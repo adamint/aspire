@@ -34,7 +34,7 @@ public partial class Traces
     public required TelemetryRepository TelemetryRepository { get; set; }
 
     [Inject]
-    public required TracesViewModel ViewModel { get; set; }
+    public required TracesRepository TracesRepository { get; set; }
 
     [Inject]
     public required IDialogService DialogService { get; set; }
@@ -56,10 +56,10 @@ public partial class Traces
 
     private ValueTask<GridItemsProviderResult<OtlpTrace>> GetData(GridItemsProviderRequest<OtlpTrace> request)
     {
-        ViewModel.StartIndex = request.StartIndex;
-        ViewModel.Count = request.Count;
+        TracesRepository.StartIndex = request.StartIndex;
+        TracesRepository.Count = request.Count;
 
-        var traces = ViewModel.GetTraces();
+        var traces = TracesRepository.GetTraces();
 
         // Updating the total item count as a field doesn't work because it isn't updated with the grid.
         // The workaround is to put the count inside a control and explicitly update and refresh the control.
@@ -86,7 +86,7 @@ public partial class Traces
     protected override void OnParametersSet()
     {
         _selectedApplication = _applicationViewModels.SingleOrDefault(e => e.Id == ApplicationInstanceId) ?? _allApplication;
-        ViewModel.ApplicationServiceId = _selectedApplication.Id;
+        TracesRepository.ApplicationServiceId = _selectedApplication.Id;
         UpdateSubscription();
     }
 
@@ -114,7 +114,7 @@ public partial class Traces
             _tracesSubscription?.Dispose();
             _tracesSubscription = TelemetryRepository.OnNewTraces(_selectedApplication.Id, SubscriptionType.Read, async () =>
             {
-                ViewModel.ClearData();
+                TracesRepository.ClearData();
                 await InvokeAsync(StateHasChanged);
             });
         }
@@ -132,7 +132,7 @@ public partial class Traces
             _ = Task.Run(async () =>
             {
                 await Task.Delay(400, cts.Token);
-                ViewModel.FilterText = newFilter;
+                TracesRepository.FilterText = newFilter;
                 await InvokeAsync(StateHasChanged);
             });
         }
@@ -141,7 +141,7 @@ public partial class Traces
     private void HandleClear()
     {
         _filterCts?.Cancel();
-        ViewModel.FilterText = string.Empty;
+        TracesRepository.FilterText = string.Empty;
         StateHasChanged();
     }
 

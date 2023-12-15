@@ -6,7 +6,7 @@ using Aspire.Dashboard.Otlp.Storage;
 
 namespace Aspire.Dashboard.Model;
 
-public class TracesViewModel
+public class TracesRepository
 {
     private readonly TelemetryRepository _telemetryRepository;
 
@@ -16,7 +16,7 @@ public class TracesViewModel
     private int _startIndex;
     private int? _count;
 
-    public TracesViewModel(TelemetryRepository telemetryRepository)
+    public TracesRepository(TelemetryRepository telemetryRepository)
     {
         _telemetryRepository = telemetryRepository;
     }

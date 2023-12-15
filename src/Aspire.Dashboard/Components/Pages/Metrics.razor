@@ -8,6 +8,8 @@
 @inject IStringLocalizer<Dashboard.Resources.Metrics> Loc
 @inject IStringLocalizer<ControlsStrings> ControlsStringsLoc
 
+@implements StatefulPage<>
+
 <PageTitle>@string.Format(Loc[Dashboard.Resources.Metrics.MetricsPageTitle], ResourceService.ApplicationName)</PageTitle>
 
 <div class="metrics-layout">

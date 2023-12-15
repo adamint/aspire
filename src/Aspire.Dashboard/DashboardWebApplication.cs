@@ -88,7 +88,7 @@ public class DashboardWebApplication : IHostedService
         builder.Services.AddGrpc();
         builder.Services.AddSingleton<TelemetryRepository>();
         builder.Services.AddTransient<StructuredLogsViewModel>();
-        builder.Services.AddTransient<TracesViewModel>();
+        builder.Services.AddTransient<TracesRepository>();
         builder.Services.TryAddEnumerable(ServiceDescriptor.Scoped<IOutgoingPeerResolver, ResourceOutgoingPeerResolver>());
         builder.Services.TryAddEnumerable(ServiceDescriptor.Scoped<IOutgoingPeerResolver, BrowserLinkOutgoingPeerResolver>());
 

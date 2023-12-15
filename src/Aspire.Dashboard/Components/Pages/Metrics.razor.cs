@@ -18,14 +18,15 @@ public partial class Metrics : IDisposable
     private static readonly TimeSpan s_defaultDuration = TimeSpan.FromMinutes(5);
 
     private List<SelectViewModel<string>> _applications = default!;
-    private SelectViewModel<string> _selectedApplication = s_selectApplication;
-    private SelectViewModel<TimeSpan> _selectedDuration = null!;
     private Subscription? _applicationsSubscription;
     private Subscription? _metricsSubscription;
     private List<OtlpInstrument>? _instruments;
+
     private FluentTreeItem? _selectedTreeItem;
     private OtlpMeter? _selectedMeter;
     private OtlpInstrument? _selectedInstrument;
+    private SelectViewModel<string> _selectedApplication = s_selectApplication;
+    private SelectViewModel<TimeSpan> _selectedDuration = null!;
 
     [Parameter]
     public string? ApplicationInstanceId { get; set; }
@@ -41,7 +42,7 @@ public partial class Metrics : IDisposable
     public int DurationMinutes { get; set; }
 
     [Inject]
-    public required NavigationManager NavigationManager { get; set; }
+    public override required NavigationManager NavigationManager { get; set; }
 
     [Inject]
     public required IResourceService ResourceService { get; set; }
@@ -53,7 +54,7 @@ public partial class Metrics : IDisposable
     public required TelemetryRepository TelemetryRepository { get; set; }
 
     [Inject]
-    public required TracesViewModel ViewModel { get; set; }
+    public required TracesRepository TracesRepository { get; set; }
 
     protected override Task OnInitializedAsync()
     {
@@ -85,7 +86,7 @@ public partial class Metrics : IDisposable
     {
         _selectedDuration = _durations.SingleOrDefault(d => (int)d.Id.TotalMinutes == DurationMinutes) ?? _durations.Single(d => d.Id == s_defaultDuration);
         _selectedApplication = _applications.SingleOrDefault(e => e.Id == ApplicationInstanceId) ?? s_selectApplication;
-        ViewModel.ApplicationServiceId = _selectedApplication.Id;
+        TracesRepository.ApplicationServiceId = _selectedApplication.Id;
         _instruments = !string.IsNullOrEmpty(_selectedApplication.Id) ? TelemetryRepository.GetInstrumentsSummary(_selectedApplication.Id) : null;
 
         _selectedMeter = null;
