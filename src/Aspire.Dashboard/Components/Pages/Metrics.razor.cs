@@ -12,7 +12,7 @@ using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace Aspire.Dashboard.Components.Pages;
 
-public partial class Metrics : IDisposable, IStatefulPage<Metrics.MetricsViewModel>
+public partial class Metrics : IDisposable, SessionAndUrlPersistedStatePage<Metrics.MetricsViewModel>
 {
     private static readonly SelectViewModel<string> s_selectApplication = new SelectViewModel<string> { Id = null, Name = "(Select a resource)" };
     private List<SelectViewModel<TimeSpan>> _durations = null!;
@@ -76,7 +76,7 @@ public partial class Metrics : IDisposable, IStatefulPage<Metrics.MetricsViewMod
 
     protected override void OnParametersSet()
     {
-        ViewModel = GetViewModelFromQuery();
+        base.OnParametersSet();
         UpdateSubscription();
     }
 
