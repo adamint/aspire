@@ -32,7 +32,7 @@
         {
             <FluentSplitter Style="height:100%" Panel1Size="2fr" Panel2Size="8fr">
                 <Panel1>
-                    <FluentTreeView Class="metrics-tree" @bind-CurrentSelected="ViewModel.SelectedTreeItem" @bind-CurrentSelected:after="HandleSelectedTreeItemChanged">
+                    <FluentTreeView Class="metrics-tree" @bind-CurrentSelected="ViewModel.SelectedTreeItem" @bind-CurrentSelected:after="HandleSelectedTreeItemChangedAsync">
                         <ChildContent>
                             @foreach (var meterGroup in _instruments.GroupBy(i => i.Parent).OrderBy(g => g.Key.MeterName))
                             {

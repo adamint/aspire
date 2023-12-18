@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Diagnostics;
 using System.Globalization;
 using Aspire.Dashboard.Extensions;
 using Aspire.Dashboard.Model;
@@ -8,11 +9,12 @@ using Aspire.Dashboard.Model.Otlp;
 using Aspire.Dashboard.Otlp.Model;
 using Aspire.Dashboard.Otlp.Storage;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace Aspire.Dashboard.Components.Pages;
 
-public partial class Metrics : IDisposable, SessionAndUrlPersistedStatePage<Metrics.MetricsViewModel>
+public partial class Metrics : IDisposable, IPageWithSessionAndUrlState<Metrics.MetricsViewModel, Metrics.MetricsPageState>
 {
     private static readonly SelectViewModel<string> s_selectApplication = new SelectViewModel<string> { Id = null, Name = "(Select a resource)" };
     private List<SelectViewModel<TimeSpan>> _durations = null!;
@@ -23,7 +25,9 @@ public partial class Metrics : IDisposable, SessionAndUrlPersistedStatePage<Metr
     private Subscription? _metricsSubscription;
     private List<OtlpInstrument>? _instruments;
 
-    private MetricsViewModel ViewModel { get; set; } = null!;
+    public string BasePath => "Metrics";
+    public string SessionStorageKey => "Metrics_PageState";
+    public MetricsViewModel ViewModel { get; set; } = null!;
 
     [Parameter]
     public string? ApplicationInstanceId { get; set; }
@@ -40,6 +44,9 @@ public partial class Metrics : IDisposable, SessionAndUrlPersistedStatePage<Metr
 
     [Inject]
     public required NavigationManager NavigationManager { get; set; }
+
+    [Inject]
+    public required ProtectedSessionStorage SessionStorage { get; set; }
 
     [Inject]
     public required IResourceService ResourceService { get; set; }
@@ -74,10 +81,19 @@ public partial class Metrics : IDisposable, SessionAndUrlPersistedStatePage<Metr
         return Task.CompletedTask;
     }
 
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
-        base.OnParametersSet();
+        await this.InitializeViewModelAsync();
         UpdateSubscription();
+    }
+
+    public MetricsPageState ConvertViewModelToSerializable()
+    {
+        return new MetricsPageState(
+            ViewModel.SelectedApplication.Id,
+            ViewModel.SelectedMeter?.MeterName,
+            ViewModel.SelectedInstrument?.Name,
+            (int)ViewModel.SelectedDuration.Id.TotalMinutes);
     }
 
     public MetricsViewModel GetViewModelFromQuery()
@@ -117,14 +133,14 @@ public partial class Metrics : IDisposable, SessionAndUrlPersistedStatePage<Metr
         UpdateSubscription();
     }
 
-    private void HandleSelectedApplicationChanged()
+    private Task HandleSelectedApplicationChangedAsync()
     {
-        this.AfterViewModelChanged();
+        return this.AfterViewModelChangedAsync();
     }
 
-    private void HandleSelectedDurationChanged()
+    private Task HandleSelectedDurationChangedAsync()
     {
-        this.AfterViewModelChanged();
+        return this.AfterViewModelChangedAsync();
     }
 
     public sealed class MetricsViewModel
@@ -136,7 +152,9 @@ public partial class Metrics : IDisposable, SessionAndUrlPersistedStatePage<Metr
         public SelectViewModel<TimeSpan> SelectedDuration { get; set; } = null!;
     }
 
-    private void HandleSelectedTreeItemChanged()
+    public record MetricsPageState(string? ApplicationId, string? MeterName, string? InstrumentName, int DurationMinutes);
+
+    private Task HandleSelectedTreeItemChangedAsync()
     {
         if (ViewModel.SelectedTreeItem?.Data is OtlpMeter meter)
         {
@@ -154,26 +172,22 @@ public partial class Metrics : IDisposable, SessionAndUrlPersistedStatePage<Metr
             ViewModel.SelectedInstrument = null;
         }
 
-        this.AfterViewModelChanged();
+        return this.AfterViewModelChangedAsync();
     }
 
-    public (string Path, Dictionary<string, string?> QueryParameters) GetUriFromViewModel()
+    public (string Path, Dictionary<string, string?> QueryParameters) GetUrlFromSerializableViewModel(MetricsPageState serializable)
     {
         string path;
-        if (ViewModel.SelectedMeter is not null)
+        if (serializable.MeterName is not null)
         {
-            if (ViewModel.SelectedInstrument != null)
-            {
-                path = $"/Metrics/{ViewModel.SelectedApplication.Id}/Meter/{ViewModel.SelectedMeter.MeterName}/Instrument/{ViewModel.SelectedInstrument.Name}";
-            }
-            else
-            {
-                path = $"/Metrics/{ViewModel.SelectedApplication.Id}/Meter/{ViewModel.SelectedMeter.MeterName}";
-            }
+            Debug.Assert(serializable.ApplicationId is not null);
+            path = serializable.InstrumentName != null
+                ? $"/Metrics/{serializable.ApplicationId}/Meter/{serializable.MeterName}/Instrument/{serializable.InstrumentName}"
+                : $"/Metrics/{serializable.ApplicationId}/Meter/{serializable.MeterName}";
         }
-        else if (ViewModel.SelectedApplication.Id != null)
+        else if (serializable.ApplicationId != null)
         {
-            path = $"/Metrics/{ViewModel.SelectedApplication.Id}";
+            path = $"/Metrics/{serializable.ApplicationId}";
         }
         else
         {
@@ -184,7 +198,7 @@ public partial class Metrics : IDisposable, SessionAndUrlPersistedStatePage<Metr
 
         if (ViewModel.SelectedDuration.Id != s_defaultDuration)
         {
-            queryParameters.Add("duration", ((int)ViewModel.SelectedDuration.Id.TotalMinutes).ToString(CultureInfo.InvariantCulture));
+            queryParameters.Add("duration", serializable.DurationMinutes.ToString(CultureInfo.InvariantCulture));
         }
 
         return (path, queryParameters);
