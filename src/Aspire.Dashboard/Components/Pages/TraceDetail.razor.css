@@ -90,7 +90,7 @@
     border-left-width: 5px;
     border-left-style: solid;
     padding-left: 5px;
-    line-height: 28px;
+    margin-top: 5px;
 }
 
 ::deep .span-container {
@@ -139,10 +139,17 @@
     vertical-align: text-bottom;
 }
 
-::deep .span-row-name {
+::deep .span-row-info {
     color: var(--foreground-subtext-rest);
     padding-left: 0.5rem;
     font-size: 12px;
+}
+
+::deep .span-row-info-name-id-divider {
+    height: 12px;
+    vertical-align: middle;
+    display: inline-block;
+    margin:  2px;
 }
 
 ::deep .selected-row .span-row-name,
