@@ -1,0 +1,38 @@
+﻿@using Aspire.Dashboard.Model
+@using Aspire.Dashboard.Resources
+@namespace Aspire.Dashboard.Components
+@inject IStringLocalizer<ControlsStrings> Loc
+
+<div style="max-height: 360px; overflow-y: scroll; margin-bottom: 10px;">
+    <FluentDataGrid aria-live="polite" Items="@_filteredMetrics.AsQueryable()" ItemSize="35">
+        <ChildContent>
+            <TemplateColumn Class="metric-grid-cell" Title="Start" Sortable="true" SortBy="_startSort">
+                <span aria-live="polite">@context.Value.Start</span>
+                <FluentIcon Title="@context.Dimension" Class="severity-icon" Icon="Icons.Regular.Size16.Info" Color="Color.Accent"/>
+            </TemplateColumn>
+            <TemplateColumn Title="End" Sortable="true" SortBy="_endSort">
+                <span aria-live="polite">@context.Value.End</span>
+            </TemplateColumn>
+            <TemplateColumn Title="Count" Sortable="true" SortBy="_countSort">
+                <span aria-live="polite">@context.Value.Count</span>
+            </TemplateColumn>
+        </ChildContent>
+        <EmptyContent>
+            There are no metric values yet.
+        </EmptyContent>
+    </FluentDataGrid>
+</div>
+
+<FluentSwitch @bind-Value="@_showLatestMetrics"
+              @bind-Value:after="ToggleFilter"
+              UncheckedMessage="Show all values"
+              CheckedMessage="Show the latest 10 values" />
+
+
+@code {
+    [Parameter, EditorRequired]
+    public required InstrumentViewModel InstrumentViewModel { get; set; }
+
+    [Parameter, EditorRequired]
+    public required TimeSpan Duration { get; set; }
+}

@@ -96,6 +96,15 @@ namespace Aspire.Dashboard.Resources {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to Graph. For an accessible view please navigate to the Table tab.
+        /// </summary>
+        public static string ChartContainerGraphAccessibleLabel {
+            get {
+                return ResourceManager.GetString("ChartContainerGraphAccessibleLabel", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to Graph.
         /// </summary>
         public static string ChartContainerGraphTab {

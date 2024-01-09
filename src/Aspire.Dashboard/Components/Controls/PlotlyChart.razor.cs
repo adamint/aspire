@@ -37,7 +37,7 @@ public partial class PlotlyChart : ComponentBase
     protected override void OnInitialized()
     {
         _currentDataStartTime = GetCurrentDataTime();
-        InstrumentViewModel.OnDataUpdate = OnInstrumentDataUpdate;
+        InstrumentViewModel.DataUpdateSubscriptions.Add(OnInstrumentDataUpdate);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -83,11 +83,6 @@ public partial class PlotlyChart : ComponentBase
     private Task OnInstrumentDataUpdate()
     {
         return InvokeAsync(StateHasChanged);
-    }
-
-    private static DateTime GetCurrentDataTime()
-    {
-        return DateTime.UtcNow.Subtract(TimeSpan.FromSeconds(1)); // Compensate for delay in receiving metrics from sevices.;
     }
 
     private sealed class Trace
@@ -469,5 +464,10 @@ public partial class PlotlyChart : ComponentBase
         {
             return Loc[nameof(ControlsStrings.PlotlyChartValue)];
         }
+    }
+
+    private static DateTime GetCurrentDataTime()
+    {
+        return DateTime.UtcNow.Subtract(TimeSpan.FromSeconds(1)); // Compensate for delay in receiving metrics from sevices.;
     }
 }

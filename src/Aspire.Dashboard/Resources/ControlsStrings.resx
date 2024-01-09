@@ -132,6 +132,9 @@
   <data name="ChartContainerTableTab" xml:space="preserve">
     <value>Table</value>
   </data>
+  <data name="ChartContainerGraphAccessibleLabel" xml:space="preserve">
+    <value>Graph. For an accessible view please navigate to the Table tab</value>
+  </data>
   <data name="EnvironmentVariablesFilterToggleShowSpecOnly" xml:space="preserve">
     <value>Show spec only</value>
     <comment>Spec means from the resource specification</comment>
