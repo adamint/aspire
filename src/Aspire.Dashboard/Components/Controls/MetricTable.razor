@@ -1,21 +1,41 @@
 ﻿@using Aspire.Dashboard.Model
+@using Aspire.Dashboard.Otlp.Model
 @using Aspire.Dashboard.Resources
 @namespace Aspire.Dashboard.Components
 @inject IStringLocalizer<ControlsStrings> Loc
 
-<div style="max-height: 360px; overflow-y: scroll; margin-bottom: 10px;">
-    <FluentDataGrid aria-live="polite" Items="@_filteredMetrics.AsQueryable()" ItemSize="35">
+<div style="max-height: 60vh; overflow-y: scroll; margin-bottom: 10px;" role="log">
+    <FluentDataGrid Items="@FilteredMetrics.AsQueryable()" ItemSize="35" ResizableColumns="true">
         <ChildContent>
-            <TemplateColumn Class="metric-grid-cell" Title="Start" Sortable="true" SortBy="_startSort">
-                <span aria-live="polite">@context.Value.Start</span>
-                <FluentIcon Title="@context.Dimension" Class="severity-icon" Icon="Icons.Regular.Size16.Info" Color="Color.Accent"/>
-            </TemplateColumn>
-            <TemplateColumn Title="End" Sortable="true" SortBy="_endSort">
-                <span aria-live="polite">@context.Value.End</span>
-            </TemplateColumn>
-            <TemplateColumn Title="Count" Sortable="true" SortBy="_countSort">
-                <span aria-live="polite">@context.Value.Count</span>
-            </TemplateColumn>
+            @if (_anyDimensionsShown)
+            {
+                <PropertyColumn Property="@(c => c.DimensionName)" Class="metric-grid-cell" Title="Dimensions" Sortable="true"/>
+            }
+            <PropertyColumn Property="@(c => c.Value.Start)" Class="metric-grid-cell" Title="Start" Sortable="true"/>
+            <PropertyColumn Property="@(c => c.Value.End)" Title="End" Sortable="true"/>
+
+            @if (InstrumentViewModel.Instrument?.Type != OtlpInstrumentType.Histogram || InstrumentViewModel.ShowCount)
+            {
+                <PropertyColumn Property="@(c => c.Value.Count)" Title="Count" Sortable="true"/>
+                <TemplateColumn Title="Change" Sortable="true">
+                    @switch (context.Direction)
+                    {
+                        case ValueDirectionChange.Up:
+                            <FluentIcon Icon="Icons.Regular.Size24.ArrowUpRight" Color="Color.Success"/>
+                            break;
+                        case ValueDirectionChange.Down:
+                            <FluentIcon Icon="Icons.Regular.Size24.ArrowDownLeft" Color="Color.Warning" Style="transform: scale(-1,1)"/>
+                            break;
+                        case ValueDirectionChange.Constant:
+                            <FluentIcon Icon="Icons.Regular.Size24.ArrowLeft" Style="transform: scale(-1,1)"/>
+                            break;
+                    }
+                </TemplateColumn>
+            }
+            else
+            {
+
+            }
         </ChildContent>
         <EmptyContent>
             There are no metric values yet.
@@ -23,11 +43,20 @@
     </FluentDataGrid>
 </div>
 
-<FluentSwitch @bind-Value="@_showLatestMetrics"
-              @bind-Value:after="ToggleFilter"
-              UncheckedMessage="Show all values"
-              CheckedMessage="Show the latest 10 values" />
+<FluentStack Orientation="Orientation.Vertical">
+    @if (_metrics.Count > 10)
+    {
+        <FluentSwitch @bind-Value="@_showLatestMetrics"
+                      @bind-Value:after="ToggleFilter"
+                      UncheckedMessage="Show all values"
+                      CheckedMessage="Show the latest 10 values" />
+    }
 
+    <FluentSwitch @bind-Value="@_onlyShowValueChanges"
+                  @bind-Value:after="ToggleOnlyShowValueChanges"
+                  UncheckedMessage="Don't only show value changes"
+                  CheckedMessage="Only show value changes" />
+</FluentStack>
 
 @code {
     [Parameter, EditorRequired]

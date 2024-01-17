@@ -4,19 +4,18 @@
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Otlp.Model.MetricValues;
 using Microsoft.AspNetCore.Components;
-using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace Aspire.Dashboard.Components;
 
 public partial class MetricTable : ComponentBase
 {
     private readonly SortedList<DimensionalMetric, DimensionalMetric> _metrics = new(DimensionalMetric.Comparer);
-    private readonly GridSort<DimensionalMetric> _startSort = GridSort<DimensionalMetric>.ByAscending(m => m.Value.Start);
-    private readonly GridSort<DimensionalMetric> _endSort = GridSort<DimensionalMetric>.ByAscending(m => m.Value.End);
-    private readonly GridSort<DimensionalMetric> _countSort = GridSort<DimensionalMetric>.ByAscending(m => m.Value.Count);
 
     private bool _showLatestMetrics = true;
-    public IEnumerable<DimensionalMetric> _filteredMetrics => _showLatestMetrics ? _metrics.Values.TakeLast(10) : _metrics.Values;
+    private bool _onlyShowValueChanges;
+
+    private IEnumerable<DimensionalMetric> FilteredMetrics => _showLatestMetrics ? _metrics.Values.TakeLast(10) : _metrics.Values;
+    private bool _anyDimensionsShown;
 
     protected override void OnInitialized()
     {
@@ -25,25 +24,79 @@ public partial class MetricTable : ComponentBase
 
     private async Task OnInstrumentDataUpdate()
     {
-        _metrics.Clear();
+        _anyDimensionsShown = false;
 
         if (InstrumentViewModel.MatchedDimensions is not null)
         {
-            var metricsWithDimension = InstrumentViewModel.MatchedDimensions.SelectMany(dimension =>
+            var metricsWithDimension = new List<DimensionalMetric>();
+            foreach (var dimension in InstrumentViewModel.MatchedDimensions)
             {
-                return dimension.Values.Select(value => new DimensionalMetric(dimension.Name, value));
-            });
+                if (!dimension.Name.Equals(DimensionScope.NoDimensions))
+                {
+                    _anyDimensionsShown = true;
+                }
 
-            foreach (var metric in metricsWithDimension)
+                for (var i = 0; i < dimension.Values.Count; i++)
+                {
+                    var metricValue = dimension.Values[i];
+                    ValueDirectionChange? directionChange = ValueDirectionChange.Constant;
+                    if (i > 0)
+                    {
+                        var previousValue = dimension.Values[i - 1];
+
+                        if (metricValue.Count > previousValue.Count)
+                        {
+                            directionChange = ValueDirectionChange.Up;
+                        }
+                        else if (metricValue.Count < previousValue.Count)
+                        {
+                            directionChange = ValueDirectionChange.Down;
+                        }
+                    }
+
+                    metricsWithDimension.Add(new DimensionalMetric(dimension.Name, dimension.Attributes, metricValue, directionChange));
+                }
+            }
+            if (_onlyShowValueChanges && metricsWithDimension.Count > 0)
             {
-                _metrics[metric] = metric;
+                var current = metricsWithDimension[0].Value.Count;
+                for (var i = 1; i < metricsWithDimension.Count; i++)
+                {
+                    var metric = metricsWithDimension[i].Value.Count;
+                    if (current == metric)
+                    {
+                        metricsWithDimension.RemoveAt(i);
+                        i--;
+                    }
+                    else
+                    {
+                        current = metric;
+                    }
+                }
+            }
+
+            while (_metrics.Count > metricsWithDimension.Count)
+            {
+                _metrics.RemoveAt(_metrics.Count - 1);
+            }
+
+            for (var i = 0; i < metricsWithDimension.Count; i++)
+            {
+                if (i >= _metrics.Count)
+                {
+                    _metrics.Add(metricsWithDimension[i], metricsWithDimension[i]);
+                }
+                else if (!_metrics.GetValueAtIndex(i).Equals(metricsWithDimension[i]))
+                {
+                    _metrics.SetValueAtIndex(i, metricsWithDimension[i]);
+                }
             }
         }
 
         await InvokeAsync(StateHasChanged);
     }
 
-    public sealed record DimensionalMetric(string Dimension, MetricValueBase Value)
+    public sealed record DimensionalMetric(string DimensionName, KeyValuePair<string, string>[] DimensionAttributes, MetricValueBase Value, ValueDirectionChange? Direction)
     {
         public static readonly MetricTimeComparer Comparer = new();
     }
@@ -57,8 +110,13 @@ public partial class MetricTable : ComponentBase
         }
     }
 
-    private void ToggleFilter()
+    public enum ValueDirectionChange
     {
-        StateHasChanged();
+        Up,
+        Down,
+        Constant
     }
+
+    private void ToggleFilter() => StateHasChanged();
+    private void ToggleOnlyShowValueChanges() => StateHasChanged();
 }

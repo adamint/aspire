@@ -197,6 +197,8 @@ fluent-data-grid-cell .long-inner-content {
     margin-right: 3px;
 }
 
+.metric-0
+
 split-panels::part(handle) {
     display: none;
 }
