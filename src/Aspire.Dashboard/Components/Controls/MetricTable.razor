@@ -1,5 +1,6 @@
 ﻿@using Aspire.Dashboard.Model
 @using Aspire.Dashboard.Otlp.Model
+@using Aspire.Dashboard.Otlp.Model.MetricValues
 @using Aspire.Dashboard.Resources
 @namespace Aspire.Dashboard.Components
 @inject IStringLocalizer<ControlsStrings> Loc
@@ -7,11 +8,14 @@
 <div style="max-height: 60vh; overflow-y: scroll; margin-bottom: 10px;" role="log">
     <FluentDataGrid Items="@FilteredMetrics.AsQueryable()" ItemSize="35" ResizableColumns="true">
         <ChildContent>
-            @if (_anyDimensionsShown)
-            {
-                <PropertyColumn Property="@(c => c.DimensionName)" Class="metric-grid-cell" Title="Dimensions" Sortable="true"/>
-            }
-            <PropertyColumn Property="@(c => c.Value.Start)" Class="metric-grid-cell" Title="Start" Sortable="true"/>
+            <TemplateColumn Class="metric-grid-cell" Title="Start" Sortable="true" Tooltip="true" TooltipText="@(metric => metric.DimensionName)">
+                @context.Value.Start
+
+                @if (_anyDimensionsShown)
+                {
+                    <FluentIcon Icon="Icons.Filled.Size16.DataBarVertical" Color="Color.Info" Style="margin-left: 3px; vertical-align: text-bottom"/>
+                }
+            </TemplateColumn>
             <PropertyColumn Property="@(c => c.Value.End)" Title="End" Sortable="true"/>
 
             @if (InstrumentViewModel.Instrument?.Type != OtlpInstrumentType.Histogram || InstrumentViewModel.ShowCount)
@@ -34,7 +38,14 @@
             }
             else
             {
-
+                var unit = PlotlyChart.GetDisplayedUnit(InstrumentViewModel, Loc);
+                var percentileColumns = new List<(int Percentile, string UnderlineColor)> { (50, "#89B5D3"), (90, "#F9B980"), (99, "#8FC98F") };
+                foreach (var (percentile, underlineColor) in percentileColumns)
+                {
+                    <TemplateColumn Title="@($"P{percentile}")" Sortable="true">
+                        <span style="@($"text-decoration: underline; text-decoration-color: {underlineColor}")">@CalculatePercentile(percentile, (HistogramValue)context.Value) @unit</span>
+                    </TemplateColumn>
+                }
             }
         </ChildContent>
         <EmptyContent>

@@ -2,19 +2,21 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Dashboard.Model;
+using Aspire.Dashboard.Otlp.Model;
 using Aspire.Dashboard.Otlp.Model.MetricValues;
 using Microsoft.AspNetCore.Components;
+using CollectionExtensions = Aspire.Dashboard.Extensions.CollectionExtensions;
 
 namespace Aspire.Dashboard.Components;
 
 public partial class MetricTable : ComponentBase
 {
-    private readonly SortedList<DimensionalMetric, DimensionalMetric> _metrics = new(DimensionalMetric.Comparer);
+    private readonly SortedList<Metric, Metric> _metrics = new(new MetricTimeComparer());
 
     private bool _showLatestMetrics = true;
     private bool _onlyShowValueChanges;
 
-    private IEnumerable<DimensionalMetric> FilteredMetrics => _showLatestMetrics ? _metrics.Values.TakeLast(10) : _metrics.Values;
+    private IEnumerable<Metric> FilteredMetrics => _showLatestMetrics ? _metrics.Values.TakeLast(10) : _metrics.Values;
     private bool _anyDimensionsShown;
 
     protected override void OnInitialized()
@@ -28,7 +30,7 @@ public partial class MetricTable : ComponentBase
 
         if (InstrumentViewModel.MatchedDimensions is not null)
         {
-            var metricsWithDimension = new List<DimensionalMetric>();
+            var metricsWithDimension = new List<Metric>();
             foreach (var dimension in InstrumentViewModel.MatchedDimensions)
             {
                 if (!dimension.Name.Equals(DimensionScope.NoDimensions))
@@ -54,23 +56,90 @@ public partial class MetricTable : ComponentBase
                         }
                     }
 
-                    metricsWithDimension.Add(new DimensionalMetric(dimension.Name, dimension.Attributes, metricValue, directionChange));
+                    if (metricValue is HistogramValue histogramValue)
+                    {
+                        var percentiles = new SortedDictionary<int, (double Value, ValueDirectionChange Direction)>();
+                        foreach (var p in new List<int> { 50, 90, 99 })
+                        {
+                            var percentile = CalculatePercentile(p, histogramValue);
+                            var directionChange = metricsWithDimension.LastOrDefault() is { } last ? GetDirectionChange(, ((HistogramValue)last)) : ValueDirectionChange.Constant;
+                            percentiles.Add(p, (CalculatePercentile(p, histogramValue, )));
+                        }
+
+
+                        metricsWithDimension.Add(
+                            new HistogramMetric
+                            {
+                                DimensionName = dimension.Name,
+                                DimensionAttributes = dimension.Attributes,
+                                Value = metricValue,
+                                Direction = directionChange,
+                                Percentiles =
+                            });
+
+                        ValueDirectionChange GetDirectionChange(double? current, double? previous)
+                        {
+                            if (current > previous)
+                            {
+                                return ValueDirectionChange.Up;
+                            }
+
+                            return previous < current ? ValueDirectionChange.Down : ValueDirectionChange.Constant;
+                        }
+                    }
+                    else
+                    {
+                        metricsWithDimension.Add(
+                            new Metric
+                            {
+                                DimensionName = dimension.Name,
+                                DimensionAttributes = dimension.Attributes,
+                                Value = metricValue,
+                                Direction = directionChange
+                            });
+                    }
                 }
             }
             if (_onlyShowValueChanges && metricsWithDimension.Count > 0)
             {
-                var current = metricsWithDimension[0].Value.Count;
-                for (var i = 1; i < metricsWithDimension.Count; i++)
+                if (InstrumentViewModel.Instrument?.Type != OtlpInstrumentType.Histogram || InstrumentViewModel.ShowCount)
                 {
-                    var metric = metricsWithDimension[i].Value.Count;
-                    if (current == metric)
+                    var current = metricsWithDimension[0].Value.Count;
+                    for (var i = 1; i < metricsWithDimension.Count; i++)
                     {
-                        metricsWithDimension.RemoveAt(i);
-                        i--;
+                        var count = metricsWithDimension[i].Value.Count;
+                        if (current == count)
+                        {
+                            metricsWithDimension.RemoveAt(i);
+                            i--;
+                        }
+                        else
+                        {
+                            current = count;
+                        }
                     }
-                    else
+                }
+                else
+                {
+                    var currentPercentiles = CalculatePercentiles((HistogramValue)metricsWithDimension[0].Value);
+                    for (var i = 1; i < metricsWithDimension.Count; i++)
                     {
-                        current = metric;
+                        var histogramValue = (HistogramValue)metricsWithDimension[0].Value;
+                        var percentiles = CalculatePercentiles(histogramValue);
+                        if (CollectionExtensions.Equivalent(currentPercentiles, percentiles))
+                        {
+                            metricsWithDimension.RemoveAt(i);
+                            i--;
+                        }
+                        else
+                        {
+                            currentPercentiles = percentiles;
+                        }
+                    }
+
+                    static double?[] CalculatePercentiles(HistogramValue value)
+                    {
+                        return [CalculatePercentile(50, value), CalculatePercentile(90, value), CalculatePercentile(99, value)];
                     }
                 }
             }
@@ -84,7 +153,7 @@ public partial class MetricTable : ComponentBase
             {
                 if (i >= _metrics.Count)
                 {
-                    _metrics.Add(metricsWithDimension[i], metricsWithDimension[i]);
+                    _metrics.TryAdd(metricsWithDimension[i], metricsWithDimension[i]);
                 }
                 else if (!_metrics.GetValueAtIndex(i).Equals(metricsWithDimension[i]))
                 {
@@ -96,14 +165,27 @@ public partial class MetricTable : ComponentBase
         await InvokeAsync(StateHasChanged);
     }
 
-    public sealed record DimensionalMetric(string DimensionName, KeyValuePair<string, string>[] DimensionAttributes, MetricValueBase Value, ValueDirectionChange? Direction)
+    private static double? CalculatePercentile(int percentile, HistogramValue value)
     {
-        public static readonly MetricTimeComparer Comparer = new();
+        return PlotlyChart.CalculatePercentile(percentile, value.Values, value.ExplicitBounds);
     }
 
-    public class MetricTimeComparer : IComparer<DimensionalMetric>
+    public class Metric
     {
-        public int Compare(DimensionalMetric? x, DimensionalMetric? y)
+        public required string DimensionName { get; init; }
+        public required KeyValuePair<string, string>[] DimensionAttributes { get; init; }
+        public required MetricValueBase Value { get; init; }
+        public required ValueDirectionChange? Direction { get; init; }
+    }
+
+    public class HistogramMetric : Metric
+    {
+        public required Dictionary<int, (double Value, ValueDirectionChange Direction)> Percentiles { get; init; }
+    }
+
+    public class MetricTimeComparer : IComparer<Metric>
+    {
+        public int Compare(Metric? x, Metric? y)
         {
             var result = x!.Value.Start.CompareTo(y!.Value.Start);
             return result is not 0 ? result : x.Value.End.CompareTo(y.Value.End);
