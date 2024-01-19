@@ -1,10 +1,13 @@
 ﻿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Globalization;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Otlp.Model;
 using Aspire.Dashboard.Otlp.Model.MetricValues;
 using Microsoft.AspNetCore.Components;
+using Microsoft.FluentUI.AspNetCore.Components;
+using Microsoft.JSInterop;
 using CollectionExtensions = Aspire.Dashboard.Extensions.CollectionExtensions;
 
 namespace Aspire.Dashboard.Components;
@@ -12,6 +15,7 @@ namespace Aspire.Dashboard.Components;
 public partial class MetricTable : ComponentBase
 {
     private readonly SortedList<Metric, Metric> _metrics = new(new MetricTimeComparer());
+    private static readonly List<int> s_shownPercentiles = [50, 90, 99];
 
     private bool _showLatestMetrics = true;
     private bool _onlyShowValueChanges;
@@ -19,9 +23,22 @@ public partial class MetricTable : ComponentBase
     private IEnumerable<Metric> FilteredMetrics => _showLatestMetrics ? _metrics.Values.TakeLast(10) : _metrics.Values;
     private bool _anyDimensionsShown;
 
+    private IJSObjectReference? _jsModule;
+
+    [Inject]
+    public required IJSRuntime JS { get; set; }
+
     protected override void OnInitialized()
     {
         InstrumentViewModel.DataUpdateSubscriptions.Add(OnInstrumentDataUpdate);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _jsModule = await JS.InvokeAsync<IJSObjectReference>("import", "/_content/Aspire.Dashboard/Components/Controls/MetricTable.razor.js");
+        }
     }
 
     private async Task OnInstrumentDataUpdate()
@@ -41,31 +58,31 @@ public partial class MetricTable : ComponentBase
                 for (var i = 0; i < dimension.Values.Count; i++)
                 {
                     var metricValue = dimension.Values[i];
-                    ValueDirectionChange? directionChange = ValueDirectionChange.Constant;
+
+                    ValueDirectionChange? countDirectionChange = ValueDirectionChange.Constant;
                     if (i > 0)
                     {
                         var previousValue = dimension.Values[i - 1];
 
                         if (metricValue.Count > previousValue.Count)
                         {
-                            directionChange = ValueDirectionChange.Up;
+                            countDirectionChange = ValueDirectionChange.Up;
                         }
                         else if (metricValue.Count < previousValue.Count)
                         {
-                            directionChange = ValueDirectionChange.Down;
+                            countDirectionChange = ValueDirectionChange.Down;
                         }
                     }
 
                     if (metricValue is HistogramValue histogramValue)
                     {
-                        var percentiles = new SortedDictionary<int, (double Value, ValueDirectionChange Direction)>();
-                        foreach (var p in new List<int> { 50, 90, 99 })
+                        var percentiles = new SortedDictionary<int, (double? Value, ValueDirectionChange Direction)>();
+                        foreach (var percentile in s_shownPercentiles)
                         {
-                            var percentile = CalculatePercentile(p, histogramValue);
-                            var directionChange = metricsWithDimension.LastOrDefault() is { } last ? GetDirectionChange(, ((HistogramValue)last)) : ValueDirectionChange.Constant;
-                            percentiles.Add(p, (CalculatePercentile(p, histogramValue, )));
+                            var percentileValue = CalculatePercentile(percentile, histogramValue);
+                            var directionChange = metricsWithDimension.LastOrDefault() is HistogramMetric last ? GetDirectionChange(percentileValue, last.Percentiles[percentile].Value) : ValueDirectionChange.Constant;
+                            percentiles.Add(percentile, (percentileValue, directionChange));
                         }
-
 
                         metricsWithDimension.Add(
                             new HistogramMetric
@@ -73,18 +90,18 @@ public partial class MetricTable : ComponentBase
                                 DimensionName = dimension.Name,
                                 DimensionAttributes = dimension.Attributes,
                                 Value = metricValue,
-                                Direction = directionChange,
-                                Percentiles =
+                                CountDirectionChange = countDirectionChange,
+                                Percentiles = percentiles
                             });
 
-                        ValueDirectionChange GetDirectionChange(double? current, double? previous)
+                        static ValueDirectionChange GetDirectionChange(double? current, double? previous)
                         {
                             if (current > previous)
                             {
                                 return ValueDirectionChange.Up;
                             }
 
-                            return previous < current ? ValueDirectionChange.Down : ValueDirectionChange.Constant;
+                            return current < previous ? ValueDirectionChange.Down : ValueDirectionChange.Constant;
                         }
                     }
                     else
@@ -95,7 +112,7 @@ public partial class MetricTable : ComponentBase
                                 DimensionName = dimension.Name,
                                 DimensionAttributes = dimension.Attributes,
                                 Value = metricValue,
-                                Direction = directionChange
+                                CountDirectionChange = countDirectionChange
                             });
                     }
                 }
@@ -124,7 +141,7 @@ public partial class MetricTable : ComponentBase
                     var currentPercentiles = CalculatePercentiles((HistogramValue)metricsWithDimension[0].Value);
                     for (var i = 1; i < metricsWithDimension.Count; i++)
                     {
-                        var histogramValue = (HistogramValue)metricsWithDimension[0].Value;
+                        var histogramValue = (HistogramValue)metricsWithDimension[i].Value;
                         var percentiles = CalculatePercentiles(histogramValue);
                         if (CollectionExtensions.Equivalent(currentPercentiles, percentiles))
                         {
@@ -163,6 +180,10 @@ public partial class MetricTable : ComponentBase
         }
 
         await InvokeAsync(StateHasChanged);
+        if (_jsModule is not null)
+        {
+            await _jsModule.InvokeVoidAsync("addRowLogRoles", DateTime.Now.ToString(CultureInfo.InvariantCulture));
+        }
     }
 
     private static double? CalculatePercentile(int percentile, HistogramValue value)
@@ -175,12 +196,12 @@ public partial class MetricTable : ComponentBase
         public required string DimensionName { get; init; }
         public required KeyValuePair<string, string>[] DimensionAttributes { get; init; }
         public required MetricValueBase Value { get; init; }
-        public required ValueDirectionChange? Direction { get; init; }
+        public required ValueDirectionChange? CountDirectionChange { get; init; }
     }
 
     public class HistogramMetric : Metric
     {
-        public required Dictionary<int, (double Value, ValueDirectionChange Direction)> Percentiles { get; init; }
+        public required SortedDictionary<int, (double? Value, ValueDirectionChange Direction)> Percentiles { get; init; }
     }
 
     public class MetricTimeComparer : IComparer<Metric>
@@ -199,6 +220,19 @@ public partial class MetricTable : ComponentBase
         Constant
     }
 
-    private void ToggleFilter() => StateHasChanged();
-    private void ToggleOnlyShowValueChanges() => StateHasChanged();
+    private static Icon? GetIconForDirection(ValueDirectionChange? directionChange)
+    {
+        return directionChange switch
+        {
+            ValueDirectionChange.Up => new Icons.Regular.Size16.ArrowCircleUp().WithColor(Color.Success),
+            ValueDirectionChange.Down => new Icons.Regular.Size16.ArrowCircleDown().WithColor(Color.Warning),
+            ValueDirectionChange.Constant => new Icons.Regular.Size16.ArrowCircleRight().WithColor(Color.Info),
+            _ => null
+        };
+    }
+
+    private Task SettingsChangedAsync()
+    {
+        return InvokeAsync(StateHasChanged);
+    }
 }

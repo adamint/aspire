@@ -5,11 +5,13 @@
 @namespace Aspire.Dashboard.Components
 @inject IStringLocalizer<ControlsStrings> Loc
 
-<div style="max-height: 60vh; overflow-y: scroll; margin-bottom: 10px;" role="log">
+<div id="data-announce-container" class="visually-hidden" role="log"></div>
+
+<div style="max-height: 60vh; overflow-y: scroll; margin-bottom: 10px;">
     <FluentDataGrid Items="@FilteredMetrics.AsQueryable()" ItemSize="35" ResizableColumns="true">
         <ChildContent>
             <TemplateColumn Class="metric-grid-cell" Title="Start" Sortable="true" Tooltip="true" TooltipText="@(metric => metric.DimensionName)">
-                @context.Value.Start
+                <span aria-live="polite">@context.Value.Start</span>
 
                 @if (_anyDimensionsShown)
                 {
@@ -18,34 +20,27 @@
             </TemplateColumn>
             <PropertyColumn Property="@(c => c.Value.End)" Title="End" Sortable="true"/>
 
-            @if (InstrumentViewModel.Instrument?.Type != OtlpInstrumentType.Histogram || InstrumentViewModel.ShowCount)
-            {
-                <PropertyColumn Property="@(c => c.Value.Count)" Title="Count" Sortable="true"/>
-                <TemplateColumn Title="Change" Sortable="true">
-                    @switch (context.Direction)
-                    {
-                        case ValueDirectionChange.Up:
-                            <FluentIcon Icon="Icons.Regular.Size24.ArrowUpRight" Color="Color.Success"/>
-                            break;
-                        case ValueDirectionChange.Down:
-                            <FluentIcon Icon="Icons.Regular.Size24.ArrowDownLeft" Color="Color.Warning" Style="transform: scale(-1,1)"/>
-                            break;
-                        case ValueDirectionChange.Constant:
-                            <FluentIcon Icon="Icons.Regular.Size24.ArrowLeft" Style="transform: scale(-1,1)"/>
-                            break;
-                    }
-                </TemplateColumn>
-            }
-            else
+            @if (InstrumentViewModel.Instrument?.Type == OtlpInstrumentType.Histogram && !InstrumentViewModel.ShowCount)
             {
                 var unit = PlotlyChart.GetDisplayedUnit(InstrumentViewModel, Loc);
                 var percentileColumns = new List<(int Percentile, string UnderlineColor)> { (50, "#89B5D3"), (90, "#F9B980"), (99, "#8FC98F") };
                 foreach (var (percentile, underlineColor) in percentileColumns)
                 {
                     <TemplateColumn Title="@($"P{percentile}")" Sortable="true">
-                        <span style="@($"text-decoration: underline; text-decoration-color: {underlineColor}")">@CalculatePercentile(percentile, (HistogramValue)context.Value) @unit</span>
+                        @if (context is HistogramMetric histogramMetric)
+                        {
+                            <span style="@($"text-decoration: underline; text-decoration-color: {underlineColor}; margin-right: 2px;")">@CalculatePercentile(percentile, (HistogramValue)context.Value) @unit</span>
+                            <FluentIcon Style="vertical-align: text-bottom" Value="@GetIconForDirection(histogramMetric.Percentiles[percentile].Direction)"/>
+                        }
                     </TemplateColumn>
                 }
+            }
+            else
+            {
+                <TemplateColumn Title="Count" Sortable="true">
+                    <span style="margin-right: 2px;">@context.Value.Count</span>
+                    <FluentIcon Style="vertical-align: text-bottom" Value="@GetIconForDirection(context.CountDirectionChange)"/>
+                </TemplateColumn>
             }
         </ChildContent>
         <EmptyContent>
@@ -55,16 +50,14 @@
 </div>
 
 <FluentStack Orientation="Orientation.Vertical">
-    @if (_metrics.Count > 10)
-    {
-        <FluentSwitch @bind-Value="@_showLatestMetrics"
-                      @bind-Value:after="ToggleFilter"
-                      UncheckedMessage="Show all values"
-                      CheckedMessage="Show the latest 10 values" />
-    }
+    <FluentSwitch @bind-Value="@_showLatestMetrics"
+                  @bind-Value:after="SettingsChangedAsync"
+                  Disabled="@(_metrics.Count < 10)"
+                  UncheckedMessage="Show all values"
+                  CheckedMessage="Show the latest 10 values" />
 
     <FluentSwitch @bind-Value="@_onlyShowValueChanges"
-                  @bind-Value:after="ToggleOnlyShowValueChanges"
+                  @bind-Value:after="SettingsChangedAsync"
                   UncheckedMessage="Don't only show value changes"
                   CheckedMessage="Only show value changes" />
 </FluentStack>
