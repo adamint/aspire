@@ -1,3 +1,6 @@
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.DependencyInjection;
@@ -52,9 +55,6 @@ public static class Extensions
                     // We want to view all traces in development
                     tracing.SetSampler(new AlwaysOnSampler());
                 }
-
-                tracing.AddSource("Microsoft.Orleans.Runtime");
-                tracing.AddSource("Microsoft.Orleans.Application");
 
                 tracing.AddAspNetCoreInstrumentation()
                        .AddGrpcClientInstrumentation()
@@ -118,6 +118,5 @@ public static class Extensions
         meterProviderBuilder.AddMeter(
             "Microsoft.AspNetCore.Hosting",
             "Microsoft.AspNetCore.Server.Kestrel",
-            "System.Net.Http",
-            "Microsoft.Orleans");
+            "System.Net.Http");
 }
