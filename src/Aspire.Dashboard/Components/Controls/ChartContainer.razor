@@ -18,12 +18,12 @@ else
             <p>@_instrument.Description</p>
         </div>
         <FluentTabs>
-            <FluentTab aria-label="@Loc[ControlsStrings.ChartContainerGraphAccessibleLabel]" Label="@Loc[ControlsStrings.ChartContainerGraphTab]" Icon="@(new Icons.Regular.Size24.DataArea())">
+            <FluentTab aria-label="@Loc[nameof(ControlsStrings.ChartContainerGraphAccessibleLabel)]" Label="@Loc[nameof(ControlsStrings.ChartContainerGraphTab)]" Icon="@(new Icons.Regular.Size24.DataArea())">
                 <div class="metrics-chart-container">
                     <PlotlyChart InstrumentViewModel="_instrumentViewModel" Duration="Duration"/>
                 </div>
             </FluentTab>
-            <FluentTab Label="@Loc[ControlsStrings.ChartContainerTableTab]">
+            <FluentTab Label="@Loc[nameof(ControlsStrings.ChartContainerTableTab)]">
                 <MetricTable InstrumentViewModel="_instrumentViewModel" Duration="Duration" />
             </FluentTab>
         </FluentTabs>
@@ -36,12 +36,12 @@ else
                     <FluentDataGrid Items="@Queryable.AsQueryable(_viewModel.DimensionFilters)" GridTemplateColumns="200px 1fr auto" GenerateHeader="GenerateHeaderOption.None">
                         <ChildContent>
                             <PropertyColumn Tooltip="true" TooltipText="@(c => c.Name)" Property="@(c => c.Name)"/>
-                            <TemplateColumn Tooltip="true" TooltipText="@(c => c.SelectedValues.Count == 0 ? "(None)" : string.Join(", ", c.SelectedValues.Select(v => v.Name)))">
+                            <TemplateColumn Tooltip="true" TooltipText="@(c => c.SelectedValues.Count == 0 ? Loc[nameof(ControlsStrings.ChartContainerNoneSelected)] : string.Join(", ", c.SelectedValues.Select(v => v.Name)))">
                                 <FluentOverflow Class="dimension-overflow">
                                     <ChildContent>
                                         @if (context.SelectedValues.Count == 0)
                                         {
-                                            <FluentBadge>(None)</FluentBadge>
+                                            <FluentBadge>@Loc[nameof(ControlsStrings.ChartContainerNoneSelected)]</FluentBadge>
                                         }
                                         else
                                         {
@@ -70,7 +70,7 @@ else
                                     <Header>@context.Name</Header>
                                     <Body>
                                     <FluentStack Orientation="Orientation.Vertical" Class="dimension-popup">
-                                        <FluentCheckbox Label="All"
+                                        <FluentCheckbox Label="@Loc[nameof(ControlsStrings.All)]"
                                                         ThreeState="true"
                                                         ShowIndeterminate="false"
                                                         ThreeStateOrderUncheckToIntermediate="true"

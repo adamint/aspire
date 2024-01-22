@@ -1,4 +1,7 @@
-﻿export function announceDataGridRows(dataGridContainerId, indices) {
+﻿/*
+ Announces row text of the specified indices to screen readers using an offscreen div
+ */
+export function announceDataGridRows(dataGridContainerId, indices) {
     const containerId = "table-announce-container";
     let container = document.getElementById(containerId);
     if (container === null) {

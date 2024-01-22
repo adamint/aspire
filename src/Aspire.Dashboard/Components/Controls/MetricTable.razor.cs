@@ -48,7 +48,7 @@ public partial class MetricTable : ComponentBase
 
         if (InstrumentViewModel.MatchedDimensions is not null)
         {
-            var metricsWithDimension = new List<Metric>();
+            var metrics = new List<Metric>();
             foreach (var dimension in InstrumentViewModel.MatchedDimensions)
             {
                 if (!dimension.Name.Equals(DimensionScope.NoDimensions))
@@ -81,11 +81,11 @@ public partial class MetricTable : ComponentBase
                         foreach (var percentile in s_shownPercentiles)
                         {
                             var percentileValue = CalculatePercentile(percentile, histogramValue);
-                            var directionChange = metricsWithDimension.LastOrDefault() is HistogramMetric last ? GetDirectionChange(percentileValue, last.Percentiles[percentile].Value) : ValueDirectionChange.Constant;
+                            var directionChange = metrics.LastOrDefault() is HistogramMetric last ? GetDirectionChange(percentileValue, last.Percentiles[percentile].Value) : ValueDirectionChange.Constant;
                             percentiles.Add(percentile, (percentileValue, directionChange));
                         }
 
-                        metricsWithDimension.Add(
+                        metrics.Add(
                             new HistogramMetric
                             {
                                 DimensionName = dimension.Name,
@@ -107,7 +107,7 @@ public partial class MetricTable : ComponentBase
                     }
                     else
                     {
-                        metricsWithDimension.Add(
+                        metrics.Add(
                             new Metric
                             {
                                 DimensionName = dimension.Name, DimensionAttributes = dimension.Attributes, Value = metricValue, CountDirectionChange = countDirectionChange
@@ -115,69 +115,32 @@ public partial class MetricTable : ComponentBase
                     }
                 }
             }
-            if (_onlyShowValueChanges && metricsWithDimension.Count > 0)
-            {
-                if (InstrumentViewModel.Instrument?.Type != OtlpInstrumentType.Histogram || InstrumentViewModel.ShowCount)
-                {
-                    var current = metricsWithDimension[0].Value.Count;
-                    for (var i = 1; i < metricsWithDimension.Count; i++)
-                    {
-                        var count = metricsWithDimension[i].Value.Count;
-                        if (current == count)
-                        {
-                            metricsWithDimension.RemoveAt(i);
-                            i--;
-                        }
-                        else
-                        {
-                            current = count;
-                        }
-                    }
-                }
-                else
-                {
-                    var currentPercentiles = CalculatePercentiles((HistogramValue)metricsWithDimension[0].Value);
-                    for (var i = 1; i < metricsWithDimension.Count; i++)
-                    {
-                        var histogramValue = (HistogramValue)metricsWithDimension[i].Value;
-                        var percentiles = CalculatePercentiles(histogramValue);
-                        if (CollectionExtensions.Equivalent(currentPercentiles, percentiles))
-                        {
-                            metricsWithDimension.RemoveAt(i);
-                            i--;
-                        }
-                        else
-                        {
-                            currentPercentiles = percentiles;
-                        }
-                    }
 
-                    static double?[] CalculatePercentiles(HistogramValue value)
-                    {
-                        return [CalculatePercentile(50, value), CalculatePercentile(90, value), CalculatePercentile(99, value)];
-                    }
-                }
+            if (_onlyShowValueChanges && metrics.Count > 0)
+            {
+                RemoveDuplicateValues(metrics);
             }
 
-            while (_metrics.Count > metricsWithDimension.Count)
+            while (_metrics.Count > metrics.Count)
             {
                 _metrics.RemoveAt(_metrics.Count - 1);
             }
 
-            for (var i = 0; i < metricsWithDimension.Count; i++)
+            for (var i = 0; i < metrics.Count; i++)
             {
                 if (i >= _metrics.Count)
                 {
-                    _metrics.TryAdd(metricsWithDimension[i], metricsWithDimension[i]);
+                    _metrics.TryAdd(metrics[i], metrics[i]);
                 }
-                else if (!_metrics.GetValueAtIndex(i).Equals(metricsWithDimension[i]))
+                else if (!_metrics.GetValueAtIndex(i).Equals(metrics[i]))
                 {
-                    _metrics.SetValueAtIndex(i, metricsWithDimension[i]);
+                    _metrics.SetValueAtIndex(i, metrics[i]);
                 }
             }
         }
 
         await InvokeAsync(StateHasChanged);
+
         if (_jsModule is not null)
         {
             var newFilteredMetrics = FilteredMetrics.ToList();
@@ -201,6 +164,52 @@ public partial class MetricTable : ComponentBase
             if (indices.Count > 0)
             {
                 await _jsModule.InvokeVoidAsync("announceDataGridRows", "metric-table-container", indices);
+            }
+        }
+
+        return;
+
+        void RemoveDuplicateValues(IList<Metric> metrics)
+        {
+            if (!ShouldShowHistogram())
+            {
+                var current = metrics[0].Value.Count;
+                for (var i = 1; i < metrics.Count; i++)
+                {
+                    var count = metrics[i].Value.Count;
+                    if (current == count)
+                    {
+                        metrics.RemoveAt(i);
+                        i--;
+                    }
+                    else
+                    {
+                        current = count;
+                    }
+                }
+            }
+            else
+            {
+                var currentPercentiles = CalculatePercentiles((HistogramValue)metrics[0].Value);
+                for (var i = 1; i < metrics.Count; i++)
+                {
+                    var histogramValue = (HistogramValue)metrics[i].Value;
+                    var percentiles = CalculatePercentiles(histogramValue);
+                    if (CollectionExtensions.Equivalent(currentPercentiles, percentiles))
+                    {
+                        metrics.RemoveAt(i);
+                        i--;
+                    }
+                    else
+                    {
+                        currentPercentiles = percentiles;
+                    }
+                }
+
+                static double?[] CalculatePercentiles(HistogramValue value)
+                {
+                    return [CalculatePercentile(50, value), CalculatePercentile(90, value), CalculatePercentile(99, value)];
+                }
             }
         }
     }
@@ -267,5 +276,10 @@ public partial class MetricTable : ComponentBase
     private Task SettingsChangedAsync()
     {
         return InvokeAsync(StateHasChanged);
+    }
+
+    private bool ShouldShowHistogram()
+    {
+        return InstrumentViewModel.Instrument?.Type == OtlpInstrumentType.Histogram && !InstrumentViewModel.ShowCount;
     }
 }

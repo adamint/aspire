@@ -114,6 +114,15 @@ namespace Aspire.Dashboard.Resources {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to (None).
+        /// </summary>
+        public static string ChartContainerNoneSelected {
+            get {
+                return ResourceManager.GetString("ChartContainerNoneSelected", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to Options.
         /// </summary>
         public static string ChartContainerOptionsHeader {
@@ -245,6 +254,78 @@ namespace Aspire.Dashboard.Resources {
         public static string GridValueMaskShowValue {
             get {
                 return ResourceManager.GetString("GridValueMaskShowValue", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Count.
+        /// </summary>
+        public static string MetricTableCountColumnHeader {
+            get {
+                return ResourceManager.GetString("MetricTableCountColumnHeader", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to End.
+        /// </summary>
+        public static string MetricTableEndColumnHeader {
+            get {
+                return ResourceManager.GetString("MetricTableEndColumnHeader", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Show all values.
+        /// </summary>
+        public static string MetricTableShowAllValues {
+            get {
+                return ResourceManager.GetString("MetricTableShowAllValues", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Show the latest 10 values.
+        /// </summary>
+        public static string MetricTableShowLatestValues {
+            get {
+                return ResourceManager.GetString("MetricTableShowLatestValues", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Don&apos;t only show value changes.
+        /// </summary>
+        public static string MetricTableShowNonValueChanges {
+            get {
+                return ResourceManager.GetString("MetricTableShowNonValueChanges", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Only show value changes.
+        /// </summary>
+        public static string MetricTableShowOnlyValueChanges {
+            get {
+                return ResourceManager.GetString("MetricTableShowOnlyValueChanges", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Start.
+        /// </summary>
+        public static string MetricTableStartColumnHeader {
+            get {
+                return ResourceManager.GetString("MetricTableStartColumnHeader", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Value.
+        /// </summary>
+        public static string MetricTableValueColumnHeader {
+            get {
+                return ResourceManager.GetString("MetricTableValueColumnHeader", resourceCulture);
             }
         }
         
