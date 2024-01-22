@@ -21,7 +21,10 @@ public class MetricValue<T> : MetricValueBase where T : struct
 
     public override bool Equals(object? obj)
     {
-        return obj is MetricValue<T> other && Start.Equals(other.Start) && Count == other.Count && End.Equals(other.End) && Equals(Value, other.Value);
+        return obj is MetricValue<T> other
+            && Start.Equals(other.Start)
+            && Count == other.Count
+            && Equals(Value, other.Value);
     }
 
     public override int GetHashCode()

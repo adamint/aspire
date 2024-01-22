@@ -1,7 +1,6 @@
 ﻿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Globalization;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Otlp.Model;
 using Aspire.Dashboard.Otlp.Model.MetricValues;
@@ -43,6 +42,8 @@ public partial class MetricTable : ComponentBase
 
     private async Task OnInstrumentDataUpdate()
     {
+        var oldFilteredMetrics = FilteredMetrics.ToList();
+
         _anyDimensionsShown = false;
 
         if (InstrumentViewModel.MatchedDimensions is not null)
@@ -109,10 +110,7 @@ public partial class MetricTable : ComponentBase
                         metricsWithDimension.Add(
                             new Metric
                             {
-                                DimensionName = dimension.Name,
-                                DimensionAttributes = dimension.Attributes,
-                                Value = metricValue,
-                                CountDirectionChange = countDirectionChange
+                                DimensionName = dimension.Name, DimensionAttributes = dimension.Attributes, Value = metricValue, CountDirectionChange = countDirectionChange
                             });
                     }
                 }
@@ -182,7 +180,28 @@ public partial class MetricTable : ComponentBase
         await InvokeAsync(StateHasChanged);
         if (_jsModule is not null)
         {
-            await _jsModule.InvokeVoidAsync("addRowLogRoles", DateTime.Now.ToString(CultureInfo.InvariantCulture));
+            var newFilteredMetrics = FilteredMetrics.ToList();
+            if (newFilteredMetrics.Count < oldFilteredMetrics.Count)
+            {
+                return;
+            }
+
+            var indices = new List<int>();
+
+            if (!newFilteredMetrics[oldFilteredMetrics.Count - 1].Equals(oldFilteredMetrics.Last()))
+            {
+                indices.Add(oldFilteredMetrics.Count - 1);
+            }
+
+            for (var i = oldFilteredMetrics.Count; i < newFilteredMetrics.Count; i++)
+            {
+                indices.Add(i);
+            }
+
+            if (indices.Count > 0)
+            {
+                await _jsModule.InvokeVoidAsync("announceDataGridRows", "metric-table-container", indices);
+            }
         }
     }
 
@@ -197,6 +216,20 @@ public partial class MetricTable : ComponentBase
         public required KeyValuePair<string, string>[] DimensionAttributes { get; init; }
         public required MetricValueBase Value { get; init; }
         public required ValueDirectionChange? CountDirectionChange { get; init; }
+
+        public override bool Equals(object? obj)
+        {
+            return obj is Metric other
+                && DimensionName == other.DimensionName
+                && DimensionAttributes.Equals(other.DimensionAttributes)
+                && Value.Equals(other.Value)
+                && CountDirectionChange == other.CountDirectionChange;
+        }
+
+        public override int GetHashCode()
+        {
+            return HashCode.Combine(DimensionName, DimensionAttributes, Value, CountDirectionChange);
+        }
     }
 
     public class HistogramMetric : Metric

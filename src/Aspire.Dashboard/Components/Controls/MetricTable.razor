@@ -5,14 +5,11 @@
 @namespace Aspire.Dashboard.Components
 @inject IStringLocalizer<ControlsStrings> Loc
 
-<div id="data-announce-container" class="visually-hidden" role="log"></div>
-
-<div style="max-height: 60vh; overflow-y: scroll; margin-bottom: 10px;">
-    <FluentDataGrid Items="@FilteredMetrics.AsQueryable()" ItemSize="35" ResizableColumns="true">
+<div id="metric-table-container" style="max-height: 60vh; overflow-y: scroll; margin-bottom: 10px;">
+    <FluentDataGrid Items="@FilteredMetrics.AsQueryable()" ItemSize="35" ResizableColumns="true" Virtualize="true">
         <ChildContent>
             <TemplateColumn Class="metric-grid-cell" Title="Start" Sortable="true" Tooltip="true" TooltipText="@(metric => metric.DimensionName)">
                 <span aria-live="polite">@context.Value.Start</span>
-
                 @if (_anyDimensionsShown)
                 {
                     <FluentIcon Icon="Icons.Filled.Size16.DataBarVertical" Color="Color.Info" Style="margin-left: 3px; vertical-align: text-bottom"/>
@@ -37,11 +34,12 @@
             }
             else
             {
-                <TemplateColumn Title="Count" Sortable="true">
-                    <span style="margin-right: 2px;">@context.Value.Count</span>
-                    <FluentIcon Style="vertical-align: text-bottom" Value="@GetIconForDirection(context.CountDirectionChange)"/>
-                </TemplateColumn>
+                <PropertyColumn Property="@(c => c.Value)" Title="Value" />
             }
+            <TemplateColumn Title="Count" Sortable="true">
+                <span style="margin-right: 2px;">@context.Value.Count</span>
+                <FluentIcon Style="vertical-align: text-bottom" Value="@GetIconForDirection(context.CountDirectionChange)"/>
+            </TemplateColumn>
         </ChildContent>
         <EmptyContent>
             There are no metric values yet.

@@ -45,11 +45,16 @@ public class HistogramValue : MetricValueBase
 
     public override bool Equals(object? obj)
     {
-        return obj is HistogramValue other && Values.Equivalent(other.Values) && Sum.Equals(other.Sum) && ExplicitBounds.Equivalent(other.ExplicitBounds);
+        return obj is HistogramValue other
+            && Values.Equivalent(other.Values)
+            && Sum.Equals(other.Sum)
+            && Count.Equals(other.Count)
+            && Start.Equals(other.Start)
+            && ExplicitBounds.Equivalent(other.ExplicitBounds);
     }
 
     public override int GetHashCode()
     {
-        return HashCode.Combine(Start, End, Count, Values, Sum, ExplicitBounds);
+        return HashCode.Combine(Start, Count, Values, Sum, ExplicitBounds);
     }
 }
