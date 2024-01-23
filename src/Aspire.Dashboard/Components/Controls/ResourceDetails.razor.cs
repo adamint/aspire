@@ -57,32 +57,32 @@ public partial class ResourceDetails
         // Known properties can't be static because they need the localizer for translations.
         _resourceProperties =
         [
-            new KnownProperty(KnownProperties.Resource.DisplayName, Loc[Resources.Resources.ResourcesDetailsDisplayNameProperty]),
-            new KnownProperty(KnownProperties.Resource.State, Loc[Resources.Resources.ResourcesDetailsStateProperty]),
-            new KnownProperty(KnownProperties.Resource.CreateTime, Loc[Resources.Resources.ResourcesDetailsStartTimeProperty])
+            new KnownProperty(KnownProperties.Resource.DisplayName, Loc[nameof(Resources.Resources.ResourcesDetailsDisplayNameProperty)]),
+            new KnownProperty(KnownProperties.Resource.State, Loc[nameof(Resources.Resources.ResourcesDetailsStateProperty)]),
+            new KnownProperty(KnownProperties.Resource.CreateTime, Loc[nameof(Resources.Resources.ResourcesDetailsStartTimeProperty)])
         ];
         _projectProperties =
         [
             .. _resourceProperties,
-            new KnownProperty(KnownProperties.Project.Path, Loc[Resources.Resources.ResourcesDetailsProjectPathProperty]),
-            new KnownProperty(KnownProperties.Executable.Pid, Loc[Resources.Resources.ResourcesDetailsExecutableProcessIdProperty]),
+            new KnownProperty(KnownProperties.Project.Path, Loc[nameof(Resources.Resources.ResourcesDetailsProjectPathProperty)]),
+            new KnownProperty(KnownProperties.Executable.Pid, Loc[nameof(Resources.Resources.ResourcesDetailsExecutableProcessIdProperty)]),
         ];
         _executableProperties =
         [
             .. _resourceProperties,
-            new KnownProperty(KnownProperties.Executable.Path, Loc[Resources.Resources.ResourcesDetailsExecutablePathProperty]),
-            new KnownProperty(KnownProperties.Executable.WorkDir, Loc[Resources.Resources.ResourcesDetailsExecutableWorkingDirectoryProperty]),
-            new KnownProperty(KnownProperties.Executable.Args, Loc[Resources.Resources.ResourcesDetailsExecutableArgumentsProperty]),
-            new KnownProperty(KnownProperties.Executable.Pid, Loc[Resources.Resources.ResourcesDetailsExecutableProcessIdProperty]),
+            new KnownProperty(KnownProperties.Executable.Path, Loc[nameof(Resources.Resources.ResourcesDetailsExecutablePathProperty)]),
+            new KnownProperty(KnownProperties.Executable.WorkDir, Loc[nameof(Resources.Resources.ResourcesDetailsExecutableWorkingDirectoryProperty)]),
+            new KnownProperty(KnownProperties.Executable.Args, Loc[nameof(Resources.Resources.ResourcesDetailsExecutableArgumentsProperty)]),
+            new KnownProperty(KnownProperties.Executable.Pid, Loc[nameof(Resources.Resources.ResourcesDetailsExecutableProcessIdProperty)]),
         ];
         _containerProperties =
         [
             .. _resourceProperties,
-            new KnownProperty(KnownProperties.Container.Image, Loc[Resources.Resources.ResourcesDetailsContainerImageProperty]),
-            new KnownProperty(KnownProperties.Container.Id, Loc[Resources.Resources.ResourcesDetailsContainerIdProperty]),
-            new KnownProperty(KnownProperties.Container.Command, Loc[Resources.Resources.ResourcesDetailsContainerCommandProperty]),
-            new KnownProperty(KnownProperties.Container.Args, Loc[Resources.Resources.ResourcesDetailsContainerArgumentsProperty]),
-            new KnownProperty(KnownProperties.Container.Ports, Loc[Resources.Resources.ResourcesDetailsContainerPortsProperty]),
+            new KnownProperty(KnownProperties.Container.Image, Loc[nameof(Resources.Resources.ResourcesDetailsContainerImageProperty)]),
+            new KnownProperty(KnownProperties.Container.Id, Loc[nameof(Resources.Resources.ResourcesDetailsContainerIdProperty)]),
+            new KnownProperty(KnownProperties.Container.Command, Loc[nameof(Resources.Resources.ResourcesDetailsContainerCommandProperty)]),
+            new KnownProperty(KnownProperties.Container.Args, Loc[nameof(Resources.Resources.ResourcesDetailsContainerArgumentsProperty)]),
+            new KnownProperty(KnownProperties.Container.Ports, Loc[nameof(Resources.Resources.ResourcesDetailsContainerPortsProperty)]),
         ];
     }
 
@@ -98,8 +98,8 @@ public partial class ResourceDetails
     {
         foreach (var endpoint in Resource.Endpoints)
         {
-            yield return new Endpoint { Name = Loc[Resources.Resources.ResourceDetailsEndpointUrl], IsHttp = true, Address = endpoint.EndpointUrl };
-            yield return new Endpoint { Name = Loc[Resources.Resources.ResourceDetailsProxyUrl], IsHttp = true, Address = endpoint.ProxyUrl };
+            yield return new Endpoint { Name = Loc[nameof(Resources.Resources.ResourceDetailsEndpointUrl)], IsHttp = true, Address = endpoint.EndpointUrl };
+            yield return new Endpoint { Name = Loc[nameof(Resources.Resources.ResourceDetailsProxyUrl)], IsHttp = true, Address = endpoint.ProxyUrl };
         }
         foreach (var service in Resource.Services)
         {

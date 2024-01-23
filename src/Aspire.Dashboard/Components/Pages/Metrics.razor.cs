@@ -70,7 +70,7 @@ public partial class Metrics : IDisposable, IPageWithSessionAndUrlState<Metrics.
             new() { Name = Loc[nameof(Dashboard.Resources.Metrics.MetricsLastTwentyFourHours)], Id = TimeSpan.FromHours(24) },
         };
 
-        _selectApplication = new SelectViewModel<string> { Id = null, Name = ControlsStringsLoc[ControlsStrings.SelectAResource] };
+        _selectApplication = new SelectViewModel<string> { Id = null, Name = ControlsStringsLoc[nameof(ControlsStrings.SelectAResource)] };
         ViewModel = new MetricsViewModel { SelectedApplication = _selectApplication, SelectedDuration = _durations.Single(d => d.Id == s_defaultDuration) };
 
         UpdateApplications();
