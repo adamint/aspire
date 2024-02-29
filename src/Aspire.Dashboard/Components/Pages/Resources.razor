@@ -1,6 +1,6 @@
 ﻿@page "/"
 @using Aspire.Dashboard.Components.ResourcesGridColumns
-@using Aspire.Dashboard.Model
+@using Aspire.Dashboard.Components.Controls.NestedDataGrid
 @using Aspire.Dashboard.Resources
 @using Aspire.Dashboard.Utils
 @using System.Globalization
@@ -51,7 +51,7 @@
                         SelectedValue="@SelectedResource"
                         ViewKey="ResourcesList">
         <Summary>
-            <FluentDataGrid Items="@FilteredResources" ResizableColumns="true" GridTemplateColumns="1fr 2fr 1.25fr 1.5fr 2.5fr 2fr 1fr 1fr" RowClass="GetRowClass">
+            <FluentNestedDataGrid Items="@FilteredResources" ResizableColumns="true" GridTemplateColumns="1fr 2fr 1.25fr 1.5fr 2.5fr 2fr 1fr 1fr" RowClass="GetRowClass">
                 <ChildContent>
                     <PropertyColumn Title="@Loc[nameof(Dashboard.Resources.Resources.ResourcesTypeColumnHeader)]" Property="@(c => c.ResourceType)" Sortable="true" />
                     <TemplateColumn Title="@ControlsStringsLoc[nameof(ControlsStrings.NameColumnHeader)]" Sortable="true" SortBy="@_nameSort">
@@ -81,7 +81,7 @@
                 <EmptyContent>
                     <FluentIcon Icon="Icons.Regular.Size24.AppGeneric" />&nbsp;@Loc[nameof(Dashboard.Resources.Resources.ResourcesNoResources)]
                 </EmptyContent>
-            </FluentDataGrid>
+            </FluentNestedDataGrid>
         </Summary>
         <Details>
             <ResourceDetails Resource="SelectedResource" ShowSpecOnlyToggle="true" />

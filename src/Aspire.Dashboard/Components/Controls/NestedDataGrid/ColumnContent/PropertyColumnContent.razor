@@ -1,0 +1,23 @@
+﻿<div style="position: relative; height: 100%; width: 100%; display: flex; align-items: center;">
+    <div>@Content</div>
+
+    @if (OnClick is not null)
+    {
+        <a
+            aria-label="@AriaLabel"
+            role="button"
+            onscroll=""
+            href="@(Href ?? "#")"
+            style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow:  hidden; text-indent: -9999px;"
+            @onclick="@(args => { OnClick?.Invoke(args); })">
+        </a>
+    }
+</div>
+
+
+@code {
+    [Parameter, EditorRequired] public required string AriaLabel { get; set; }
+    [Parameter, EditorRequired] public required string Content { get; set; }
+    [Parameter] public string? Href { get; set; }
+    [Parameter] public Func<MouseEventArgs, Task>? OnClick { get; set; }
+}

@@ -1,0 +1,58 @@
+﻿@typeparam TModelItem where TModelItem : FluentNestedDataItem<TModelItem>
+@typeparam TGridItem where TGridItem : FluentNestedDataGridDisplayItem<TModelItem>
+
+@{
+    var gridItems = GetGridItems(Items).ToList();
+    var visibleGridItems = gridItems.Where(item => item.IsVisible).ToList();
+    var levelsCount = gridItems
+    .Where(item => item.IsVisible || item.Parents.Count == 0 || item.Parents.Count(parent => !parent.IsExpanded) == 1)
+    .Max(item => item.Parents.Count);
+}
+
+<div>
+    <FluentDataGrid RowClass="@(row => "nested-data-grid-row")" Items="@visibleGridItems.AsQueryable()" GridTemplateColumns="@GetGridTemplateColumnsWithNestedColumns(gridItems, levelsCount)">
+        @for (var i = 0; i < levelsCount; i++)
+        {
+            var level = i;
+            <TemplateColumn Class="nested-data-grid-level-column" Title="@GetColumnTitleAtLevel?.Invoke(level, GetGridItemsAtLevel(gridItems, level))">
+                <ChildContent>
+                    @{
+                        var itemHasChildAtLevel = context.Parents.Count == level && context.Children?.Count > 0;
+                    }
+                    @if (itemHasChildAtLevel)
+                    {
+                        var id = Guid.NewGuid().ToString();
+                        <FluentButton 
+                            Id="@id" 
+                              Appearance="Appearance.Stealth"
+                              Disabled="@(!context.Item.IsExpandable)"
+                              IconEnd="@(context.Item.IsExpanded ? new Icons.Regular.Size12.ChevronUp() : new Icons.Regular.Size12.ChevronDown())"
+                              Title="@(context.Item.IsExpanded ? "Collapse children" : "Expand children")"
+                              OnClick="@(() => ToggleNodeAsync(context, "test"))" />
+                    }
+                </ChildContent>
+            </TemplateColumn>
+        }
+        
+        @ChildContent
+    </FluentDataGrid>
+</div>
+
+@code {
+    [Parameter]
+    [EditorRequired]
+    public required IEnumerable<TModelItem> Items { get; set; }
+
+    [Parameter]
+    [EditorRequired]
+    public required string GridTemplateColumns { get; set; }
+
+    [Parameter(CaptureUnmatchedValues = true)]
+    public Dictionary<string, object>? AdditionalAttributes { get; set; }
+    
+    [Parameter]
+    public Func<int, IEnumerable<TGridItem>, string?>? GetColumnTitleAtLevel { get; set; }
+
+    [Parameter]
+    public Func<int, IEnumerable<TGridItem>, string>? GetColumnWidthAtLevel { get; set; }
+}
