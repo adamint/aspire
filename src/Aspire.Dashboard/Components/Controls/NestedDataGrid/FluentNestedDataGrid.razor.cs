@@ -9,6 +9,8 @@ public partial class FluentNestedDataGrid<TModelItem, TGridItem>
 	where TGridItem : FluentNestedDataGridDisplayItem<TModelItem>
 {
 	[Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? EmptyContent { get; set; }
+
 	[Inject] public required IJSRuntime JS { get; set; }
 
 	private static IEnumerable<TGridItem> GetGridItems(IEnumerable<TModelItem> items)
@@ -24,7 +26,7 @@ public partial class FluentNestedDataGrid<TModelItem, TGridItem>
 				if (item.Children is not null)
 				{
 					var newParents = parents.ToList();
-					newParents.Add((FluentNestedDataItem<TModelItem>)item);
+					newParents.Add(item);
 
 					foreach (var grandChild in GetGridItemsFor(item.Children, newParents))
 					{
@@ -40,13 +42,13 @@ public partial class FluentNestedDataGrid<TModelItem, TGridItem>
 		return string.Join(" ", Enumerable.Range(0, hierarchyLevels).Select(level => GetColumnWidthAtLevel?.Invoke(level, GetGridItemsAtLevel(gridItems, level)) ?? "0.45fr")) + " " + GridTemplateColumns;
 	}
 
-	private async Task ToggleNodeAsync(TGridItem item, string buttonId)
+	private async Task ToggleNodeAsync(TGridItem item)
 	{
 		item.Item.IsExpanded = !item.Item.IsExpanded;
 		await InvokeAsync(StateHasChanged);
 	}
 
-	private IEnumerable<TGridItem> GetGridItemsAtLevel(IEnumerable<TGridItem> gridItems, int level)
+	private static IEnumerable<TGridItem> GetGridItemsAtLevel(IEnumerable<TGridItem> gridItems, int level)
 	{
 		return gridItems.Where(item => item.Parents.Count == level);
 	}

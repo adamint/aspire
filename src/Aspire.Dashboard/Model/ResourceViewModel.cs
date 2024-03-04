@@ -4,12 +4,26 @@
 using System.Collections.Frozen;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using Aspire.Dashboard.Components.Controls.NestedDataGrid;
 using Google.Protobuf.WellKnownTypes;
 
 namespace Aspire.Dashboard.Model;
 
+public abstract class ResourceViewModelBase(IReadOnlyCollection<ResourceViewModelBase>? children) : FluentNestedDataItem<ResourceViewModelBase>(children)
+{
+    public abstract string GetName();
+}
+
+public sealed class ResourceSetViewModel(IReadOnlyCollection<ResourceViewModel> children) : ResourceViewModelBase(children)
+{
+    public required string Name { get; set; }
+    public IEnumerable<ResourceViewModel> Replicas => children;
+
+    public override string GetName() => Name;
+}
+
 [DebuggerDisplay("Name = {Name}, ResourceType = {ResourceType}, State = {State}, Properties = {Properties.Count}")]
-public sealed class ResourceViewModel : IResource
+public sealed class ResourceViewModel() : ResourceViewModelBase(children: null)
 {
     public required string Name { get; init; }
     public required string ResourceType { get; init; }
@@ -46,6 +60,8 @@ public sealed class ResourceViewModel : IResource
 
         return resource.DisplayName;
     }
+
+    public override string GetName() => Name;
 }
 
 public sealed class EnvironmentVariableViewModel

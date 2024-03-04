@@ -3,6 +3,7 @@
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using Aspire.Dashboard.Components.Controls.NestedDataGrid;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Otlp.Model;
 using Aspire.Dashboard.Otlp.Storage;
@@ -10,6 +11,9 @@ using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
 
 namespace Aspire.Dashboard.Components.Pages;
+#pragma warning disable CA1823
+#pragma warning disable IDE0060
+#pragma warning disable IDE0051
 
 public partial class Resources : ComponentBase, IDisposable
 {
@@ -94,12 +98,11 @@ public partial class Resources : ComponentBase, IDisposable
         }
     }
 
-    private IQueryable<ResourceViewModel>? FilteredResources => _resourceByName.Values.Where(Filter).OrderBy(e => e.ResourceType).ThenBy(e => e.Name).AsQueryable();
+    private IQueryable<ResourceViewModelBase> FilteredResources => _resourceByName.Values.Where(Filter).OrderBy(e => e.ResourceType).ThenBy(e => e.Name).AsQueryable();
 
     private readonly GridSort<ResourceViewModel> _nameSort = GridSort<ResourceViewModel>.ByAscending(p => p.Name);
     private readonly GridSort<ResourceViewModel> _stateSort = GridSort<ResourceViewModel>.ByAscending(p => p.State);
     private readonly GridSort<ResourceViewModel> _startTimeSort = GridSort<ResourceViewModel>.ByDescending(p => p.CreationTimeStamp);
-
     protected override void OnInitialized()
     {
         _applicationUnviewedErrorCounts = TelemetryRepository.GetApplicationUnviewedErrorLogsCount();
@@ -209,4 +212,9 @@ public partial class Resources : ComponentBase, IDisposable
 
     private string? GetRowClass(ResourceViewModel resource)
         => resource == SelectedResource ? "selected-row resource-row" : "resource-row";
+
+    private static string Test(FluentNestedDataGridDisplayItem<ResourceViewModelBase> item)
+    {
+        return item.Item is ResourceViewModel resource ? resource.ResourceType : "ReplicaSet";
+    }
 }

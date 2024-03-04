@@ -4,6 +4,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
+using Aspire.Dashboard.Extensions;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Model.Otlp;
 using Aspire.Dashboard.Otlp.Model;
@@ -168,6 +169,27 @@ public sealed partial class ConsoleLogs : ComponentBase, IAsyncDisposable, IPage
     {
         var builder = ImmutableList.CreateBuilder<SelectViewModel<ResourceTypeDetails>>();
         builder.Add(_noSelection);
+
+        foreach (var resourceSet in ResourceExtensions.MapResourceNamesToSets(_resourceByName))
+        {
+            if (resourceSet is ResourceViewModel resource)
+            {
+                builder.Add(ToOption(resource, false, resource.DisplayName));
+            }
+            else if (resourceSet is ResourceSetViewModel set)
+            {
+                builder.Add(new SelectViewModel<ResourceTypeDetails>
+                {
+                    Id = ResourceTypeDetails.CreateReplicaSet(set.Name),
+                    Name = set.Name
+                });
+
+                foreach (var replica in set.Replicas)
+                {
+                    builder.Add(ToOption(replica, false, set.Name));
+                }
+            }
+        }
 
         foreach (var resourceGroupsByApplicationName in _resourceByName.Values.OrderBy(c => c.Name).GroupBy(resource => resource.DisplayName))
         {

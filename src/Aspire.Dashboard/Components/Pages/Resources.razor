@@ -4,6 +4,7 @@
 @using Aspire.Dashboard.Resources
 @using Aspire.Dashboard.Utils
 @using System.Globalization
+@using Aspire.Dashboard.Model
 @inject IStringLocalizer<Dashboard.Resources.Resources> Loc
 @inject IStringLocalizer<ControlsStrings> ControlsStringsLoc
 
@@ -51,10 +52,22 @@
                         SelectedValue="@SelectedResource"
                         ViewKey="ResourcesList">
         <Summary>
-            <FluentNestedDataGrid Items="@FilteredResources" ResizableColumns="true" GridTemplateColumns="1fr 2fr 1.25fr 1.5fr 2.5fr 2fr 1fr 1fr" RowClass="GetRowClass">
+            <FluentNestedDataGrid
+                TModelItem="ResourceViewModelBase"
+                TGridItem="FluentNestedDataGridDisplayItem<ResourceViewModelBase>"
+                Items="@FilteredResources"
+                ResizableColumns="true"
+                GridTemplateColumns="1fr 2fr 1.25fr 1.5fr 2.5fr 2fr 1fr 1fr"
+                RowClass="GetRowClass"
+                >
                 <ChildContent>
-                    <PropertyColumn Title="@Loc[nameof(Dashboard.Resources.Resources.ResourcesTypeColumnHeader)]" Property="@(c => c.ResourceType)" Sortable="true" />
-                    <TemplateColumn Title="@ControlsStringsLoc[nameof(ControlsStrings.NameColumnHeader)]" Sortable="true" SortBy="@_nameSort">
+                    <AspirePropertyColumn
+                        Title="@Loc[nameof(Dashboard.Resources.Resources.ResourcesTypeColumnHeader)]"
+                        Property="@(c => Test(c))"
+                        AriaLabel="Test"
+                        Sortable="true" />
+
+                    <!--<TemplateColumn Title="@ControlsStringsLoc[nameof(ControlsStrings.NameColumnHeader)]" Sortable="true" SortBy="@_nameSort">
                         <ResourceNameDisplay Resource="context" FilterText="@_filter" FormatName="GetResourceName" />
                     </TemplateColumn>
                     <TemplateColumn Title="@Loc[nameof(Dashboard.Resources.Resources.ResourcesStateColumnHeader)]" Sortable="true" SortBy="@_stateSort">
@@ -76,7 +89,7 @@
                         <FluentButton Appearance="Appearance.Lightweight"
                                       Title="@ControlsStringsLoc[nameof(ControlsStrings.ViewAction)]"
                                       OnClick="() => ShowResourceDetails(context)">@ControlsStringsLoc[nameof(ControlsStrings.ViewAction)]</FluentButton>
-                    </TemplateColumn>
+                    </TemplateColumn>-->
                 </ChildContent>
                 <EmptyContent>
                     <FluentIcon Icon="Icons.Regular.Size24.AppGeneric" />&nbsp;@Loc[nameof(Dashboard.Resources.Resources.ResourcesNoResources)]

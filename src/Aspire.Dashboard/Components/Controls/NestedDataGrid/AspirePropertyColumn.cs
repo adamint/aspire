@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using System.Reflection;
+using Aspire.Dashboard.Components.Controls.NestedDataGrid.ColumnContent;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.AspNetCore.Components.Web;
@@ -37,16 +38,23 @@ public class AspirePropertyColumn<TGridItem, TProp> : ColumnBase<TGridItem>, IAs
 
     /// <summary>
     /// Optionally specifies how to compare values in this column when sorting.
-    /// 
+    ///
     /// Using this requires the <typeparamref name="TProp"/> type to implement <see cref="IComparable{T}"/>.
     /// </summary>
     [Parameter]
     public IComparer<TProp>? Comparer { get; set; } = null;
 
-    [Parameter] public string? Href { get; set; }
-    [Parameter] public Func<MouseEventArgs, Task>? OnClick { get; set; }
-    [Parameter, EditorRequired] public required string AriaLabel { get; set; }
+    [Parameter]
+    public string? Href { get; set; }
 
+    [Parameter]
+    public Func<MouseEventArgs, Task>? OnClick { get; set; }
+
+    [Parameter, EditorRequired]
+    public required string AriaLabel { get; set; }
+
+    [Parameter]
+    public Func<TGridItem, bool>? RowHasContent { get; set; }
 
     public override GridSort<TGridItem>? SortBy
     {
@@ -108,11 +116,13 @@ public class AspirePropertyColumn<TGridItem, TProp> : ColumnBase<TGridItem>, IAs
     /// <inheritdoc />
     protected override void CellContent(RenderTreeBuilder builder, TGridItem item)
     {
-        builder.OpenComponent<PropertyColumnContent>(0);
-        builder.AddComponentParameter(1, nameof(PropertyColumnContent.Href), Href);
-        builder.AddComponentParameter(2, nameof(PropertyColumnContent.OnClick), OnClick);
-        builder.AddComponentParameter(3, nameof(PropertyColumnContent.Content), _cellTextFunc?.Invoke(item));
-        builder.AddComponentParameter(4, nameof(PropertyColumnContent.AriaLabel), AriaLabel);
+        builder.OpenComponent<PropertyColumnContent<TGridItem>>(0);
+        builder.AddComponentParameter(1, nameof(PropertyColumnContent<TGridItem>.Href), Href);
+        builder.AddComponentParameter(2, nameof(PropertyColumnContent<TGridItem>.OnClick), OnClick);
+        builder.AddComponentParameter(3, nameof(PropertyColumnContent<TGridItem>.Content), _cellTextFunc?.Invoke(item));
+        builder.AddComponentParameter(4, nameof(PropertyColumnContent<TGridItem>.AriaLabel), AriaLabel);
+        builder.AddComponentParameter(5, nameof(PropertyColumnContent<TGridItem>.Item), item);
+        builder.AddComponentParameter(6, nameof(PropertyColumnContent<TGridItem>.RowHasContent), RowHasContent);
 
         builder.CloseComponent();
     }
