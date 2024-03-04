@@ -106,6 +106,7 @@ public sealed class ManifestPublishingContext(DistributedApplicationExecutionCon
 
         await WriteEnvironmentVariablesAsync(container).ConfigureAwait(false);
         WriteBindings(container, emitContainerPort: true);
+        WriteInputs(container);
     }
 
     /// <summary>
@@ -160,7 +161,7 @@ public sealed class ManifestPublishingContext(DistributedApplicationExecutionCon
     /// <param name="resource"></param>
     public async Task WriteEnvironmentVariablesAsync(IResource resource)
     {
-        var config = new Dictionary<string, string>();
+        var config = new Dictionary<string, object>();
 
         var envContext = new EnvironmentCallbackContext(ExecutionContext, config, CancellationToken);
 
@@ -174,13 +175,52 @@ public sealed class ManifestPublishingContext(DistributedApplicationExecutionCon
 
             foreach (var (key, value) in config)
             {
-                Writer.WriteString(key, value);
+                var valueString = value switch
+                {
+                    string stringValue => stringValue,
+                    IManifestExpressionProvider manifestExpression => manifestExpression.ValueExpression,
+                    _ => throw new DistributedApplicationException($"The value of the environment variable `{key}` is not supported.")
+                };
+
+                Writer.WriteString(key, valueString);
             }
 
             WriteServiceDiscoveryEnvironmentVariables(resource);
 
             WritePortBindingEnvironmentVariables(resource);
 
+            Writer.WriteEndObject();
+        }
+    }
+
+    /// <summary>
+    /// Writes the "inputs" annotations for the underlying resource.
+    /// </summary>
+    /// <param name="resource">The resource to write inputs for.</param>
+    public void WriteInputs(IResource resource)
+    {
+        if (resource.TryGetAnnotationsOfType<InputAnnotation>(out var inputs))
+        {
+            Writer.WriteStartObject("inputs");
+            foreach (var input in inputs)
+            {
+                Writer.WriteStartObject(input.Name);
+                Writer.WriteString("type", input.Type);
+
+                if (input.Secret)
+                {
+                    Writer.WriteBoolean("secret", true);
+                }
+
+                if (input.Default is not null)
+                {
+                    Writer.WriteStartObject("default");
+                    input.Default.WriteToManifest(this);
+                    Writer.WriteEndObject();
+                }
+
+                Writer.WriteEndObject();
+            }
             Writer.WriteEndObject();
         }
     }
