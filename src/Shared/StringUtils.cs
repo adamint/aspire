@@ -22,9 +22,9 @@ internal static class StringUtils
         }
     }
 
-    public static string GenerateNewGuid(out string guid)
+    public static string GenerateNewGuidId(out string guid)
     {
-        guid = Guid.NewGuid().ToString();
+        guid = $"f-{Guid.NewGuid()}";
         return guid;
     }
 }

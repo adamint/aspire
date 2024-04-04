@@ -1,11 +1,11 @@
 ﻿@page "/traces"
 @page "/traces/resource/{applicationName}"
 
-@using Aspire.Dashboard.Model.Otlp
 @using Aspire.Dashboard.Otlp.Model
 @using Aspire.Dashboard.Resources
 @using Aspire.Dashboard.Utils
 @using System.Globalization
+@using Aspire.Hosting.Utils
 @inject NavigationManager NavigationManager
 @inject IJSRuntime JS
 @inject IStringLocalizer<Dashboard.Resources.Traces> Loc
@@ -25,7 +25,7 @@
                       @oninput="HandleFilter"
                       @bind-Value:after="HandleClear"
                       Placeholder="@ControlsStringsLoc[nameof(ControlsStrings.FilterPlaceholder)]"
-                      title="@Loc[nameof(Dashboard.Resources.Traces.TracesNameFilter)]"
+                      aria-label="@Loc[nameof(Dashboard.Resources.Traces.TracesNameFilter)]"
                       slot="end" />
     </FluentToolbar>
     <div class="datagrid-overflow-area continuous-scroll-overflow" tabindex="-1">
@@ -44,13 +44,15 @@
                             @foreach (var item in context.Spans.GroupBy(s => s.Source).OrderBy(g => g.Min(s => s.StartTime)))
                             {
                                 <FluentOverflowItem>
-                                    <span class="trace-tag trace-service-tag" title="@(GetSpansTooltip(item))" style="border-left-color: @(ColorGenerator.Instance.GetColorHexByKey(GetResourceName(item.Key)));">
+                                    <span id="@StringUtils.GenerateNewGuidId(out var id)" class="trace-tag trace-service-tag" style="border-left-color: @(ColorGenerator.Instance.GetColorHexByKey(GetResourceName(item.Key)));">
                                         @if (item.Any(s => s.Status == OtlpSpanStatusCode.Error))
                                         {
-                                            <FluentIcon Icon="Icons.Filled.Size12.ErrorCircle" Color="Color.Error" Class="trace-tag-icon" />
+                                            <FluentIcon Icon="Icons.Filled.Size12.ErrorCircle" Color="Color.Error" Class="trace-tag-icon"/>
                                         }
                                         @GetResourceName(item.Key) (@item.Count())
                                     </span>
+
+                                    <FluentTooltip Anchor="@id">@GetSpansTooltip(item)</FluentTooltip>
                                 </FluentOverflowItem>
                             }
                         </ChildContent>

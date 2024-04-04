@@ -7,6 +7,7 @@
 @using Aspire.Dashboard.Resources
 @using Aspire.Dashboard.Otlp.Model
 @using Aspire.Dashboard.Utils
+@using Aspire.Hosting.Utils
 @inject IStringLocalizer<Dashboard.Resources.Metrics> Loc
 @inject IStringLocalizer<ControlsStrings> ControlsStringsLoc
 
@@ -36,12 +37,13 @@
                         <ChildContent>
                             @foreach (var meterGroup in PageViewModel.Instruments.GroupBy(i => i.Parent).OrderBy(g => g.Key.MeterName))
                             {
-                                <FluentTreeItem @key="meterGroup.Key" Text="@meterGroup.Key.MeterName" Data="@meterGroup.Key" title="@meterGroup.Key.MeterName" InitiallyExpanded="true" InitiallySelected="@(PageViewModel.SelectedInstrument == null && meterGroup.Key.MeterName == PageViewModel.SelectedMeter?.MeterName)">
+                                <FluentTreeItem Id="@StringUtils.GenerateNewGuidId(out _)" @key="meterGroup.Key" Text="@meterGroup.Key.MeterName" Data="@meterGroup.Key" InitiallyExpanded="true" InitiallySelected="@(PageViewModel.SelectedInstrument == null && meterGroup.Key.MeterName == PageViewModel.SelectedMeter?.MeterName)">
                                     @foreach (var instrument in meterGroup.OrderBy(i => i.Name))
                                     {
-                                        <FluentTreeItem @key="instrument" Class="nested" Text="@instrument.Name" Data="@instrument" title="@instrument.Name" InitiallySelected="@(instrument.Name == PageViewModel.SelectedInstrument?.Name && instrument.Parent.MeterName == PageViewModel.SelectedMeter?.MeterName)" />
+                                        <FluentTreeItem Id="@StringUtils.GenerateNewGuidId(out _)" @key="instrument" Class="nested" Text="@instrument.Name" Data="@instrument" InitiallySelected="@(instrument.Name == PageViewModel.SelectedInstrument?.Name && instrument.Parent.MeterName == PageViewModel.SelectedMeter?.MeterName)" />
                                     }
                                 </FluentTreeItem>
+
                             }
                         </ChildContent>
                     </FluentTreeView>

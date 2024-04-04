@@ -3,6 +3,7 @@
 @using Aspire.Dashboard.Resources
 @using Aspire.Dashboard.Otlp.Model
 @using Aspire.Dashboard.Model
+@using Aspire.Hosting.Utils
 @inject IStringLocalizer<ControlsStrings> Loc
 
 <div class="metrics-filters-container">
@@ -39,14 +40,14 @@
                     </TemplateColumn>
                     <TemplateColumn Tooltip="true" TooltipText="@(ctx => ctx.AreAllValuesSelected is true ? Loc[nameof(ControlsStrings.ChartContainerAllTags)] : Loc[nameof(ControlsStrings.ChartContainerFilteredTags)])">
                         @{
-                            var id = $"typeFilterButton-{context.SanitizedHtmlId}-{Guid.NewGuid()}";
+                            var buttonId = $"typeFilterButton-{context.SanitizedHtmlId}-{Guid.NewGuid()}";
                         }
-                        <FluentButton id="@id"
+                        <FluentButton id="@buttonId"
                                       IconEnd="@(new Icons.Regular.Size20.Filter())"
                                       Appearance="@(context.AreAllValuesSelected is true ? Appearance.Stealth : Appearance.Accent)"
                                       @onclick="() => context.PopupVisible = !context.PopupVisible"
                                       aria-label="@(context.AreAllValuesSelected is true ? Loc[nameof(ControlsStrings.ChartContainerAllTags)] : Loc[nameof(ControlsStrings.ChartContainerFilteredTags)])"/>
-                        <FluentPopover AnchorId="@id" @bind-Open="context.PopupVisible" VerticalThreshold="200">
+                        <FluentPopover AnchorId="@buttonId" @bind-Open="context.PopupVisible" VerticalThreshold="200">
                             <Header>@context.Name</Header>
                             <Body>
                             <FluentStack Orientation="Orientation.Vertical" Class="dimension-popup">
@@ -59,10 +60,11 @@
                                 {
                                     var isChecked = context.SelectedValues.Contains(tag);
                                     <FluentCheckbox Label="@tag.Name"
-                                                    title="@tag.Name"
+                                                    Id="@StringUtils.GenerateNewGuidId(out var id)"
                                                     @key=tag
                                                     @bind-Value:get="isChecked"
                                                     @bind-Value:set="c => context.OnTagSelectionChanged(tag, c)"/>
+                                    <FluentTooltip Anchor="@id">@tag.Name</FluentTooltip>
                                 }
                             </FluentStack>
                             </Body>

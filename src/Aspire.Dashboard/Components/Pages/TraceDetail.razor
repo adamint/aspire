@@ -5,6 +5,7 @@
 @using System.Globalization
 @using Aspire.Dashboard.Resources
 @using Aspire.Dashboard.Utils
+@using Aspire.Hosting.Utils
 @inject IStringLocalizer<Dashboard.Resources.TraceDetail> Loc
 @inject IStringLocalizer<ControlsStrings> ControlStringsLoc
 
@@ -19,7 +20,9 @@
         </div>
         <FluentToolbar Orientation="Orientation.Horizontal">
             <div>
-                @Loc[nameof(Dashboard.Resources.TraceDetail.TraceDetailTraceStartHeader)] <strong title="@FormatHelpers.FormatDateTime(TimeProvider, _trace.FirstSpan.StartTime, MillisecondsDisplay.Full)">@FormatHelpers.FormatDateTime(TimeProvider, _trace.FirstSpan.StartTime, MillisecondsDisplay.Truncated)</strong>
+                @Loc[nameof(Dashboard.Resources.TraceDetail.TraceDetailTraceStartHeader)] <strong id="@StringUtils.GenerateNewGuidId(out var id)">@FormatHelpers.FormatDateTime(TimeProvider, _trace.FirstSpan.StartTime, MillisecondsDisplay.Truncated)</strong>
+
+                <FluentTooltip Anchor="@id">@FormatHelpers.FormatDateTime(TimeProvider, _trace.FirstSpan.StartTime, MillisecondsDisplay.Full)</FluentTooltip>
             </div>
             <FluentDivider Role="DividerRole.Presentation" Orientation="Orientation.Vertical" />
             <div>
@@ -47,15 +50,17 @@
             SelectedValue="@SelectedSpan">
             <DetailsTitleTemplate>
                 @{ var shortedSpanId = OtlpHelpers.ToShortenedId(SelectedSpan!.Span.SpanId); }
-                <div class="pane-details-title" title="@($"{SelectedSpan!.Title} ({shortedSpanId})")">
+                <div class="pane-details-title" id="@StringUtils.GenerateNewGuidId(out var id)">
                     @SelectedSpan!.Title
                     <span class="pane-details-subtext">@shortedSpanId</span>
                 </div>
+
+                <FluentTooltip Anchor="@id">@($"{SelectedSpan!.Title} ({shortedSpanId})")</FluentTooltip>
             </DetailsTitleTemplate>
             <Summary>
                 <FluentDataGrid Virtualize="true" GenerateHeader="GenerateHeaderOption.Sticky" Class="trace-view-grid" ResizableColumns="true" ItemsProvider="@GetData" TGridItem="SpanWaterfallViewModel" RowClass="@GetRowClass" GridTemplateColumns="4fr 12fr 85px">
-                    <TemplateColumn Title="Name">
-                        <div class="col-long-content" title="@context.GetTooltip()" @onclick="() => OnShowProperties(context)">
+                    <TemplateColumn Title="Name" Tooltip="true" TooltipText="@(ctx => ctx.GetTooltip())">
+                        <div id="@StringUtils.GenerateNewGuidId(out var id)" class="col-long-content" @onclick="() => OnShowProperties(context)">
                             @{
                                 var isServerOrConsumer = context.Span.Kind == OtlpSpanKind.Server || context.Span.Kind == OtlpSpanKind.Consumer;
                                 // Indent the span name based on the depth of the span.
