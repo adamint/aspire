@@ -64,7 +64,7 @@
         SelectedValue="@SelectedLogEntry">
         <DetailsTitleTemplate>
             @{
-                var eventName = OtlpHelpers.GetValue(SelectedLogEntry!.LogEntry.Attributes, "event.name") 
+                var eventName = OtlpHelpers.GetValue(SelectedLogEntry!.LogEntry.Attributes, "event.name")
                     ?? OtlpHelpers.GetValue(SelectedLogEntry.LogEntry.Attributes, "logrecord.event.name")
                     ?? Loc[nameof(Dashboard.Resources.StructuredLogs.StructuredLogsEntryDetails)];
             }
@@ -84,7 +84,7 @@
                                     @GetResourceName(context.Application)
                                 </span>
                             </TemplateColumn>
-                            <TemplateColumn Title="@Loc[nameof(Dashboard.Resources.StructuredLogs.StructuredLogsLevelColumnHeader)]">
+                            <TemplateColumn Title="@Loc[nameof(Dashboard.Resources.StructuredLogs.StructuredLogsLevelColumnHeader)]" Tooltip="true" TooltipText="@(ctx => ctx.Severity.ToString())">
                                 <LogLevelColumnDisplay LogEntry="@context" />
                             </TemplateColumn>
                             <TemplateColumn Title="@Loc[nameof(Dashboard.Resources.StructuredLogs.StructuredLogsTimestampColumnHeader)]" TooltipText="@(context => FormatHelpers.FormatDateTime(TimeProvider, context.TimeStamp, MillisecondsDisplay.Full, CultureInfo.CurrentCulture))" Tooltip="true">

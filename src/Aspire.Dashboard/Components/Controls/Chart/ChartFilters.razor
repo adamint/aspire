@@ -37,7 +37,7 @@
                             </MoreButtonTemplate>
                         </FluentOverflow>
                     </TemplateColumn>
-                    <TemplateColumn>
+                    <TemplateColumn Tooltip="true" TooltipText="@(ctx => ctx.AreAllValuesSelected is true ? Loc[nameof(ControlsStrings.ChartContainerAllTags)] : Loc[nameof(ControlsStrings.ChartContainerFilteredTags)])">
                         @{
                             var id = $"typeFilterButton-{context.SanitizedHtmlId}-{Guid.NewGuid()}";
                         }

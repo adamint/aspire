@@ -48,10 +48,10 @@
                                 Style="width:100%"
                                 GenerateHeader="GenerateHeaderOption.Sticky"
                                 GridTemplateColumns="1fr 1.5fr">
-                    <TemplateColumn Title="@ControlStringsLoc[nameof(ControlsStrings.NameColumnHeader)]" Class="nameColumn">
+                    <TemplateColumn Title="@ControlStringsLoc[nameof(ControlsStrings.NameColumnHeader)]" Class="nameColumn" Tooltip="true" TooltipText="@(ctx => ctx.Key)">
                         <GridValue Value="@(context.KnownProperty?.DisplayName ?? context.Key)" ToolTip="@context.Key" />
                     </TemplateColumn>
-                    <TemplateColumn Title="@ControlStringsLoc[nameof(ControlsStrings.PropertyGridValueColumnHeader)]" Class="valueColumn">
+                    <TemplateColumn Title="@ControlStringsLoc[nameof(ControlsStrings.PropertyGridValueColumnHeader)]" Class="valueColumn" Tooltip="true" TooltipText="@(ctx => ctx.Tooltip)">
                         <GridValue Value="@GetDisplayedValue(TimeProvider, context)" ToolTip="@context.Tooltip" />
                     </TemplateColumn>
                 </FluentDataGrid>
@@ -67,10 +67,10 @@
                                 Style="width:100%"
                                 GenerateHeader="GenerateHeaderOption.Sticky"
                                 GridTemplateColumns="1fr 1.5fr">
-                    <TemplateColumn Title="@ControlStringsLoc[nameof(ControlsStrings.NameColumnHeader)]" Class="nameColumn">
+                    <TemplateColumn Title="@ControlStringsLoc[nameof(ControlsStrings.NameColumnHeader)]" Class="nameColumn" Tooltip="true" TooltipText="@(ctx => ctx.Name)">
                         <GridValue Value="@context.Name" />
                     </TemplateColumn>
-                    <TemplateColumn Title="@ControlStringsLoc[nameof(ControlsStrings.PropertyGridValueColumnHeader)]" Class="valueColumn">
+                    <TemplateColumn Title="@ControlStringsLoc[nameof(ControlsStrings.PropertyGridValueColumnHeader)]" Class="valueColumn" Tooltip="true" TooltipText="@(ctx => ctx.Text)">
                         <GridValue Value="@context.Text" MaxDisplayLength="0">
                             <ContentAfterValue>
                                 @if (context.Url != null)

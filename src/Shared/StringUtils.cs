@@ -21,4 +21,10 @@ internal static class StringUtils
             return false;
         }
     }
+
+    public static string GenerateNewGuid(out string guid)
+    {
+        guid = Guid.NewGuid().ToString();
+        return guid;
+    }
 }
