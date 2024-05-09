@@ -145,6 +145,9 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
                               | TestResourceNames.efmysql
                               | TestResourceNames.sqlserver,
             "" or null => TestResourceNames.All,
+            "dashboard" => TestResourceNames.dashboard
+                           | TestResourceNames.mongodb
+                           | TestResourceNames.mysql,
             _ => throw new ArgumentException($"Unknown test scenario '{TestScenario}'")
         };
 
@@ -166,7 +169,10 @@ public sealed class IntegrationServicesFixture : IAsyncLifetime
         }
 
         // always skip the dashboard
-        resourcesToSkip |= TestResourceNames.dashboard;
+        if (TestScenario != "dashboard")
+        {
+            resourcesToSkip |= TestResourceNames.dashboard;
+        }
 
         return resourcesToSkip;
     }

@@ -98,6 +98,7 @@ public class IntegrationServicesTests : IClassFixture<IntegrationServicesFixture
             await _integrationServicesFixture.IntegrationServiceA.WaitForHealthyStatusAsync("http", _testOutput);
         });
 
+
     private async Task RunTestAsync(Func<Task> test)
     {
         _integrationServicesFixture.Project.EnsureAppHostRunning();

@@ -9,6 +9,7 @@ using Aspire.Dashboard.Utils;
 using Aspire.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Testing;
+using Microsoft.Playwright;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -40,6 +41,8 @@ public class FrontendAuthTests
         // Act
         var response = await client.GetAsync("/");
 
+        await Task.Delay(10000);
+
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal(DashboardUrls.LoginUrl(returnUrl: DashboardUrls.StructuredLogsUrl()), response.RequestMessage!.RequestUri!.PathAndQuery);
@@ -57,7 +60,8 @@ public class FrontendAuthTests
         });
         await app.StartAsync();
 
-        using var client = new HttpClient { BaseAddress = new Uri($"http://{app.FrontendEndPointAccessor().EndPoint}") };
+        var baseUrl = $"http://{app.FrontendEndPointAccessor().EndPoint}";
+        using var client = new HttpClient { BaseAddress = new Uri(baseUrl) };
 
         // Act 1
         var response1 = await client.GetAsync(DashboardUrls.LoginUrl(returnUrl: DashboardUrls.TracesUrl(), token: apiKey));
@@ -72,6 +76,11 @@ public class FrontendAuthTests
         // Assert 2
         Assert.Equal(HttpStatusCode.OK, response2.StatusCode);
         Assert.Equal(DashboardUrls.StructuredLogsUrl(), response2.RequestMessage!.RequestUri!.PathAndQuery);
+
+        var playwright = await Playwright.CreateAsync();
+        var browser = await playwright.Chromium.LaunchAsync(new() { Headless = false });
+        var page = await browser.NewPageAsync();
+        await page.GotoAsync(baseUrl);
     }
 
     [Fact]

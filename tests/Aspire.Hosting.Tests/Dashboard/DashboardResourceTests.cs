@@ -3,19 +3,32 @@
 
 using System.Collections.Concurrent;
 using System.Text.Json;
+using Aspire.Dashboard.Tests.Integration.Playright;
 using Aspire.Hosting.Dashboard;
 using Aspire.Hosting.Dcp;
+using Aspire.Hosting.Tests.Helpers;
 using Aspire.Hosting.Tests.Utils;
 using Aspire.Hosting.Utils;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Playwright;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Aspire.Hosting.Tests.Dashboard;
 
-public class DashboardResourceTests
+public class DashboardResourceTests : IClassFixture<PlaywrightFixture>
 {
+    private readonly ITestOutputHelper _testOutputHelper;
+    private readonly PlaywrightFixture _playwrightFixture;
+
+    public DashboardResourceTests(ITestOutputHelper testOutputHelper, PlaywrightFixture playwrightFixture)
+    {
+        _testOutputHelper = testOutputHelper;
+        _playwrightFixture = playwrightFixture;
+    }
+
     [Fact]
     public async Task DashboardIsAutomaticallyAddedAsHiddenResource()
     {
@@ -402,6 +415,52 @@ public class DashboardResourceTests
         Assert.Null(manifest);
     }
 
+    private async Task<(string DashboardUrl, IPage Page)> SetupDashboardForPlaywrightAsync()
+    {
+        var url = "http://localhost:1234";
+
+        var args = new string[] {
+            "ASPNETCORE_ENVIRONMENT=Development",
+            "DOTNET_ENVIRONMENT=Development",
+            $"ASPNETCORE_URLS={url}",
+            $"DOTNET_DASHBOARD_OTLP_ENDPOINT_URL={url}5",
+            "DOTNET_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS=true",
+            "DOTNET_ASPIRE_SHOW_DASHBOARD_RESOURCES=true"
+        };
+
+        using var testProgram = TestProgram.Create<DistributedApplicationTests>(
+            args,
+            includeIntegrationServices: true,
+            disableDashboard: false);
+
+        testProgram.AppBuilder.Services.AddLogging(b =>
+        {
+            b.AddProvider(new TestLoggerProvider());
+        });
+
+        await using var app = testProgram.Build();
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(1));
+        await app.StartAsync(cts.Token);
+        var page = await _playwrightFixture.Browser.NewPageAsync();
+        await Task.Delay(5000);
+        await page.GotoAsync(url);
+
+        return (url, page);
+    }
+
+    [LocalOnlyFact]
+    public async Task Dashboard_Playwright_Test()
+    {
+        var (baseUrl, page) = await SetupDashboardForPlaywrightAsync();
+        var resource = page.Locator(".resource-name").First;
+        var innerHtml = await resource.InnerHTMLAsync();
+        Console.WriteLine(innerHtml);
+        var resourceName = await resource.Locator("span.resource-name").TextContentAsync();
+        await resource.Locator("css=resource-log-link").ClickAsync();
+
+        Assert.StartsWith($"{baseUrl}/consolelogs/resource/{resourceName}", page.Url);
+    }
+
     private sealed class DashboardProject : IProjectMetadata
     {
         public string ProjectPath => "dashboard.csproj";
@@ -429,7 +488,6 @@ public class DashboardResourceTests
 
             _tcs.TrySetResult(message);
         }
-            
 
         public sealed class LogMessage
         {

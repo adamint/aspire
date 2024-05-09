@@ -120,12 +120,46 @@ public class StartupTests(ITestOutputHelper testOutputHelper)
             var request = new HttpRequestMessage(HttpMethod.Get, "/");
             var response = await httpClient.SendAsync(request);
             response.EnsureSuccessStatusCode();
-
+            var content = await response.Content.ReadAsStringAsync();
+            Console.WriteLine(content);
             // Check OTLP service
             using var channel = IntegrationTestHelpers.CreateGrpcChannel($"https://{app.FrontendEndPointAccessor().EndPoint}", testOutputHelper);
             var client = new LogsService.LogsServiceClient(channel);
             var serviceResponse = await client.ExportAsync(new ExportLogsServiceRequest());
             Assert.Equal(0, serviceResponse.PartialSuccess.RejectedLogRecords);
+        }
+        finally
+        {
+            if (app is not null)
+            {
+                await app.DisposeAsync();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Test()
+    {
+        DashboardWebApplication? app = null;
+
+        try
+        {
+            await ServerRetryHelper.BindPortWithRetry(async port =>
+            {
+                app = IntegrationTestHelpers.CreateDashboardWebApplication(testOutputHelper,
+                    additionalConfiguration: data =>
+                    {
+                        data[DashboardConfigNames.DashboardUnsecuredAllowAnonymousName.ConfigKey] = bool.TrueString;
+                        data[DashboardConfigNames.DashboardFrontendUrlName.ConfigKey] = $"http://127.0.0.1:{port}";
+                        data[DashboardConfigNames.DashboardOtlpUrlName.ConfigKey] = $"http://127.0.0.1:{port}";
+                    });
+
+                // Act
+                await app.StartAsync();
+            }, NullLogger.Instance);
+
+            // Assert
+            await Task.Delay(10000);
         }
         finally
         {

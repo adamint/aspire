@@ -45,6 +45,7 @@
 
     <PackageReference Include="Microsoft.Extensions.Http.Resilience" />
     <PackageReference Include="Newtonsoft.Json.Schema" />
+    <PackageReference Include="Microsoft.Playwright" />
 
     <Compile Include="$(TestsSharedDir)Logging\*.cs" LinkBase="shared/Logging" />
     <Compile Include="$(RepoRoot)src\Aspire.Hosting.Garnet\GarnetContainerImageTags.cs" />
@@ -61,4 +62,8 @@
     </Content>
   </ItemGroup>
 
+  <Target Name="InstallBrowser" AfterTargets="Build">
+    <Message Text="## Installing playright browser ##" Importance="high" />
+    <Exec Command="pwsh playwright.ps1 install" WorkingDirectory="$(ProjectDir)..\..\artifacts\bin\Aspire.Dashboard.Tests\Debug\net8.0\"/>
+  </Target>
 </Project>
