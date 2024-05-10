@@ -3,7 +3,7 @@
 
 using System.Collections.Concurrent;
 using System.Text.Json;
-using Aspire.Dashboard.Tests.Integration.Playright;
+using Aspire.Dashboard.Model;
 using Aspire.Hosting.Dashboard;
 using Aspire.Hosting.Dcp;
 using Aspire.Hosting.Tests.Helpers;
@@ -12,6 +12,7 @@ using Aspire.Hosting.Utils;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Playwright;
 using Xunit;
 using Xunit.Abstractions;
@@ -417,6 +418,7 @@ public class DashboardResourceTests : IClassFixture<PlaywrightFixture>
 
     private async Task<(string DashboardUrl, IPage Page)> SetupDashboardForPlaywrightAsync()
     {
+
         var url = "http://localhost:1234";
 
         var args = new string[] {
@@ -430,35 +432,43 @@ public class DashboardResourceTests : IClassFixture<PlaywrightFixture>
 
         using var testProgram = TestProgram.Create<DistributedApplicationTests>(
             args,
-            includeIntegrationServices: true,
+            includeIntegrationServices: false,
             disableDashboard: false);
-
-        testProgram.AppBuilder.Services.AddLogging(b =>
-        {
-            b.AddProvider(new TestLoggerProvider());
-        });
+        var services = testProgram.AppBuilder.Services;
+        services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
+        services.AddSingleton<IDashboardClient, MockDashboardClient>();
 
         await using var app = testProgram.Build();
         using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(1));
         await app.StartAsync(cts.Token);
         var page = await _playwrightFixture.Browser.NewPageAsync();
-        await Task.Delay(5000);
-        await page.GotoAsync(url);
+        await WaitUntilDashboardReadyAsync();
 
         return (url, page);
+
+        async Task WaitUntilDashboardReadyAsync()
+        {
+            try
+            {
+                await page.GotoAsync(url);
+            }
+            catch (Exception)
+            {
+                await Task.Delay(1000, cts.Token);
+                await WaitUntilDashboardReadyAsync();
+            }
+        }
     }
 
     [LocalOnlyFact]
     public async Task Dashboard_Playwright_Test()
     {
-        var (baseUrl, page) = await SetupDashboardForPlaywrightAsync();
-        var resource = page.Locator(".resource-name").First;
-        var innerHtml = await resource.InnerHTMLAsync();
-        Console.WriteLine(innerHtml);
-        var resourceName = await resource.Locator("span.resource-name").TextContentAsync();
-        await resource.Locator("css=resource-log-link").ClickAsync();
-
-        Assert.StartsWith($"{baseUrl}/consolelogs/resource/{resourceName}", page.Url);
+        var (_, page) = await SetupDashboardForPlaywrightAsync();
+        var settingsButton = page.GetByRole(AriaRole.Button, new() { Name = "Launch settings"});
+        await settingsButton.ClickAsync();
+        var darkThemeCheckbox = page.GetByRole(AriaRole.Radio).And(page.GetByText("Dark")).First;
+        await darkThemeCheckbox.ClickAsync();
+        Assert.Equal("dark", await page.Locator("html").First.GetAttributeAsync("data-theme"));
     }
 
     private sealed class DashboardProject : IProjectMetadata
@@ -514,5 +524,16 @@ public class DashboardResourceTests : IClassFixture<PlaywrightFixture>
         {
             return Task.FromResult("http://localhost:5000");
         }
+    }
+
+    private sealed class MockDashboardClient : IDashboardClient
+    {
+        public bool IsEnabled => true;
+        public Task WhenConnected => Task.CompletedTask;
+        public string ApplicationName => "<marquee>An HTML title!</marquee>";
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public Task<ResourceCommandResponseViewModel> ExecuteResourceCommandAsync(string resourceName, string resourceType, CommandViewModel command, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public IAsyncEnumerable<IReadOnlyList<ResourceLogLine>>? SubscribeConsoleLogs(string resourceName, CancellationToken cancellationToken) => throw new NotImplementedException();
+        public Task<ResourceViewModelSubscription> SubscribeResourcesAsync(CancellationToken cancellationToken) => throw new NotImplementedException();
     }
 }
