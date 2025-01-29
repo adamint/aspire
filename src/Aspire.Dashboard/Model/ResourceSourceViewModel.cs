@@ -15,7 +15,7 @@ public class ResourceSourceViewModel(string value, string? contentAfterValue, st
     internal static ResourceSourceViewModel? GetSourceViewModel(ResourceViewModel resource)
     {
         string? executablePath;
-        (List<string>? Arguments, string? ArgumentsString, string FullCommandLine)? commandLineInfo;
+        (string? NonDefaultArguments, string FullCommandLine)? commandLineInfo;
 
         if (resource.TryGetExecutablePath(out var path))
         {
@@ -31,18 +31,18 @@ public class ResourceSourceViewModel(string value, string? contentAfterValue, st
         // NOTE projects are also executables, so we have to check for projects first
         if (resource.IsProject() && resource.TryGetProjectPath(out var projectPath))
         {
-            if (commandLineInfo is { ArgumentsString: { } argumentsString, FullCommandLine: { } fullCommandLine })
+            if (commandLineInfo is { NonDefaultArguments: { } argumentsString, FullCommandLine: { } fullCommandLine })
             {
                 return new ResourceSourceViewModel(value: Path.GetFileName(projectPath), contentAfterValue: argumentsString, valueToVisualize: fullCommandLine, tooltip: fullCommandLine);
             }
 
             // default to project path if there is no executable path or executable arguments
-            return new ResourceSourceViewModel(value: Path.GetFileName(projectPath), contentAfterValue: commandLineInfo?.ArgumentsString, valueToVisualize: projectPath, tooltip: projectPath);
+            return new ResourceSourceViewModel(value: Path.GetFileName(projectPath), contentAfterValue: commandLineInfo?.NonDefaultArguments, valueToVisualize: projectPath, tooltip: projectPath);
         }
 
         if (executablePath is not null)
         {
-            return new ResourceSourceViewModel(value: Path.GetFileName(executablePath), contentAfterValue: commandLineInfo?.ArgumentsString, valueToVisualize: commandLineInfo?.FullCommandLine ?? executablePath, tooltip: commandLineInfo?.FullCommandLine ?? string.Empty);
+            return new ResourceSourceViewModel(value: Path.GetFileName(executablePath), contentAfterValue: commandLineInfo?.NonDefaultArguments, valueToVisualize: commandLineInfo?.FullCommandLine ?? executablePath, tooltip: commandLineInfo?.FullCommandLine ?? string.Empty);
         }
 
         if (resource.TryGetContainerImage(out var containerImage))
@@ -58,19 +58,20 @@ public class ResourceSourceViewModel(string value, string? contentAfterValue, st
         return null;
     }
 
-    private static (List<string>? Arguments, string? ArgumentsString, string FullCommandLine)? GetCommandLineInfo(ResourceViewModel resource, string executablePath)
+    /**
+     * Returns information about command line arguments, stripping out DCP default arguments, if any exist.
+     * The defaults come from DcpExecutor#PrepareProjectExecutables and need to be kept in sync
+     */
+    private static (string? NonDefaultArguments, string FullCommandLine)? GetCommandLineInfo(ResourceViewModel resource, string executablePath)
     {
         if (resource.TryGetExecutableArguments(out var arguments))
         {
             if (arguments.IsDefaultOrEmpty)
             {
-                return (Arguments: null, ArgumentsString: null, FullCommandLine: executablePath);
+                return (NonDefaultArguments: null, FullCommandLine: executablePath);
             }
 
             var escapedArguments = arguments.Select(EscapeCommandLineArgument).ToList();
-
-            // if the command line arguments start with DCP defaults, hide them
-            // these come from DcpExecutor#PrepareProjectExecutables and need to be kept in sync
 
             if (escapedArguments.Count > 3 && escapedArguments.Take(3).SequenceEqual(["run", "--no-build", "--project"], StringComparers.CommandLineArguments))
             {
@@ -91,13 +92,14 @@ public class ResourceSourceViewModel(string value, string? contentAfterValue, st
                 escapedArguments.RemoveAt(0);
             }
 
-            if (escapedArguments.Count == 0)
-            {
-                return (Arguments: [], ArgumentsString: string.Empty, FullCommandLine: executablePath);
-            }
+            var cleanedArguments = escapedArguments.Count == 0 ? null : string.Join(' ', escapedArguments);
+            var fullCommandLine = resource.TryGetProjectPath(out var projectPath)
+                ? AppendArgumentsIfNotEmpty(projectPath, cleanedArguments)
+                : AppendArgumentsIfNotEmpty(executablePath, cleanedArguments);
 
-            var argumentsString = string.Join(' ', escapedArguments);
-            return (Arguments: escapedArguments, argumentsString, $"{executablePath} {argumentsString}");
+            return (NonDefaultArguments: cleanedArguments ?? string.Empty, FullCommandLine: fullCommandLine);
+
+            static string AppendArgumentsIfNotEmpty(string s, string? arguments) => arguments is null ? s : $"{s} {arguments}";
         }
 
         return null;
