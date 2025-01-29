@@ -31,19 +31,8 @@ public class ResourceSourceViewModel(string value, string? contentAfterValue, st
         // NOTE projects are also executables, so we have to check for projects first
         if (resource.IsProject() && resource.TryGetProjectPath(out var projectPath))
         {
-            if (commandLineInfo is { Arguments: { } arguments, ArgumentsString: { } argumentsString, FullCommandLine: { } fullCommandLine })
+            if (commandLineInfo is { ArgumentsString: { } argumentsString, FullCommandLine: { } fullCommandLine })
             {
-                // if the command line arguments start with DCP defaults, hide them
-                List<List<string>> dcpDefaultArgumentsOptions = ["run", "--no-build", "--project"];
-
-                if (arguments.Count > dcpDefaultArguments.Count && arguments.Take(dcpDefaultArguments.Count).SequenceEqual(dcpDefaultArguments))
-                {
-                    // skip the project path too
-                    var skipCount = dcpDefaultArguments.Count + 1;
-                    argumentsString = string.Join(' ', arguments.Skip(skipCount));
-                    arguments.RemoveRange(0, skipCount);
-                }
-
                 return new ResourceSourceViewModel(value: Path.GetFileName(projectPath), contentAfterValue: argumentsString, valueToVisualize: fullCommandLine, tooltip: fullCommandLine);
             }
 
@@ -79,8 +68,35 @@ public class ResourceSourceViewModel(string value, string? contentAfterValue, st
             }
 
             var escapedArguments = arguments.Select(EscapeCommandLineArgument).ToList();
-            var argumentsString = string.Join(' ', escapedArguments);
 
+            // if the command line arguments start with DCP defaults, hide them
+            // these come from DcpExecutor#PrepareProjectExecutables and need to be kept in sync
+
+            if (escapedArguments.Count > 3 && escapedArguments.Take(3).SequenceEqual(["run", "--no-build", "--project"], StringComparers.CommandLineArguments))
+            {
+                escapedArguments.RemoveRange(0, 4); // remove the project path too
+            }
+            else if (escapedArguments.Count > 4 && escapedArguments.Take(4).SequenceEqual(["watch", "--non-interactive", "--no-hot-reload", "--project"], StringComparers.CommandLineArguments))
+            {
+                escapedArguments.RemoveRange(0, 5); // remove the project path too
+            }
+
+            if (escapedArguments.Count > 1 && string.Equals(escapedArguments[0], "-c", StringComparisons.CommandLineArguments))
+            {
+                escapedArguments.RemoveRange(0, 2);
+            }
+
+            if (escapedArguments.Count > 0 && string.Equals(escapedArguments[0], "--no-launch-profile", StringComparisons.CommandLineArguments))
+            {
+                escapedArguments.RemoveAt(0);
+            }
+
+            if (escapedArguments.Count == 0)
+            {
+                return (Arguments: [], ArgumentsString: string.Empty, FullCommandLine: executablePath);
+            }
+
+            var argumentsString = string.Join(' ', escapedArguments);
             return (Arguments: escapedArguments, argumentsString, $"{executablePath} {argumentsString}");
         }
 
