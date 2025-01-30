@@ -20,7 +20,8 @@ basketCache.WithRedisCommander(c =>
 #endif
 
 var catalogDbApp = builder.AddProject<Projects.CatalogDb>("catalogdbapp")
-                          .WithReference(catalogDb);
+                          .WithReference(catalogDb)
+                          .WithArgs("test1 test2");
 
 var catalogService = builder.AddProject<Projects.CatalogService>("catalogservice")
                             .WithReference(catalogDb)
