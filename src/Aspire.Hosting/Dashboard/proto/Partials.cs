@@ -56,7 +56,13 @@ partial class Resource
 
         foreach (var property in snapshot.Properties)
         {
-            resource.Properties.Add(new ResourceProperty { Name = property.Name, Value = property.Value, IsSensitive = property.IsSensitive });
+            var resourceProperty = new ResourceProperty { Name = property.Name, Value = property.Value, IsSensitive = property.IsSensitive };
+            if (property.FormatArgs is not null)
+            {
+                resourceProperty.FormatArgs.AddRange(property.FormatArgs);
+            }
+
+            resource.Properties.Add(resourceProperty);
         }
 
         foreach (var volume in snapshot.Volumes)

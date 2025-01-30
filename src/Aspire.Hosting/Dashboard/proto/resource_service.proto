@@ -181,6 +181,8 @@ message ResourceProperty {
     // Whether the value is sensitive and should be masked in the UI by default.
     // Defaults to false. When true, the user must explicitly unmask the value to view it.
     optional bool is_sensitive = 4;
+    // Optional arguments to format value with, if value is a string.
+    repeated google.protobuf.Value format_args = 5;
 }
 
 // Models the full state of an resource (container, executable, project, etc) at a particular point in time.

@@ -254,6 +254,7 @@ public sealed class ResourcePropertyViewModel : IPropertyGridItem
 
     public string Name { get; }
     public Value Value { get; }
+    public ImmutableArray<Value>? FormatArgs { get; }
     public KnownProperty? KnownProperty { get; }
     public string ToolTip => _tooltip.Value;
     public bool IsValueSensitive { get; }
@@ -266,7 +267,7 @@ public sealed class ResourcePropertyViewModel : IPropertyGridItem
 
     object IPropertyGridItem.Key => _key;
 
-    public ResourcePropertyViewModel(string name, Value value, bool isValueSensitive, KnownProperty? knownProperty, int priority, BrowserTimeProvider timeProvider)
+    public ResourcePropertyViewModel(string name, Value value, bool isValueSensitive, KnownProperty? knownProperty, int priority, BrowserTimeProvider timeProvider, ICollection<Value> formatArgs)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
@@ -275,6 +276,7 @@ public sealed class ResourcePropertyViewModel : IPropertyGridItem
         IsValueSensitive = isValueSensitive;
         KnownProperty = knownProperty;
         Priority = priority;
+        FormatArgs = formatArgs.Any() ? formatArgs.ToImmutableArray() : null;
         IsValueMasked = isValueSensitive;
 
         // Known and unknown properties are displayed together. Avoid any duplicate keys.

@@ -39,7 +39,8 @@ partial class Resource
                             isValueSensitive: property.IsSensitive,
                             knownProperty: knownProperty,
                             priority: priority,
-                            timeProvider: timeProvider);
+                            timeProvider: timeProvider,
+                            formatArgs: property.FormatArgs);
                     }),
                 Environment = GetEnvironment(),
                 Urls = GetUrls(),

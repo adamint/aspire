@@ -23,7 +23,15 @@ public class ResourceSourceViewModelTests
 
         if (testData.ExecutableArguments is not null)
         {
-            properties.TryAdd(KnownProperties.Executable.Args, new ResourcePropertyViewModel(KnownProperties.Executable.Args, Value.ForList(testData.ExecutableArguments.Select(Value.ForString).ToArray()), false, null, 0, new BrowserTimeProvider(new NullLoggerFactory())));
+            properties.TryAdd(KnownProperties.Executable.Args,
+                new ResourcePropertyViewModel(
+                    KnownProperties.Executable.Args,
+                    Value.ForList(testData.ExecutableArguments.Select(Value.ForString).ToArray()),
+                    false,
+                    null,
+                    0,
+                    new BrowserTimeProvider(new NullLoggerFactory()),
+                    testData.ExecutableArgumentsFormatArgs is null ? [] : testData.ExecutableArgumentsFormatArgs.Select(Value.ForString).ToArray()));
         }
 
         var resource = ModelTestHelpers.CreateResource(
@@ -46,7 +54,7 @@ public class ResourceSourceViewModelTests
 
         void AddStringProperty(string propertyName, string? propertyValue)
         {
-            properties.TryAdd(propertyName, new ResourcePropertyViewModel(propertyName, propertyValue is null ? Value.ForNull() : Value.ForString(propertyValue), false, null, 0, new BrowserTimeProvider(new NullLoggerFactory())));
+            properties.TryAdd(propertyName, new ResourcePropertyViewModel(propertyName, propertyValue is null ? Value.ForNull() : Value.ForString(propertyValue), false, null, 0, new BrowserTimeProvider(new NullLoggerFactory()), []));
         }
     }
 
@@ -59,6 +67,7 @@ public class ResourceSourceViewModelTests
                 ResourceType: "Project",
                 ExecutablePath: "path/to/executable",
                 ExecutableArguments: ["arg1", "arg2"],
+                ExecutableArgumentsFormatArgs: null,
                 ProjectPath: "path/to/project",
                 ContainerImage: null,
                 SourceProperty: null),
@@ -73,6 +82,7 @@ public class ResourceSourceViewModelTests
                 ResourceType: "Project",
                 ExecutablePath: null,
                 ExecutableArguments: null,
+                ExecutableArgumentsFormatArgs: null,
                 ProjectPath: "path/to/project",
                 ContainerImage: null,
                 SourceProperty: null),
@@ -87,6 +97,7 @@ public class ResourceSourceViewModelTests
                 ResourceType: "Executable",
                 ExecutablePath: "path/to/executable",
                 ExecutableArguments: ["arg1", "arg2"],
+                ExecutableArgumentsFormatArgs: null,
                 ProjectPath: null,
                 ContainerImage: null,
                 SourceProperty: null),
@@ -101,6 +112,7 @@ public class ResourceSourceViewModelTests
                 ResourceType: "Container",
                 ExecutablePath: null,
                 ExecutableArguments: null,
+                ExecutableArgumentsFormatArgs: null,
                 ProjectPath: null,
                 ContainerImage: "my-container-image",
                 SourceProperty: null),
@@ -115,6 +127,7 @@ public class ResourceSourceViewModelTests
                 ResourceType: "CustomResourceType",
                 ExecutablePath: null,
                 ExecutableArguments: null,
+                ExecutableArgumentsFormatArgs: null,
                 ProjectPath: null,
                 ContainerImage: null,
                 SourceProperty: "source-value"),
@@ -129,6 +142,7 @@ public class ResourceSourceViewModelTests
                 ResourceType: "Executable",
                 ExecutablePath: "path/to/executable",
                 ExecutableArguments: null,
+                ExecutableArgumentsFormatArgs: null,
                 ProjectPath: null,
                 ContainerImage: null,
                 SourceProperty: null),
@@ -145,6 +159,7 @@ public class ResourceSourceViewModelTests
         string ResourceType,
         string? ExecutablePath,
         string[]? ExecutableArguments,
+        string[]? ExecutableArgumentsFormatArgs,
         string? ProjectPath,
         string? ContainerImage,
         string? SourceProperty);
