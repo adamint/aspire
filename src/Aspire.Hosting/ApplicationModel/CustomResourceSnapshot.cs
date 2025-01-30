@@ -213,11 +213,21 @@ public sealed record ResourcePropertySnapshot(string Name, object? Value)
     /// </remarks>
     public bool IsSensitive { get; init; }
 
-    internal void Deconstruct(out string name, out object? value, out bool isSensitive)
+    /// <summary>
+    /// Optional format arguments for the property value. Only used when the value is a string.
+    /// </summary>
+    /// <remarks>
+    /// If this property is sensitive (see <see cref="IsSensitive"/>), the format arguments will be masked and require an explicit
+    /// user action to reveal.
+    /// </remarks>
+    public ImmutableArray<object>? FormatArgs { get; init; }
+
+    internal void Deconstruct(out string name, out object? value, out bool isSensitive, out ImmutableArray<object>? formatArgs)
     {
         name = Name;
         value = Value;
         isSensitive = IsSensitive;
+        formatArgs = FormatArgs;
     }
 }
 

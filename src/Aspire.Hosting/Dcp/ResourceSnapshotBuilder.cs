@@ -44,7 +44,7 @@ internal class ResourceSnapshotBuilder
                 new(KnownProperties.Container.Image, container.Spec.Image),
                 new(KnownProperties.Container.Id, containerId),
                 new(KnownProperties.Container.Command, container.Spec.Command),
-                new(KnownProperties.Container.Args, container.Status?.EffectiveArgs ?? []) { IsSensitive = true },
+                CreateArgsProperty(container.Status?.EffectiveArgs),
                 new(KnownProperties.Container.Ports, GetPorts()),
                 new(KnownProperties.Container.Lifetime, GetContainerLifetime()),
             ],
@@ -114,7 +114,7 @@ internal class ResourceSnapshotBuilder
                 Properties = [
                     new(KnownProperties.Executable.Path, executable.Spec.ExecutablePath),
                     new(KnownProperties.Executable.WorkDir, executable.Spec.WorkingDirectory),
-                    new(KnownProperties.Executable.Args, executable.Status?.EffectiveArgs ?? []) { IsSensitive = true },
+                    CreateArgsProperty(executable.Status?.EffectiveArgs),
                     new(KnownProperties.Executable.Pid, executable.Status?.ProcessId),
                     new(KnownProperties.Project.Path, projectPath)
                 ],
@@ -254,5 +254,13 @@ internal class ResourceSnapshotBuilder
         environment.Sort((v1, v2) => string.Compare(v1.Name, v2.Name, StringComparison.Ordinal));
 
         return environment.ToImmutable();
+    }
+
+    private static ResourcePropertySnapshot CreateArgsProperty(List<string>? effectiveArgs)
+    {
+        return new(KnownProperties.Container.Args, effectiveArgs ?? [])
+        {
+            IsSensitive = true
+        };
     }
 }

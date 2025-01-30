@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Collections.Immutable;
 using Aspire.Hosting.ApplicationModel;
 using Google.Protobuf.WellKnownTypes;
 
@@ -10,13 +11,13 @@ internal sealed class GenericResourceSnapshot(CustomResourceSnapshot state) : Re
 {
     public override string ResourceType => state.ResourceType;
 
-    protected override IEnumerable<(string Key, Value Value, bool IsSensitive)> GetProperties()
+    protected override IEnumerable<(string Key, Value Value, bool IsSensitive, ImmutableArray<Value>? FormatArgs)> GetProperties()
     {
-        foreach (var (key, value, isSensitive) in state.Properties)
+        foreach (var (key, value, isSensitive, formatArgs) in state.Properties)
         {
             var result = ConvertToValue(value);
 
-            yield return (key, result, isSensitive);
+            yield return (key, result, isSensitive, formatArgs?.Select(ConvertToValue).ToImmutableArray());
         }
     }
 }
