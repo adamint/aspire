@@ -285,4 +285,8 @@ app.MapGet("/multiple-traces-linked", async () =>
     return $"Created {TraceCount} traces.";
 });
 
+app.MapPost("/upload", (IFormFile file) => file.FileName)
+    .WithName("PostUpload")
+    .DisableAntiforgery();
+
 app.Run();
