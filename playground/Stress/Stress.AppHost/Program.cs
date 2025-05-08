@@ -26,6 +26,12 @@ for (var i = 0; i < 5; i++)
     }
 }
 
+var appWithManifestExpression = builder.AddExecutable("exe", "pwsh.exe", ".")
+    .WithHttpEndpoint();
+var endpoint = appWithManifestExpression.GetEndpoint("http");
+appWithManifestExpression.WithArgs("-port")
+    .WithArgs(x => x.Args.Add(endpoint.Property(EndpointProperty.TargetPort)));
+
 builder.AddParameter("testParameterResource", () => "value", secret: true);
 
 // TODO: OTEL env var can be removed when OTEL libraries are updated to 1.9.0
