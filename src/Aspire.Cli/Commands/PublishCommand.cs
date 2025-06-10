@@ -6,6 +6,7 @@ using System.Diagnostics;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Projects;
+using Aspire.Cli.Resources;
 using Aspire.Cli.Utils;
 using Aspire.Hosting;
 using Spectre.Console;
@@ -118,7 +119,7 @@ internal sealed class PublishCommand : BaseCommand
             var fullyQualifiedOutputPath = Path.GetFullPath(outputPath ?? ".");
 
             _interactionService.DisplayMessage($"hammer_and_wrench", $"Generating artifacts...");
-            
+
             var backchannelCompletionSource = new TaskCompletionSource<IAppHostBackchannel>();
 
             var publishRunOptions = new DotNetCliRunnerInvocationOptions
@@ -180,19 +181,19 @@ internal sealed class PublishCommand : BaseCommand
             _interactionService.DisplayError("The specified project file is not an Aspire app host project.");
             return ExitCodeConstants.FailedToFindProject;
         }
-        catch (ProjectLocatorException ex) when (ex.Message == "Project file does not exist.")
+        catch (ProjectLocatorException ex) when (string.Equals(ex.Message, Strings.ProjectFileDoesntExist, StringComparisons.CliInputOrOutput))
         {
-            _interactionService.DisplayError("The --project option specified a project that does not exist.");
+            _interactionService.DisplayError(InteractionServiceStrings.ProjectOptionDoesntExist);
             return ExitCodeConstants.FailedToFindProject;
         }
-        catch (ProjectLocatorException ex) when (ex.Message.Contains("Multiple project files found."))
+        catch (ProjectLocatorException ex) when (ex.Message.Contains(Strings.MultipleProjectFilesFound, StringComparisons.CliInputOrOutput))
         {
-            _interactionService.DisplayError("The --project option was not specified and multiple app host project files were detected.");
+            _interactionService.DisplayError(InteractionServiceStrings.ProjectOptionNotSpecifiedMultipleAppHostsFound);
             return ExitCodeConstants.FailedToFindProject;
         }
-        catch (ProjectLocatorException ex) when (ex.Message.Contains("No project file"))
+        catch (ProjectLocatorException ex) when (ex.Message.Contains(Strings.NoProjectFileFound, StringComparisons.CliInputOrOutput))
         {
-            _interactionService.DisplayError("The project argument was not specified and no *.csproj files were detected.");
+            _interactionService.DisplayError(InteractionServiceStrings.ProjectOptionNotSpecifiedNoCsprojFound);
             return ExitCodeConstants.FailedToFindProject;
         }
         catch (AppHostIncompatibleException ex)
@@ -270,7 +271,7 @@ internal sealed class PublishCommand : BaseCommand
                         return false;
                     }
                 }
-                
+
                 return true;
             });
     }

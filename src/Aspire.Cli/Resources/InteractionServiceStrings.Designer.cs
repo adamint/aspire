@@ -110,5 +110,23 @@ namespace Aspire.Cli.Resources {
                 return ResourceManager.GetString("BuildingAppHost", resourceCulture);
             }
         }
+        
+        public static string ProjectOptionDoesntExist {
+            get {
+                return ResourceManager.GetString("ProjectOptionDoesntExist", resourceCulture);
+            }
+        }
+        
+        public static string ProjectOptionNotSpecifiedMultipleAppHostsFound {
+            get {
+                return ResourceManager.GetString("ProjectOptionNotSpecifiedMultipleAppHostsFound", resourceCulture);
+            }
+        }
+        
+        public static string ProjectOptionNotSpecifiedNoCsprojFound {
+            get {
+                return ResourceManager.GetString("ProjectOptionNotSpecifiedNoCsprojFound", resourceCulture);
+            }
+        }
     }
 }

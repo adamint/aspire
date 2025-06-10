@@ -7,6 +7,7 @@ using Aspire.Cli.Backchannel;
 using Aspire.Cli.Certificates;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Projects;
+using Aspire.Cli.Resources;
 using Aspire.Cli.Utils;
 using Aspire.Hosting;
 using Spectre.Console;
@@ -62,7 +63,7 @@ internal sealed class RunCommand : BaseCommand
 
             var passedAppHostProjectFile = parseResult.GetValue<FileInfo?>("--project");
             var effectiveAppHostProjectFile = await _projectLocator.UseOrFindAppHostProjectFileAsync(passedAppHostProjectFile, cancellationToken);
-            
+
             if (effectiveAppHostProjectFile is null)
             {
                 return ExitCodeConstants.FailedToFindProject;
@@ -75,7 +76,7 @@ internal sealed class RunCommand : BaseCommand
             var waitForDebugger = parseResult.GetValue<bool>("--wait-for-debugger");
 
             var forceUseRichConsole = Environment.GetEnvironmentVariable(KnownConfigNames.ForceRichConsole) == "true";
-            
+
             var useRichConsole = forceUseRichConsole || !debug;
 
             if (waitForDebugger)
@@ -104,7 +105,7 @@ internal sealed class RunCommand : BaseCommand
                     return ExitCodeConstants.FailedToBuildArtifacts;
                 }
             }
-            
+
             appHostCompatibilityCheck = await AppHostHelper.CheckAppHostCompatibilityAsync(_runner, _interactionService, effectiveAppHostProjectFile, cancellationToken);
 
             if (!appHostCompatibilityCheck?.IsCompatibleAppHost ?? throw new InvalidOperationException("IsCompatibleAppHost is null"))
@@ -148,7 +149,7 @@ internal sealed class RunCommand : BaseCommand
                         }
 
                         // The wait for the debugger in the apphost is done inside the CreateBuilder(...) method
-                        // before the backchannel is created, therefore waiting on the backchannel is a 
+                        // before the backchannel is created, therefore waiting on the backchannel is a
                         // good signal that the debugger was attached (or timed out).
                         var backchannel = await backchannelCompletitionSource.Task.WaitAsync(cancellationToken);
                         return backchannel;
@@ -176,7 +177,7 @@ internal sealed class RunCommand : BaseCommand
                 // resource is streamed back from the
                 // app host which should be almost immediate
                 // if no resources are present.
-                
+
                 // Create placeholders based on number of columns defined.
                 var placeholders = new Markup[table.Columns.Count];
                 for (int i = 0; i < table.Columns.Count; i++)
@@ -259,7 +260,7 @@ internal sealed class RunCommand : BaseCommand
                     {
                         // This exception will be thrown if the cancellation request reaches the WaitForExitAsync
                         // call on the process and shuts down the apphost before the JsonRpc connection gets it meaning
-                        // that the apphost side of the RPC connection will be closed. Therefore if we get a 
+                        // that the apphost side of the RPC connection will be closed. Therefore if we get a
                         // ConnectionLostException AND the inner exception is an OperationCancelledException we can
                         // asume that the apphost was shutdown and we can ignore it.
                     }
@@ -293,19 +294,19 @@ internal sealed class RunCommand : BaseCommand
             _interactionService.DisplayCancellationMessage();
             return ExitCodeConstants.Success;
         }
-        catch (ProjectLocatorException ex) when (ex.Message == "Project file does not exist.")
+        catch (ProjectLocatorException ex) when (string.Equals(ex.Message, Strings.ProjectFileDoesntExist, StringComparisons.CliInputOrOutput))
         {
-            _interactionService.DisplayError("The --project option specified a project that does not exist.");
+            _interactionService.DisplayError(InteractionServiceStrings.ProjectOptionDoesntExist);
             return ExitCodeConstants.FailedToFindProject;
         }
-        catch (ProjectLocatorException ex) when (ex.Message.Contains("Multiple project files"))
+        catch (ProjectLocatorException ex) when (ex.Message.Contains(Strings.MultipleProjectFilesFound, StringComparisons.CliInputOrOutput))
         {
-            _interactionService.DisplayError("The --project option was not specified and multiple app host project files were detected.");
+            _interactionService.DisplayError(InteractionServiceStrings.ProjectOptionNotSpecifiedMultipleAppHostsFound);
             return ExitCodeConstants.FailedToFindProject;
         }
-        catch (ProjectLocatorException ex) when (ex.Message.Contains("No project file"))
+        catch (ProjectLocatorException ex) when (ex.Message.Contains(Strings.NoProjectFileFound, StringComparisons.CliInputOrOutput))
         {
-            _interactionService.DisplayError("The project argument was not specified and no *.csproj files were detected.");
+            _interactionService.DisplayError(InteractionServiceStrings.ProjectOptionNotSpecifiedNoCsprojFound);
             return ExitCodeConstants.FailedToFindProject;
         }
         catch (AppHostIncompatibleException ex)
