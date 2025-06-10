@@ -117,8 +117,47 @@
   <resheader name="writer">
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
-  <data name="" xml:space="preserve">
-    <value></value>
-    <comment></comment>
+  <data name="Description" xml:space="preserve">
+    <value>Run an Aspire app host in development mode.</value>
+  </data>
+  <data name="ProjectArgumentDescription" xml:space="preserve">
+    <value>The path to the Aspire app host project file.</value>
+  </data>
+  <data name="WatchArgumentDescription" xml:space="preserve">
+    <value>Start project resources in watch mode.</value>
+  </data>
+  <data name="IsCompatibleAppHostIsNull" xml:space="preserve">
+    <value>IsCompatibleAppHost is null</value>
+  </data>
+  <data name="StartingAppHost" xml:space="preserve">
+    <value>Starting Aspire app host...</value>
+  </data>
+  <data name="StartingDashboard" xml:space="preserve">
+    <value>Starting Aspire dashboard...</value>
+  </data>
+  <data name="Resource" xml:space="preserve">
+    <value>Resource</value>
+    <comment>A column header (noun)</comment>
+  </data>
+  <data name="Type" xml:space="preserve">
+    <value>Type</value>
+    <comment>The type of the resource, eg Project</comment>
+  </data>
+  <data name="State" xml:space="preserve">
+    <value>State</value>
+    <comment>The state of the resource, eg Running</comment>
+  </data>
+  <data name="Health" xml:space="preserve">
+    <value>The health of the resource, eg Healthy</value>
+  </data>
+  <data name="Endpoints" xml:space="preserve">
+    <value>Endpoints</value>
+  </data>
+  <data name="PressCtrlCToStopAppHost" xml:space="preserve">
+    <value>Press [bold]Ctrl+C[/] to stop the app host and exit.</value>
+    <comment>[bold] should not be localized</comment>
+  </data>
+  <data name="ProjectCouldNotBeRun" xml:space="preserve">
+    <value>The project could not be run. For more information run with --debug switch.</value>
   </data>
 </root>

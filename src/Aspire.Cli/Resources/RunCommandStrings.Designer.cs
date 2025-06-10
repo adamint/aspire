@@ -45,9 +45,81 @@ namespace Aspire.Cli.Resources {
             }
         }
         
-        public static string _ {
+        public static string Description {
             get {
-                return ResourceManager.GetString("", resourceCulture);
+                return ResourceManager.GetString("Description", resourceCulture);
+            }
+        }
+        
+        public static string ProjectArgumentDescription {
+            get {
+                return ResourceManager.GetString("ProjectArgumentDescription", resourceCulture);
+            }
+        }
+        
+        public static string WatchArgumentDescription {
+            get {
+                return ResourceManager.GetString("WatchArgumentDescription", resourceCulture);
+            }
+        }
+        
+        public static string IsCompatibleAppHostIsNull {
+            get {
+                return ResourceManager.GetString("IsCompatibleAppHostIsNull", resourceCulture);
+            }
+        }
+        
+        public static string StartingAppHost {
+            get {
+                return ResourceManager.GetString("StartingAppHost", resourceCulture);
+            }
+        }
+        
+        public static string StartingDashboard {
+            get {
+                return ResourceManager.GetString("StartingDashboard", resourceCulture);
+            }
+        }
+        
+        public static string Resource {
+            get {
+                return ResourceManager.GetString("Resource", resourceCulture);
+            }
+        }
+        
+        public static string Type {
+            get {
+                return ResourceManager.GetString("Type", resourceCulture);
+            }
+        }
+        
+        public static string State {
+            get {
+                return ResourceManager.GetString("State", resourceCulture);
+            }
+        }
+        
+        public static string Health {
+            get {
+                return ResourceManager.GetString("Health", resourceCulture);
+            }
+        }
+        
+        public static string Endpoints {
+            get {
+                return ResourceManager.GetString("Endpoints", resourceCulture);
+            }
+        }
+        
+        public static string PressCtrlCToStopAppHost {
+            get {
+                return ResourceManager.GetString("PressCtrlCToStopAppHost", resourceCulture);
+            }
+        }
+        
+        public static string ProjectCouldNotBeRun {
+            get {
+                return ResourceManager.GetString("ProjectCouldNotBeRun", resourceCulture);
             }
         }
     }

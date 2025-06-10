@@ -146,7 +146,7 @@ internal sealed class PublishCommand : BaseCommand
             // of the apphost so that the user can attach to it.
             if (waitForDebugger)
             {
-                _interactionService.DisplayMessage("bug", $"Waiting for debugger to attach to app host process");
+                _interactionService.DisplayMessage("bug", InteractionServiceStrings.WaitingForDebuggerToAttachToAppHost);
             }
 
             var backchannel = await backchannelCompletionSource.Task.ConfigureAwait(false);

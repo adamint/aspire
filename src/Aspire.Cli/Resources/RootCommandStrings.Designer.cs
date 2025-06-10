@@ -51,21 +51,21 @@ namespace Aspire.Cli.Resources {
             }
         }
         
-        public static string DebugOptionDescription {
+        public static string DebugArgumentDescription {
             get {
-                return ResourceManager.GetString("DebugOptionDescription", resourceCulture);
+                return ResourceManager.GetString("DebugArgumentDescription", resourceCulture);
             }
         }
         
-        public static string WaitForDebuggerOptionDescription {
+        public static string WaitForDebuggerArgumentDescription {
             get {
-                return ResourceManager.GetString("WaitForDebuggerOptionDescription", resourceCulture);
+                return ResourceManager.GetString("WaitForDebuggerArgumentDescription", resourceCulture);
             }
         }
         
-        public static string CliWaitForDebuggerOptionDescription {
+        public static string CliWaitForDebuggerArgumentDescription {
             get {
-                return ResourceManager.GetString("CliWaitForDebuggerOptionDescription", resourceCulture);
+                return ResourceManager.GetString("CliWaitForDebuggerArgumentDescription", resourceCulture);
             }
         }
         

@@ -178,4 +178,7 @@
     <value>An unexpected error occurred: {0}</value>
     <comment>{0} is the exception message</comment>
   </data>
+  <data name="WaitingForDebuggerToAttachToAppHost" xml:space="preserve">
+    <value>Waiting for debugger to attach to app host process</value>
+  </data>
 </root>

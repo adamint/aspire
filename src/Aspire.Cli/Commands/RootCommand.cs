@@ -30,17 +30,17 @@ internal sealed class RootCommand : BaseRootCommand
         _interactionService = interactionService;
 
         var debugOption = new Option<bool>("--debug", "-d");
-        debugOption.Description = RootCommandStrings.DebugOptionDescription;
+        debugOption.Description = RootCommandStrings.DebugArgumentDescription;
         debugOption.Recursive = true;
         Options.Add(debugOption);
 
         var waitForDebuggerOption = new Option<bool>("--wait-for-debugger");
-        waitForDebuggerOption.Description = RootCommandStrings.WaitForDebuggerOptionDescription;
+        waitForDebuggerOption.Description = RootCommandStrings.WaitForDebuggerArgumentDescription;
         waitForDebuggerOption.Recursive = true;
         waitForDebuggerOption.DefaultValueFactory = (result) => false;
 
         var cliWaitForDebuggerOption = new Option<bool>("--cli-wait-for-debugger");
-        cliWaitForDebuggerOption.Description = RootCommandStrings.CliWaitForDebuggerOptionDescription;
+        cliWaitForDebuggerOption.Description = RootCommandStrings.CliWaitForDebuggerArgumentDescription;
         cliWaitForDebuggerOption.Recursive = true;
         cliWaitForDebuggerOption.Hidden = true;
         cliWaitForDebuggerOption.DefaultValueFactory = (result) => false;

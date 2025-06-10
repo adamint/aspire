@@ -158,5 +158,11 @@ namespace Aspire.Cli.Resources {
                 return ResourceManager.GetString("UnexpectedErrorOccurred", resourceCulture);
             }
         }
+        
+        public static string WaitingForDebuggerToAttachToAppHost {
+            get {
+                return ResourceManager.GetString("WaitingForDebuggerToAttachToAppHost", resourceCulture);
+            }
+        }
     }
 }
