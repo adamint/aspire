@@ -45,6 +45,66 @@ namespace Aspire.Cli.Resources {
             }
         }
         
+        public static string Description {
+            get {
+                return ResourceManager.GetString("Description", resourceCulture);
+            }
+        }
+        
+        public static string NameArgumentDescription {
+            get {
+                return ResourceManager.GetString("NameArgumentDescription", resourceCulture);
+            }
+        }
+        
+        public static string OutputArgumentDescription {
+            get {
+                return ResourceManager.GetString("OutputArgumentDescription", resourceCulture);
+            }
+        }
+        
+        public static string SourceArgumentDescription {
+            get {
+                return ResourceManager.GetString("SourceArgumentDescription", resourceCulture);
+            }
+        }
+        
+        public static string VersionArgumentDescription {
+            get {
+                return ResourceManager.GetString("VersionArgumentDescription", resourceCulture);
+            }
+        }
+        
+        public static string SelectATemplateVersion {
+            get {
+                return ResourceManager.GetString("SelectATemplateVersion", resourceCulture);
+            }
+        }
+        
+        public static string EnterTheOutputPath {
+            get {
+                return ResourceManager.GetString("EnterTheOutputPath", resourceCulture);
+            }
+        }
+        
+        public static string EnterTheProjectName {
+            get {
+                return ResourceManager.GetString("EnterTheProjectName", resourceCulture);
+            }
+        }
+        
+        public static string InvalidProjectName {
+            get {
+                return ResourceManager.GetString("InvalidProjectName", resourceCulture);
+            }
+        }
+        
+        public static string SelectAProjectTemplate {
+            get {
+                return ResourceManager.GetString("SelectAProjectTemplate", resourceCulture);
+            }
+        }
+        
         public static string _ {
             get {
                 return ResourceManager.GetString("", resourceCulture);
