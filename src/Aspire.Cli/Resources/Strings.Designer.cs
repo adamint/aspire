@@ -188,5 +188,11 @@ namespace Aspire.Cli.Resources {
                 return ResourceManager.GetString("NoProjectFileFound", resourceCulture);
             }
         }
+        
+        public static string ProjectFileNotAppHostProject {
+            get {
+                return ResourceManager.GetString("ProjectFileNotAppHostProject", resourceCulture);
+            }
+        }
     }
 }

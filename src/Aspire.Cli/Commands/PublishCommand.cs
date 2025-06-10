@@ -3,6 +3,7 @@
 
 using System.CommandLine;
 using System.Diagnostics;
+using System.Globalization;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Projects;
@@ -23,7 +24,7 @@ internal class PublishCommandPrompter(IInteractionService interactionService) : 
     public virtual async Task<string> PromptForPublisherAsync(IEnumerable<string> publishers, CancellationToken cancellationToken)
     {
         return await interactionService.PromptForSelectionAsync(
-            "Select a publisher:",
+            PublishCommandStrings.SelectAPublisher,
             publishers,
             p => p,
             cancellationToken
@@ -40,7 +41,7 @@ internal sealed class PublishCommand : BaseCommand
     private readonly IPublishCommandPrompter _prompter;
 
     public PublishCommand(IDotNetCliRunner runner, IInteractionService interactionService, IProjectLocator projectLocator, IPublishCommandPrompter prompter)
-        : base("publish", "Generates deployment artifacts for an Aspire app host project.")
+        : base("publish", PublishCommandStrings.Description)
     {
         ArgumentNullException.ThrowIfNull(runner);
         ArgumentNullException.ThrowIfNull(interactionService);
@@ -53,11 +54,11 @@ internal sealed class PublishCommand : BaseCommand
         _prompter = prompter;
 
         var projectOption = new Option<FileInfo?>("--project");
-        projectOption.Description = "The path to the Aspire app host project file.";
+        projectOption.Description = PublishCommandStrings.ProjectArgumentDescription;
         Options.Add(projectOption);
 
         var outputPath = new Option<string>("--output-path", "-o");
-        outputPath.Description = "The output path for the generated artifacts.";
+        outputPath.Description = PublishCommandStrings.OutputPathArgumentDescription;
         outputPath.DefaultValueFactory = (result) => Path.Combine(Environment.CurrentDirectory);
         Options.Add(outputPath);
 
@@ -111,14 +112,14 @@ internal sealed class PublishCommand : BaseCommand
             if (buildExitCode != 0)
             {
                 _interactionService.DisplayLines(buildOutputCollector.GetLines());
-                _interactionService.DisplayError("The project could not be built. For more information run with --debug switch.");
+                _interactionService.DisplayError(InteractionServiceStrings.ProjectCouldNotBeBuilt);
                 return ExitCodeConstants.FailedToBuildArtifacts;
             }
 
             var outputPath = parseResult.GetValue<string>("--output-path");
             var fullyQualifiedOutputPath = Path.GetFullPath(outputPath ?? ".");
 
-            _interactionService.DisplayMessage($"hammer_and_wrench", $"Generating artifacts...");
+            _interactionService.DisplayMessage($"hammer_and_wrench", PublishCommandStrings.GeneratingArtifacts);
 
             var backchannelCompletionSource = new TaskCompletionSource<IAppHostBackchannel>();
 
@@ -163,22 +164,22 @@ internal sealed class PublishCommand : BaseCommand
 
             if (exitCode == 0 && noFailuresReported)
             {
-                _interactionService.DisplaySuccess($"Successfully published artifacts to: {fullyQualifiedOutputPath}");
+                _interactionService.DisplaySuccess(string.Format(CultureInfo.CurrentCulture, PublishCommandStrings.SuccessfullyPublishedArtifacts, fullyQualifiedOutputPath));
                 return ExitCodeConstants.Success;
             }
 
             _interactionService.DisplayLines(publishOutputCollector.GetLines());
-            _interactionService.DisplayError($"Publishing artifacts failed with exit code {exitCode}. For more information run with --debug switch.");
+            _interactionService.DisplayError(string.Format(CultureInfo.CurrentCulture, PublishCommandStrings.FailedToPublishArtifacts, exitCode));
             return ExitCodeConstants.FailedToBuildArtifacts;
         }
         catch (OperationCanceledException)
         {
-            _interactionService.DisplayError("The operation was canceled.");
+            _interactionService.DisplayError(InteractionServiceStrings.OperationCancelled);
             return ExitCodeConstants.FailedToBuildArtifacts;
         }
-        catch (ProjectLocatorException ex) when (ex.Message == "Project file is not an Aspire app host project.")
+        catch (ProjectLocatorException ex) when (string.Equals(ex.Message, Strings.ProjectFileNotAppHostProject, StringComparisons.CliInputOrOutput))
         {
-            _interactionService.DisplayError("The specified project file is not an Aspire app host project.");
+            _interactionService.DisplayError(InteractionServiceStrings.SpecifiedProjectFileNotAppHostProject);
             return ExitCodeConstants.FailedToFindProject;
         }
         catch (ProjectLocatorException ex) when (string.Equals(ex.Message, Strings.ProjectFileDoesntExist, StringComparisons.CliInputOrOutput))
@@ -205,13 +206,13 @@ internal sealed class PublishCommand : BaseCommand
         }
         catch (FailedToConnectBackchannelConnection ex)
         {
-            _interactionService.DisplayError($"An error occurred while connecting to the app host. The app host possibly crashed before it was available: {ex.Message}");
+            _interactionService.DisplayError(string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.ErrorConnectingToAppHost, ex.Message));
             _interactionService.DisplayLines(publishOutputCollector.GetLines());
             return ExitCodeConstants.FailedToBuildArtifacts;
         }
         catch (Exception ex)
         {
-            _interactionService.DisplayError($"An unexpected error occurred: {ex.Message}");
+            _interactionService.DisplayError(string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.UnexpectedErrorOccurred, ex.Message));
             return ExitCodeConstants.FailedToBuildArtifacts;
         }
     }

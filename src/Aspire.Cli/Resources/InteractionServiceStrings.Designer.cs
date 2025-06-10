@@ -128,5 +128,35 @@ namespace Aspire.Cli.Resources {
                 return ResourceManager.GetString("ProjectOptionNotSpecifiedNoCsprojFound", resourceCulture);
             }
         }
+        
+        public static string ProjectCouldNotBeBuilt {
+            get {
+                return ResourceManager.GetString("ProjectCouldNotBeBuilt", resourceCulture);
+            }
+        }
+        
+        public static string OperationCancelled {
+            get {
+                return ResourceManager.GetString("OperationCancelled", resourceCulture);
+            }
+        }
+        
+        public static string SpecifiedProjectFileNotAppHostProject {
+            get {
+                return ResourceManager.GetString("SpecifiedProjectFileNotAppHostProject", resourceCulture);
+            }
+        }
+        
+        public static string ErrorConnectingToAppHost {
+            get {
+                return ResourceManager.GetString("ErrorConnectingToAppHost", resourceCulture);
+            }
+        }
+        
+        public static string UnexpectedErrorOccurred {
+            get {
+                return ResourceManager.GetString("UnexpectedErrorOccurred", resourceCulture);
+            }
+        }
     }
 }

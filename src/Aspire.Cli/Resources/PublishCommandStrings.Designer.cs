@@ -45,9 +45,45 @@ namespace Aspire.Cli.Resources {
             }
         }
         
-        public static string _ {
+        public static string Description {
             get {
-                return ResourceManager.GetString("", resourceCulture);
+                return ResourceManager.GetString("Description", resourceCulture);
+            }
+        }
+        
+        public static string SelectAPublisher {
+            get {
+                return ResourceManager.GetString("SelectAPublisher", resourceCulture);
+            }
+        }
+        
+        public static string ProjectArgumentDescription {
+            get {
+                return ResourceManager.GetString("ProjectArgumentDescription", resourceCulture);
+            }
+        }
+        
+        public static string OutputPathArgumentDescription {
+            get {
+                return ResourceManager.GetString("OutputPathArgumentDescription", resourceCulture);
+            }
+        }
+        
+        public static string GeneratingArtifacts {
+            get {
+                return ResourceManager.GetString("GeneratingArtifacts", resourceCulture);
+            }
+        }
+        
+        public static string SuccessfullyPublishedArtifacts {
+            get {
+                return ResourceManager.GetString("SuccessfullyPublishedArtifacts", resourceCulture);
+            }
+        }
+        
+        public static string FailedToPublishArtifacts {
+            get {
+                return ResourceManager.GetString("FailedToPublishArtifacts", resourceCulture);
             }
         }
     }

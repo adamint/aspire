@@ -162,4 +162,20 @@
   <data name="ProjectOptionNotSpecifiedNoCsprojFound" xml:space="preserve">
     <value>The project argument was not specified and no *.csproj files were detected.</value>
   </data>
+  <data name="ProjectCouldNotBeBuilt" xml:space="preserve">
+    <value>The project could not be built. For more information run with --debug switch.</value>
+  </data>
+  <data name="OperationCancelled" xml:space="preserve">
+    <value>The operation was canceled.</value>
+  </data>
+  <data name="SpecifiedProjectFileNotAppHostProject" xml:space="preserve">
+    <value>The specified project file is not an Aspire app host project.</value>
+  </data>
+  <data name="ErrorConnectingToAppHost" xml:space="preserve">
+    <value>An error occurred while connecting to the app host. The app host possibly crashed before it was available: {0}.</value>
+  </data>
+  <data name="UnexpectedErrorOccurred" xml:space="preserve">
+    <value>An unexpected error occurred: {0}</value>
+    <comment>{0} is the exception message</comment>
+  </data>
 </root>

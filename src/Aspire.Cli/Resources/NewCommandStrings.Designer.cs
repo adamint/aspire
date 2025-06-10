@@ -104,11 +104,5 @@ namespace Aspire.Cli.Resources {
                 return ResourceManager.GetString("SelectAProjectTemplate", resourceCulture);
             }
         }
-        
-        public static string _ {
-            get {
-                return ResourceManager.GetString("", resourceCulture);
-            }
-        }
     }
 }

@@ -117,8 +117,25 @@
   <resheader name="writer">
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
-  <data name="" xml:space="preserve">
-    <value></value>
-    <comment></comment>
+  <data name="Description" xml:space="preserve">
+    <value>Generates deployment artifacts for an Aspire app host project.</value>
+  </data>
+  <data name="SelectAPublisher" xml:space="preserve">
+    <value>Select a publisher:</value>
+  </data>
+  <data name="ProjectArgumentDescription" xml:space="preserve">
+    <value>The path to the Aspire app host project file.</value>
+  </data>
+  <data name="OutputPathArgumentDescription" xml:space="preserve">
+    <value>The output path for the generated artifacts.</value>
+  </data>
+  <data name="GeneratingArtifacts" xml:space="preserve">
+    <value>Generating artifacts...</value>
+  </data>
+  <data name="SuccessfullyPublishedArtifacts" xml:space="preserve">
+    <value>Successfully published artifacts to: {0}</value>
+  </data>
+  <data name="FailedToPublishArtifacts" xml:space="preserve">
+    <value>Publishing artifacts failed with exit code {0}. For more information run with --debug switch.</value>
   </data>
 </root>

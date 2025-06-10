@@ -193,4 +193,7 @@
   <data name="NoProjectFileFound" xml:space="preserve">
     <value>No project file found.</value>
   </data>
+  <data name="ProjectFileNotAppHostProject" xml:space="preserve">
+    <value>Project file is not an Aspire app host project.</value>
+  </data>
 </root>
