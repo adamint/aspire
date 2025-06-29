@@ -68,7 +68,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
 
                     return (
                         0, // Exit code.
-                        new NuGetPackage[] { dockerPackage, redisPackage, azureRedisPackage } // 
+                        new NuGetPackage[] { dockerPackage, redisPackage, azureRedisPackage } //
                         );
                 };
 
@@ -93,8 +93,8 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     [Fact]
     public async Task AddCommandSortsPackageVersions()
     {
-        IEnumerable<(string FriendlyName, NuGetPackage Package)>? promptedPackages = null;
-        
+        IEnumerable<IntegrationPackageInfo>? promptedPackages = null;
+
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options => {
 
@@ -135,7 +135,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
 
                     return (
                         0, // Exit code.
-                        new NuGetPackage[] { redis92Package, redis93Package } // 
+                        new NuGetPackage[] { redis92Package, redis93Package } //
                         );
                 };
 
@@ -165,8 +165,8 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     [Fact]
     public async Task AddCommandSortsPackageVersionsWithPrerelease()
     {
-        IEnumerable<(string FriendlyName, NuGetPackage Package)>? promptedPackages = null;
-        
+        IEnumerable<IntegrationPackageInfo>? promptedPackages = null;
+
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options => {
 
@@ -214,7 +214,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
 
                     return (
                         0, // Exit code.
-                        new NuGetPackage[] { redis92Package, redis94PrereleasePackage, redis93Package } // 
+                        new NuGetPackage[] { redis92Package, redis94PrereleasePackage, redis93Package } //
                         );
                 };
 
@@ -294,7 +294,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
 
                     return (
                         0, // Exit code.
-                        new NuGetPackage[] { dockerPackage, redisPackage, azureRedisPackage } // 
+                        new NuGetPackage[] { dockerPackage, redisPackage, azureRedisPackage } //
                         );
                 };
 
@@ -376,7 +376,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
 
                     return (
                         0, // Exit code.
-                        new NuGetPackage[] { dockerPackage, redisPackage, azureRedisPackage } // 
+                        new NuGetPackage[] { dockerPackage, redisPackage, azureRedisPackage } //
                         );
                 };
 
@@ -403,7 +403,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     [Fact]
     public async Task AddCommandPromptsForDisambiguation()
     {
-        IEnumerable<(string FriendlyName, NuGetPackage Package)>? promptedPackages = null;
+        IEnumerable<IntegrationPackageInfo>? promptedPackages = null;
         string? addedPackageName = null;
         string? addedPackageVersion = null;
 
@@ -454,7 +454,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
 
                     return (
                         0, // Exit code.
-                        new NuGetPackage[] { dockerPackage, redisPackage, azureRedisPackage } // 
+                        new NuGetPackage[] { dockerPackage, redisPackage, azureRedisPackage } //
                         );
                 };
 
@@ -519,7 +519,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
 
                     return (
                         0, // Exit code.
-                        new NuGetPackage[] { redisPackage } // 
+                        new NuGetPackage[] { redisPackage } //
                         );
                 };
 
@@ -527,7 +527,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
                 {
                     // Capture the source used for add
                     addUsedSource = nugetSource;
-                    
+
                     // Simulate adding the package.
                     return 0; // Success.
                 };
@@ -542,7 +542,7 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
         var result = command.Parse($"add redis --source {expectedSource}");
 
         var exitCode = await result.InvokeAsync().WaitAsync(CliTestConstants.DefaultTimeout);
-        
+
         // Assert
         Assert.Equal(0, exitCode);
         Assert.Equal(expectedSource, searchUsedSource);
@@ -590,10 +590,10 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
 
 internal sealed class TestAddCommandPrompter(IInteractionService interactionService) : AddCommandPrompter(interactionService)
 {
-    public Func<IEnumerable<(string FriendlyName, NuGetPackage Package)>, (string FriendlyName, NuGetPackage Package)>? PromptForIntegrationCallback { get; set; }
-    public Func<IEnumerable<(string FriendlyName, NuGetPackage Package)>, (string FriendlyName, NuGetPackage Package)>? PromptForIntegrationVersionCallback { get; set; }
+    public Func<IEnumerable<IntegrationPackageInfo>, IntegrationPackageInfo>? PromptForIntegrationCallback { get; set; }
+    public Func<IEnumerable<IntegrationPackageInfo>, IntegrationPackageInfo>? PromptForIntegrationVersionCallback { get; set; }
 
-    public override Task<(string FriendlyName, NuGetPackage Package)> PromptForIntegrationAsync(IEnumerable<(string FriendlyName, NuGetPackage Package)> packages, CancellationToken cancellationToken)
+    public override Task<IntegrationPackageInfo> PromptForIntegrationAsync(IEnumerable<IntegrationPackageInfo> packages, CancellationToken cancellationToken)
     {
         return PromptForIntegrationCallback switch
         {
@@ -602,7 +602,7 @@ internal sealed class TestAddCommandPrompter(IInteractionService interactionServ
         };
     }
 
-    public override Task<(string FriendlyName, NuGetPackage Package)> PromptForIntegrationVersionAsync(IEnumerable<(string FriendlyName, NuGetPackage Package)> packages, CancellationToken cancellationToken)
+    public override Task<IntegrationPackageInfo> PromptForIntegrationVersionAsync(IEnumerable<IntegrationPackageInfo> packages, CancellationToken cancellationToken)
     {
         return PromptForIntegrationVersionCallback switch
         {
