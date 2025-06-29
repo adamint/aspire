@@ -3,12 +3,11 @@ import * as vscode from 'vscode';
 import { createMessageConnection, MessageConnection } from 'vscode-jsonrpc';
 import { StreamMessageReader, StreamMessageWriter } from 'vscode-jsonrpc/node';
 import { rpcServerAddressError, rpcServerListening, rpcServerError } from '../loc/strings';
-import * as crypto from 'crypto';
 import { addInteractionServiceEndpoints, IInteractionService } from './interactionService';
 import { ICliRpcClient } from './rpcClient';
 import { IOutputChannelWriter } from '../utils/vsc';
 import * as tls from 'tls';
-import { generateSelfSignedCert } from './cert-util';
+import { generateSelfSignedCert, generateToken } from '../utils/server';
 
 export type RpcServerInformation = {
     address: string;
@@ -85,9 +84,4 @@ export function setupRpcServer(interactionService: (connection: MessageConnectio
 
 function disposeRpcServer(rpcServer: net.Server) {
     rpcServer.close();
-}
-
-function generateToken(): string {
-    const key = crypto.randomBytes(16);
-    return key.toString('base64');
 }

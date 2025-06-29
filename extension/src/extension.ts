@@ -11,8 +11,10 @@ import { newCommand } from './commands/new';
 import { configCommand } from './commands/config';
 import { deployCommand } from './commands/deploy';
 import { publishCommand } from './commands/publish';
+import { DcpServerInformation, startDcpServer } from './dcp/dcpServer';
 
 export let rpcServerInfo: RpcServerInformation | undefined;
+export let dcpServerInfo: DcpServerInformation | undefined;
 
 export async function activate(context: vscode.ExtensionContext) {
 	const cliRunCommand = vscode.commands.registerCommand('aspire-vscode.run', () => tryExecuteCommand(runCommand));
@@ -32,10 +34,15 @@ export async function activate(context: vscode.ExtensionContext) {
 		vscOutputChannelWriter
 	);
 
+	dcpServerInfo = await startDcpServer();
+
 	// Return exported API for tests or other extensions
 	return {
 		getRpcServerInfo: (): RpcServerInformation | undefined => {
 			return rpcServerInfo;
+		},
+		getDcpServerInfo: (): DcpServerInformation | undefined => {
+			return dcpServerInfo;
 		}
 	};
 }
