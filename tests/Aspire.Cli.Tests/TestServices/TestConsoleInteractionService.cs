@@ -26,7 +26,7 @@ internal sealed class TestConsoleInteractionService : IInteractionService
         return Task.FromResult(defaultValue ?? string.Empty);
     }
 
-    public Task<T> PromptForSelectionAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter, CancellationToken cancellationToken = default) where T : notnull
+    public Task<T> PromptForSelectionAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter, CancellationToken cancellationToken = default) where T : class
     {
         if (!choices.Any())
         {
@@ -82,7 +82,7 @@ internal sealed class TestConsoleInteractionService : IInteractionService
     public void DisplayPlainText(string text)
     {
     }
-    
+
     public void OpenNewProject(string projectPath)
     {
     }

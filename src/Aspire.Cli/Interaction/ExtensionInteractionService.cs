@@ -124,9 +124,12 @@ internal class ExtensionInteractionService : IInteractionService
         }
     }
 
-    public async Task<T> PromptForSelectionAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter,
-        CancellationToken cancellationToken = default) where T : notnull
+    public async Task<T> PromptForSelectionAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter, CancellationToken cancellationToken = default) where T : class
     {
+        ArgumentNullException.ThrowIfNull(promptText, nameof(promptText));
+        ArgumentNullException.ThrowIfNull(choices, nameof(choices));
+        ArgumentNullException.ThrowIfNull(choiceFormatter, nameof(choiceFormatter));
+
         if (_extensionPromptEnabled)
         {
             var tcs = new TaskCompletionSource<T>();

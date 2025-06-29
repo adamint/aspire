@@ -12,7 +12,7 @@ internal interface IInteractionService
     void ShowStatus(string statusText, Action action);
     Task<string> PromptForStringAsync(string promptText, string? defaultValue = null, Func<string, ValidationResult>? validator = null, bool isSecret = false, CancellationToken cancellationToken = default);
     public Task<bool> ConfirmAsync(string promptText, bool defaultValue = true, CancellationToken cancellationToken = default);
-    Task<T> PromptForSelectionAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter, CancellationToken cancellationToken = default) where T : notnull;
+    Task<T> PromptForSelectionAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter, CancellationToken cancellationToken = default) where T : class;
     int DisplayIncompatibleVersionError(AppHostIncompatibleException ex, string appHostHostingVersion);
     void DisplayError(string errorMessage);
     void DisplayMessage(string emoji, string message);

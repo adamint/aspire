@@ -55,7 +55,7 @@ internal class ConsoleInteractionService : IInteractionService
         return await _ansiConsole.PromptAsync(prompt, cancellationToken);
     }
 
-    public async Task<T> PromptForSelectionAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter, CancellationToken cancellationToken = default) where T : notnull
+    public async Task<T> PromptForSelectionAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter, CancellationToken cancellationToken = default) where T : class
     {
         ArgumentNullException.ThrowIfNull(promptText, nameof(promptText));
         ArgumentNullException.ThrowIfNull(choices, nameof(choices));
