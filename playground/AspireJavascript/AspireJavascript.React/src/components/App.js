@@ -3,25 +3,72 @@ import "./App.css";
 
 function App() {
     const [forecasts, setForecasts] = useState([]);
+    const [apiSource, setApiSource] = useState("dotnet"); // "dotnet" or "nodejs"
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
 
     const requestWeather = async () => {
-        const weather = await fetch("api/weatherforecast");
-        console.log(weather);
+        setLoading(true);
+        setError(null);
+        
+        try {
+            // Use different endpoints based on selected API
+            const endpoint = apiSource === "nodejs" ? "nodeapi/weatherforecast" : "api/weatherforecast";
+            const weather = await fetch(endpoint);
+            
+            if (!weather.ok) {
+                throw new Error(`HTTP error! status: ${weather.status}`);
+            }
+            
+            console.log(weather);
 
-        const weatherJson = await weather.json();
-        console.log(weatherJson);
+            const weatherJson = await weather.json();
+            console.log(weatherJson);
 
-        setForecasts(weatherJson);
+            setForecasts(weatherJson);
+        } catch (err) {
+            console.error("Error fetching weather:", err);
+            setError(err.message);
+            setForecasts([]);
+        } finally {
+            setLoading(false);
+        }
     };
 
     useEffect(() => {
         requestWeather();
-    }, []);
+    }, [apiSource]); // Refetch when API source changes
+
+    const toggleApiSource = () => {
+        setApiSource(prev => prev === "dotnet" ? "nodejs" : "dotnet");
+    };
 
     return (
         <div className="App">
             <header className="App-header">
                 <h1>React Weather</h1>
+                
+                <div style={{ marginBottom: "20px" }}>
+                    <button 
+                        onClick={toggleApiSource}
+                        style={{
+                            padding: "10px 20px",
+                            fontSize: "16px",
+                            backgroundColor: apiSource === "dotnet" ? "#61dafb" : "#68d391",
+                            border: "none",
+                            borderRadius: "5px",
+                            cursor: "pointer",
+                            color: "black"
+                        }}
+                    >
+                        Using: {apiSource === "dotnet" ? ".NET MinimalAPI" : "Node.js Express"} 
+                        (Click to switch)
+                    </button>
+                </div>
+
+                {loading && <p>Loading weather data...</p>}
+                {error && <p style={{color: "red"}}>Error: {error}</p>}
+
                 <table>
                     <thead>
                     <tr>

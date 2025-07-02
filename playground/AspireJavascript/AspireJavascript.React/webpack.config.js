@@ -2,6 +2,8 @@ const HTMLWebpackPlugin = require("html-webpack-plugin");
 
 module.exports = (env) => {
     return {
+        mode: env.NODE_ENV || "development",
+        devtool: "eval-source-map",
         entry: "./src/index.js",
         devServer: {
             port: env.PORT || 4001,
@@ -15,6 +17,14 @@ module.exports = (env) => {
                     pathRewrite: { "^/api": "" },
                     secure: false,
                 },
+                {
+                    context: ["/nodeapi"],
+                    target:
+                        process.env.services__node_weather_api__https__0 ||
+                        process.env.services__node_weather_api__http__0,
+                    pathRewrite: { "^/nodeapi": "" },
+                    secure: false,
+                },
             ],
         },
         output: {
@@ -24,7 +34,6 @@ module.exports = (env) => {
         plugins: [
             new HTMLWebpackPlugin({
                 template: "./src/index.html",
-                favicon: "./src/favicon.ico",
             }),
         ],
         module: {

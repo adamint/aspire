@@ -1,13 +1,14 @@
 import * as vscode from 'vscode';
-import { dcpServerInfo, rpcServerInfo } from '../extension';
+import { dcpServer, rpcServerInfo } from '../extension';
 import { aspireTerminalName } from '../loc/strings';
+import { getSupportedDebugLanguages } from './vsc';
 
 export function getAspireTerminal(): vscode.Terminal {
     if (!rpcServerInfo) {
         throw new Error('RPC server is not initialized. Ensure activation before using this function.');
     }
 
-    if (!dcpServerInfo) {
+    if (!dcpServer?.info) {
         throw new Error('DCP server is not initialized. Ensure activation before using this function.');
     }
 
@@ -30,9 +31,12 @@ export function getAspireTerminal(): vscode.Terminal {
             ASPIRE_LOCALE_OVERRIDE: vscode.env.language,
 
             // Include DCP server info
-            DEBUG_SESSION_PORT: dcpServerInfo.port.toString(),
-            DEBUG_SESSION_TOKEN: dcpServerInfo.token,
-            DEBUG_SESSION_SERVER_CERTIFICATE: Buffer.from(dcpServerInfo.certificate, 'utf-8').toString('base64')
+            DEBUG_SESSION_PORT: dcpServer.info.address,
+            DEBUG_SESSION_TOKEN: dcpServer.info.token,
+            //DEBUG_SESSION_SERVER_CERTIFICATE: Buffer.from(dcpServer.info.certificate, 'utf-8').toString('base64')
+
+            // Indicate that this extension supports 
+            DEBUG_SESSION_LANGUAGES_SUPPORTED: getSupportedDebugLanguages().join(',')
          };
 
         return vscode.window.createTerminal({

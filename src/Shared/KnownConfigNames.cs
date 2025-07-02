@@ -35,6 +35,7 @@ internal static class KnownConfigNames
     public const string ExtensionPromptEnabled = "ASPIRE_EXTENSION_PROMPT_ENABLED";
     public const string ExtensionToken = "ASPIRE_EXTENSION_TOKEN";
     public const string ExtensionCert = "ASPIRE_EXTENSION_CERT";
+    public const string ExtensionSupportedDebugLanguages = "DEBUG_SESSION_LANGUAGES_SUPPORTED";
 
     public static class Legacy
     {

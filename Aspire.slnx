@@ -101,6 +101,11 @@
     <File Path="playground/README.md" />
     <Project Path="playground/Playground.ServiceDefaults/Playground.ServiceDefaults.csproj" />
   </Folder>
+    <Folder Name="/playground/AspireJavaScript/">
+        <Project Path="playground/AspireJavaScript/AspireJavaScript.AppHost/AspireJavaScript.AppHost.csproj" />
+        <Project Path="playground/AspireJavaScript/AspireJavaScript.MinimalApi/AspireJavaScript.MinimalApi.csproj" />
+        <Project Path="playground/AspireJavaScript/AspireJavaScript.ServiceDefaults/AspireJavaScript.ServiceDefaults.csproj" />
+    </Folder>
   <Folder Name="/playground/AzureAIFoundryEndToEnd/">
     <Project Path="playground/AzureAIFoundryEndToEnd/AzureAIFoundryEndToEnd.AppHost/AzureAIFoundryEndToEnd.AppHost.csproj" />
     <Project Path="playground/AzureAIFoundryEndToEnd/AzureAIFoundryEndToEnd.WebStory/AzureAIFoundryEndToEnd.WebStory.csproj" />

@@ -827,11 +827,27 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
 
             // The working directory is always relative to the app host project directory (if it exists).
             exe.Spec.WorkingDirectory = executable.WorkingDirectory;
-            exe.Spec.ExecutionType = ExecutionType.Process;
             exe.Annotate(CustomResource.OtelServiceNameAnnotation, executable.Name);
             exe.Annotate(CustomResource.OtelServiceInstanceIdAnnotation, exeInstance.Suffix);
             exe.Annotate(CustomResource.ResourceNameAnnotation, executable.Name);
+
             SetInitialResourceState(executable, exe);
+
+#pragma warning disable ASPIREEXTENSION001
+            if (!string.IsNullOrEmpty(_configuration[DebugSessionPortVar]) && executable.TryGetAnnotationsOfType<ExtensionRunnableResourceAnnotation>(out _))
+#pragma warning restore ASPIREEXTENSION001
+            {
+                exe.Spec.ExecutionType = ExecutionType.IDE;
+                var projectLaunchConfiguration = new ProjectLaunchConfiguration();
+                projectLaunchConfiguration.ProjectPath = executable.WorkingDirectory;
+                projectLaunchConfiguration.Mode = ProjectLaunchMode.Debug;
+                exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, projectLaunchConfiguration);
+                executable.Annotations.Add(new EnvironmentCallbackAnnotation(ctx => ctx.Add("EXECUTABLE_COMMAND", executable.Command)));
+            }
+            else
+            {
+                exe.Spec.ExecutionType = ExecutionType.Process;
+            }
 
             var exeAppResource = new AppResource(executable, exe);
             AddServicesProducedInfo(executable, exe, exeAppResource);
@@ -871,6 +887,11 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
                 var projectLaunchConfiguration = new ProjectLaunchConfiguration();
                 projectLaunchConfiguration.ProjectPath = projectMetadata.ProjectPath;
 
+                if (_configuration[KnownConfigNames.ExtensionEndpoint] is not null)
+                {
+                    projectLaunchConfiguration.Mode = ProjectLaunchMode.Debug;
+                }
+
                 var projectArgs = new List<string>();
 
                 if (!string.IsNullOrEmpty(_configuration[DebugSessionPortVar]))
@@ -882,6 +903,8 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
                     {
                         projectLaunchConfiguration.LaunchProfile = lpa.LaunchProfileName;
                     }
+
+                    project.Annotations.Add(new EnvironmentCallbackAnnotation(ctx => ctx.Add("EXECUTABLE_COMMAND", "dotnet")));
                 }
                 else
                 {
