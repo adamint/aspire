@@ -8,6 +8,7 @@ import { ICliRpcClient } from './rpcClient';
 import * as tls from 'tls';
 import { generateSelfSignedCert, generateToken } from '../utils/security';
 import { IOutputChannelWriter } from '../utils/logging';
+import { isCSharpExtensionInstalled } from '../utils/extensions';
 
 export type RpcServerInformation = {
     address: string;
@@ -48,7 +49,13 @@ export function createRpcServer(interactionService: (connection: MessageConnecti
             }));
 
             connection.onRequest('getCapabilities', withAuthentication(async () => {
-                return ["baseline.v1"];
+                const capabilities = ["baseline.v1"];
+
+                if (isCSharpExtensionInstalled()) {
+                    capabilities.push("csharp.v1");
+                }
+
+                return capabilities;
             }));
 
             addInteractionServiceEndpoints(connection, interactionService(connection), rpcClient(connection, token), withAuthentication);
