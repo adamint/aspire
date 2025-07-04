@@ -212,6 +212,9 @@ class TestOutputChannelWriter implements IOutputChannelWriter {
 }
 
 class TestCliRpcClient implements ICliRpcClient {
+	processExited(id: string, exitCode: number): Promise<void> {
+		throw new Error('Method not implemented.');
+	}
 	getCliVersion(): Promise<string> {
 		return Promise.resolve('1.0.0');
 	}

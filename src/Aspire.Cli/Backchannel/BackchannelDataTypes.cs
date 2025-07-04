@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text.Json.Serialization;
+
 namespace Aspire.Cli.Backchannel;
 
 /// <summary>
@@ -44,4 +46,19 @@ internal enum InputType
     /// A numeric input.
     /// </summary>
     Number
+}
+
+internal class RunSessionRequest
+{
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    [JsonPropertyName("launch_configurations")]
+    public required ProjectLaunchConfiguration[] LaunchConfigurations { get; init; }
+
+    [JsonPropertyName("env")]
+    public required EnvVar[]? Env { get; init; }
+
+    [JsonPropertyName("args")]
+    public required string[] Args { get; init; }
 }

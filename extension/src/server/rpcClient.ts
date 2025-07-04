@@ -4,6 +4,7 @@ import { logAsyncOperation } from '../utils/logging';
 export interface ICliRpcClient {
     getCliVersion(): Promise<string>;
     validatePromptInputString(input: string): Promise<ValidationResult | null>;
+    processExited(id: string, exitCode: number): Promise<void>;
 }
 
 export type ValidationResult = {
@@ -40,6 +41,21 @@ export class RpcClient implements ICliRpcClient {
                 return await this._messageConnection.sendRequest<ValidationResult | null>('validatePromptInputString', {
                     token: this._token,
                     input
+                });
+            }
+        );
+    }
+
+    processExited(id: string, exitCode: number): Promise<void> {
+        return logAsyncOperation(
+            "interaction",
+            `Notifying that process has exited`,
+            () => `Process exit notification sent successfully`,
+            async () => {
+                return await this._messageConnection.sendRequest<void>('processExited', {
+                    token: this._token,
+                    id,
+                    exitCode
                 });
             }
         );

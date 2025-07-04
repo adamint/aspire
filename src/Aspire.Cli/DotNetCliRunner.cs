@@ -8,8 +8,10 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using Aspire.Cli.Backchannel;
+using Aspire.Cli.Configuration;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Telemetry;
+using Aspire.Cli.Utils;
 using Aspire.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,9 +41,8 @@ internal sealed class DotNetCliRunnerInvocationOptions
     public bool NoLaunchProfile { get; set; }
 }
 
-internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider serviceProvider, AspireCliTelemetry telemetry, IConfiguration configuration) : IDotNetCliRunner
+internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider serviceProvider, AspireCliTelemetry telemetry, IConfiguration configuration, IConfigurationService configurationService) : IDotNetCliRunner
 {
-
     internal Func<int> GetCurrentProcessId { get; set; } = () => Environment.ProcessId;
 
     private string GetMsBuildServerValue()
@@ -430,87 +431,138 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
         // not exist the orphan detector will exit.
         startInfo.EnvironmentVariables[KnownConfigNames.CliProcessId] = GetCurrentProcessId().ToString(CultureInfo.InvariantCulture);
 
-        var process = new Process { StartInfo = startInfo };
-
-        logger.LogDebug("Running dotnet with args: {Args}", string.Join(" ", args));
-
-        var started = process.Start();
-
-        if (backchannelCompletionSource is not null)
+        if (ExtensionHelper.IsExtensionHost(serviceProvider, out var interactionService, out var extensionBackchannel)
+            && backchannelCompletionSource is not null
+            && (await interactionService.GetCapabilitiesAsync()).Any(ExtensionCapabilities.CSharpRunner.IsCompatible))
         {
-            _ = StartBackchannelAsync(process, socketPath, backchannelCompletionSource, cancellationToken);
-        }
+            var runIdentifier = Guid.NewGuid().ToString();
 
-        var pendingStdoutStreamForwarder = Task.Run(async () => {
-            await ForwardStreamToLoggerAsync(
-                process.StandardOutput,
-                "stdout",
-                process,
-                options.StandardOutputCallback,
-                cancellationToken);
+            var started = await extensionBackchannel.RunExecutableAsync(new RunSessionRequest
+            {
+                Id = runIdentifier,
+                Args = startInfo.ArgumentList.ToArray(),
+                Env = env?.Select(kvp => new EnvVar { Name = kvp.Key, Value = kvp.Value }).ToArray(),
+                LaunchConfigurations = [
+                    new ProjectLaunchConfiguration
+                    {
+                        Type = "project",
+                        DisableLaunchProfile = true,
+                        LaunchProfile = string.Empty,
+                        Mode = "Debug",
+                        ProjectPath = workingDirectory.FullName
+                    }
+                ]
             }, cancellationToken);
 
-        var pendingStderrStreamForwarder = Task.Run(async () => {
-            await ForwardStreamToLoggerAsync(
-                process.StandardError,
-                "stderr",
-                process,
-                options.StandardOutputCallback,
-                cancellationToken);
-            }, cancellationToken);
+            _ = StartBackchannelAsync(() => !started, socketPath, backchannelCompletionSource, cancellationToken);
 
-        if (!started)
-        {
-            logger.LogDebug("Failed to start dotnet process with args: {Args}", string.Join(" ", args));
-            return ExitCodeConstants.FailedToDotnetRunAppHost;
+            if (!started)
+            {
+                logger.LogDebug("Failed to start dotnet process with args: {Args}", string.Join(" ", args));
+                return ExitCodeConstants.FailedToDotnetRunAppHost;
+            }
+            else
+            {
+                logger.LogDebug("Started dotnet AppHost with run ID: {RunIdentifier}", runIdentifier);
+            }
+
+            // Wait for process completion, which will be notified via an RPC call onto the extension rpc target
+            while (true)
+            {
+                if (!extensionBackchannel.TryGetProcessExitCode(runIdentifier, out var exitCode))
+                {
+                    await Task.Delay(50, cancellationToken);
+                }
+                else
+                {
+                    return exitCode.Value;
+                }
+            }
         }
         else
         {
-            logger.LogDebug("Started dotnet with PID: {ProcessId}", process.Id);
-        }
+            var process = new Process { StartInfo = startInfo };
 
-        logger.LogDebug("Waiting for dotnet process to exit with PID: {ProcessId}", process.Id);
+            logger.LogDebug("Running dotnet with args: {Args}", string.Join(" ", args));
 
-        await process.WaitForExitAsync(cancellationToken);
+            var started = process.Start();
 
-        if (!process.HasExited)
-        {
-            logger.LogDebug("dotnet process with PID: {ProcessId} has not exited, killing it.", process.Id);
-            process.Kill(false);
-        }
-        else
-        {
-            logger.LogDebug("dotnet process with PID: {ProcessId} has exited with code: {ExitCode}", process.Id, process.ExitCode);
-        }
+            if (backchannelCompletionSource is not null)
+            {
+                _ = StartBackchannelAsync(() => process.HasExited && process.ExitCode != 0, socketPath, backchannelCompletionSource, cancellationToken);
+            }
 
-        // Wait for all the stream forwarders to finish so we know we've got everything
-        // fired off through the callbacks.
-        await Task.WhenAll([pendingStdoutStreamForwarder, pendingStderrStreamForwarder]);
-        return process.ExitCode;
+            var pendingStdoutStreamForwarder = Task.Run(async () => {
+                await ForwardStreamToLoggerAsync(
+                    process.StandardOutput,
+                    "stdout",
+                    process,
+                    options.StandardOutputCallback,
+                    cancellationToken);
+                }, cancellationToken);
 
-        async Task ForwardStreamToLoggerAsync(StreamReader reader, string identifier, Process process, Action<string>? lineCallback, CancellationToken cancellationToken)
-        {
-            logger.LogDebug(
-                "Starting to forward stream with identifier '{Identifier}' on process '{ProcessId}' to logger",
-                identifier,
-                process.Id
+            var pendingStderrStreamForwarder = Task.Run(async () => {
+                await ForwardStreamToLoggerAsync(
+                    process.StandardError,
+                    "stderr",
+                    process,
+                    options.StandardOutputCallback,
+                    cancellationToken);
+                }, cancellationToken);
+
+            if (!started)
+            {
+                logger.LogDebug("Failed to start dotnet process with args: {Args}", string.Join(" ", args));
+                return ExitCodeConstants.FailedToDotnetRunAppHost;
+            }
+            else
+            {
+                logger.LogDebug("Started dotnet with PID: {ProcessId}", process.Id);
+            }
+
+            logger.LogDebug("Waiting for dotnet process to exit with PID: {ProcessId}", process.Id);
+
+            await process.WaitForExitAsync(cancellationToken);
+
+            if (!process.HasExited)
+            {
+                logger.LogDebug("dotnet process with PID: {ProcessId} has not exited, killing it.", process.Id);
+                process.Kill(false);
+            }
+            else
+            {
+                logger.LogDebug("dotnet process with PID: {ProcessId} has exited with code: {ExitCode}", process.Id, process.ExitCode);
+            }
+
+            // Wait for all the stream forwarders to finish so we know we've got everything
+            // fired off through the callbacks.
+            await Task.WhenAll([pendingStdoutStreamForwarder, pendingStderrStreamForwarder]);
+            return process.ExitCode;
+
+            async Task ForwardStreamToLoggerAsync(StreamReader reader, string identifier, Process process, Action<string>? lineCallback, CancellationToken cancellationToken)
+            {
+                logger.LogDebug(
+                    "Starting to forward stream with identifier '{Identifier}' on process '{ProcessId}' to logger",
+                    identifier,
+                    process.Id
                 );
 
-            while (!cancellationToken.IsCancellationRequested && !reader.EndOfStream)
-            {
-                var line = await reader.ReadLineAsync(cancellationToken);
-                logger.LogDebug(
-                    "dotnet({ProcessId}) {Identifier}: {Line}",
-                    process.Id,
-                    identifier,
-                    line
+                while (!cancellationToken.IsCancellationRequested && !reader.EndOfStream)
+                {
+                    var line = await reader.ReadLineAsync(cancellationToken);
+                    logger.LogDebug(
+                        "dotnet({ProcessId}) {Identifier}: {Line}",
+                        process.Id,
+                        identifier,
+                        line
                     );
-                lineCallback?.Invoke(line!);
+                    lineCallback?.Invoke(line!);
+                }
             }
         }
     }
 
-    private async Task StartBackchannelAsync(Process process, string socketPath, TaskCompletionSource<IAppHostBackchannel> backchannelCompletionSource, CancellationToken cancellationToken)
+    private async Task StartBackchannelAsync(Func<bool> appHostExitedFunction, string socketPath, TaskCompletionSource<IAppHostBackchannel> backchannelCompletionSource, CancellationToken cancellationToken)
     {
         using var activity = telemetry.ActivitySource.StartActivity();
 
@@ -533,10 +585,10 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
                 logger.LogDebug("Connected to AppHost backchannel at {SocketPath}", socketPath);
                 return;
             }
-            catch (SocketException ex) when (process.HasExited && process.ExitCode != 0)
+            catch (SocketException ex) when (appHostExitedFunction())
             {
                 logger.LogError(ex, "AppHost process has exited. Unable to connect to backchannel at {SocketPath}", socketPath);
-                var backchannelException = new FailedToConnectBackchannelConnection($"AppHost process has exited unexpectedly. Use --debug to see more details.", process, ex);
+                var backchannelException = new FailedToConnectBackchannelConnection($"AppHost process has exited unexpectedly. Use --debug to see more details.", ex);
                 backchannelCompletionSource.SetException(backchannelException);
                 return;
             }
@@ -588,14 +640,16 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
     {
         using var activity = telemetry.ActivitySource.StartActivity();
 
-        string[] cliArgs = ["build", projectFilePath.FullName];
-        
+        string[] cliArgs = ExtensionHelper.IsExtensionHost(serviceProvider, out _, out _)
+            ? ["build", projectFilePath.FullName]
+            : ["build", projectFilePath.FullName, "--output", Path.Join(configurationService.GetSettingsFilePath(false), "bin")];
+
         // Always inject DOTNET_CLI_USE_MSBUILD_SERVER for apphost builds
         var env = new Dictionary<string, string>
         {
             ["DOTNET_CLI_USE_MSBUILD_SERVER"] = GetMsBuildServerValue()
         };
-        
+
         return await ExecuteAsync(
             args: cliArgs,
             env: env,

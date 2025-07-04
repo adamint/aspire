@@ -37,10 +37,23 @@ internal interface IExtensionBackchannel
     Task OpenProjectAsync(string projectPath, CancellationToken cancellationToken);
     Task LogMessageAsync(LogLevel logLevel, string message, CancellationToken cancellationToken);
     Task<IReadOnlyList<VersionedCapability>> GetCapabilitiesAsync(CancellationToken cancellationToken);
+    bool TryGetProcessExitCode(string id, [NotNullWhen(true)] out int? exitCode);
+    Task<bool> RunExecutableAsync(RunSessionRequest runSessionRequest, CancellationToken cancellationToken);
 }
 
 internal record VersionedCapability(string Name, Version Version)
 {
+    public bool IsCompatible(VersionedCapability other)
+    {
+        if (Name != other.Name)
+        {
+            return false;
+        }
+
+        // If the version is the same or higher, it is compatible.
+        return Version.CompareTo(other.Version) >= 0;
+    }
+
     public override string ToString()
     {
         return $"{Name}.v{Version}";
@@ -238,7 +251,7 @@ internal sealed class ExtensionBackchannel(ILogger<ExtensionBackchannel> logger,
                     Capabilities.Add(new VersionedCapability(capabilityName, version));
                 }
 
-                if (!Capabilities.Any(capability => capability.Name == s_baselineCapability.Name && capability.Version.CompareTo(s_baselineCapability.Version) <= 0))
+                if (!Capabilities.Any(capability => capability.Name == s_baselineCapability.Name && s_baselineCapability.IsCompatible(capability)))
                 {
                     throw new ExtensionIncompatibleException(
                         string.Format(CultureInfo.CurrentCulture, ErrorStrings.ExtensionIncompatibleWithCli, s_baselineCapability.ToString()),
@@ -532,6 +545,36 @@ internal sealed class ExtensionBackchannel(ILogger<ExtensionBackchannel> logger,
         await ConnectAsync(cancellationToken);
 
         return Capabilities;
+    }
+
+    public bool TryGetProcessExitCode(string id, [NotNullWhen(true)] out int? exitCode)
+    {
+        if (target.ProcessExitCodes.TryGetValue(id, out var code))
+        {
+            exitCode = code;
+            return true;
+        }
+
+        exitCode = null;
+        return false;
+    }
+
+    public async Task<bool> RunExecutableAsync(RunSessionRequest runSessionRequest, CancellationToken cancellationToken)
+    {
+        await ConnectAsync(cancellationToken);
+
+        using var activity = _activitySource.StartActivity();
+
+        var rpc = await _rpcTaskCompletionSource.Task;
+
+        logger.LogDebug("Sending executable run session request: {RequestId}", runSessionRequest.Id);
+
+        var result = await rpc.InvokeWithCancellationAsync<bool>(
+            "runSession",
+            [_token, runSessionRequest],
+            cancellationToken);
+
+        return result;
     }
 
     private X509Certificate2 GetCertificate()

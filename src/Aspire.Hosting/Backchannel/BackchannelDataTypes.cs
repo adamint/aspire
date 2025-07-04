@@ -3,6 +3,9 @@
 
 // These types are source shared between the CLI and the Aspire.Hosting projects.
 // The CLI sets the types in its own namespace.
+
+using System.Text.Json.Serialization;
+
 #if CLI
 namespace Aspire.Cli.Backchannel;
 #else
@@ -190,4 +193,39 @@ internal class BackchannelLogEntry
     public required string Message { get; set; }
     public required DateTimeOffset Timestamp { get; set; }
     public required string CategoryName { get; set; }
+}
+
+internal static class ProjectLaunchMode
+{
+    public const string Debug = "Debug";
+    public const string NoDebug = "NoDebug";
+}
+
+internal sealed class ProjectLaunchConfiguration
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "project";
+
+    [JsonPropertyName("mode")]
+    public string Mode { get; set; } = System.Diagnostics.Debugger.IsAttached ? ProjectLaunchMode.Debug : ProjectLaunchMode.NoDebug;
+
+    [JsonPropertyName("project_path")]
+    public string ProjectPath { get; set; } = string.Empty;
+
+    [JsonPropertyName("launch_profile")]
+    public string LaunchProfile { get; set; } = string.Empty;
+
+    [JsonPropertyName("disable_launch_profile")]
+    public bool DisableLaunchProfile { get; set; } = false;
+}
+
+internal sealed class EnvVar
+{
+    // Name of the environment variable
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    // Value of the environment variable
+    [JsonPropertyName("value")]
+    public string? Value { get; set; }
 }

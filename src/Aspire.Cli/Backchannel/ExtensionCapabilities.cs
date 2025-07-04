@@ -3,4 +3,7 @@
 
 namespace Aspire.Cli.Backchannel;
 
-internal sealed class FailedToConnectBackchannelConnection(string message, Exception innerException) : Exception(message, innerException);
+internal static class ExtensionCapabilities
+{
+    public static readonly VersionedCapability CSharpRunner = new("csharp", new Version(1, 0));
+}

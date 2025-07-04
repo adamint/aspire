@@ -19,6 +19,19 @@ internal interface IExtensionRpcTarget
 internal class ExtensionRpcTarget(IConfiguration configuration) : IExtensionRpcTarget
 {
     public Func<string, ValidationResult>? ValidationFunction { get; set; }
+    public Dictionary<string, int> ProcessExitCodes { get; } = [];
+
+    [JsonRpcMethod("processExited")]
+    public Task ProcessExitedAsync(string id, int exitCode)
+    {
+        if (string.IsNullOrEmpty(id) || exitCode < 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        ProcessExitCodes[id] = exitCode;
+        return Task.CompletedTask;
+    }
 
     [JsonRpcMethod("getCliVersion")]
     public Task<string> GetCliVersionAsync(string token)

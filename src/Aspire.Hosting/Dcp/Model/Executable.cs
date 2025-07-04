@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Aspire.Hosting.Backchannel;
+
 namespace Aspire.Hosting.Dcp.Model;
 
 using System.Diagnostics.CodeAnalysis;
@@ -266,30 +268,3 @@ internal sealed class Executable : CustomResource<ExecutableSpec, ExecutableStat
         return launchConfiguration is not null;
     }
 }
-
-internal static class ProjectLaunchMode
-{
-    public const string Debug = "Debug";
-    public const string NoDebug = "NoDebug";
-}
-
-internal sealed class ProjectLaunchConfiguration
-{
-    [JsonPropertyName("type")]
-#pragma warning disable CA1822 // We want this member to be non-static, as it is used in serialization.
-    public string Type => "project";
-#pragma warning restore CA1822
-
-    [JsonPropertyName("mode")]
-    public string Mode { get; set; } = System.Diagnostics.Debugger.IsAttached ? ProjectLaunchMode.Debug : ProjectLaunchMode.NoDebug;
-
-    [JsonPropertyName("project_path")]
-    public string ProjectPath { get; set; } = string.Empty;
-
-    [JsonPropertyName("launch_profile")]
-    public string LaunchProfile { get; set; } = string.Empty;
-
-    [JsonPropertyName("disable_launch_profile")]
-    public bool DisableLaunchProfile { get; set; } = false;
-}
-
