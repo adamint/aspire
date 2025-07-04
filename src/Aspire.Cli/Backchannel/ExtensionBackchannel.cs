@@ -38,10 +38,18 @@ internal interface IExtensionBackchannel
     Task LogMessageAsync(LogLevel logLevel, string message, CancellationToken cancellationToken);
 }
 
+internal record VersionedCapability(string Name, Version Version)
+{
+    public override string ToString()
+    {
+        return $"{Name}.v{Version}";
+    }
+}
+
 internal sealed class ExtensionBackchannel(ILogger<ExtensionBackchannel> logger, ExtensionRpcTarget target, IConfiguration configuration) : IExtensionBackchannel
 {
     private const string Name = "Aspire Extension";
-    private const string BaselineCapability = "baseline.v1";
+    private static readonly VersionedCapability s_baselineCapability = new("baseline", new Version(1, 0));
 
     private readonly ActivitySource _activitySource = new(nameof(ExtensionBackchannel));
     private readonly TaskCompletionSource<JsonRpc> _rpcTaskCompletionSource = new();
@@ -49,6 +57,8 @@ internal sealed class ExtensionBackchannel(ILogger<ExtensionBackchannel> logger,
         ?? throw new InvalidOperationException(ErrorStrings.ExtensionTokenMustBeSet);
 
     private TaskCompletionSource? _connectionSetupTcs;
+
+    public List<VersionedCapability> Capabilities { get; private set; } = [];
 
     public async Task<long> PingAsync(long timestamp, CancellationToken cancellationToken)
     {
@@ -199,17 +209,29 @@ internal sealed class ExtensionBackchannel(ILogger<ExtensionBackchannel> logger,
                 AddLocalRpcTarget(rpc, target);
                 rpc.StartListening();
 
+                Capabilities.Clear();
+
                 var capabilities = await rpc.InvokeWithCancellationAsync<string[]>(
                     "getCapabilities",
                     [_token],
                     cancellationToken);
 
-                if (!capabilities.Any(s => s == BaselineCapability))
+                foreach (var capability in capabilities)
+                {
+                    var split = capability.Split(".v");
+                    if (split.Length == 1 || !Version.TryParse(split[1], out var version))
+                    {
+                        continue;
+                    }
+
+                    Capabilities.Add(new VersionedCapability(split[0], version));
+                }
+
+                if (!Capabilities.Any(capability => capability.Name == s_baselineCapability.Name && capability.Version.CompareTo(s_baselineCapability.Version) <= 0))
                 {
                     throw new ExtensionIncompatibleException(
-                        string.Format(CultureInfo.CurrentCulture, ErrorStrings.ExtensionIncompatibleWithCli,
-                            BaselineCapability),
-                        BaselineCapability
+                        string.Format(CultureInfo.CurrentCulture, ErrorStrings.ExtensionIncompatibleWithCli, s_baselineCapability.ToString()),
+                        s_baselineCapability.ToString()
                     );
                 }
 
@@ -220,12 +242,11 @@ internal sealed class ExtensionBackchannel(ILogger<ExtensionBackchannel> logger,
                 logger.LogError(ex,
                     "Failed to connect to {Name} backchannel. The connection must be updated to a version that supports the {BaselineCapability} capability.",
                     Name,
-                    BaselineCapability);
+                    s_baselineCapability);
 
                 throw new ExtensionIncompatibleException(
-                    string.Format(CultureInfo.CurrentCulture, ErrorStrings.ExtensionIncompatibleWithCli,
-                        BaselineCapability),
-                    BaselineCapability
+                    string.Format(CultureInfo.CurrentCulture, ErrorStrings.ExtensionIncompatibleWithCli, s_baselineCapability.ToString()),
+                    s_baselineCapability.ToString()
                 );
             }
         }
