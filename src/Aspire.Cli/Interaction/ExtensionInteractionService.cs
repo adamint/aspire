@@ -246,4 +246,9 @@ internal class ExtensionInteractionService : IInteractionService
     {
         Debug.Assert(_extensionTaskChannel.Writer.TryWrite(() => _backchannel.LogMessageAsync(logLevel, message.RemoveSpectreFormatting(), _cancellationToken)));
     }
+
+    public Task GetCapabilitiesAsync()
+    {
+        return _backchannel.GetCapabilitiesAsync(_cancellationToken);
+    }
 }

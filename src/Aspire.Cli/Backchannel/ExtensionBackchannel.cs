@@ -36,6 +36,7 @@ internal interface IExtensionBackchannel
     Task<string?> PromptForStringAsync(string promptText, string? defaultValue, Func<string, ValidationResult>? validator, bool required, CancellationToken cancellationToken);
     Task OpenProjectAsync(string projectPath, CancellationToken cancellationToken);
     Task LogMessageAsync(LogLevel logLevel, string message, CancellationToken cancellationToken);
+    Task<IReadOnlyList<VersionedCapability>> GetCapabilitiesAsync(CancellationToken cancellationToken);
 }
 
 internal record VersionedCapability(string Name, Version Version)
@@ -219,12 +220,22 @@ internal sealed class ExtensionBackchannel(ILogger<ExtensionBackchannel> logger,
                 foreach (var capability in capabilities)
                 {
                     var split = capability.Split(".v");
-                    if (split.Length == 1 || !Version.TryParse(split[1], out var version))
+                    var capabilityName = split[0];
+                    var versionString = split[1];
+
+                    // if a version like "baseline.v1" (1) is sent, pad with a minor version of 0
+                    // because at least 2 parts are required
+                    if (!versionString.Contains('.'))
+                    {
+                        versionString += ".0";
+                    }
+
+                    if (split.Length == 1 || !Version.TryParse(versionString, out var version))
                     {
                         continue;
                     }
 
-                    Capabilities.Add(new VersionedCapability(split[0], version));
+                    Capabilities.Add(new VersionedCapability(capabilityName, version));
                 }
 
                 if (!Capabilities.Any(capability => capability.Name == s_baselineCapability.Name && capability.Version.CompareTo(s_baselineCapability.Version) <= 0))
@@ -514,6 +525,13 @@ internal sealed class ExtensionBackchannel(ILogger<ExtensionBackchannel> logger,
             "logMessage",
             [_token, logLevel.ToString(), message],
             cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<VersionedCapability>> GetCapabilitiesAsync(CancellationToken cancellationToken)
+    {
+        await ConnectAsync(cancellationToken);
+
+        return Capabilities;
     }
 
     private X509Certificate2 GetCertificate()
