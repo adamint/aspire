@@ -1,12 +1,17 @@
 import * as vscode from 'vscode';
-import { rpcServerInfo } from '../extension';
+import { dcpServer, rpcServerInfo } from '../extension';
 import { aspireTerminalName } from '../loc/strings';
 import { extensionLogOutputChannel } from './logging';
+import { getSupportedDebugLanguages } from './extensions';
 
 let hasRunGetAspireTerminal = false;
 export function getAspireTerminal(): vscode.Terminal {
     if (!rpcServerInfo) {
         throw new Error('RPC server is not initialized. Ensure activation before using this function.');
+    }
+
+    if (!dcpServer?.info) {
+        throw new Error('DCP server is not initialized. Ensure activation before using this function.');
     }
 
     const terminalName = aspireTerminalName;
@@ -31,7 +36,17 @@ export function getAspireTerminal(): vscode.Terminal {
         ASPIRE_EXTENSION_TOKEN: rpcServerInfo.token,
         ASPIRE_EXTENSION_CERT: Buffer.from(rpcServerInfo.cert, 'utf-8').toString('base64'),
         ASPIRE_EXTENSION_PROMPT_ENABLED: 'true',
-        ASPIRE_LOCALE_OVERRIDE: vscode.env.language
+
+        // Use the current locale in the CLI
+        ASPIRE_LOCALE_OVERRIDE: vscode.env.language,
+
+        // Include DCP server info
+        DEBUG_SESSION_PORT: dcpServer.info.address,
+        DEBUG_SESSION_TOKEN: dcpServer.info.token,
+        //DEBUG_SESSION_SERVER_CERTIFICATE: Buffer.from(dcpServer.info.certificate, 'utf-8').toString('base64')
+
+        // Indicate that this extension supports 
+        DEBUG_SESSION_SUPPORTED_RESOURCE_TYPES: getSupportedDebugLanguages().join(',')
     };
 
     return vscode.window.createTerminal({
@@ -40,9 +55,9 @@ export function getAspireTerminal(): vscode.Terminal {
     });
 }
 
-export function sendToAspireTerminal(command: string) {
+export function sendToAspireTerminal(command: string, preserveFocus?: boolean) {
     const terminal = getAspireTerminal();
     extensionLogOutputChannel.info(`Sending command to Aspire terminal: ${command}`);
     terminal.sendText(command);
-    terminal.show();
+    terminal.show(preserveFocus);
 }

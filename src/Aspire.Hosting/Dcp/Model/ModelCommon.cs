@@ -29,6 +29,7 @@ internal abstract class CustomResource : KubernetesObject, IMetadata<V1ObjectMet
     public const string ResourceProjectArgsAnnotation = "resource-project-args";
     public const string ResourceReplicaCount = "resource-replica-count";
     public const string ResourceReplicaIndex = "resource-replica-index";
+    public const string CommandNameEnvironmentVariable = "EXECUTABLE_COMMAND_NAME";
 
     public string? AppModelResourceName => Metadata.Annotations?.TryGetValue(ResourceNameAnnotation, out var value) is true ? value : null;
 
