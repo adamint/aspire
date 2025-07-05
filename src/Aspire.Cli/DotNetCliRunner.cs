@@ -41,7 +41,6 @@ internal sealed class DotNetCliRunnerInvocationOptions
 
 internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider serviceProvider, AspireCliTelemetry telemetry, IConfiguration configuration) : IDotNetCliRunner
 {
-
     internal Func<int> GetCurrentProcessId { get; set; } = () => Environment.ProcessId;
 
     private string GetMsBuildServerValue()
@@ -589,13 +588,13 @@ internal class DotNetCliRunner(ILogger<DotNetCliRunner> logger, IServiceProvider
         using var activity = telemetry.ActivitySource.StartActivity();
 
         string[] cliArgs = ["build", projectFilePath.FullName];
-        
+
         // Always inject DOTNET_CLI_USE_MSBUILD_SERVER for apphost builds
         var env = new Dictionary<string, string>
         {
             ["DOTNET_CLI_USE_MSBUILD_SERVER"] = GetMsBuildServerValue()
         };
-        
+
         return await ExecuteAsync(
             args: cliArgs,
             env: env,

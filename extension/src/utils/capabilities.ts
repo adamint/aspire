@@ -10,7 +10,7 @@ function isCSharpExtensionInstalled(): boolean {
 }
 
 export function getSupportedCapabilities(): string[] {
-    const capabilities = ['node', 'prompting'];
+    const capabilities = ['node', 'prompting', 'baseline.v1'];
 
     if (isCSharpExtensionInstalled()) {
         capabilities.push('csharp');

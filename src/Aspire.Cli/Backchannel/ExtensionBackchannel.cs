@@ -37,6 +37,7 @@ internal interface IExtensionBackchannel
     Task<string> PromptForStringAsync(string promptText, string? defaultValue, Func<string, ValidationResult>? validator, bool required, CancellationToken cancellationToken);
     Task OpenProjectAsync(string projectPath, CancellationToken cancellationToken);
     Task LogMessageAsync(LogLevel logLevel, string message, CancellationToken cancellationToken);
+    Task<string[]> GetCapabilitiesAsync(CancellationToken cancellationToken);
 }
 
 internal sealed class ExtensionBackchannel(ILogger<ExtensionBackchannel> logger, ExtensionRpcTarget target, IConfiguration configuration) : IExtensionBackchannel
@@ -50,6 +51,7 @@ internal sealed class ExtensionBackchannel(ILogger<ExtensionBackchannel> logger,
         ?? throw new InvalidOperationException(ErrorStrings.ExtensionTokenMustBeSet);
 
     private TaskCompletionSource? _connectionSetupTcs;
+    private string[]? _capabilities;
 
     public async Task<long> PingAsync(long timestamp, CancellationToken cancellationToken)
     {
@@ -200,12 +202,12 @@ internal sealed class ExtensionBackchannel(ILogger<ExtensionBackchannel> logger,
                 AddLocalRpcTarget(rpc, target);
                 rpc.StartListening();
 
-                var capabilities = await rpc.InvokeWithCancellationAsync<string[]>(
+                _capabilities = await rpc.InvokeWithCancellationAsync<string[]>(
                     "getCapabilities",
                     [_token],
                     cancellationToken);
 
-                if (!capabilities.Any(s => s == BaselineCapability))
+                if (!_capabilities.Any(s => s == BaselineCapability))
                 {
                     throw new ExtensionIncompatibleException(
                         string.Format(CultureInfo.CurrentCulture, ErrorStrings.ExtensionIncompatibleWithCli,
@@ -498,6 +500,14 @@ internal sealed class ExtensionBackchannel(ILogger<ExtensionBackchannel> logger,
             "logMessage",
             [_token, logLevel.ToString(), message],
             cancellationToken);
+    }
+
+    public async Task<string[]> GetCapabilitiesAsync(CancellationToken cancellationToken)
+    {
+        await ConnectAsync(cancellationToken);
+        Debug.Assert(_capabilities is not null, "Capabilities should be initialized after connection is established.");
+
+        return _capabilities;
     }
 
     private X509Certificate2 GetCertificate()
