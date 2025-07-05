@@ -44,9 +44,9 @@ export function getAspireTerminal(): vscode.Terminal {
     });
 }
 
-export function sendToAspireTerminal(command: string) {
+export function sendToAspireTerminal(command: string, preserveFocus?: boolean) {
     const terminal = getAspireTerminal();
     extensionLogOutputChannel.info(`Sending command to Aspire terminal: ${command}`);
     terminal.sendText(command);
-    terminal.show();
+    terminal.show(preserveFocus);
 }

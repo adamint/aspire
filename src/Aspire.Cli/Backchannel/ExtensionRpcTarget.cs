@@ -14,11 +14,23 @@ internal interface IExtensionRpcTarget
 {
     Task<string> GetCliVersionAsync(string token);
     Task<ValidationResult?> ValidatePromptInputStringAsync(string token, string input);
+    void StopCli(string token);
 }
 
 internal class ExtensionRpcTarget(IConfiguration configuration) : IExtensionRpcTarget
 {
     public Func<string, ValidationResult>? ValidationFunction { get; set; }
+
+    [JsonRpcMethod("stopCli")]
+    public void StopCli(string token)
+    {
+        if (!string.Equals(token, configuration[KnownConfigNames.ExtensionToken], StringComparisons.CliInputOrOutput))
+        {
+            throw new AuthenticationException();
+        }
+
+        Environment.Exit(0);
+   }
 
     [JsonRpcMethod("getCliVersion")]
     public Task<string> GetCliVersionAsync(string token)

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { startAndGetDebugSession } from './common';
 import { extensionLogOutputChannel } from '../utils/logging';
+import { attachToAppHost as attachToAppHostString } from '../loc/strings';
 
 let appHostDebugSession: vscode.DebugSession | undefined = undefined;
 
@@ -17,11 +18,12 @@ export async function attachToAppHost(pid: number, sourceRoot?: string): Promise
     const config: vscode.DebugConfiguration = {
         type: 'coreclr',
         request: 'attach',
-        name: 'Attach to AppHost',
+        name: attachToAppHostString,
         processId: pid.toString(),
         justMyCode: false,
         // Provide source mapping if specified
-        //...(sourceRoot ? { sourceSearchPaths: ["/Users/adamratzman/source/repos/aspire-vscode/aspire-cli-test-apps/starter/starter.AppHost"] } : {})
+        ...(sourceRoot ? { sourceSearchPaths: [sourceRoot] } : {}),
+        appHost: true
     };
     
     appHostDebugSession = await startAndGetDebugSession(config);
