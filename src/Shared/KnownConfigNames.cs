@@ -38,6 +38,10 @@ internal static class KnownConfigNames
     public const string ExtensionCert = "ASPIRE_EXTENSION_CERT";
     public const string ExtensionCapabilities = "DEBUG_SESSION_CAPABILITIES";
 
+    // This is the path that the AppHost will write its PID to when running inside an extension.
+    // This is used by the Aspire extension to attach to the AppHost process.
+    public const string ExtensionPidFilePath = "ASPIRE_EXTENSION_PID_PATH";
+
     public static class Legacy
     {
         public const string DashboardOtlpGrpcEndpointUrl = "DOTNET_DASHBOARD_OTLP_ENDPOINT_URL";

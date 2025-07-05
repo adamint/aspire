@@ -2,7 +2,6 @@ import * as vscode from 'vscode';
 import { rpcServerInfo } from '../extension';
 import { aspireTerminalName } from '../loc/strings';
 import { extensionLogOutputChannel } from './logging';
-import { getSupportedCapabilities } from './capabilities';
 
 let hasRunGetAspireTerminal = false;
 export function getAspireTerminal(): vscode.Terminal {
@@ -33,13 +32,10 @@ export function getAspireTerminal(): vscode.Terminal {
         ASPIRE_EXTENSION_ENDPOINT: rpcServerInfo.address,
         ASPIRE_EXTENSION_TOKEN: rpcServerInfo.token,
         ASPIRE_EXTENSION_CERT: Buffer.from(rpcServerInfo.cert, 'utf-8').toString('base64'),
-
+        ASPIRE_EXTENSION_PROMPT_ENABLED: 'true',
+        
         // Use the current locale in the CLI
         ASPIRE_LOCALE_OVERRIDE: vscode.env.language,
-
-        // Notifies CLI & AppHost about supported capabilities, including
-        // whether prompting is supported
-        DEBUG_SESSION_CAPABILITIES: getSupportedCapabilities().join(',')
     };
 
     return vscode.window.createTerminal({

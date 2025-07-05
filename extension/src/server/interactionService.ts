@@ -5,6 +5,7 @@ import { yesLabel, noLabel, directLink, codespacesLink, openAspireDashboard, fai
 import { ICliRpcClient } from './rpcClient';
 import { formatText } from '../utils/strings';
 import { extensionLogOutputChannel } from '../utils/logging';
+import { attachToAppHost } from '../debugger/appHost';
 
 type CSLogLevel = 'Trace' | 'Debug' | 'Info' | 'Warn' | 'Error' | 'Critical';
 
@@ -24,6 +25,7 @@ export interface IInteractionService {
     displayCancellationMessage: (message: string) => void;
     openProject: (projectPath: string) => void;
     logMessage: (logLevel: CSLogLevel, message: string) => void;
+    requestAppHostAttach(pid: number): Promise<void>;
 }
 
 type DashboardUrls = {
@@ -256,6 +258,10 @@ export class InteractionService implements IInteractionService {
         }
     }
 
+    requestAppHostAttach(pid: number): Promise<void> {
+        return attachToAppHost(pid);
+    }
+
     clearStatusBar() {
         if (this._statusBarItem) {
             this._statusBarItem.hide();
@@ -281,4 +287,5 @@ export function addInteractionServiceEndpoints(connection: MessageConnection, in
     connection.onRequest("displayCancellationMessage", withAuthentication(interactionService.displayCancellationMessage.bind(interactionService)));
     connection.onRequest("openProject", withAuthentication(interactionService.openProject.bind(interactionService)));
     connection.onRequest("logMessage", withAuthentication(interactionService.logMessage.bind(interactionService)));
+    connection.onRequest("requestAppHostAttach", withAuthentication(interactionService.requestAppHostAttach.bind(interactionService)));
 }

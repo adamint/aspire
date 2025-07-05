@@ -1,20 +1,5 @@
-import * as vscode from 'vscode';
-
-function isExtensionInstalled(extensionId: string): boolean {
-    const ext = vscode.extensions.getExtension(extensionId);
-    return !!ext;
-}
-
-function isCSharpExtensionInstalled(): boolean {
-    return isExtensionInstalled('ms-dotnettools.csharp');
-}
-
 export function getSupportedCapabilities(): string[] {
-    const capabilities = ['node', 'prompting', 'baseline.v1'];
-
-    if (isCSharpExtensionInstalled()) {
-        capabilities.push('csharp');
-    }
+    const capabilities = ['apphost-debug', 'prompting', 'baseline.v1'];
 
     return capabilities;
 }

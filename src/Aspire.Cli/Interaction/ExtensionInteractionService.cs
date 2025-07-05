@@ -233,4 +233,9 @@ internal class ExtensionInteractionService : IInteractionService
     {
         _consoleInteractionService.WriteConsoleLog(message, lineNumber, type, isErrorMessage);
     }
+
+    public Task RequestAppHostAttachAsync(int processId)
+    {
+        return _backchannel.RequestAppHostAttachAsync(processId, _cancellationToken);
+    }
 }

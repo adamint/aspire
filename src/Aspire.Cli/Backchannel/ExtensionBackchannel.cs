@@ -38,6 +38,7 @@ internal interface IExtensionBackchannel
     Task OpenProjectAsync(string projectPath, CancellationToken cancellationToken);
     Task LogMessageAsync(LogLevel logLevel, string message, CancellationToken cancellationToken);
     Task<string[]> GetCapabilitiesAsync(CancellationToken cancellationToken);
+    Task RequestAppHostAttachAsync(int processId, CancellationToken cancellationToken);
 }
 
 internal sealed class ExtensionBackchannel(ILogger<ExtensionBackchannel> logger, ExtensionRpcTarget target, IConfiguration configuration) : IExtensionBackchannel
@@ -508,6 +509,22 @@ internal sealed class ExtensionBackchannel(ILogger<ExtensionBackchannel> logger,
         Debug.Assert(_capabilities is not null, "Capabilities should be initialized after connection is established.");
 
         return _capabilities;
+    }
+
+    public async Task RequestAppHostAttachAsync(int processId, CancellationToken cancellationToken)
+    {
+        await ConnectAsync(cancellationToken);
+
+        using var activity = _activitySource.StartActivity();
+
+        var rpc = await _rpcTaskCompletionSource.Task;
+
+        logger.LogDebug("Requesting app host attach for process ID: {ProcessId}", processId);
+
+        await rpc.InvokeWithCancellationAsync(
+            "requestAppHostAttach",
+            [_token, processId],
+            cancellationToken);
     }
 
     private X509Certificate2 GetCertificate()
