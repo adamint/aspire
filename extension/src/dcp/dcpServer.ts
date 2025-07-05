@@ -8,6 +8,7 @@ import { mergeEnvs } from '../utils/environment';
 import { generateToken } from '../utils/security';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { DcpServerInformation, ErrorDetails, ErrorResponse, RunSessionNotification, RunSessionPayload } from './types';
+import { sendStoppedToAspireDebugSession, shouldOverrideDcpDebug } from './debugAdapterFactory';
 
 const runsBySession = new Map<string, (vscode.DebugSession | vscode.Terminal)[]>();
 
@@ -94,7 +95,7 @@ export class DcpServer {
                 }
                 else {
                     for (const launchConfig of payload.launch_configurations) {
-                        if (launchConfig.mode === 'NoDebug') {
+                        if (launchConfig.mode === 'NoDebug' || shouldOverrideDcpDebug()) {
                             spawnProcess(launchConfig.project_path);
                         }
                         else {
@@ -209,6 +210,9 @@ export class DcpServer {
                             }
                         }
                     }
+
+                    // After all processes/terminals are cleaned up, check for any active Aspire debug session and send 'stopped'
+                    sendStoppedToAspireDebugSession();
 
                     runsBySession.delete(runId);
                     res.status(200).end();
