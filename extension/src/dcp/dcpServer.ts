@@ -9,7 +9,7 @@ import { generateToken } from '../utils/security';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { DcpServerInformation, ErrorDetails, ErrorResponse, RunSessionNotification, RunSessionPayload } from './types';
 
-const runsBySession = new Map<string, (ChildProcess | vscode.DebugSession)[]>();
+const runsBySession = new Map<string, (vscode.DebugSession | vscode.Terminal)[]>();
 
 export class DcpServer {
     public readonly info: DcpServerInformation;
@@ -87,20 +87,7 @@ export class DcpServer {
                     return;
                 }
 
-                if (payload.launch_configurations.length === 0) {
-                    const error: ErrorDetails = {
-                        code: 'MissingLaunchConfig',
-                        message: 'At least one launch configuration is required.',
-                        details: []
-                    };
-
-                    extensionLogOutputChannel.error(`Error creating run session ${runId}: ${error.message}`);
-                    const response: ErrorResponse = { error };
-                    res.status(400).json(response).end();
-                    return;
-                }
-
-                const processes: (ChildProcess | vscode.DebugSession)[] = [];
+                const processes: (vscode.DebugSession | vscode.Terminal)[] = [];
 
                 if (payload.launch_configurations.length === 0) {
                     spawnProcess();
@@ -108,7 +95,7 @@ export class DcpServer {
                 else {
                     for (const launchConfig of payload.launch_configurations) {
                         if (launchConfig.mode === 'NoDebug') {
-                            spawnProcess();
+                            spawnProcess(launchConfig.project_path);
                         }
                         else {
                             let debugConfig: DebugConfiguration | undefined;
@@ -131,7 +118,7 @@ export class DcpServer {
                                         message: 'Python debug mode requires a script to run. Please provide the script as the first argument in the args array.',
                                         details: []
                                     };
-                                
+
                                     extensionLogOutputChannel.error(`Error creating debug session ${runId}: ${error.message}`);
                                     const response: ErrorResponse = { error };
                                     res.status(400).json(response).end();
@@ -182,23 +169,19 @@ export class DcpServer {
                 res.status(201).set('Location', `${req.protocol}://${req.get('host')}/run_session/${runId}`).end();
                 extensionLogOutputChannel.info(`New run session created with ID: ${runId}`);
 
-                function spawnProcess() {
-                    const cwd = process.cwd();
-
+                function spawnProcess(workingDirectory?: string) {
+                    const termName = `DCP Run ${runId}`;
                     const envVars = mergeEnvs(process.env, payload.env);
+                    const terminal = vscode.window.createTerminal({
+                        name: termName,
+                        cwd: workingDirectory ?? process.cwd(),
+                        env: envVars
+                    });
 
-                    try {
-                        const child = spawn(command as string, payload.args ?? [], {
-                            cwd,
-                            env: envVars,
-                            stdio: 'inherit',
-                            detached: true
-                        });
-                        processes.push(child);
-                        extensionLogOutputChannel.info(`Spawned process for run session ${runId} (pid: ${child.pid})`);
-                    } catch (err) {
-                        extensionLogOutputChannel.error(`Failed to spawn process for run session ${runId}: ${err}`);
-                    }
+                    terminal.show();
+                    terminal.sendText(`${command} ${(payload.args ?? []).map(a => JSON.stringify(a)).join(' ')}`);
+                    processes.push(terminal);
+                    extensionLogOutputChannel.info(`Spawned terminal for run session ${runId}`);
                 }
             });
 
@@ -207,7 +190,14 @@ export class DcpServer {
                 if (runsBySession.has(runId)) {
                     const sessions = runsBySession.get(runId);
                     for (const session of sessions || []) {
-                        if (session instanceof ChildProcess) {
+                        if (isTerminal(session)) {
+                            try {
+                                session.dispose();
+                                extensionLogOutputChannel.info(`Closed terminal for run session ${runId}`);
+                            } catch (err) {
+                                extensionLogOutputChannel.error(`Failed to close terminal for run session ${runId}: ${err}`);
+                            }
+                        } else if (session instanceof ChildProcess) {
                             // Kill the spawned process if it exists
                             if (session.pid) {
                                 try {
@@ -218,9 +208,6 @@ export class DcpServer {
                                 }
                             }
                         }
-                        else {
-                            await vscode.debug.stopDebugging(session);
-                        }
                     }
 
                     runsBySession.delete(runId);
@@ -229,6 +216,10 @@ export class DcpServer {
                     res.status(204).end();
                 }
             });
+
+            function isTerminal(obj: any): obj is vscode.Terminal {
+                return obj && typeof obj.dispose === 'function' && typeof obj.sendText === 'function';
+            }
 
             const server = http.createServer(app);
             const wss = new WebSocketServer({ noServer: true });
