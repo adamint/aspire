@@ -873,6 +873,8 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
                 exe.Spec.ExecutionType = ExecutionType.Process;
             }
 
+            executable.Annotations.Add(new EnvironmentCallbackAnnotation(ctx => ctx.Add(CustomResource.CommandNameEnvironmentVariable, executable.Command)));
+
             SetInitialResourceState(executable, exe);
 
             var exeAppResource = new AppResource(executable, exe);

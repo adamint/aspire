@@ -12,8 +12,10 @@ import { publishCommand } from './commands/publish';
 import { errorMessage } from './loc/strings';
 import { extensionLogOutputChannel } from './utils/logging';
 import { initializeTelemetry, sendTelemetryEvent } from './utils/telemetry';
+import { createDcpServer, DcpServer } from './dcp/dcpServer';
 
 export let rpcServerInfo: RpcServerInformation | undefined;
+export let dcpServer: DcpServer | undefined;
 
 export async function activate(context: vscode.ExtensionContext) {
 	initializeTelemetry(context);
@@ -23,6 +25,8 @@ export async function activate(context: vscode.ExtensionContext) {
 		connection => new InteractionService(),
 		(connection, token: string) => new RpcClient(connection, token)
 	);
+
+	dcpServer = await createDcpServer();
 
 	const cliRunCommand = vscode.commands.registerCommand('aspire-vscode.run', () => tryExecuteCommand('aspire-vscode.run', runCommand));
 	const cliAddCommand = vscode.commands.registerCommand('aspire-vscode.add', () => tryExecuteCommand('aspire-vscode.add', addCommand));
@@ -36,6 +40,7 @@ export async function activate(context: vscode.ExtensionContext) {
 	// Return exported API for tests or other extensions
 	return {
 		rpcServerInfo: rpcServerInfo,
+		dcpServer: dcpServer
 	};
 }
 
