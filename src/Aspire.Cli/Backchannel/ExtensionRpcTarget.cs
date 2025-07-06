@@ -29,6 +29,8 @@ internal class ExtensionRpcTarget(IConfiguration configuration) : IExtensionRpcT
             throw new AuthenticationException();
         }
 
+        // TODO
+        //serviceProvider.GetRequiredService<IInteractionService>().DisplayCancellationMessage();
         Environment.Exit(0);
    }
 
