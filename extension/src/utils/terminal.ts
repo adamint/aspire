@@ -27,11 +27,15 @@ export function getAspireTerminal(): vscode.Terminal {
 
     const env = {
         ...process.env,
+
+        // Extension connection information
         ASPIRE_EXTENSION_ENDPOINT: rpcServerInfo.address,
         ASPIRE_EXTENSION_TOKEN: rpcServerInfo.token,
         ASPIRE_EXTENSION_CERT: Buffer.from(rpcServerInfo.cert, 'utf-8').toString('base64'),
         ASPIRE_EXTENSION_PROMPT_ENABLED: 'true',
-        ASPIRE_LOCALE_OVERRIDE: vscode.env.language
+        
+        // Use the current locale in the CLI
+        ASPIRE_LOCALE_OVERRIDE: vscode.env.language,
     };
 
     return vscode.window.createTerminal({
@@ -40,9 +44,9 @@ export function getAspireTerminal(): vscode.Terminal {
     });
 }
 
-export function sendToAspireTerminal(command: string) {
+export function sendToAspireTerminal(command: string, preserveFocus?: boolean) {
     const terminal = getAspireTerminal();
     extensionLogOutputChannel.info(`Sending command to Aspire terminal: ${command}`);
     terminal.sendText(command);
-    terminal.show();
+    terminal.show(preserveFocus);
 }

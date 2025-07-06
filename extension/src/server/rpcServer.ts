@@ -8,6 +8,8 @@ import { ICliRpcClient } from './rpcClient';
 import * as tls from 'tls';
 import { generateSelfSignedCert, generateToken } from '../utils/security';
 import { extensionLogOutputChannel } from '../utils/logging';
+import { getSupportedCapabilities } from '../utils/capabilities';
+import { rpcServerInfo } from '../extension';
 
 export type RpcServerInformation = {
     address: string;
@@ -15,6 +17,7 @@ export type RpcServerInformation = {
     server: tls.Server;
     dispose: () => void;
     cert: string;
+    rpcClient?: ICliRpcClient;
 };
 
 export function createRpcServer(interactionService: (connection: MessageConnection) => IInteractionService, rpcClient: (connection: MessageConnection, token: string) => ICliRpcClient): Promise<RpcServerInformation> {
@@ -48,10 +51,20 @@ export function createRpcServer(interactionService: (connection: MessageConnecti
             }));
 
             connection.onRequest('getCapabilities', withAuthentication(async () => {
-                return ["baseline.v1"];
+                return getSupportedCapabilities();
             }));
 
-            addInteractionServiceEndpoints(connection, interactionService(connection), rpcClient(connection, token), withAuthentication);
+            if (!rpcServerInfo) {
+                throw new Error('RPC server information is not initialized.');
+            }
+
+            if (!!rpcServerInfo.rpcClient) {
+                throw new Error('CLI already connected to RPC server.');
+            }
+
+            const createdRpcClient = rpcClient(connection, token);
+            rpcServerInfo.rpcClient = createdRpcClient;
+            addInteractionServiceEndpoints(connection, interactionService(connection), createdRpcClient, withAuthentication);
 
             connection.listen();
         });

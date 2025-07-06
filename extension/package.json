@@ -23,7 +23,9 @@
     "orchestrator",
     "apphost"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "workspaceContains:**/*AppHost*"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
@@ -56,6 +58,30 @@
         "command": "aspire-vscode.deploy",
         "title": "%command.deploy%",
         "category": "Aspire"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "aspire",
+        "label": "Aspire Debug",
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "project": {
+                "type": "string",
+                "description": "Path to the Aspire project"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "aspire",
+            "request": "launch",
+            "name": "Aspire: Launch",
+            "project": "${workspaceFolder}"
+          }
+        ]
       }
     ]
   },

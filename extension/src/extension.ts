@@ -12,6 +12,7 @@ import { publishCommand } from './commands/publish';
 import { errorMessage } from './loc/strings';
 import { extensionLogOutputChannel } from './utils/logging';
 import { initializeTelemetry, sendTelemetryEvent } from './utils/telemetry';
+import { AspireDebugAdapterDescriptorFactory } from './debugger/debugAdapter';
 
 export let rpcServerInfo: RpcServerInformation | undefined;
 
@@ -33,6 +34,10 @@ export async function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(cliRunCommand, cliAddCommand, cliNewCommand, cliConfigCommand, cliDeployCommand, cliPublishCommand);
 
+	context.subscriptions.push(
+		vscode.debug.registerDebugAdapterDescriptorFactory('aspire', new AspireDebugAdapterDescriptorFactory())
+	);
+	
 	// Return exported API for tests or other extensions
 	return {
 		rpcServerInfo: rpcServerInfo,

@@ -30,3 +30,4 @@ export const requiredCapability = (capability: string) => localize('aspire-vscod
 export const aspireTerminalName = localize('aspire-vscode.strings.aspireTerminalName', 'Aspire Terminal');
 export const aspireOutputChannelName = localize('aspire-vscode.strings.aspireOutputChannelName', 'Aspire Extension');
 export const fieldRequired = localize('aspire-vscode.strings.fieldRequired', 'This field is required');
+export const attachToAppHost = localize('aspire-vscode.strings.attachToAppHost', 'Attach to AppHost');
