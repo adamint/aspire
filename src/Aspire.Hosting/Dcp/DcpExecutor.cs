@@ -19,6 +19,7 @@ using Aspire.Hosting.Dashboard;
 using Aspire.Hosting.Dcp.Model;
 using Aspire.Hosting.Eventing;
 using Aspire.Hosting.Utils;
+using Humanizer;
 using Json.Patch;
 using k8s;
 using k8s.Autorest;
@@ -33,6 +34,7 @@ namespace Aspire.Hosting.Dcp;
 internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDisposable
 {
     internal const string DebugSessionPortVar = "DEBUG_SESSION_PORT";
+    internal const string DebugSessionSupportedResourceTypes = "DEBUG_SESSION_SUPPORTED_RESOURCE_TYPES";
     internal const string DefaultAspireNetworkName = "default-aspire-network";
 
     // Disposal of the DcpExecutor means shutting down watches and log streams,
@@ -838,10 +840,41 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
 
             // The working directory is always relative to the app host project directory (if it exists).
             exe.Spec.WorkingDirectory = executable.WorkingDirectory;
-            exe.Spec.ExecutionType = ExecutionType.Process;
             exe.Annotate(CustomResource.OtelServiceNameAnnotation, executable.Name);
             exe.Annotate(CustomResource.OtelServiceInstanceIdAnnotation, exeInstance.Suffix);
             exe.Annotate(CustomResource.ResourceNameAnnotation, executable.Name);
+
+            // Transform the type name into an identifier, stripping out
+            // the ending "AppResource" or "Resource" and converting from
+            // PascalCase to snake_case.
+            // e.g. "PythonAppResource" becomes "python",
+            // and "ProjectResource" becomes "project".
+            var resourceType = executable.GetType().Name
+                .RemoveSuffix("AppResource")
+                .RemoveSuffix("Resource")
+                .Underscore();
+
+            if (GetDebugSupportedResourceTypes().Contains(resourceType) && !string.IsNullOrEmpty(_configuration[DebugSessionPortVar]))
+            {
+                exe.Spec.ExecutionType = ExecutionType.IDE;
+                var projectLaunchConfiguration = new ProjectLaunchConfiguration();
+                projectLaunchConfiguration.Type = resourceType;
+                projectLaunchConfiguration.ProjectPath = executable.WorkingDirectory;
+
+                if (_configuration[KnownConfigNames.ExtensionEndpoint] is not null)
+                {
+                    projectLaunchConfiguration.Mode = ProjectLaunchMode.Debug;
+                }
+
+                exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, projectLaunchConfiguration);
+            }
+            else
+            {
+                exe.Spec.ExecutionType = ExecutionType.Process;
+            }
+
+            executable.Annotations.Add(new EnvironmentCallbackAnnotation(ctx => ctx.Add(CustomResource.CommandNameEnvironmentVariable, executable.Command)));
+
             SetInitialResourceState(executable, exe);
 
             var exeAppResource = new AppResource(executable, exe);
@@ -881,6 +914,11 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
 
                 var projectLaunchConfiguration = new ProjectLaunchConfiguration();
                 projectLaunchConfiguration.ProjectPath = projectMetadata.ProjectPath;
+
+                if (_configuration[KnownConfigNames.ExtensionEndpoint] is not null)
+                {
+                    projectLaunchConfiguration.Mode = ProjectLaunchMode.Debug;
+                }
 
                 var projectArgs = new List<string>();
 
@@ -1903,5 +1941,22 @@ internal sealed class DcpExecutor : IDcpExecutor, IConsoleLogsService, IAsyncDis
         }
 
         return volumeMounts;
+    }
+
+    /// <summary>
+    /// Returns a list of resource types that are supported for IDE launch. Always contains project
+    /// </summary>
+    private List<string> GetDebugSupportedResourceTypes()
+    {
+        var types = _configuration[DebugSessionSupportedResourceTypes] is not { } supportedResourceTypes
+            ? ["project"]
+            : supportedResourceTypes.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+        if (!types.Contains("project"))
+        {
+            types.Add("project");
+        }
+
+        return types;
     }
 }

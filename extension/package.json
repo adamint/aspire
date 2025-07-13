@@ -23,7 +23,9 @@
     "orchestrator",
     "apphost"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "workspaceContains:**/*AppHost*"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
@@ -57,7 +59,31 @@
         "title": "%command.deploy%",
         "category": "Aspire"
       }
-    ]
+    ],
+    "debuggers": [
+      {
+        "type": "aspire",
+        "label": "Aspire Debug",
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "project": {
+                "type": "string",
+                "description": "Path to the Aspire project"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "aspire",
+            "request": "launch",
+            "name": "Aspire: Launch",
+            "project": "${workspaceFolder}"
+          }
+        ]
+      }
+  ]
   },
   "repository": {
     "type": "git",
@@ -84,11 +110,13 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.27.0",
+    "@types/express": "^5.0.3",
     "@types/mocha": "^10.0.10",
     "@types/node": "20.x",
     "@types/node-forge": "^1.3.11",
     "@types/sinon": "^17.0.4",
     "@types/vscode": "^1.98.0",
+    "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^8.28.0",
     "@typescript-eslint/parser": "^8.28.0",
     "@vscode/test-cli": "^0.0.10",
@@ -111,11 +139,13 @@
   "dependencies": {
     "@vscode/extension-telemetry": "^1.0.0",
     "@vscode/vsce": "^3.3.2",
+    "express": "^5.1.0",
     "node-forge": "^1.3.1",
     "sinon": "^20.0.0",
     "ts-node": "^10.9.2",
     "vscode-jsonrpc": "^8.2.1",
-    "vscode-nls": "5.2.0"
+    "vscode-nls": "5.2.0",
+    "ws": "^8.18.3"
   },
   "resolutions": {
     "braces": "^3.0.3"
