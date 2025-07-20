@@ -195,7 +195,6 @@ public class Program
 
         if (extensionEndpoint is not null)
         {
-            builder.Services.AddSingleton<ExtensionRpcTarget>();
             builder.Services.AddSingleton<IExtensionBackchannel, ExtensionBackchannel>();
 
             var extensionPromptEnabled = builder.Configuration[KnownConfigNames.ExtensionPromptEnabled] is "true";
@@ -207,6 +206,8 @@ public class Program
                     provider.GetRequiredService<IExtensionBackchannel>(),
                     extensionPromptEnabled);
             });
+
+            builder.Services.AddSingleton<ExtensionRpcTarget>();
 
             // If the CLI is being launched from the aspire extension, we don't want to use the console logger that's used when including --debug.
             // Instead, we will log to the extension backchannel.

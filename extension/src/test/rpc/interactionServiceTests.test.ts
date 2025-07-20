@@ -183,8 +183,8 @@ suite('InteractionService endpoints', () => {
 		const testInfo = await createTestRpcServer();
 		const showInformationMessageSpy = sinon.spy(vscode.window, 'showInformationMessage');
 		testInfo.interactionService.displayLines([
-			{ stream: 'stdout', line: 'line1' },
-			{ stream: 'stderr', line: 'line2' }
+			{ Stream: 'stdout', Line: 'line1' },
+			{ Stream: 'stderr', Line: 'line2' }
 		]);
 		assert.ok(showInformationMessageSpy.called);
 		assert.ok(stub.calledWith('line1'));
@@ -222,6 +222,10 @@ class TestCliRpcClient implements ICliRpcClient {
 		else {
 			return Promise.resolve(null);
 		}
+	}
+
+	stopCli(): Promise<void> {
+		return Promise.resolve();
 	}
 }
 

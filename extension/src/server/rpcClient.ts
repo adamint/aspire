@@ -4,6 +4,7 @@ import { logAsyncOperation } from '../utils/logging';
 export interface ICliRpcClient {
     getCliVersion(): Promise<string>;
     validatePromptInputString(input: string): Promise<ValidationResult | null>;
+    stopCli: () => Promise<void>;
 }
 
 export type ValidationResult = {
@@ -41,5 +42,9 @@ export class RpcClient implements ICliRpcClient {
                 });
             }
         );
+    }
+
+    async stopCli(): Promise<void> {
+        await this._messageConnection.sendRequest<void>('stopCli', this._token);
     }
 }
