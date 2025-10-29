@@ -36,9 +36,14 @@ To run and debug your Aspire application, add an entry to the workspace `launch.
     "type": "aspire",
     "request": "launch",
     "name": "Aspire: Launch MyAppHost",
-    "program": "${workspaceFolder}/MyAppHost/MyAppHost.csproj"
+    "program": "${workspaceFolder}/MyAppHost/MyAppHost.csproj",
+    "mode": "run"
 }
 ```
+
+### Debug modes
+
+The three available debug modes are `run`, `deploy`, and `publish`, corresponding to `aspire run`, `aspire deploy`, and `aspire publish` respectively.
 
 ## Requirements
 

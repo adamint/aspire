@@ -29,6 +29,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private _trackedDebugAdapters: string[] = [];
   private _rpcClient?: ICliRpcClient;
   private readonly _disposables: vscode.Disposable[] = [];
+  private _cliCommand: string;
 
   public readonly onDidSendMessage = this._onDidSendMessage.event;
   public readonly debugSessionId: string;
@@ -40,6 +41,14 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     this._dcpServer = dcpServer;
     this._terminalProvider = terminalProvider;
     this.configuration = session.configuration as AspireExtendedDebugConfiguration;
+
+    // If mode is not set or invalid, default to 'run'
+    if (!this.configuration.mode || !['run', 'deploy', 'publish'].includes(this.configuration.mode)) {
+      this._cliCommand = 'run';
+    }
+    else {
+      this._cliCommand = this.configuration.mode;
+    }
 
     this.debugSessionId = generateDcpIdPrefix();
 
@@ -74,7 +83,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       const appHostPath = this._session.configuration.program as string;
       const noDebug = !!message.arguments?.noDebug;
 
-      const args = ['run'];
+      const args = [this._cliCommand];
       if (!noDebug) {
         args.push('--start-debug-session');
       }

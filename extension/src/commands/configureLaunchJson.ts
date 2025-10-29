@@ -21,7 +21,8 @@ export async function configureLaunchJsonCommand() {
             type: 'aspire',
             request: 'launch',
             name: defaultConfigurationName,
-            program: '${workspaceFolder}'
+            program: '${workspaceFolder}',
+            mode: 'run'
         };
 
         // Check if .vscode directory exists, create if not

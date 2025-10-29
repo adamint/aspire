@@ -62,3 +62,4 @@ export const invalidOrMissingToken = vscode.l10n.t('Invalid or missing token in 
 export const invalidTokenLength = vscode.l10n.t('Invalid token length in Authorization header.');
 export const authorizationHeaderMustStartWithBearer = vscode.l10n.t('Authorization header must start with \'Bearer \'.');
 export const authorizationAndDcpHeadersRequired = vscode.l10n.t('Authorization and Microsoft-Developer-DCP-Instance-ID headers are required.');
+export const deployApp = vscode.l10n.t('Deploy app');

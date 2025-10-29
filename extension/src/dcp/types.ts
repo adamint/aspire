@@ -113,6 +113,7 @@ export interface AspireResourceExtendedDebugConfiguration extends vscode.DebugCo
 export interface AspireExtendedDebugConfiguration extends vscode.DebugConfiguration {
     program: string;
     debuggers?: AspireDebuggersConfiguration;
+    mode?: 'run' | 'deploy' | 'publish';
 }
 
 interface AspireDebuggersConfiguration {
