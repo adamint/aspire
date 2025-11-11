@@ -10,6 +10,8 @@ import { createDebugSessionConfiguration, ResourceDebuggerExtension } from '../d
 import { timingSafeEqual } from 'crypto';
 import { getRunSessionInfo, getSupportedCapabilities } from '../capabilities';
 import { authorizationAndDcpHeadersRequired, authorizationHeaderMustStartWithBearer, encounteredErrorStartingResource, invalidOrMissingToken, invalidTokenLength } from '../loc/strings';
+import { CopilotService } from '../copilot/CopilotService';
+import { OpenAIChatCompletionOption } from '../copilot/types';
 
 export default class AspireDcpServer {
     private readonly app: express.Express;
@@ -39,12 +41,14 @@ export default class AspireDcpServer {
         const runsBySession = new Map<string, AspireResourceDebugSession[]>();
         const wsBySession = new Map<string, WebSocket>();
         const pendingNotificationQueueByDcpId = new Map<string, RunSessionNotification[]>();
+        const copilotService = new CopilotService();
 
         return new Promise(async (resolve, reject) => {
             const token = generateToken();
 
             const app = express();
-            app.use(express.json());
+            // Increase body size limit to 10MB to support large trace/log contexts from dashboard
+            app.use(express.json({ limit: '10mb' }));
 
             function requireHeaders(req: Request, res: Response, next: NextFunction): void {
                 const auth = req.header('Authorization');
@@ -180,6 +184,131 @@ export default class AspireDcpServer {
                     res.status(200).end();
                 } else {
                     res.status(204).end();
+                }
+            });
+
+            // GitHub Copilot endpoints
+            app.get('/ghcp_info', async (req: Request, res: Response) => {
+                extensionLogOutputChannel.info('Received request to /ghcp_info');
+
+                // Check authentication (only require Authorization header for Copilot endpoints)
+                const auth = req.header('Authorization');
+                if (!auth) {
+                    extensionLogOutputChannel.warn('/ghcp_info: Missing Authorization header');
+                    respondWithError(res, 401, { error: { code: 'MissingAuthHeader', message: 'Authorization header is required', details: [] } });
+                    return;
+                }
+
+                if (auth.split('Bearer ').length !== 2) {
+                    extensionLogOutputChannel.warn('/ghcp_info: Invalid Authorization header format');
+                    respondWithError(res, 401, { error: { code: 'InvalidAuthHeader', message: authorizationHeaderMustStartWithBearer, details: [] } });
+                    return;
+                }
+
+                const bearerTokenBuffer = Buffer.from(auth.split('Bearer ')[1]);
+                const expectedTokenBuffer = Buffer.from(token);
+
+                if (bearerTokenBuffer.length !== expectedTokenBuffer.length || !timingSafeEqual(bearerTokenBuffer, expectedTokenBuffer)) {
+                    extensionLogOutputChannel.warn('/ghcp_info: Invalid token');
+                    respondWithError(res, 401, { error: { code: 'InvalidToken', message: invalidOrMissingToken, details: [] } });
+                    return;
+                }
+
+                extensionLogOutputChannel.info('/ghcp_info: Authentication successful, querying Copilot service');
+                try {
+                    const response = await copilotService.getGhcpInfoAsync(new vscode.CancellationTokenSource().token);
+                    extensionLogOutputChannel.info(`/ghcp_info: Returning response with State: ${response.State}, Models: ${response.Models?.length || 0}`);
+                    res.json(response);
+                } catch (error) {
+                    extensionLogOutputChannel.error(`Error getting Copilot info: ${error}`);
+                    respondWithError(res, 500, { error: { code: 'InternalError', message: String(error), details: [] } });
+                }
+            });
+
+            app.post('/v1/chat/completions', async (req: Request, res: Response) => {
+                // Check authentication
+                const auth = req.header('Authorization');
+                if (!auth) {
+                    respondWithError(res, 401, { error: { code: 'MissingAuthHeader', message: 'Authorization header is required', details: [] } });
+                    return;
+                }
+
+                if (auth.split('Bearer ').length !== 2) {
+                    respondWithError(res, 401, { error: { code: 'InvalidAuthHeader', message: authorizationHeaderMustStartWithBearer, details: [] } });
+                    return;
+                }
+
+                const bearerTokenBuffer = Buffer.from(auth.split('Bearer ')[1]);
+                const expectedTokenBuffer = Buffer.from(token);
+
+                if (bearerTokenBuffer.length !== expectedTokenBuffer.length || !timingSafeEqual(bearerTokenBuffer, expectedTokenBuffer)) {
+                    respondWithError(res, 401, { error: { code: 'InvalidToken', message: invalidOrMissingToken, details: [] } });
+                    return;
+                }
+
+                const body = req.body as OpenAIChatCompletionOption;
+
+                if (!body || !body.messages) {
+                    respondWithError(res, 400, { error: { code: 'InvalidRequest', message: 'Request body must contain messages', details: [] } });
+                    return;
+                }
+
+                const cancellationTokenSource = new vscode.CancellationTokenSource();
+
+                try {
+                    if (body.stream === true) {
+                        // Send as server-sent events
+                        res.setHeader('Content-Type', 'text/event-stream');
+                        res.setHeader('Cache-Control', 'no-cache');
+                        res.setHeader('Connection', 'keep-alive');
+
+                        try {
+                            for await (const chatCompletion of copilotService.generateStreamingResponseAsync(body, cancellationTokenSource.token)) {
+                                const data = JSON.stringify(chatCompletion);
+                                res.write(`data: ${data}\n\n`);
+
+                                if (chatCompletion.choices?.[0]?.finish_reason === 'stop' || chatCompletion.choices?.[0]?.finish_reason === 'tool_calls') {
+                                    res.write('data: [DONE]\n\n');
+                                    break;
+                                }
+                            }
+                            res.end();
+                        } catch (streamError: any) {
+                            // For streaming errors, send error as SSE event before closing
+                            extensionLogOutputChannel.error(`Error during streaming: ${streamError}`);
+                            const errorEvent = {
+                                error: {
+                                    message: streamError.message || 'Streaming error occurred',
+                                    code: streamError.code
+                                }
+                            };
+                            res.write(`data: ${JSON.stringify(errorEvent)}\n\n`);
+                            res.write('data: [DONE]\n\n');
+                            res.end();
+                        }
+                    } else {
+                        const chatCompletion = await copilotService.generateResponseAsync(body, cancellationTokenSource.token);
+                        res.json(chatCompletion);
+                    }
+                } catch (error: any) {
+                    extensionLogOutputChannel.error(`Error generating chat completion: ${error}`);
+
+                    // Only send error response if headers haven't been sent (non-streaming case)
+                    if (!res.headersSent) {
+                        // Handle specific error types
+                        if (error.message?.includes('rate limit')) {
+                            res.status(429).json({ error: 'Rate limit exceeded' });
+                        } else if (error.message?.includes('no access') || error.message?.includes('not available')) {
+                            res.status(403).json({ error: error.message });
+                        } else {
+                            res.status(500).json({
+                                error: error.message || 'Internal server error',
+                                stacktrace: error.stack
+                            });
+                        }
+                    }
+                } finally {
+                    cancellationTokenSource.dispose();
                 }
             });
 
