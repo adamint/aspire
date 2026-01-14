@@ -223,24 +223,6 @@ public class WithEndpointTests
     }
 
     [Fact]
-    public void GettingContainerHostNameFailsIfNoContainerHostNameSet()
-    {
-        using var builder = TestDistributedApplicationBuilder.Create();
-        var container = builder.AddContainer("app", "image")
-            .WithEndpoint("ep", e =>
-            {
-                e.AllocatedEndpoint = new(e, "localhost", 8031);
-            });
-
-        var ex = Assert.Throws<InvalidOperationException>(() =>
-        {
-            return container.GetEndpoint("ep").ContainerHost;
-        });
-
-        Assert.Equal("The endpoint \"ep\" has no associated container host name.", ex.Message);
-    }
-
-    [Fact]
     public void WithExternalHttpEndpointsMarkExistingHttpEndpointsAsExternal()
     {
         using var builder = TestDistributedApplicationBuilder.Create();
@@ -470,8 +452,6 @@ public class WithEndpointTests
               "type": "project.v0",
               "path": "projectpath",
               "env": {
-                "OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EXCEPTION_LOG_ATTRIBUTES": "true",
-                "OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EVENT_LOG_ATTRIBUTES": "true",
                 "OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY": "in_memory",
                 "ASPNETCORE_FORWARDEDHEADERS_ENABLED": "true",
                 "HTTP_PORTS": "{proj.bindings.hp.targetPort};{proj.bindings.hp2.targetPort}",
@@ -537,8 +517,6 @@ public class WithEndpointTests
         var expectedEnv =
             """
             {
-              "OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EXCEPTION_LOG_ATTRIBUTES": "true",
-              "OTEL_DOTNET_EXPERIMENTAL_OTLP_EMIT_EVENT_LOG_ATTRIBUTES": "true",
               "OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY": "in_memory",
               "ASPNETCORE_FORWARDEDHEADERS_ENABLED": "true",
               "HTTP_PORTS": "{proj.bindings.http.targetPort};{proj.bindings.hp1.targetPort};{proj.bindings.hp2.targetPort};{proj.bindings.hp3.targetPort};{proj.bindings.hp4.targetPort}",
@@ -682,12 +660,53 @@ public class WithEndpointTests
         await app.StopAsync();
     }
 
+    [Fact]
+    public async Task VerifyManifestProjectWithExplicitPortAndNoLaunchProfile()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
+        var project = builder.AddProject<TestProjectNoLaunchSettings>("proj", launchProfileName: null)
+            .WithHttpEndpoint(port: 5001);
+
+        var manifest = await ManifestUtils.GetManifest(project.Resource).DefaultTimeout();
+
+        var expectedManifest =
+            """
+            {
+              "type": "project.v0",
+              "path": "projectpath",
+              "env": {
+                "OTEL_DOTNET_EXPERIMENTAL_OTLP_RETRY": "in_memory",
+                "ASPNETCORE_FORWARDEDHEADERS_ENABLED": "true",
+                "HTTP_PORTS": "{proj.bindings.http.targetPort}"
+              },
+              "bindings": {
+                "http": {
+                  "scheme": "http",
+                  "protocol": "tcp",
+                  "transport": "http",
+                  "port": 5001
+                }
+              }
+            }
+            """;
+
+        Assert.Equal(expectedManifest, manifest.ToString());
+    }
+
     private sealed class TestProject : IProjectMetadata
     {
         public string ProjectPath => "projectpath";
 
         public LaunchSettings? LaunchSettings { get; } = new();
     }
+
+    private sealed class TestProjectNoLaunchSettings : IProjectMetadata
+    {
+        public string ProjectPath => "projectpath";
+
+        public LaunchSettings? LaunchSettings => null;
+    }
+
     private sealed class ProjectA : IProjectMetadata
     {
         public string ProjectPath => "projectA";

@@ -160,6 +160,12 @@ public class McpOptions
 
     public bool SuppressUnsecuredMessage { get; set; }
 
+    /// <summary>
+    /// When true, the dashboard will show instructions for configuring the Aspire CLI MCP server
+    /// instead of the dashboard's HTTP-based MCP server.
+    /// </summary>
+    public bool? UseCliMcp { get; set; }
+
     public BindingAddress? GetEndpointAddress()
     {
         return _parsedEndpointAddress;
@@ -207,6 +213,9 @@ public sealed class FrontendOptions
     public string? EndpointUrls { get; set; }
     public FrontendAuthMode? AuthMode { get; set; }
     public string? BrowserToken { get; set; }
+
+    // Public URL could be different from the endpoint URL (e.g., when behind a proxy).
+    public string? PublicUrl { get; set; }
 
     /// <summary>
     /// Gets and sets an optional limit on the number of console log messages to be retained in the viewer.
@@ -290,6 +299,7 @@ public sealed class TelemetryLimitOptions
 public sealed class UIOptions
 {
     public bool? DisableResourceGraph { get; set; }
+    public bool? DisableImport { get; set; }
 }
 
 // Don't set values after validating/parsing options.

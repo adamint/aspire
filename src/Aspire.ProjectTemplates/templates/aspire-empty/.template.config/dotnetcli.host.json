@@ -5,8 +5,7 @@
         "longName": "framework"
       },
       "AspireVersion": {
-        "shortName": "",
-        "longName": "aspire-version"
+        "isHidden": true
       },
       "skipRestore": {
         "longName": "no-restore",
@@ -22,6 +21,12 @@
         "isHidden": true
       },
       "appHostOtlpHttpsPort": {
+        "isHidden": true
+      },
+      "appHostMcpHttpPort": {
+        "isHidden": true
+      },
+      "appHostMcpHttpsPort": {
         "isHidden": true
       },
       "appHostResourceHttpPort": {

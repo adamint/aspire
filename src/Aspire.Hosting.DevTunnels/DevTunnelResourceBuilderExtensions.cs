@@ -8,7 +8,6 @@ using System.Text.RegularExpressions;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.DevTunnels;
 using Aspire.Hosting.Eventing;
-using Aspire.Hosting.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -433,6 +432,8 @@ public static partial class DevTunnelsResourceBuilderExtensions
                 {
                     var serviceName = targetResource.Resource.Name;
                     var endpointName = port.TargetEndpoint.EndpointName;
+                    var encodedServiceName = EnvironmentVariableNameEncoder.Encode(serviceName);
+                    var encodedEndpointName = EnvironmentVariableNameEncoder.Encode(endpointName);
 
                     if (flags.HasFlag(ReferenceEnvironmentInjectionFlags.ServiceDiscovery))
                     {
@@ -441,7 +442,8 @@ public static partial class DevTunnelsResourceBuilderExtensions
 
                     if (flags.HasFlag(ReferenceEnvironmentInjectionFlags.Endpoints))
                     {
-                        context.EnvironmentVariables[$"{serviceName.ToUpperInvariant()}_{endpointName.ToUpperInvariant()}"] = port.TunnelEndpoint;
+                        var endpointKey = $"{encodedServiceName.ToUpperInvariant()}_{encodedEndpointName.ToUpperInvariant()}";
+                        context.EnvironmentVariables[endpointKey] = port.TunnelEndpoint;
                     }
                 }
             });

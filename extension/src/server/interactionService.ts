@@ -94,7 +94,7 @@ export class InteractionService implements IInteractionService {
             ignoreFocusOut: true
         });
 
-        return input || null;
+        return input ?? null;
     }
 
     async promptForSecretString(promptText: string, required: boolean, rpcClient: ICliRpcClient): Promise<string | null> {
@@ -125,7 +125,7 @@ export class InteractionService implements IInteractionService {
             ignoreFocusOut: true
         });
 
-        return input || null;
+        return input ?? null;
     }
 
     async confirm(promptText: string, defaultValue: boolean): Promise<boolean | null> {
@@ -255,6 +255,16 @@ export class InteractionService implements IInteractionService {
 
         if (dashboardUrls.CodespacesUrlWithLoginToken) {
             this.writeDebugSessionMessage(codespaces + ': ' + dashboardUrls.CodespacesUrlWithLoginToken, true, AnsiColors.Green);
+        }
+
+        //  If aspire.enableAspireDashboardAutoLaunch is true, the dashboard will be launched automatically and we do not need
+        // to show an information message.
+        const enableDashboardAutoLaunch = vscode.workspace.getConfiguration('aspire').get<boolean>('enableAspireDashboardAutoLaunch', true);
+        if (enableDashboardAutoLaunch) {
+            // Open the dashboard URL in an external browser. Prefer codespaces URL if available.
+            const urlToOpen = dashboardUrls.CodespacesUrlWithLoginToken ?? dashboardUrls.BaseUrlWithLoginToken;
+            vscode.env.openExternal(vscode.Uri.parse(urlToOpen));
+            return;
         }
 
         const actions: vscode.MessageItem[] = [

@@ -149,6 +149,11 @@ public class DashboardResourceTests(ITestOutputHelper testOutputHelper)
             },
             e =>
             {
+                Assert.Equal("DASHBOARD__FRONTEND__PUBLICURL", e.Key);
+                Assert.Equal("http://localhost:5003", e.Value);
+            },
+            e =>
+            {
                 Assert.Equal("DASHBOARD__MCP__AUTHMODE", e.Key);
                 Assert.Equal("Unsecured", e.Value);
             },
@@ -156,6 +161,11 @@ public class DashboardResourceTests(ITestOutputHelper testOutputHelper)
             {
                 Assert.Equal("DASHBOARD__MCP__PUBLICURL", e.Key);
                 Assert.Equal("http://localhost:5004", e.Value);
+            },
+            e =>
+            {
+                Assert.Equal("DASHBOARD__MCP__USECLIMCP", e.Key);
+                Assert.Equal("true", e.Value);
             },
             e =>
             {

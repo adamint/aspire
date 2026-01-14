@@ -18,6 +18,7 @@ internal interface IInteractionService
     void DisplayError(string errorMessage);
     void DisplayMessage(string emoji, string message);
     void DisplayPlainText(string text);
+    void DisplayRawText(string text);
     void DisplayMarkdown(string markdown);
     void DisplaySuccess(string message);
     void DisplaySubtleMessage(string message, bool escapeMarkup = true);
@@ -25,6 +26,6 @@ internal interface IInteractionService
     void DisplayCancellationMessage();
     void DisplayEmptyLine();
 
-    void DisplayVersionUpdateNotification(string newerVersion);
+    void DisplayVersionUpdateNotification(string newerVersion, string? updateCommand = null);
     void WriteConsoleLog(string message, int? lineNumber = null, string? type = null, bool isErrorMessage = false);
 }

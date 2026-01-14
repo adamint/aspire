@@ -2,10 +2,13 @@
 #pragma warning disable ASPIREPIPELINES001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 #pragma warning disable ASPIREPIPELINES003 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 #pragma warning disable ASPIREDOCKERFILEBUILDER001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+#pragma warning disable ASPIRECONTAINERRUNTIME001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+#pragma warning disable ASPIREFILESYSTEM001 // Type is for evaluation purposes only
 
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Diagnostics;
 using Aspire.Hosting.ApplicationModel.Docker;
 using Aspire.Hosting.Pipelines;
 using Aspire.Hosting.Publishing;
@@ -17,8 +20,9 @@ namespace Aspire.Hosting.ApplicationModel;
 /// <summary>
 /// A resource that represents a specified .NET project.
 /// </summary>
+[DebuggerDisplay("{DebuggerToString(),nq}")]
 public class ProjectResource : Resource, IResourceWithEnvironment, IResourceWithArgs, IResourceWithServiceDiscovery, IResourceWithWaitSupport, IResourceWithProbes,
-    IComputeResource
+    IComputeResource, IContainerFilesDestinationResource
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="ProjectResource"/> class.
@@ -26,24 +30,50 @@ public class ProjectResource : Resource, IResourceWithEnvironment, IResourceWith
     /// <param name="name">The name of the resource.</param>
     public ProjectResource(string name) : base(name)
     {
-        // Add pipeline step annotation to create a build step for this project
+        // Add pipeline step annotation to create build and push steps for this project
         Annotations.Add(new PipelineStepAnnotation((factoryContext) =>
         {
+            var steps = new List<PipelineStep>();
+
             if (factoryContext.Resource.IsExcludedFromPublish())
             {
-                return [];
+                return steps;
             }
 
             var buildStep = new PipelineStep
             {
                 Name = $"build-{name}",
+                Description = $"Builds the container image for the {name} project.",
                 Action = BuildProjectImage,
                 Tags = [WellKnownPipelineTags.BuildCompute],
                 RequiredBySteps = [WellKnownPipelineSteps.Build],
-                DependsOnSteps = [WellKnownPipelineSteps.BuildPrereq]
+                DependsOnSteps = [WellKnownPipelineSteps.BuildPrereq],
+                Resource = this
             };
+            steps.Add(buildStep);
 
-            return [buildStep];
+            if (this.RequiresImageBuildAndPush())
+            {
+                var pushStep = new PipelineStep
+                {
+                    Name = $"push-{name}",
+                    Action = ctx => PipelineStepHelpers.PushImageToRegistryAsync(this, ctx),
+                    Tags = [WellKnownPipelineTags.PushContainerImage],
+                    RequiredBySteps = [WellKnownPipelineSteps.Push],
+                    Resource = this
+                };
+                steps.Add(pushStep);
+            }
+
+            return steps;
+        }));
+
+        // Add default container build options annotation
+        Annotations.Add(new ContainerBuildOptionsCallbackAnnotation(context =>
+        {
+            context.LocalImageName = name.ToLowerInvariant();
+            context.LocalImageTag = "latest";
+            context.TargetPlatform = ContainerTargetPlatform.LinuxAmd64;
         }));
 
         Annotations.Add(new PipelineConfigurationAnnotation(context =>
@@ -58,6 +88,13 @@ public class ProjectResource : Resource, IResourceWithEnvironment, IResourceWith
                     buildSteps.DependsOn(context.GetSteps(containerFile.Source, WellKnownPipelineTags.BuildCompute));
                 }
             }
+
+            // Wire up dependencies for push steps
+            var projectBuildSteps = context.GetSteps(this, WellKnownPipelineTags.BuildCompute);
+            var pushSteps = context.GetSteps(this, WellKnownPipelineTags.PushContainerImage);
+
+            pushSteps.DependsOn(projectBuildSteps);
+            pushSteps.DependsOn(WellKnownPipelineSteps.PushPrereq);
         }));
     }
     // Keep track of the config host for each Kestrel endpoint annotation
@@ -87,20 +124,14 @@ public class ProjectResource : Resource, IResourceWithEnvironment, IResourceWith
 
     private async Task BuildProjectImage(PipelineStepContext ctx)
     {
-        var containerImageBuilder = ctx.Services.GetRequiredService<IResourceContainerImageBuilder>();
+        var containerImageBuilder = ctx.Services.GetRequiredService<IResourceContainerImageManager>();
         var logger = ctx.Logger;
 
         // Build the container image for the project first
-        await containerImageBuilder.BuildImageAsync(
-            this,
-            new ContainerBuildOptions
-            {
-                TargetPlatform = ContainerTargetPlatform.LinuxAmd64
-            },
-            ctx.CancellationToken).ConfigureAwait(false);
+        await containerImageBuilder.BuildImageAsync(this, ctx.CancellationToken).ConfigureAwait(false);
 
         // Check if we need to copy container files
-        if (!this.TryGetAnnotationsOfType<ContainerFilesDestinationAnnotation>(out var containerFilesAnnotations))
+        if (!this.TryGetAnnotationsOfType<ContainerFilesDestinationAnnotation>(out var _))
         {
             // No container files to copy, just build the image normally
             return;
@@ -120,6 +151,8 @@ public class ProjectResource : Resource, IResourceWithEnvironment, IResourceWith
 
         // Generate a Dockerfile that layers the container files on top
         var dockerfileBuilder = new DockerfileBuilder();
+        dockerfileBuilder.AddContainerFilesStages(this, logger);
+
         var stage = dockerfileBuilder.From(tempImageName);
 
         var projectMetadata = this.GetProjectMetadata();
@@ -128,34 +161,12 @@ public class ProjectResource : Resource, IResourceWithEnvironment, IResourceWith
         var containerWorkingDir = await GetContainerWorkingDirectoryAsync(projectMetadata.ProjectPath, logger, ctx.CancellationToken).ConfigureAwait(false);
 
         // Add COPY --from: statements for each source
-        foreach (var containerFileDestination in containerFilesAnnotations)
-        {
-            var source = containerFileDestination.Source;
+        stage.AddContainerFiles(this, containerWorkingDir, logger);
 
-            if (!source.TryGetContainerImageName(out var sourceImageName))
-            {
-                logger.LogWarning("Cannot get container image name for source resource {SourceName}, skipping", source.Name);
-                continue;
-            }
-
-            var destinationPath = containerFileDestination.DestinationPath;
-            if (!destinationPath.StartsWith('/'))
-            {
-                // Make it an absolute path relative to the container working directory
-                destinationPath = $"{containerWorkingDir}/{destinationPath}";
-            }
-
-            foreach (var containerFilesSource in source.Annotations.OfType<ContainerFilesSourceAnnotation>())
-            {
-                logger.LogDebug("Adding COPY --from={SourceImage} {SourcePath} {DestinationPath}",
-                    sourceImageName, containerFilesSource.SourcePath, destinationPath);
-                stage.CopyFrom(sourceImageName, containerFilesSource.SourcePath, destinationPath);
-            }
-        }
-
-        // Write the Dockerfile to a temporary location
+        // Get the directory service to create temp Dockerfile
         var projectDir = Path.GetDirectoryName(projectMetadata.ProjectPath)!;
-        var tempDockerfilePath = Path.GetTempFileName();
+        var directoryService = ctx.Services.GetRequiredService<IFileSystemService>();
+        var tempDockerfilePath = directoryService.TempDirectory.CreateTempFile().Path;
 
         var builtSuccessfully = false;
         try
@@ -168,14 +179,22 @@ public class ProjectResource : Resource, IResourceWithEnvironment, IResourceWith
             logger.LogDebug("Generated temporary Dockerfile at {DockerfilePath}", tempDockerfilePath);
 
             // Build the final image from the generated Dockerfile
+            // Get the container build options from annotations to ensure consistency
+            var context = await this.ProcessContainerBuildOptionsCallbackAsync(
+                ctx.Services,
+                logger,
+                cancellationToken: ctx.CancellationToken).ConfigureAwait(false);
+
+            var buildOptions = new ContainerImageBuildOptions
+            {
+                ImageName = originalImageName,
+                TargetPlatform = context.TargetPlatform ?? ContainerTargetPlatform.LinuxAmd64
+            };
+
             await containerRuntime.BuildImageAsync(
                 projectDir,
                 tempDockerfilePath,
-                originalImageName,
-                new ContainerBuildOptions
-                {
-                    TargetPlatform = ContainerTargetPlatform.LinuxAmd64
-                },
+                buildOptions,
                 [],
                 [],
                 null,
@@ -265,5 +284,16 @@ public class ProjectResource : Resource, IResourceWithEnvironment, IResourceWith
             logger.LogDebug(ex, "Error getting ContainerWorkingDirectory. Using default /app");
             return "/app";
         }
+    }
+
+    private string DebuggerToString()
+    {
+        var path = "<unknown>";
+        if (this.TryGetLastAnnotation<IProjectMetadata>(out var metadata))
+        {
+            path = metadata.ProjectPath;
+        }
+
+        return $@"Type = {GetType().Name}, Name = ""{Name}"", Path = ""{path}""";
     }
 }

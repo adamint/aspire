@@ -196,7 +196,7 @@ public sealed class DashboardWebApplication : IAsyncDisposable
         ConfigureKestrelEndpoints(builder, dashboardOptions);
 
         var browserHttpsPort = dashboardOptions.Frontend.GetEndpointAddresses().FirstOrDefault(IsHttpsOrNull)?.Port;
-        var isAllHttps = browserHttpsPort is not null && IsHttpsOrNull(dashboardOptions.Otlp.GetGrpcEndpointAddress()) && IsHttpsOrNull(dashboardOptions.Otlp.GetHttpEndpointAddress());
+        var isAllHttps = browserHttpsPort is not null && IsHttpsOrNull(dashboardOptions.Otlp.GetGrpcEndpointAddress()) && IsHttpsOrNull(dashboardOptions.Otlp.GetHttpEndpointAddress()) && IsHttpsOrNull(dashboardOptions.Mcp.GetEndpointAddress());
         if (isAllHttps)
         {
             // Explicitly configure the HTTPS redirect port as we're possibly listening on multiple HTTPS addresses
@@ -304,6 +304,9 @@ public sealed class DashboardWebApplication : IAsyncDisposable
         // ShortcutManager is scoped because we want shortcuts to apply one browser window.
         builder.Services.AddScoped<ShortcutManager>();
         builder.Services.AddScoped<ConsoleLogsManager>();
+        builder.Services.AddScoped<ConsoleLogsFetcher>();
+        builder.Services.AddScoped<TelemetryExportService>();
+        builder.Services.AddScoped<TelemetryImportService>();
         builder.Services.AddSingleton<IInstrumentUnitResolver, DefaultInstrumentUnitResolver>();
 
         builder.Services.AddScoped<IAIContextProvider, AIContextProvider>();
@@ -378,6 +381,11 @@ public sealed class DashboardWebApplication : IAsyncDisposable
                 // This isn't used by dotnet watch but still useful to have for debugging
                 _logger.LogInformation("OTLP/HTTP listening on: {OtlpEndpointUri}", _otlpServiceHttpEndPointAccessor().GetResolvedAddress());
             }
+            if (_mcpEndPointAccessor != null)
+            {
+                // This isn't used by dotnet watch but still useful to have for debugging
+                _logger.LogInformation("MCP listening on: {McpEndpointUri}", _mcpEndPointAccessor().GetResolvedAddress());
+            }
 
             if (_dashboardOptionsMonitor.CurrentValue.Otlp.AuthMode == OtlpAuthMode.Unsecured)
             {
@@ -444,11 +452,6 @@ public sealed class DashboardWebApplication : IAsyncDisposable
 
         _app.UseMiddleware<ValidateTokenMiddleware>();
 
-        if (!_dashboardOptionsMonitor.CurrentValue.Mcp.Disabled.GetValueOrDefault())
-        {
-            _app.MapMcp("/mcp").RequireAuthorization(McpApiKeyAuthenticationHandler.PolicyName);
-        }
-
         // Configure the HTTP request pipeline.
         if (!_app.Environment.IsDevelopment())
         {
@@ -504,6 +507,7 @@ public sealed class DashboardWebApplication : IAsyncDisposable
         _app.MapGrpcService<OtlpGrpcTraceService>();
         _app.MapGrpcService<OtlpGrpcLogsService>();
 
+        _app.MapDashboardMcp(dashboardOptions);
         _app.MapDashboardApi(dashboardOptions);
         _app.MapDashboardHealthChecks();
     }
@@ -614,8 +618,9 @@ public sealed class DashboardWebApplication : IAsyncDisposable
 
             var kestrelSection = context.Configuration.GetSection("Kestrel");
             var configurationLoader = serverOptions.Configure(kestrelSection);
+            var groupedEndpoints = EndpointInfo.GroupEndpointsByAddress(endpoints);
 
-            foreach (var (address, addressEndpoints) in EndpointInfo.GroupEndpointsByAddress(endpoints))
+            foreach (var (address, addressEndpoints) in groupedEndpoints)
             {
                 var name = string.Join("-", addressEndpoints.Select(m => m.Name));
                 var connectionTypes = addressEndpoints.Select(m => m.ConnectionType).ToList();
