@@ -214,26 +214,26 @@ export function determineWorkingDirectory(
 // https://github.com/microsoft/vscode/blob/2efcdb92310b5ce12636ad6896080476dc42bf1c/extensions/debug-server-ready/package.json
 type ServerReadyAction =
     | {
-        action: 'openExternally';
+        action: "openExternally";
         pattern: string;
         uriFormat: string;
         killOnServerStop?: boolean;
     }
     | {
-        action: 'debugWithChrome' | 'debugWithEdge';
+        action: "debugWithChrome" | "debugWithEdge";
         pattern: string;
         uriFormat: string;
         webRoot: string;
         killOnServerStop?: boolean;
     }
     | {
-        action: 'startDebugging';
+        action: "startDebugging";
         pattern: string;
         name: string;
         killOnServerStop?: boolean;
     }
     | {
-        action: 'startDebugging';
+        action: "startDebugging";
         pattern: string;
         config: Record<string, unknown>;
         killOnServerStop?: boolean;
@@ -247,7 +247,7 @@ export function determineServerReadyAction(launchBrowser?: boolean, applicationU
     let uriFormat = applicationUrl.includes(';') ? applicationUrl.split(';')[0] : applicationUrl;
 
     return {
-        action: 'openExternally',
+        action: "openExternally",
         pattern: "\\bNow listening on:\\s+https?://\\S+",
         uriFormat: uriFormat
     };
