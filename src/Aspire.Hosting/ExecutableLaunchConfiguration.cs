@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 namespace Aspire.Hosting;
@@ -57,13 +59,157 @@ public class PresentationOptions
 /// <summary>
 /// Specifies an action to take when the server is ready.
 /// </summary>
+public enum ServerReadyActionKind
+{
+    /// <summary>
+    /// Opens the server URL in an external web browser.
+    /// </summary>
+    OpenExternally,
+
+    /// <summary>
+    /// Launches a Chrome debugging session.
+    /// </summary>
+    DebugWithChrome,
+
+    /// <summary>
+    /// Launches a Microsoft Edge debugging session.
+    /// </summary>
+    DebugWithEdge,
+
+    /// <summary>
+    /// Starts another VS Code debug configuration.
+    /// </summary>
+    StartDebugging
+}
+
+/// <summary>
+/// Specifies an action to take when the server is ready.
+/// </summary>
+public readonly record struct ServerReadyActionAction
+{
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ServerReadyActionAction"/> struct.
+    /// </summary>
+    /// <param name="value">The action name as understood by VS Code.</param>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="value"/> is <see langword="null"/>, empty, or whitespace.</exception>
+    public ServerReadyActionAction(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        Value = value;
+    }
+
+    /// <summary>
+    /// Gets the action name as understood by VS Code.
+    /// </summary>
+    public string Value { get; }
+
+    /// <summary>
+    /// Opens the server URL in an external web browser.
+    /// </summary>
+    public static ServerReadyActionAction OpenExternally { get; } = new("openExternally");
+
+    /// <summary>
+    /// Launches a Chrome debugging session.
+    /// </summary>
+    public static ServerReadyActionAction DebugWithChrome { get; } = new("debugWithChrome");
+
+    /// <summary>
+    /// Launches a Microsoft Edge debugging session.
+    /// </summary>
+    public static ServerReadyActionAction DebugWithEdge { get; } = new("debugWithEdge");
+
+    /// <summary>
+    /// Starts another VS Code debug configuration.
+    /// </summary>
+    public static ServerReadyActionAction StartDebugging { get; } = new("startDebugging");
+
+    /// <summary>
+    /// Creates a <see cref="ServerReadyActionAction"/> for a known action kind.
+    /// </summary>
+    /// <param name="kind">The known action kind.</param>
+    /// <returns>A <see cref="ServerReadyActionAction"/> representing <paramref name="kind"/>.</returns>
+    public static ServerReadyActionAction FromKind(ServerReadyActionKind kind) => kind switch
+    {
+        ServerReadyActionKind.OpenExternally => OpenExternally,
+        ServerReadyActionKind.DebugWithChrome => DebugWithChrome,
+        ServerReadyActionKind.DebugWithEdge => DebugWithEdge,
+        ServerReadyActionKind.StartDebugging => StartDebugging,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind))
+    };
+
+    /// <summary>
+    /// Attempts to map this action to a <see cref="ServerReadyActionKind"/>.
+    /// </summary>
+    /// <param name="kind">When this method returns <see langword="true"/>, contains the mapped kind.</param>
+    /// <returns><see langword="true"/> if <see cref="Value"/> matches a known action; otherwise, <see langword="false"/>.</returns>
+    public bool TryGetKind(out ServerReadyActionKind kind)
+    {
+        kind = Value switch
+        {
+            "openExternally" => ServerReadyActionKind.OpenExternally,
+            "debugWithChrome" => ServerReadyActionKind.DebugWithChrome,
+            "debugWithEdge" => ServerReadyActionKind.DebugWithEdge,
+            "startDebugging" => ServerReadyActionKind.StartDebugging,
+            _ => default
+        };
+
+        return Value is "openExternally" or "debugWithChrome" or "debugWithEdge" or "startDebugging";
+    }
+
+    /// <inheritdoc/>
+    public override string ToString() => Value;
+}
+
+/// <summary>
+/// Serializes <see cref="ServerReadyActionAction"/> as a string value.
+/// </summary>
+internal sealed class ServerReadyActionActionJsonConverter : JsonConverter<ServerReadyActionAction?>
+{
+    public override ServerReadyActionAction? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType is JsonTokenType.Null)
+        {
+            return null;
+        }
+
+        if (reader.TokenType is not JsonTokenType.String)
+        {
+            throw new JsonException($"Expected string or null for {nameof(ServerReadyAction.Action)}.");
+        }
+
+        var value = reader.GetString();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new JsonException($"{nameof(ServerReadyAction.Action)} cannot be empty.");
+        }
+
+        // Do not validate values here. VS Code supports additional actions and debug adapters may introduce more.
+        return new ServerReadyActionAction(value);
+    }
+
+    public override void Write(Utf8JsonWriter writer, ServerReadyActionAction? value, JsonSerializerOptions options)
+    {
+        if (value is null)
+        {
+            writer.WriteNullValue();
+            return;
+        }
+
+        writer.WriteStringValue(value.Value.Value);
+    }
+}
+
+/// <summary>
+/// Specifies an action to take when the server is ready.
+/// </summary>
 public class ServerReadyAction
 {
     /// <summary>
-    /// The kind of action to take. Currently only "openExternally" is supported.
+    /// The action to take.
     /// </summary>
     [JsonPropertyName("action")]
-    public string? Action { get; set; }
+    [JsonConverter(typeof(ServerReadyActionActionJsonConverter))]
+    public ServerReadyActionAction? Action { get; set; }
 
     /// <summary>
     /// The pattern to match in the debug console or integrated terminal output.
@@ -76,6 +222,43 @@ public class ServerReadyAction
     /// </summary>
     [JsonPropertyName("uriFormat")]
     public string? UriFormat { get; set; }
+
+    /// <summary>
+    /// The root directory used to resolve source maps and client-side files when launching a browser-based debug session.
+    /// </summary>
+    /// <remarks>
+    /// This maps to VS Code's <c>serverReadyAction.webRoot</c> property.
+    /// </remarks>
+    [JsonPropertyName("webRoot")]
+    public string? WebRoot { get; set; }
+
+    /// <summary>
+    /// The name of the debug configuration to start when <see cref="Action"/> is <see cref="ServerReadyActionAction.StartDebugging"/>.
+    /// </summary>
+    /// <remarks>
+    /// This maps to VS Code's <c>serverReadyAction.name</c> property.
+    /// </remarks>
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    /// <summary>
+    /// Additional debug configuration to use when starting a follow-up debug session.
+    /// </summary>
+    /// <remarks>
+    /// This maps to VS Code's <c>serverReadyAction.config</c> property.
+    /// The schema for this object depends on the debug adapter being used, so it is represented as arbitrary JSON.
+    /// </remarks>
+    [JsonPropertyName("config")]
+    public JsonObject? Config { get; set; }
+
+    /// <summary>
+    /// Indicates whether the browser session started by the <see cref="Action"/> should be closed when the server process stops.
+    /// </summary>
+    /// <remarks>
+    /// This maps to VS Code's <c>serverReadyAction.killOnServerStop</c> property.
+    /// </remarks>
+    [JsonPropertyName("killOnServerStop")]
+    public bool? KillOnServerStop { get; set; }
 }
 
 /// <summary>
