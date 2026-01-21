@@ -176,14 +176,28 @@ export function determineWorkingDirectory(
     projectPath: string,
     baseProfile: LaunchProfile | null
 ): string {
+    const normalizeToPosixPath = (value: string): string => {
+        // VS Code debug configurations accept forward slashes across platforms.
+        // Use path.posix.normalize so we produce stable, slash-normalized paths regardless of host OS.
+        return path.posix.normalize(value.replace(/\\/g, '/'));
+    };
+
     if (baseProfile?.workingDirectory) {
+        const isAbsoluteWorkingDirectory = path.isAbsolute(baseProfile.workingDirectory) || path.win32.isAbsolute(baseProfile.workingDirectory);
+        const isWindowsProjectPath = path.win32.isAbsolute(projectPath);
+
         // If working directory is relative, resolve it relative to project directory
-        if (path.isAbsolute(baseProfile.workingDirectory)) {
+        if (isAbsoluteWorkingDirectory) {
             extensionLogOutputChannel.debug(`Using absolute working directory from launch profile: ${baseProfile.workingDirectory}`);
-            return baseProfile.workingDirectory;
+            return normalizeToPosixPath(baseProfile.workingDirectory);
         } else {
-            const projectDir = path.dirname(projectPath);
-            const workingDir = path.resolve(projectDir, baseProfile.workingDirectory);
+            const projectDir = isWindowsProjectPath ? path.win32.dirname(projectPath) : path.dirname(projectPath);
+
+            let workingDir = isWindowsProjectPath
+                ? path.win32.resolve(projectDir, baseProfile.workingDirectory)
+                : path.resolve(projectDir, baseProfile.workingDirectory);
+
+            workingDir = normalizeToPosixPath(workingDir);
             extensionLogOutputChannel.debug(`Using relative working directory from launch profile: ${workingDir}`);
             return workingDir;
         }
@@ -191,15 +205,39 @@ export function determineWorkingDirectory(
 
     // Default to project directory
     const projectDir = path.dirname(projectPath);
-    extensionLogOutputChannel.debug(`Using default working directory (project directory): ${projectDir}`);
-    return projectDir;
+    const normalizedProjectDir = normalizeToPosixPath(projectDir);
+    extensionLogOutputChannel.debug(`Using default working directory (project directory): ${normalizedProjectDir}`);
+    return normalizedProjectDir;
 }
 
-interface ServerReadyAction {
-    action: "openExternally";
-    pattern: "\\bNow listening on:\\s+https?://\\S+";
-    uriFormat: string;
-}
+// Matches the schema from VS Code's debug-server-ready extension.
+// https://github.com/microsoft/vscode/blob/2efcdb92310b5ce12636ad6896080476dc42bf1c/extensions/debug-server-ready/package.json
+type ServerReadyAction =
+    | {
+        action: "openExternally";
+        pattern: string;
+        uriFormat: string;
+        killOnServerStop?: boolean;
+    }
+    | {
+        action: "debugWithChrome" | "debugWithEdge";
+        pattern: string;
+        uriFormat: string;
+        webRoot: string;
+        killOnServerStop?: boolean;
+    }
+    | {
+        action: "startDebugging";
+        pattern: string;
+        name: string;
+        killOnServerStop?: boolean;
+    }
+    | {
+        action: "startDebugging";
+        pattern: string;
+        config: Record<string, unknown>;
+        killOnServerStop?: boolean;
+    };
 
 export function determineServerReadyAction(launchBrowser?: boolean, applicationUrl?: string): ServerReadyAction | undefined {
     if (!launchBrowser || !applicationUrl) {

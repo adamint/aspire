@@ -185,4 +185,64 @@ suite('Dotnet Debugger Extension Tests', () => {
         // cleanup
         fs.rmSync(tempDir, { recursive: true, force: true });
     });
+
+    test('does not overwrite an existing serverReadyAction', async () => {
+        const fs = require('fs');
+        const os = require('os');
+        const path = require('path');
+
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-test-'));
+        const projectDir = path.join(tempDir, 'TestProject');
+        const propertiesDir = path.join(projectDir, 'Properties');
+        fs.mkdirSync(propertiesDir, { recursive: true });
+
+        const projectPath = path.join(projectDir, 'TestProject.csproj');
+        fs.writeFileSync(projectPath, '<Project></Project>');
+
+        // Provide a base launch profile that would normally cause dotnet.ts to set serverReadyAction.
+        const launchSettings = {
+            profiles: {
+                'Development': {
+                    commandName: 'Project',
+                    launchBrowser: true,
+                    applicationUrl: 'https://localhost:5001'
+                }
+            }
+        };
+
+        fs.writeFileSync(path.join(propertiesDir, 'launchSettings.json'), JSON.stringify(launchSettings, null, 2));
+
+        const outputPath = path.join(projectDir, 'bin', 'Debug', 'net7.0', 'TestProject.dll');
+        const { extension } = createDebuggerExtension(outputPath, null, true, true);
+
+        const launchConfig: ProjectLaunchConfiguration = {
+            type: 'project',
+            project_path: projectPath,
+            launch_profile: 'Development'
+        };
+
+        const existingServerReadyAction = {
+            action: 'openExternally',
+            pattern: 'existing',
+            uriFormat: 'https://example.invalid/existing'
+        };
+
+        const debugConfig: AspireResourceExtendedDebugConfiguration = {
+            runId: '1',
+            debugSessionId: '1',
+            type: 'coreclr',
+            name: 'Test Debug Config',
+            request: 'launch',
+            serverReadyAction: existingServerReadyAction
+        };
+
+        const fakeAspireDebugSession = sinon.createStubInstance(AspireDebugSession);
+
+        await extension.createDebugSessionConfigurationCallback!(launchConfig, undefined, [], { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession }, debugConfig);
+
+        assert.strictEqual(debugConfig.serverReadyAction, existingServerReadyAction);
+        assert.strictEqual(debugConfig.serverReadyAction.uriFormat, 'https://example.invalid/existing');
+
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    });
 });

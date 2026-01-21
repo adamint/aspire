@@ -88,7 +88,7 @@ class DotNetService implements IDotNetService {
                 extensionLogOutputChannel.info(`Executing build task: ${modifiedTask.name} for project: ${projectFile}`);
                 await vscode.tasks.executeTask(modifiedTask);
 
-                let disposable: vscode.Disposable = { dispose: () => {} };
+                let disposable: vscode.Disposable = { dispose: () => { } };
                 return new Promise<void>((resolve, reject) => {
                     disposable = vscode.tasks.onDidEndTaskProcess(async e => {
                         if (e.execution.task === modifiedTask) {
@@ -291,7 +291,7 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
 
             // The apphost's application URL is the Aspire dashboard URL. We already get the dashboard login URL later on,
             // so we should just avoid setting up serverReadyAction and manually open the browser ourselves.
-            if (!launchOptions.isApphost) {
+            if (!launchOptions.isApphost && !debugConfiguration.serverReadyAction) {
                 debugConfiguration.serverReadyAction = determineServerReadyAction(baseProfile?.launchBrowser, baseProfile?.applicationUrl);
             }
 
