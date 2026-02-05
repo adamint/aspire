@@ -345,7 +345,78 @@ For most development tasks, following these instructions should be sufficient to
 
 ## Aspire VS Code Extension
 
-* When displaying text to the user, ensure that the strings are localized. New localized strings must be put both in the extension `package.nls.json` and also `src/loc/strings.ts`.
+Located in `extension/`. Provides debugging, CLI command execution, and Aspire Dashboard integration.
+
+### Key Files
+
+| Path | Purpose |
+|------|---------|
+| `src/extension.ts` | Entry point, command registration |
+| `src/commands/*.ts` | CLI command wrappers (new, add, init, deploy, publish, update) |
+| `src/server/AspireRpcServer.ts` | TLS JSON-RPC server for CLI↔extension communication |
+| `src/server/interactionService.ts` | Maps CLI prompts to VS Code UI (showInputBox, showQuickPick) |
+| `src/dcp/AspireDcpServer.ts` | HTTPS/WebSocket server for AppHost debug sessions |
+| `src/debugger/AspireDebugSession.ts` | Debug adapter managing CLI spawn and resource debugging |
+| `src/loc/strings.ts` | Runtime localized strings |
+| `package.nls.json` | Manifest localized strings |
+| `src/utils/AspireTerminalProvider.ts` | Terminal management, environment variable injection |
+
+### Architecture
+
+Two servers enable CLI and AppHost communication:
+- **RPC Server**: CLI connects via `ASPIRE_EXTENSION_ENDPOINT`/`TOKEN`/`CERT` env vars for prompts and status
+- **DCP Server**: AppHost connects via `DEBUG_SESSION_PORT`/`TOKEN` for resource debug session creation
+
+### Development
+
+```bash
+cd extension
+npm install && npm run compile   # or npm run watch
+```
+
+Run locally: Open `extension/` in VS Code → F5. Set `aspire.aspireCliExecutablePath` to `artifacts/bin/Aspire.Cli/Debug/net8.0/aspire` for local CLI debugging.
+
+### Testing
+
+```bash
+npm run compile-tests && npm run unit-test
+```
+
+Tests in `src/test/*.test.ts` use Mocha TDD style. Use `getAndActivateExtension()` from `common.ts`.
+
+### Localization (Required for all user-visible strings)
+
+**Two-file pattern:**
+
+1. **`package.nls.json`** - For `package.json` strings (commands, settings):
+   ```json
+   { "command.new": "New Aspire project" }
+   ```
+   Reference with `%command.new%` in `package.json`.
+
+2. **`src/loc/strings.ts`** - For runtime strings:
+   ```typescript
+   export const myMessage = vscode.l10n.t('Message text');
+   export const withParam = (x: string) => vscode.l10n.t('Value: {0}', x);
+   ```
+
+Run `npm run localize` after adding strings.
+
+### Adding Features
+
+**New command:**
+1. Add to `package.json` → `contributes.commands` + `package.nls.json`
+2. Create `src/commands/yourCommand.ts`
+3. Register in `extension.ts` with `vscode.commands.registerCommand`
+
+**New CLI prompt type:**
+Add handler in `interactionService.ts`, register endpoint in `addInteractionServiceEndpoints()`
+
+### Debugging
+
+- Extension logs: "Aspire Extension" output channel
+- CLI verbose: Set `aspire.enableAspireCliDebugLogging`
+- DCP logs: Set `aspire.enableAspireDcpDebugLogging` → logs in `.aspire/dcp/logs-{sessionId}/`
 
 ## Available Skills
 
