@@ -1418,13 +1418,12 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
             exe.Annotate(CustomResource.OtelServiceInstanceIdAnnotation, exeInstance.Suffix);
             exe.Annotate(CustomResource.ResourceNameAnnotation, executable.Name);
 
-            if (executable.SupportsDebugging(_configuration, out var supportsDebuggingAnnotation))
+            if (executable.SupportsDebugging(_configuration, out _))
             {
                 // Just mark as IDE execution here - the actual callback will be invoked
                 // in CreateExecutableAsync after endpoints are allocated
                 exe.Spec.ExecutionType = ExecutionType.IDE;
                 exe.Spec.FallbackExecutionTypes = [ExecutionType.Process];
-                supportsDebuggingAnnotation.LaunchConfigurationAnnotator(exe, _configuration[KnownConfigNames.DebugSessionRunMode] ?? ExecutableLaunchMode.NoDebug);
             }
             else
             {

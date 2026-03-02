@@ -161,7 +161,6 @@
           "description": "Enable or disable disk caching for package search results to improve performance",
           "default": true
         },
-
         "runningInstanceDetectionEnabled": {
           "anyOf": [
             {

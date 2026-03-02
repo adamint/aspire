@@ -7,14 +7,13 @@
     <Description>JavaScript and TypeScript support for Aspire.</Description>
   </PropertyGroup>
 
-  <ItemGroup>
-    <Compile Include="$(SharedDir)PathNormalizer.cs" Link="Utils\PathNormalizer.cs" />
-    <Compile Include="$(SharedDir)KnownConfigNames.cs" Link="Utils\KnownConfigNames.cs" />
-    <Compile Include="$(SharedDir)ResourceDebugSupportExtensions.cs" Link="Utils\ResourceDebugSupportExtensions.cs" />
-  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Aspire.Hosting\Aspire.Hosting.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Aspire.Hosting.JavaScript.Tests" />
   </ItemGroup>
 
 </Project>

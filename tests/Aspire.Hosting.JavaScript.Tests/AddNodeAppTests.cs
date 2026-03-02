@@ -107,39 +107,39 @@ public class AddNodeAppTests
         var expectedDockerfile = includePackageJson ?
             """
             FROM node:22-alpine AS build
-            
+
             WORKDIR /app
             COPY package*.json ./
             RUN --mount=type=cache,target=/root/.npm npm ci
             COPY . .
-            
+
             FROM node:22-alpine AS runtime
-            
+
             WORKDIR /app
             COPY --from=build /app /app
-            
+
             ENV NODE_ENV=production
-            
+
             USER node
-            
+
             ENTRYPOINT ["node","app.js"]
 
             """.Replace("\r\n", "\n") :
             """
             FROM node:22-alpine AS build
-            
+
             WORKDIR /app
             COPY . .
-            
+
             FROM node:22-alpine AS runtime
-            
+
             WORKDIR /app
             COPY --from=build /app /app
-            
+
             ENV NODE_ENV=production
-            
+
             USER node
-            
+
             ENTRYPOINT ["node","app.js"]
 
             """.Replace("\r\n", "\n");
@@ -544,7 +544,7 @@ public class AddNodeAppTests
         using var tempDir = new TestTempDirectory();
 
         var viteApp = builder.AddViteApp("viteapp", tempDir.Path)
-            .WithBrowserDebugger(configureDebuggerProperties: props =>
+            .WithBrowserDebugger("msedge", configureDebuggerProperties: props =>
             {
                 props.SmartStep = true;
                 props.Timeout = 30000;
