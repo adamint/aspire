@@ -26,8 +26,7 @@ builder.AddPythonModule("flask-app", "../flask_app", "flask")
         c.Args.Add("--port=8002");
     })
     .WithHttpEndpoint(targetPort: 8002)
-    .WithUv()
-    .WithVSCodeDebugging();
+    .WithUv();
 
 // Uvicorn app using the AddUvicornApp method
 builder.AddUvicornApp("uvicorn-app", "../uvicorn_app", "app:app")

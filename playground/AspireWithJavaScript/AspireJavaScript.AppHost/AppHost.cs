@@ -16,7 +16,6 @@ builder.AddJavaScriptApp("react", "../AspireJavaScript.React", runScriptName: "s
     .WithEnvironment("BROWSER", "none") // Disable opening browser on npm start
     .WithHttpEndpoint(env: "PORT")
     .WithExternalHttpEndpoints()
-    .WithBrowserDebugger()
     .PublishAsDockerFile();
 
 builder.AddJavaScriptApp("vue", "../AspireJavaScript.Vue")
