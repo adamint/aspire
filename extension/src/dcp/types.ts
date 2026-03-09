@@ -44,6 +44,28 @@ export function isPythonLaunchConfiguration(obj: any): obj is PythonLaunchConfig
     return obj && obj.type === 'python';
 }
 
+export interface NodeLaunchConfiguration extends ExecutableLaunchConfiguration {
+    type: "node";
+    script_path?: string;
+    runtime_executable?: string;
+    working_directory?: string;
+}
+
+export function isNodeLaunchConfiguration(obj: any): obj is NodeLaunchConfiguration {
+    return obj && obj.type === 'node';
+}
+
+export interface BrowserLaunchConfiguration extends ExecutableLaunchConfiguration {
+    type: "browser";
+    url?: string;
+    web_root?: string;
+    browser?: string;
+}
+
+export function isBrowserLaunchConfiguration(obj: any): obj is BrowserLaunchConfiguration {
+    return obj && obj.type === 'browser';
+}
+
 export interface EnvVar {
     name: string;
     value: string;
