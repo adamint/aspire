@@ -202,6 +202,11 @@
         <target state="translated">狀態</target>
         <note>The state of the resource, eg Running</note>
       </trans-unit>
+      <trans-unit id="StoppingPreviousInstance">
+        <source>Stopping previous instance (AppHost PID: {0}, CLI PID: {1})</source>
+        <target state="new">Stopping previous instance (AppHost PID: {0}, CLI PID: {1})</target>
+        <note />
+      </trans-unit>
       <trans-unit id="TimeoutWaitingForAppHost">
         <source>Timeout waiting for apphost to start.</source>
         <target state="needs-review-translation">等候 AppHost 啟動時發生逾時。</target>
@@ -211,6 +216,11 @@
         <source>Type</source>
         <target state="translated">類型</target>
         <note>The type of the resource, eg Project</note>
+      </trans-unit>
+      <trans-unit id="UnrecognizedAppHostType">
+        <source>Unrecognized app host type.</source>
+        <target state="new">Unrecognized app host type.</target>
+        <note />
       </trans-unit>
       <trans-unit id="WaitingForAppHostToStart">
         <source>Waiting for apphost to start...</source>

@@ -248,5 +248,11 @@ namespace Aspire.Cli.Resources {
                 return ResourceManager.GetString("HeaderStatus", resourceCulture);
             }
         }
-    }
+    
+        internal static string ResourceNotFound {
+            get {
+                return ResourceManager.GetString("ResourceNotFound", resourceCulture);
+            }
+        }
+}
 }

@@ -257,4 +257,25 @@
   <data name="RunAspireRun" xml:space="preserve">
     <value>Run 'aspire run' to start your apphost.</value>
   </data>
+  <data name="CreatedOrUpdatedNuGetConfigMessage" xml:space="preserve">
+    <value>Created or updated NuGet.config in the project directory with required package sources.</value>
+  </data>
+  <data name="FailedToCreateProjectFiles" xml:space="preserve">
+    <value>Failed to create project files: {0}</value>
+  </data>
+  <data name="LanguageSelectionRequired" xml:space="preserve">
+    <value>Language selection is required.</value>
+  </data>
+  <data name="UnableToDetermineAspireVersionForTypeScript" xml:space="preserve">
+    <value>Unable to determine Aspire version for the TypeScript starter template.</value>
+  </data>
+  <data name="UnknownLanguageId" xml:space="preserve">
+    <value>Unknown language: '{0}'</value>
+  </data>
+  <data name="UpdateNuGetConfigPrompt" xml:space="preserve">
+    <value>Update NuGet.config to add missing package sources for the selected channel?</value>
+  </data>
+  <data name="UpdatedNuGetConfigMessage" xml:space="preserve">
+    <value>Updated NuGet.config with required package sources.</value>
+  </data>
 </root>

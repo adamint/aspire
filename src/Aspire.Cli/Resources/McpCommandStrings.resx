@@ -88,17 +88,6 @@
   </data>
   <data name="InitCommand_WorkspaceRootNotFound" xml:space="preserve">
     <value>Directory not found: {0}</value>
-  </data>  <data name="InvalidJsonInputExpectedObject" xml:space="preserve">
-    <value>Invalid JSON input: expected a JSON object.</value>
-  </data>
-  <data name="InvalidJsonInput" xml:space="preserve">
-    <value>Invalid JSON input: {0}</value>
-  </data>
-  <data name="FailedToCallTool" xml:space="preserve">
-    <value>Failed to call tool '{0}' on resource '{1}': {2}</value>
-  </data>
-  <data name="NoResourcesWithMcpTools" xml:space="preserve">
-    <value>No resources with MCP tools found.</value>
   </data>
   <data name="CallCommand_Description" xml:space="preserve">
     <value>Call an MCP tool on a running resource</value>
@@ -117,5 +106,17 @@
   </data>
   <data name="ToolsCommand_FormatOptionDescription" xml:space="preserve">
     <value>Output format (Table or Json)</value>
+  </data>
+  <data name="FailedToCallTool" xml:space="preserve">
+    <value>Failed to call tool '{0}' on resource '{1}': {2}</value>
+  </data>
+  <data name="InvalidJsonInput" xml:space="preserve">
+    <value>Invalid JSON input: {0}</value>
+  </data>
+  <data name="InvalidJsonInputExpectedObject" xml:space="preserve">
+    <value>Invalid JSON input: expected a JSON object.</value>
+  </data>
+  <data name="NoResourcesWithMcpTools" xml:space="preserve">
+    <value>No resources with MCP tools found.</value>
   </data>
 </root>

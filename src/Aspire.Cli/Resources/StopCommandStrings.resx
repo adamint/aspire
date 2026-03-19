@@ -147,4 +147,10 @@
   <data name="AllAndProjectMutuallyExclusive" xml:space="preserve">
     <value>The {0} and {1} options cannot be used together.</value>
   </data>
+  <data name="FoundRunningAppHost" xml:space="preserve">
+    <value>Found running AppHost: {0}</value>
+  </data>
+  <data name="SendingStopSignal" xml:space="preserve">
+    <value>Sending stop signal...</value>
+  </data>
 </root>

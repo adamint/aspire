@@ -122,5 +122,17 @@ namespace Aspire.Cli.Resources {
                 return ResourceManager.GetString("PipelineEnvironmentOptionDescription", resourceCulture);
             }
         }
-    }
+    
+        internal static string LanguagePreferenceSavedToSettings {
+            get {
+                return ResourceManager.GetString("LanguagePreferenceSavedToSettings", resourceCulture);
+            }
+        }
+
+        internal static string UnknownLanguageError {
+            get {
+                return ResourceManager.GetString("UnknownLanguageError", resourceCulture);
+            }
+        }
+}
 }

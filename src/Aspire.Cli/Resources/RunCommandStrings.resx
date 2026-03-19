@@ -253,4 +253,10 @@
   <data name="NoBuildNotSupportedWithWatchMode" xml:space="preserve">
     <value>The --no-build option cannot be used when watch mode is enabled.</value>
   </data>
+  <data name="StoppingPreviousInstance" xml:space="preserve">
+    <value>Stopping previous instance (AppHost PID: {0}, CLI PID: {1})</value>
+  </data>
+  <data name="UnrecognizedAppHostType" xml:space="preserve">
+    <value>Unrecognized app host type.</value>
+  </data>
 </root>

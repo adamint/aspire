@@ -42,7 +42,7 @@
     "mcpServerDefinitionProviders": [
       {
         "id": "aspire-mcp-server",
-        "label": "Aspire"
+        "label": "%mcpServerDefinitionProviders.aspire.label%"
       }
     ],
     "viewsContainers": {

@@ -116,5 +116,77 @@ namespace Aspire.Cli.Resources {
     internal static string RegeneratingSdkCode => ResourceManager.GetString("RegeneratingSdkCode", resourceCulture);
     internal static string RegeneratedSdkCode => ResourceManager.GetString("RegeneratedSdkCode", resourceCulture);
     internal static string SelfOptionDescription => ResourceManager.GetString("SelfOptionDescription", resourceCulture);
-    }
+    
+        internal static string BackingUpCurrentCli {
+            get {
+                return ResourceManager.GetString("BackingUpCurrentCli", resourceCulture);
+            }
+        }
+
+        internal static string CurrentCliLocation {
+            get {
+                return ResourceManager.GetString("CurrentCliLocation", resourceCulture);
+            }
+        }
+
+        internal static string DownloadCompletedSuccessfully {
+            get {
+                return ResourceManager.GetString("DownloadCompletedSuccessfully", resourceCulture);
+            }
+        }
+
+        internal static string InstallingNewCli {
+            get {
+                return ResourceManager.GetString("InstallingNewCli", resourceCulture);
+            }
+        }
+
+        internal static string NotInPath {
+            get {
+                return ResourceManager.GetString("NotInPath", resourceCulture);
+            }
+        }
+
+        internal static string PackageUpdateLine {
+            get {
+                return ResourceManager.GetString("PackageUpdateLine", resourceCulture);
+            }
+        }
+
+        internal static string SdkUpdateLine {
+            get {
+                return ResourceManager.GetString("SdkUpdateLine", resourceCulture);
+            }
+        }
+
+        internal static string SelfUpdateNotAvailable {
+            get {
+                return ResourceManager.GetString("SelfUpdateNotAvailable", resourceCulture);
+            }
+        }
+
+        internal static string UnableToDetermineExecutablePath {
+            get {
+                return ResourceManager.GetString("UnableToDetermineExecutablePath", resourceCulture);
+            }
+        }
+
+        internal static string UpdatedToVersion {
+            get {
+                return ResourceManager.GetString("UpdatedToVersion", resourceCulture);
+            }
+        }
+
+        internal static string UpdatingToChannel {
+            get {
+                return ResourceManager.GetString("UpdatingToChannel", resourceCulture);
+            }
+        }
+
+        internal static string ValidatingDownloadedFile {
+            get {
+                return ResourceManager.GetString("ValidatingDownloadedFile", resourceCulture);
+            }
+        }
+}
 }

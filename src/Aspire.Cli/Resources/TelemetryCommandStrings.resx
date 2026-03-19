@@ -186,4 +186,7 @@
   <data name="HeaderStatus" xml:space="preserve">
     <value>Status</value>
   </data>
+  <data name="ResourceNotFound" xml:space="preserve">
+    <value>Resource '{0}' not found.</value>
+  </data>
 </root>

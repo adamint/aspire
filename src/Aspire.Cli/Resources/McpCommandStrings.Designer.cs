@@ -221,5 +221,29 @@ namespace Aspire.Cli.Resources {
                 return ResourceManager.GetString("ToolsCommand_FormatOptionDescription", resourceCulture);
             }
         }
-    }
+    
+        internal static string FailedToCallTool {
+            get {
+                return ResourceManager.GetString("FailedToCallTool", resourceCulture);
+            }
+        }
+
+        internal static string InvalidJsonInput {
+            get {
+                return ResourceManager.GetString("InvalidJsonInput", resourceCulture);
+            }
+        }
+
+        internal static string InvalidJsonInputExpectedObject {
+            get {
+                return ResourceManager.GetString("InvalidJsonInputExpectedObject", resourceCulture);
+            }
+        }
+
+        internal static string NoResourcesWithMcpTools {
+            get {
+                return ResourceManager.GetString("NoResourcesWithMcpTools", resourceCulture);
+            }
+        }
+}
 }

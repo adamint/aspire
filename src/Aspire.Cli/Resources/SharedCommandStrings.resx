@@ -156,4 +156,10 @@
   <data name="PipelineEnvironmentOptionDescription" xml:space="preserve">
     <value>The environment to use for the operation. The default is 'Production'.</value>
   </data>
+  <data name="LanguagePreferenceSavedToSettings" xml:space="preserve">
+    <value>Language preference saved to local settings: {0}</value>
+  </data>
+  <data name="UnknownLanguageError" xml:space="preserve">
+    <value>Unknown language: '{0}'</value>
+  </data>
 </root>

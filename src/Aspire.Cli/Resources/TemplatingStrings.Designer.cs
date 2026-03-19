@@ -464,5 +464,47 @@ namespace Aspire.Cli.Resources {
                 return ResourceManager.GetString("Yes", resourceCulture);
             }
         }
-    }
+    
+        public static string CreatedOrUpdatedNuGetConfigMessage {
+            get {
+                return ResourceManager.GetString("CreatedOrUpdatedNuGetConfigMessage", resourceCulture);
+            }
+        }
+
+        public static string FailedToCreateProjectFiles {
+            get {
+                return ResourceManager.GetString("FailedToCreateProjectFiles", resourceCulture);
+            }
+        }
+
+        public static string LanguageSelectionRequired {
+            get {
+                return ResourceManager.GetString("LanguageSelectionRequired", resourceCulture);
+            }
+        }
+
+        public static string UnableToDetermineAspireVersionForTypeScript {
+            get {
+                return ResourceManager.GetString("UnableToDetermineAspireVersionForTypeScript", resourceCulture);
+            }
+        }
+
+        public static string UnknownLanguageId {
+            get {
+                return ResourceManager.GetString("UnknownLanguageId", resourceCulture);
+            }
+        }
+
+        public static string UpdateNuGetConfigPrompt {
+            get {
+                return ResourceManager.GetString("UpdateNuGetConfigPrompt", resourceCulture);
+            }
+        }
+
+        public static string UpdatedNuGetConfigMessage {
+            get {
+                return ResourceManager.GetString("UpdatedNuGetConfigMessage", resourceCulture);
+            }
+        }
+}
 }
