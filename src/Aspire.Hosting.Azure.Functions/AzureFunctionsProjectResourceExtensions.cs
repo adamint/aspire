@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Globalization;
+using System.Text.Json.Serialization;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Azure;
 using Aspire.Hosting.Utils;
@@ -182,9 +183,12 @@ public static class AzureFunctionsProjectResourceExtensions
 
         resource.HostStorage = storage;
 
+#pragma warning disable ASPIREEXTENSION001 // WithDebugSupport is experimental
         var functionsBuilder = builder.AddResource(resource)
             .WithAnnotation(projectMetadata)
-            .WithAnnotation(new AzureFunctionsAnnotation());
+            .WithAnnotation(new AzureFunctionsAnnotation())
+            .WithDebugSupport(mode => new AzureFunctionsLaunchConfiguration { ProjectPath = projectMetadata.ProjectPath, Mode = mode }, "azure-functions");
+#pragma warning restore ASPIREEXTENSION001
 
         // Only validate Azure Functions Core Tools in run mode (not during publish)
         if (builder.ExecutionContext.IsRunMode)
@@ -347,6 +351,37 @@ public static class AzureFunctionsProjectResourceExtensions
         });
     }
 
+    internal static IResourceBuilder<AzureFunctionsProjectResource>? TryWithReference(
+        IResourceBuilder<AzureFunctionsProjectResource> destination,
+        IResourceBuilder<IResource> source,
+        string? connectionName,
+        bool optional,
+        string? name)
+    {
+        if (source.Resource is not IResourceWithConnectionString || source.Resource is not IResourceWithAzureFunctionsConfig azureFunctionsConfig)
+        {
+            return null;
+        }
+
+        if (optional)
+        {
+            throw new InvalidOperationException("Optional references are not supported for Azure Functions resources.");
+        }
+
+        if (name is not null)
+        {
+            throw new InvalidOperationException("Named service references are not supported for Azure Functions resources.");
+        }
+
+        destination.WithReferenceRelationship(source.Resource);
+
+        return destination.WithEnvironment(context =>
+        {
+            connectionName ??= source.Resource.Name;
+            azureFunctionsConfig.ApplyAzureFunctionsConfiguration(context.EnvironmentVariables, connectionName);
+        });
+    }
+
     private static string CreateDefaultStorageName(this IDistributedApplicationBuilder builder)
     {
         // Use ProjectNameSha256 for stable naming across deployments regardless of path
@@ -398,5 +433,21 @@ public static class AzureFunctionsProjectResourceExtensions
 
             return path;
         }
+    }
+
+    /// <summary>
+    /// Launch configuration for Azure Functions projects, serialized to JSON for DCP.
+    /// Uses type "azure-functions" so the VS Code extension can launch via func host start.
+    /// </summary>
+    private sealed class AzureFunctionsLaunchConfiguration
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "azure-functions";
+
+        [JsonPropertyName("mode")]
+        public string Mode { get; set; } = string.Empty;
+
+        [JsonPropertyName("project_path")]
+        public string ProjectPath { get; set; } = string.Empty;
     }
 }

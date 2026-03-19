@@ -7,6 +7,7 @@ export const codespacesUrl = (url: string) => vscode.l10n.t('Codespaces: {0}', u
 export const directLink = vscode.l10n.t('Open local URL');
 export const codespacesLink = vscode.l10n.t('Open codespaces URL');
 export const openAspireDashboard = vscode.l10n.t('Launch Aspire Dashboard');
+export const settingsLabel = vscode.l10n.t('Settings');
 export const aspireDashboard = vscode.l10n.t('Aspire Dashboard');
 export const noWorkspaceOpen = vscode.l10n.t('No workspace is open. Please open a folder or workspace before running this command.');
 export const failedToShowPromptEmpty = vscode.l10n.t('Failed to show prompt, text was empty.');
@@ -33,6 +34,7 @@ export const launchingWithAppHost = (appHostPath: string) => vscode.l10n.t('Laun
 export const disconnectingFromSession = vscode.l10n.t('Disconnecting from Aspire debug session... Child processes will be stopped.');
 export const processExitedWithCode = (code: number | string) => vscode.l10n.t('Process exited with code {0}.', code);
 export const dcpServerNotInitialized = vscode.l10n.t('DCP server not initialized - cannot forward debug output.');
+export const appHostSessionTerminated = vscode.l10n.t('The apphost process has terminated. To view console output, select the apphost session from the debug console dropdown.');
 export const invalidTokenProvided = vscode.l10n.t('Invalid token provided.');
 export const noWorkspaceFolder = vscode.l10n.t('No workspace folder found.');
 export const aspireConfigExists = vscode.l10n.t('Aspire launch configuration already exists in launch.json.');
@@ -51,6 +53,12 @@ export const resourcesGroupLabel = vscode.l10n.t('Resources');
 export const resourceStateLabel = (name: string, state: string) => vscode.l10n.t('{0} — {1}', name, state);
 export const noCommandsAvailable = vscode.l10n.t('No commands available for this resource.');
 export const selectCommandPlaceholder = vscode.l10n.t('Select a command to execute');
+export const workspaceAppHostLabel = vscode.l10n.t('Workspace apphost');
+export const resourceCountDescription = (count: number) => vscode.l10n.t('({0} resources)', count);
+export const tooltipType = (type: string) => vscode.l10n.t('Type: {0}', type);
+export const tooltipState = (state: string) => vscode.l10n.t('State: {0}', state);
+export const tooltipHealth = (health: string) => vscode.l10n.t('Health: {0}', health);
+export const tooltipEndpoints = vscode.l10n.t('Endpoints:');
 export const failedToStartDebugSession = vscode.l10n.t('Failed to start debug session.');
 export const failedToGetConfigInfo = (exitCode: number) => vscode.l10n.t('Failed to get Aspire config info (exit code: {0}). Try updating the Aspire CLI with: aspire update', exitCode);
 export const failedToParseConfigInfo = (error: any) => vscode.l10n.t('Failed to parse Aspire config info: {0}. Try updating the Aspire CLI with: aspire update', error);
@@ -84,7 +92,9 @@ export const enterPipelineStep = vscode.l10n.t('Enter the pipeline step to execu
 export const missingDcpPrefix = vscode.l10n.t('Missing valid DCP prefix corresponding to an Aspire debug session.');
 export const unsupportedLaunchConfigType = (type: string) => vscode.l10n.t('Unsupported launch configuration type: {0}', type);
 export const noAspireDebugSessionFound = (debugSessionId: string) => vscode.l10n.t('No Aspire debug session found for Debug Session ID {0}', debugSessionId);
-export const failedToStartDebugSessionForRunId = (runId: string) => vscode.l10n.t('Failed to start debug session for run ID {0}', runId);
+export const failedToStartDebugSessionForRunId = (runId: string, errorDetails?: string) => errorDetails
+    ? vscode.l10n.t('Failed to start debug session for run ID {0}: {1}', runId, errorDetails)
+    : vscode.l10n.t('Failed to start debug session for run ID {0}', runId);
 
 // Dotnet debugger error strings
 export const dotnetRunApiFailed = (message: string) => vscode.l10n.t('dotnet run-api failed: {0}', message);

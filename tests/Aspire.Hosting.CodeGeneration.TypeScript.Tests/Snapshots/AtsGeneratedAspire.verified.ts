@@ -1,4 +1,4 @@
-﻿// aspire.ts - Capability-based Aspire SDK
+// aspire.ts - Capability-based Aspire SDK
 // This SDK uses the ATS (Aspire Type System) capability API.
 // Capabilities are endpoints like 'Aspire.Hosting/createBuilder'.
 //
@@ -8,6 +8,8 @@ import {
     AspireClient as AspireClientRpc,
     Handle,
     MarshalledHandle,
+    AppHostUsageError,
+    CancellationToken,
     CapabilityError,
     registerCallback,
     wrapIfHandle,
@@ -123,11 +125,11 @@ export interface AddTestRedisOptions {
 }
 
 export interface GetStatusAsyncOptions {
-    cancellationToken?: AbortSignal;
+    cancellationToken?: AbortSignal | CancellationToken;
 }
 
 export interface WaitForReadyAsyncOptions {
-    cancellationToken?: AbortSignal;
+    cancellationToken?: AbortSignal | CancellationToken;
 }
 
 export interface WithDataVolumeOptions {
@@ -195,16 +197,17 @@ export class TestCallbackContext {
 
     /** Gets the CancellationToken property */
     cancellationToken = {
-        get: async (): Promise<AbortSignal> => {
-            return await this._client.invokeCapability<AbortSignal>(
+        get: async (): Promise<CancellationToken> => {
+            const result = await this._client.invokeCapability<string | null>(
                 'Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestCallbackContext.cancellationToken',
                 { context: this._handle }
             );
+            return CancellationToken.fromValue(result);
         },
-        set: async (value: AbortSignal): Promise<void> => {
+        set: async (value: AbortSignal | CancellationToken): Promise<void> => {
             await this._client.invokeCapability<void>(
                 'Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestCallbackContext.setCancellationToken',
-                { context: this._handle, value }
+                { context: this._handle, value: CancellationToken.fromValue(value) }
             );
         }
     };
@@ -740,9 +743,9 @@ export class TestDatabaseResource extends ResourceBuilderBase<TestDatabaseResour
     }
 
     /** @internal */
-    private async _withCancellableOperationInternal(operation: (arg: AbortSignal) => Promise<void>): Promise<TestDatabaseResource> {
+    private async _withCancellableOperationInternal(operation: (arg: CancellationToken) => Promise<void>): Promise<TestDatabaseResource> {
         const operationId = registerCallback(async (argData: unknown) => {
-            const arg = wrapIfHandle(argData) as AbortSignal;
+            const arg = CancellationToken.fromValue(argData);
             await operation(arg);
         });
         const rpcArgs: Record<string, unknown> = { builder: this._handle, operation: operationId };
@@ -754,7 +757,7 @@ export class TestDatabaseResource extends ResourceBuilderBase<TestDatabaseResour
     }
 
     /** Performs a cancellable operation */
-    withCancellableOperation(operation: (arg: AbortSignal) => Promise<void>): TestDatabaseResourcePromise {
+    withCancellableOperation(operation: (arg: CancellationToken) => Promise<void>): TestDatabaseResourcePromise {
         return new TestDatabaseResourcePromise(this._withCancellableOperationInternal(operation));
     }
 
@@ -863,7 +866,7 @@ export class TestDatabaseResourcePromise implements PromiseLike<TestDatabaseReso
     }
 
     /** Performs a cancellable operation */
-    withCancellableOperation(operation: (arg: AbortSignal) => Promise<void>): TestDatabaseResourcePromise {
+    withCancellableOperation(operation: (arg: CancellationToken) => Promise<void>): TestDatabaseResourcePromise {
         return new TestDatabaseResourcePromise(this._promise.then(obj => obj.withCancellableOperation(operation)));
     }
 
@@ -1223,9 +1226,8 @@ export class TestRedisResource extends ResourceBuilderBase<TestRedisResourceHand
     /** Gets the status of the resource asynchronously */
     async getStatusAsync(options?: GetStatusAsyncOptions): Promise<string> {
         const cancellationToken = options?.cancellationToken;
-        const cancellationTokenId = cancellationToken ? registerCancellation(cancellationToken) : undefined;
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
-        if (cancellationToken !== undefined) rpcArgs.cancellationToken = cancellationTokenId;
+        if (cancellationToken !== undefined) rpcArgs.cancellationToken = CancellationToken.fromValue(cancellationToken);
         return await this._client.invokeCapability<string>(
             'Aspire.Hosting.CodeGeneration.TypeScript.Tests/getStatusAsync',
             rpcArgs
@@ -1233,9 +1235,9 @@ export class TestRedisResource extends ResourceBuilderBase<TestRedisResourceHand
     }
 
     /** @internal */
-    private async _withCancellableOperationInternal(operation: (arg: AbortSignal) => Promise<void>): Promise<TestRedisResource> {
+    private async _withCancellableOperationInternal(operation: (arg: CancellationToken) => Promise<void>): Promise<TestRedisResource> {
         const operationId = registerCallback(async (argData: unknown) => {
-            const arg = wrapIfHandle(argData) as AbortSignal;
+            const arg = CancellationToken.fromValue(argData);
             await operation(arg);
         });
         const rpcArgs: Record<string, unknown> = { builder: this._handle, operation: operationId };
@@ -1247,16 +1249,15 @@ export class TestRedisResource extends ResourceBuilderBase<TestRedisResourceHand
     }
 
     /** Performs a cancellable operation */
-    withCancellableOperation(operation: (arg: AbortSignal) => Promise<void>): TestRedisResourcePromise {
+    withCancellableOperation(operation: (arg: CancellationToken) => Promise<void>): TestRedisResourcePromise {
         return new TestRedisResourcePromise(this._withCancellableOperationInternal(operation));
     }
 
     /** Waits for the resource to be ready */
     async waitForReadyAsync(timeout: number, options?: WaitForReadyAsyncOptions): Promise<boolean> {
         const cancellationToken = options?.cancellationToken;
-        const cancellationTokenId = cancellationToken ? registerCancellation(cancellationToken) : undefined;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, timeout };
-        if (cancellationToken !== undefined) rpcArgs.cancellationToken = cancellationTokenId;
+        if (cancellationToken !== undefined) rpcArgs.cancellationToken = CancellationToken.fromValue(cancellationToken);
         return await this._client.invokeCapability<boolean>(
             'Aspire.Hosting.CodeGeneration.TypeScript.Tests/waitForReadyAsync',
             rpcArgs
@@ -1265,11 +1266,10 @@ export class TestRedisResource extends ResourceBuilderBase<TestRedisResourceHand
 
     /** @internal */
     private async _withMultiParamHandleCallbackInternal(callback: (arg1: TestCallbackContext, arg2: TestEnvironmentContext) => Promise<void>): Promise<TestRedisResource> {
-        const callbackId = registerCallback(async (argsData: unknown) => {
-            const args = argsData as { p0: unknown, p1: unknown };
-            const arg1Handle = wrapIfHandle(args.p0) as TestCallbackContextHandle;
+        const callbackId = registerCallback(async (arg1Data: unknown, arg2Data: unknown) => {
+            const arg1Handle = wrapIfHandle(arg1Data) as TestCallbackContextHandle;
             const arg1 = new TestCallbackContext(arg1Handle, this._client);
-            const arg2Handle = wrapIfHandle(args.p1) as TestEnvironmentContextHandle;
+            const arg2Handle = wrapIfHandle(arg2Data) as TestEnvironmentContextHandle;
             const arg2 = new TestEnvironmentContext(arg2Handle, this._client);
             await callback(arg1, arg2);
         });
@@ -1438,7 +1438,7 @@ export class TestRedisResourcePromise implements PromiseLike<TestRedisResource> 
     }
 
     /** Performs a cancellable operation */
-    withCancellableOperation(operation: (arg: AbortSignal) => Promise<void>): TestRedisResourcePromise {
+    withCancellableOperation(operation: (arg: CancellationToken) => Promise<void>): TestRedisResourcePromise {
         return new TestRedisResourcePromise(this._promise.then(obj => obj.withCancellableOperation(operation)));
     }
 
@@ -1700,9 +1700,9 @@ export class TestVaultResource extends ResourceBuilderBase<TestVaultResourceHand
     }
 
     /** @internal */
-    private async _withCancellableOperationInternal(operation: (arg: AbortSignal) => Promise<void>): Promise<TestVaultResource> {
+    private async _withCancellableOperationInternal(operation: (arg: CancellationToken) => Promise<void>): Promise<TestVaultResource> {
         const operationId = registerCallback(async (argData: unknown) => {
-            const arg = wrapIfHandle(argData) as AbortSignal;
+            const arg = CancellationToken.fromValue(argData);
             await operation(arg);
         });
         const rpcArgs: Record<string, unknown> = { builder: this._handle, operation: operationId };
@@ -1714,7 +1714,7 @@ export class TestVaultResource extends ResourceBuilderBase<TestVaultResourceHand
     }
 
     /** Performs a cancellable operation */
-    withCancellableOperation(operation: (arg: AbortSignal) => Promise<void>): TestVaultResourcePromise {
+    withCancellableOperation(operation: (arg: CancellationToken) => Promise<void>): TestVaultResourcePromise {
         return new TestVaultResourcePromise(this._withCancellableOperationInternal(operation));
     }
 
@@ -1821,7 +1821,7 @@ export class TestVaultResourcePromise implements PromiseLike<TestVaultResource> 
     }
 
     /** Performs a cancellable operation */
-    withCancellableOperation(operation: (arg: AbortSignal) => Promise<void>): TestVaultResourcePromise {
+    withCancellableOperation(operation: (arg: CancellationToken) => Promise<void>): TestVaultResourcePromise {
         return new TestVaultResourcePromise(this._promise.then(obj => obj.withCancellableOperation(operation)));
     }
 
@@ -2038,9 +2038,9 @@ export class Resource extends ResourceBuilderBase<IResourceHandle> {
     }
 
     /** @internal */
-    private async _withCancellableOperationInternal(operation: (arg: AbortSignal) => Promise<void>): Promise<Resource> {
+    private async _withCancellableOperationInternal(operation: (arg: CancellationToken) => Promise<void>): Promise<Resource> {
         const operationId = registerCallback(async (argData: unknown) => {
-            const arg = wrapIfHandle(argData) as AbortSignal;
+            const arg = CancellationToken.fromValue(argData);
             await operation(arg);
         });
         const rpcArgs: Record<string, unknown> = { builder: this._handle, operation: operationId };
@@ -2052,7 +2052,7 @@ export class Resource extends ResourceBuilderBase<IResourceHandle> {
     }
 
     /** Performs a cancellable operation */
-    withCancellableOperation(operation: (arg: AbortSignal) => Promise<void>): ResourcePromise {
+    withCancellableOperation(operation: (arg: CancellationToken) => Promise<void>): ResourcePromise {
         return new ResourcePromise(this._withCancellableOperationInternal(operation));
     }
 
@@ -2134,7 +2134,7 @@ export class ResourcePromise implements PromiseLike<Resource> {
     }
 
     /** Performs a cancellable operation */
-    withCancellableOperation(operation: (arg: AbortSignal) => Promise<void>): ResourcePromise {
+    withCancellableOperation(operation: (arg: CancellationToken) => Promise<void>): ResourcePromise {
         return new ResourcePromise(this._promise.then(obj => obj.withCancellableOperation(operation)));
     }
 
@@ -2344,7 +2344,7 @@ export async function createBuilder(options?: CreateBuilderOptions): Promise<Dis
 }
 
 // Re-export commonly used types
-export { Handle, CapabilityError, registerCallback } from './transport.js';
+export { Handle, AppHostUsageError, CancellationToken, CapabilityError, registerCallback } from './transport.js';
 export { refExpr, ReferenceExpression } from './base.js';
 
 // ============================================================================
@@ -2358,7 +2358,9 @@ export { refExpr, ReferenceExpression } from './base.js';
 process.on('unhandledRejection', (reason: unknown) => {
     const error = reason instanceof Error ? reason : new Error(String(reason));
 
-    if (reason instanceof CapabilityError) {
+    if (reason instanceof AppHostUsageError) {
+        console.error(`\n❌ AppHost Error: ${error.message}`);
+    } else if (reason instanceof CapabilityError) {
         console.error(`\n❌ Capability Error: ${error.message}`);
         console.error(`   Code: ${(reason as CapabilityError).code}`);
         if ((reason as CapabilityError).capability) {
@@ -2375,8 +2377,12 @@ process.on('unhandledRejection', (reason: unknown) => {
 });
 
 process.on('uncaughtException', (error: Error) => {
-    console.error(`\n❌ Uncaught Exception: ${error.message}`);
-    if (error.stack) {
+    if (error instanceof AppHostUsageError) {
+        console.error(`\n❌ AppHost Error: ${error.message}`);
+    } else {
+        console.error(`\n❌ Uncaught Exception: ${error.message}`);
+    }
+    if (!(error instanceof AppHostUsageError) && error.stack) {
         console.error(error.stack);
     }
     process.exit(1);

@@ -14,7 +14,7 @@ namespace Aspire.Cli.Resources {
     [System.CodeDom.Compiler.GeneratedCodeAttribute("System.Resources.Tools.StronglyTypedResourceBuilder", "4.0.0.0")]
     [System.Diagnostics.DebuggerNonUserCodeAttribute()]
     [System.Runtime.CompilerServices.CompilerGeneratedAttribute()]
-    public class SharedCommandStrings {
+    internal class SharedCommandStrings {
 
         private static System.Resources.ResourceManager resourceMan;
 
@@ -25,7 +25,7 @@ namespace Aspire.Cli.Resources {
         }
 
         [System.ComponentModel.EditorBrowsableAttribute(System.ComponentModel.EditorBrowsableState.Advanced)]
-        public static System.Resources.ResourceManager ResourceManager {
+        internal static System.Resources.ResourceManager ResourceManager {
             get {
                 if (object.Equals(null, resourceMan)) {
                     System.Resources.ResourceManager temp = new System.Resources.ResourceManager("Aspire.Cli.Resources.SharedCommandStrings", typeof(SharedCommandStrings).Assembly);
@@ -36,7 +36,7 @@ namespace Aspire.Cli.Resources {
         }
 
         [System.ComponentModel.EditorBrowsableAttribute(System.ComponentModel.EditorBrowsableState.Advanced)]
-        public static System.Globalization.CultureInfo Culture {
+        internal static System.Globalization.CultureInfo Culture {
             get {
                 return resourceCulture;
             }
@@ -105,33 +105,21 @@ namespace Aspire.Cli.Resources {
             }
         }
 
-        internal static string UpdatedNuGetConfig {
+        internal static string PipelineLogLevelOptionDescription {
             get {
-                return ResourceManager.GetString("UpdatedNuGetConfig", resourceCulture);
+                return ResourceManager.GetString("PipelineLogLevelOptionDescription", resourceCulture);
             }
         }
 
-        internal static string CreatedNuGetConfig {
+        internal static string PipelineIncludeExceptionDetailsOptionDescription {
             get {
-                return ResourceManager.GetString("CreatedNuGetConfig", resourceCulture);
+                return ResourceManager.GetString("PipelineIncludeExceptionDetailsOptionDescription", resourceCulture);
             }
         }
 
-        internal static string LanguagePreferenceSaved {
+        internal static string PipelineEnvironmentOptionDescription {
             get {
-                return ResourceManager.GetString("LanguagePreferenceSaved", resourceCulture);
-            }
-        }
-
-        internal static string UnknownLanguageError {
-            get {
-                return ResourceManager.GetString("UnknownLanguageError", resourceCulture);
-            }
-        }
-
-        internal static string LanguagePreferenceSavedToSettings {
-            get {
-                return ResourceManager.GetString("LanguagePreferenceSavedToSettings", resourceCulture);
+                return ResourceManager.GetString("PipelineEnvironmentOptionDescription", resourceCulture);
             }
         }
     }

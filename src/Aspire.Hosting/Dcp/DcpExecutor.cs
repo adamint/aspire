@@ -671,6 +671,11 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                     // Ignore
                     _logger.LogDebug("Log streaming for {ResourceName} was cancelled.", resource.Metadata.Name);
                 }
+                catch (HttpOperationException ex) when (ex.Response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    // Resource was deleted — this is expected for short-lived resources like rebuilders.
+                    _logger.LogDebug("Log streaming for {ResourceName} ended because the resource was deleted.", resource.Metadata.Name);
+                }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Error streaming logs for {ResourceName}.", resource.Metadata.Name);
@@ -1014,7 +1019,7 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                 ))
                 .Where(ts =>
                     ts.Service is not null &&
-                    StringComparers.ResourceName.Equals(ts.ResourceName, appResource.ModelResource.Name) &&
+                    string.Equals(ts.ResourceName, appResource.ModelResource.Name, StringComparisons.ResourceName) &&
                     !string.IsNullOrEmpty(ts.EndpointName) &&
                     !string.IsNullOrEmpty(ts.ContainerNetworkName)
                 );
@@ -1033,9 +1038,9 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                     }
 
                     var serverSvc = _appResources.OfType<ServiceWithModelResource>().FirstOrDefault(swr =>
-                         StringComparers.ResourceName.Equals(swr.ModelResource.Name, ts.ResourceName) &&
-                         StringComparers.EndpointAnnotationName.Equals(swr.EndpointAnnotation.Name, endpoint.Name)
-                     );
+                        string.Equals(swr.ModelResource.Name, ts.ResourceName, StringComparisons.ResourceName) &&
+                        string.Equals(swr.EndpointAnnotation.Name, endpoint.Name, StringComparisons.EndpointAnnotationName)
+                    );
                     if (serverSvc is null)
                     {
                         // Should never happen -- we should have created a Service for every endpoint exposed from a resource.
@@ -1225,8 +1230,8 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                 // Address and port will be set automatically by DCP.
 
                 var serverSvc = _appResources.OfType<ServiceWithModelResource>().FirstOrDefault(swr =>
-                    StringComparers.ResourceName.Equals(swr.ModelResource.Name, re.Resource.Name) &&
-                    StringComparers.EndpointAnnotationName.Equals(swr.EndpointAnnotation.Name, endpoint.Name)
+                    string.Equals(swr.ModelResource.Name, re.Resource.Name, StringComparisons.ResourceName) &&
+                    string.Equals(swr.EndpointAnnotation.Name, endpoint.Name, StringComparisons.EndpointAnnotationName)
                 );
                 if (serverSvc is null)
                 {
@@ -1372,26 +1377,39 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
 
                 SetInitialResourceState(project, exe);
 
-                var projectLaunchConfiguration = new ProjectLaunchConfiguration();
-                projectLaunchConfiguration.ProjectPath = projectMetadata.ProjectPath;
-
                 var projectArgs = new List<string>();
 
-                if (project.SupportsDebugging(_configuration, out _))
+                if (project.SupportsDebugging(_configuration, out var supportsDebuggingAnnotation))
                 {
                     exe.Spec.ExecutionType = ExecutionType.IDE;
                     exe.Spec.FallbackExecutionTypes = [ ExecutionType.Process ];
 
-                    projectLaunchConfiguration.DisableLaunchProfile = project.TryGetLastAnnotation<ExcludeLaunchProfileAnnotation>(out _);
-                    // Use the effective launch profile which has fallback logic
-                    if (!projectLaunchConfiguration.DisableLaunchProfile && project.GetEffectiveLaunchProfile() is NamedLaunchProfile namedLaunchProfile)
+                    if (supportsDebuggingAnnotation.LaunchConfigurationType is "project")
                     {
-                        projectLaunchConfiguration.LaunchProfile = namedLaunchProfile.Name;
+                        var projectLaunchConfiguration = new ProjectLaunchConfiguration();
+                        projectLaunchConfiguration.ProjectPath = projectMetadata.ProjectPath;
+                        projectLaunchConfiguration.Mode = _configuration[KnownConfigNames.DebugSessionRunMode]
+                            ?? (Debugger.IsAttached ? ExecutableLaunchMode.Debug : ExecutableLaunchMode.NoDebug);
+
+                        projectLaunchConfiguration.DisableLaunchProfile = project.TryGetLastAnnotation<ExcludeLaunchProfileAnnotation>(out _);
+                        // Use the effective launch profile which has fallback logic
+                        if (!projectLaunchConfiguration.DisableLaunchProfile && project.GetEffectiveLaunchProfile() is NamedLaunchProfile namedLaunchProfile)
+                        {
+                            projectLaunchConfiguration.LaunchProfile = namedLaunchProfile.Name;
+                        }
+
+                        // We want this annotation even if we are not using IDE execution; see ToSnapshot() for details.
+                        exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, projectLaunchConfiguration);
                     }
+                    // Non-project launch types (e.g. azure-functions) have their launch configuration
+                    // applied later in CreateExecutableAsync() after endpoints are allocated.
                 }
                 else
                 {
                     exe.Spec.ExecutionType = ExecutionType.Process;
+
+                    var projectLaunchConfiguration = new ProjectLaunchConfiguration();
+                    projectLaunchConfiguration.ProjectPath = projectMetadata.ProjectPath;
 
                     // `dotnet watch` does not work with file-based apps yet, so we have to use `dotnet run` in that case
                     if (_configuration.GetBool("DOTNET_WATCH") is not true || projectMetadata.IsFileBasedApp)
@@ -1430,10 +1448,11 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                     // and should be HIGHER priority than the launch profile settings).
                     // This means we need to apply the launch profile settings manually inside CreateExecutableAsync().
                     projectArgs.Add("--no-launch-profile");
+
+                    // We want this annotation even if we are not using IDE execution; see ToSnapshot() for details.
+                    exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, projectLaunchConfiguration);
                 }
 
-                // We want this annotation even if we are not using IDE execution; see ToSnapshot() for details.
-                exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, projectLaunchConfiguration);
                 exe.SetAnnotationAsObjectList(CustomResource.ResourceProjectArgsAnnotation, projectArgs);
 
                 var exeAppResource = new RenderedModelResource(project, exe);
@@ -1639,6 +1658,7 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
             // Build the base paths for certificate output in the DCP session directory.
             var certificatesRootDir = Path.Join(_locations.DcpSessionDir, exe.Name());
             var bundleOutputPath = Path.Join(certificatesRootDir, "cert.pem");
+            var customBundleOutputPath = Path.Join(certificatesRootDir, "bundles");
             var certificatesOutputPath = Path.Join(certificatesRootDir, "certs");
             var baseServerAuthOutputPath = Path.Join(certificatesRootDir, "private");
 
@@ -1662,6 +1682,7 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                         CertificateBundlePath = ReferenceExpression.Create($"{bundleOutputPath}"),
                         // Build the SSL_CERT_DIR value by combining the new certs directory with any existing directories.
                         CertificateDirectoriesPath = ReferenceExpression.Create($"{string.Join(Path.PathSeparator, dirs)}"),
+                        RootCertificatesPath = certificatesRootDir,
                     };
                 })
                 .WithHttpsCertificateConfig(cert => new()
@@ -1691,6 +1712,19 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                     }).DistinctBy(cert => cert.Thumbprint).ToList(),
                     ContinueOnError = true,
                 };
+
+                if (certificateTrustConfiguration.CustomBundlesFactories.Count > 0)
+                {
+                    Directory.CreateDirectory(customBundleOutputPath);
+                }
+
+                foreach (var bundleFactory in certificateTrustConfiguration.CustomBundlesFactories)
+                {
+                    var bundleId = bundleFactory.Key;
+                    var bundleBytes = await bundleFactory.Value(certificateTrustConfiguration.Certificates, cancellationToken).ConfigureAwait(false);
+
+                    File.WriteAllBytes(Path.Join(customBundleOutputPath, bundleId), bundleBytes);
+                }
             }
 
             exe.Spec.PemCertificates = pemCertificates;
@@ -1751,10 +1785,10 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
             // Invoke the debug configuration callback now that endpoints are allocated.
             // This allows launch configurations to access endpoint URLs that were not
             // available during PrepareExecutables().
-            // Project resources configure their launch configs in PrepareProjectExecutables() directly,
-            // so we only invoke the annotator for non-project executables here.
-            if (er.ModelResource is not ProjectResource
-                && er.ModelResource.SupportsDebugging(_configuration, out var supportsDebuggingAnnotation))
+            // "project" launch types configure their launch configs in PrepareProjectExecutables() directly;
+            // all other types (plain executables and project subtypes like azure-functions) are handled here.
+            if (er.ModelResource.SupportsDebugging(_configuration, out var supportsDebuggingAnnotation)
+                && supportsDebuggingAnnotation.LaunchConfigurationType is not "project")
             {
                 var mode = _configuration[KnownConfigNames.DebugSessionRunMode] ?? ExecutableLaunchMode.NoDebug;
                 try
@@ -2052,6 +2086,8 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                         CertificateBundlePath = ReferenceExpression.Create($"{certificatesDestination}/cert.pem"),
                         // Build Linux PATH style colon-separated list of directories
                         CertificateDirectoriesPath = ReferenceExpression.Create($"{string.Join(':', dirs)}"),
+                        RootCertificatesPath = certificatesDestination,
+                        IsContainer = true,
                     };
                 })
                 .WithHttpsCertificateConfig(cert => new()
@@ -2062,6 +2098,8 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                 })
                 .BuildAsync(_executionContext, resourceLogger, cancellationToken)
                 .ConfigureAwait(false);
+
+            List<ContainerFileSystemEntry> customBundleFiles = new();
 
             // Add the certificates to the executable spec so they'll be placed in the DCP config
             ContainerPemCertificates? pemCertificates = null;
@@ -2089,6 +2127,19 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                     // used by common Linux distributions to make it easier to ensure applications pick it up.
                     // Group by common directory to avoid creating multiple file system entries for the same root directory.
                     pemCertificates.OverwriteBundlePaths = bundlePaths;
+                }
+
+                foreach (var bundleFactory in certificateTrustConfiguration.CustomBundlesFactories)
+                {
+                    var bundleId = bundleFactory.Key;
+                    var bundleBytes = await bundleFactory.Value(certificateTrustConfiguration.Certificates, cancellationToken).ConfigureAwait(false);
+
+                    customBundleFiles.Add(new ContainerFileSystemEntry
+                    {
+                        Name = bundleId,
+                        Type = ContainerFileSystemEntryType.File,
+                        RawContents = Convert.ToBase64String(bundleBytes),
+                    });
                 }
             }
 
@@ -2118,20 +2169,36 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                 buildCreateFilesContext,
                 cancellationToken).ConfigureAwait(false);
 
+            if (customBundleFiles.Count > 0)
+            {
+                createFiles.Add(new ContainerCreateFileSystem
+                {
+                    Destination = certificatesDestination,
+                    Entries = [
+                        new ContainerFileSystemEntry
+                        {
+                            Name = "bundles",
+                            Type = ContainerFileSystemEntryType.Directory,
+                            Entries = customBundleFiles,
+                        },
+                    ],
+                });
+            }
+
             if (tlsCertificateConfiguration is not null)
             {
                 var thumbprint = tlsCertificateConfiguration.Certificate.Thumbprint;
                 var publicCertificatePem = tlsCertificateConfiguration.Certificate.ExportCertificatePem();
                 (var keyPem, var pfxBytes) = await GetCertificateKeyMaterialAsync(tlsCertificateConfiguration, cancellationToken).ConfigureAwait(false);
                 var certificateFiles = new List<ContainerFileSystemEntry>()
-            {
-                new ContainerFileSystemEntry
                 {
-                    Name = thumbprint + ".crt",
-                    Type = ContainerFileSystemEntryType.File,
-                    Contents = new string(publicCertificatePem),
-                }
-            };
+                    new ContainerFileSystemEntry
+                    {
+                        Name = thumbprint + ".crt",
+                        Type = ContainerFileSystemEntryType.File,
+                        Contents = new string(publicCertificatePem),
+                    }
+                };
 
                 if (keyPem is not null)
                 {
@@ -2877,8 +2944,10 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
         endpoint = null;
         if (resource.TryGetAnnotationsOfType<EndpointAnnotation>(out var endpoints))
         {
-            endpoint = endpoints.FirstOrDefault(e => StringComparers.EndpointAnnotationName.Equals(e.Name, endpointName));
+            endpoint = endpoints.FirstOrDefault(e => string.Equals(e.Name, endpointName, StringComparisons.EndpointAnnotationName));
         }
         return endpoint is not null;
     }
+
 }
+

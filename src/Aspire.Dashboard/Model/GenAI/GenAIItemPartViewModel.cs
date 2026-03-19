@@ -22,7 +22,8 @@ public sealed class GenAIItemPartViewModel
 {
     private static readonly JsonSerializerOptions s_jsonSerializerOptions = new()
     {
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        WriteIndented = true
     };
 
     public MessagePart? MessagePart { get; init; }
@@ -54,6 +55,7 @@ public sealed class GenAIItemPartViewModel
         return new GenAIItemPartViewModel
         {
             MessagePart = part,
+            ErrorMessage = part is UnexpectedErrorPart errorPart ? errorPart.Error?.Message : null,
             TextVisualizerViewModel = CreateMessagePartVisualizer(part),
             AdditionalProperties = part is GenericPart genericPart
                 ? genericPart.AdditionalProperties?.Select(p => new GenAIPartPropertyViewModel { Name = p.Key, Value = p.Value.ToString() ?? string.Empty }).ToList()

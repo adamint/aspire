@@ -13,10 +13,10 @@
     <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
   </resheader>
   <data name="Description" xml:space="preserve">
-    <value>Update integrations in the Aspire project. (Preview)</value>
+    <value>Update integrations in the Aspire project (Preview)</value>
   </data>
   <data name="ProjectArgumentDescription" xml:space="preserve">
-    <value>The path to the Aspire AppHost project file.</value>
+    <value>The path to the Aspire apphost project file</value>
   </data>
   <data name="SelectChannelPrompt" xml:space="preserve">
     <value>Select a channel:</value>
@@ -40,10 +40,10 @@
     <value>Update successful!</value>
   </data>
   <data name="AnalyzeAppHost" xml:space="preserve">
-    <value>Analyze App Host</value>
+    <value>Analyze apphost</value>
   </data>
   <data name="AnalyzeAppHostSdk" xml:space="preserve">
-    <value>Analyze App Host SDK</value>
+    <value>Analyze apphost SDK</value>
   </data>
   <data name="AnalyzeProjectFormat" xml:space="preserve">
     <value>Analyze project: {0}</value>
@@ -71,9 +71,17 @@
   </data>
   <data name="PackageReferenceNoIdentity" xml:space="preserve">
     <value>Package reference does not have Identity.</value>
-  </data><data name="FailedUpdatePackageReferenceFormat" xml:space="preserve">
+  </data>
+  <data name="PackageReferenceNoVersion" xml:space="preserve">
+    <value>Package reference does not have Version.</value>
+  </data>
+  <data name="FailedUpdatePackageReferenceFormat" xml:space="preserve">
     <value>Failed to update package reference for {0} in project {1}.</value>
-  </data><data name="CentralPackageManagementNotSupported" xml:space="preserve">
+  </data>
+  <data name="UnxpectedCodePath" xml:space="preserve">
+    <value>Unexpected code path.</value>
+  </data>
+  <data name="CentralPackageManagementNotSupported" xml:space="preserve">
     <value>Central package management is currently not supported by 'aspire update'.</value>
   </data>
   <data name="CouldNotFindPackageVersionInDirectoryPackagesProps" xml:space="preserve">
@@ -104,10 +112,10 @@
     <value>   Mapping: {0}</value>
   </data>
   <data name="FallbackParsingWarning" xml:space="preserve">
-    <value>Note: Update plan generated using fallback parsing due to unresolvable AppHost SDK. Dependency analysis may have reduced accuracy.</value>
+    <value>Note: Update plan generated using fallback parsing due to unresolvable apphost SDK. Dependency analysis may have reduced accuracy.</value>
   </data>
   <data name="NoAppHostFoundUpdateCliPrompt" xml:space="preserve">
-    <value>No Aspire AppHost project found. Would you like to update the Aspire CLI instead?</value>
+    <value>No Aspire apphost project found. Would you like to update the Aspire CLI instead?</value>
   </data>
   <data name="UpdateCliAfterProjectUpdatePrompt" xml:space="preserve">
     <value>An update is available for the Aspire CLI. Would you like to update it now?</value>
@@ -154,45 +162,7 @@
   <data name="RegeneratedSdkCode" xml:space="preserve">
     <value>Regenerated SDK code with updated packages.</value>
   </data>
-  <data name="SelfUpdateNotAvailable" xml:space="preserve">
-    <value>CLI self-update is not available in this environment.</value>
-  </data>
-  <data name="UnableToDetermineExecutablePath" xml:space="preserve">
-    <value>Unable to determine the current executable path.</value>
-  </data>
-  <data name="DownloadCompletedSuccessfully" xml:space="preserve">
-    <value>Download completed successfully</value>
-  </data>
-  <data name="CurrentCliLocation" xml:space="preserve">
-    <value>Current CLI location: {0}</value>
-  </data>
-  <data name="UpdatingToChannel" xml:space="preserve">
-    <value>Updating to channel: {0}</value>
-  </data>
-  <data name="BackingUpCurrentCli" xml:space="preserve">
-    <value>Backing up current CLI...</value>
-  </data>
-  <data name="InstallingNewCli" xml:space="preserve">
-    <value>Installing new CLI to {0}...</value>
-  </data>
-  <data name="UpdatedToVersion" xml:space="preserve">
-    <value>Updated to version: {0}</value>
-  </data>
-  <data name="NotInPath" xml:space="preserve">
-    <value>Note: {0} is not in your PATH. Add it to use the updated CLI globally.</value>
-  </data>
-  <data name="ValidatingDownloadedFile" xml:space="preserve">
-    <value>Validating downloaded file...</value>
-  </data>
-  <data name="SdkUpdateLine" xml:space="preserve">
-    <value>[bold yellow]Aspire SDK[/] [bold green]{0}[/] to [bold green]{1}[/]</value>
-    <comment>[bold yellow], [bold green], and [/] are Spectre.Console markup and should not be localized</comment>
-  </data>
-  <data name="PackageUpdateLine" xml:space="preserve">
-    <value>[bold yellow]{0}[/] [bold green]{1}[/] to [bold green]{2}[/]</value>
-    <comment>[bold yellow], [bold green], and [/] are Spectre.Console markup and should not be localized</comment>
-  </data>
-  <data name="UnexpectedCodePath" xml:space="preserve">
-    <value>Unexpected code path.</value>
+  <data name="SelfOptionDescription" xml:space="preserve">
+    <value>Update the Aspire CLI itself to the latest version</value>
   </data>
 </root>

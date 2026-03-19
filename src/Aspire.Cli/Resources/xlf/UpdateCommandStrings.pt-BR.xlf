@@ -8,13 +8,13 @@
         <note />
       </trans-unit>
       <trans-unit id="AnalyzeAppHost">
-        <source>Analyze App Host</source>
-        <target state="translated">Analisar o Host de Aplicativo</target>
+        <source>Analyze apphost</source>
+        <target state="needs-review-translation">Analisar o Host de Aplicativo</target>
         <note />
       </trans-unit>
       <trans-unit id="AnalyzeAppHostSdk">
-        <source>Analyze App Host SDK</source>
-        <target state="translated">Analisar o SDK do Host de Aplicativo</target>
+        <source>Analyze apphost SDK</source>
+        <target state="needs-review-translation">Analisar o SDK do Host de Aplicativo</target>
         <note />
       </trans-unit>
       <trans-unit id="AnalyzeProjectFormat">
@@ -35,11 +35,6 @@
       <trans-unit id="ApplyingUpdates">
         <source>Applying updates...</source>
         <target state="new">Applying updates...</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="BackingUpCurrentCli">
-        <source>Backing up current CLI...</source>
-        <target state="new">Backing up current CLI...</target>
         <note />
       </trans-unit>
       <trans-unit id="CentralPackageManagementNotSupported">
@@ -77,24 +72,14 @@
         <target state="translated">Não foi possível localizar o elemento &lt;Sdk Name='Host.AppHost.Sdk' /&gt; no {0}</target>
         <note />
       </trans-unit>
-      <trans-unit id="CurrentCliLocation">
-        <source>Current CLI location: {0}</source>
-        <target state="new">Current CLI location: {0}</target>
-        <note />
-      </trans-unit>
       <trans-unit id="Description">
-        <source>Update integrations in the Aspire project. (Preview)</source>
-        <target state="translated">Atualizar integrações no projeto Aspire. (Versão Prévia)</target>
+        <source>Update integrations in the Aspire project (Preview)</source>
+        <target state="needs-review-translation">Atualizar integrações no projeto Aspire. (Versão Prévia)</target>
         <note />
       </trans-unit>
       <trans-unit id="DotNetToolSelfUpdateMessage">
         <source>To update the Aspire CLI when installed as a .NET tool, run:</source>
         <target state="translated">Para atualizar a CLI do Aspire quando instalada como uma ferramenta do .NET, execute:</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="DownloadCompletedSuccessfully">
-        <source>Download completed successfully</source>
-        <target state="new">Download completed successfully</target>
         <note />
       </trans-unit>
       <trans-unit id="ExecutingUpdateStepFormat">
@@ -128,13 +113,8 @@
         <note />
       </trans-unit>
       <trans-unit id="FallbackParsingWarning">
-        <source>Note: Update plan generated using fallback parsing due to unresolvable AppHost SDK. Dependency analysis may have reduced accuracy.</source>
-        <target state="translated">Observação: o plano de atualização gerado usando a análise de fallback devido ao SDK do AppHost não resolvido. A análise de dependência pode ter uma precisão reduzida.</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="InstallingNewCli">
-        <source>Installing new CLI to {0}...</source>
-        <target state="new">Installing new CLI to {0}...</target>
+        <source>Note: Update plan generated using fallback parsing due to unresolvable apphost SDK. Dependency analysis may have reduced accuracy.</source>
+        <target state="needs-review-translation">Observação: o plano de atualização gerado usando a análise de fallback devido ao SDK do AppHost não resolvido. A análise de dependência pode ter uma precisão reduzida.</target>
         <note />
       </trans-unit>
       <trans-unit id="MappingAddedFormat">
@@ -158,8 +138,8 @@
         <note />
       </trans-unit>
       <trans-unit id="NoAppHostFoundUpdateCliPrompt">
-        <source>No Aspire AppHost project found. Would you like to update the Aspire CLI instead?</source>
-        <target state="translated">Não foram encontrados projetos AppHost do Aspire. Você quer atualizar a CLI do Aspire em vez disso?</target>
+        <source>No Aspire apphost project found. Would you like to update the Aspire CLI instead?</source>
+        <target state="needs-review-translation">Não foram encontrados projetos AppHost do Aspire. Você quer atualizar a CLI do Aspire em vez disso?</target>
         <note />
       </trans-unit>
       <trans-unit id="NoChangesDetectedInNuGetConfig">
@@ -177,20 +157,15 @@
         <target state="translated">Não é possível gravar no diretório de instalação '{0}'. Execute a atualização com permissões elevadas (por exemplo, usando sudo no Linux/macOS).</target>
         <note />
       </trans-unit>
-      <trans-unit id="NotInPath">
-        <source>Note: {0} is not in your PATH. Add it to use the updated CLI globally.</source>
-        <target state="new">Note: {0} is not in your PATH. Add it to use the updated CLI globally.</target>
-        <note />
-      </trans-unit>
       <trans-unit id="PackageReferenceNoIdentity">
         <source>Package reference does not have Identity.</source>
         <target state="translated">A referência do pacote não tem Identidade.</target>
         <note />
       </trans-unit>
-      <trans-unit id="PackageUpdateLine">
-        <source>[bold yellow]{0}[/] [bold green]{1}[/] to [bold green]{2}[/]</source>
-        <target state="new">[bold yellow]{0}[/] [bold green]{1}[/] to [bold green]{2}[/]</target>
-        <note>[bold yellow], [bold green], and [/] are Spectre.Console markup and should not be localized</note>
+      <trans-unit id="PackageReferenceNoVersion">
+        <source>Package reference does not have Version.</source>
+        <target state="translated">A referência de pacote não tem a Versão.</target>
+        <note />
       </trans-unit>
       <trans-unit id="PerformUpdatesPrompt">
         <source>Perform updates?</source>
@@ -198,8 +173,8 @@
         <note />
       </trans-unit>
       <trans-unit id="ProjectArgumentDescription">
-        <source>The path to the Aspire AppHost project file.</source>
-        <target state="translated">O caminho para o arquivo de projeto do Aspire AppHost.</target>
+        <source>The path to the Aspire apphost project file</source>
+        <target state="needs-review-translation">O caminho para o arquivo de projeto do Aspire AppHost.</target>
         <note />
       </trans-unit>
       <trans-unit id="ProjectReferenceNoFullPath">
@@ -247,29 +222,19 @@
         <target state="translated">Retidos: {0}</target>
         <note />
       </trans-unit>
-      <trans-unit id="SdkUpdateLine">
-        <source>[bold yellow]Aspire SDK[/] [bold green]{0}[/] to [bold green]{1}[/]</source>
-        <target state="new">[bold yellow]Aspire SDK[/] [bold green]{0}[/] to [bold green]{1}[/]</target>
-        <note>[bold yellow], [bold green], and [/] are Spectre.Console markup and should not be localized</note>
-      </trans-unit>
       <trans-unit id="SelectChannelPrompt">
         <source>Select a channel:</source>
         <target state="translated">Selecionar um canal:</target>
         <note />
       </trans-unit>
-      <trans-unit id="SelfUpdateNotAvailable">
-        <source>CLI self-update is not available in this environment.</source>
-        <target state="new">CLI self-update is not available in this environment.</target>
+      <trans-unit id="SelfOptionDescription">
+        <source>Update the Aspire CLI itself to the latest version</source>
+        <target state="new">Update the Aspire CLI itself to the latest version</target>
         <note />
       </trans-unit>
-      <trans-unit id="UnableToDetermineExecutablePath">
-        <source>Unable to determine the current executable path.</source>
-        <target state="new">Unable to determine the current executable path.</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="UnexpectedCodePath">
+      <trans-unit id="UnxpectedCodePath">
         <source>Unexpected code path.</source>
-        <target state="new">Unexpected code path.</target>
+        <target state="translated">Caminho de código inesperado.</target>
         <note />
       </trans-unit>
       <trans-unit id="UpdateCliAfterProjectUpdatePrompt">
@@ -285,21 +250,6 @@
       <trans-unit id="UpdateSuccessfulMessage">
         <source>Update successful!</source>
         <target state="translated">Atualização bem-sucedida</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="UpdatedToVersion">
-        <source>Updated to version: {0}</source>
-        <target state="new">Updated to version: {0}</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="UpdatingToChannel">
-        <source>Updating to channel: {0}</source>
-        <target state="new">Updating to channel: {0}</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="ValidatingDownloadedFile">
-        <source>Validating downloaded file...</source>
-        <target state="new">Validating downloaded file...</target>
         <note />
       </trans-unit>
       <trans-unit id="WhichDirectoryNuGetConfigPrompt">

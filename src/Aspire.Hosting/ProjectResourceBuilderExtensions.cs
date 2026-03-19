@@ -456,6 +456,12 @@ public static class ProjectResourceBuilderExtensions
 
         var projectResource = builder.Resource;
 
+        // In run mode, create a hidden rebuilder resource for this project.
+        if (builder.ApplicationBuilder.ExecutionContext.IsRunMode)
+        {
+            AddRebuilderResource(builder, projectResource);
+        }
+
         if (builder.ApplicationBuilder.ExecutionContext.IsPublishMode)
         {
             builder.WithEnvironment(context =>
@@ -820,7 +826,7 @@ public static class ProjectResourceBuilderExtensions
     /// <param name="builder">Resource builder</param>
     /// <param name="configure">Optional action to configure the container resource</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
-    [AspireExport("publishAsDockerFileWithConfigure", Description = "Publishes a project as a Docker file with optional container configuration")]
+    [AspireExport("publishProjectAsDockerFileWithConfigure", MethodName = "publishAsDockerFile", Description = "Publishes a project as a Docker file with optional container configuration")]
     public static IResourceBuilder<T> PublishAsDockerFile<T>(this IResourceBuilder<T> builder, Action<IResourceBuilder<ContainerResource>>? configure = null)
         where T : ProjectResource
     {
@@ -899,6 +905,36 @@ public static class ProjectResourceBuilderExtensions
         configBuilder.AddJsonFile(appNameSettingsPath, optional: true);
         configBuilder.AddJsonFile(appNameSettingsEnvironmentPath, optional: true);
         return configBuilder.Build();
+    }
+
+    /// <summary>
+    /// Creates a hidden rebuilder resource that runs 'dotnet build' on demand via the rebuild command.
+    /// </summary>
+    private static void AddRebuilderResource<TProjectResource>(IResourceBuilder<TProjectResource> builder, TProjectResource projectResource)
+        where TProjectResource : ProjectResource
+    {
+        var projectMetadata = projectResource.Annotations.OfType<IProjectMetadata>().SingleOrDefault();
+        if (projectMetadata is null || projectMetadata.IsFileBasedApp)
+        {
+            return;
+        }
+
+        var rebuilderName = $"{projectResource.Name}-rebuilder";
+        var rebuilder = new ProjectRebuilderResource(rebuilderName, projectResource, projectMetadata.ProjectPath);
+        var rebuilderBuilder = builder.ApplicationBuilder.AddResource(rebuilder);
+
+        rebuilderBuilder
+            .WithArgs("build", projectMetadata.ProjectPath)
+            .WithAnnotation(new ExplicitStartupAnnotation())
+            .WithAnnotation(new ExcludeLifecycleCommandsAnnotation())
+            .ExcludeFromManifest()
+            .WithInitialState(new CustomResourceSnapshot
+            {
+                ResourceType = "Executable",
+                State = KnownResourceStates.NotStarted,
+                Properties = [],
+                IsHidden = true,
+            });
     }
 
     private static void SetAspNetCoreUrls(this IResourceBuilder<ProjectResource> builder)

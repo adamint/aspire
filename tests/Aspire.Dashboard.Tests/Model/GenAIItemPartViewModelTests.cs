@@ -68,7 +68,14 @@ public sealed class GenAIItemPartViewModelTests
         var itemPart = GenAIItemPartViewModel.CreateMessagePart(responsePart);
 
         // Assert
-        Assert.Equal("""["Jack","Jane"]""", itemPart.TextVisualizerViewModel.Text);
+        Assert.Equal(
+            """
+            [
+              "Jack",
+              "Jane"
+            ]
+            """,
+            itemPart.TextVisualizerViewModel.Text);
         Assert.Equal(DashboardUIHelpers.JsonFormat, itemPart.TextVisualizerViewModel.FormatKind);
         Assert.Equal(
             """
@@ -93,7 +100,14 @@ public sealed class GenAIItemPartViewModelTests
         var itemPart = GenAIItemPartViewModel.CreateMessagePart(responsePart);
 
         // Assert
-        Assert.Equal("""{"name":"Jack","age":30}""", itemPart.TextVisualizerViewModel.Text);
+        Assert.Equal(
+            """
+            {
+              "name": "Jack",
+              "age": 30
+            }
+            """,
+            itemPart.TextVisualizerViewModel.Text);
         Assert.Equal(DashboardUIHelpers.JsonFormat, itemPart.TextVisualizerViewModel.FormatKind);
     }
 
@@ -152,5 +166,25 @@ public sealed class GenAIItemPartViewModelTests
         // Assert
         Assert.Contains("こんにちは", itemPart.TextVisualizerViewModel.Text);
         Assert.DoesNotContain("\\u", itemPart.TextVisualizerViewModel.Text);
+    }
+
+    [Fact]
+    public void CreateMessagePart_UnexpectedErrorPart_SetsErrorMessage()
+    {
+        var errorPart = new UnexpectedErrorPart
+        {
+            Type = "text",
+            Error = new JsonException("Test deserialization error"),
+            AdditionalProperties = new Dictionary<string, JsonElement>
+            {
+                ["content"] = JsonDocument.Parse("""{"nested":"value"}""").RootElement
+            }
+        };
+
+        var itemPart = GenAIItemPartViewModel.CreateMessagePart(errorPart);
+
+        Assert.Equal("Test deserialization error", itemPart.ErrorMessage);
+        Assert.NotNull(itemPart.AdditionalProperties);
+        Assert.Single(itemPart.AdditionalProperties);
     }
 }

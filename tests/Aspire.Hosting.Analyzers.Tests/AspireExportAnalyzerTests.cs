@@ -268,6 +268,307 @@ public class AspireExportAnalyzerTests
     }
 
     [Fact]
+    public async Task ExportedBuilderMethod_InvokesActionInline_ReportsASPIREEXPORT010()
+    {
+        var diagnostic = AspireExportAnalyzer.Diagnostics.s_exportedSyncDelegateInvokedInline;
+
+        var test = AnalyzerTest.Create<AspireExportAnalyzer>("""
+            using System;
+            using Aspire.Hosting;
+            using Aspire.Hosting.ApplicationModel;
+
+            var builder = DistributedApplication.CreateBuilder(args);
+
+            public sealed class TestResource(string name) : Resource(name);
+            public sealed class TestContext;
+
+            public static class TestExports
+            {
+                [AspireExport("withInlineCallback")]
+                public static IResourceBuilder<TestResource> WithInlineCallback(this IResourceBuilder<TestResource> builder, Action<TestContext> callback)
+                {
+                    callback(new TestContext());
+                    return builder;
+                }
+            }
+            """,
+            [new DiagnosticResult(diagnostic).WithLocation(15, 9).WithArguments("WithInlineCallback", "callback")]);
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task ExportedBuilderMethod_InvokesNullableActionViaInvoke_ReportsASPIREEXPORT010()
+    {
+        var diagnostic = AspireExportAnalyzer.Diagnostics.s_exportedSyncDelegateInvokedInline;
+
+        var test = AnalyzerTest.Create<AspireExportAnalyzer>("""
+            using System;
+            using Aspire.Hosting;
+            using Aspire.Hosting.ApplicationModel;
+
+            var builder = DistributedApplication.CreateBuilder(args);
+
+            public sealed class TestResource(string name) : Resource(name);
+            public sealed class TestContext;
+
+            public static class TestExports
+            {
+                [AspireExport("withInlineOptionalCallback")]
+                public static IResourceBuilder<TestResource> WithInlineOptionalCallback(this IResourceBuilder<TestResource> builder, Action<TestContext>? callback)
+                {
+                    callback?.Invoke(new TestContext());
+                    return builder;
+                }
+            }
+            """,
+            [new DiagnosticResult(diagnostic).WithLocation(15, 18).WithArguments("WithInlineOptionalCallback", "callback")]);
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task ExportedBuilderMethod_InvokesSyncFuncInline_ReportsASPIREEXPORT010()
+    {
+        var diagnostic = AspireExportAnalyzer.Diagnostics.s_exportedSyncDelegateInvokedInline;
+
+        var test = AnalyzerTest.Create<AspireExportAnalyzer>("""
+            using System;
+            using Aspire.Hosting;
+            using Aspire.Hosting.ApplicationModel;
+
+            var builder = DistributedApplication.CreateBuilder(args);
+
+            public sealed class TestResource(string name) : Resource(name);
+            public sealed class TestContext;
+
+            public static class TestExports
+            {
+                [AspireExport("withInlineFunc")]
+                public static IResourceBuilder<TestResource> WithInlineFunc(this IResourceBuilder<TestResource> builder, Func<TestContext, string> callback)
+                {
+                    _ = callback(new TestContext());
+                    return builder;
+                }
+            }
+            """,
+            [new DiagnosticResult(diagnostic).WithLocation(15, 13).WithArguments("WithInlineFunc", "callback")]);
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task ExportedBuilderMethod_PassesActionIntoDeferredLambda_NoDiagnostics()
+    {
+        var test = AnalyzerTest.Create<AspireExportAnalyzer>("""
+            using System;
+            using Aspire.Hosting;
+            using Aspire.Hosting.ApplicationModel;
+
+            var builder = DistributedApplication.CreateBuilder(args);
+
+            public sealed class TestResource(string name) : Resource(name);
+            public sealed class TestContext;
+
+            public sealed class TestAnnotation : IResourceAnnotation
+            {
+                public TestAnnotation(Action<TestContext> callback) { }
+            }
+
+            public static class TestExports
+            {
+                [AspireExport("withDeferredCallback")]
+                public static IResourceBuilder<TestResource> WithDeferredCallback(this IResourceBuilder<TestResource> builder, Action<TestContext> callback)
+                {
+                    return builder.WithAnnotation(new TestAnnotation(ctx => callback(ctx)));
+                }
+            }
+            """, []);
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task ExportedBuilderMethod_InvokesSyncCallbackInsideImmediatelyInvokedLambda_ReportsASPIREEXPORT010()
+    {
+        var diagnostic = AspireExportAnalyzer.Diagnostics.s_exportedSyncDelegateInvokedInline;
+
+        var test = AnalyzerTest.Create<AspireExportAnalyzer>("""
+            using System;
+            using Aspire.Hosting;
+            using Aspire.Hosting.ApplicationModel;
+
+            var builder = DistributedApplication.CreateBuilder(args);
+
+            public sealed class TestResource(string name) : Resource(name);
+            public sealed class TestContext;
+
+            public static class TestExports
+            {
+                [AspireExport("withInlineLambdaCallback")]
+                public static IResourceBuilder<TestResource> WithInlineLambdaCallback(this IResourceBuilder<TestResource> builder, Action<TestContext> callback)
+                {
+                    ((Action)(() => callback(new TestContext())))();
+                    return builder;
+                }
+            }
+            """,
+            [new DiagnosticResult(diagnostic).WithLocation(15, 25).WithArguments("WithInlineLambdaCallback", "callback")]);
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task ExportedBuilderMethod_PassesActionIntoDeferredLocalFunction_NoDiagnostics()
+    {
+        var test = AnalyzerTest.Create<AspireExportAnalyzer>("""
+            using System;
+            using Aspire.Hosting;
+            using Aspire.Hosting.ApplicationModel;
+
+            var builder = DistributedApplication.CreateBuilder(args);
+
+            public sealed class TestResource(string name) : Resource(name);
+            public sealed class TestContext;
+
+            public sealed class TestAnnotation : IResourceAnnotation
+            {
+                public TestAnnotation(Action<TestContext> callback) { }
+            }
+
+            public static class TestExports
+            {
+                [AspireExport("withDeferredLocalFunction")]
+                public static IResourceBuilder<TestResource> WithDeferredLocalFunction(this IResourceBuilder<TestResource> builder, Action<TestContext> callback)
+                {
+                    void InvokeCallback(TestContext context) => callback(context);
+                    return builder.WithAnnotation(new TestAnnotation(InvokeCallback));
+                }
+            }
+            """, []);
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task ExportedBuilderMethod_InvokesSyncCallbackInsideInlineLocalFunction_ReportsASPIREEXPORT010()
+    {
+        var diagnostic = AspireExportAnalyzer.Diagnostics.s_exportedSyncDelegateInvokedInline;
+
+        var test = AnalyzerTest.Create<AspireExportAnalyzer>("""
+            using System;
+            using Aspire.Hosting;
+            using Aspire.Hosting.ApplicationModel;
+
+            var builder = DistributedApplication.CreateBuilder(args);
+
+            public sealed class TestResource(string name) : Resource(name);
+            public sealed class TestContext;
+
+            public static class TestExports
+            {
+                [AspireExport("withInlineLocalFunction")]
+                public static IResourceBuilder<TestResource> WithInlineLocalFunction(this IResourceBuilder<TestResource> builder, Action<TestContext> callback)
+                {
+                    void InvokeCallback()
+                    {
+                        callback(new TestContext());
+                    }
+
+                    InvokeCallback();
+                    return builder;
+                }
+            }
+            """,
+            [new DiagnosticResult(diagnostic).WithLocation(17, 13).WithArguments("WithInlineLocalFunction", "callback")]);
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task ExportedBuilderMethod_WithBackgroundThreadOptIn_NoASPIREEXPORT010()
+    {
+        var test = AnalyzerTest.Create<AspireExportAnalyzer>("""
+            using System;
+            using Aspire.Hosting;
+            using Aspire.Hosting.ApplicationModel;
+
+            var builder = DistributedApplication.CreateBuilder(args);
+
+            public sealed class TestResource(string name) : Resource(name);
+            public sealed class TestContext;
+
+            public static class TestExports
+            {
+                [AspireExport("withInlineCallback", RunSyncOnBackgroundThread = true)]
+                public static IResourceBuilder<TestResource> WithInlineCallback(this IResourceBuilder<TestResource> builder, Action<TestContext> callback)
+                {
+                    callback(new TestContext());
+                    return builder;
+                }
+            }
+            """, []);
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task ExportedBuilderMethod_WithContainingTypeBackgroundThreadOptIn_NoASPIREEXPORT010()
+    {
+        var test = AnalyzerTest.Create<AspireExportAnalyzer>("""
+            using System;
+            using Aspire.Hosting;
+            using Aspire.Hosting.ApplicationModel;
+
+            var builder = DistributedApplication.CreateBuilder(args);
+
+            public sealed class TestResource(string name) : Resource(name);
+            public sealed class TestContext;
+
+            [AspireExport(RunSyncOnBackgroundThread = true)]
+            public static class TestExports
+            {
+                [AspireExport("withInlineCallback")]
+                public static IResourceBuilder<TestResource> WithInlineCallback(this IResourceBuilder<TestResource> builder, Action<TestContext> callback)
+                {
+                    callback(new TestContext());
+                    return builder;
+                }
+            }
+            """, []);
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task ExportedBuilderMethod_InvokesAsyncCallbackInline_NoDiagnostics()
+    {
+        var test = AnalyzerTest.Create<AspireExportAnalyzer>("""
+            using System;
+            using System.Threading.Tasks;
+            using Aspire.Hosting;
+            using Aspire.Hosting.ApplicationModel;
+
+            var builder = DistributedApplication.CreateBuilder(args);
+
+            public sealed class TestResource(string name) : Resource(name);
+            public sealed class TestContext;
+
+            public static class TestExports
+            {
+                [AspireExport("withAsyncCallback")]
+                public static async Task<IResourceBuilder<TestResource>> WithAsyncCallback(this IResourceBuilder<TestResource> builder, Func<TestContext, Task> callback)
+                {
+                    await callback(new TestContext());
+                    return builder;
+                }
+            }
+            """, []);
+
+        await test.RunAsync();
+    }
+
+    [Fact]
     public async Task ValidBuilderParameter_NoDiagnostics()
     {
         var test = AnalyzerTest.Create<AspireExportAnalyzer>("""
@@ -1028,6 +1329,112 @@ public class AspireExportAnalyzerTests
             public static class TestExports
             {
                 public static void AddThing(this string name) { }
+            }
+            """, []);
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task MissingExportAttribute_OnAspireExportedTypeExtension_ReportsASPIREEXPORT008()
+    {
+        var diagnostic = AspireExportAnalyzer.Diagnostics.s_missingExportAttribute;
+
+        var test = AnalyzerTest.Create<AspireExportAnalyzer>("""
+            using Aspire.Hosting;
+
+            var builder = DistributedApplication.CreateBuilder(args);
+
+            [AspireExport]
+            public interface IExportedHandle
+            {
+            }
+
+            public static class TestExports
+            {
+                public static void Configure(this IExportedHandle handle) { }
+            }
+            """,
+            [new DiagnosticResult(diagnostic).WithLocation(12, 24).WithArguments("Configure", "Add [AspireExport] if ATS-compatible, or [AspireExportIgnore] with a reason.")]);
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task MissingExportAttribute_OnAssemblyExportedTypeExtension_ReportsASPIREEXPORT008()
+    {
+        var diagnostic = AspireExportAnalyzer.Diagnostics.s_missingExportAttribute;
+
+        var test = AnalyzerTest.Create<AspireExportAnalyzer>("""
+            using Aspire.Hosting;
+
+            [assembly: AspireExport(typeof(AssemblyExportedHandle))]
+
+            var builder = DistributedApplication.CreateBuilder(args);
+
+            public class AssemblyExportedHandle
+            {
+            }
+
+            public static class TestExports
+            {
+                public static void Configure(this AssemblyExportedHandle handle) { }
+            }
+            """,
+            [new DiagnosticResult(diagnostic).WithLocation(13, 24).WithArguments("Configure", "Add [AspireExport] if ATS-compatible, or [AspireExportIgnore] with a reason.")]);
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task MissingExportAttribute_OnImplicitlyExportedResourceTypeExtension_ReportsASPIREEXPORT008()
+    {
+        var diagnostic = AspireExportAnalyzer.Diagnostics.s_missingExportAttribute;
+
+        var test = AnalyzerTest.Create<AspireExportAnalyzer>("""
+            using Aspire.Hosting;
+            using Aspire.Hosting.ApplicationModel;
+
+            var builder = DistributedApplication.CreateBuilder(args);
+
+            public class MyResource : IResource
+            {
+                public string Name => "test";
+                public ResourceAnnotationCollection Annotations { get; } = new();
+            }
+
+            public static class ExportedMethods
+            {
+                [AspireExport("addThing")]
+                public static IResourceBuilder<MyResource> AddThing(this IDistributedApplicationBuilder builder, string name) => throw null!;
+            }
+
+            public static class ResourceExtensions
+            {
+                public static void Configure(this MyResource resource) { }
+            }
+            """,
+            [new DiagnosticResult(diagnostic).WithLocation(20, 24).WithArguments("Configure", "Add [AspireExport] if ATS-compatible, or [AspireExportIgnore] with a reason.")]);
+
+        await test.RunAsync();
+    }
+
+    [Fact]
+    public async Task MissingExportAttribute_OnExportedTypeInternalExtensionMethod_NoDiagnostics()
+    {
+        var test = AnalyzerTest.Create<AspireExportAnalyzer>("""
+            using Aspire.Hosting;
+
+            var builder = DistributedApplication.CreateBuilder(args);
+
+            [AspireExport]
+            public interface IExportedHandle
+            {
+            }
+
+            public static class TestExports
+            {
+                internal static void Configure(this IExportedHandle handle) { }
             }
             """, []);
 

@@ -53,6 +53,11 @@
                         <div>
                             <div class="message-header">
                                 <GenAIItemTitle Item="@selectedItem" ResourceName="@selectedItem.ResourceName" />
+                                <FluentButton Class="back-button"
+                                              Appearance="Appearance.Stealth"
+                                              OnClick="@GoBackAsync">
+                                    <FluentIcon Value="@(new Icons.Regular.Size16.ArrowHookUpLeft())" />
+                                </FluentButton>
                             </div>
                             @*
                                 Tab content isn't nested inside FluentTab elements. The tab control is just used to display the tabs.
@@ -93,7 +98,8 @@
                                     {
                                         <span class="error-message-text">@itemPart.ErrorMessage</span>
                                     }
-                                    else if (TryGetDataPart(itemPart, MimeTypeHelpers.SupportedImageTypes, out var imageData))
+
+                                    if (TryGetDataPart(itemPart, MimeTypeHelpers.SupportedImageTypes, out var imageData))
                                     {
                                         <img src="@imageData.Url" />
                                     }
@@ -136,6 +142,10 @@
                                             </FluentAccordion>
                                         </div>
                                     }
+                                    else if (itemPart.ErrorMessage == itemPart.TextVisualizerViewModel.Text)
+                                    {
+                                        // Don't display text if it is the same as error message.
+                                    }
                                     else
                                     {
                                         if (itemPart.TextVisualizerViewModel.FormatKind is DashboardUIHelpers.PlaintextFormat)
@@ -158,7 +168,7 @@
                                                 <div class="tool-button-container">
                                                     <FluentButton OnClick="@(() => ViewToolDefinitionAsync(toolVM))">
                                                         <FluentIcon Value="@s_wrenchIcon" Style="vertical-align: sub;" slot="start" />
-                                                        Tool definition
+                                                        @Loc[nameof(Dialogs.GenAIToolDefinitionButtonText)]
                                                     </FluentButton>
                                                 </div>
                                             }
@@ -170,7 +180,7 @@
                                                 <div class="tool-button-container">
                                                     <FluentButton OnClick="@(() => ViewToolDefinitionAsync(toolVM))">
                                                         <FluentIcon Value="@s_wrenchIcon" Style="vertical-align: sub;" slot="start" />
-                                                        Tool definition
+                                                        @Loc[nameof(Dialogs.GenAIToolDefinitionButtonText)]
                                                     </FluentButton>
                                                 </div>
                                             }
@@ -182,14 +192,14 @@
                                                 <div class="tool-button-container">
                                                     <FluentButton OnClick="@(() => OnViewItem(itemVM))">
                                                         <FluentIcon Value="@s_toolIcon" Style="vertical-align: sub;" slot="start" />
-                                                        Tool call
+                                                        @Loc[nameof(Dialogs.GenAIToolCallButtonText)]
                                                     </FluentButton>
 
                                                     @if (Content.ToolDefinitions.FirstOrDefault(d => d.ToolDefinition.Name == toolCallRequestPart.Name) is { } toolVM)
                                                     {
                                                         <FluentButton OnClick="@(() => ViewToolDefinitionAsync(toolVM))">
                                                             <FluentIcon Value="@s_wrenchIcon" Style="vertical-align: sub;" slot="start" />
-                                                            Tool definition
+                                                            @Loc[nameof(Dialogs.GenAIToolDefinitionButtonText)]
                                                         </FluentButton>
                                                     }
                                                 </div>
@@ -223,7 +233,7 @@
                     {
                         <div>
                             <div class="message-header">
-                                <span class="llm-badge">LLM</span>
+                                <span class="llm-badge">@Loc[nameof(Dialogs.GenAILLMBadgeText)]</span>
                                 <div class="message-header-title">
                                     <span>@Content.Span.Name</span>
                                     <span class="message-header-date">@FormatHelpers.FormatTimeWithOptionalDate(TimeProvider, Content.Span.StartTime, MillisecondsDisplay.Truncated)</span>
@@ -473,11 +483,11 @@
                 {
                     var itemParts = item.ItemParts.Where(p => !string.IsNullOrEmpty(p.TextVisualizerViewModel.Text)).ToList();
 
-                    <div class="message-container">
+                    <div class="message-container" id="@($"genai-message-{item.Index}")">
                         @if (item.Type != GenAIItemType.Error)
                         {
                             <div class="message-title">
-                                @GetItemTitle(item)
+                                <GenAIItemTitle Item="@item" ResourceName="@item.ResourceName" ShowIcon="false" />
                             </div>
                         }
                         <span class="defaultHidden">
@@ -493,7 +503,9 @@
                                 {
                                     <div class="error-message-text">@itemPart.ErrorMessage</div>
                                 }
-                                else
+
+                                // Don't display text if it is a copy of the error message
+                                if (itemPart.ErrorMessage != itemPart.TextVisualizerViewModel.Text)
                                 {
                                     <TextVisualizer ViewModel="@itemPart.TextVisualizerViewModel" HideLineNumbers="true" Virtualize="false" />
                                 }
