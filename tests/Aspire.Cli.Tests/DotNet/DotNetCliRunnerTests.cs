@@ -1197,7 +1197,7 @@ public class DotNetCliRunnerTests(ITestOutputHelper outputHelper)
                 // Verify that "build" command is used for single-file app host
                 Assert.Contains("build", args);
                 Assert.DoesNotContain("msbuild", args);
-                
+
                 // Provide valid JSON output
                 invocationOptions.StandardOutputCallback?.Invoke("{\"Properties\":{\"MSBuildVersion\":\"17.0.0\",\"AspireHostingSDKVersion\":\"9.0.0\"},\"Items\":{\"PackageReference\":[]}}");
             },
@@ -1233,7 +1233,7 @@ public class DotNetCliRunnerTests(ITestOutputHelper outputHelper)
                 // Verify that "msbuild" command is used for .csproj files
                 Assert.Contains("msbuild", args);
                 Assert.DoesNotContain("build", args);
-                
+
                 // Provide valid JSON output
                 invocationOptions.StandardOutputCallback?.Invoke("{\"Properties\":{\"MSBuildVersion\":\"17.0.0\",\"AspireHostingSDKVersion\":\"9.0.0\"},\"Items\":{\"PackageReference\":[]}}");
             },
@@ -1280,6 +1280,7 @@ public class DotNetCliRunnerTests(ITestOutputHelper outputHelper)
         var result = await runner.SearchPackagesAsync(
             workspace.WorkspaceRoot,
             "Aspire.Hosting",
+            exactMatch: false,
             prerelease: false,
             take: 100,
             skip: 0,
@@ -1321,6 +1322,7 @@ public class DotNetCliRunnerTests(ITestOutputHelper outputHelper)
         var result = await runner.SearchPackagesAsync(
             workspace.WorkspaceRoot,
             "Aspire.Hosting",
+            exactMatch: false,
             prerelease: false,
             take: 100,
             skip: 0,
@@ -1362,6 +1364,7 @@ public class DotNetCliRunnerTests(ITestOutputHelper outputHelper)
         var result = await runner.SearchPackagesAsync(
             workspace.WorkspaceRoot,
             "Aspire.Hosting",
+            exactMatch: false,
             prerelease: false,
             take: 100,
             skip: 0,

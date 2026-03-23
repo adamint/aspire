@@ -312,4 +312,9 @@ internal sealed class TestNuGetPackageCache : INuGetPackageCache
     {
         return Task.FromResult(Enumerable.Empty<NuGetPackage>());
     }
+
+    public Task<IEnumerable<NuGetPackage>> GetPackageVersionsAsync(DirectoryInfo workingDirectory, string exactPackageId, bool prerelease, FileInfo? nugetConfigFile, bool useCache, CancellationToken cancellationToken)
+    {
+        return Task.FromResult(Enumerable.Empty<NuGetPackage>());
+    }
 }

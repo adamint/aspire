@@ -45,6 +45,8 @@ internal sealed class MockNuGetPackageCache : INuGetPackageCache
 
     public Task<IEnumerable<NuGetPackageCli>> GetPackagesAsync(DirectoryInfo workingDirectory, string packageId, Func<string, bool>? filter, bool prerelease, FileInfo? nugetConfigFile, bool useCache, CancellationToken cancellationToken)
         => Task.FromResult<IEnumerable<NuGetPackageCli>>([]);
+    public Task<IEnumerable<NuGetPackageCli>> GetPackageVersionsAsync(DirectoryInfo workingDirectory, string exactPackageId, bool prerelease, FileInfo? nugetConfigFile, bool useCache, CancellationToken cancellationToken)
+        => Task.FromResult<IEnumerable<NuGetPackageCli>>([]);
 }
 
 internal static class TestExecutionContextFactory

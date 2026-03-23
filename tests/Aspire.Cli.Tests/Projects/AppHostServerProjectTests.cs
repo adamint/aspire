@@ -248,7 +248,7 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
             prNewHive.FullName);
 
         var runner = new TestDotNetCliRunner();
-        
+
         // Use a real logger to capture debug output for diagnostics
         using var loggerFactory = LoggerFactory.Create(builder =>
         {
@@ -354,18 +354,21 @@ public class AppHostServerProjectTests(ITestOutputHelper outputHelper) : IDispos
 
         public Task<IEnumerable<NuGetPackageCli>> GetPackagesAsync(DirectoryInfo workingDirectory, string packageId, Func<string, bool>? filter, bool prerelease, FileInfo? nugetConfigFile, bool useCache, CancellationToken cancellationToken)
             => Task.FromResult<IEnumerable<NuGetPackageCli>>([]);
+
+        public Task<IEnumerable<NuGetPackageCli>> GetPackageVersionsAsync(DirectoryInfo workingDirectory, string exactPackageId, bool prerelease, FileInfo? nugetConfigFile, bool useCache, CancellationToken cancellationToken)
+            => Task.FromResult<IEnumerable<NuGetPackageCli>>([]);
     }
 
     private static void DumpDirectoryTree(string path, ITestOutputHelper output, string indent = "")
     {
         var dirInfo = new DirectoryInfo(path);
         output.WriteLine($"{indent}{dirInfo.Name}/");
-        
+
         foreach (var file in dirInfo.GetFiles())
         {
             output.WriteLine($"{indent}  {file.Name}");
         }
-        
+
         foreach (var dir in dirInfo.GetDirectories())
         {
             DumpDirectoryTree(dir.FullName, output, indent + "  ");

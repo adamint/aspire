@@ -82,7 +82,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -139,7 +139,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -192,7 +192,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -247,7 +247,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -279,7 +279,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     public async Task NewCommandWithChannelOptionUsesSpecifiedChannel()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
-        
+
         string? channelNameUsed = null;
         bool promptedForVersion = false;
 
@@ -289,13 +289,13 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             {
                 var interactionService = sp.GetRequiredService<IInteractionService>();
                 var prompter = new TestNewCommandPrompter(interactionService);
-                
+
                 prompter.PromptForTemplatesVersionCallback = (packages) =>
                 {
                     promptedForVersion = true;
                     throw new InvalidOperationException("Should not prompt for version when --channel is specified");
                 };
-                
+
                 return prompter;
             };
 
@@ -311,7 +311,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
                         var package = new NuGetPackage { Id = "Aspire.ProjectTemplates", Source = "nuget", Version = "9.2.0" };
                         return Task.FromResult<IEnumerable<NuGetPackage>>([package]);
                     };
-                    
+
                     var dailyCache = new NewCommandTestFakeNuGetPackageCache();
                     dailyCache.GetTemplatePackagesAsyncCallback = (dir, prerelease, nugetConfig, ct) =>
                     {
@@ -319,13 +319,13 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
                         var package = new NuGetPackage { Id = "Aspire.ProjectTemplates", Source = "nuget", Version = "10.0.0-dev" };
                         return Task.FromResult<IEnumerable<NuGetPackage>>([package]);
                     };
-                    
+
                     var stableChannel = PackageChannel.CreateExplicitChannel("stable", PackageChannelQuality.Both, [], stableCache);
                     var dailyChannel = PackageChannel.CreateExplicitChannel("daily", PackageChannelQuality.Both, [], dailyCache);
-                    
+
                     return Task.FromResult<IEnumerable<PackageChannel>>([stableChannel, dailyChannel]);
                 };
-                
+
                 return packagingService;
             };
 
@@ -349,7 +349,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         var result = command.Parse("new aspire-starter --channel stable --use-redis-cache --test-framework None");
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
-        
+
         // Assert
         Assert.Equal(0, exitCode);
         Assert.Equal("stable", channelNameUsed); // Verify the stable channel was used
@@ -360,7 +360,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
     public async Task NewCommandWithChannelOptionAutoSelectsHighestVersion()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
-        
+
         string? selectedVersion = null;
         bool promptedForVersion = false;
 
@@ -370,13 +370,13 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             {
                 var interactionService = sp.GetRequiredService<IInteractionService>();
                 var prompter = new TestNewCommandPrompter(interactionService);
-                
+
                 prompter.PromptForTemplatesVersionCallback = (packages) =>
                 {
                     promptedForVersion = true;
                     throw new InvalidOperationException("Should not prompt for version when --channel is specified");
                 };
-                
+
                 return prompter;
             };
 
@@ -397,14 +397,14 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
                         };
                         return Task.FromResult<IEnumerable<NuGetPackage>>(packages);
                     };
-                    
+
                     var stableChannel = PackageChannel.CreateExplicitChannel("stable", PackageChannelQuality.Both, [], fakeCache);
                     return Task.FromResult<IEnumerable<PackageChannel>>([stableChannel]);
                 };
-                
+
                 return packagingService;
             };
-            
+
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
@@ -426,7 +426,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         var result = command.Parse("new aspire-starter --channel stable --use-redis-cache --test-framework None");
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
-        
+
         // Assert
         Assert.Equal(0, exitCode);
         Assert.Equal("9.2.0", selectedVersion); // Should auto-select highest version (9.2.0)
@@ -460,7 +460,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -514,7 +514,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetConfigFile, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetConfigFile, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -556,7 +556,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
 
             options.DotNetCliRunnerFactory = (sp) => {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) => {
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) => {
                     return (0, Array.Empty<NuGetPackage>());
                 };
                 return runner;
@@ -591,7 +591,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -644,7 +644,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -733,7 +733,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetConfigFile, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetConfigFile, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -780,7 +780,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         // This test validates that project names containing Spectre markup characters
         // (like '[' and ']') are properly escaped when displayed as default values in prompts.
         // This prevents crashes when the markup parser encounters malformed markup.
-        
+
         var projectNameWithMarkup = "[27;5;13~";  // Example of input that could crash the markup parser
         var capturedProjectNameDefault = string.Empty;
         var capturedOutputPathDefault = string.Empty;
@@ -815,7 +815,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -860,7 +860,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, dotnetOptions, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, dotnetOptions, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -956,7 +956,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, dotnetOptions, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, dotnetOptions, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -993,7 +993,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -1054,7 +1054,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -1096,7 +1096,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -1152,7 +1152,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -1231,7 +1231,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -1300,7 +1300,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         {
             options.DotNetCliRunnerFactory = _ => new TestDotNetCliRunner
             {
-                SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, runnerOptions, cancellationToken) =>
+                SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, runnerOptions, cancellationToken) =>
                 {
                     var package = new NuGetPackage
                     {
@@ -1373,7 +1373,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         {
             options.DotNetCliRunnerFactory = _ => new TestDotNetCliRunner
             {
-                SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, runnerOptions, cancellationToken) =>
+                SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, runnerOptions, cancellationToken) =>
                 {
                     var package = new NuGetPackage
                     {
@@ -1441,7 +1441,7 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
                 {
                     var package = new NuGetPackage()
                     {
@@ -1601,7 +1601,7 @@ internal sealed class NewCommandTestPackagingService : IPackagingService
         {
             return GetChannelsAsyncCallback(cancellationToken);
         }
-        
+
         // Default: Return a fake channel
         var testChannel = PackageChannel.CreateImplicitChannel(new NewCommandTestFakeNuGetPackageCache());
         return Task.FromResult<IEnumerable<PackageChannel>>(new[] { testChannel });
@@ -1639,6 +1639,11 @@ internal sealed class NewCommandTestFakeNuGetPackageCache : INuGetPackageCache
     }
 
     public Task<IEnumerable<NuGetPackage>> GetPackagesAsync(DirectoryInfo workingDirectory, string packageId, Func<string, bool>? filter, bool prerelease, FileInfo? nugetConfigFile, bool useCache, CancellationToken cancellationToken)
+    {
+        return Task.FromResult<IEnumerable<NuGetPackage>>(Array.Empty<NuGetPackage>());
+    }
+
+    public Task<IEnumerable<NuGetPackage>> GetPackageVersionsAsync(DirectoryInfo workingDirectory, string exactPackageId, bool prerelease, FileInfo? nugetConfigFile, bool useCache, CancellationToken cancellationToken)
     {
         return Task.FromResult<IEnumerable<NuGetPackage>>(Array.Empty<NuGetPackage>());
     }

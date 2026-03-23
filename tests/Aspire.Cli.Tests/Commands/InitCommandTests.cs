@@ -7,6 +7,7 @@ using Aspire.Cli.NuGet;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
+using Aspire.Shared;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.InternalTesting;
 
@@ -352,7 +353,7 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
                 };
 
                 // Mock package search for template version selection
-                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetConfigFile, useCache, invocationOptions, cancellationToken) =>
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetConfigFile, useCache, invocationOptions, cancellationToken) =>
                 {
                     var package = new Aspire.Shared.NuGetPackageCli
                     {
@@ -460,13 +461,18 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
         {
             return Task.FromResult<IEnumerable<Aspire.Shared.NuGetPackageCli>>(Array.Empty<Aspire.Shared.NuGetPackageCli>());
         }
+
+        public Task<IEnumerable<NuGetPackageCli>> GetPackageVersionsAsync(DirectoryInfo workingDirectory, string exactPackageId, bool prerelease, FileInfo? nugetConfigFile, bool useCache, CancellationToken cancellationToken)
+        {
+            return Task.FromResult<IEnumerable<Aspire.Shared.NuGetPackageCli>>(Array.Empty<Aspire.Shared.NuGetPackageCli>());
+        }
     }
 
     [Fact]
     public async Task InitCommandWithChannelOptionUsesSpecifiedChannel()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
-        
+
         string? channelNameUsed = null;
         bool promptedForVersion = false;
 
@@ -476,13 +482,13 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
             {
                 var interactionService = sp.GetRequiredService<IInteractionService>();
                 var prompter = new TestNewCommandPrompter(interactionService);
-                
+
                 prompter.PromptForTemplatesVersionCallback = (packages) =>
                 {
                     promptedForVersion = true;
                     throw new InvalidOperationException("Should not prompt for version when --channel is specified");
                 };
-                
+
                 return prompter;
             };
 
@@ -490,7 +496,7 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
             {
                 return new TestPackagingServiceWithChannelTracking((channelName) => channelNameUsed = channelName);
             };
-            
+
             options.DotNetCliRunnerFactory = (sp) =>
             {
                 var runner = new TestDotNetCliRunner();
@@ -513,7 +519,7 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
         var result = command.Parse("init --channel stable");
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
-        
+
         // Assert
         Assert.Equal(0, exitCode);
         Assert.Equal("stable", channelNameUsed);
@@ -538,7 +544,7 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
         var result = command.Parse("init --channel invalid-channel");
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
-        
+
         // Assert - should fail with non-zero exit code for invalid channel
         Assert.NotEqual(0, exitCode);
     }
@@ -549,10 +555,10 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
         {
             var stableCache = new FakeNuGetPackageCacheWithTracking("stable", onChannelUsed);
             var dailyCache = new FakeNuGetPackageCacheWithTracking("daily", onChannelUsed);
-            
+
             var stableChannel = PackageChannel.CreateExplicitChannel("stable", PackageChannelQuality.Both, [], stableCache);
             var dailyChannel = PackageChannel.CreateExplicitChannel("daily", PackageChannelQuality.Both, [], dailyCache);
-            
+
             return Task.FromResult<IEnumerable<PackageChannel>>(new[] { stableChannel, dailyChannel });
         }
     }
@@ -582,6 +588,11 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
         }
 
         public Task<IEnumerable<Aspire.Shared.NuGetPackageCli>> GetPackagesAsync(DirectoryInfo workingDirectory, string packageId, Func<string, bool>? filter, bool prerelease, FileInfo? nugetConfigFile, bool useCache, CancellationToken cancellationToken)
+        {
+            return Task.FromResult<IEnumerable<Aspire.Shared.NuGetPackageCli>>(Array.Empty<Aspire.Shared.NuGetPackageCli>());
+        }
+
+        public Task<IEnumerable<NuGetPackageCli>> GetPackageVersionsAsync(DirectoryInfo workingDirectory, string exactPackageId, bool prerelease, FileInfo? nugetConfigFile, bool useCache, CancellationToken cancellationToken)
         {
             return Task.FromResult<IEnumerable<Aspire.Shared.NuGetPackageCli>>(Array.Empty<Aspire.Shared.NuGetPackageCli>());
         }
