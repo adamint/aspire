@@ -104,6 +104,24 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
         return FilterPackages(packages, filter);
     }
 
+    public async Task<IEnumerable<NuGetPackage>> GetPackageVersionsAsync(
+        DirectoryInfo workingDirectory,
+        string exactPackageId,
+        bool prerelease,
+        FileInfo? nugetConfigFile,
+        bool useCache,
+        CancellationToken cancellationToken)
+    {
+        return await GetPackagesAsync(
+            workingDirectory,
+            exactPackageId,
+            filter: id => string.Equals(id, exactPackageId, StringComparison.OrdinalIgnoreCase),
+            prerelease,
+            nugetConfigFile,
+            useCache,
+            cancellationToken);
+    }
+
     private async Task<IEnumerable<NuGetPackage>> SearchPackagesInternalAsync(
         DirectoryInfo workingDirectory,
         string query,
