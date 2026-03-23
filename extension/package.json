@@ -344,7 +344,7 @@
         },
         {
           "command": "aspire-vscode.openDashboard",
-          "when": "false"
+          "when": "!aspire.noRunningAppHosts"
         },
         {
           "command": "aspire-vscode.stopAppHost",
