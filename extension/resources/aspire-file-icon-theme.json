@@ -1,0 +1,25 @@
+{
+    "iconDefinitions": {
+        "_file": {
+            "iconPath": "./default-file.svg"
+        },
+        "_folder": {
+            "iconPath": "./default-folder.svg"
+        },
+        "_folder_open": {
+            "iconPath": "./default-folder-open.svg"
+        },
+        "aspire": {
+            "iconPath": "./aspire-file-icon.svg"
+        }
+    },
+    "file": "_file",
+    "folder": "_folder",
+    "folderExpanded": "_folder_open",
+    "fileNames": {
+        "apphost.cs": "aspire",
+        "apphost.js": "aspire",
+        "apphost.java": "aspire",
+        "apphost.py": "aspire"
+    }
+}
