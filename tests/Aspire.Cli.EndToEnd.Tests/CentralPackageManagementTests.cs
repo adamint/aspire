@@ -170,33 +170,8 @@ public sealed class CentralPackageManagementTests(ITestOutputHelper output)
             </Project>
             """);
 
-        var waitingForVersionSelection = new CellPatternSearcher()
-            .Find("Select a version of");
-        var versionSelectionShown = false;
-
-        await auto.TypeAsync("aspire add Aspire.Hosting.Redis");
+        await auto.TypeAsync("aspire add Aspire.Hosting.Redis --version 13.1.2");
         await auto.EnterAsync();
-        await auto.WaitUntilAsync(s =>
-        {
-            if (waitingForVersionSelection.Search(s).Count > 0)
-            {
-                versionSelectionShown = true;
-                return true;
-            }
-
-            var successPromptSearcher = new CellPatternSearcher()
-                .FindPattern(counter.Value.ToString())
-                .RightText(" OK] $ ");
-
-            return successPromptSearcher.Search(s).Count > 0;
-        }, timeout: TimeSpan.FromSeconds(180), description: "version selection prompt or success prompt");
-
-        if (versionSelectionShown)
-        {
-            // PR hives can surface multiple channels in CI. Accept the default implicit-channel version
-            // so this test validates CPM behavior without pinning a specific package version.
-            await auto.EnterAsync();
-        }
 
         await auto.WaitForSuccessPromptAsync(counter);
 
