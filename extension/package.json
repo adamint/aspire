@@ -685,6 +685,12 @@
           "default": true,
           "description": "%configuration.aspire.enableGutterDecorations%",
           "scope": "window"
+        },
+        "aspire.enableAutoRestore": {
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.aspire.enableAutoRestore%",
+          "scope": "window"
         }
       }
     },
