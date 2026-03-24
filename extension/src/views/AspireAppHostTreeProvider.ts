@@ -79,14 +79,21 @@ class PidItem extends vscode.TreeItem {
 class EndpointUrlItem extends vscode.TreeItem {
     constructor(public readonly url: string, displayName: string) {
         super(displayName, vscode.TreeItemCollapsibleState.None);
-        this.iconPath = new vscode.ThemeIcon('link-external');
         this.tooltip = url;
-        this.contextValue = 'endpointUrl';
-        this.command = {
-            command: 'vscode.open',
-            title: url,
-            arguments: [vscode.Uri.parse(url)]
-        };
+
+        const isHttpUrl = url.startsWith('http://') || url.startsWith('https://');
+        if (isHttpUrl) {
+            this.iconPath = new vscode.ThemeIcon('link-external');
+            this.contextValue = 'endpointUrl';
+            this.command = {
+                command: 'vscode.open',
+                title: url,
+                arguments: [vscode.Uri.parse(url)]
+            };
+        } else {
+            this.iconPath = new vscode.ThemeIcon('radio-tower');
+            this.contextValue = 'endpointUrlNonHttp';
+        }
     }
 }
 
