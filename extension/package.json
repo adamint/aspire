@@ -39,6 +39,25 @@
   "main": "./dist/extension.js",
   "l10n": "./l10n",
   "contributes": {
+    "languages": [
+      {
+        "id": "aspire-apphost",
+        "filenames": [
+          "apphost.cs",
+          "AppHost.cs",
+          "apphost.js",
+          "AppHost.js",
+          "apphost.java",
+          "AppHost.java",
+          "apphost.py",
+          "AppHost.py"
+        ],
+        "icon": {
+          "light": "./resources/aspire-file-icon.svg",
+          "dark": "./resources/aspire-file-icon.svg"
+        }
+      }
+    ],
     "mcpServerDefinitionProviders": [
       {
         "id": "aspire-mcp-server",
