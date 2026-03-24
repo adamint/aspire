@@ -273,7 +273,14 @@ internal sealed class NewCommand : BaseCommand, IPackageMetaPrefetchingCommand
         var templateResult = await template.ApplyTemplateAsync(inputs, parseResult, cancellationToken);
         if (templateResult.ExitCode == ExitCodeConstants.Success && templateResult.OutputPath is not null)
         {
-            WriteVsCodeWorkspaceFiles(templateResult.OutputPath);
+            try
+            {
+                WriteVsCodeWorkspaceFiles(templateResult.OutputPath);
+            }
+            catch (Exception ex)
+            {
+                InteractionService.DisplayMessage(KnownEmojis.Warning, $"Failed to generate VS Code workspace files: {ex.Message}");
+            }
         }
 
         if (templateResult.OutputPath is not null && ExtensionHelper.IsExtensionHost(InteractionService, out var extensionInteractionService, out _))

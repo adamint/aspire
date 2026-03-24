@@ -1562,6 +1562,54 @@ public class NewCommandTests(ITestOutputHelper outputHelper)
         var launchContent = File.ReadAllText(Path.Combine(vsCodeDir, "launch.json"));
         Assert.DoesNotContain("\"type\": \"aspire\"", launchContent);
     }
+
+    [Fact]
+    public async Task NewCommandCreatesOnlyMissingVsCodeFiles()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var outputDir = workspace.CreateDirectory("MyApp3");
+
+        var vsCodeDir = Path.Combine(outputDir.FullName, ".vscode");
+        Directory.CreateDirectory(vsCodeDir);
+        File.WriteAllText(Path.Combine(vsCodeDir, "extensions.json"), """{"recommendations":["existing.extension"]}""");
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.DotNetCliRunnerFactory = (sp) =>
+            {
+                var runner = new TestDotNetCliRunner();
+                runner.SearchPackagesAsyncCallback = (dir, query, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                {
+                    var package = new NuGetPackage()
+                    {
+                        Id = "Aspire.ProjectTemplates",
+                        Source = "nuget",
+                        Version = "9.2.0"
+                    };
+
+                    return (0, new NuGetPackage[] { package });
+                };
+
+                return runner;
+            };
+        });
+        var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<NewCommand>();
+        var result = command.Parse($"new aspire-starter --name TestApp --output {outputDir.FullName} --use-redis-cache --test-framework None");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+        Assert.Equal(0, exitCode);
+
+        var extensionsContent = File.ReadAllText(Path.Combine(vsCodeDir, "extensions.json"));
+        Assert.Contains("existing.extension", extensionsContent);
+        Assert.DoesNotContain("microsoft-aspire.aspire-vscode", extensionsContent);
+
+        var launchJsonPath = Path.Combine(vsCodeDir, "launch.json");
+        Assert.True(File.Exists(launchJsonPath));
+        var launchContent = File.ReadAllText(launchJsonPath);
+        Assert.Contains("\"type\": \"aspire\"", launchContent);
+    }
 }
 
 internal sealed class TestNewCommandPrompter(IInteractionService interactionService) : NewCommandPrompter(interactionService)
