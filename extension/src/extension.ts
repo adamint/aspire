@@ -197,7 +197,9 @@ export async function activate(context: vscode.ExtensionContext) {
   // Auto-restore: run `aspire restore` on workspace open and when aspire.config.json changes
   const packageRestoreProvider = new AspirePackageRestoreProvider(terminalProvider);
   context.subscriptions.push(packageRestoreProvider);
-  packageRestoreProvider.activate();
+  void packageRestoreProvider.activate().catch(err => {
+    extensionLogOutputChannel.warn(`Auto-restore activation failed: ${String(err)}`);
+  });
 
   // Return exported API for tests or other extensions
   return {

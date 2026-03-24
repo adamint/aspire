@@ -23,6 +23,7 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
     private readonly _active = new Map<string, string>(); // configDir → relativePath
     private readonly _childProcesses = new Set<ChildProcessWithoutNullStreams>();
     private readonly _timeouts = new Set<ReturnType<typeof setTimeout>>();
+    private readonly _pendingRestore = new Set<string>(); // configDirs needing re-restore
     private _total = 0;
     private _completed = 0;
 
@@ -33,14 +34,6 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
     }
 
     async activate(): Promise<void> {
-        if (!getEnableAutoRestore()) {
-            extensionLogOutputChannel.info('Auto-restore is disabled');
-            return;
-        }
-
-        await this._restoreAll();
-        this._watchConfigFiles();
-
         this._disposables.push(
             vscode.workspace.onDidChangeConfiguration(e => {
                 if (e.affectsConfiguration('aspire.enableAutoRestore') && getEnableAutoRestore()) {
@@ -48,6 +41,14 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
                 }
             })
         );
+
+        if (!getEnableAutoRestore()) {
+            extensionLogOutputChannel.info('Auto-restore is disabled');
+            return;
+        }
+
+        await this._restoreAll();
+        this._watchConfigFiles();
     }
 
     private async _restoreAll(): Promise<void> {
@@ -94,29 +95,43 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
     }
 
     private async _restoreIfChanged(uri: vscode.Uri, isInitial: boolean): Promise<void> {
+        let content: string;
         try {
-            const content = (await vscode.workspace.fs.readFile(uri)).toString();
-            const prev = this._lastContent.get(uri.fsPath);
-            this._lastContent.set(uri.fsPath, content);
-
-            if (!isInitial && prev === content) {
-                return;
-            }
-
-            const configDir = path.dirname(uri.fsPath);
-            const relativePath = vscode.workspace.asRelativePath(uri);
-            extensionLogOutputChannel.info(`${isInitial ? 'Initial' : 'Changed'} restore for ${relativePath}`);
-            await this._runRestore(configDir, relativePath);
+            content = (await vscode.workspace.fs.readFile(uri)).toString();
         } catch (error) {
             extensionLogOutputChannel.warn(`Failed to read ${uri.fsPath}: ${error}`);
+            return;
+        }
+
+        const prev = this._lastContent.get(uri.fsPath);
+        if (!isInitial && prev === content) {
+            return;
+        }
+
+        const configDir = path.dirname(uri.fsPath);
+        const relativePath = vscode.workspace.asRelativePath(uri);
+        extensionLogOutputChannel.info(`${isInitial ? 'Initial' : 'Changed'} restore for ${relativePath}`);
+
+        // Don't update baseline until restore succeeds; queue re-restore if one is already active
+        if (this._active.has(configDir)) {
+            this._pendingRestore.add(configDir);
+            return;
+        }
+
+        this._lastContent.set(uri.fsPath, content);
+        try {
+            await this._runRestore(configDir, relativePath);
+        } catch (error) {
+            extensionLogOutputChannel.warn(`Restore failed for ${relativePath}: ${error}`);
+        }
+
+        // If a change arrived while we were restoring, re-read and restore again
+        if (this._pendingRestore.delete(configDir)) {
+            await this._restoreIfChanged(uri, false);
         }
     }
 
     private async _runRestore(configDir: string, relativePath: string): Promise<void> {
-        if (this._active.has(configDir)) {
-            return;
-        }
-
         this._active.set(configDir, relativePath);
         this._showProgress();
 
@@ -131,7 +146,7 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
                         resolve();
                     } else {
                         extensionLogOutputChannel.warn(aspireRestoreFailed(relativePath, `exit code ${code}`));
-                        reject();
+                        reject(new Error(`exit code ${code}`));
                     }
                 },
                 errorCallback: error => {
@@ -140,7 +155,7 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
                 },
             });
             this._childProcesses.add(proc);
-            const timeout = setTimeout(() => { proc.kill(); reject(); }, 120_000);
+            const timeout = setTimeout(() => { proc.kill(); reject(new Error('restore timed out')); }, 120_000);
             this._timeouts.add(timeout);
             proc.on('close', () => {
                 clearTimeout(timeout);
@@ -152,7 +167,10 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
             this._completed++;
             this._showProgress();
             if (this._active.size === 0) {
-                const hideTimeout = setTimeout(() => { if (this._active.size === 0) { this._statusBarItem.hide(); } }, 5000);
+                const hideTimeout = setTimeout(() => {
+                    this._timeouts.delete(hideTimeout);
+                    if (this._active.size === 0) { this._statusBarItem.hide(); }
+                }, 5000);
                 this._timeouts.add(hideTimeout);
             }
         });
