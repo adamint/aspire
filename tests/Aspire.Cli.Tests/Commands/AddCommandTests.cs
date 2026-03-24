@@ -255,6 +255,211 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task AddCommandDoesNotPromptForVersionIfOlderVersionSpecifiedOnCommandLine()
+    {
+        var promptedForIntegrationPackages = false;
+        var promptedForVersion = false;
+
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.AddCommandPrompterFactory = (sp) =>
+            {
+                var interactionService = sp.GetRequiredService<IInteractionService>();
+                var prompter = new TestAddCommandPrompter(interactionService);
+
+                prompter.PromptForIntegrationCallback = (packages) =>
+                {
+                    promptedForIntegrationPackages = true;
+                    throw new InvalidOperationException("Should not have been prompted for integration packages.");
+                };
+
+                prompter.PromptForIntegrationVersionCallback = (packages) =>
+                {
+                    promptedForVersion = true;
+                    throw new InvalidOperationException("Should not have been prompted for integration version.");
+                };
+
+                return prompter;
+            };
+
+            options.ProjectLocatorFactory = _ => new TestProjectLocator();
+
+            options.DotNetCliRunnerFactory = (sp) =>
+            {
+                var runner = new TestDotNetCliRunner();
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                {
+                    var dockerLatestPackage = new NuGetPackage()
+                    {
+                        Id = "Aspire.Hosting.Docker",
+                        Source = "nuget",
+                        Version = "13.2.0"
+                    };
+                    var dockerOlderPackage = new NuGetPackage()
+                    {
+                        Id = "Aspire.Hosting.Docker",
+                        Source = "nuget",
+                        Version = "9.2.0"
+                    };
+
+                    var redisPackage = new NuGetPackage()
+                    {
+                        Id = "Aspire.Hosting.Redis",
+                        Source = "nuget",
+                        Version = "13.2.0"
+                    };
+
+                    var azureRedisPackage = new NuGetPackage()
+                    {
+                        Id = "Aspire.Hosting.Azure.Redis",
+                        Source = "nuget",
+                        Version = "13.2.0"
+                    };
+
+                    if (!exactMatch) // package search returns only latest version
+                    {
+                        return (
+                            0, // Exit code.
+                            new NuGetPackage[] { dockerLatestPackage, redisPackage, azureRedisPackage }
+                            );
+                    }
+                    else // exact match gets all previous versions of a specific package
+                    {
+                        return (
+                            0, // Exit code.
+                            new NuGetPackage[] { dockerLatestPackage, dockerOlderPackage }
+                            );
+                    }
+                };
+
+                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, nugetSource, noRestore, options, cancellationToken) =>
+                {
+                    // Simulate adding the package.
+                    return 0; // Success.
+                };
+
+                return runner;
+            };
+        });
+        var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<AddCommand>();
+        var result = command.Parse("add docker --version 9.2.0");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+        Assert.Equal(0, exitCode);
+        Assert.False(promptedForIntegrationPackages);
+        Assert.False(promptedForVersion);
+    }
+
+    [Fact]
+    public async Task AddCommandPromptsForLatestVersionIfVersionSpecifiedOnCommandLineDoesNotExist()
+    {
+        IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)>? promptedPackageVersions = null;
+        var promptedForIntegrationPackages = false;
+        var promptedForVersion = false;
+
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.CliHostEnvironmentFactory = _ => TestHelpers.CreateInteractiveHostEnvironment();
+
+            options.AddCommandPrompterFactory = (sp) =>
+            {
+                var interactionService = sp.GetRequiredService<IInteractionService>();
+                var prompter = new TestAddCommandPrompter(interactionService);
+
+                prompter.PromptForIntegrationCallback = (packages) =>
+                {
+                    promptedForIntegrationPackages = true;
+                    throw new InvalidOperationException("Should not have been prompted for integration packages.");
+                };
+
+                prompter.PromptForIntegrationVersionCallback = (packages) =>
+                {
+                    promptedForVersion = true;
+                    promptedPackageVersions = packages;
+                    return packages.First();
+                };
+
+                return prompter;
+            };
+
+            options.ProjectLocatorFactory = _ => new TestProjectLocator();
+
+            options.DotNetCliRunnerFactory = (sp) =>
+            {
+                var runner = new TestDotNetCliRunner();
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, options, cancellationToken) =>
+                {
+                    var dockerLatestPackage = new NuGetPackage()
+                    {
+                        Id = "Aspire.Hosting.Docker",
+                        Source = "nuget",
+                        Version = "13.2.0"
+                    };
+                    var dockerOlderPackage = new NuGetPackage()
+                    {
+                        Id = "Aspire.Hosting.Docker",
+                        Source = "nuget",
+                        Version = "9.2.0"
+                    };
+
+                    var redisPackage = new NuGetPackage()
+                    {
+                        Id = "Aspire.Hosting.Redis",
+                        Source = "nuget",
+                        Version = "13.2.0"
+                    };
+
+                    var azureRedisPackage = new NuGetPackage()
+                    {
+                        Id = "Aspire.Hosting.Azure.Redis",
+                        Source = "nuget",
+                        Version = "13.2.0"
+                    };
+
+                    if (!exactMatch) // package search returns only latest version
+                    {
+                        return (
+                            0, // Exit code.
+                            new NuGetPackage[] { dockerLatestPackage, redisPackage, azureRedisPackage }
+                            );
+                    }
+                    else // exact match gets all previous versions of a specific package
+                    {
+                        return (
+                            0, // Exit code.
+                            new NuGetPackage[] { dockerLatestPackage, dockerOlderPackage }
+                            );
+                    }
+                };
+
+                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, nugetSource, noRestore, options, cancellationToken) =>
+                {
+                    // Simulate adding the package.
+                    return 0; // Success.
+                };
+
+                return runner;
+            };
+        });
+        var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<AddCommand>();
+        var result = command.Parse("add docker --version 11.2.0");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+        Assert.Equal(0, exitCode);
+        Assert.False(promptedForIntegrationPackages);
+        Assert.True(promptedForVersion);
+        var promptedPackage = Assert.Single(promptedPackageVersions!);
+        Assert.Equal("Aspire.Hosting.Docker", promptedPackage.Package.Id);
+        Assert.Equal("13.2.0", promptedPackage.Package.Version);
+    }
+
+    [Fact]
     public async Task AddCommandPromptsForDisambiguation()
     {
         IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)>? promptedPackages = null;

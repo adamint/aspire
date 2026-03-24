@@ -199,11 +199,9 @@ internal sealed class AddCommand : BaseCommand
             var selectedNuGetPackage = filteredPackagesWithShortName.Count() switch
             {
                 0 => await GetPackageByInteractiveFlowWithNoMatchesMessage(effectiveAppHostProjectFile.Directory!, packagesWithShortName, integrationName, cancellationToken),
-                1 => filteredPackagesWithShortName.First().Package.Version == version
-                    ? filteredPackagesWithShortName.First()
-                    : await GetPackageByInteractiveFlow(effectiveAppHostProjectFile.Directory!, filteredPackagesWithShortName, null, cancellationToken),
-                > 1 => await GetPackageByInteractiveFlow(effectiveAppHostProjectFile.Directory!, filteredPackagesWithShortName, version, cancellationToken),
-                _ => throw new InvalidOperationException(AddCommandStrings.UnexpectedNumberOfPackagesFound)
+                1 when filteredPackagesWithShortName.First().Package.Version == version
+                    => filteredPackagesWithShortName.First(),
+                _ => await GetPackageByInteractiveFlow(effectiveAppHostProjectFile.Directory!, filteredPackagesWithShortName, version, cancellationToken)
             };
 
             var source = parseResult.GetValue(s_sourceOption);
