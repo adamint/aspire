@@ -81,14 +81,15 @@ class EndpointUrlItem extends vscode.TreeItem {
         super(displayName, vscode.TreeItemCollapsibleState.None);
         this.tooltip = url;
 
-        const isHttpUrl = url.startsWith('http://') || url.startsWith('https://');
+        const uri = vscode.Uri.parse(url);
+        const isHttpUrl = uri.scheme.toLowerCase() === 'http' || uri.scheme.toLowerCase() === 'https';
         if (isHttpUrl) {
             this.iconPath = new vscode.ThemeIcon('link-external');
             this.contextValue = 'endpointUrl';
             this.command = {
                 command: 'vscode.open',
                 title: url,
-                arguments: [vscode.Uri.parse(url)]
+                arguments: [uri]
             };
         } else {
             this.iconPath = new vscode.ThemeIcon('radio-tower');
