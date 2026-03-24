@@ -3,6 +3,7 @@
 
 using System.CommandLine;
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using System.Text.RegularExpressions;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
@@ -270,6 +271,11 @@ internal sealed class NewCommand : BaseCommand, IPackageMetaPrefetchingCommand
             Language = template.LanguageId
         };
         var templateResult = await template.ApplyTemplateAsync(inputs, parseResult, cancellationToken);
+        if (templateResult.ExitCode == ExitCodeConstants.Success && templateResult.OutputPath is not null)
+        {
+            WriteVsCodeWorkspaceFiles(templateResult.OutputPath);
+        }
+
         if (templateResult.OutputPath is not null && ExtensionHelper.IsExtensionHost(InteractionService, out var extensionInteractionService, out _))
         {
             extensionInteractionService.OpenEditor(templateResult.OutputPath);
@@ -282,6 +288,46 @@ internal sealed class NewCommand : BaseCommand, IPackageMetaPrefetchingCommand
     private static bool ShouldResolveCliTemplateVersion(ITemplate template)
     {
         return template.Runtime is TemplateRuntime.Cli;
+    }
+
+    private static void WriteVsCodeWorkspaceFiles(string outputPath)
+    {
+        var vsCodeDir = Path.Combine(outputPath, ".vscode");
+        Directory.CreateDirectory(vsCodeDir);
+
+        var extensionsJsonPath = Path.Combine(vsCodeDir, "extensions.json");
+        if (!File.Exists(extensionsJsonPath))
+        {
+            File.WriteAllText(extensionsJsonPath,
+                """
+                {
+                    "recommendations": [
+                        "microsoft-aspire.aspire-vscode"
+                    ]
+                }
+                """,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
+
+        var launchJsonPath = Path.Combine(vsCodeDir, "launch.json");
+        if (!File.Exists(launchJsonPath))
+        {
+            File.WriteAllText(launchJsonPath,
+                """
+                {
+                    "version": "0.2.0",
+                    "configurations": [
+                        {
+                            "type": "aspire",
+                            "request": "launch",
+                            "name": "Aspire: Launch default apphost",
+                            "program": "${workspaceFolder}"
+                        }
+                    ]
+                }
+                """,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        }
     }
 }
 
