@@ -288,6 +288,7 @@ internal sealed class NewCommand : BaseCommand, IPackageMetaPrefetchingCommand
         var workspaceRoot = new DirectoryInfo(templateResult.OutputPath ?? ExecutionContext.WorkingDirectory.FullName);
         var exitCode = await _agentInitCommand.PromptAndChainAsync(_hostEnvironment, InteractionService, templateResult.ExitCode, workspaceRoot, cancellationToken);
 
+        // Editor is opened AFTER the agent init prompt since OpenEditor may trigger a workspace change, which would terminate the CLI process
         if (templateResult.OutputPath is not null && ExtensionHelper.IsExtensionHost(InteractionService, out var extensionInteractionService, out _))
         {
             extensionInteractionService.OpenEditor(templateResult.OutputPath);
