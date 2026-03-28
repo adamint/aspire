@@ -7,7 +7,7 @@ import { spawnCliProcess } from '../debugger/languages/cli';
 import { AspireTerminalProvider } from './AspireTerminalProvider';
 import { extensionLogOutputChannel } from './logging';
 import { getEnableAutoRestore } from './settings';
-import { runningAspireRestore, runningAspireRestoreProgress, aspireRestoreCompleted, aspireRestoreAllCompleted, aspireRestoreFailed } from '../loc/strings';
+import { runningAspireRestore, runningAspireRestoreProgress, aspireRestoreCompleted, aspireRestoreAllCompleted, aspireRestoreFailed, aspireRestoreFailedStatusBar } from '../loc/strings';
 
 /**
  * Runs `aspire restore` on workspace open and whenever aspire.config.json content changes
@@ -15,6 +15,8 @@ import { runningAspireRestore, runningAspireRestoreProgress, aspireRestoreComple
  */
 export class AspirePackageRestoreProvider implements vscode.Disposable {
     private static readonly _maxConcurrency = 4;
+    private static readonly _statusBarHideDelayMs = 5000;
+    private static readonly _restoreTimeoutMs = 120_000;
 
     private readonly _disposables: vscode.Disposable[] = [];
     private readonly _terminalProvider: AspireTerminalProvider;
@@ -26,10 +28,12 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
     private readonly _pendingRestore = new Set<string>(); // configDirs needing re-restore
     private _total = 0;
     private _completed = 0;
+    private _hadFailure = false;
 
     constructor(terminalProvider: AspireTerminalProvider) {
         this._terminalProvider = terminalProvider;
         this._statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
+        this._statusBarItem.command = 'aspire-vscode.restore';
         this._disposables.push(this._statusBarItem);
     }
 
@@ -37,10 +41,16 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
         this._disposables.push(
             vscode.workspace.onDidChangeConfiguration(e => {
                 if (e.affectsConfiguration('aspire.enableAutoRestore') && getEnableAutoRestore()) {
-                    this._restoreAll();
+                    void this._restoreAll().catch(err => {
+                        extensionLogOutputChannel.warn(`Auto-restore failed: ${String(err)}`);
+                    });
                 }
             })
         );
+
+        // Always set up watchers so they're ready when the setting is toggled on.
+        // _onChanged gates on the current setting value.
+        this._watchConfigFiles();
 
         if (!getEnableAutoRestore()) {
             extensionLogOutputChannel.info('Auto-restore is disabled');
@@ -48,7 +58,6 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
         }
 
         await this._restoreAll();
-        this._watchConfigFiles();
     }
 
     private async _restoreAll(): Promise<void> {
@@ -60,6 +69,7 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
 
         this._total = configs.length;
         this._completed = 0;
+        this._hadFailure = false;
 
         const pending = new Set<Promise<void>>();
         for (const uri of configs) {
@@ -77,8 +87,8 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
             const watcher = vscode.workspace.createFileSystemWatcher(
                 new vscode.RelativePattern(folder, `**/${aspireConfigFileName}`)
             );
-            watcher.onDidChange(uri => this._onChanged(uri));
-            watcher.onDidCreate(uri => this._onChanged(uri));
+            watcher.onDidChange(uri => void this._onChanged(uri).catch(err => extensionLogOutputChannel.warn(`Watcher handler failed: ${String(err)}`)));
+            watcher.onDidCreate(uri => void this._onChanged(uri).catch(err => extensionLogOutputChannel.warn(`Watcher handler failed: ${String(err)}`)));
             this._disposables.push(watcher);
         }
     }
@@ -90,6 +100,8 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
         if (this._active.size === 0) {
             this._total = 1;
             this._completed = 0;
+        } else {
+            this._total++;
         }
         await this._restoreIfChanged(uri, false);
     }
@@ -112,16 +124,22 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
         const relativePath = vscode.workspace.asRelativePath(uri);
         extensionLogOutputChannel.info(`${isInitial ? 'Initial' : 'Changed'} restore for ${relativePath}`);
 
-        // Don't update baseline until restore succeeds; queue re-restore if one is already active
+        // Queue re-restore if one is already active for this config directory
         if (this._active.has(configDir)) {
             this._pendingRestore.add(configDir);
             return;
         }
 
-        this._lastContent.set(uri.fsPath, content);
         try {
             await this._runRestore(configDir, relativePath);
+            // Only update baseline after successful restore so a retry is attempted on next change
+            this._lastContent.set(uri.fsPath, content);
+            this._hadFailure = false;
+            this._showProgress();
+            this._scheduleHide();
         } catch (error) {
+            this._hadFailure = true;
+            this._showProgress();
             extensionLogOutputChannel.warn(`Restore failed for ${relativePath}: ${error}`);
         }
 
@@ -137,10 +155,13 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
 
         const cliPath = await this._terminalProvider.getAspireCliExecutablePath();
         await new Promise<void>((resolve, reject) => {
+            let settled = false;
             const proc = spawnCliProcess(this._terminalProvider, cliPath, ['restore'], {
                 workingDirectory: configDir,
                 noExtensionVariables: true,
                 exitCallback: code => {
+                    if (settled) { return; }
+                    settled = true;
                     if (code === 0) {
                         extensionLogOutputChannel.info(aspireRestoreCompleted(relativePath));
                         resolve();
@@ -150,12 +171,19 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
                     }
                 },
                 errorCallback: error => {
+                    if (settled) { return; }
+                    settled = true;
                     extensionLogOutputChannel.warn(aspireRestoreFailed(relativePath, error.message));
                     reject(error);
                 },
             });
             this._childProcesses.add(proc);
-            const timeout = setTimeout(() => { proc.kill(); reject(new Error('restore timed out')); }, 120_000);
+            const timeout = setTimeout(() => {
+                if (settled) { return; }
+                settled = true;
+                try { proc.kill(); } catch { /* ignore */ }
+                reject(new Error('restore timed out'));
+            }, AspirePackageRestoreProvider._restoreTimeoutMs);
             this._timeouts.add(timeout);
             proc.on('close', () => {
                 clearTimeout(timeout);
@@ -166,30 +194,39 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
             this._active.delete(configDir);
             this._completed++;
             this._showProgress();
-            if (this._active.size === 0) {
-                const hideTimeout = setTimeout(() => {
-                    this._timeouts.delete(hideTimeout);
-                    if (this._active.size === 0) { this._statusBarItem.hide(); }
-                }, 5000);
-                this._timeouts.add(hideTimeout);
-            }
         });
     }
 
+    private _scheduleHide(): void {
+        if (this._active.size === 0 && !this._hadFailure) {
+            const hideTimeout = setTimeout(() => {
+                this._timeouts.delete(hideTimeout);
+                if (this._active.size === 0 && !this._hadFailure) { this._statusBarItem.hide(); }
+            }, AspirePackageRestoreProvider._statusBarHideDelayMs);
+            this._timeouts.add(hideTimeout);
+        }
+    }
+
     private _showProgress(): void {
-        if (this._active.size === 0) {
+        if (this._active.size === 0 && this._hadFailure) {
+            this._statusBarItem.text = `$(error) ${aspireRestoreFailedStatusBar}`;
+            this._statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+        } else if (this._active.size === 0) {
             this._statusBarItem.text = `$(check) ${aspireRestoreAllCompleted}`;
+            this._statusBarItem.backgroundColor = undefined;
         } else if (this._total <= 1) {
             this._statusBarItem.text = `$(sync~spin) ${runningAspireRestore([...this._active.values()][0])}`;
+            this._statusBarItem.backgroundColor = undefined;
         } else {
             this._statusBarItem.text = `$(sync~spin) ${runningAspireRestoreProgress(this._completed, this._total)}`;
+            this._statusBarItem.backgroundColor = undefined;
         }
         this._statusBarItem.show();
     }
 
     dispose(): void {
         for (const proc of this._childProcesses) {
-            proc.kill();
+            try { proc.kill(); } catch { /* ignore */ }
         }
         this._childProcesses.clear();
         for (const timeout of this._timeouts) {

@@ -197,6 +197,12 @@
         "category": "Aspire"
       },
       {
+        "command": "aspire-vscode.restore",
+        "enablement": "workspaceFolderCount > 0",
+        "title": "%command.restore%",
+        "category": "Aspire"
+      },
+      {
         "command": "aspire-vscode.settings",
         "title": "%command.settings%",
         "category": "Aspire"
