@@ -26,9 +26,11 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
     private readonly _childProcesses = new Set<ChildProcessWithoutNullStreams>();
     private readonly _timeouts = new Set<ReturnType<typeof setTimeout>>();
     private readonly _pendingRestore = new Set<string>(); // configDirs needing re-restore
+    private readonly _failedDirs = new Set<string>(); // configDirs that failed
     private _total = 0;
     private _completed = 0;
-    private _hadFailure = false;
+    private _batchRunning = false;
+    private _hideTimeout: ReturnType<typeof setTimeout> | undefined;
 
     constructor(terminalProvider: AspireTerminalProvider) {
         this._terminalProvider = terminalProvider;
@@ -67,9 +69,10 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
             return;
         }
 
+        this._batchRunning = true;
         this._total = configs.length;
         this._completed = 0;
-        this._hadFailure = false;
+        this._failedDirs.clear();
 
         const pending = new Set<Promise<void>>();
         for (const uri of configs) {
@@ -80,6 +83,7 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
             }
         }
         await Promise.all(pending);
+        this._batchRunning = false;
     }
 
     private _watchConfigFiles(): void {
@@ -99,10 +103,11 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
         }
         const configDir = path.dirname(uri.fsPath);
         // Don't inflate total if a re-restore is already queued for this directory
-        if (!this._pendingRestore.has(configDir)) {
+        if (!this._pendingRestore.has(configDir) && !this._batchRunning) {
             if (this._active.size === 0 && this._completed >= this._total) {
                 this._total = 1;
                 this._completed = 0;
+                this._failedDirs.clear();
             } else {
                 this._total++;
             }
@@ -144,17 +149,17 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
             await this._runRestore(configDir, relativePath);
             // Only update baseline after successful restore so a retry is attempted on next change
             this._lastContent.set(uri.fsPath, content);
-            this._hadFailure = false;
+            this._failedDirs.delete(configDir);
             this._showProgress();
             this._scheduleHide();
         } catch (error) {
-            this._hadFailure = true;
+            this._failedDirs.add(configDir);
             this._showProgress();
             extensionLogOutputChannel.warn(`Restore failed for ${relativePath}: ${error}`);
         }
 
         // If a change arrived while we were restoring, re-read and restore again
-        if (this._pendingRestore.delete(configDir)) {
+        while (this._pendingRestore.delete(configDir)) {
             await this._restoreIfChanged(uri, false);
         }
     }
@@ -208,17 +213,23 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
     }
 
     private _scheduleHide(): void {
-        if (this._active.size === 0 && !this._hadFailure) {
-            const hideTimeout = setTimeout(() => {
-                this._timeouts.delete(hideTimeout);
-                if (this._active.size === 0 && !this._hadFailure) { this._statusBarItem.hide(); }
+        if (this._hideTimeout) {
+            clearTimeout(this._hideTimeout);
+            this._timeouts.delete(this._hideTimeout);
+            this._hideTimeout = undefined;
+        }
+        if (this._active.size === 0 && this._failedDirs.size === 0) {
+            this._hideTimeout = setTimeout(() => {
+                this._timeouts.delete(this._hideTimeout!);
+                this._hideTimeout = undefined;
+                if (this._active.size === 0 && this._failedDirs.size === 0) { this._statusBarItem.hide(); }
             }, AspirePackageRestoreProvider._statusBarHideDelayMs);
-            this._timeouts.add(hideTimeout);
+            this._timeouts.add(this._hideTimeout);
         }
     }
 
     private _showProgress(): void {
-        if (this._active.size === 0 && this._hadFailure) {
+        if (this._active.size === 0 && this._failedDirs.size > 0) {
             this._statusBarItem.text = `$(error) ${aspireRestoreFailedStatusBar}`;
             this._statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
         } else if (this._active.size === 0) {
