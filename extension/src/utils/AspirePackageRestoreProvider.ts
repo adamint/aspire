@@ -97,11 +97,15 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
         if (!getEnableAutoRestore()) {
             return;
         }
-        if (this._active.size === 0) {
-            this._total = 1;
-            this._completed = 0;
-        } else {
-            this._total++;
+        const configDir = path.dirname(uri.fsPath);
+        // Don't inflate total if a re-restore is already queued for this directory
+        if (!this._pendingRestore.has(configDir)) {
+            if (this._active.size === 0 && this._completed >= this._total) {
+                this._total = 1;
+                this._completed = 0;
+            } else {
+                this._total++;
+            }
         }
         await this._restoreIfChanged(uri, false);
     }
@@ -112,11 +116,17 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
             content = (await vscode.workspace.fs.readFile(uri)).toString();
         } catch (error) {
             extensionLogOutputChannel.warn(`Failed to read ${uri.fsPath}: ${error}`);
+            this._completed++;
+            this._showProgress();
+            this._scheduleHide();
             return;
         }
 
         const prev = this._lastContent.get(uri.fsPath);
         if (!isInitial && prev === content) {
+            this._completed++;
+            this._showProgress();
+            this._scheduleHide();
             return;
         }
 
