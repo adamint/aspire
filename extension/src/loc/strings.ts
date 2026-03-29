@@ -69,7 +69,9 @@ export const tooltipState = (state: string) => vscode.l10n.t('State: {0}', state
 export const tooltipHealth = (health: string) => vscode.l10n.t('Health: {0}', health);
 export const tooltipEndpoints = vscode.l10n.t('Endpoints:');
 export const healthChecksLabel = vscode.l10n.t('Health Checks');
-export const healthCheckDescription = (status: string) => vscode.l10n.t('{0}', status);
+export const healthCheckDescription = (status: string) => vscode.l10n.t('Status: {0}', status);
+export const resourceDescriptionHealth = (passed: number, total: number) => vscode.l10n.t('Health: {0}/{1}', passed, total);
+export const resourceDescriptionExitCode = (exitCode: number) => vscode.l10n.t('Exit Code: {0}', exitCode);
 export const failedToStartDebugSession = vscode.l10n.t('Failed to start debug session.');
 export const failedToGetConfigInfo = (exitCode: number) => vscode.l10n.t('Failed to get Aspire config info (exit code: {0}). Try updating the Aspire CLI with: aspire update', exitCode);
 export const failedToParseConfigInfo = (error: any) => vscode.l10n.t('Failed to parse Aspire config info: {0}. Try updating the Aspire CLI with: aspire update', error);

@@ -274,7 +274,7 @@ suite('buildResourceDescription', () => {
             },
         }));
         assert.ok(desc.includes('1/1'));
-        assert.ok(desc.includes('1'));
+        assert.ok(desc.includes('Exit Code: 1'));
     });
 
     test('empty health reports returns resource type', () => {

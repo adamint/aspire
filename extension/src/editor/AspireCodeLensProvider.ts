@@ -219,10 +219,11 @@ export function getCodeLensStateLabel(state: string, stateStyle: string, exitCod
         case ResourceState.FailedToStart:
         case ResourceState.RuntimeUnhealthy:
             return codeLensResourceError;
+        case ResourceState.Stopping:
+            return codeLensResourceStarting;
         case ResourceState.Finished:
         case ResourceState.Exited:
         case ResourceState.Stopped:
-        case ResourceState.Stopping:
             if (stateStyle === StateStyle.Error) {
                 return exitCode != null ? codeLensResourceStoppedErrorWithExitCode(exitCode) : codeLensResourceStoppedError;
             }

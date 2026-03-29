@@ -22,6 +22,8 @@ import {
     appHostSourceOpenFailed,
     healthChecksLabel,
     healthCheckDescription,
+    resourceDescriptionHealth,
+    resourceDescriptionExitCode,
 } from '../loc/strings';
 import {
     AppHostDataRepository,
@@ -269,10 +271,10 @@ export function buildResourceDescription(resource: ResourceJson): string {
     if (reports && Object.keys(reports).length > 0) {
         const total = Object.keys(reports).length;
         const passed = Object.values(reports).filter(r => r.status === 'Healthy').length;
-        parts.push(`Health: ${passed}/${total}`);
+        parts.push(resourceDescriptionHealth(passed, total));
     }
     if (exitCode != null) {
-        parts.push(`Exit Code: ${exitCode}`);
+        parts.push(resourceDescriptionExitCode(exitCode));
     }
     return parts.join(' · ');
 }
@@ -285,9 +287,7 @@ function buildResourceTooltip(resource: ResourceJson): vscode.MarkdownString {
         md.appendMarkdown(`${tooltipState(resource.state)}\n\n`);
     }
     if (resource.healthStatus) {
-        md.appendMarkdown(`${tooltipHealth(resource.healthStatus)}
-
-`);
+        md.appendMarkdown(`${tooltipHealth(resource.healthStatus)}\n\n`);
         const reports = resource.healthReports;
         if (reports) {
             const entries = Object.entries(reports);
