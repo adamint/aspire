@@ -197,11 +197,11 @@ export function getResourceIcon(resource: ResourceJson): vscode.ThemeIcon {
     switch (state) {
         case ResourceState.Running:
         case ResourceState.Active:
-            if (health === HealthStatus.Unhealthy) {
-                return new vscode.ThemeIcon('warning', new vscode.ThemeColor('list.warningForeground'));
-            }
             if (resource.stateStyle === StateStyle.Error) {
                 return new vscode.ThemeIcon('error', new vscode.ThemeColor('list.errorForeground'));
+            }
+            if (health === HealthStatus.Unhealthy) {
+                return new vscode.ThemeIcon('warning', new vscode.ThemeColor('list.warningForeground'));
             }
             if (health === HealthStatus.Degraded || resource.stateStyle === StateStyle.Warning) {
                 return new vscode.ThemeIcon('warning', new vscode.ThemeColor('list.warningForeground'));
@@ -290,9 +290,9 @@ function buildResourceTooltip(resource: ResourceJson): vscode.MarkdownString {
         md.appendMarkdown(`${tooltipHealth(resource.healthStatus)}\n\n`);
         const reports = resource.healthReports;
         if (reports) {
-            const entries = Object.entries(reports);
+            const entries = Object.entries(reports).sort(([a], [b]) => a.localeCompare(b));
             for (const [name, report] of entries) {
-                const icon = report.status === 'Healthy' ? '$(pass)' : report.status === 'Degraded' ? '$(warning)' : '$(error)';
+                const icon = report.status === HealthStatus.Healthy ? '$(pass)' : report.status === HealthStatus.Degraded ? '$(warning)' : '$(error)';
                 md.appendMarkdown(`${icon} ${name}: ${report.status ?? 'Unknown'}${report.description ? ` - ${report.description}` : ''}\n\n`);
             }
         }
