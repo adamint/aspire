@@ -3,6 +3,7 @@
 
 using Aspire.Cli.DotNet;
 using Aspire.Cli.Resources;
+using System.Collections.Frozen;
 using System.Globalization;
 using Aspire.Cli.Telemetry;
 using Microsoft.Extensions.Caching.Memory;
@@ -20,15 +21,23 @@ internal interface INuGetPackageCache
     Task<IEnumerable<NuGetPackage>> GetPackageVersionsAsync(DirectoryInfo workingDirectory, string exactPackageId, bool prerelease, FileInfo? nugetConfigFile, bool useCache, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Packages that have been superseded and should be hidden from integration listings by default.
+/// </summary>
+internal static class DeprecatedPackages
+{
+    private static readonly FrozenSet<string> s_all = new[]
+    {
+        "Aspire.Hosting.Dapr",
+        "Aspire.Hosting.NodeJs"
+    }.ToFrozenSet(StringComparer.OrdinalIgnoreCase);
+
+    public static bool IsDeprecated(string packageId) => s_all.Contains(packageId);
+}
+
 internal sealed class NuGetPackageCache(IDotNetCliRunner cliRunner, IMemoryCache memoryCache, AspireCliTelemetry telemetry, IFeatures features) : INuGetPackageCache
 {
     private const int SearchPageSize = 1000;
-
-    // List of deprecated packages that should be filtered by default
-    private static readonly HashSet<string> s_deprecatedPackages = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Aspire.Hosting.Dapr"
-    };
 
     public async Task<IEnumerable<NuGetPackage>> GetTemplatePackagesAsync(DirectoryInfo workingDirectory, bool prerelease, FileInfo? nugetConfigFile, CancellationToken cancellationToken)
     {
@@ -135,7 +144,7 @@ internal sealed class NuGetPackageCache(IDotNetCliRunner cliRunner, IMemoryCache
             // Apply deprecated package filter unless the user wants to show deprecated packages
             if (isOfficialPackage && !features.IsFeatureEnabled(KnownFeatures.ShowDeprecatedPackages, defaultValue: false))
             {
-                return !s_deprecatedPackages.Contains(p.Id);
+                return !DeprecatedPackages.IsDeprecated(p.Id);
             }
 
             return isOfficialPackage;
@@ -196,7 +205,7 @@ internal sealed class NuGetPackageCache(IDotNetCliRunner cliRunner, IMemoryCache
             // Apply deprecated package filter unless the user wants to show deprecated packages
             if (!features.IsFeatureEnabled(KnownFeatures.ShowDeprecatedPackages, defaultValue: false))
             {
-                return !s_deprecatedPackages.Contains(p.Id);
+                return !DeprecatedPackages.IsDeprecated(p.Id);;
             }
             return true;
         };
