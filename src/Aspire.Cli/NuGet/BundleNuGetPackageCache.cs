@@ -39,7 +39,8 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
     {
         var packages = await SearchPackagesInternalAsync(
             workingDirectory,
-            "Aspire.ProjectTemplates",
+            query: "Aspire.ProjectTemplates",
+            exactMatch: false,
             prerelease,
             nugetConfigFile,
             cancellationToken).ConfigureAwait(false);
@@ -55,7 +56,8 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
     {
         var packages = await SearchPackagesInternalAsync(
             workingDirectory,
-            "Aspire.Hosting",
+            query: "Aspire.Hosting",
+            exactMatch: false,
             prerelease,
             nugetConfigFile,
             cancellationToken).ConfigureAwait(false);
@@ -71,7 +73,8 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
     {
         var packages = await SearchPackagesInternalAsync(
             workingDirectory,
-            "Aspire.Cli",
+            query: "Aspire.Cli",
+            exactMatch: false,
             prerelease,
             nugetConfigFile,
             cancellationToken).ConfigureAwait(false);
@@ -90,7 +93,8 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
     {
         var packages = await SearchPackagesInternalAsync(
             workingDirectory,
-            packageId,
+            query: packageId,
+            exactMatch: false,
             prerelease,
             nugetConfigFile,
             cancellationToken).ConfigureAwait(false);
@@ -106,19 +110,22 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
         bool useCache,
         CancellationToken cancellationToken)
     {
-        return await GetPackagesAsync(
+        var packages = await SearchPackagesInternalAsync(
             workingDirectory,
-            exactPackageId,
-            filter: id => string.Equals(id, exactPackageId, StringComparison.OrdinalIgnoreCase),
+            query: exactPackageId,
+            exactMatch: true,
             prerelease,
             nugetConfigFile,
-            useCache,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
+
+        bool FilterExactIdMatch(string? id) => string.Equals(id, exactPackageId, StringComparison.Ordinal);
+        return FilterPackages(packages, FilterExactIdMatch);
     }
 
     private async Task<IEnumerable<NuGetPackage>> SearchPackagesInternalAsync(
         DirectoryInfo workingDirectory,
         string query,
+        bool exactMatch,
         bool prerelease,
         FileInfo? nugetConfigFile,
         CancellationToken cancellationToken)
@@ -210,12 +217,30 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
             }
 
             // Convert to NuGetPackage format
-            return result.Packages.Select(p => new NuGetPackage
+            if (!exactMatch)
             {
-                Id = p.Id,
-                Version = p.Version,
-                Source = p.Source ?? string.Empty
-            }).ToList();
+                return result.Packages.Select(p => new NuGetPackage
+                {
+                    Id = p.Id,
+                    Version = p.Version,
+                    Source = p.Source ?? string.Empty
+                }).ToList();
+            }
+            else
+            {
+                var exactMatchResultPackage = result.Packages
+                    .FirstOrDefault(p => p.Id.Equals(query, StringComparison.Ordinal));
+                if (exactMatchResultPackage is null || exactMatchResultPackage.AllVersions is null)
+                {
+                    return [];
+                }
+                return exactMatchResultPackage.AllVersions.Select(packageVersion => new NuGetPackage
+                {
+                    Id = exactMatchResultPackage.Id,
+                    Version = packageVersion,
+                    Source = exactMatchResultPackage.Source ?? string.Empty
+                }).ToList();
+            }
         }
         catch (JsonException ex)
         {
