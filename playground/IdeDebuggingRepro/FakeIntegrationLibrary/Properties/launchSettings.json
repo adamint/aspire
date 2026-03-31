@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Aspire_fake-integration": {
+      "commandName": "Executable",
+      "executablePath": "dotnet",
+      "commandLineArgs": "run --project ../StandardService/StandardService.csproj",
+      "workingDirectory": "."
+    }
+  }
+}

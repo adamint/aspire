@@ -15,6 +15,7 @@
   <ItemGroup>
     <ProjectReference Include="..\StandardService\StandardService.csproj" />
     <ProjectReference Include="..\CustomDebugService\CustomDebugService.csproj" />
+    <ProjectReference Include="..\FakeIntegrationLibrary\FakeIntegrationLibrary.csproj" />
   </ItemGroup>
 
 </Project>

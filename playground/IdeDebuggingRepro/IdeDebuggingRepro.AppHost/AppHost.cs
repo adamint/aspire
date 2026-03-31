@@ -7,6 +7,15 @@ var builder = DistributedApplication.CreateBuilder(args);
 // advertises SupportedLaunchConfigurations that don't include "project".
 var standardService = builder.AddProject<Projects.StandardService>("standard-service");
 
+// Bug #15606/#15647 repro (internal fake integration): a ProjectResource subclass
+// added via AddResource (not AddProject) with no SupportsDebuggingAnnotation and
+// an Executable launch profile. This simulates third-party integrations that need
+// IDE execution in debug sessions without calling WithDebugSupport.
+builder.AddFakeIntegrationProject(
+    "fake-integration-library",
+    "../FakeIntegrationLibrary/FakeIntegrationLibrary.csproj",
+    "Aspire_fake-integration");
+
 // Bug #15378 repro: A project resource with a custom debug type (simulating
 // Azure Functions / AWS Lambda) should still get IDE execution in Visual Studio,
 // which sets DEBUG_SESSION_PORT but NOT DEBUG_SESSION_INFO.
@@ -18,6 +27,35 @@ builder.AddProject<Projects.CustomDebugService>("custom-debug-service")
         "custom-debug-type");
 
 builder.Build().Run();
+
+static class FakeIntegrationProjectResourceExtensions
+{
+    public static IResourceBuilder<FakeIntegrationProjectResource> AddFakeIntegrationProject(
+        this IDistributedApplicationBuilder builder,
+        string name,
+        string relativeProjectPath,
+        string launchProfileName)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(name);
+        ArgumentNullException.ThrowIfNull(relativeProjectPath);
+        ArgumentNullException.ThrowIfNull(launchProfileName);
+
+        var projectPath = Path.GetFullPath(Path.Combine(builder.AppHostDirectory, relativeProjectPath));
+
+        return builder
+            .AddResource(new FakeIntegrationProjectResource(name))
+            .WithAnnotation(new FakeProjectMetadata(projectPath))
+            .WithAnnotation(new LaunchProfileAnnotation(launchProfileName));
+    }
+}
+
+internal sealed class FakeIntegrationProjectResource(string name) : ProjectResource(name);
+
+internal sealed class FakeProjectMetadata(string projectPath) : IProjectMetadata
+{
+    public string ProjectPath { get; } = projectPath;
+}
 
 // Simulates a custom launch configuration like AzureFunctionsLaunchConfiguration
 // or an AWS Lambda launch configuration.
