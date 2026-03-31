@@ -2174,6 +2174,8 @@ public class DcpExecutorTests
 
         var exe = Assert.Single(kubernetesService.CreatedResources.OfType<Executable>(), e => e.AppModelResourceName == "proj");
         Assert.Equal(ExecutionType.IDE, exe.Spec.ExecutionType);
+        Assert.NotNull(exe.Spec.FallbackExecutionTypes);
+        Assert.Equal(ExecutionType.Process, Assert.Single(exe.Spec.FallbackExecutionTypes));
 
         Assert.True(exe.TryGetAnnotationAsObjectList<ProjectLaunchConfiguration>(Executable.LaunchConfigurationsAnnotation, out var launchConfigs));
         Assert.Single(launchConfigs);
@@ -2333,6 +2335,12 @@ public class DcpExecutorTests
 
         var customExe = Assert.Single(dcpExes, e => e.AppModelResourceName == "custom-project");
         Assert.Equal(ExecutionType.IDE, customExe.Spec.ExecutionType);
+        Assert.NotNull(customExe.Spec.FallbackExecutionTypes);
+        Assert.Equal(ExecutionType.Process, Assert.Single(customExe.Spec.FallbackExecutionTypes));
+
+        Assert.True(customExe.TryGetAnnotationAsObjectList<ProjectLaunchConfiguration>(Executable.LaunchConfigurationsAnnotation, out var launchConfigs));
+        Assert.Single(launchConfigs);
+        Assert.Equal("project", launchConfigs[0].Type);
     }
 
     [Fact]
@@ -2484,7 +2492,7 @@ public class DcpExecutorTests
         var projectBuilder = builder.AddProject<Projects.ServiceA>("ServiceA", launchProfileName: null);
         // Remove the SupportsDebuggingAnnotation that AddProject adds by default
         var annotationToRemove = projectBuilder.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().FirstOrDefault();
-        if (annotationToRemove != null)
+        if (annotationToRemove is not null)
         {
             projectBuilder.Resource.Annotations.Remove(annotationToRemove);
         }
@@ -2507,6 +2515,8 @@ public class DcpExecutorTests
 
         var exe = Assert.Single(kubernetesService.CreatedResources.OfType<Executable>(), e => e.AppModelResourceName == "ServiceA");
         Assert.Equal(ExecutionType.IDE, exe.Spec.ExecutionType);
+        Assert.NotNull(exe.Spec.FallbackExecutionTypes);
+        Assert.Equal(ExecutionType.Process, Assert.Single(exe.Spec.FallbackExecutionTypes));
 
         Assert.True(exe.TryGetAnnotationAsObjectList<ProjectLaunchConfiguration>(Executable.LaunchConfigurationsAnnotation, out var launchConfigs));
         Assert.Single(launchConfigs);
@@ -2525,7 +2535,7 @@ public class DcpExecutorTests
 
         var projectBuilder = builder.AddProject<Projects.ServiceA>("ServiceA", launchProfileName: null);
         var annotationToRemove = projectBuilder.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().FirstOrDefault();
-        if (annotationToRemove != null)
+        if (annotationToRemove is not null)
         {
             projectBuilder.Resource.Annotations.Remove(annotationToRemove);
         }
