@@ -185,4 +185,77 @@ suite('Dotnet Debugger Extension Tests', () => {
         // cleanup
         fs.rmSync(tempDir, { recursive: true, force: true });
     });
+
+    test('uses executable path for Executable command launch profiles instead of project output', async () => {
+        // Bug #15647: AWS Lambda uses Executable command profiles where the executablePath
+        // and commandLineArgs define how to run the class library project. The extension
+        // should use executablePath as the program instead of the project's output DLL.
+        const fs = require('fs');
+        const os = require('os');
+        const path = require('path');
+
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-test-'));
+        const projectDir = path.join(tempDir, 'MyLambdaFunction');
+        const propertiesDir = path.join(projectDir, 'Properties');
+        fs.mkdirSync(propertiesDir, { recursive: true });
+
+        const projectPath = path.join(projectDir, 'MyLambdaFunction.csproj');
+        fs.writeFileSync(projectPath, '<Project></Project>');
+
+        const launchSettings = {
+            profiles: {
+                'Aspire_my-lambda': {
+                    commandName: 'Executable',
+                    executablePath: 'dotnet',
+                    commandLineArgs: 'exec --depsfile ./MyLambdaFunction.deps.json --runtimeconfig ./MyLambdaFunction.runtimeconfig.json RuntimeSupport.dll MyLambdaFunction::MyLambdaFunction.Function::FunctionHandler',
+                    workingDirectory: 'bin/Debug/net10.0/',
+                    environmentVariables: {
+                        LAMBDA_ENV: 'test'
+                    }
+                }
+            }
+        };
+
+        fs.writeFileSync(path.join(propertiesDir, 'launchSettings.json'), JSON.stringify(launchSettings, null, 2));
+
+        // The output path would be a class library DLL - this should NOT be used as program
+        const outputPath = path.join(projectDir, 'bin', 'Debug', 'net10.0', 'MyLambdaFunction.dll');
+        const { extension, dotNetService } = createDebuggerExtension(outputPath, null, true, true);
+
+        const launchConfig: ProjectLaunchConfiguration = {
+            type: 'project',
+            project_path: projectPath,
+            launch_profile: 'Aspire_my-lambda'
+        };
+
+        const debugConfig: AspireResourceExtendedDebugConfiguration = {
+            runId: '1',
+            debugSessionId: '1',
+            type: 'coreclr',
+            name: 'Test Debug Config',
+            request: 'launch'
+        };
+
+        const fakeAspireDebugSession = sinon.createStubInstance(AspireDebugSession);
+
+        await extension.createDebugSessionConfigurationCallback!(launchConfig, undefined, [], { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession }, debugConfig);
+
+        // program should be the executable path from the profile, NOT the project output DLL
+        assert.strictEqual(debugConfig.program, 'dotnet');
+
+        // args should come from the profile's commandLineArgs
+        assert.strictEqual(debugConfig.args, 'exec --depsfile ./MyLambdaFunction.deps.json --runtimeconfig ./MyLambdaFunction.runtimeconfig.json RuntimeSupport.dll MyLambdaFunction::MyLambdaFunction.Function::FunctionHandler');
+
+        // cwd should resolve to the profile's working directory
+        assert.strictEqual(debugConfig.cwd, path.resolve(projectDir, 'bin/Debug/net10.0/'));
+
+        // env should include the profile's environment variables
+        assert.strictEqual(debugConfig.env.LAMBDA_ENV, 'test');
+
+        // project should still be built (to compile the class library dependencies)
+        assert.strictEqual(dotNetService.buildDotNetProjectStub.calledOnce, true);
+
+        // cleanup
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    });
 });

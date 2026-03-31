@@ -2468,9 +2468,13 @@ public class DcpExecutorTests
     }
 
     [Fact]
-    public async Task ProjectExecutable_NoSupportsDebuggingAnnotation_RunsInProcessMode()
+    public async Task ProjectExecutable_NoSupportsDebuggingAnnotation_InDebugSession_RunsInIdeMode()
     {
-        // Arrange
+        // ProjectResource subclasses added via AddResource (not AddProject) may not have
+        // a SupportsDebuggingAnnotation (e.g. AWS Lambda). When in a debug session, these
+        // should still default to IDE execution with ProjectLaunchConfiguration — matching
+        // the pre-13.2 behavior. External integrations should not be forced to call the
+        // experimental WithDebugSupport API to get basic IDE execution.
         var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
         {
             AssemblyName = typeof(DistributedApplicationTests).Assembly.FullName
@@ -2499,14 +2503,41 @@ public class DcpExecutorTests
         var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
         var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration);
 
-        // Act
         await appExecutor.RunApplicationAsync();
 
-        // Assert
-        var dcpExes = kubernetesService.CreatedResources.OfType<Executable>().ToList();
-        Assert.Single(dcpExes);
+        var exe = Assert.Single(kubernetesService.CreatedResources.OfType<Executable>(), e => e.AppModelResourceName == "ServiceA");
+        Assert.Equal(ExecutionType.IDE, exe.Spec.ExecutionType);
 
-        var exe = Assert.Single(dcpExes, e => e.AppModelResourceName == "ServiceA");
+        Assert.True(exe.TryGetAnnotationAsObjectList<ProjectLaunchConfiguration>(Executable.LaunchConfigurationsAnnotation, out var launchConfigs));
+        Assert.Single(launchConfigs);
+        Assert.Equal("project", launchConfigs[0].Type);
+    }
+
+    [Fact]
+    public async Task ProjectExecutable_NoSupportsDebuggingAnnotation_NoDebugSession_RunsInProcessMode()
+    {
+        // When there's no debug session (CLI scenario), projects without annotations
+        // should still run in Process mode.
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
+        {
+            AssemblyName = typeof(DistributedApplicationTests).Assembly.FullName
+        });
+
+        var projectBuilder = builder.AddProject<Projects.ServiceA>("ServiceA", launchProfileName: null);
+        var annotationToRemove = projectBuilder.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().FirstOrDefault();
+        if (annotationToRemove != null)
+        {
+            projectBuilder.Resource.Annotations.Remove(annotationToRemove);
+        }
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService);
+
+        await appExecutor.RunApplicationAsync();
+
+        var exe = Assert.Single(kubernetesService.CreatedResources.OfType<Executable>(), e => e.AppModelResourceName == "ServiceA");
         Assert.Equal(ExecutionType.Process, exe.Spec.ExecutionType);
     }
 

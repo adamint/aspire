@@ -1422,13 +1422,15 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                     // Non-project launch types (e.g. azure-functions) have their launch configuration
                     // applied later in CreateExecutableAsync() after endpoints are allocated.
                 }
-                else if (isInDebugSession && supportsDebuggingAnnotation is not null && string.IsNullOrEmpty(_configuration[KnownConfigNames.DebugSessionInfo]))
+                else if (isInDebugSession && (supportsDebuggingAnnotation is null || string.IsNullOrEmpty(_configuration[KnownConfigNames.DebugSessionInfo])))
                 {
-                    // We are in a debug session (DEBUG_SESSION_PORT is set) but the IDE did not send
-                    // DEBUG_SESSION_INFO, which means it has no explicit launch-configuration capability
-                    // advertisement. This is the Visual Studio scenario: VS handles all project resources
-                    // natively via IDE execution with a standard ProjectLaunchConfiguration. Fall back to
-                    // that so Azure Functions and other project subtypes still launch and debug correctly.
+                    // Fall back to IDE execution with a standard ProjectLaunchConfiguration when:
+                    // 1. No SupportsDebuggingAnnotation exists (e.g. AddResource-based ProjectResource
+                    //    subclasses that don't call WithDebugSupport — such as AWS Lambda). These should
+                    //    get the same IDE treatment that AddProject provides by default.
+                    // 2. The annotation exists but the IDE did not send DEBUG_SESSION_INFO (Visual Studio
+                    //    scenario). VS handles all project resources natively, so non-"project" types
+                    //    like "azure-functions" still need IDE execution with ProjectLaunchConfiguration.
                     exe.Spec.ExecutionType = ExecutionType.IDE;
                     exe.Spec.FallbackExecutionTypes = [ExecutionType.Process];
 

@@ -253,7 +253,21 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 env.push({ name: "ASPIRE_DASHBOARD_AI_DISABLED", value: "true" });
             }
 
-            if (!isFileBasedApp(projectPath)) {
+            if (baseProfile?.commandName === 'Executable' && baseProfile.executablePath) {
+                // For Executable command profiles (e.g., AWS Lambda), the launch profile
+                // specifies an external executable to run instead of the project output.
+                // Build the project to ensure dependencies are compiled, then launch
+                // using the profile's executable path and command line arguments.
+                await dotNetService.buildDotNetProject(projectPath);
+
+                debugConfiguration.program = baseProfile.executablePath;
+                debugConfiguration.env = Object.fromEntries(mergeEnvironmentVariables(
+                    baseProfile?.environmentVariables,
+                    debugConfiguration.env,
+                    env
+                ));
+            }
+            else if (!isFileBasedApp(projectPath)) {
                 const outputPath = await dotNetService.getDotNetTargetPath(projectPath);
                 if ((!(await doesFileExist(outputPath)) || launchOptions.forceBuild)) {
                     await dotNetService.buildDotNetProject(projectPath);
