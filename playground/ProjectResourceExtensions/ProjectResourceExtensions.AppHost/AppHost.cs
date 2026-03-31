@@ -29,7 +29,6 @@ builder.AddAzureFunctionsProject<Projects.AzureFunctionsService>("azure-function
 // WithDebugSupport replaces the default "project" annotation with a custom type,
 // exactly as Aspire.Hosting.Azure.Functions does with "azure-functions".
 builder.AddProject<Projects.CustomDebugService>("custom-debug-service")
-    .WithHttpEndpoint()
     .WithDebugSupport(
         mode => new CustomLaunchConfiguration { Mode = mode, ProjectPath = "CustomDebugService" },
         "custom-debug-type");
