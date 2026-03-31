@@ -9,8 +9,8 @@ var standardService = builder.AddProject<Projects.StandardService>("standard-ser
 
 // Bug #15606/#15647 repro (internal fake integration): a ProjectResource subclass
 // added via AddResource (not AddProject) with no SupportsDebuggingAnnotation and
-// an Executable launch profile. This simulates third-party integrations that need
-// IDE execution in debug sessions without calling WithDebugSupport.
+// a launch profile. This simulates third-party integrations like AWS Lambda that
+// need IDE execution in debug sessions without calling WithDebugSupport.
 builder.AddFakeIntegrationProject(
     "fake-integration-library",
     "../FakeIntegrationLibrary/FakeIntegrationLibrary.csproj",
@@ -51,10 +51,36 @@ static class FakeIntegrationProjectResourceExtensions
 
         var projectPath = Path.GetFullPath(Path.Combine(builder.AppHostDirectory, relativeProjectPath));
 
-        return builder
+        var resourceBuilder = builder
             .AddResource(new FakeIntegrationProjectResource(name))
             .WithAnnotation(new FakeProjectMetadata(projectPath))
             .WithAnnotation(new LaunchProfileAnnotation(launchProfileName));
+
+        // AddResource doesn't call WithProjectDefaults so we must inject
+        // ASPNETCORE_URLS ourselves, otherwise the app defaults to port 5000.
+        resourceBuilder.WithEnvironment(context =>
+        {
+            if (context.EnvironmentVariables.ContainsKey("ASPNETCORE_URLS"))
+            {
+                return;
+            }
+
+            var urls = new List<string>();
+            foreach (var endpoint in resourceBuilder.Resource.Annotations.OfType<EndpointAnnotation>())
+            {
+                if (endpoint.AllocatedEndpoint is { } allocated)
+                {
+                    urls.Add($"{allocated.UriScheme}://localhost:{allocated.Port}");
+                }
+            }
+
+            if (urls.Count > 0)
+            {
+                context.EnvironmentVariables["ASPNETCORE_URLS"] = string.Join(";", urls);
+            }
+        });
+
+        return resourceBuilder;
     }
 }
 
