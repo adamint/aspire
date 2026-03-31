@@ -2,10 +2,18 @@
 
 var builder = DistributedApplication.CreateBuilder(args);
 
+// Bug #15378 repro with a real Azure Functions project. This validates that
+// AddAzureFunctionsProject resources still get IDE execution in Visual Studio
+// (DEBUG_SESSION_PORT set, no DEBUG_SESSION_INFO) so breakpoints bind.
+var funcApp = builder.AddAzureFunctionsProject<Projects.AzureFunctionsService>("azure-functions-service")
+    .WithExternalHttpEndpoints();
+
 // Bug #15606/#15647 repro: A standard project resource should always get
 // IDE execution when DEBUG_SESSION_PORT is set, even if the extension
 // advertises SupportedLaunchConfigurations that don't include "project".
-var standardService = builder.AddProject<Projects.StandardService>("standard-service");
+var standardService = builder.AddProject<Projects.StandardService>("standard-service")
+    .WithReference(funcApp)
+    .WaitFor(funcApp);
 
 // Bug #15606/#15647 repro (internal fake integration): a ProjectResource subclass
 // added via AddResource (not AddProject) with no SupportsDebuggingAnnotation and
@@ -15,13 +23,7 @@ builder.AddFakeIntegrationProject(
     "fake-integration-library",
     "../FakeIntegrationLibrary/FakeIntegrationLibrary.csproj",
     "Aspire_fake-integration")
-    .WithHttpEndpoint();
-
-// Bug #15378 repro with a real Azure Functions project. This validates that
-// AddAzureFunctionsProject resources still get IDE execution in Visual Studio
-// (DEBUG_SESSION_PORT set, no DEBUG_SESSION_INFO) so breakpoints bind.
-builder.AddAzureFunctionsProject<Projects.AzureFunctionsService>("azure-functions-service")
-    .WithExternalHttpEndpoints();
+    .WithHttpEndpoint(env: "PORT");
 
 // Bug #15378 repro: A project resource with a custom debug type (simulating
 // Azure Functions / AWS Lambda) should still get IDE execution in Visual Studio,
@@ -54,30 +56,6 @@ static class FakeIntegrationProjectResourceExtensions
             .AddResource(new FakeIntegrationProjectResource(name))
             .WithAnnotation(new FakeProjectMetadata(projectPath))
             .WithAnnotation(new LaunchProfileAnnotation(launchProfileName));
-
-        // AddResource doesn't call WithProjectDefaults so we must inject
-        // ASPNETCORE_URLS ourselves, otherwise the app defaults to port 5000.
-        resourceBuilder.WithEnvironment(context =>
-        {
-            if (context.EnvironmentVariables.ContainsKey("ASPNETCORE_URLS"))
-            {
-                return;
-            }
-
-            var urls = new List<string>();
-            foreach (var endpoint in resourceBuilder.Resource.Annotations.OfType<EndpointAnnotation>())
-            {
-                if (endpoint.AllocatedEndpoint is { } allocated)
-                {
-                    urls.Add($"{allocated.UriScheme}://localhost:{allocated.Port}");
-                }
-            }
-
-            if (urls.Count > 0)
-            {
-                context.EnvironmentVariables["ASPNETCORE_URLS"] = string.Join(";", urls);
-            }
-        });
 
         return resourceBuilder;
     }
