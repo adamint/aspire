@@ -14,7 +14,8 @@ var standardService = builder.AddProject<Projects.StandardService>("standard-ser
 builder.AddFakeIntegrationProject(
     "fake-integration-library",
     "../FakeIntegrationLibrary/FakeIntegrationLibrary.csproj",
-    "Aspire_fake-integration");
+    "Aspire_fake-integration")
+    .WithHttpEndpoint();
 
 // Bug #15378 repro with a real Azure Functions project. This validates that
 // AddAzureFunctionsProject resources still get IDE execution in Visual Studio
@@ -28,6 +29,7 @@ builder.AddAzureFunctionsProject<Projects.AzureFunctionsService>("azure-function
 // WithDebugSupport replaces the default "project" annotation with a custom type,
 // exactly as Aspire.Hosting.Azure.Functions does with "azure-functions".
 builder.AddProject<Projects.CustomDebugService>("custom-debug-service")
+    .WithHttpEndpoint()
     .WithDebugSupport(
         mode => new CustomLaunchConfiguration { Mode = mode, ProjectPath = "CustomDebugService" },
         "custom-debug-type");
