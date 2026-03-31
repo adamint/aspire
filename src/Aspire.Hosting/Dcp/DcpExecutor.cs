@@ -1395,6 +1395,8 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
 
                 var projectArgs = new List<string>();
 
+                var isInDebugSession = !string.IsNullOrEmpty(_configuration[DebugSessionPortVar]);
+
                 if (project.SupportsDebugging(_configuration, out var supportsDebuggingAnnotation))
                 {
                     exe.Spec.ExecutionType = ExecutionType.IDE;
@@ -1419,6 +1421,29 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                     }
                     // Non-project launch types (e.g. azure-functions) have their launch configuration
                     // applied later in CreateExecutableAsync() after endpoints are allocated.
+                }
+                else if (isInDebugSession && supportsDebuggingAnnotation is not null && string.IsNullOrEmpty(_configuration[KnownConfigNames.DebugSessionInfo]))
+                {
+                    // We are in a debug session (DEBUG_SESSION_PORT is set) but the IDE did not send
+                    // DEBUG_SESSION_INFO, which means it has no explicit launch-configuration capability
+                    // advertisement. This is the Visual Studio scenario: VS handles all project resources
+                    // natively via IDE execution with a standard ProjectLaunchConfiguration. Fall back to
+                    // that so Azure Functions and other project subtypes still launch and debug correctly.
+                    exe.Spec.ExecutionType = ExecutionType.IDE;
+                    exe.Spec.FallbackExecutionTypes = [ExecutionType.Process];
+
+                    var projectLaunchConfiguration = new ProjectLaunchConfiguration();
+                    projectLaunchConfiguration.ProjectPath = projectMetadata.ProjectPath;
+                    projectLaunchConfiguration.Mode = _configuration[KnownConfigNames.DebugSessionRunMode]
+                        ?? (Debugger.IsAttached ? ExecutableLaunchMode.Debug : ExecutableLaunchMode.NoDebug);
+
+                    projectLaunchConfiguration.DisableLaunchProfile = project.TryGetLastAnnotation<ExcludeLaunchProfileAnnotation>(out _);
+                    if (!projectLaunchConfiguration.DisableLaunchProfile && project.GetEffectiveLaunchProfile() is NamedLaunchProfile namedLaunchProfile)
+                    {
+                        projectLaunchConfiguration.LaunchProfile = namedLaunchProfile.Name;
+                    }
+
+                    exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, projectLaunchConfiguration);
                 }
                 else
                 {

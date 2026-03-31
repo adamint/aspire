@@ -1,0 +1,34 @@
+#pragma warning disable ASPIREEXTENSION001
+
+var builder = DistributedApplication.CreateBuilder(args);
+
+// Bug #15606/#15647 repro: A standard project resource should always get
+// IDE execution when DEBUG_SESSION_PORT is set, even if the extension
+// advertises SupportedLaunchConfigurations that don't include "project".
+var standardService = builder.AddProject<Projects.StandardService>("standard-service");
+
+// Bug #15378 repro: A project resource with a custom debug type (simulating
+// Azure Functions / AWS Lambda) should still get IDE execution in Visual Studio,
+// which sets DEBUG_SESSION_PORT but NOT DEBUG_SESSION_INFO.
+// WithDebugSupport replaces the default "project" annotation with a custom type,
+// exactly as Aspire.Hosting.Azure.Functions does with "azure-functions".
+builder.AddProject<Projects.CustomDebugService>("custom-debug-service")
+    .WithDebugSupport(
+        mode => new CustomLaunchConfiguration { Mode = mode, ProjectPath = "CustomDebugService" },
+        "custom-debug-type");
+
+builder.Build().Run();
+
+// Simulates a custom launch configuration like AzureFunctionsLaunchConfiguration
+// or an AWS Lambda launch configuration.
+internal sealed class CustomLaunchConfiguration
+{
+    [System.Text.Json.Serialization.JsonPropertyName("type")]
+    public string Type { get; set; } = "custom-debug-type";
+
+    [System.Text.Json.Serialization.JsonPropertyName("mode")]
+    public string Mode { get; set; } = string.Empty;
+
+    [System.Text.Json.Serialization.JsonPropertyName("project_path")]
+    public string ProjectPath { get; set; } = string.Empty;
+}
