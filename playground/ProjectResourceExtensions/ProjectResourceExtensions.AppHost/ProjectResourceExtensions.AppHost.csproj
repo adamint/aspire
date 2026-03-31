@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <AspireProjectOrPackageReference Include="Aspire.Hosting.Azure.Functions" />
     <AspireProjectOrPackageReference Include="Aspire.Hosting.AppHost" />
   </ItemGroup>
 
@@ -16,6 +17,7 @@
     <ProjectReference Include="..\StandardService\StandardService.csproj" />
     <ProjectReference Include="..\CustomDebugService\CustomDebugService.csproj" />
     <ProjectReference Include="..\FakeIntegrationLibrary\FakeIntegrationLibrary.csproj" />
+    <ProjectReference Include="..\AzureFunctionsService\AzureFunctionsService.csproj" />
   </ItemGroup>
 
 </Project>

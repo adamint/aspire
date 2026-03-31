@@ -16,6 +16,12 @@ builder.AddFakeIntegrationProject(
     "../FakeIntegrationLibrary/FakeIntegrationLibrary.csproj",
     "Aspire_fake-integration");
 
+// Bug #15378 repro with a real Azure Functions project. This validates that
+// AddAzureFunctionsProject resources still get IDE execution in Visual Studio
+// (DEBUG_SESSION_PORT set, no DEBUG_SESSION_INFO) so breakpoints bind.
+builder.AddAzureFunctionsProject<Projects.AzureFunctionsService>("azure-functions-service")
+    .WithExternalHttpEndpoints();
+
 // Bug #15378 repro: A project resource with a custom debug type (simulating
 // Azure Functions / AWS Lambda) should still get IDE execution in Visual Studio,
 // which sets DEBUG_SESSION_PORT but NOT DEBUG_SESSION_INFO.
