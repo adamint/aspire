@@ -1404,25 +1404,14 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
 
                     if (supportsDebuggingAnnotation.LaunchConfigurationType is "project")
                     {
-                        var projectLaunchConfiguration = new ProjectLaunchConfiguration();
-                        projectLaunchConfiguration.ProjectPath = projectMetadata.ProjectPath;
-                        projectLaunchConfiguration.Mode = _configuration[KnownConfigNames.DebugSessionRunMode]
-                            ?? (Debugger.IsAttached ? ExecutableLaunchMode.Debug : ExecutableLaunchMode.NoDebug);
-
-                        projectLaunchConfiguration.DisableLaunchProfile = project.TryGetLastAnnotation<ExcludeLaunchProfileAnnotation>(out _);
-                        // Use the effective launch profile which has fallback logic
-                        if (!projectLaunchConfiguration.DisableLaunchProfile && project.GetEffectiveLaunchProfile() is NamedLaunchProfile namedLaunchProfile)
-                        {
-                            projectLaunchConfiguration.LaunchProfile = namedLaunchProfile.Name;
-                        }
-
                         // We want this annotation even if we are not using IDE execution; see ToSnapshot() for details.
-                        exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, projectLaunchConfiguration);
+                        exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, CreateProjectLaunchConfiguration(project, projectMetadata));
                     }
                     // Non-project launch types (e.g. azure-functions) have their launch configuration
-                    // applied later in CreateExecutableAsync() after endpoints are allocated.
+                    // applied later in CreateExecutableAsync() after endpoints are allocated,
+                    // unless the IDE didn't send DEBUG_SESSION_INFO (handled by the fallback branch below).
                 }
-                else if (isInDebugSession && (supportsDebuggingAnnotation is null || string.IsNullOrEmpty(_configuration[KnownConfigNames.DebugSessionInfo])))
+                else if (ShouldFallBackToIdeExecution(isInDebugSession, supportsDebuggingAnnotation))
                 {
                     // Fall back to IDE execution with a standard ProjectLaunchConfiguration when:
                     // 1. No SupportsDebuggingAnnotation exists (e.g. AddResource-based ProjectResource
@@ -1434,18 +1423,7 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                     exe.Spec.ExecutionType = ExecutionType.IDE;
                     exe.Spec.FallbackExecutionTypes = [ExecutionType.Process];
 
-                    var projectLaunchConfiguration = new ProjectLaunchConfiguration();
-                    projectLaunchConfiguration.ProjectPath = projectMetadata.ProjectPath;
-                    projectLaunchConfiguration.Mode = _configuration[KnownConfigNames.DebugSessionRunMode]
-                        ?? (Debugger.IsAttached ? ExecutableLaunchMode.Debug : ExecutableLaunchMode.NoDebug);
-
-                    projectLaunchConfiguration.DisableLaunchProfile = project.TryGetLastAnnotation<ExcludeLaunchProfileAnnotation>(out _);
-                    if (!projectLaunchConfiguration.DisableLaunchProfile && project.GetEffectiveLaunchProfile() is NamedLaunchProfile namedLaunchProfile)
-                    {
-                        projectLaunchConfiguration.LaunchProfile = namedLaunchProfile.Name;
-                    }
-
-                    exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, projectLaunchConfiguration);
+                    exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, CreateProjectLaunchConfiguration(project, projectMetadata));
                 }
                 else
                 {
@@ -1503,6 +1481,36 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                 _appResources.Add(exeAppResource);
             }
         }
+    }
+
+    /// <summary>
+    /// Determines whether to fall back to IDE execution for a project resource that did not
+    /// pass <see cref="ExtensionUtils.SupportsDebugging"/>. Returns <see langword="true"/> when
+    /// the app host is running inside a debug session and either the resource has no
+    /// <see cref="SupportsDebuggingAnnotation"/> (e.g. AddResource-based subclasses) or the
+    /// IDE did not send <c>DEBUG_SESSION_INFO</c> (Visual Studio scenario).
+    /// </summary>
+    private bool ShouldFallBackToIdeExecution(bool isInDebugSession, SupportsDebuggingAnnotation? supportsDebuggingAnnotation)
+    {
+        return isInDebugSession
+            && (supportsDebuggingAnnotation is null || string.IsNullOrEmpty(_configuration[KnownConfigNames.DebugSessionInfo]));
+    }
+
+    private ProjectLaunchConfiguration CreateProjectLaunchConfiguration(ProjectResource project, IProjectMetadata projectMetadata)
+    {
+        var projectLaunchConfiguration = new ProjectLaunchConfiguration();
+        projectLaunchConfiguration.ProjectPath = projectMetadata.ProjectPath;
+        projectLaunchConfiguration.Mode = _configuration[KnownConfigNames.DebugSessionRunMode]
+            ?? (Debugger.IsAttached ? ExecutableLaunchMode.Debug : ExecutableLaunchMode.NoDebug);
+
+        projectLaunchConfiguration.DisableLaunchProfile = project.TryGetLastAnnotation<ExcludeLaunchProfileAnnotation>(out _);
+        // Use the effective launch profile which has fallback logic
+        if (!projectLaunchConfiguration.DisableLaunchProfile && project.GetEffectiveLaunchProfile() is NamedLaunchProfile namedLaunchProfile)
+        {
+            projectLaunchConfiguration.LaunchProfile = namedLaunchProfile.Name;
+        }
+
+        return projectLaunchConfiguration;
     }
 
     private void EnsureRequiredAnnotations(IResource resource)

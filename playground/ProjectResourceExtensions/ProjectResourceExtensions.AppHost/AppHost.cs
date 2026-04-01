@@ -11,7 +11,7 @@ var funcApp = builder.AddAzureFunctionsProject<Projects.AzureFunctionsService>("
 // Bug #15606/#15647 repro: A standard project resource should always get
 // IDE execution when DEBUG_SESSION_PORT is set, even if the extension
 // advertises SupportedLaunchConfigurations that don't include "project".
-var standardService = builder.AddProject<Projects.StandardService>("standard-service")
+builder.AddProject<Projects.StandardService>("standard-service")
     .WithReference(funcApp)
     .WaitFor(funcApp);
 

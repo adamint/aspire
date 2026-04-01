@@ -15,7 +15,8 @@ import {
     mergeEnvironmentVariables,
     determineArguments,
     determineWorkingDirectory,
-    determineServerReadyAction
+    determineServerReadyAction,
+    LaunchProfileCommandName
 } from '../launchProfiles';
 import { AspireDebugSession } from '../AspireDebugSession';
 
@@ -253,7 +254,7 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 env.push({ name: "ASPIRE_DASHBOARD_AI_DISABLED", value: "true" });
             }
 
-            if (baseProfile?.commandName === 'Executable' && baseProfile.executablePath) {
+            if (baseProfile?.commandName?.toLowerCase() === LaunchProfileCommandName.executable && baseProfile.executablePath) {
                 // For Executable command profiles (e.g., AWS Lambda), the launch profile
                 // specifies an external executable to run instead of the project output.
                 // Build the project to ensure dependencies are compiled, then launch
