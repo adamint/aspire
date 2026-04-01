@@ -29,7 +29,6 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  models: read
 
 jobs:
   prepare-release:
@@ -178,13 +177,22 @@ jobs:
           PROMPT_END
           )
 
-          # Combine context
-          CONTEXT="COMMIT LOG:\n${COMMITS}\n\nDIFF STATISTICS:\n${DIFFSTAT}\n\nCODE DIFF (truncated):\n${DIFF}"
+          # Combine context into a file
+          {
+            echo "COMMIT LOG:"
+            cat /tmp/commits.txt
+            echo ""
+            echo "DIFF STATISTICS:"
+            cat /tmp/diffstat.txt
+            echo ""
+            echo "CODE DIFF (truncated):"
+            cat /tmp/diff.txt
+          } > /tmp/context.txt
 
           # Call GitHub Models API
           # Escape the content for JSON
           ESCAPED_PROMPT=$(echo "$PROMPT" | jq -Rs .)
-          ESCAPED_CONTEXT=$(echo "$CONTEXT" | jq -Rs .)
+          ESCAPED_CONTEXT=$(cat /tmp/context.txt | jq -Rs .)
 
           REQUEST_BODY=$(jq -n \
             --argjson system "$ESCAPED_PROMPT" \
@@ -212,12 +220,12 @@ jobs:
           if [ -z "$AI_NOTES" ]; then
             echo "⚠️ AI generation failed or returned empty. Using commit log as fallback."
             echo "API Response: $RESPONSE"
-            AI_NOTES="### Changes\n"
+            AI_NOTES="### Changes"
             while IFS= read -r line; do
               if [ -n "$line" ]; then
                 # Strip the SHA prefix from "abc1234 Some message"
                 MSG=$(echo "$line" | sed 's/^[a-f0-9]* //')
-                AI_NOTES="${AI_NOTES}- ${MSG}\n"
+                AI_NOTES="${AI_NOTES}"$'\n'"- ${MSG}"
               fi
             done < /tmp/commits.txt
           fi
@@ -225,13 +233,13 @@ jobs:
           echo "✓ Release notes generated"
 
           # Write to file (avoids multiline output issues)
-          echo -e "$AI_NOTES" > /tmp/release_notes.md
+          printf '%s\n' "$AI_NOTES" > /tmp/release_notes.md
 
           # Also create the full changelog entry
           {
             echo "## v${NEW_VERSION}"
             echo ""
-            echo -e "$AI_NOTES"
+            printf '%s\n' "$AI_NOTES"
           } > /tmp/changelog_entry.md
 
       - name: Update package.json version
@@ -290,11 +298,13 @@ jobs:
           TO_SHA: ${{ steps.resolve-sha.outputs.to_sha }}
         run: |
           BRANCH_NAME="extension-release/v${NEW_VERSION}"
-          RELEASE_NOTES=$(cat /tmp/release_notes.md)
 
           # Configure git
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Delete existing branch if present (idempotent re-runs)
+          git push origin --delete "$BRANCH_NAME" 2>/dev/null || true
 
           # Create branch and commit
           git checkout -b "$BRANCH_NAME"
@@ -302,28 +312,30 @@ jobs:
           git commit -m "Prepare VS Code extension release v${NEW_VERSION}"
           git push origin "$BRANCH_NAME"
 
-          # Build PR body
-          PR_BODY="## VS Code Extension Release v${NEW_VERSION}
-
-          **Version bump:** ${CURRENT_VERSION} → ${NEW_VERSION}
-          **Commit range:** [\`${FROM_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${FROM_SHA})..[\`${TO_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${TO_SHA})
-
-          ### AI-Generated Release Notes
-
-          ${RELEASE_NOTES}
-
-          ---
-
-          > **Note:** Review the generated release notes in \`extension/CHANGELOG.md\` and edit as needed before merging.
-          > After merging, publish the extension using the standard extension build and publish pipeline."
+          # Build PR body via temp file to avoid quoting issues
+          RELEASE_NOTES=$(cat /tmp/release_notes.md)
+          {
+            echo "## VS Code Extension Release v${NEW_VERSION}"
+            echo ""
+            echo "**Version bump:** ${CURRENT_VERSION} → ${NEW_VERSION}"
+            echo "**Commit range:** [\`${FROM_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${FROM_SHA})..[\`${TO_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${TO_SHA})"
+            echo ""
+            echo "### AI-Generated Release Notes"
+            echo ""
+            printf '%s\n' "$RELEASE_NOTES"
+            echo ""
+            echo "---"
+            echo ""
+            echo '> **Note:** Review the generated release notes in `extension/CHANGELOG.md` and edit as needed before merging.'
+            echo '> After merging, publish the extension using the standard extension build and publish pipeline.'
+          } > /tmp/pr_body.md
 
           # Create draft PR
           gh pr create \
             --base main \
             --head "$BRANCH_NAME" \
             --title "Prepare VS Code extension release v${NEW_VERSION}" \
-            --body "$PR_BODY" \
-            --draft \
-            --label "area-vscode-extension"
+            --body-file /tmp/pr_body.md \
+            --draft
 
           echo "✓ Created draft PR for extension release v${NEW_VERSION}"
