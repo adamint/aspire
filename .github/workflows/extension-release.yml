@@ -51,19 +51,19 @@ jobs:
             echo "No end SHA provided, using HEAD: $TO_SHA"
           fi
 
-          # Validate both SHAs exist
-          if ! git cat-file -e "${{ inputs.from_sha }}^{commit}" 2>/dev/null; then
+          # Resolve and validate both SHAs (accepts short or full SHAs)
+          FROM_SHA=$(git rev-parse --verify "${{ inputs.from_sha }}^{commit}" 2>/dev/null) || {
             echo "❌ Start SHA does not exist: ${{ inputs.from_sha }}"
             exit 1
-          fi
-          if ! git cat-file -e "$TO_SHA^{commit}" 2>/dev/null; then
-            echo "❌ End SHA does not exist: $TO_SHA"
+          }
+          TO_SHA=$(git rev-parse --verify "${TO_SHA}^{commit}" 2>/dev/null) || {
+            echo "❌ End SHA does not exist: ${{ inputs.to_sha }}"
             exit 1
-          fi
+          }
 
-          echo "from_sha=${{ inputs.from_sha }}" >> "$GITHUB_OUTPUT"
+          echo "from_sha=$FROM_SHA" >> "$GITHUB_OUTPUT"
           echo "to_sha=$TO_SHA" >> "$GITHUB_OUTPUT"
-          echo "✓ SHA range: ${{ inputs.from_sha }}..${TO_SHA}"
+          echo "✓ SHA range: ${FROM_SHA}..${TO_SHA}"
 
       - name: Validate version format
         run: |
