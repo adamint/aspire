@@ -21,7 +21,7 @@ on:
         required: true
         type: string
       to_sha:
-        description: 'End commit SHA (defaults to HEAD of main if empty)'
+        description: 'End commit SHA (defaults to latest commit on main if empty)'
         required: false
         type: string
         default: ''
@@ -49,8 +49,8 @@ jobs:
         run: |
           TO_SHA="$INPUT_TO_SHA"
           if [ -z "$TO_SHA" ]; then
-            TO_SHA=$(git rev-parse HEAD)
-            echo "No end SHA provided, using HEAD: $TO_SHA"
+            TO_SHA=$(git rev-parse origin/main)
+            echo "No end SHA provided, using origin/main: $TO_SHA"
           fi
 
           # Resolve and validate both SHAs (accepts short or full SHAs)
@@ -306,18 +306,19 @@ jobs:
         run: |
           BRANCH_NAME="extension-release/v${NEW_VERSION}"
 
-          # Configure git
+          # Configure git to use the app token for push
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
 
           # Delete existing branch if present (idempotent re-runs)
           git push origin --delete "$BRANCH_NAME" 2>/dev/null || true
 
           # Create branch and commit
-          git checkout -b "$BRANCH_NAME"
+          git checkout -B "$BRANCH_NAME"
           git add extension/package.json extension/CHANGELOG.md
           git commit -m "Prepare VS Code extension release v${NEW_VERSION}"
-          git push origin "$BRANCH_NAME"
+          git push --force-with-lease origin "$BRANCH_NAME"
 
           # Build PR body via temp file to avoid quoting issues
           RELEASE_NOTES=$(cat /tmp/release_notes.md)
@@ -337,12 +338,19 @@ jobs:
             echo '> After merging, publish the extension using the standard extension build and publish pipeline.'
           } > /tmp/pr_body.md
 
-          # Create draft PR
-          gh pr create \
-            --base main \
-            --head "$BRANCH_NAME" \
-            --title "Prepare VS Code extension release v${NEW_VERSION}" \
-            --body-file /tmp/pr_body.md \
-            --draft
-
-          echo "✓ Created draft PR for extension release v${NEW_VERSION}"
+          # Create or update draft PR
+          EXISTING_PR=$(gh pr list --head "$BRANCH_NAME" --base main --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [ -n "$EXISTING_PR" ]; then
+            gh pr edit "$EXISTING_PR" \
+              --title "Prepare VS Code extension release v${NEW_VERSION}" \
+              --body-file /tmp/pr_body.md
+            echo "✓ Updated existing draft PR #${EXISTING_PR} for extension release v${NEW_VERSION}"
+          else
+            gh pr create \
+              --base main \
+              --head "$BRANCH_NAME" \
+              --title "Prepare VS Code extension release v${NEW_VERSION}" \
+              --body-file /tmp/pr_body.md \
+              --draft
+            echo "✓ Created draft PR for extension release v${NEW_VERSION}"
+          fi
