@@ -136,7 +136,7 @@ export function determineBaseLaunchProfile(
 
     // If launch_profile is absent, choose the first one with commandName='Project'
     for (const [name, profile] of Object.entries(launchSettings.profiles)) {
-        if (profile.commandName.toLowerCase() === LaunchProfileCommandName.project) {
+        if (profile.commandName?.toLowerCase() === LaunchProfileCommandName.project) {
             extensionLogOutputChannel.debug(`Using default launch profile: ${name}`);
             return { profile, profileName: name };
         }
