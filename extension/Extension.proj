@@ -25,6 +25,15 @@
       <_ManifestPath>$(_VscodeOutputDir)\aspire-vscode-$(_ExtractedVersion).manifest</_ManifestPath>
     </PropertyGroup>
 
+    <!-- Capture current git commit SHA and write .version file -->
+    <Exec Command="git rev-parse HEAD"
+          ConsoleToMSBuild="true"
+          IgnoreStandardErrorWarningFormat="true"
+          ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_GitCommitSha" />
+    </Exec>
+    <WriteLinesToFile File="$(ExtensionSrcDir).version" Lines="$(_GitCommitSha)" Overwrite="true" Condition="'$(_GitCommitSha)' != ''" />
+
     <!-- Install dependencies and compile -->
     <Exec Command="yarn install" WorkingDirectory="$(ExtensionSrcDir)" IgnoreStandardErrorWarningFormat="true" />
     <Exec Command="yarn compile" WorkingDirectory="$(ExtensionSrcDir)" IgnoreStandardErrorWarningFormat="true" />
