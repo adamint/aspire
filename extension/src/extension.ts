@@ -70,7 +70,6 @@ export async function activate(context: vscode.ExtensionContext) {
   const settingsCommandRegistration = vscode.commands.registerCommand('aspire-vscode.settings', () => tryExecuteCommand('aspire-vscode.settings', terminalProvider, settingsCommand));
   const openLocalSettingsCommandRegistration = vscode.commands.registerCommand('aspire-vscode.openLocalSettings', () => tryExecuteCommand('aspire-vscode.openLocalSettings', terminalProvider, openLocalSettingsCommand));
   const openGlobalSettingsCommandRegistration = vscode.commands.registerCommand('aspire-vscode.openGlobalSettings', () => tryExecuteCommand('aspire-vscode.openGlobalSettings', terminalProvider, openGlobalSettingsCommand));
-  const restoreCommandRegistration = vscode.commands.registerCommand('aspire-vscode.restore', () => terminalProvider.sendAspireCommandToAspireTerminal('restore'));
   const runAppHostCommandRegistration = vscode.commands.registerCommand('aspire-vscode.runAppHost', () => editorCommandProvider.tryExecuteRunAppHost(true));
   const debugAppHostCommandRegistration = vscode.commands.registerCommand('aspire-vscode.debugAppHost', () => editorCommandProvider.tryExecuteRunAppHost(false));
 
@@ -152,7 +151,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(gutterDecorationProvider);
 
   context.subscriptions.push(cliAddCommandRegistration, cliNewCommandRegistration, cliInitCommandRegistration, cliDeployCommandRegistration, cliPublishCommandRegistration, cliDoCommandRegistration, openTerminalCommandRegistration, configureLaunchJsonCommandRegistration);
-  context.subscriptions.push(cliUpdateCommandRegistration, cliUpdateSelfCommandRegistration, settingsCommandRegistration, openLocalSettingsCommandRegistration, openGlobalSettingsCommandRegistration, restoreCommandRegistration, runAppHostCommandRegistration, debugAppHostCommandRegistration);
+  context.subscriptions.push(cliUpdateCommandRegistration, cliUpdateSelfCommandRegistration, settingsCommandRegistration, openLocalSettingsCommandRegistration, openGlobalSettingsCommandRegistration, runAppHostCommandRegistration, debugAppHostCommandRegistration);
   context.subscriptions.push(installCliStableRegistration, installCliDailyRegistration, verifyCliInstalledRegistration);
 
   const debugConfigProvider = new AspireDebugConfigurationProvider();
@@ -201,6 +200,13 @@ export async function activate(context: vscode.ExtensionContext) {
   void packageRestoreProvider.activate().catch(err => {
     extensionLogOutputChannel.warn(`Auto-restore activation failed: ${String(err)}`);
   });
+
+  const restoreCommandRegistration = vscode.commands.registerCommand('aspire-vscode.restore', () => {
+    void packageRestoreProvider.retryRestore().catch(err => {
+      extensionLogOutputChannel.warn(`Manual restore failed: ${String(err)}`);
+    });
+  });
+  context.subscriptions.push(restoreCommandRegistration);
 
   // Return exported API for tests or other extensions
   return {

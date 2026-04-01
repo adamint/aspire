@@ -29,7 +29,6 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
     private readonly _failedDirs = new Set<string>(); // configDirs that failed
     private _total = 0;
     private _completed = 0;
-    private _batchRunning = false;
     private _hideTimeout: ReturnType<typeof setTimeout> | undefined;
 
     constructor(terminalProvider: AspireTerminalProvider) {
@@ -62,6 +61,12 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
         await this._restoreAll();
     }
 
+    async retryRestore(): Promise<void> {
+        this._failedDirs.clear();
+        this._showProgress();
+        await this._restoreAll();
+    }
+
     private async _restoreAll(): Promise<void> {
         const allConfigs = await findAspireSettingsFiles();
         const configs = allConfigs.filter(uri => uri.fsPath.endsWith(aspireConfigFileName));
@@ -69,7 +74,6 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
             return;
         }
 
-        this._batchRunning = true;
         this._total = configs.length;
         this._completed = 0;
         this._failedDirs.clear();
@@ -83,7 +87,6 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
             }
         }
         await Promise.all(pending);
-        this._batchRunning = false;
     }
 
     private _watchConfigFiles(): void {
@@ -103,7 +106,7 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
         }
         const configDir = path.dirname(uri.fsPath);
         // Don't inflate total if a re-restore is already queued for this directory
-        if (!this._pendingRestore.has(configDir) && !this._batchRunning) {
+        if (!this._pendingRestore.has(configDir)) {
             if (this._active.size === 0 && this._completed >= this._total) {
                 this._total = 1;
                 this._completed = 0;
@@ -168,48 +171,50 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
         this._active.set(configDir, relativePath);
         this._showProgress();
 
-        const cliPath = await this._terminalProvider.getAspireCliExecutablePath();
-        await new Promise<void>((resolve, reject) => {
-            let settled = false;
-            const proc = spawnCliProcess(this._terminalProvider, cliPath, ['restore'], {
-                workingDirectory: configDir,
-                noExtensionVariables: true,
-                exitCallback: code => {
+        try {
+            const cliPath = await this._terminalProvider.getAspireCliExecutablePath();
+            await new Promise<void>((resolve, reject) => {
+                let settled = false;
+                const proc = spawnCliProcess(this._terminalProvider, cliPath, ['restore'], {
+                    workingDirectory: configDir,
+                    noExtensionVariables: true,
+                    exitCallback: code => {
+                        if (settled) { return; }
+                        settled = true;
+                        if (code === 0) {
+                            extensionLogOutputChannel.info(aspireRestoreCompleted(relativePath));
+                            resolve();
+                        } else {
+                            extensionLogOutputChannel.warn(aspireRestoreFailed(relativePath, `exit code ${code}`));
+                            reject(new Error(`exit code ${code}`));
+                        }
+                    },
+                    errorCallback: error => {
+                        if (settled) { return; }
+                        settled = true;
+                        extensionLogOutputChannel.warn(aspireRestoreFailed(relativePath, error.message));
+                        reject(error);
+                    },
+                });
+                this._childProcesses.add(proc);
+                const timeout = setTimeout(() => {
                     if (settled) { return; }
                     settled = true;
-                    if (code === 0) {
-                        extensionLogOutputChannel.info(aspireRestoreCompleted(relativePath));
-                        resolve();
-                    } else {
-                        extensionLogOutputChannel.warn(aspireRestoreFailed(relativePath, `exit code ${code}`));
-                        reject(new Error(`exit code ${code}`));
-                    }
-                },
-                errorCallback: error => {
-                    if (settled) { return; }
-                    settled = true;
-                    extensionLogOutputChannel.warn(aspireRestoreFailed(relativePath, error.message));
-                    reject(error);
-                },
+                    try { proc.kill(); } catch { /* ignore */ }
+                    reject(new Error('restore timed out'));
+                }, AspirePackageRestoreProvider._restoreTimeoutMs);
+                this._timeouts.add(timeout);
+                proc.on('close', () => {
+                    clearTimeout(timeout);
+                    this._timeouts.delete(timeout);
+                    this._childProcesses.delete(proc);
+                });
             });
-            this._childProcesses.add(proc);
-            const timeout = setTimeout(() => {
-                if (settled) { return; }
-                settled = true;
-                try { proc.kill(); } catch { /* ignore */ }
-                reject(new Error('restore timed out'));
-            }, AspirePackageRestoreProvider._restoreTimeoutMs);
-            this._timeouts.add(timeout);
-            proc.on('close', () => {
-                clearTimeout(timeout);
-                this._timeouts.delete(timeout);
-                this._childProcesses.delete(proc);
-            });
-        }).finally(() => {
+        } finally {
             this._active.delete(configDir);
             this._completed++;
             this._showProgress();
-        });
+        }
     }
 
     private _scheduleHide(): void {
