@@ -1,0 +1,329 @@
+# Extension Release Workflow
+#
+# Prepares a VS Code extension release by:
+# 1. Validating the new version is greater than the current version in package.json
+# 2. Generating AI-powered release notes from the diff between two commits
+# 3. Updating the version in extension/package.json
+# 4. Creating a CHANGELOG.md entry
+# 5. Opening a draft PR with the changes
+
+name: Extension Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: 'New extension version (e.g., 1.0.8)'
+        required: true
+        type: string
+      from_sha:
+        description: 'Start commit SHA (changes after this commit)'
+        required: true
+        type: string
+      to_sha:
+        description: 'End commit SHA (defaults to HEAD of main if empty)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+  pull-requests: write
+  models: read
+
+jobs:
+  prepare-release:
+    name: Prepare Extension Release
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'microsoft' }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0  # Full history for diff generation
+
+      - name: Resolve end SHA
+        id: resolve-sha
+        run: |
+          TO_SHA="${{ inputs.to_sha }}"
+          if [ -z "$TO_SHA" ]; then
+            TO_SHA=$(git rev-parse HEAD)
+            echo "No end SHA provided, using HEAD: $TO_SHA"
+          fi
+
+          # Validate both SHAs exist
+          if ! git cat-file -e "${{ inputs.from_sha }}^{commit}" 2>/dev/null; then
+            echo "❌ Start SHA does not exist: ${{ inputs.from_sha }}"
+            exit 1
+          fi
+          if ! git cat-file -e "$TO_SHA^{commit}" 2>/dev/null; then
+            echo "❌ End SHA does not exist: $TO_SHA"
+            exit 1
+          fi
+
+          echo "from_sha=${{ inputs.from_sha }}" >> "$GITHUB_OUTPUT"
+          echo "to_sha=$TO_SHA" >> "$GITHUB_OUTPUT"
+          echo "✓ SHA range: ${{ inputs.from_sha }}..${TO_SHA}"
+
+      - name: Validate version format
+        run: |
+          VERSION="${{ inputs.release_version }}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Invalid version format: $VERSION"
+            echo "Expected format: major.minor.patch (e.g., 1.0.8)"
+            exit 1
+          fi
+          echo "✓ Version format is valid: $VERSION"
+
+      - name: Check version is greater than current
+        id: version-check
+        run: |
+          CURRENT_VERSION=$(jq -r '.version' extension/package.json)
+          NEW_VERSION="${{ inputs.release_version }}"
+
+          echo "Current version: $CURRENT_VERSION"
+          echo "New version: $NEW_VERSION"
+
+          # Split versions into components
+          IFS='.' read -r CUR_MAJOR CUR_MINOR CUR_PATCH <<< "$CURRENT_VERSION"
+          IFS='.' read -r NEW_MAJOR NEW_MINOR NEW_PATCH <<< "$NEW_VERSION"
+
+          # Compare versions
+          IS_GREATER=false
+          if [ "$NEW_MAJOR" -gt "$CUR_MAJOR" ]; then
+            IS_GREATER=true
+          elif [ "$NEW_MAJOR" -eq "$CUR_MAJOR" ]; then
+            if [ "$NEW_MINOR" -gt "$CUR_MINOR" ]; then
+              IS_GREATER=true
+            elif [ "$NEW_MINOR" -eq "$CUR_MINOR" ]; then
+              if [ "$NEW_PATCH" -gt "$CUR_PATCH" ]; then
+                IS_GREATER=true
+              fi
+            fi
+          fi
+
+          if [ "$IS_GREATER" != "true" ]; then
+            echo "❌ New version ($NEW_VERSION) must be greater than current version ($CURRENT_VERSION)"
+            exit 1
+          fi
+
+          echo "current_version=$CURRENT_VERSION" >> "$GITHUB_OUTPUT"
+          echo "✓ Version bump: $CURRENT_VERSION → $NEW_VERSION"
+
+      - name: Generate commit log and diff summary
+        id: generate-diff
+        env:
+          FROM_SHA: ${{ steps.resolve-sha.outputs.from_sha }}
+          TO_SHA: ${{ steps.resolve-sha.outputs.to_sha }}
+        run: |
+          echo "Generating commit log for extension changes..."
+
+          # Get commit messages for extension/ changes
+          COMMITS=$(git log --oneline --no-merges "${FROM_SHA}..${TO_SHA}" -- extension/ 2>/dev/null || echo "")
+
+          if [ -z "$COMMITS" ]; then
+            echo "⚠️ No extension-specific commits found in range. Using all commits."
+            COMMITS=$(git log --oneline --no-merges "${FROM_SHA}..${TO_SHA}" 2>/dev/null | head -100)
+          fi
+
+          # Get diffstat for extension/
+          DIFFSTAT=$(git diff --stat "${FROM_SHA}..${TO_SHA}" -- extension/ 2>/dev/null || echo "")
+
+          # Get the actual diff (truncated for AI context)
+          DIFF_CONTENT=$(git diff "${FROM_SHA}..${TO_SHA}" -- extension/src/ extension/package.json extension/package.nls.json 2>/dev/null | head -3000)
+
+          # Write to files for the AI step
+          echo "$COMMITS" > /tmp/commits.txt
+          echo "$DIFFSTAT" > /tmp/diffstat.txt
+          echo "$DIFF_CONTENT" > /tmp/diff.txt
+
+          COMMIT_COUNT=$(echo "$COMMITS" | grep -c . || echo "0")
+          echo "commit_count=$COMMIT_COUNT" >> "$GITHUB_OUTPUT"
+          echo "✓ Found $COMMIT_COUNT extension commits in range"
+
+      - name: Generate AI release notes
+        id: ai-release-notes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NEW_VERSION: ${{ inputs.release_version }}
+          CURRENT_VERSION: ${{ steps.version-check.outputs.current_version }}
+        run: |
+          COMMITS=$(cat /tmp/commits.txt)
+          DIFFSTAT=$(cat /tmp/diffstat.txt)
+          DIFF=$(cat /tmp/diff.txt)
+
+          # Build the prompt
+          PROMPT=$(cat <<'PROMPT_END'
+          You are a technical writer generating release notes for the Aspire VS Code extension.
+          Given the commit log, diff statistics, and code diff below, generate a concise, user-facing changelog.
+
+          Rules:
+          - Group changes into categories: "Features", "Bug Fixes", "Improvements", and optionally "Breaking Changes"
+          - Only include categories that have entries
+          - Each entry should be a single bullet point, written in past tense
+          - Focus on what changed from the user's perspective, not implementation details
+          - Do NOT mention commit SHAs or PR numbers
+          - Keep it concise — aim for 3-15 bullet points total
+          - Use markdown formatting
+
+          Output format (do not include the version header, just the categorized bullets):
+          ### Features
+          - Added ...
+
+          ### Bug Fixes
+          - Fixed ...
+
+          ### Improvements
+          - Improved ...
+          PROMPT_END
+          )
+
+          # Combine context
+          CONTEXT="COMMIT LOG:\n${COMMITS}\n\nDIFF STATISTICS:\n${DIFFSTAT}\n\nCODE DIFF (truncated):\n${DIFF}"
+
+          # Call GitHub Models API
+          # Escape the content for JSON
+          ESCAPED_PROMPT=$(echo "$PROMPT" | jq -Rs .)
+          ESCAPED_CONTEXT=$(echo "$CONTEXT" | jq -Rs .)
+
+          REQUEST_BODY=$(jq -n \
+            --argjson system "$ESCAPED_PROMPT" \
+            --argjson user "$ESCAPED_CONTEXT" \
+            '{
+              "messages": [
+                {"role": "system", "content": $system},
+                {"role": "user", "content": $user}
+              ],
+              "model": "openai/gpt-4o-mini",
+              "temperature": 0.3
+            }')
+
+          echo "Calling GitHub Models API for release notes generation..."
+
+          RESPONSE=$(curl -s -X POST \
+            "https://models.github.ai/inference/chat/completions" \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$REQUEST_BODY")
+
+          # Extract the generated text
+          AI_NOTES=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+
+          if [ -z "$AI_NOTES" ]; then
+            echo "⚠️ AI generation failed or returned empty. Using commit log as fallback."
+            echo "API Response: $RESPONSE"
+            AI_NOTES="### Changes\n"
+            while IFS= read -r line; do
+              if [ -n "$line" ]; then
+                # Strip the SHA prefix from "abc1234 Some message"
+                MSG=$(echo "$line" | sed 's/^[a-f0-9]* //')
+                AI_NOTES="${AI_NOTES}- ${MSG}\n"
+              fi
+            done < /tmp/commits.txt
+          fi
+
+          echo "✓ Release notes generated"
+
+          # Write to file (avoids multiline output issues)
+          echo -e "$AI_NOTES" > /tmp/release_notes.md
+
+          # Also create the full changelog entry
+          {
+            echo "## v${NEW_VERSION}"
+            echo ""
+            echo -e "$AI_NOTES"
+          } > /tmp/changelog_entry.md
+
+      - name: Update package.json version
+        env:
+          NEW_VERSION: ${{ inputs.release_version }}
+        run: |
+          cd extension
+          jq --arg v "$NEW_VERSION" '.version = $v' package.json > package.json.tmp
+          mv package.json.tmp package.json
+          echo "✓ Updated extension/package.json version to $NEW_VERSION"
+
+      - name: Update or create CHANGELOG.md
+        env:
+          NEW_VERSION: ${{ inputs.release_version }}
+        run: |
+          CHANGELOG="extension/CHANGELOG.md"
+          ENTRY=$(cat /tmp/changelog_entry.md)
+
+          if [ -f "$CHANGELOG" ]; then
+            # Prepend new entry after the title line
+            {
+              head -1 "$CHANGELOG"
+              echo ""
+              echo "$ENTRY"
+              echo ""
+              tail -n +2 "$CHANGELOG"
+            } > "${CHANGELOG}.tmp"
+            mv "${CHANGELOG}.tmp" "$CHANGELOG"
+          else
+            {
+              echo "# Aspire VS Code Extension Changelog"
+              echo ""
+              echo "$ENTRY"
+            } > "$CHANGELOG"
+          fi
+
+          echo "✓ Updated $CHANGELOG"
+          echo ""
+          echo "=== Changelog Entry ==="
+          cat /tmp/changelog_entry.md
+          echo "========================"
+
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e # v2.0.6
+        with:
+          app-id: ${{ secrets.ASPIRE_BOT_APP_ID }}
+          private-key: ${{ secrets.ASPIRE_BOT_PRIVATE_KEY }}
+
+      - name: Create draft pull request
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          NEW_VERSION: ${{ inputs.release_version }}
+          CURRENT_VERSION: ${{ steps.version-check.outputs.current_version }}
+          FROM_SHA: ${{ steps.resolve-sha.outputs.from_sha }}
+          TO_SHA: ${{ steps.resolve-sha.outputs.to_sha }}
+        run: |
+          BRANCH_NAME="extension-release/v${NEW_VERSION}"
+          RELEASE_NOTES=$(cat /tmp/release_notes.md)
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create branch and commit
+          git checkout -b "$BRANCH_NAME"
+          git add extension/package.json extension/CHANGELOG.md
+          git commit -m "Prepare VS Code extension release v${NEW_VERSION}"
+          git push origin "$BRANCH_NAME"
+
+          # Build PR body
+          PR_BODY="## VS Code Extension Release v${NEW_VERSION}
+
+          **Version bump:** ${CURRENT_VERSION} → ${NEW_VERSION}
+          **Commit range:** [\`${FROM_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${FROM_SHA})..[\`${TO_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${TO_SHA})
+
+          ### AI-Generated Release Notes
+
+          ${RELEASE_NOTES}
+
+          ---
+
+          > **Note:** Review the generated release notes in \`extension/CHANGELOG.md\` and edit as needed before merging.
+          > After merging, publish the extension using the standard extension build and publish pipeline."
+
+          # Create draft PR
+          gh pr create \
+            --base main \
+            --head "$BRANCH_NAME" \
+            --title "Prepare VS Code extension release v${NEW_VERSION}" \
+            --body "$PR_BODY" \
+            --draft \
+            --label "area-vscode-extension"
+
+          echo "✓ Created draft PR for extension release v${NEW_VERSION}"
