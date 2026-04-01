@@ -29,6 +29,7 @@ Instructions for GitHub Copilot and other AI coding agents working with the Aspi
 * Never change global.json unless explicitly asked to.
 * Never change package.json or package-lock.json files unless explicitly asked to.
 * Never change NuGet.config files unless explicitly asked to.
+* When code needs a temporary directory, prefer the repository temp directory abstractions first (for example `IFileSystemService.TempDirectory` / `ITempFileSystemService`) and otherwise use `Directory.CreateTempSubdirectory()` instead of `Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())`; if you need a temporary file path, place it under a securely created temp directory.
 * Don't update files under `*/api/*.cs` (e.g. src/Aspire.Hosting/api/Aspire.Hosting.cs) as they are generated.
 
 ## Code Review Instructions
@@ -392,6 +393,7 @@ The following specialized skills are available in `.github/skills/`:
 - **test-management**: Quarantines or disables flaky/problematic tests using the QuarantineTools utility
 - **connection-properties**: Expert for creating and improving Connection Properties in Aspire resources
 - **dependency-update**: Guides dependency version updates by checking nuget.org, triggering the dotnet-migrate-package Azure DevOps pipeline, and monitoring runs
+- **api-review**: Reviews .NET API surface area PRs for design guideline violations, applies rules from .NET Framework Design Guidelines and Aspire conventions, and attributes findings to the author who introduced each API
 - **startup-perf**: Measures Aspire application startup performance using dotnet-trace and the TraceAnalyzer tool
 
 ## Pattern-Based Instructions
