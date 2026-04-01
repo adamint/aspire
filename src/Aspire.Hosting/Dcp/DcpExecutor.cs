@@ -1411,7 +1411,7 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                     // applied later in CreateExecutableAsync() after endpoints are allocated,
                     // unless the IDE didn't send DEBUG_SESSION_INFO (handled by the fallback branch below).
                 }
-                else if (ShouldFallBackToIdeExecution(isInDebugSession, supportsDebuggingAnnotation, project))
+                else if (ShouldFallBackToIdeExecution(isInDebugSession, supportsDebuggingAnnotation))
                 {
                     // Fall back to IDE execution with a standard ProjectLaunchConfiguration when:
                     // 1. No SupportsDebuggingAnnotation exists (e.g. AddResource-based ProjectResource
@@ -1490,7 +1490,7 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
     /// <see cref="SupportsDebuggingAnnotation"/> (e.g. AddResource-based subclasses) or the
     /// IDE did not send <c>DEBUG_SESSION_INFO</c> (Visual Studio scenario).
     /// </summary>
-    private bool ShouldFallBackToIdeExecution(bool isInDebugSession, SupportsDebuggingAnnotation? supportsDebuggingAnnotation, ProjectResource project)
+    private bool ShouldFallBackToIdeExecution(bool isInDebugSession, SupportsDebuggingAnnotation? supportsDebuggingAnnotation)
     {
         if (!isInDebugSession)
         {
@@ -1498,16 +1498,6 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
         }
 
         if (supportsDebuggingAnnotation is not null && !string.IsNullOrEmpty(_configuration[KnownConfigNames.DebugSessionInfo]))
-        {
-            return false;
-        }
-
-        // Executable command name profiles (e.g. class library projects using `dotnet exec`)
-        // cannot be debugged via IDE execution because the coreclr debugger cannot attach to a
-        // bare `dotnet` host. Let these fall through to normal process execution.
-        var effectiveLaunchProfile = project.GetEffectiveLaunchProfile();
-        if (effectiveLaunchProfile?.LaunchProfile?.CommandName is not null
-            && string.Equals(effectiveLaunchProfile.LaunchProfile.CommandName, "Executable", StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }

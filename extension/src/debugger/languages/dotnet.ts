@@ -16,7 +16,8 @@ import {
     determineArguments,
     determineWorkingDirectory,
     determineServerReadyAction,
-    LaunchProfileCommandName
+    LaunchProfileCommandName,
+    expandEnvironmentVariables
 } from '../launchProfiles';
 import { AspireDebugSession } from '../AspireDebugSession';
 
@@ -259,9 +260,17 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 // specifies an external executable to run instead of the project output.
                 // Build the project to ensure dependencies are compiled, then launch
                 // using the profile's executable path and command line arguments.
+                // Expand environment variable references (e.g. $(HOME)) that VS handles natively
+                // but aren't expanded by the coreclr debugger.
                 await dotNetService.buildDotNetProject(projectPath);
 
-                debugConfiguration.program = baseProfile.executablePath;
+                debugConfiguration.program = expandEnvironmentVariables(baseProfile.executablePath);
+                if (debugConfiguration.args) {
+                    debugConfiguration.args = expandEnvironmentVariables(debugConfiguration.args);
+                } else if (baseProfile.commandLineArgs) {
+                    // Fall back to launch profile args if run session args were empty
+                    debugConfiguration.args = expandEnvironmentVariables(baseProfile.commandLineArgs);
+                }
                 debugConfiguration.env = Object.fromEntries(mergeEnvironmentVariables(
                     baseProfile?.environmentVariables,
                     debugConfiguration.env,

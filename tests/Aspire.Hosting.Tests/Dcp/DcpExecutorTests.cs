@@ -2552,13 +2552,12 @@ public class DcpExecutorTests
     }
 
     [Fact]
-    public async Task ProjectExecutable_NoAnnotation_ExecutableLaunchProfile_InDebugSession_RunsInProcess()
+    public async Task ProjectExecutable_NoAnnotation_ExecutableLaunchProfile_InDebugSession_RunsInIdeMode()
     {
-        // Class library projects with commandName=Executable launch profiles and
-        // "dotnet exec ..." args. When there's no SupportsDebuggingAnnotation and the launch
-        // profile is Executable, the resource should fall back to process execution (dotnet run)
-        // instead of IDE execution (which fails because the coreclr debugger can't attach to a
-        // bare 'dotnet' host process).
+        // Class library projects with commandName=Executable launch profiles (e.g. AWS Lambda
+        // using "dotnet exec ...") should get IDE execution so both VS and VS Code can debug them.
+        // VS natively handles Executable command profiles; VS Code's extension detects the
+        // Executable commandName and uses the profile's executablePath + args.
         var builder = DistributedApplication.CreateBuilder();
 
         var projectBuilder = builder.AddProject<TestProjectWithExecutableLaunchProfile>("TestFunction",
@@ -2584,9 +2583,18 @@ public class DcpExecutorTests
         await appExecutor.RunApplicationAsync();
 
         var exe = Assert.Single(kubernetesService.CreatedResources.OfType<Executable>(), e => e.AppModelResourceName == "TestFunction");
-        // Should be Process, not IDE, because launch profile is Executable
-        Assert.Equal(ExecutionType.Process, exe.Spec.ExecutionType);
-        Assert.Null(exe.Spec.FallbackExecutionTypes);
+        Assert.Equal(ExecutionType.IDE, exe.Spec.ExecutionType);
+        Assert.NotNull(exe.Spec.FallbackExecutionTypes);
+        Assert.Equal(ExecutionType.Process, Assert.Single(exe.Spec.FallbackExecutionTypes));
+
+        Assert.True(exe.TryGetAnnotationAsObjectList<ProjectLaunchConfiguration>(Executable.LaunchConfigurationsAnnotation, out var launchConfigs));
+        Assert.Single(launchConfigs);
+        Assert.Equal("Aspire_TestFunction", launchConfigs[0].LaunchProfile);
+
+        // Project args should be empty — the Executable profile's command line args are NOT
+        // injected into project args (that was the old Process fallback behavior).
+        Assert.True(exe.TryGetAnnotationAsObjectList<string>(CustomResource.ResourceProjectArgsAnnotation, out var projectArgs));
+        Assert.Empty(projectArgs);
     }
 
     [Fact]

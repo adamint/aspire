@@ -28,6 +28,18 @@ export interface LaunchProfile {
 }
 
 /**
+ * Expands environment variable references in a string.
+ * Supports $(VAR) and %VAR% syntax used by launch profiles.
+ */
+export function expandEnvironmentVariables(value: string): string {
+    // Expand $(VAR) syntax (used by VS and MSBuild-style launch profiles)
+    let result = value.replace(/\$\(([^)]+)\)/g, (_, varName) => process.env[varName] ?? '');
+    // Expand %VAR% syntax (Windows)
+    result = result.replace(/%([^%]+)%/g, (_, varName) => process.env[varName] ?? '');
+    return result;
+}
+
+/**
  * Well-known launch profile command names (lowercased for case-insensitive comparison).
  */
 export const LaunchProfileCommandName = {
@@ -217,13 +229,14 @@ export function determineWorkingDirectory(
     baseProfile: LaunchProfile | null
 ): string {
     if (baseProfile?.workingDirectory) {
+        const workingDirectory = expandEnvironmentVariables(baseProfile.workingDirectory);
         // If working directory is relative, resolve it relative to project directory
-        if (path.isAbsolute(baseProfile.workingDirectory)) {
-            extensionLogOutputChannel.debug(`Using absolute working directory from launch profile: ${baseProfile.workingDirectory}`);
-            return baseProfile.workingDirectory;
+        if (path.isAbsolute(workingDirectory)) {
+            extensionLogOutputChannel.debug(`Using absolute working directory from launch profile: ${workingDirectory}`);
+            return workingDirectory;
         } else {
             const projectDir = path.dirname(projectPath);
-            const workingDir = path.resolve(projectDir, baseProfile.workingDirectory);
+            const workingDir = path.resolve(projectDir, workingDirectory);
             extensionLogOutputChannel.debug(`Using relative working directory from launch profile: ${workingDir}`);
             return workingDir;
         }
