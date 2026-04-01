@@ -1413,15 +1413,33 @@ internal sealed partial class DcpExecutor : IDcpExecutor, IConsoleLogsService, I
                 }
                 else if (ShouldFallBackToIdeExecution(isInDebugSession, supportsDebuggingAnnotation))
                 {
-                    // Fall back to IDE execution with a standard ProjectLaunchConfiguration when:
-                    // 1. No SupportsDebuggingAnnotation exists (e.g. AddResource-based ProjectResource
-                    //    subclasses that don't call WithDebugSupport — such as AWS Lambda). These should
-                    //    get the same IDE treatment that AddProject provides by default.
-                    // 2. The annotation exists but the IDE did not send DEBUG_SESSION_INFO (Visual Studio
-                    //    scenario). VS handles all project resources natively, so non-"project" types
-                    //    like "azure-functions" still need IDE execution with ProjectLaunchConfiguration.
-                    exe.Spec.ExecutionType = ExecutionType.IDE;
-                    exe.Spec.FallbackExecutionTypes = [ExecutionType.Process];
+                    var effectiveLaunchProfile = project.GetEffectiveLaunchProfile();
+                    if (effectiveLaunchProfile?.LaunchProfile?.CommandName is not null
+                        && string.Equals(effectiveLaunchProfile.LaunchProfile.CommandName, "Executable", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // When the effective launch profile uses commandName=Executable (e.g. AWS Lambda class
+                        // libraries that invoke `dotnet exec`), the IDE debugger cannot attach to a bare `dotnet`
+                        // host process. Fall back to process execution using the launch profile's command line
+                        // args directly (e.g. "exec --depsfile ... TestTool.dll handler").
+                        exe.Spec.ExecutionType = ExecutionType.Process;
+
+                        if (!string.IsNullOrEmpty(effectiveLaunchProfile.LaunchProfile.CommandLineArgs))
+                        {
+                            projectArgs.AddRange(CommandLineArgsParser.Parse(effectiveLaunchProfile.LaunchProfile.CommandLineArgs));
+                        }
+                    }
+                    else
+                    {
+                        // Fall back to IDE execution with a standard ProjectLaunchConfiguration when:
+                        // 1. No SupportsDebuggingAnnotation exists (e.g. AddResource-based ProjectResource
+                        //    subclasses that don't call WithDebugSupport). These should get the same IDE
+                        //    treatment that AddProject provides by default.
+                        // 2. The annotation exists but the IDE did not send DEBUG_SESSION_INFO (Visual Studio
+                        //    scenario). VS handles all project resources natively, so non-"project" types
+                        //    like "azure-functions" still need IDE execution with ProjectLaunchConfiguration.
+                        exe.Spec.ExecutionType = ExecutionType.IDE;
+                        exe.Spec.FallbackExecutionTypes = [ExecutionType.Process];
+                    }
 
                     exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, CreateProjectLaunchConfiguration(project, projectMetadata));
                 }

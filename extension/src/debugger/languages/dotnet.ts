@@ -255,27 +255,13 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
             }
 
             if (baseProfile?.commandName?.toLowerCase() === LaunchProfileCommandName.executable && baseProfile.executablePath) {
-                // For Executable command profiles (e.g., AWS Lambda class libraries), the launch profile
+                // For Executable command profiles (e.g., AWS Lambda), the launch profile
                 // specifies an external executable to run instead of the project output.
                 // Build the project to ensure dependencies are compiled, then launch
                 // using the profile's executable path and command line arguments.
                 await dotNetService.buildDotNetProject(projectPath);
 
-                // When executablePath is 'dotnet' and commandLineArgs uses 'exec', the coreclr debugger
-                // needs the target DLL as the program, not 'dotnet' itself. Extract the DLL path from
-                // the exec command and use it as the program, keeping any post-DLL arguments.
-                if (baseProfile.executablePath.toLowerCase() === 'dotnet' && baseProfile.commandLineArgs) {
-                    const execResult = parseDotnetExecArgs(baseProfile.commandLineArgs, debugConfiguration.cwd);
-                    if (execResult) {
-                        debugConfiguration.program = execResult.dllPath;
-                        debugConfiguration.args = execResult.appArgs.length > 0 ? execResult.appArgs.join(' ') : undefined;
-                    } else {
-                        debugConfiguration.program = baseProfile.executablePath;
-                    }
-                } else {
-                    debugConfiguration.program = baseProfile.executablePath;
-                }
-
+                debugConfiguration.program = baseProfile.executablePath;
                 debugConfiguration.env = Object.fromEntries(mergeEnvironmentVariables(
                     baseProfile?.environmentVariables,
                     debugConfiguration.env,
@@ -325,55 +311,3 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
 }
 
 export const projectDebuggerExtension: ResourceDebuggerExtension = createProjectDebuggerExtension(debugSession => new DotNetService(debugSession));
-
-/**
- * Parses `dotnet exec` command line arguments to extract the target DLL path and
- * any application arguments that follow it. This is needed because the coreclr
- * debugger expects the DLL as the program, not `dotnet` itself.
- *
- * The `dotnet exec` syntax is: dotnet exec [options] <app.dll> [app-args]
- * Options include --depsfile, --runtimeconfig, --additionalprobingpath, --additional-deps, --fx-version, --roll-forward.
- */
-function parseDotnetExecArgs(commandLineArgs: string, cwd: string | undefined): { dllPath: string; appArgs: string[] } | undefined {
-    const tokens = commandLineArgs.match(/(?:[^\s"]+|"[^"]*")+/g);
-    if (!tokens || tokens.length === 0) {
-        return undefined;
-    }
-
-    // Must start with 'exec'
-    if (tokens[0].toLowerCase() !== 'exec') {
-        return undefined;
-    }
-
-    // Known dotnet exec options that take a value argument
-    const optionsWithValue = new Set([
-        '--depsfile', '--runtimeconfig', '--additionalprobingpath',
-        '--additional-deps', '--fx-version', '--roll-forward'
-    ]);
-
-    let i = 1; // Skip 'exec'
-    while (i < tokens.length) {
-        const token = tokens[i];
-        if (optionsWithValue.has(token.toLowerCase()) && i + 1 < tokens.length) {
-            i += 2; // Skip option and its value
-        } else if (token.startsWith('--')) {
-            i++; // Skip unknown flag
-        } else {
-            // This should be the DLL path
-            let dllPath = token;
-            // Expand $(HOME) and similar shell variables
-            dllPath = dllPath.replace(/\$\(HOME\)/g, os.homedir());
-            dllPath = dllPath.replace(/\$HOME/g, os.homedir());
-
-            // Resolve relative paths against the working directory
-            if (!path.isAbsolute(dllPath) && cwd) {
-                dllPath = path.resolve(cwd, dllPath);
-            }
-
-            const appArgs = tokens.slice(i + 1);
-            return { dllPath, appArgs };
-        }
-    }
-
-    return undefined;
-}
