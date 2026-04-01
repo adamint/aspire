@@ -43,20 +43,23 @@ jobs:
 
       - name: Resolve end SHA
         id: resolve-sha
+        env:
+          INPUT_FROM_SHA: ${{ inputs.from_sha }}
+          INPUT_TO_SHA: ${{ inputs.to_sha }}
         run: |
-          TO_SHA="${{ inputs.to_sha }}"
+          TO_SHA="$INPUT_TO_SHA"
           if [ -z "$TO_SHA" ]; then
             TO_SHA=$(git rev-parse HEAD)
             echo "No end SHA provided, using HEAD: $TO_SHA"
           fi
 
           # Resolve and validate both SHAs (accepts short or full SHAs)
-          FROM_SHA=$(git rev-parse --verify "${{ inputs.from_sha }}^{commit}" 2>/dev/null) || {
-            echo "❌ Start SHA does not exist: ${{ inputs.from_sha }}"
+          FROM_SHA=$(git rev-parse --verify "${INPUT_FROM_SHA}^{commit}" 2>/dev/null) || {
+            echo "❌ Start SHA does not exist: $INPUT_FROM_SHA"
             exit 1
           }
           TO_SHA=$(git rev-parse --verify "${TO_SHA}^{commit}" 2>/dev/null) || {
-            echo "❌ End SHA does not exist: ${{ inputs.to_sha }}"
+            echo "❌ End SHA does not exist: $INPUT_TO_SHA"
             exit 1
           }
 
@@ -65,8 +68,10 @@ jobs:
           echo "✓ SHA range: ${FROM_SHA}..${TO_SHA}"
 
       - name: Validate version format
+        env:
+          INPUT_VERSION: ${{ inputs.release_version }}
         run: |
-          VERSION="${{ inputs.release_version }}"
+          VERSION="$INPUT_VERSION"
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "❌ Invalid version format: $VERSION"
             echo "Expected format: major.minor.patch (e.g., 1.0.8)"
@@ -76,9 +81,11 @@ jobs:
 
       - name: Check version is greater than current
         id: version-check
+        env:
+          INPUT_VERSION: ${{ inputs.release_version }}
         run: |
           CURRENT_VERSION=$(jq -r '.version' extension/package.json)
-          NEW_VERSION="${{ inputs.release_version }}"
+          NEW_VERSION="$INPUT_VERSION"
 
           echo "Current version: $CURRENT_VERSION"
           echo "New version: $NEW_VERSION"
@@ -191,8 +198,8 @@ jobs:
 
           # Call GitHub Models API
           # Escape the content for JSON
-          ESCAPED_PROMPT=$(echo "$PROMPT" | jq -Rs .)
-          ESCAPED_CONTEXT=$(cat /tmp/context.txt | jq -Rs .)
+          ESCAPED_PROMPT=$(printf '%s' "$PROMPT" | jq -Rs .)
+          ESCAPED_CONTEXT=$(jq -Rs . < /tmp/context.txt)
 
           REQUEST_BODY=$(jq -n \
             --argjson system "$ESCAPED_PROMPT" \
