@@ -795,6 +795,7 @@
     "generate-schema": "node scripts/generate-schema.js",
     "generate-version": "git rev-parse HEAD > .version 2>/dev/null || echo unknown > .version",
     "precompile": "npm run generate-version && npm run generate-schema && npm run l10n:export && npm run l10n:import",
+    "prepackage": "npm run generate-version && npm run generate-schema && npm run l10n:export && npm run l10n:import",
     "prewatch": "npm run generate-version && npm run generate-schema && npm run l10n:export && npm run l10n:import",
     "localize": "npm run l10n:export && npm run l10n:import"
   },
