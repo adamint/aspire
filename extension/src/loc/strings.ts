@@ -110,6 +110,7 @@ export const codeLensResourceRunning = vscode.l10n.t('$(pass) Running');
 export const codeLensResourceRunningWarning = vscode.l10n.t('$(warning) Running');
 export const codeLensResourceRunningError = vscode.l10n.t('$(error) Running');
 export const codeLensResourceStarting = vscode.l10n.t('$(loading~spin) Starting');
+export const codeLensResourceStopping = vscode.l10n.t('$(loading~spin) Stopping');
 export const codeLensResourceNotStarted = vscode.l10n.t('$(circle-outline) Not Started');
 export const codeLensResourceWaiting = vscode.l10n.t('$(loading~spin) Waiting');
 export const codeLensResourceStopped = vscode.l10n.t('$(circle-outline) Stopped');

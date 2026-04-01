@@ -122,7 +122,7 @@ class ResourcesGroupItem extends vscode.TreeItem {
 
 class HealthChecksGroupItem extends vscode.TreeItem {
     constructor(public readonly resource: ResourceJson, parentId: string) {
-        super(healthChecksLabel, vscode.TreeItemCollapsibleState.Expanded);
+        super(healthChecksLabel, vscode.TreeItemCollapsibleState.Collapsed);
         this.id = `${parentId}:health-checks`;
         this.iconPath = new vscode.ThemeIcon('heart');
         this.contextValue = 'healthChecksGroup';
@@ -273,7 +273,7 @@ export function buildResourceDescription(resource: ResourceJson): string {
         const passed = Object.values(reports).filter(r => r.status === 'Healthy').length;
         parts.push(resourceDescriptionHealth(passed, total));
     }
-    if (exitCode != null) {
+    if (exitCode != null && exitCode !== 0) {
         parts.push(resourceDescriptionExitCode(exitCode));
     }
     return parts.join(' · ');
