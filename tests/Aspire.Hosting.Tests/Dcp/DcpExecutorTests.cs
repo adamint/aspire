@@ -2551,6 +2551,85 @@ public class DcpExecutorTests
         Assert.Equal(ExecutionType.Process, exe.Spec.ExecutionType);
     }
 
+    [Fact]
+    public async Task ProjectExecutable_NoAnnotation_ExecutableLaunchProfile_InDebugSession_RunsInProcessWithExecArgs()
+    {
+        // AWS Lambda class library projects use commandName=Executable launch profiles with
+        // "dotnet exec ..." args. When there's no SupportsDebuggingAnnotation and the launch
+        // profile is Executable, the resource should fall back to process execution using the
+        // launch profile's command line args instead of IDE execution (which fails because the
+        // coreclr debugger can't attach to a bare 'dotnet' host process).
+        var builder = DistributedApplication.CreateBuilder();
+
+        var projectBuilder = builder.AddProject<TestProjectWithExecutableLaunchProfile>("TestFunction",
+            launchProfileName: "Aspire_TestFunction");
+        var annotationToRemove = projectBuilder.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().FirstOrDefault();
+        if (annotationToRemove is not null)
+        {
+            projectBuilder.Resource.Annotations.Remove(annotationToRemove);
+        }
+
+        var configDict = new Dictionary<string, string?>
+        {
+            [DcpExecutor.DebugSessionPortVar] = "12345",
+        };
+
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        var exe = Assert.Single(kubernetesService.CreatedResources.OfType<Executable>(), e => e.AppModelResourceName == "TestFunction");
+        // Should be Process, not IDE, because launch profile is Executable
+        Assert.Equal(ExecutionType.Process, exe.Spec.ExecutionType);
+
+        // The launch profile's command line args should be used as the project args
+        Assert.True(exe.TryGetAnnotationAsObjectList<string>(CustomResource.ResourceProjectArgsAnnotation, out var projectArgs));
+        Assert.Contains("exec", projectArgs);
+        Assert.Contains("--depsfile", projectArgs);
+        Assert.Contains("/tools/TestTool.dll", projectArgs);
+        Assert.Contains("TestLib::TestLib.Functions::Handler", projectArgs);
+    }
+
+    [Fact]
+    public async Task ProjectExecutable_NoAnnotation_ProjectLaunchProfile_InDebugSession_RunsInIdeMode()
+    {
+        // When a project without SupportsDebuggingAnnotation has a normal Project launch profile
+        // (not Executable), it should still get IDE execution in a debug session.
+        var builder = DistributedApplication.CreateBuilder();
+
+        var projectBuilder = builder.AddProject<TestProjectWithLaunchSettings>("proj", launchProfileName: "http");
+        var annotationToRemove = projectBuilder.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().FirstOrDefault();
+        if (annotationToRemove is not null)
+        {
+            projectBuilder.Resource.Annotations.Remove(annotationToRemove);
+        }
+
+        var configDict = new Dictionary<string, string?>
+        {
+            [DcpExecutor.DebugSessionPortVar] = "12345",
+        };
+
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        var exe = Assert.Single(kubernetesService.CreatedResources.OfType<Executable>(), e => e.AppModelResourceName == "proj");
+        // Should be IDE, because it's a normal Project profile
+        Assert.Equal(ExecutionType.IDE, exe.Spec.ExecutionType);
+        Assert.NotNull(exe.Spec.FallbackExecutionTypes);
+        Assert.Equal(ExecutionType.Process, Assert.Single(exe.Spec.FallbackExecutionTypes));
+    }
+
     [Theory]
     [InlineData(true, null, "aspire.dev.internal")]
     [InlineData(false, null, "host.docker.internal")]
@@ -3283,6 +3362,24 @@ public class DcpExecutorTests
     private sealed class CustomChildResource(string name, IResource parent) : Resource(name), IResourceWithParent
     {
         public IResource Parent => parent;
+    }
+
+    private sealed class TestProjectWithExecutableLaunchProfile : IProjectMetadata
+    {
+        public string ProjectPath => "TestProjectWithExecutableLaunchProfile";
+        public LaunchSettings LaunchSettings { get; } = CreateLaunchSettings();
+
+        private static LaunchSettings CreateLaunchSettings()
+        {
+            var settings = new LaunchSettings();
+            settings.Profiles["Aspire_TestFunction"] = new LaunchProfile
+            {
+                CommandName = "Executable",
+                ExecutablePath = "dotnet",
+                CommandLineArgs = "exec --depsfile ./TestLib.deps.json --runtimeconfig ./TestLib.runtimeconfig.json /tools/TestTool.dll TestLib::TestLib.Functions::Handler"
+            };
+            return settings;
+        }
     }
 
 }
