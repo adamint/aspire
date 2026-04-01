@@ -255,7 +255,7 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
             }
 
             if (baseProfile?.commandName?.toLowerCase() === LaunchProfileCommandName.executable && baseProfile.executablePath) {
-                // For Executable command profiles (e.g., AWS Lambda), the launch profile
+                // For Executable command profiles (e.g., class library integrations), the launch profile
                 // specifies an external executable to run instead of the project output.
                 // Build the project to ensure dependencies are compiled, then launch
                 // using the profile's executable path and command line arguments.

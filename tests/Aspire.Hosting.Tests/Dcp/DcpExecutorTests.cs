@@ -2144,7 +2144,7 @@ public class DcpExecutorTests
     [Fact]
     public async Task ProjectWithNonProjectAnnotation_DebugSessionWithoutInfo_FallsBackToProjectIdeExecution()
     {
-        // Bug #15378: Simulates the Visual Studio scenario for Azure Functions / AWS Lambda projects.
+        // Bug #15378: Simulates the Visual Studio scenario for projects with custom debug types.
         // VS sets DEBUG_SESSION_PORT but does NOT send DEBUG_SESSION_INFO. A project resource
         // with a non-"project" SupportsDebuggingAnnotation (e.g., "azure-functions") should still
         // get ExecutionType.IDE with a ProjectLaunchConfiguration so VS can launch and debug it.
@@ -2479,7 +2479,7 @@ public class DcpExecutorTests
     public async Task ProjectExecutable_NoSupportsDebuggingAnnotation_InDebugSession_RunsInIdeMode()
     {
         // ProjectResource subclasses added via AddResource (not AddProject) may not have
-        // a SupportsDebuggingAnnotation (e.g. AWS Lambda). When in a debug session, these
+        // a SupportsDebuggingAnnotation (e.g. third-party integrations). When in a debug session, these
         // should still default to IDE execution with ProjectLaunchConfiguration — matching
         // the pre-13.2 behavior. External integrations should not be forced to call the
         // experimental WithDebugSupport API to get basic IDE execution.
@@ -2552,13 +2552,13 @@ public class DcpExecutorTests
     }
 
     [Fact]
-    public async Task ProjectExecutable_NoAnnotation_ExecutableLaunchProfile_InDebugSession_RunsInProcessWithExecArgs()
+    public async Task ProjectExecutable_NoAnnotation_ExecutableLaunchProfile_InDebugSession_RunsInProcess()
     {
-        // AWS Lambda class library projects use commandName=Executable launch profiles with
+        // Class library projects with commandName=Executable launch profiles and
         // "dotnet exec ..." args. When there's no SupportsDebuggingAnnotation and the launch
-        // profile is Executable, the resource should fall back to process execution using the
-        // launch profile's command line args instead of IDE execution (which fails because the
-        // coreclr debugger can't attach to a bare 'dotnet' host process).
+        // profile is Executable, the resource should fall back to process execution (dotnet run)
+        // instead of IDE execution (which fails because the coreclr debugger can't attach to a
+        // bare 'dotnet' host process).
         var builder = DistributedApplication.CreateBuilder();
 
         var projectBuilder = builder.AddProject<TestProjectWithExecutableLaunchProfile>("TestFunction",
@@ -2586,13 +2586,7 @@ public class DcpExecutorTests
         var exe = Assert.Single(kubernetesService.CreatedResources.OfType<Executable>(), e => e.AppModelResourceName == "TestFunction");
         // Should be Process, not IDE, because launch profile is Executable
         Assert.Equal(ExecutionType.Process, exe.Spec.ExecutionType);
-
-        // The launch profile's command line args should be used as the project args
-        Assert.True(exe.TryGetAnnotationAsObjectList<string>(CustomResource.ResourceProjectArgsAnnotation, out var projectArgs));
-        Assert.Contains("exec", projectArgs);
-        Assert.Contains("--depsfile", projectArgs);
-        Assert.Contains("/tools/TestTool.dll", projectArgs);
-        Assert.Contains("TestLib::TestLib.Functions::Handler", projectArgs);
+        Assert.Null(exe.Spec.FallbackExecutionTypes);
     }
 
     [Fact]
@@ -3376,7 +3370,7 @@ public class DcpExecutorTests
             {
                 CommandName = "Executable",
                 ExecutablePath = "dotnet",
-                CommandLineArgs = "exec --depsfile ./TestLib.deps.json --runtimeconfig ./TestLib.runtimeconfig.json /tools/TestTool.dll TestLib::TestLib.Functions::Handler"
+                CommandLineArgs = "exec --depsfile ./TestLib.deps.json --runtimeconfig ./TestLib.runtimeconfig.json $(HOME)/.dotnet/tools/TestTool.dll TestLib::TestLib.Functions::Handler"
             };
             return settings;
         }

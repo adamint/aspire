@@ -187,7 +187,7 @@ suite('Dotnet Debugger Extension Tests', () => {
     });
 
     test('uses executable path for Executable command launch profiles instead of project output', async () => {
-        // Bug #15647: AWS Lambda uses Executable command profiles where the executablePath
+        // Bug #15647: Executable command profiles use the executablePath
         // and commandLineArgs define how to run the class library project. The extension
         // should use executablePath as the program instead of the project's output DLL.
         const fs = require('fs');
@@ -195,22 +195,22 @@ suite('Dotnet Debugger Extension Tests', () => {
         const path = require('path');
 
         const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-test-'));
-        const projectDir = path.join(tempDir, 'MyLambdaFunction');
+        const projectDir = path.join(tempDir, 'MyClassLibFunction');
         const propertiesDir = path.join(projectDir, 'Properties');
         fs.mkdirSync(propertiesDir, { recursive: true });
 
-        const projectPath = path.join(projectDir, 'MyLambdaFunction.csproj');
+        const projectPath = path.join(projectDir, 'MyClassLibFunction.csproj');
         fs.writeFileSync(projectPath, '<Project></Project>');
 
         const launchSettings = {
             profiles: {
-                'Aspire_my-lambda': {
+                'Aspire_my-function': {
                     commandName: 'Executable',
                     executablePath: 'dotnet',
-                    commandLineArgs: 'exec --depsfile ./MyLambdaFunction.deps.json --runtimeconfig ./MyLambdaFunction.runtimeconfig.json RuntimeSupport.dll MyLambdaFunction::MyLambdaFunction.Function::FunctionHandler',
+                    commandLineArgs: 'exec --depsfile ./MyClassLibFunction.deps.json --runtimeconfig ./MyClassLibFunction.runtimeconfig.json RuntimeSupport.dll MyClassLibFunction::MyClassLibFunction.Function::FunctionHandler',
                     workingDirectory: 'bin/Debug/net10.0/',
                     environmentVariables: {
-                        LAMBDA_ENV: 'test'
+                        FUNCTION_ENV: 'test'
                     }
                 }
             }
@@ -219,13 +219,13 @@ suite('Dotnet Debugger Extension Tests', () => {
         fs.writeFileSync(path.join(propertiesDir, 'launchSettings.json'), JSON.stringify(launchSettings, null, 2));
 
         // The output path would be a class library DLL - this should NOT be used as program
-        const outputPath = path.join(projectDir, 'bin', 'Debug', 'net10.0', 'MyLambdaFunction.dll');
+        const outputPath = path.join(projectDir, 'bin', 'Debug', 'net10.0', 'MyClassLibFunction.dll');
         const { extension, dotNetService } = createDebuggerExtension(outputPath, null, true, true);
 
         const launchConfig: ProjectLaunchConfiguration = {
             type: 'project',
             project_path: projectPath,
-            launch_profile: 'Aspire_my-lambda'
+            launch_profile: 'Aspire_my-function'
         };
 
         const debugConfig: AspireResourceExtendedDebugConfiguration = {
@@ -244,13 +244,13 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(debugConfig.program, 'dotnet');
 
         // args should come from the profile's commandLineArgs
-        assert.strictEqual(debugConfig.args, 'exec --depsfile ./MyLambdaFunction.deps.json --runtimeconfig ./MyLambdaFunction.runtimeconfig.json RuntimeSupport.dll MyLambdaFunction::MyLambdaFunction.Function::FunctionHandler');
+        assert.strictEqual(debugConfig.args, 'exec --depsfile ./MyClassLibFunction.deps.json --runtimeconfig ./MyClassLibFunction.runtimeconfig.json RuntimeSupport.dll MyClassLibFunction::MyClassLibFunction.Function::FunctionHandler');
 
         // cwd should resolve to the profile's working directory
         assert.strictEqual(debugConfig.cwd, path.resolve(projectDir, 'bin/Debug/net10.0/'));
 
         // env should include the profile's environment variables
-        assert.strictEqual(debugConfig.env.LAMBDA_ENV, 'test');
+        assert.strictEqual(debugConfig.env.FUNCTION_ENV, 'test');
 
         // project should still be built (to compile the class library dependencies)
         assert.strictEqual(dotNetService.buildDotNetProjectStub.calledOnce, true);
