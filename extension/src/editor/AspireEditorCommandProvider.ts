@@ -4,6 +4,7 @@ import { noAppHostInWorkspace } from '../loc/strings';
 import { getResourceDebuggerExtensions } from '../debugger/debuggerExtensions';
 import { AspireCommandType } from '../dcp/types';
 import { aspireConfigFileName, getAppHostPathFromConfig, readJsonFile } from '../utils/cliTypes';
+import { resolveCanonicalPath } from '../utils/io';
 
 export class AspireEditorCommandProvider implements vscode.Disposable {
     private _workspaceAppHostPath: string | null = null;
@@ -187,7 +188,9 @@ export class AspireEditorCommandProvider implements vscode.Disposable {
                 const appHostPath = path.isAbsolute(appHostRelativePath)
                     ? appHostRelativePath
                     : path.join(configDir, appHostRelativePath);
-                onChangeAppHostPath(appHostPath);
+                // Resolve to canonical on-disk casing to prevent case mismatches
+                // when the path is passed to the CLI via --apphost (see #15588)
+                onChangeAppHostPath(resolveCanonicalPath(appHostPath));
             }
             catch {
                 onChangeAppHostPath(null);
@@ -200,7 +203,7 @@ export class AspireEditorCommandProvider implements vscode.Disposable {
      */
     public async getAppHostPath(): Promise<string | null> {
         if (vscode.window.activeTextEditor && await this.isAppHostFile(vscode.window.activeTextEditor.document.uri.fsPath)) {
-            return vscode.window.activeTextEditor.document.uri.fsPath;
+            return resolveCanonicalPath(vscode.window.activeTextEditor.document.uri.fsPath);
         }
 
         return this._workspaceAppHostPath;

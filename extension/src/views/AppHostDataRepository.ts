@@ -5,6 +5,7 @@ import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { EnvironmentVariables } from '../utils/environment';
 import { errorFetchingAppHosts } from '../loc/strings';
+import { resolveCanonicalPath } from '../utils/io';
 
 export interface ResourceUrlJson {
     name: string | null;
@@ -231,7 +232,9 @@ export class AppHostDataRepository {
                             const appHostPath = parsed.selected_project_file
                                 ?? (parsed.all_project_file_candidates.length === 1 ? parsed.all_project_file_candidates[0] : null);
                             if (appHostPath) {
-                                this._workspaceAppHostPath = appHostPath;
+                                // Resolve to canonical on-disk casing to prevent case mismatches
+                                // when the path is passed to the CLI via --apphost (see #15588)
+                                this._workspaceAppHostPath = resolveCanonicalPath(appHostPath);
                                 this._workspaceAppHostName = shortenPath(appHostPath);
                                 extensionLogOutputChannel.info(`Workspace apphost resolved: ${appHostPath}`);
                                 this._onDidChangeData.fire();
