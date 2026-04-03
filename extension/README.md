@@ -50,7 +50,7 @@ The [Aspire CLI](https://aspire.dev/get-started/install-cli/) needs to be instal
 
 ### VS Code
 
-VS Code 1.98 or later is required.
+VS Code 1.101 or later is required.
 
 ---
 
