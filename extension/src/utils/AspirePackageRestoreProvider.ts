@@ -96,6 +96,9 @@ export class AspirePackageRestoreProvider implements vscode.Disposable {
             );
             watcher.onDidChange(uri => void this._onChanged(uri).catch(err => extensionLogOutputChannel.warn(`Watcher handler failed: ${String(err)}`)));
             watcher.onDidCreate(uri => void this._onChanged(uri).catch(err => extensionLogOutputChannel.warn(`Watcher handler failed: ${String(err)}`)));
+            watcher.onDidDelete(uri => {
+                this._lastContent.delete(uri.fsPath);
+            });
             this._disposables.push(watcher);
         }
     }
