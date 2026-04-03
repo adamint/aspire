@@ -97,6 +97,12 @@ export class AspireTerminalProvider implements vscode.Disposable {
 
         const aspireTerminal = this.getAspireTerminal();
         extensionLogOutputChannel.info(`Sending command to Aspire terminal: ${command}`);
+
+        // Clear any pre-existing text in the terminal input buffer before sending the command.
+        // Ctrl+U clears the current line in bash/zsh; Escape clears it in PowerShell.
+        const clearSequence = process.platform === 'win32' ? '\x1b' : '\x15';
+        aspireTerminal.terminal.sendText(clearSequence, false);
+
         aspireTerminal.terminal.sendText(command);
         if (showTerminal) {
             aspireTerminal.terminal.show();
