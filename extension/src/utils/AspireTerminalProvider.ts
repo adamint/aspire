@@ -99,8 +99,9 @@ export class AspireTerminalProvider implements vscode.Disposable {
         extensionLogOutputChannel.info(`Sending command to Aspire terminal: ${command}`);
 
         // Clear any pre-existing text in the terminal input buffer before sending the command.
-        // Ctrl+U clears the current line in bash/zsh; Escape clears it in PowerShell.
-        const clearSequence = process.platform === 'win32' ? '\x1b' : '\x15';
+        // Use Ctrl+U to clear the current line without sending an ESC prefix that can alter
+        // how the following command text is interpreted by Windows line editors.
+        const clearSequence = '\x15';
         aspireTerminal.terminal.sendText(clearSequence, false);
 
         aspireTerminal.terminal.sendText(command);
