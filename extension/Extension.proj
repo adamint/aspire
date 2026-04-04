@@ -25,7 +25,7 @@
       <_VscodeOutputDir>$(ArtifactsPackagesDir)vscode</_VscodeOutputDir>
       <_VsixPath>$(_VscodeOutputDir)\aspire-vscode-$(_EffectiveVersion).vsix</_VsixPath>
       <_ManifestPath>$(_VscodeOutputDir)\aspire-vscode-$(_EffectiveVersion).manifest</_ManifestPath>
-      <_VersionArg Condition="'$(ExtensionVersionOverride)' != ''">--version $(ExtensionVersionOverride)</_VersionArg>
+      <_VersionArg Condition="'$(ExtensionVersionOverride)' != ''">$(ExtensionVersionOverride)</_VersionArg>
       <_VersionArg Condition="'$(ExtensionVersionOverride)' == ''"></_VersionArg>
     </PropertyGroup>
 
