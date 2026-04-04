@@ -234,9 +234,10 @@ export class AppHostDataRepository {
                             if (appHostPath) {
                                 // Resolve to canonical on-disk casing to prevent case mismatches
                                 // when the path is passed to the CLI via --apphost (see #15588)
-                                this._workspaceAppHostPath = resolveCanonicalPath(appHostPath);
-                                this._workspaceAppHostName = shortenPath(appHostPath);
-                                extensionLogOutputChannel.info(`Workspace apphost resolved: ${appHostPath}`);
+                                const canonicalAppHostPath = resolveCanonicalPath(appHostPath);
+                                this._workspaceAppHostPath = canonicalAppHostPath;
+                                this._workspaceAppHostName = shortenPath(canonicalAppHostPath);
+                                extensionLogOutputChannel.info(`Workspace apphost resolved: ${canonicalAppHostPath}`);
                                 this._onDidChangeData.fire();
                             }
                         }
