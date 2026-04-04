@@ -31,6 +31,7 @@
   "configuration.aspire.enableAspireDashboardAutoLaunch.off": "Do nothing — the dashboard URL is still printed in the terminal.",
   "configuration.aspire.dashboardBrowser": "The browser to use when auto-launching the Aspire Dashboard.",
   "configuration.aspire.dashboardBrowser.openExternalBrowser": "Use the system default browser (cannot auto-close).",
+  "configuration.aspire.dashboardBrowser.simpleBrowser": "Open in VS Code's built-in Simple Browser tab (does not auto-close).",
   "configuration.aspire.dashboardBrowser.debugChrome": "Launch Chrome as a debug session (auto-closes when debugging ends).",
   "configuration.aspire.dashboardBrowser.debugEdge": "Launch Microsoft Edge as a debug session (auto-closes when debugging ends).",
   "configuration.aspire.dashboardBrowser.debugFirefox": "Launch Firefox as a debug session (requires Firefox Debugger extension).",

@@ -679,14 +679,16 @@
           "type": "string",
           "enum": [
             "openExternalBrowser",
+            "simpleBrowser",
             "debugChrome",
             "debugEdge",
             "debugFirefox"
           ],
-          "default": "openExternalBrowser",
+          "default": "simpleBrowser",
           "description": "%configuration.aspire.dashboardBrowser%",
           "enumDescriptions": [
             "%configuration.aspire.dashboardBrowser.openExternalBrowser%",
+            "%configuration.aspire.dashboardBrowser.simpleBrowser%",
             "%configuration.aspire.dashboardBrowser.debugChrome%",
             "%configuration.aspire.dashboardBrowser.debugEdge%",
             "%configuration.aspire.dashboardBrowser.debugFirefox%"
