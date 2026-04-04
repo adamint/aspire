@@ -35,7 +35,7 @@ class JsTsAppHostParser implements AppHostResourceParser {
             const startPos = document.positionAt(matchStart);
             const endPos = document.positionAt(matchStart + match[0].length);
 
-            // Find the start of the full statement (walk back to previous ';', '{', or start of file)
+            // Find the start of the full statement (walk back to previous ';', '{', '}', or start of file)
             const statementStartLine = this._findStatementStartLine(text, matchStart, document);
 
             results.push({
@@ -52,7 +52,7 @@ class JsTsAppHostParser implements AppHostResourceParser {
 
     /**
      * Walk backwards from the match position to find the first line of the statement.
-     * Stops at the previous ';', '{', or start of file, then returns the first non-comment,
+     * Stops at the previous ';', '{', '}', or start of file, then returns the first non-comment,
      * non-blank line after that delimiter.
      */
     private _findStatementStartLine(text: string, matchIndex: number, document: vscode.TextDocument): number {
@@ -70,10 +70,10 @@ class JsTsAppHostParser implements AppHostResourceParser {
         }
         let line = document.positionAt(start).line;
         const matchLine = document.positionAt(matchIndex).line;
-        // Skip lines that are comments (// or /* or * continuation)
+        // Skip lines that are closing braces or comments (// or /* or * continuation)
         while (line < matchLine) {
             const lineText = document.lineAt(line).text.trimStart();
-            if (lineText.startsWith('//') || lineText.startsWith('/*') || lineText.startsWith('*')) {
+            if (lineText.startsWith('}') || lineText.startsWith('//') || lineText.startsWith('/*') || lineText.startsWith('*')) {
                 line++;
             } else {
                 break;

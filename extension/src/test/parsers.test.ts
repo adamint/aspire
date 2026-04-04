@@ -870,6 +870,25 @@ suite('CSharpAppHostParser', () => {
         assert.strictEqual(resources[1].statementStartLine, 14, 'second resource should start on its own line');
     });
 
+    test('statementStartLine not affected by closing brace with trailing comment', () => {
+        const parser = getCSharpParser();
+        const doc = createMockDocument(
+            [
+                'var builder = DistributedApplication.CreateBuilder(args);',
+                '',
+                'if (false)',
+                '{',
+                '    throw new Exception("fail");',
+                '} // end if',
+                'builder.AddContainer("nginx", "nginx");',
+            ].join('\n'),
+            '/test/AppHost.cs'
+        );
+        const resources = parser.parseResources(doc);
+        assert.strictEqual(resources.length, 1);
+        assert.strictEqual(resources[0].statementStartLine, 6, 'statement should start on builder.AddContainer line, not on } // end if line');
+    });
+
     // --- Pipeline step classification ---
 
     test('classifies AddStep as pipelineStep', () => {
@@ -1632,6 +1651,25 @@ suite('JsTsAppHostParser', () => {
         assert.strictEqual(resources.length, 2);
         assert.strictEqual(resources[0].statementStartLine, 7, 'first resource should start on its own line');
         assert.strictEqual(resources[1].statementStartLine, 14, 'second resource should start on its own line');
+    });
+
+    test('statementStartLine not affected by closing brace with trailing comment', () => {
+        const parser = getJsTsParser();
+        const doc = createMockDocument(
+            [
+                'import { createBuilder } from "@aspire/sdk";',
+                '',
+                'if (false)',
+                '{',
+                '    throw new Error("fail");',
+                '} // end if',
+                'builder.addContainer("nginx", "nginx");',
+            ].join('\n'),
+            '/test/apphost.ts'
+        );
+        const resources = parser.parseResources(doc);
+        assert.strictEqual(resources.length, 1);
+        assert.strictEqual(resources[0].statementStartLine, 6, 'statement should start on builder.addContainer line, not on } // end if line');
     });
 
     // --- Pipeline step classification ---
