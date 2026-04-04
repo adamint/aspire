@@ -59,7 +59,7 @@ class JsTsAppHostParser implements AppHostResourceParser {
         let i = matchIndex - 1;
         while (i >= 0) {
             const ch = text[i];
-            if (ch === ';' || ch === '{') {
+            if (ch === ';' || ch === '{' || ch === '}') {
                 break;
             }
             i--;
