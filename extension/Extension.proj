@@ -20,9 +20,13 @@
     </Exec>
 
     <PropertyGroup>
+      <_EffectiveVersion Condition="'$(ExtensionVersionOverride)' != ''">$(ExtensionVersionOverride)</_EffectiveVersion>
+      <_EffectiveVersion Condition="'$(ExtensionVersionOverride)' == ''">$(_ExtractedVersion)</_EffectiveVersion>
       <_VscodeOutputDir>$(ArtifactsPackagesDir)vscode</_VscodeOutputDir>
-      <_VsixPath>$(_VscodeOutputDir)\aspire-vscode-$(_ExtractedVersion).vsix</_VsixPath>
-      <_ManifestPath>$(_VscodeOutputDir)\aspire-vscode-$(_ExtractedVersion).manifest</_ManifestPath>
+      <_VsixPath>$(_VscodeOutputDir)\aspire-vscode-$(_EffectiveVersion).vsix</_VsixPath>
+      <_ManifestPath>$(_VscodeOutputDir)\aspire-vscode-$(_EffectiveVersion).manifest</_ManifestPath>
+      <_VersionArg Condition="'$(ExtensionVersionOverride)' != ''">--version $(ExtensionVersionOverride)</_VersionArg>
+      <_VersionArg Condition="'$(ExtensionVersionOverride)' == ''"></_VersionArg>
     </PropertyGroup>
 
     <!-- Install dependencies and compile -->
@@ -33,7 +37,7 @@
     <MakeDir Directories="$(_VscodeOutputDir)" />
 
     <!-- Package extension -->
-    <Exec Command="vsce package --out $(_VsixPath)"
+    <Exec Command="vsce package $(_VersionArg) --out $(_VsixPath)"
           IgnoreStandardErrorWarningFormat="true"
           WorkingDirectory="$(ExtensionSrcDir)" />
 

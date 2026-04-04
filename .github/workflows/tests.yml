@@ -7,6 +7,9 @@ on:
       versionOverrideArg:
         required: false
         type: string
+      extensionVersionOverride:
+        required: false
+        type: string
 
 jobs:
   setup_for_tests:
@@ -295,7 +298,7 @@ jobs:
       - name: Run tests
         run: npm test
       - name: Package VSIX
-        run: npm exec @vscode/vsce -- package --pre-release -o out/aspire-extension.vsix
+        run: npm exec @vscode/vsce -- package --pre-release ${{ inputs.extensionVersionOverride && format('--version {0}', inputs.extensionVersionOverride) || '' }} -o out/aspire-extension.vsix
       - name: Upload VSIX
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
