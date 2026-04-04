@@ -25,9 +25,12 @@
       <_VscodeOutputDir>$(ArtifactsPackagesDir)vscode</_VscodeOutputDir>
       <_VsixPath>$(_VscodeOutputDir)\aspire-vscode-$(_EffectiveVersion).vsix</_VsixPath>
       <_ManifestPath>$(_VscodeOutputDir)\aspire-vscode-$(_EffectiveVersion).manifest</_ManifestPath>
-      <_VersionArg Condition="'$(ExtensionVersionOverride)' != ''">$(ExtensionVersionOverride)</_VersionArg>
-      <_VersionArg Condition="'$(ExtensionVersionOverride)' == ''"></_VersionArg>
     </PropertyGroup>
+
+    <!-- Override package.json version if ExtensionVersionOverride is set -->
+    <Exec Command="node -e &quot;const p=require('./package.json');p.version='$(ExtensionVersionOverride)';require('fs').writeFileSync('./package.json',JSON.stringify(p,null,2)+'\n')&quot;"
+          Condition="'$(ExtensionVersionOverride)' != ''"
+          WorkingDirectory="$(ExtensionSrcDir)" />
 
     <!-- Install dependencies and compile -->
     <Exec Command="yarn install" WorkingDirectory="$(ExtensionSrcDir)" IgnoreStandardErrorWarningFormat="true" />
@@ -37,11 +40,11 @@
     <MakeDir Directories="$(_VscodeOutputDir)" />
 
     <!-- Package extension -->
-    <Exec Command="vsce package $(_VersionArg) --out $(_VsixPath)"
+    <Exec Command="vsce package --out $(_VsixPath)"
           IgnoreStandardErrorWarningFormat="true"
           WorkingDirectory="$(ExtensionSrcDir)" />
 
-    <!-- 
+    <!--
       VS Code extension signing for marketplace verification:
       Generate manifest from the VSIX using vsce. The signing project (signing/signVsix.proj)
       will copy this to .signature.p7s and sign it with the VSCodePublisher certificate.

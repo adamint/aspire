@@ -297,8 +297,11 @@ jobs:
         run: npm install
       - name: Run tests
         run: npm test
+      - name: Override extension version for PR builds
+        if: ${{ inputs.extensionVersionOverride != '' }}
+        run: npm version "${{ inputs.extensionVersionOverride }}" --no-git-tag-version
       - name: Package VSIX
-        run: npm exec @vscode/vsce -- package ${{ inputs.extensionVersionOverride || '' }} --pre-release -o out/aspire-extension.vsix
+        run: npm exec @vscode/vsce -- package --pre-release -o out/aspire-extension.vsix
       - name: Upload VSIX
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
