@@ -346,11 +346,11 @@
     <trans-unit id="command.openGlobalSettings">
       <source xml:lang="en">Open global Aspire settings</source>
     </trans-unit>
-    <trans-unit id="command.openInSimpleBrowser">
+    <trans-unit id="command.openInIntegratedBrowser">
       <source xml:lang="en">Open in VS Code</source>
     </trans-unit>
-    <trans-unit id="configuration.aspire.dashboardBrowser.simpleBrowser">
-      <source xml:lang="en">Open in VS Code&apos;s built-in Simple Browser tab (does not auto-close).</source>
+    <trans-unit id="configuration.aspire.dashboardBrowser.integratedBrowser">
+      <source xml:lang="en">Open in VS Code&apos;s integrated browser (does not auto-close).</source>
     </trans-unit>
     <trans-unit id="command.openInExternalBrowser">
       <source xml:lang="en">Open in browser</source>
