@@ -449,7 +449,7 @@ internal sealed class RunCommand : BaseCommand
         string appHostRelativePath,
         string? dashboardUrl,
         string? codespacesUrl,
-        string logFilePath,
+        string? logFilePath,
         bool isExtensionHost,
         int? pid = null)
     {
@@ -504,9 +504,12 @@ internal sealed class RunCommand : BaseCommand
         }
 
         // Logs row
-        grid.AddRow(
-            new Align(new Markup($"[bold green]{logsLabel}[/]:"), HorizontalAlignment.Right),
-            new Text(logFilePath));
+        if (logFilePath is not null)
+        {
+            grid.AddRow(
+                new Align(new Markup($"[bold green]{logsLabel}[/]:"), HorizontalAlignment.Right),
+                new Text(logFilePath));
+        }
 
         // PID row (if provided)
         if (pid.HasValue)

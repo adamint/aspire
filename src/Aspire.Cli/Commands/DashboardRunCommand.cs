@@ -290,7 +290,7 @@ internal sealed class DashboardRunCommand : BaseCommand
         };
     }
 
-    private void RenderDashboardSummary(DashboardInfo info, string logFilePath)
+    private void RenderDashboardSummary(DashboardInfo info, string? logFilePath)
     {
         _interactionService.DisplayEmptyLine();
         var grid = new Grid();
@@ -327,9 +327,12 @@ internal sealed class DashboardRunCommand : BaseCommand
         grid.AddRow(Text.Empty, Text.Empty);
 
         // Logs row
-        grid.AddRow(
-            new Align(new Markup($"[bold green]{logsLabel}[/]:"), HorizontalAlignment.Right),
-            new Text(logFilePath));
+        if (logFilePath is not null)
+        {
+            grid.AddRow(
+                new Align(new Markup($"[bold green]{logsLabel}[/]:"), HorizontalAlignment.Right),
+                new Text(logFilePath));
+        }
 
         var padder = new Padder(grid, new Padding(3, 0));
         _interactionService.DisplayRenderable(padder);
@@ -348,7 +351,7 @@ internal sealed class DashboardRunCommand : BaseCommand
             {
                 outputCollector.AppendOutput(line);
 
-                // The dashboard writes "Now listening on: {urls}" when it's ready to accept requests. 
+                // The dashboard writes "Now listening on: {urls}" when it's ready to accept requests.
                 // Wait for that message before showing the dashboard URL to the user.
                 // This message isn't localized, so we can reliably look for it in the output regardless of the user's language/locale.
                 if (line.Contains("Now listening on:", StringComparison.OrdinalIgnoreCase))

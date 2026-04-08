@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as sinon from 'sinon';
 import * as os from 'os';
 import * as path from 'path';
-import { getDefaultCliInstallPaths, resolveCliPath, CliPathDependencies } from '../utils/cliPath';
+import { getDefaultCliInstallPaths, resolveCliPath, clearCliPathCache, CliPathDependencies } from '../utils/cliPath';
 
 const bundlePath = '/home/user/.aspire/bin/aspire';
 const globalToolPath = '/home/user/.dotnet/tools/aspire';
@@ -206,6 +206,65 @@ suite('utils/cliPath tests', () => {
             assert.strictEqual(result.source, 'default-install');
             assert.ok(setConfiguredPath.notCalled, 'should not re-set the path if it already matches');
         });
+
+        test('does not cache results when custom deps are provided', async () => {
+            const tryExecute = sinon.stub().resolves(false);
+            const isOnPath = sinon.stub().resolves(true);
+
+            const deps = createMockDeps({
+                isOnPath,
+                tryExecute,
+            });
+
+            const result1 = await resolveCliPath(deps);
+            assert.strictEqual(result1.source, 'path');
+
+            // Change behavior — second call should re-probe since custom deps are not cached
+            isOnPath.resolves(false);
+            const deps2 = createMockDeps({
+                isOnPath,
+                findAtDefaultPath: async () => bundlePath,
+                setConfiguredPath: sinon.stub().resolves(),
+            });
+
+            const result2 = await resolveCliPath(deps2);
+            assert.strictEqual(result2.source, 'default-install', 'should re-probe with new deps, not return cached result');
+        });
+
+        test('clearCliPathCache does not throw', () => {
+            clearCliPathCache();
+        });
+
+        test('coalesces concurrent resolutions for the same dependency set', async () => {
+            let releaseIsOnPath: (() => void) | undefined;
+            let signalIsOnPathStarted: (() => void) | undefined;
+            const isOnPathStarted = new Promise<void>(resolve => {
+                signalIsOnPathStarted = resolve;
+            });
+
+            const isOnPath = sinon.stub().callsFake(async () => {
+                signalIsOnPathStarted?.();
+                await new Promise<void>(resolveRelease => {
+                    releaseIsOnPath = resolveRelease;
+                });
+                return true;
+            });
+
+            const deps = createMockDeps({
+                isOnPath,
+            });
+
+            const firstResolution = resolveCliPath(deps);
+            await isOnPathStarted;
+            const secondResolution = resolveCliPath(deps);
+
+            assert.strictEqual(isOnPath.callCount, 1, 'should only run PATH probe once');
+            assert.ok(releaseIsOnPath, 'expected first resolution to be in progress');
+
+            releaseIsOnPath();
+
+            const [firstResult, secondResult] = await Promise.all([firstResolution, secondResolution]);
+            assert.deepStrictEqual(firstResult, secondResult);
+        });
     });
 });
-

@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { ChildProcessWithoutNullStreams } from 'child_process';
 import { spawnCliProcess } from '../debugger/languages/cli';
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
-import { extensionLogOutputChannel } from '../utils/logging';
+import { extensionLogOutputChannel, cliLogsOutputChannel } from '../utils/logging';
 import { EnvironmentVariables } from '../utils/environment';
 import { errorFetchingAppHosts } from '../loc/strings';
 
@@ -53,8 +53,8 @@ export type ViewMode = 'workspace' | 'global';
  *
  * Owns two independent data sources:
  *  - `aspire describe --follow` (workspace mode) — streams resource updates
- *    via NDJSON.  Runs unconditionally from activation so workspace data is
- *    available across the extension.
+ *    via NDJSON.  Only active while the Aspire panel or an app-host editor
+ *    is visible.
  *  - `aspire ps` polling (global mode) — periodically fetches all running
  *    app hosts.  Only active while the tree-view panel is visible **and**
  *    global mode is selected.
@@ -66,6 +66,7 @@ export class AppHostDataRepository {
     // ── Mode / panel state ──
     private _viewMode: ViewMode = 'workspace';
     private _panelVisible = false;
+    private _appHostEditorVisible = false;
 
     // ── Workspace mode state (describe --follow) ──
     private _workspaceResources: Map<string, ResourceJson> = new Map();
@@ -155,6 +156,15 @@ export class AppHostDataRepository {
         }
         this._panelVisible = visible;
         this._syncPolling();
+        this._syncDescribeWatch();
+    }
+
+    setAppHostEditorVisible(visible: boolean): void {
+        if (this._appHostEditorVisible === visible) {
+            return;
+        }
+        this._appHostEditorVisible = visible;
+        this._syncDescribeWatch();
     }
 
     refresh(): void {
@@ -171,7 +181,7 @@ export class AppHostDataRepository {
 
     activate(): void {
         vscode.commands.executeCommand('setContext', 'aspire.viewMode', this._viewMode);
-        this._startDescribeWatch();
+        this._syncDescribeWatch();
     }
 
     dispose(): void {
@@ -181,6 +191,24 @@ export class AppHostDataRepository {
         this._getAppHostsProcess?.kill();
         this._configChangeDisposable.dispose();
         this._onDidChangeData.dispose();
+    }
+
+    // ── Describe watch lifecycle ──
+
+    private get _shouldDescribe(): boolean {
+        return this._panelVisible || this._appHostEditorVisible;
+    }
+
+    private _syncDescribeWatch(): void {
+        if (this._disposed) {
+            return;
+        }
+        if (this._shouldDescribe) {
+            extensionLogOutputChannel.info(`_syncDescribeWatch: starting describe watch (panelVisible=${this._panelVisible}, appHostEditorVisible=${this._appHostEditorVisible})`);
+            this._startDescribeWatch();
+        } else {
+            this._stopDescribeWatch();
+        }
     }
 
     // ── PS polling lifecycle ──
@@ -223,6 +251,7 @@ export class AppHostDataRepository {
 
             this._getAppHostsProcess = spawnCliProcess(this._terminalProvider, cliPath, args, {
                 noExtensionVariables: true,
+                logToCliOutputChannel: true,
                 workingDirectory: rootFolder.uri.fsPath,
                 lineCallback: (line) => {
                     try {
@@ -276,6 +305,7 @@ export class AppHostDataRepository {
             this._describeReceivedData = false;
             this._describeProcess = spawnCliProcess(this._terminalProvider, cliPath, args, {
                 noExtensionVariables: true,
+                logToCliOutputChannel: true,
                 lineCallback: (line) => {
                     this._handleDescribeLine(line);
                 },
@@ -284,11 +314,11 @@ export class AppHostDataRepository {
                     this._describeProcess = undefined;
 
                     if (!this._disposed && !this._describeRestarting) {
-                        if (!this._describeReceivedData && code !== 0) {
-                            // The process exited with a non-zero code without ever producing valid data.
-                            // This is expected when no apphost is running. Don't set the error state
-                            // since that would show the "CLI not supported" banner; instead just show
-                            // the normal "no running apphost" welcome.
+                        if (!this._describeReceivedData) {
+                            // The process exited without ever producing valid data.
+                            // This is expected when no apphost is running. Don't restart —
+                            // the user can trigger a refresh manually or the extension will
+                            // start watching again when a debug session begins.
                             extensionLogOutputChannel.warn('aspire describe --follow exited without producing data; no running apphost or CLI may not support this feature.');
                             this._workspaceResources.clear();
                             this._updateWorkspaceContext();
@@ -335,6 +365,7 @@ export class AppHostDataRepository {
             this._describeRestartTimer = undefined;
         }
         if (this._describeProcess) {
+            cliLogsOutputChannel.appendLine('Stopping aspire describe --follow process');
             this._describeRestarting = true;
             this._describeProcess.kill();
             this._describeProcess = undefined;
@@ -481,6 +512,7 @@ export class AppHostDataRepository {
 
         spawnCliProcess(this._terminalProvider, cliPath, args, {
             noExtensionVariables: true,
+            logToCliOutputChannel: true,
             stdoutCallback: (data) => { stdout += data; },
             stderrCallback: (data) => { stderr += data; },
             exitCallback: (code) => {

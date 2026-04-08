@@ -1,6 +1,6 @@
 import { ChildProcessWithoutNullStreams, spawn } from "child_process";
 import { EnvVar } from "../../dcp/types";
-import { extensionLogOutputChannel } from "../../utils/logging";
+import { extensionLogOutputChannel, cliLogsOutputChannel } from "../../utils/logging";
 import { AspireTerminalProvider } from "../../utils/AspireTerminalProvider";
 import * as readline from 'readline';
 import * as vscode from 'vscode';
@@ -16,6 +16,8 @@ export interface SpawnProcessOptions {
     debugSessionId?: string,
     noDebug?: boolean;
     noExtensionVariables?: boolean;
+    /** When true, passes --debug --no-log-file to redirect CLI logs to the CLI output channel instead of a file. */
+    logToCliOutputChannel?: boolean;
 }
 
 export function spawnCliProcess(terminalProvider: AspireTerminalProvider, command: string, args?: string[], options?: SpawnProcessOptions): ChildProcessWithoutNullStreams {
@@ -25,6 +27,10 @@ export function spawnCliProcess(terminalProvider: AspireTerminalProvider, comman
     Object.assign(env, terminalProvider.createEnvironment(options?.debugSessionId, options?.noDebug, options?.noExtensionVariables));
     if (options?.env) {
         Object.assign(env, Object.fromEntries(options.env.map(e => [e.name, e.value])));
+    }
+    if (options?.logToCliOutputChannel) {
+        args = [...(args ?? []), '--debug', '--no-log-file'];
+        cliLogsOutputChannel.appendLine(`Spawning CLI process with command: ${command} ${args.join(' ')} in directory: ${workingDirectory}`);
     }
 
     const child = spawn(command, args ?? [], {
@@ -45,14 +51,24 @@ export function spawnCliProcess(terminalProvider: AspireTerminalProvider, comman
     });
 
     child.stderr.on("data", (data) => {
-        options?.stderrCallback?.(new String(data).toString());
+        const text = new String(data).toString();
+        options?.stderrCallback?.(text);
+        if (options?.logToCliOutputChannel) {
+            cliLogsOutputChannel.append(text);
+        }
     });
 
     child.on('error', (error) => {
+        if (options?.logToCliOutputChannel) {
+            cliLogsOutputChannel.appendLine(`CLI process error: ${error.message} (command: ${command} ${(args ?? []).join(' ')})`);
+        }
         options?.errorCallback?.(error);
     });
 
     child.on("close", (code) => {
+        if (options?.logToCliOutputChannel) {
+            cliLogsOutputChannel.appendLine(`CLI process exited with code ${code} (command: ${command} ${(args ?? []).join(' ')})`);
+        }
         options?.exitCallback?.(code);
     });
 

@@ -1,6 +1,9 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Aspire.Cli.Diagnostics;
+using Microsoft.Extensions.Logging;
+
 namespace Aspire.Cli.Tests;
 
 public class ProgramTests
@@ -27,5 +30,56 @@ public class ProgramTests
         var result = Program.ParseLogFileOption(["run", "--", "--log-file", "app.log"]);
 
         Assert.Null(result);
+    }
+
+    [Fact]
+    public void ParseLoggingOptions_NoLogFile_SetsFlag()
+    {
+        var options = Program.ParseLoggingOptions(["describe", "--no-log-file"]);
+
+        Assert.True(options.NoLogFile);
+        Assert.Null(options.LogFilePath);
+    }
+
+    [Fact]
+    public void ParseLoggingOptions_WithoutNoLogFile_GeneratesLogFilePath()
+    {
+        var options = Program.ParseLoggingOptions(["describe"]);
+
+        Assert.False(options.NoLogFile);
+        Assert.NotNull(options.LogFilePath);
+        Assert.EndsWith(".log", options.LogFilePath);
+    }
+
+    [Fact]
+    public void ParseLoggingOptions_NoLogFileWithDebug_SetsBothFlags()
+    {
+        var options = Program.ParseLoggingOptions(["describe", "--debug", "--no-log-file"]);
+
+        Assert.True(options.NoLogFile);
+        Assert.True(options.DebugMode);
+        Assert.Null(options.LogFilePath);
+    }
+
+    [Fact]
+    public void FileLoggerProvider_CreateNull_DoesNotCreateFile()
+    {
+        using var provider = FileLoggerProvider.CreateNull();
+
+        Assert.Null(provider.LogFilePath);
+
+        // Writing should be a no-op (no exception)
+        var logger = provider.CreateLogger("Test");
+        logger.LogInformation("This should not throw");
+    }
+
+    [Fact]
+    public void FileLoggerProvider_CreateNull_LoggerIsEnabled()
+    {
+        using var provider = FileLoggerProvider.CreateNull();
+        var logger = provider.CreateLogger("Aspire.Cli.Test");
+
+        // Logger reports enabled (filter is separate from file existence)
+        Assert.True(logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Information));
     }
 }

@@ -32,8 +32,9 @@ import { installCliStableCommand, installCliDailyCommand, verifyCliInstalledComm
 import { AspireMcpServerDefinitionProvider } from './mcp/AspireMcpServerDefinitionProvider';
 import { AspireCodeLensProvider } from './editor/AspireCodeLensProvider';
 import { AspireGutterDecorationProvider } from './editor/AspireGutterDecorationProvider';
-import { getSupportedLanguageIds } from './editor/parsers/AppHostResourceParser';
+import { getSupportedLanguageIds, getParserForDocument } from './editor/parsers/AppHostResourceParser';
 import { readGitCommitSha } from './utils/versionInfo';
+import { clearCliPathCache } from './utils/cliPath';
 
 let aspireExtensionContext = new AspireExtensionContext();
 
@@ -95,6 +96,14 @@ export async function activate(context: vscode.ExtensionContext) {
     dataRepository.setPanelVisible(e.visible);
   });
 
+  // Describe watch is also started when an apphost file is visible in an editor
+  const updateAppHostEditorVisible = () => {
+    const hasAppHostEditor = vscode.window.visibleTextEditors.some(editor => getParserForDocument(editor.document) !== undefined);
+    dataRepository.setAppHostEditorVisible(hasAppHostEditor);
+  };
+  updateAppHostEditorVisible();
+  context.subscriptions.push(vscode.window.onDidChangeVisibleTextEditors(() => updateAppHostEditorVisible()));
+
   const refreshRunningAppHostsRegistration = vscode.commands.registerCommand('aspire-vscode.refreshRunningAppHosts', () => dataRepository.refresh());
   const switchToGlobalViewRegistration = vscode.commands.registerCommand('aspire-vscode.switchToGlobalView', () => dataRepository.setViewMode('global'));
   const switchToWorkspaceViewRegistration = vscode.commands.registerCommand('aspire-vscode.switchToWorkspaceView', () => dataRepository.setViewMode('workspace'));
@@ -118,8 +127,15 @@ export async function activate(context: vscode.ExtensionContext) {
   vscode.commands.executeCommand('setContext', 'aspire.noRunningAppHosts', true);
   vscode.commands.executeCommand('setContext', 'aspire.loading', true);
 
-  // Activate the data repository (starts workspace describe --follow; global polling begins when the panel is visible)
+  // Activate the data repository (describe --follow starts when panel or apphost editor is visible; global polling begins when the panel is visible)
   dataRepository.activate();
+
+  // Clear cached CLI path when the user changes the setting
+  context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+    if (e.affectsConfiguration('aspire.aspireCliExecutablePath')) {
+      clearCliPathCache();
+    }
+  }));
 
   context.subscriptions.push(appHostTreeView, refreshRunningAppHostsRegistration, switchToGlobalViewRegistration, switchToWorkspaceViewRegistration, openDashboardRegistration, openAppHostSourceRegistration, stopAppHostRegistration, stopResourceRegistration, startResourceRegistration, restartResourceRegistration, viewResourceLogsRegistration, executeResourceCommandRegistration, copyEndpointUrlRegistration, openInExternalBrowserRegistration, openInIntegratedBrowserRegistration, copyResourceNameRegistration, copyPidRegistration, copyAppHostPathRegistration, expandAllRegistration, { dispose: () => { appHostTreeProvider.dispose(); dataRepository.dispose(); } });
 

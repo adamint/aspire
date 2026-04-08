@@ -62,8 +62,9 @@ public class Program
     /// <param name="ConsoleLogLevel">The console log level if specified via --log-level or --debug.</param>
     /// <param name="DebugMode">Whether --debug or -d was specified.</param>
     /// <param name="LogsDirectory">The directory where log files are stored.</param>
-    /// <param name="LogFilePath">The full path to the current session's log file.</param>
-    internal record CliLoggingOptions(LogLevel? ConsoleLogLevel, bool DebugMode, string LogsDirectory, string LogFilePath);
+    /// <param name="LogFilePath">The full path to the current session's log file, or null when file logging is disabled.</param>
+    /// <param name="NoLogFile">Whether --no-log-file was specified to disable file logging.</param>
+    internal record CliLoggingOptions(LogLevel? ConsoleLogLevel, bool DebugMode, string LogsDirectory, string? LogFilePath, bool NoLogFile);
 
     /// <summary>
     /// Holds the objects created during early CLI startup, before DI is available.
@@ -119,9 +120,12 @@ public class Program
         }
 
         var logsDirectory = Path.Combine(GetUsersAspirePath(), "logs");
-        var logFilePath = ParseLogFileOption(args) ?? FileLoggerProvider.GenerateLogFilePath(logsDirectory, TimeProvider.System);
+        var noLogFile = args?.Any(a => a == CommonOptionNames.NoLogFile) ?? false;
+        var logFilePath = noLogFile
+            ? null
+            : ParseLogFileOption(args) ?? FileLoggerProvider.GenerateLogFilePath(logsDirectory, TimeProvider.System);
 
-        return new CliLoggingOptions(logLevel, debugMode, logsDirectory, logFilePath);
+        return new CliLoggingOptions(logLevel, debugMode, logsDirectory, logFilePath, noLogFile);
     }
 
     /// <summary>
@@ -194,8 +198,12 @@ public class Program
 
         var extensionEndpoint = Environment.GetEnvironmentVariable(KnownConfigNames.ExtensionEndpoint);
 
-        // Create file logger provider from pre-computed path info
-        var fileLoggerProvider = new FileLoggerProvider(loggingOptions.LogFilePath, errorWriter);
+        // When --no-log-file is passed (e.g. by the VS Code extension for background
+        // invocations), skip creating a log file. Use --debug --no-log-file together
+        // to redirect logs to stderr instead of a file.
+        var fileLoggerProvider = loggingOptions.NoLogFile
+            ? FileLoggerProvider.CreateNull()
+            : new FileLoggerProvider(loggingOptions.LogFilePath!, errorWriter);
 
         var factory = LoggerFactory.Create(builder =>
         {
@@ -525,7 +533,7 @@ public class Program
         return new DirectoryInfo(sdksPath);
     }
 
-    private static CliExecutionContext BuildCliExecutionContext(bool debugMode, string logsDirectory, string logFilePath)
+    private static CliExecutionContext BuildCliExecutionContext(bool debugMode, string logsDirectory, string? logFilePath)
     {
         var workingDirectory = new DirectoryInfo(Environment.CurrentDirectory);
         var hivesDirectory = GetHivesDirectory();

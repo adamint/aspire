@@ -68,6 +68,14 @@ internal sealed class RootCommand : BaseRootCommand
         DefaultValueFactory = _ => false
     };
 
+    public static readonly Option<bool> NoLogFileOption = new(CommonOptionNames.NoLogFile)
+    {
+        Description = RootCommandStrings.NoLogFileArgumentDescription,
+        Recursive = true,
+        Hidden = true,
+        DefaultValueFactory = _ => false
+    };
+
     /// <summary>
     /// Global options that should be passed through to child CLI processes when spawning.
     /// Add new global options here to ensure they are forwarded during detached mode execution.
@@ -180,6 +188,7 @@ internal sealed class RootCommand : BaseRootCommand
         Options.Add(BannerOption);
         Options.Add(WaitForDebuggerOption);
         Options.Add(CliWaitForDebuggerOption);
+        Options.Add(NoLogFileOption);
 
         // Handle standalone 'aspire' or 'aspire --banner' (no subcommand)
         this.SetAction((context, cancellationToken) =>

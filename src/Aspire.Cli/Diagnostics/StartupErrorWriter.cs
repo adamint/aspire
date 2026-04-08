@@ -32,10 +32,10 @@ internal interface IStartupErrorWriter : IDisposable
 internal sealed class StartupErrorWriter : IStartupErrorWriter
 {
     private readonly IAnsiConsole _errorConsole;
-    private readonly string _logFilePath;
+    private readonly string? _logFilePath;
     private bool _hasOutput;
 
-    public StartupErrorWriter(string logFilePath)
+    public StartupErrorWriter(string? logFilePath)
     {
         _logFilePath = logFilePath;
         _errorConsole = AnsiConsole.Create(new AnsiConsoleSettings
@@ -64,6 +64,6 @@ internal sealed class StartupErrorWriter : IStartupErrorWriter
         }
 
         var prefix = ConsoleHelpers.FormatEmojiPrefix(KnownEmojis.PageFacingUp, _errorConsole);
-        _errorConsole.MarkupLine(prefix + string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeLogsAt, _logFilePath.EscapeMarkup()));
+        _errorConsole.MarkupLine(prefix + string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeLogsAt, _logFilePath!.EscapeMarkup()));
     }
 }
