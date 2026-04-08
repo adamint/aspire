@@ -11,6 +11,7 @@ using Aspire.Cli.Processes;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Utils;
+using Aspire.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Cli.Commands;
@@ -212,6 +213,30 @@ internal sealed class AppHostLauncher(
         return (dotnetPath, childArgs);
     }
 
+    /// <summary>
+    /// Extension-related environment variable names that must be removed from
+    /// the detached child process. When the parent CLI runs inside the VS Code
+    /// Aspire terminal, these vars are set — but the child must not see them
+    /// because it would incorrectly detect extension mode and delegate back to
+    /// the extension instead of launching the AppHost.
+    /// </summary>
+    private static readonly HashSet<string> s_extensionEnvironmentVariables = new(StringComparer.OrdinalIgnoreCase)
+    {
+        KnownConfigNames.ExtensionEndpoint,
+        KnownConfigNames.ExtensionToken,
+        KnownConfigNames.ExtensionCert,
+        KnownConfigNames.ExtensionPromptEnabled,
+        KnownConfigNames.ExtensionDebugSessionId,
+        KnownConfigNames.ExtensionDebugRunMode,
+        KnownConfigNames.ExtensionCapabilities,
+        KnownConfigNames.DebugSessionInfo,
+        KnownConfigNames.DebugSessionRunMode,
+        KnownConfigNames.DebugSessionPort,
+        KnownConfigNames.DebugSessionToken,
+        KnownConfigNames.DebugSessionServerCertificate,
+        KnownConfigNames.DcpInstanceIdPrefix,
+    };
+
     private record LaunchResult(Process? ChildProcess, IAppHostAuxiliaryBackchannel? Backchannel, DashboardUrlsState? DashboardUrls, bool ChildExitedEarly, int ChildExitCode);
 
     private async Task<LaunchResult> LaunchAndWaitForBackchannelAsync(
@@ -227,7 +252,8 @@ internal sealed class AppHostLauncher(
             childProcess = DetachedProcessLauncher.Start(
                 executablePath,
                 childArgs,
-                executionContext.WorkingDirectory.FullName);
+                executionContext.WorkingDirectory.FullName,
+                s_extensionEnvironmentVariables);
         }
         catch (Exception ex)
         {

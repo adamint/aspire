@@ -48,7 +48,9 @@ internal sealed class StartCommand : BaseCommand
         var isolated = parseResult.GetValue(AppHostLauncher.s_isolatedOption);
 
         var noBuild = parseResult.GetValue(s_noBuildOption);
-        var isExtensionHost = ExtensionHelper.IsExtensionHost(_interactionService, out _, out _);
+        // `aspire start` is always user-initiated, so we never suppress dashboard URLs
+        // in the summary — even when running inside the VS Code extension terminal.
+        var isExtensionHost = false;
         var waitForDebugger = parseResult.GetValue(RootCommand.WaitForDebuggerOption);
         var globalArgs = RootCommand.GetChildProcessArgs(parseResult);
         var additionalArgs = parseResult.UnmatchedTokens.ToList();
