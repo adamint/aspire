@@ -20,6 +20,24 @@ export interface SpawnProcessOptions {
     logToCliOutputChannel?: boolean;
 }
 
+export function withCliLogOutputChannelArgs(args: readonly string[] = []): string[] {
+    const delimiterIndex = args.indexOf('--');
+    const insertionIndex = delimiterIndex === -1 ? args.length : delimiterIndex;
+    const cliArgs = args.slice(0, insertionIndex);
+    const forwardedArgs = args.slice(insertionIndex);
+    const updatedArgs = [...cliArgs];
+
+    if (!cliArgs.includes('--debug')) {
+        updatedArgs.push('--debug');
+    }
+
+    if (!cliArgs.includes('--no-log-file')) {
+        updatedArgs.push('--no-log-file');
+    }
+
+    return [...updatedArgs, ...forwardedArgs];
+}
+
 export function spawnCliProcess(terminalProvider: AspireTerminalProvider, command: string, args?: string[], options?: SpawnProcessOptions): ChildProcessWithoutNullStreams {
     const workingDirectory = options?.workingDirectory ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
     const env = {};
@@ -29,7 +47,7 @@ export function spawnCliProcess(terminalProvider: AspireTerminalProvider, comman
         Object.assign(env, Object.fromEntries(options.env.map(e => [e.name, e.value])));
     }
     if (options?.logToCliOutputChannel) {
-        args = [...(args ?? []), '--debug', '--no-log-file'];
+        args = withCliLogOutputChannelArgs(args);
         cliLogsOutputChannel.appendLine(`Spawning CLI process with command: ${command} ${args.join(' ')} in directory: ${workingDirectory}`);
     }
 

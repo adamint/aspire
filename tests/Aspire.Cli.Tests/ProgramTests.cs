@@ -98,4 +98,15 @@ public class ProgramTests
         using var writer = new StartupErrorWriter(logFilePath: null);
         writer.WriteLine("example startup error");
     }
+
+    [Fact]
+    public void CreateLoggerFactory_ThrowsWhenFileLoggingEnabledWithoutLogFilePath()
+    {
+        var loggingOptions = new Program.CliLoggingOptions(ConsoleLogLevel: null, DebugMode: false, LogsDirectory: Path.GetTempPath(), LogFilePath: null, NoLogFile: false);
+        using var writer = new StartupErrorWriter(logFilePath: null);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => Program.CreateLoggerFactory([], loggingOptions, writer));
+
+        Assert.Equal("A log file path is required when file logging is enabled.", exception.Message);
+    }
 }

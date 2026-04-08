@@ -147,6 +147,11 @@
         <target state="translated">No se pudo analizar el proyecto debido a un error de compilación. Consulte los registros en {0}</target>
         <note />
       </trans-unit>
+      <trans-unit id="ProjectCouldNotBeAnalyzedWithoutLogFile">
+        <source>The project could not be analyzed due to a build error. Re-run with file logging enabled to capture the build output.</source>
+        <target state="new">The project could not be analyzed due to a build error. Re-run with file logging enabled to capture the build output.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="ProjectFileDoesntExist">
         <source>Project file does not exist.</source>
         <target state="translated">El archivo de proyecto no existe.</target>

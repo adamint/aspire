@@ -71,7 +71,6 @@ export class AppHostDataRepository {
     // ── Workspace mode state (describe --follow) ──
     private _workspaceResources: Map<string, ResourceJson> = new Map();
     private _describeProcess: ChildProcessWithoutNullStreams | undefined;
-    private _describeRestarting = false;
     private _describeRestartDelay = 5000;
     private _describeRestartTimer: ReturnType<typeof setTimeout> | undefined;
     private _describeReceivedData = false;
@@ -204,7 +203,6 @@ export class AppHostDataRepository {
             return;
         }
         if (this._shouldDescribe) {
-            extensionLogOutputChannel.info(`_syncDescribeWatch: starting describe watch (panelVisible=${this._panelVisible}, appHostEditorVisible=${this._appHostEditorVisible})`);
             this._startDescribeWatch();
         } else {
             this._stopDescribeWatch();
@@ -289,21 +287,21 @@ export class AppHostDataRepository {
     // ── Workspace mode: describe --follow ──
 
     private _startDescribeWatch(): void {
-        if (this._describeProcess || this._disposed) {
+        if (this._describeProcess || this._disposed || !this._shouldDescribe) {
             return;
         }
 
         this._terminalProvider.getAspireCliExecutablePath().then(cliPath => {
-            if (this._disposed) {
+            if (this._describeProcess || this._disposed || !this._shouldDescribe) {
                 return;
             }
 
             const args = ['describe', '--follow', '--format', 'json'];
 
-            extensionLogOutputChannel.info('Starting aspire describe --follow for workspace resources');
+            extensionLogOutputChannel.info(`Starting aspire describe --follow for workspace resources (panelVisible=${this._panelVisible}, appHostEditorVisible=${this._appHostEditorVisible})`);
 
             this._describeReceivedData = false;
-            this._describeProcess = spawnCliProcess(this._terminalProvider, cliPath, args, {
+            const describeProcess = spawnCliProcess(this._terminalProvider, cliPath, args, {
                 noExtensionVariables: true,
                 logToCliOutputChannel: true,
                 lineCallback: (line) => {
@@ -311,9 +309,13 @@ export class AppHostDataRepository {
                 },
                 exitCallback: (code) => {
                     extensionLogOutputChannel.info(`aspire describe --follow exited with code ${code}`);
+                    if (this._describeProcess !== describeProcess) {
+                        return;
+                    }
+
                     this._describeProcess = undefined;
 
-                    if (!this._disposed && !this._describeRestarting) {
+                    if (!this._disposed && this._shouldDescribe) {
                         if (!this._describeReceivedData) {
                             // The process exited without ever producing valid data.
                             // This is expected when no apphost is running. Don't restart —
@@ -339,18 +341,23 @@ export class AppHostDataRepository {
                             }, delay);
                         }
                     }
-                    this._describeRestarting = false;
                 },
                 errorCallback: (error) => {
                     extensionLogOutputChannel.warn(`aspire describe --follow error: ${error.message}`);
+                    if (this._describeProcess !== describeProcess) {
+                        return;
+                    }
+
                     this._describeProcess = undefined;
-                    if (!this._disposed && !this._describeRestarting) {
+
+                    if (!this._disposed && this._shouldDescribe) {
                         this._loadingWorkspace = false;
                         this._updateLoadingContext();
                         this._setError(errorFetchingAppHosts(error.message));
                     }
                 }
             });
+            this._describeProcess = describeProcess;
         }).catch(error => {
             extensionLogOutputChannel.warn(`Failed to start describe watch: ${error}`);
             this._loadingWorkspace = false;
@@ -366,9 +373,9 @@ export class AppHostDataRepository {
         }
         if (this._describeProcess) {
             cliLogsOutputChannel.appendLine('Stopping aspire describe --follow process');
-            this._describeRestarting = true;
-            this._describeProcess.kill();
+            const describeProcess = this._describeProcess;
             this._describeProcess = undefined;
+            describeProcess.kill();
         }
     }
 

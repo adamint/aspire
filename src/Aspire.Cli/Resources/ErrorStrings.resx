@@ -159,6 +159,9 @@
   <data name="ProjectCouldNotBeAnalyzed" xml:space="preserve">
     <value>The project could not be analyzed due to a build error. See logs at {0}</value>
   </data>
+  <data name="ProjectCouldNotBeAnalyzedWithoutLogFile" xml:space="preserve">
+    <value>The project could not be analyzed due to a build error. Re-run with file logging enabled to capture the build output.</value>
+  </data>
   <data name="ProjectIsNotAppHost" xml:space="preserve">
     <value>The project does not contain an Aspire AppHost.</value>
   </data>

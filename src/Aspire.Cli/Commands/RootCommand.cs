@@ -79,6 +79,8 @@ internal sealed class RootCommand : BaseRootCommand
     /// <summary>
     /// Global options that should be passed through to child CLI processes when spawning.
     /// Add new global options here to ensure they are forwarded during detached mode execution.
+    /// Options like <c>--no-log-file</c> are intentionally excluded because detached launches
+    /// always provision an explicit child log file for startup diagnostics.
     /// </summary>
     private static readonly (Option Option, Func<ParseResult, string[]?> GetArgs)[] s_childProcessOptions =
     [

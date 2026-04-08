@@ -227,9 +227,12 @@ public class Program
         // When --no-log-file is passed (e.g. by the VS Code extension for background
         // invocations), skip creating a log file. Use --debug --no-log-file together
         // to redirect logs to stderr instead of a file.
-        var fileLoggerProvider = loggingOptions.NoLogFile
-            ? FileLoggerProvider.CreateNull()
-            : new FileLoggerProvider(loggingOptions.LogFilePath!, errorWriter);
+        var fileLoggerProvider = loggingOptions switch
+        {
+            { NoLogFile: true } => FileLoggerProvider.CreateNull(),
+            { LogFilePath: { } logFilePath } => new FileLoggerProvider(logFilePath, errorWriter),
+            _ => throw new InvalidOperationException("A log file path is required when file logging is enabled.")
+        };
 
         var factory = LoggerFactory.Create(builder =>
         {

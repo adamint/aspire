@@ -157,6 +157,14 @@ namespace Aspire.Cli.Resources {
             }
         }
 
+        public static string ProjectCouldNotBeAnalyzedWithoutLogFile
+        {
+            get
+            {
+                return ResourceManager.GetString("ProjectCouldNotBeAnalyzedWithoutLogFile", resourceCulture);
+            }
+        }
+
         public static string ProjectIsNotAppHost
         {
             get
