@@ -120,7 +120,7 @@ public class Program
         }
 
         var logsDirectory = Path.Combine(GetUsersAspirePath(), "logs");
-        var noLogFile = args?.Any(a => a == CommonOptionNames.NoLogFile) ?? false;
+        var noLogFile = HasNoLogFileOption(args);
         var logFilePath = noLogFile
             ? null
             : ParseLogFileOption(args) ?? FileLoggerProvider.GenerateLogFilePath(logsDirectory, TimeProvider.System);
@@ -153,6 +153,32 @@ public class Program
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Returns whether <c>--no-log-file</c> appears before the command delimiter (<c>--</c>).
+    /// </summary>
+    private static bool HasNoLogFileOption(string[]? args)
+    {
+        if (args is null)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--")
+            {
+                break;
+            }
+
+            if (args[i] == CommonOptionNames.NoLogFile)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string GetGlobalSettingsPath(ILogger logger)

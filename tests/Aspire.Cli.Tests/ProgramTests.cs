@@ -62,6 +62,15 @@ public class ProgramTests
     }
 
     [Fact]
+    public void ParseLoggingOptions_IgnoresNoLogFileAfterDelimiter()
+    {
+        var options = Program.ParseLoggingOptions(["run", "--", "--no-log-file"]);
+
+        Assert.False(options.NoLogFile);
+        Assert.NotNull(options.LogFilePath);
+    }
+
+    [Fact]
     public void FileLoggerProvider_CreateNull_DoesNotCreateFile()
     {
         using var provider = FileLoggerProvider.CreateNull();
@@ -81,5 +90,12 @@ public class ProgramTests
 
         // Logger reports enabled (filter is separate from file existence)
         Assert.True(logger.IsEnabled(Microsoft.Extensions.Logging.LogLevel.Information));
+    }
+
+    [Fact]
+    public void StartupErrorWriter_Dispose_DoesNotThrowWhenLogFileIsDisabled()
+    {
+        using var writer = new StartupErrorWriter(logFilePath: null);
+        writer.WriteLine("example startup error");
     }
 }

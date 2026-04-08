@@ -58,12 +58,12 @@ internal sealed class StartupErrorWriter : IStartupErrorWriter
 
     public void Dispose()
     {
-        if (!_hasOutput || !File.Exists(_logFilePath))
+        if (!_hasOutput || _logFilePath is null || !File.Exists(_logFilePath))
         {
             return;
         }
 
         var prefix = ConsoleHelpers.FormatEmojiPrefix(KnownEmojis.PageFacingUp, _errorConsole);
-        _errorConsole.MarkupLine(prefix + string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeLogsAt, _logFilePath!.EscapeMarkup()));
+        _errorConsole.MarkupLine(prefix + string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeLogsAt, _logFilePath.EscapeMarkup()));
     }
 }
