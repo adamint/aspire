@@ -616,7 +616,18 @@ internal class DotNetTemplateFactory(
             outputPath = await prompter.PromptForOutputPath(pathDeriver(projectName), cancellationToken);
         }
 
-        return Path.GetFullPath(outputPath);
+        outputPath = Path.GetFullPath(outputPath);
+
+        // When running in extension mode (VS Code), the folder picker returns the parent
+        // directory the user selected. Append the project name as a subdirectory so the
+        // project gets its own clean folder, matching the git-clone convention.
+        if (ExtensionHelper.IsExtensionHost(interactionService, out _, out _)
+            && !string.Equals(Path.GetFileName(outputPath), projectName, StringComparison.OrdinalIgnoreCase))
+        {
+            outputPath = Path.Combine(outputPath, projectName);
+        }
+
+        return outputPath;
     }
 
     private async Task<(NuGetPackage Package, PackageChannel Channel)> GetProjectTemplatesVersionAsync(TemplateInputs inputs, CancellationToken cancellationToken)
