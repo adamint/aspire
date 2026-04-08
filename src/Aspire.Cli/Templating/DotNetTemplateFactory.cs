@@ -622,9 +622,19 @@ internal class DotNetTemplateFactory(
         // directory the user selected. Append the project name as a subdirectory so the
         // project gets its own clean folder, matching the git-clone convention.
         if (ExtensionHelper.IsExtensionHost(interactionService, out _, out _)
-            && !string.Equals(Path.GetFileName(outputPath), projectName, StringComparison.OrdinalIgnoreCase))
+            && !projectName.Equals(".", StringComparison.Ordinal)
+            && !projectName.Equals("..", StringComparison.Ordinal))
         {
-            outputPath = Path.Combine(outputPath, projectName);
+            var normalizedOutputPath = Path.TrimEndingDirectorySeparator(outputPath);
+
+            if (!string.Equals(Path.GetFileName(normalizedOutputPath), projectName, StringComparison.OrdinalIgnoreCase))
+            {
+                outputPath = Path.Combine(normalizedOutputPath, projectName);
+            }
+            else
+            {
+                outputPath = normalizedOutputPath;
+            }
         }
 
         return outputPath;
