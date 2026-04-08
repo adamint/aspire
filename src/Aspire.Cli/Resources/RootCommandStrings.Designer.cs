@@ -106,6 +106,15 @@ namespace Aspire.Cli.Resources {
         }
 
         /// <summary>
+        ///   Looks up a localized string similar to Disable writing logs to a file..
+        /// </summary>
+        public static string NoLogFileArgumentDescription {
+            get {
+                return ResourceManager.GetString("NoLogFileArgumentDescription", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to The Aspire CLI can be used to create, run, and publish Aspire-based applications..
         /// </summary>
         public static string Description {
