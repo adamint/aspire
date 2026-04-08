@@ -299,7 +299,9 @@ jobs:
         run: npm test
       - name: Override extension version for PR builds
         if: ${{ inputs.extensionVersionOverride != '' }}
-        run: npm version "${{ inputs.extensionVersionOverride }}" --no-git-tag-version
+        env:
+          EXTENSION_VERSION: ${{ inputs.extensionVersionOverride }}
+        run: npm version "$EXTENSION_VERSION" --no-git-tag-version
       - name: Package VSIX
         run: npm exec @vscode/vsce -- package --pre-release -o out/aspire-extension.vsix
       - name: Upload VSIX

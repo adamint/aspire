@@ -59,7 +59,7 @@ jobs:
           Write-Host "Computed VERSION_SUFFIX_OVERRIDE=$VERSION_SUFFIX"
           "VERSION_SUFFIX_OVERRIDE=$VERSION_SUFFIX" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append -Encoding utf8
 
-          $EXTENSION_VERSION = "0.0.$($Env:PR_NUMBER)"
+          $EXTENSION_VERSION = "99.0.$($Env:PR_NUMBER)"
           Write-Host "Computed EXTENSION_VERSION_OVERRIDE=$EXTENSION_VERSION"
           "EXTENSION_VERSION_OVERRIDE=$EXTENSION_VERSION" | Out-File -FilePath $Env:GITHUB_OUTPUT -Append -Encoding utf8
 
