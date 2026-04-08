@@ -889,6 +889,70 @@ suite('CSharpAppHostParser', () => {
         assert.strictEqual(resources[0].statementStartLine, 6, 'statement should start on builder.AddContainer line, not on } // end if line');
     });
 
+    test('statementStartLine reaches top of fluent chain through callback lambda', () => {
+        const parser = getCSharpParser();
+        const doc = createMockDocument(
+            [
+                'var builder = DistributedApplication.CreateBuilder(args);',
+                '',
+                'var catalogDb = builder.AddPostgres("postgres")',
+                '                       .WithPgAdmin(resource => {',
+                '                           resource.SomeConfig();',
+                '                       })',
+                '                       .AddDatabase("catalogdb");',
+            ].join('\n'),
+            '/test/AppHost.cs'
+        );
+        const resources = parser.parseResources(doc);
+        assert.strictEqual(resources.length, 2);
+        assert.strictEqual(resources[0].name, 'postgres');
+        assert.strictEqual(resources[0].statementStartLine, 2, 'AddPostgres starts at var catalogDb');
+        assert.strictEqual(resources[1].name, 'catalogdb');
+        assert.strictEqual(resources[1].statementStartLine, 2, 'AddDatabase should also start at var catalogDb, not after callback }');
+    });
+
+    test('statementStartLine reaches top of fluent chain through RunAsContainer callback', () => {
+        const parser = getCSharpParser();
+        const doc = createMockDocument(
+            [
+                'var builder = DistributedApplication.CreateBuilder(args);',
+                '',
+                'var db = builder.AddPostgres("postgres")',
+                '    .RunAsContainer(c => {',
+                '        c.WithLifetime(ContainerLifetime.Persistent);',
+                '    })',
+                '    .AddDatabase("db");',
+            ].join('\n'),
+            '/test/AppHost.cs'
+        );
+        const resources = parser.parseResources(doc);
+        assert.strictEqual(resources.length, 2);
+        assert.strictEqual(resources[1].name, 'db');
+        assert.strictEqual(resources[1].statementStartLine, 2, 'AddDatabase should start at var db, not after callback }');
+    });
+
+    test('statementStartLine not affected by } else { between block and resource', () => {
+        const parser = getCSharpParser();
+        const doc = createMockDocument(
+            [
+                'var builder = DistributedApplication.CreateBuilder(args);',
+                '',
+                'if (true)',
+                '{',
+                '    DoSomething();',
+                '} else {',
+                '    DoSomethingElse();',
+                '}',
+                '',
+                'builder.AddContainer("nginx", "nginx");',
+            ].join('\n'),
+            '/test/AppHost.cs'
+        );
+        const resources = parser.parseResources(doc);
+        assert.strictEqual(resources.length, 1);
+        assert.strictEqual(resources[0].statementStartLine, 9, 'statement should start on builder.AddContainer line');
+    });
+
     // --- Pipeline step classification ---
 
     test('classifies AddStep as pipelineStep', () => {
@@ -1670,6 +1734,70 @@ suite('JsTsAppHostParser', () => {
         const resources = parser.parseResources(doc);
         assert.strictEqual(resources.length, 1);
         assert.strictEqual(resources[0].statementStartLine, 6, 'statement should start on builder.addContainer line, not on } // end if line');
+    });
+
+    test('statementStartLine reaches top of fluent chain through callback arrow function', () => {
+        const parser = getJsTsParser();
+        const doc = createMockDocument(
+            [
+                'import { createBuilder } from "@aspire/sdk";',
+                '',
+                'const catalogDb = builder.addPostgres("postgres")',
+                '    .withPgAdmin((resource) => {',
+                '        resource.someConfig();',
+                '    })',
+                '    .addDatabase("catalogdb");',
+            ].join('\n'),
+            '/test/apphost.ts'
+        );
+        const resources = parser.parseResources(doc);
+        assert.strictEqual(resources.length, 2);
+        assert.strictEqual(resources[0].name, 'postgres');
+        assert.strictEqual(resources[0].statementStartLine, 2, 'addPostgres starts at const catalogDb');
+        assert.strictEqual(resources[1].name, 'catalogdb');
+        assert.strictEqual(resources[1].statementStartLine, 2, 'addDatabase should also start at const catalogDb, not after callback }');
+    });
+
+    test('statementStartLine reaches top of fluent chain through runAsContainer callback', () => {
+        const parser = getJsTsParser();
+        const doc = createMockDocument(
+            [
+                'import { createBuilder } from "@aspire/sdk";',
+                '',
+                'const db = builder.addPostgres("postgres")',
+                '    .runAsContainer((c) => {',
+                '        c.withLifetime("persistent");',
+                '    })',
+                '    .addDatabase("db");',
+            ].join('\n'),
+            '/test/apphost.ts'
+        );
+        const resources = parser.parseResources(doc);
+        assert.strictEqual(resources.length, 2);
+        assert.strictEqual(resources[1].name, 'db');
+        assert.strictEqual(resources[1].statementStartLine, 2, 'addDatabase should start at const db, not after callback }');
+    });
+
+    test('statementStartLine not affected by } else { between block and resource', () => {
+        const parser = getJsTsParser();
+        const doc = createMockDocument(
+            [
+                'import { createBuilder } from "@aspire/sdk";',
+                '',
+                'if (true)',
+                '{',
+                '    doSomething();',
+                '} else {',
+                '    doSomethingElse();',
+                '}',
+                '',
+                'builder.addContainer("nginx", "nginx");',
+            ].join('\n'),
+            '/test/apphost.ts'
+        );
+        const resources = parser.parseResources(doc);
+        assert.strictEqual(resources.length, 1);
+        assert.strictEqual(resources[0].statementStartLine, 9, 'statement should start on builder.addContainer line');
     });
 
     // --- Pipeline step classification ---
