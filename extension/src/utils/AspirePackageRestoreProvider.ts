@@ -14,7 +14,7 @@ import { runningAspireRestore, runningAspireRestoreProgress, aspireRestoreComple
  * (e.g. after a git branch switch).
  */
 export class AspirePackageRestoreProvider implements vscode.Disposable {
-    private static readonly _maxConcurrency = 4;
+    private static readonly _maxConcurrency = 2;
     private static readonly _statusBarHideDelayMs = 5000;
     private static readonly _restoreTimeoutMs = 120_000;
 
