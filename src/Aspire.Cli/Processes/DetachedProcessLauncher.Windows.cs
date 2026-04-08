@@ -265,6 +265,12 @@ internal static partial class DetachedProcessLauncher
             blockBuilder.Append(kvp.Value);
             blockBuilder.Append('\0');
         }
+
+        if (envVars.Count == 0)
+        {
+            blockBuilder.Append('\0');
+        }
+
         blockBuilder.Append('\0'); // Final terminator
 
         var blockString = blockBuilder.ToString();

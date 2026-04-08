@@ -15,7 +15,6 @@ internal sealed class StartCommand : BaseCommand
     internal override HelpGroup HelpGroup => HelpGroup.AppCommands;
 
     private readonly AppHostLauncher _appHostLauncher;
-    private readonly IInteractionService _interactionService;
 
     private static readonly Option<bool> s_noBuildOption = new("--no-build")
     {
@@ -32,7 +31,6 @@ internal sealed class StartCommand : BaseCommand
         : base("start", StartCommandStrings.Description,
                features, updateNotifier, executionContext, interactionService, telemetry)
     {
-        _interactionService = interactionService;
         _appHostLauncher = appHostLauncher;
 
         Options.Add(s_noBuildOption);

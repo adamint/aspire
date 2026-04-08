@@ -214,13 +214,11 @@ internal sealed class AppHostLauncher(
     }
 
     /// <summary>
-    /// Extension-related environment variable names that must be removed from
-    /// the detached child process. When the parent CLI runs inside the VS Code
-    /// Aspire terminal, these vars are set — but the child must not see them
-    /// because it would incorrectly detect extension mode and delegate back to
-    /// the extension instead of launching the AppHost.
+    /// Environment variable names that make a detached child CLI run in extension-host mode.
+    /// Keep the DEBUG_SESSION_* and DCP session variables intact because the launched AppHost
+    /// still relies on them for IDE execution and dashboard integration.
     /// </summary>
-    private static readonly HashSet<string> s_extensionEnvironmentVariables = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> s_extensionHostEnvironmentVariables = new(StringComparer.OrdinalIgnoreCase)
     {
         KnownConfigNames.ExtensionEndpoint,
         KnownConfigNames.ExtensionToken,
@@ -229,13 +227,12 @@ internal sealed class AppHostLauncher(
         KnownConfigNames.ExtensionDebugSessionId,
         KnownConfigNames.ExtensionDebugRunMode,
         KnownConfigNames.ExtensionCapabilities,
-        KnownConfigNames.DebugSessionInfo,
-        KnownConfigNames.DebugSessionRunMode,
-        KnownConfigNames.DebugSessionPort,
-        KnownConfigNames.DebugSessionToken,
-        KnownConfigNames.DebugSessionServerCertificate,
-        KnownConfigNames.DcpInstanceIdPrefix,
     };
+
+    /// <summary>
+    /// Gets the environment variables removed from detached child CLI processes.
+    /// </summary>
+    internal static IReadOnlySet<string> DetachedChildEnvironmentVariablesToRemove => s_extensionHostEnvironmentVariables;
 
     private record LaunchResult(Process? ChildProcess, IAppHostAuxiliaryBackchannel? Backchannel, DashboardUrlsState? DashboardUrls, bool ChildExitedEarly, int ChildExitCode);
 
@@ -253,7 +250,7 @@ internal sealed class AppHostLauncher(
                 executablePath,
                 childArgs,
                 executionContext.WorkingDirectory.FullName,
-                s_extensionEnvironmentVariables);
+                s_extensionHostEnvironmentVariables);
         }
         catch (Exception ex)
         {

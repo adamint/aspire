@@ -13,6 +13,7 @@ using Aspire.Cli.Resources;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Cli.Utils;
+using Aspire.Hosting;
 using Aspire.Shared.UserSecrets;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.DependencyInjection;
@@ -1634,6 +1635,21 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
 
         Assert.Equal(ExitCodeConstants.Success, exitCode);
         Assert.False(startDebugSessionCalled, "StartDebugSessionAsync should not be called in non-interactive mode.");
+    }
+
+    [Fact]
+    public void DetachedChildEnvironmentFilter_PreservesDebugSessionVariables()
+    {
+        var filteredVariables = AppHostLauncher.DetachedChildEnvironmentVariablesToRemove;
+
+        Assert.Contains(KnownConfigNames.ExtensionEndpoint, filteredVariables);
+        Assert.Contains(KnownConfigNames.ExtensionDebugSessionId, filteredVariables);
+        Assert.DoesNotContain(KnownConfigNames.DebugSessionInfo, filteredVariables);
+        Assert.DoesNotContain(KnownConfigNames.DebugSessionRunMode, filteredVariables);
+        Assert.DoesNotContain(KnownConfigNames.DebugSessionPort, filteredVariables);
+        Assert.DoesNotContain(KnownConfigNames.DebugSessionToken, filteredVariables);
+        Assert.DoesNotContain(KnownConfigNames.DebugSessionServerCertificate, filteredVariables);
+        Assert.DoesNotContain(KnownConfigNames.DcpInstanceIdPrefix, filteredVariables);
     }
 
 }
