@@ -1,11 +1,13 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Globalization;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Resources;
 using Aspire.Tests.Shared.DashboardModel;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Localization;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Xunit;
 using Enum = System.Enum;
@@ -100,5 +102,62 @@ public class ResourceStateViewModelTests
         Assert.Equal(expectedIconName, vm.Icon.Name);
         Assert.Equal(expectedColor, vm.Color);
         Assert.Equal(expectedText, vm.Text);
+    }
+
+    [Fact]
+    public void GetResourceStateTooltip_ExitedCustomResource_EncodesResourceType()
+    {
+        var resource = ModelTestHelpers.CreateResource(
+            state: KnownResourceState.Exited,
+            resourceType: "<marquee>An HTML resource type!</marquee>");
+
+        var tooltip = ResourceStateViewModel.GetResourceStateTooltip(resource, new HtmlTestStringLocalizer());
+
+        Assert.Equal("&lt;marquee&gt;An HTML resource type!&lt;/marquee&gt; is no longer running", tooltip);
+    }
+
+    [Fact]
+    public void GetResourceStateTooltip_RuntimeUnhealthyContainer_PreservesLocalizedMarkup()
+    {
+        var resource = ModelTestHelpers.CreateResource(state: KnownResourceState.RuntimeUnhealthy);
+
+        var tooltip = ResourceStateViewModel.GetResourceStateTooltip(resource, new HtmlTestStringLocalizer());
+
+        Assert.Contains("<a href=\"https://aka.ms/dotnet/aspire/container-runtime-unhealthy\"", tooltip);
+    }
+
+    private sealed class HtmlTestStringLocalizer : IStringLocalizer<Columns>
+    {
+        public LocalizedString this[string name]
+        {
+            get
+            {
+                return name switch
+                {
+                    nameof(Columns.StateColumnResourceContainerRuntimeUnhealthy) => new(name, "Container runtime issue. <a href=\"https://aka.ms/dotnet/aspire/container-runtime-unhealthy\">More information</a>."),
+                    nameof(Columns.RunningAndUnhealthyResourceStateToolTip) => new(name, "Resource is running but not in a healthy state."),
+                    nameof(Columns.StateColumnResourceWaiting) => new(name, "Resource is waiting for other resources to be in a running and healthy state."),
+                    nameof(Columns.StateColumnResourceNotStarted) => new(name, "Resource has not started because it's configured to not automatically start."),
+                    _ => new(name, name)
+                };
+            }
+        }
+
+        public LocalizedString this[string name, params object[] arguments]
+        {
+            get
+            {
+                var format = name switch
+                {
+                    nameof(Columns.StateColumnResourceExited) => "{0} is no longer running",
+                    nameof(Columns.StateColumnResourceExitedUnexpectedly) => "{0} exited unexpectedly with exit code {1}",
+                    _ => name
+                };
+
+                return new(name, string.Format(CultureInfo.CurrentCulture, format, arguments));
+            }
+        }
+
+        public IEnumerable<LocalizedString> GetAllStrings(bool includeParentCultures) => [];
     }
 }
