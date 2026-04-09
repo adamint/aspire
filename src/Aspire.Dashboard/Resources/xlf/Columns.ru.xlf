@@ -19,7 +19,7 @@
       </trans-unit>
       <trans-unit id="StateColumnResourceContainerRuntimeUnhealthy">
         <source>Container runtime was found but appears to be unhealthy. Ensure that it is running.
-For more information, see &lt;a href="https://aka.ms/dotnet/aspire/container-runtime-unhealthy" target="_blank"&gt;https://aka.ms/dotnet/aspire/container-runtime-unhealthy&lt;/a&gt;.</source>
+For more information, see &lt;a href="https://aka.ms/dotnet/aspire/container-runtime-unhealthy" target="_blank" rel="noopener noreferrer"&gt;https://aka.ms/dotnet/aspire/container-runtime-unhealthy&lt;/a&gt;.</source>
         <target state="needs-review-translation">Среда выполнения контейнера обнаружена, но, по-видимому, неработоспособна. Убедитесь, что она запущена.
 Дополнительные сведения см. по адресу https://aka.ms/dotnet/aspire/container-runtime-unhealthy</target>
         <note>Contains a new line. The link provided is html markup and should not be translated or otherwise modified.</note>
