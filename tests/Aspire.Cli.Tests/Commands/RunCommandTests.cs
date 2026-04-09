@@ -1640,16 +1640,17 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
     [Fact]
     public void DetachedChildEnvironmentFilter_PreservesDebugSessionVariables()
     {
-        var filteredVariables = AppHostLauncher.DetachedChildEnvironmentVariablesToRemove;
+        // Extension variables use the ASPIRE_EXTENSION_ prefix and should be filtered
+        Assert.True(AppHostLauncher.IsExtensionEnvironmentVariable(KnownConfigNames.ExtensionEndpoint));
+        Assert.True(AppHostLauncher.IsExtensionEnvironmentVariable(KnownConfigNames.ExtensionDebugSessionId));
 
-        Assert.Contains(KnownConfigNames.ExtensionEndpoint, filteredVariables);
-        Assert.Contains(KnownConfigNames.ExtensionDebugSessionId, filteredVariables);
-        Assert.DoesNotContain(KnownConfigNames.DebugSessionInfo, filteredVariables);
-        Assert.DoesNotContain(KnownConfigNames.DebugSessionRunMode, filteredVariables);
-        Assert.DoesNotContain(KnownConfigNames.DebugSessionPort, filteredVariables);
-        Assert.DoesNotContain(KnownConfigNames.DebugSessionToken, filteredVariables);
-        Assert.DoesNotContain(KnownConfigNames.DebugSessionServerCertificate, filteredVariables);
-        Assert.DoesNotContain(KnownConfigNames.DcpInstanceIdPrefix, filteredVariables);
+        // DEBUG_SESSION variables should NOT be filtered
+        Assert.False(AppHostLauncher.IsExtensionEnvironmentVariable(KnownConfigNames.DebugSessionInfo));
+        Assert.False(AppHostLauncher.IsExtensionEnvironmentVariable(KnownConfigNames.DebugSessionRunMode));
+        Assert.False(AppHostLauncher.IsExtensionEnvironmentVariable(KnownConfigNames.DebugSessionPort));
+        Assert.False(AppHostLauncher.IsExtensionEnvironmentVariable(KnownConfigNames.DebugSessionToken));
+        Assert.False(AppHostLauncher.IsExtensionEnvironmentVariable(KnownConfigNames.DebugSessionServerCertificate));
+        Assert.False(AppHostLauncher.IsExtensionEnvironmentVariable(KnownConfigNames.DcpInstanceIdPrefix));
     }
 
 }

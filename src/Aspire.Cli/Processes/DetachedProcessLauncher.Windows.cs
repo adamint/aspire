@@ -17,7 +17,7 @@ internal static partial class DetachedProcessLauncher
     /// PROC_THREAD_ATTRIBUTE_HANDLE_LIST to prevent handle inheritance to grandchildren.
     /// </summary>
     [SupportedOSPlatform("windows")]
-    private static Process StartWindows(string fileName, IReadOnlyList<string> arguments, string workingDirectory, IReadOnlySet<string>? environmentVariablesToRemove)
+    private static Process StartWindows(string fileName, IReadOnlyList<string> arguments, string workingDirectory, Func<string, bool>? shouldRemoveEnvironmentVariable)
     {
         // Open NUL device for stdout/stderr — child writes go nowhere
         using var nulHandle = CreateFileW(
@@ -94,9 +94,9 @@ internal static partial class DetachedProcessLauncher
                     var envBlockHandle = nint.Zero;
                     try
                     {
-                        if (environmentVariablesToRemove is { Count: > 0 })
+                        if (shouldRemoveEnvironmentVariable is not null)
                         {
-                            envBlockHandle = BuildFilteredEnvironmentBlock(environmentVariablesToRemove);
+                            envBlockHandle = BuildFilteredEnvironmentBlock(shouldRemoveEnvironmentVariable);
                         }
 
                         if (!CreateProcessW(
@@ -242,14 +242,14 @@ internal static partial class DetachedProcessLauncher
     /// and double-null-terminated. The caller must free the returned pointer with Marshal.FreeHGlobal.
     /// </summary>
     [SupportedOSPlatform("windows")]
-    private static nint BuildFilteredEnvironmentBlock(IReadOnlySet<string> variablesToRemove)
+    private static nint BuildFilteredEnvironmentBlock(Func<string, bool> shouldRemove)
     {
         // Collect current environment variables, excluding the ones to remove.
         var envVars = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables())
         {
             var key = (string)entry.Key;
-            if (!variablesToRemove.Contains(key))
+            if (!shouldRemove(key))
             {
                 envVars[key] = (string?)entry.Value ?? string.Empty;
             }

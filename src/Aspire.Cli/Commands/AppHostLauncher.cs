@@ -11,7 +11,6 @@ using Aspire.Cli.Processes;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Utils;
-using Aspire.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Cli.Commands;
@@ -214,25 +213,20 @@ internal sealed class AppHostLauncher(
     }
 
     /// <summary>
-    /// Environment variable names that make a detached child CLI run in extension-host mode.
+    /// Prefix for environment variables that configure extension-host mode.
+    /// Any environment variable starting with this prefix is removed from
+    /// detached child processes to prevent them from entering extension mode.
     /// Keep the DEBUG_SESSION_* and DCP session variables intact because the launched AppHost
     /// still relies on them for IDE execution and dashboard integration.
     /// </summary>
-    private static readonly HashSet<string> s_extensionHostEnvironmentVariables = new(StringComparer.OrdinalIgnoreCase)
-    {
-        KnownConfigNames.ExtensionEndpoint,
-        KnownConfigNames.ExtensionToken,
-        KnownConfigNames.ExtensionCert,
-        KnownConfigNames.ExtensionPromptEnabled,
-        KnownConfigNames.ExtensionDebugSessionId,
-        KnownConfigNames.ExtensionDebugRunMode,
-        KnownConfigNames.ExtensionCapabilities,
-    };
+    internal const string ExtensionEnvironmentVariablePrefix = "ASPIRE_EXTENSION_";
 
     /// <summary>
-    /// Gets the environment variables removed from detached child CLI processes.
+    /// Returns <see langword="true"/> if the specified environment variable name
+    /// should be removed from detached child CLI processes.
     /// </summary>
-    internal static IReadOnlySet<string> DetachedChildEnvironmentVariablesToRemove => s_extensionHostEnvironmentVariables;
+    internal static bool IsExtensionEnvironmentVariable(string name) =>
+        name.StartsWith(ExtensionEnvironmentVariablePrefix, StringComparison.OrdinalIgnoreCase);
 
     private record LaunchResult(Process? ChildProcess, IAppHostAuxiliaryBackchannel? Backchannel, DashboardUrlsState? DashboardUrls, bool ChildExitedEarly, int ChildExitCode);
 
@@ -250,7 +244,7 @@ internal sealed class AppHostLauncher(
                 executablePath,
                 childArgs,
                 executionContext.WorkingDirectory.FullName,
-                s_extensionHostEnvironmentVariables);
+                IsExtensionEnvironmentVariable);
         }
         catch (Exception ex)
         {

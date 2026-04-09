@@ -15,7 +15,7 @@ internal static partial class DetachedProcessLauncher
     /// pipe has no reader and writes produce EPIPE (harmless). The key difference from
     /// Windows is that on Unix, only fds 0/1/2 survive exec — no extra handle leakage.
     /// </summary>
-    private static Process StartUnix(string fileName, IReadOnlyList<string> arguments, string workingDirectory, IReadOnlySet<string>? environmentVariablesToRemove)
+    private static Process StartUnix(string fileName, IReadOnlyList<string> arguments, string workingDirectory, Func<string, bool>? shouldRemoveEnvironmentVariable)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -35,11 +35,20 @@ internal static partial class DetachedProcessLauncher
 
         // Remove specified environment variables from the child process.
         // Accessing startInfo.Environment auto-populates from the current process.
-        if (environmentVariablesToRemove is { Count: > 0 })
+        if (shouldRemoveEnvironmentVariable is not null)
         {
-            foreach (var varName in environmentVariablesToRemove)
+            var keysToRemove = new List<string>();
+            foreach (var key in startInfo.Environment.Keys)
             {
-                startInfo.Environment.Remove(varName);
+                if (shouldRemoveEnvironmentVariable(key))
+                {
+                    keysToRemove.Add(key);
+                }
+            }
+
+            foreach (var key in keysToRemove)
+            {
+                startInfo.Environment.Remove(key);
             }
         }
 
