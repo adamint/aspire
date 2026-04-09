@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Net;
 using Aspire.Dashboard.Extensions;
 using Aspire.Dashboard.Resources;
 using Humanizer;
@@ -105,15 +106,17 @@ internal class ResourceStateViewModel(string text, Icon icon, Color color)
     {
         if (resource.IsStopped())
         {
+            var encodedResourceType = WebUtility.HtmlEncode(resource.ResourceType);
+
             if (resource.TryGetExitCode(out var exitCode) && exitCode is not 0)
             {
                 // Process completed unexpectedly, hence the non-zero code. This is almost certainly an error, so warn users.
-                return loc.GetString(nameof(Columns.StateColumnResourceExitedUnexpectedly), resource.ResourceType, exitCode);
+                return loc.GetString(nameof(Columns.StateColumnResourceExitedUnexpectedly), encodedResourceType, exitCode);
             }
             else
             {
                 // Process completed, which may not have been unexpected.
-                return loc.GetString(nameof(Columns.StateColumnResourceExited), resource.ResourceType);
+                return loc.GetString(nameof(Columns.StateColumnResourceExited), encodedResourceType);
             }
         }
         else if (resource is { KnownState: KnownResourceState.Running, HealthStatus: not HealthStatus.Healthy })
