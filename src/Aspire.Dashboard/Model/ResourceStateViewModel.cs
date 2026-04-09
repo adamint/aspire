@@ -101,7 +101,7 @@ internal class ResourceStateViewModel(string text, Icon icon, Color color)
     /// <remarks>
     /// This is a static method so it can be called at the level of the parent column.
     /// </remarks>
-    internal static string GetResourceStateTooltip(ResourceViewModel resource, IStringLocalizer<Columns> loc)
+    internal static string? GetResourceStateTooltip(ResourceViewModel resource, IStringLocalizer<Columns> loc)
     {
         if (resource.IsStopped())
         {
@@ -135,8 +135,7 @@ internal class ResourceStateViewModel(string text, Icon icon, Color color)
             return loc[nameof(Columns.StateColumnResourceNotStarted)];
         }
 
-        // Fallback to text displayed in column.
-        return GetStateText(resource, loc);
+        return null;
     }
 
     private static string GetStateText(ResourceViewModel resource, IStringLocalizer<Columns> loc)

@@ -1,4 +1,6 @@
 .state-column-cell {
+    display: inline-flex;
+    align-items: center;
     overflow: hidden;
     text-overflow: ellipsis;
 }

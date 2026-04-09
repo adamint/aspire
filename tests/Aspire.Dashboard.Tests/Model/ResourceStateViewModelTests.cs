@@ -33,11 +33,11 @@ public class ResourceStateViewModelTests
         /* expected output */ $"Localized:{nameof(Columns.StateColumnResourceExited)}:CustomResource", "RecordStop", Color.Info, "Finished")]
     [InlineData(
         /* state */ "Container", KnownResourceState.Unknown, null, null, null,
-        /* expected output */ "Unknown", "CircleHint", Color.Info, "Unknown")]
+        /* expected output */ null, "CircleHint", Color.Info, "Unknown")]
     // Health checks
     [InlineData(
         /* state */ "Container", KnownResourceState.Running, null, "Healthy", null,
-        /* expected output */ "Running", "CheckmarkCircle", Color.Success, "Running")]
+        /* expected output */ null, "CheckmarkCircle", Color.Success, "Running")]
     [InlineData(
         /* state */ "Container", KnownResourceState.Running, null, "", null,
         /* expected output */ $"Localized:{nameof(Columns.RunningAndUnhealthyResourceStateToolTip)}", "CheckmarkCircleWarning", Color.Warning, "Running (Unhealthy)")]
@@ -46,13 +46,13 @@ public class ResourceStateViewModelTests
         /* expected output */ $"Localized:{nameof(Columns.RunningAndUnhealthyResourceStateToolTip)}", "CheckmarkCircleWarning", Color.Warning, "Running (Unhealthy)")]
     [InlineData(
         /* state */ "Container", KnownResourceState.Running, null, "Healthy", "warning",
-        /* expected output */ "Running", "Warning", Color.Warning, "Running")]
+        /* expected output */ null, "Warning", Color.Warning, "Running")]
     [InlineData(
         /* state */ "Container", KnownResourceState.Running, null, "Healthy", "NOT_A_VALID_STATE_STYLE",
-        /* expected output */ "Running", "Circle", Color.Neutral, "Running")]
+        /* expected output */ null, "Circle", Color.Neutral, "Running")]
     [InlineData(
         /* state */ "Container", KnownResourceState.Running, null, null, "info",
-        /* expected output */ "Running", "Info", Color.Info, "Running")]
+        /* expected output */ null, "Info", Color.Info, "Running")]
     [InlineData(
         /* state */ "Container", KnownResourceState.RuntimeUnhealthy, null, null, null,
         /* expected output */ $"Localized:{nameof(Columns.StateColumnResourceContainerRuntimeUnhealthy)}", "Warning", Color.Warning, "Runtime unhealthy")]

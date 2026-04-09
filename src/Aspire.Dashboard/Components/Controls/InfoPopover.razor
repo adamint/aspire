@@ -1,0 +1,23 @@
+@using Aspire.Dashboard.Resources
+@inject IStringLocalizer<Columns> Loc
+
+@{
+    var buttonId = $"info-popover-{AnchorId}";
+}
+
+<span @onclick:stopPropagation="true" class="info-popover-container">
+    <FluentButton Id="@buttonId"
+                  Appearance="Appearance.Stealth"
+                  Class="info-popover-button"
+                  OnClick="@(() => _popoverVisible = !_popoverVisible)"
+                  aria-label="@Loc[nameof(Columns.StateColumnResourceInfoButton)]">
+        <FluentIcon Value="@(new Icons.Regular.Size16.Info())" Color="Color.Neutral" />
+    </FluentButton>
+    <FluentPopover AnchorId="@buttonId" @bind-Open="_popoverVisible" VerticalThreshold="200" AutoFocus="false">
+        <Body>
+            <div class="info-popover-content">
+                @ChildContent
+            </div>
+        </Body>
+    </FluentPopover>
+</span>

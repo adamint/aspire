@@ -100,7 +100,7 @@ namespace Aspire.Dashboard.Resources {
         
         /// <summary>
         ///   Looks up a localized string similar to Container runtime was found but appears to be unhealthy. Ensure that it is running.
-        ///For more information, see https://aka.ms/dotnet/aspire/container-runtime-unhealthy.
+        ///For more informationTEST, see &lt;a href=&quot;https://aka.ms/dotnet/aspire/container-runtime-unhealthy&quot; target=&quot;_blank&quot;&gt;https://aka.ms/dotnet/aspire/container-runtime-unhealthy&lt;/a&gt;.
         /// </summary>
         public static string StateColumnResourceContainerRuntimeUnhealthy {
             get {
@@ -141,6 +141,15 @@ namespace Aspire.Dashboard.Resources {
         public static string StateColumnResourceWaiting {
             get {
                 return ResourceManager.GetString("StateColumnResourceWaiting", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to More information about resource state.
+        /// </summary>
+        public static string StateColumnResourceInfoButton {
+            get {
+                return ResourceManager.GetString("StateColumnResourceInfoButton", resourceCulture);
             }
         }
         
