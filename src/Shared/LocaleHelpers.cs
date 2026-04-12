@@ -9,6 +9,8 @@ namespace Aspire.Shared;
 
 internal static class LocaleHelpers
 {
+    private const int MaxCultureParentDepth = 5;
+
     // our localization list comes from https://github.com/dotnet/arcade/blob/89008f339a79931cc49c739e9dbc1a27c608b379/src/Microsoft.DotNet.XliffTasks/build/Microsoft.DotNet.XliffTasks.props#L22
     public static readonly string[] SupportedLocales = ["en", "cs", "de", "es", "fr", "it", "ja", "ko", "pl", "pt-BR", "ru", "tr", "zh-Hans", "zh-Hant"];
 
@@ -54,7 +56,7 @@ internal static class LocaleHelpers
         // For example, zh-CN's parent is zh-Hans which is supported.
         var current = cultureInfo.Parent;
         var depth = 0;
-        while (current != CultureInfo.InvariantCulture && depth < 5)
+        while (current != CultureInfo.InvariantCulture && current != current.Parent && depth < MaxCultureParentDepth)
         {
             if (SupportedLocales.Contains(current.Name))
             {
