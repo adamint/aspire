@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Globalization;
 using Aspire.Dashboard.Components.CustomIcons;
 using Aspire.Dashboard.Components.Dialogs;
 using Aspire.Dashboard.Model.Assistant;
@@ -31,6 +32,7 @@ public sealed class ResourceMenuBuilder
     private static readonly Icon s_linkMultipleIcon = new Icons.Regular.Size16.LinkMultiple();
     private static readonly Icon s_bracesIcon = new Icons.Regular.Size16.Braces();
     private static readonly Icon s_exportEnvIcon = new Icons.Regular.Size16.DocumentText();
+    private static readonly Icon s_keyIcon = new Icons.Regular.Size16.Key();
 
     private readonly NavigationManager _navigationManager;
     private readonly TelemetryRepository _telemetryRepository;
@@ -79,7 +81,8 @@ public sealed class ResourceMenuBuilder
         Func<ResourceViewModel, CommandViewModel, bool> isCommandExecuting,
         bool showViewDetails,
         bool showConsoleLogsItem,
-        bool showUrls)
+        bool showUrls,
+        Func<ResourceViewModel, Task>? onViewRelatedParameters = null)
     {
         if (showViewDetails)
         {
@@ -164,6 +167,27 @@ public sealed class ResourceMenuBuilder
         }
 
         AddTelemetryMenuItems(menuItems, resource, resourceByName);
+
+        // Add "View parameters" for non-parameter resources that reference parameters
+        var parameterCount = CountParameterRelationships(resource, resourceByName);
+        if (!resource.IsParameter && parameterCount > 0)
+        {
+            var capturedResource = resource;
+            menuItems.Add(new MenuButtonItem
+            {
+                Text = string.Format(CultureInfo.CurrentCulture, _loc[nameof(Resources.Resources.ResourcesViewRelatedParameters)], parameterCount),
+                Icon = s_keyIcon,
+                OnClick = onViewRelatedParameters is not null
+                    ? () => onViewRelatedParameters(capturedResource)
+                    : () =>
+                    {
+                        _navigationManager.NavigateTo(DashboardUrls.ResourcesUrl(
+                            view: "Parameters",
+                            relatedResource: capturedResource.Name));
+                        return Task.CompletedTask;
+                    }
+            });
+        }
 
         AddCommandMenuItems(menuItems, resource, commandSelected, isCommandExecuting);
 
@@ -344,5 +368,24 @@ public sealed class ResourceMenuBuilder
                 IsDisabled = command.State == CommandViewModelState.Disabled || isCommandExecuting(resource, command)
             };
         }
+    }
+
+    private static int CountParameterRelationships(ResourceViewModel resource, IDictionary<string, ResourceViewModel> resourceByName)
+    {
+        var count = 0;
+        var counted = new HashSet<string>(StringComparers.ResourceName);
+        foreach (var relationship in resource.Relationships)
+        {
+            foreach (var candidate in resourceByName.Values)
+            {
+                if (string.Equals(candidate.DisplayName, relationship.ResourceName, StringComparisons.ResourceName)
+                    && candidate.IsParameter
+                    && counted.Add(candidate.DisplayName))
+                {
+                    count++;
+                }
+            }
+        }
+        return count;
     }
 }

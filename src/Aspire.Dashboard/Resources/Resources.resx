@@ -163,6 +163,17 @@
   <data name="ResourcesNoParameters" xml:space="preserve">
     <value>No parameters found</value>
   </data>
+  <data name="ResourcesParametersFilteredBy" xml:space="preserve">
+    <value>Filtered by: {0}</value>
+    <comment>{0} is the resource name</comment>
+  </data>
+  <data name="ResourcesParametersFilterClear" xml:space="preserve">
+    <value>Clear parameter filter</value>
+  </data>
+  <data name="ResourcesViewRelatedParameters" xml:space="preserve">
+    <value>View parameters ({0})</value>
+    <comment>{0} is the number of parameters</comment>
+  </data>
   <data name="ResourcesDetailsContainerArgumentsProperty" xml:space="preserve">
     <value>Container arguments</value>
   </data>

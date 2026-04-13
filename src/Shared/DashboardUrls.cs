@@ -16,7 +16,7 @@ internal static class DashboardUrls
     public const string LoginBasePath = "login";
     public const string HealthBasePath = "health";
 
-    public static string ResourcesUrl(string? resource = null, string? view = null, string? hiddenTypes = null, string? hiddenStates = null, string? hiddenHealthStates = null)
+    public static string ResourcesUrl(string? resource = null, string? view = null, string? hiddenTypes = null, string? hiddenStates = null, string? hiddenHealthStates = null, string? relatedResource = null)
     {
         var url = $"/{ResourcesBasePath}";
         if (resource != null)
@@ -38,6 +38,10 @@ internal static class DashboardUrls
         if (hiddenHealthStates != null)
         {
             url = AddQueryString(url, "hiddenHealthStates", hiddenHealthStates);
+        }
+        if (relatedResource != null)
+        {
+            url = AddQueryString(url, "relatedResource", relatedResource);
         }
 
         return url;

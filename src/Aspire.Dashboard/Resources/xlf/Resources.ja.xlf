@@ -237,6 +237,16 @@
         <target state="translated">フィルターなし</target>
         <note />
       </trans-unit>
+      <trans-unit id="ResourcesParametersFilterClear">
+        <source>Clear parameter filter</source>
+        <target state="new">Clear parameter filter</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="ResourcesParametersFilteredBy">
+        <source>Filtered by: {0}</source>
+        <target state="new">Filtered by: {0}</target>
+        <note>{0} is the resource name</note>
+      </trans-unit>
       <trans-unit id="ResourcesResourceStatesHeader">
         <source>State</source>
         <target state="translated">状態</target>
@@ -291,6 +301,11 @@
         <source>URLs</source>
         <target state="translated">URL</target>
         <note />
+      </trans-unit>
+      <trans-unit id="ResourcesViewRelatedParameters">
+        <source>View parameters ({0})</source>
+        <target state="new">View parameters ({0})</target>
+        <note>{0} is the number of parameters</note>
       </trans-unit>
       <trans-unit id="TotalItemsFooterParametersPluralText">
         <source>Showing &lt;strong&gt;{0} parameters&lt;/strong&gt;</source>
