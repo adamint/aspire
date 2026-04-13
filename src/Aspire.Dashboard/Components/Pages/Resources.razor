@@ -214,13 +214,12 @@
                                                     if (setCommand is not null)
                                                     {
                                                         <span class="cellText" @onclick:stopPropagation="true">
-                                                            @*Using a link instead of a button to ensure text appears inline - button style does not look good without the default padding*@
-                                                            <a href="" role="button"
-                                                               @onclick="@(() => ExecuteResourceCommandAsync(context.Resource, setCommand))"
-                                                               @onclick:preventDefault="true"
-                                                               title="@ControlsStringsLoc[nameof(ControlsStrings.ParameterSetValueAction)]">
+                                                            <button type="button"
+                                                                    class="value-not-set-link"
+                                                                    @onclick="@(() => ExecuteResourceCommandAsync(context.Resource, setCommand))"
+                                                                    title="@ControlsStringsLoc[nameof(ControlsStrings.ParameterSetValueAction)]">
                                                                 @ControlsStringsLoc[nameof(ControlsStrings.ParameterValueNotSet)]
-                                                            </a>
+                                                            </button>
                                                         </span>
                                                     }
                                                     else
