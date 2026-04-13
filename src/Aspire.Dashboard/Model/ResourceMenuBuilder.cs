@@ -183,7 +183,7 @@ public sealed class ResourceMenuBuilder
                     {
                         _navigationManager.NavigateTo(DashboardUrls.ResourcesUrl(
                             view: "Parameters",
-                            relatedResource: capturedResource.Name));
+                            resource: capturedResource.Name));
                         return Task.CompletedTask;
                     }
             });
@@ -373,17 +373,25 @@ public sealed class ResourceMenuBuilder
     private static int CountParameterRelationships(ResourceViewModel resource, IDictionary<string, ResourceViewModel> resourceByName)
     {
         var count = 0;
-        var counted = new HashSet<string>(StringComparers.ResourceName);
+        var relationshipNames = new HashSet<string>(StringComparers.ResourceName);
         foreach (var relationship in resource.Relationships)
         {
-            foreach (var candidate in resourceByName.Values)
+            relationshipNames.Add(relationship.ResourceName);
+        }
+
+        if (relationshipNames.Count == 0)
+        {
+            return 0;
+        }
+
+        var counted = new HashSet<string>(StringComparers.ResourceName);
+        foreach (var candidate in resourceByName.Values)
+        {
+            if (candidate.IsParameter
+                && relationshipNames.Contains(candidate.DisplayName)
+                && counted.Add(candidate.DisplayName))
             {
-                if (string.Equals(candidate.DisplayName, relationship.ResourceName, StringComparisons.ResourceName)
-                    && candidate.IsParameter
-                    && counted.Add(candidate.DisplayName))
-                {
-                    count++;
-                }
+                count++;
             }
         }
         return count;

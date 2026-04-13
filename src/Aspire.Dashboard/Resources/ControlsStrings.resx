@@ -189,10 +189,6 @@
   <data name="ParameterSetValueAction" xml:space="preserve">
     <value>Click to set parameter value</value>
   </data>
-  <data name="ParameterUnresolvedCountBadge" xml:space="preserve">
-    <value>{0} parameter(s) have no value set</value>
-    <comment>{0} is the count of unresolved parameters</comment>
-  </data>
   <data name="StateColumnHeader" xml:space="preserve">
     <value>State</value>
   </data>

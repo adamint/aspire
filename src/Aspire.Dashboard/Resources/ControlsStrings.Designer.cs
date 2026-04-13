@@ -808,15 +808,6 @@ namespace Aspire.Dashboard.Resources {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to {0} parameter(s) have no value set.
-        /// </summary>
-        public static string ParameterUnresolvedCountBadge {
-            get {
-                return ResourceManager.GetString("ParameterUnresolvedCountBadge", resourceCulture);
-            }
-        }
-
-        /// <summary>
         ///   Looks up a localized string similar to Resource actions.
         /// </summary>
         public static string ResourceActions {

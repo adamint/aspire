@@ -163,10 +163,6 @@
   <data name="ResourcesNoParameters" xml:space="preserve">
     <value>No parameters found</value>
   </data>
-  <data name="ResourcesParametersFilteredBy" xml:space="preserve">
-    <value>Filtered by: {0}</value>
-    <comment>{0} is the resource name</comment>
-  </data>
   <data name="ResourcesParametersFilterClear" xml:space="preserve">
     <value>Clear parameter filter</value>
   </data>

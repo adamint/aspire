@@ -493,15 +493,6 @@ namespace Aspire.Dashboard.Resources {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to Filtered by: {0}.
-        /// </summary>
-        public static string ResourcesParametersFilteredBy {
-            get {
-                return ResourceManager.GetString("ResourcesParametersFilteredBy", resourceCulture);
-            }
-        }
-
-        /// <summary>
         ///   Looks up a localized string similar to Clear parameter filter.
         /// </summary>
         public static string ResourcesParametersFilterClear {

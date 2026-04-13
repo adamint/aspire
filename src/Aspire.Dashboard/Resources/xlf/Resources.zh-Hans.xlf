@@ -242,11 +242,6 @@
         <target state="new">Clear parameter filter</target>
         <note />
       </trans-unit>
-      <trans-unit id="ResourcesParametersFilteredBy">
-        <source>Filtered by: {0}</source>
-        <target state="new">Filtered by: {0}</target>
-        <note>{0} is the resource name</note>
-      </trans-unit>
       <trans-unit id="ResourcesResourceStatesHeader">
         <source>State</source>
         <target state="translated">状态</target>

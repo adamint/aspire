@@ -32,14 +32,14 @@
 
             @if (ViewportInformation.IsDesktop)
             {
-                @if (RelatedResourceName is not null)
+                @if (ResourceName is not null && PageViewModel.SelectedViewKind == ResourceViewKind.Parameters)
                 {
                     <FluentButton slot="end"
                                   Appearance="Appearance.Accent"
                                   IconEnd="@(new Icons.Regular.Size16.Dismiss())"
                                   OnClick="ClearRelatedResourceFilterAsync"
                                   Title="@Loc[nameof(Dashboard.Resources.Resources.ResourcesParametersFilterClear)]">
-                        @RelatedResourceName
+                        @ResourceName
                     </FluentButton>
                 }
 
@@ -61,6 +61,16 @@
             }
             else
             {
+                @if (ResourceName is not null && PageViewModel.SelectedViewKind == ResourceViewKind.Parameters)
+                {
+                    <FluentButton Appearance="Appearance.Accent"
+                                  IconEnd="@(new Icons.Regular.Size16.Dismiss())"
+                                  OnClick="ClearRelatedResourceFilterAsync"
+                                  Title="@Loc[nameof(Dashboard.Resources.Resources.ResourcesParametersFilterClear)]">
+                        @ResourceName
+                    </FluentButton>
+                }
+
                 foreach (var item in _resourcesMenuItems)
                 {
                     <FluentButton IconStart="@item.Icon"
@@ -122,20 +132,6 @@
                                                Id="@($"tab-{ResourceViewKind.Parameters}")"
                                                Label="@ControlsStringsLoc[nameof(ControlsStrings.ChartContainerParametersTab)]"
                                                Icon="@(new Icons.Regular.Size24.Key())">
-                                        @{
-                                            var unresolvedCount = GetUnresolvedParameterCount();
-                                        }
-                                        @if (unresolvedCount > 0)
-                                        {
-                                            <FluentCounterBadge Count="@unresolvedCount"
-                                                                Max="99"
-                                                                ShowOverflow="true"
-                                                                BackgroundColor="Color.Error"
-                                                                Color="Color.Fill"
-                                                                Appearance="Appearance.Accent"
-                                                                Title="@string.Format(CultureInfo.CurrentCulture, ControlsStringsLoc[nameof(ControlsStrings.ParameterUnresolvedCountBadge)], unresolvedCount)"
-                                                                slot="end" />
-                                        }
                                     </FluentTab>
                                     <FluentTab LabelClass="tab-label"
                                                Id="@($"tab-{ResourceViewKind.Graph}")"
@@ -145,7 +141,7 @@
                                     </FluentTab>
                                 </FluentTabs>
                             }
-                        <div class="resources-grid-container" hidden="@(PageViewModel.SelectedViewKind == ResourceViewKind.Graph)">
+                            <div class="resources-grid-container" hidden="@(PageViewModel.SelectedViewKind == ResourceViewKind.Graph)">
                                 <GridColumnManager @ref="_manager" Columns="@_gridColumns">
                                     <FluentDataGrid @ref="_dataGrid"
                                                     ColumnResizeLabels="@_resizeLabels"
@@ -218,6 +214,7 @@
                                                     if (setCommand is not null)
                                                     {
                                                         <span class="cellText" @onclick:stopPropagation="true">
+                                                            @*Using a link instead of a button to ensure text appears inline - button style does not look good without the default padding*@
                                                             <a href="" role="button"
                                                                @onclick="@(() => ExecuteResourceCommandAsync(context.Resource, setCommand))"
                                                                @onclick:preventDefault="true"
