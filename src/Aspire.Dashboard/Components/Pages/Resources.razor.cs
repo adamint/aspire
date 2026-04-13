@@ -1012,12 +1012,6 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
             viewModel.SelectedViewKind = vk;
         }
 
-        // If a resource filter is set, switch to the Parameters view
-        if (ResourceName is not null)
-        {
-            viewModel.SelectedViewKind = ResourceViewKind.Parameters;
-        }
-
         return Task.CompletedTask;
     }
 
