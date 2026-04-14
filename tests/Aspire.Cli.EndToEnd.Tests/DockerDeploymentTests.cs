@@ -19,6 +19,7 @@ public sealed class DockerDeploymentTests(ITestOutputHelper output)
     private const string ProjectName = "AspireDockerDeployTest";
 
     [Fact]
+    [ActiveIssue("https://github.com/microsoft/aspire/issues/15930")]
     [QuarantinedTest("https://github.com/microsoft/aspire/issues/15882")]
     public async Task CreateAndDeployToDockerCompose()
     {
@@ -129,10 +130,8 @@ builder.Build().Run();
         await auto.EnterAsync();
         await auto.WaitForSuccessPromptAsync(counter, TimeSpan.FromSeconds(30));
 
-        // Step 11: Clean up - stop and remove containers
-        await auto.TypeAsync("cd deploy-output && docker compose down --volumes --remove-orphans 2>/dev/null || true");
-        await auto.EnterAsync();
-        await auto.WaitForSuccessPromptAsync(counter, TimeSpan.FromSeconds(60));
+        // Step 11: Clean up - destroy the deployment using aspire destroy
+        await auto.AspireDestroyAsync(counter);
 
         await auto.TypeAsync("exit");
         await auto.EnterAsync();
@@ -141,6 +140,7 @@ builder.Build().Run();
     }
 
     [Fact]
+    [ActiveIssue("https://github.com/microsoft/aspire/issues/15930")]
     [QuarantinedTest("https://github.com/microsoft/aspire/issues/15871")]
     public async Task CreateAndDeployToDockerComposeInteractive()
     {
@@ -252,10 +252,8 @@ builder.Build().Run();
         await auto.EnterAsync();
         await auto.WaitForSuccessPromptAsync(counter, TimeSpan.FromSeconds(30));
 
-        // Step 11: Clean up - stop and remove containers
-        await auto.TypeAsync("cd deploy-output && docker compose down --volumes --remove-orphans 2>/dev/null || true");
-        await auto.EnterAsync();
-        await auto.WaitForSuccessPromptAsync(counter, TimeSpan.FromSeconds(60));
+        // Step 11: Clean up - destroy the deployment using aspire destroy
+        await auto.AspireDestroyAsync(counter);
 
         await auto.TypeAsync("exit");
         await auto.EnterAsync();

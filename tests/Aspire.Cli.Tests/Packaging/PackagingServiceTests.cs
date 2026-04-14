@@ -2,9 +2,9 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Microsoft.AspNetCore.InternalTesting;
-using Aspire.Cli.Configuration;
 using Aspire.Cli.NuGet;
 using Aspire.Cli.Packaging;
+using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Shared;
 using Microsoft.Extensions.Configuration;
@@ -27,21 +27,6 @@ public class PackagingServiceTests(ITestOutputHelper outputHelper)
             => Task.FromResult<IEnumerable<Aspire.Shared.NuGetPackageCli>>([]);
         public Task<IEnumerable<NuGetPackageCli>> GetPackageVersionsAsync(DirectoryInfo workingDirectory, string exactPackageId, bool prerelease, FileInfo? nugetConfigFile, bool useCache, CancellationToken cancellationToken)
             => Task.FromResult<IEnumerable<Aspire.Shared.NuGetPackageCli>>([]);
-    }
-
-    private sealed class TestFeatures : IFeatures
-    {
-        private readonly Dictionary<string, bool> _features = new();
-
-        public bool IsFeatureEnabled(string featureFlag, bool defaultValue)
-        {
-            return _features.TryGetValue(featureFlag, out var value) ? value : defaultValue;
-        }
-
-        public void SetFeature(string featureFlag, bool enabled)
-        {
-            _features[featureFlag] = enabled;
-        }
     }
 
     [Fact]
@@ -165,11 +150,11 @@ public class PackagingServiceTests(ITestOutputHelper outputHelper)
         var hivesDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "hives"));
         var cacheDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "cache"));
         var executionContext = new CliExecutionContext(tempDir, hivesDir, cacheDir, new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-runtimes")), new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-logs")), "test.log");
-
+        
         var features = new TestFeatures();
         features.SetFeature(KnownFeatures.StagingChannelEnabled, true);
-
-        var azureDevOpsFeedUrl = "https://pkgs.dev.azure.com/dnceng/public/_packaging/darc-pub-dotnet-aspire-abcd1234/nuget/v3/index.json";
+        
+        var azureDevOpsFeedUrl = "https://pkgs.dev.azure.com/dnceng/public/_packaging/darc-pub-microsoft-aspire-abcd1234/nuget/v3/index.json";
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -198,10 +183,10 @@ public class PackagingServiceTests(ITestOutputHelper outputHelper)
         var hivesDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "hives"));
         var cacheDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "cache"));
         var executionContext = new CliExecutionContext(tempDir, hivesDir, cacheDir, new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-runtimes")), new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-logs")), "test.log");
-
+        
         var features = new TestFeatures();
         features.SetFeature(KnownFeatures.StagingChannelEnabled, true);
-
+        
         var invalidFeedUrl = "not-a-valid-url";
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -230,10 +215,10 @@ public class PackagingServiceTests(ITestOutputHelper outputHelper)
         var hivesDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "hives"));
         var cacheDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "cache"));
         var executionContext = new CliExecutionContext(tempDir, hivesDir, cacheDir, new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-runtimes")), new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-logs")), "test.log");
-
+        
         var features = new TestFeatures();
         features.SetFeature(KnownFeatures.StagingChannelEnabled, true);
-
+        
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -261,10 +246,10 @@ public class PackagingServiceTests(ITestOutputHelper outputHelper)
         var hivesDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "hives"));
         var cacheDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "cache"));
         var executionContext = new CliExecutionContext(tempDir, hivesDir, cacheDir, new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-runtimes")), new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-logs")), "test.log");
-
+        
         var features = new TestFeatures();
         features.SetFeature(KnownFeatures.StagingChannelEnabled, true);
-
+        
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -292,10 +277,10 @@ public class PackagingServiceTests(ITestOutputHelper outputHelper)
         var hivesDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "hives"));
         var cacheDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "cache"));
         var executionContext = new CliExecutionContext(tempDir, hivesDir, cacheDir, new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-runtimes")), new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-logs")), "test.log");
-
+        
         var features = new TestFeatures();
         features.SetFeature(KnownFeatures.StagingChannelEnabled, true);
-
+        
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -323,10 +308,10 @@ public class PackagingServiceTests(ITestOutputHelper outputHelper)
         var hivesDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "hives"));
         var cacheDir = new DirectoryInfo(Path.Combine(tempDir.FullName, ".aspire", "cache"));
         var executionContext = new CliExecutionContext(tempDir, hivesDir, cacheDir, new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-runtimes")), new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-logs")), "test.log");
-
+        
         var features = new TestFeatures();
         features.SetFeature(KnownFeatures.StagingChannelEnabled, true);
-
+        
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -350,14 +335,14 @@ public class PackagingServiceTests(ITestOutputHelper outputHelper)
         // Arrange
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var tempDir = workspace.WorkspaceRoot;
-
+        
         var features = new TestFeatures();
         features.SetFeature(KnownFeatures.StagingChannelEnabled, true);
-
+        
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["overrideStagingFeed"] = "https://pkgs.dev.azure.com/dnceng/public/_packaging/darc-pub-dotnet-aspire-48a11dae/nuget/v3/index.json"
+                ["overrideStagingFeed"] = "https://pkgs.dev.azure.com/dnceng/public/_packaging/darc-pub-microsoft-aspire-48a11dae/nuget/v3/index.json"
             })
             .Build();
 
@@ -906,8 +891,8 @@ public class PackagingServiceTests(ITestOutputHelper outputHelper)
         {
             // Simulate what the real cache does: filter by prerelease flag
             var filtered = prerelease
-                ? packages.Where(p => Semver.SemVersion.Parse(p.Version).IsPrerelease)
-                : packages.Where(p => !Semver.SemVersion.Parse(p.Version).IsPrerelease);
+                ? packages.Where(p => SemVersion.Parse(p.Version).IsPrerelease)
+                : packages.Where(p => !SemVersion.Parse(p.Version).IsPrerelease);
             return Task.FromResult<IEnumerable<Aspire.Shared.NuGetPackageCli>>(filtered.ToList());
         }
         public Task<IEnumerable<NuGetPackageCli>> GetPackageVersionsAsync(DirectoryInfo workingDirectory, string exactPackageId, bool prerelease, FileInfo? nugetConfigFile, bool useCache, CancellationToken cancellationToken)
