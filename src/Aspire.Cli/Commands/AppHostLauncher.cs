@@ -25,6 +25,7 @@ internal sealed class AppHostLauncher(
     CliExecutionContext executionContext,
     IInteractionService interactionService,
     IAuxiliaryBackchannelMonitor backchannelMonitor,
+    ICliHostEnvironment hostEnvironment,
     ILogger<AppHostLauncher> logger,
     TimeProvider timeProvider)
 {
@@ -83,8 +84,8 @@ internal sealed class AppHostLauncher(
         IEnumerable<string> additionalArgs,
         CancellationToken cancellationToken)
     {
-        // In JSON mode, avoid interactive prompts to keep stdout parseable.
-        var multipleAppHostBehavior = format == OutputFormat.Json
+        // In JSON mode or non-interactive mode, avoid interactive prompts.
+        var multipleAppHostBehavior = format == OutputFormat.Json || !hostEnvironment.SupportsInteractiveInput
             ? MultipleAppHostProjectsFoundBehavior.Throw
             : MultipleAppHostProjectsFoundBehavior.Prompt;
 

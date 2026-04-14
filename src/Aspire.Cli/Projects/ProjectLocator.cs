@@ -169,11 +169,6 @@ internal sealed class ProjectLocator(
         return await GetAppHostProjectFileFromSettingsAsync(silent: true, cancellationToken);
     }
 
-    private async Task<FileInfo?> GetAppHostProjectFileFromSettingsAsync(CancellationToken cancellationToken)
-    {
-        return await GetAppHostProjectFileFromSettingsAsync(silent: false, cancellationToken);
-    }
-
     private async Task<FileInfo?> GetAppHostProjectFileFromSettingsAsync(bool silent, CancellationToken cancellationToken)
     {
         var searchDirectory = executionContext.WorkingDirectory;
@@ -347,16 +342,34 @@ internal sealed class ProjectLocator(
             }
         }
 
-        projectFile = await GetAppHostProjectFileFromSettingsAsync(cancellationToken);
+        // Fast path: look for aspire.config.json files first. If exactly one exists
+        // in the directory tree, use the apphost it points to without a full scan.
+        // This avoids the expensive recursive .csproj/.fsproj/.vbproj enumeration.
+        var configFiles = FindConfigFiles(executionContext.WorkingDirectory, cancellationToken);
 
-        if (projectFile is not null)
+        if (configFiles.Length == 1)
         {
-            if (createSettingsFile)
+            var config = AspireConfigFile.Load(configFiles[0].Directory!.FullName);
+            if (config?.AppHost?.Path is { } configAppHostPath)
             {
-                await CreateSettingsFileAsync(projectFile, cancellationToken);
-            }
+                var configDir = configFiles[0].Directory!.FullName;
+                var qualifiedPath = Path.IsPathRooted(configAppHostPath)
+                    ? configAppHostPath
+                    : Path.Combine(configDir, configAppHostPath);
+                qualifiedPath = PathNormalizer.NormalizePathForCurrentPlatform(qualifiedPath);
+                var appHostFile = new FileInfo(qualifiedPath);
 
-            return new AppHostProjectSearchResult(projectFile, [projectFile]);
+                if (appHostFile.Exists)
+                {
+                    logger.LogDebug("Single config file found, using AppHost from settings: {AppHost}", appHostFile.FullName);
+                    return new AppHostProjectSearchResult(appHostFile, [appHostFile]);
+                }
+            }
+        }
+
+        if (configFiles.Length > 1)
+        {
+            logger.LogDebug("Multiple config files found ({Count}), falling through to full scan", configFiles.Length);
         }
 
         logger.LogDebug("No project file specified, searching for apphost projects in {CurrentDirectory}", executionContext.WorkingDirectory);
@@ -385,6 +398,9 @@ internal sealed class ProjectLocator(
         }
         else if (results.BuildableAppHost.Count > 1)
         {
+            // Multiple apphosts found — always apply the requested behavior.
+            // Don't silently use a cached settings selection; the user should
+            // explicitly choose which apphost to use.
             selectedAppHost = multipleAppHostProjectsFoundBehavior switch
             {
                 MultipleAppHostProjectsFoundBehavior.Throw => throw new ProjectLocatorException(ErrorStrings.MultipleProjectFilesFound, ProjectLocatorFailureReason.MultipleProjectFilesFound),
@@ -581,6 +597,35 @@ internal sealed class ProjectLocator(
         return null;
     }
 
+    /// <summary>
+    /// Quickly finds aspire.config.json files in the directory tree.
+    /// Stops early once more than one is found since we only need to distinguish 0, 1, or many.
+    /// </summary>
+    private static FileInfo[] FindConfigFiles(DirectoryInfo searchDirectory, CancellationToken cancellationToken)
+    {
+        var enumerationOptions = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true
+        };
+
+        var enumerable = new FileSystemEnumerable<FileInfo>(
+            searchDirectory.FullName,
+            (ref FileSystemEntry entry) => new FileInfo(entry.ToFullPath()),
+            enumerationOptions)
+        {
+            ShouldIncludePredicate = (ref FileSystemEntry entry) =>
+                !entry.IsDirectory && entry.FileName.Equals(AspireConfigFile.FileName, StringComparison.OrdinalIgnoreCase),
+            ShouldRecursePredicate = (ref FileSystemEntry entry) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return true;
+            }
+        };
+
+        // Take at most 2 — we only need to know if there's exactly 1 or more.
+        return enumerable.Take(2).ToArray();
+    }
 }
 
 internal class ProjectLocatorException(string message, ProjectLocatorFailureReason failureReason) : System.Exception(message)

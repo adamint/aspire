@@ -15,6 +15,7 @@ using Aspire.Cli.Utils;
 using Aspire.Hosting;
 using Aspire.Shared.UserSecrets;
 using Microsoft.AspNetCore.InternalTesting;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -51,6 +52,72 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
         Assert.Equal(ExitCodeConstants.FailedToFindProject, exitCode);
+    }
+
+    [Fact]
+    public async Task RunCommand_WhenMultipleProjectFilesFound_NonInteractive_PassesThrowBehavior()
+    {
+        MultipleAppHostProjectsFoundBehavior? capturedBehavior = null;
+
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.ProjectLocatorFactory = _ => new TestProjectLocator
+            {
+                UseOrFindAppHostProjectFileWithBehaviorAsyncCallback = (_, behavior, _, _) =>
+                {
+                    capturedBehavior = behavior;
+                    throw new ProjectLocatorException("Multiple project files found.", ProjectLocatorFailureReason.MultipleProjectFilesFound);
+                }
+            };
+            options.CliHostEnvironmentFactory = sp =>
+            {
+                var configuration = sp.GetRequiredService<IConfiguration>();
+                return new CliHostEnvironment(configuration, nonInteractive: true);
+            };
+        });
+        var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("run");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(ExitCodeConstants.FailedToFindProject, exitCode);
+        Assert.Equal(MultipleAppHostProjectsFoundBehavior.Throw, capturedBehavior);
+    }
+
+    [Fact]
+    public async Task RunCommand_WhenMultipleProjectFilesFound_Interactive_PassesPromptBehavior()
+    {
+        MultipleAppHostProjectsFoundBehavior? capturedBehavior = null;
+
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.ProjectLocatorFactory = _ => new TestProjectLocator
+            {
+                UseOrFindAppHostProjectFileWithBehaviorAsyncCallback = (_, behavior, _, _) =>
+                {
+                    capturedBehavior = behavior;
+                    throw new ProjectLocatorException("Multiple project files found.", ProjectLocatorFailureReason.MultipleProjectFilesFound);
+                }
+            };
+            options.CliHostEnvironmentFactory = sp =>
+            {
+                var configuration = sp.GetRequiredService<IConfiguration>();
+                return new CliHostEnvironment(configuration, nonInteractive: false);
+            };
+        });
+        var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("run");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(ExitCodeConstants.FailedToFindProject, exitCode);
+        Assert.Equal(MultipleAppHostProjectsFoundBehavior.Prompt, capturedBehavior);
     }
 
     [Fact]
