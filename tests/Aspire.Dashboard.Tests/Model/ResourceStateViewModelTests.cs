@@ -123,7 +123,7 @@ public class ResourceStateViewModelTests
 
         var tooltip = ResourceStateViewModel.GetResourceStateTooltip(resource, new HtmlTestStringLocalizer());
 
-        Assert.Contains("<a href=\"https://aka.ms/dotnet/aspire/container-runtime-unhealthy\"", tooltip);
+        Assert.Contains("<a href=\"https://aka.ms/aspire/container-runtime-unhealthy\"", tooltip);
     }
 
     private sealed class HtmlTestStringLocalizer : IStringLocalizer<Columns>
@@ -134,7 +134,7 @@ public class ResourceStateViewModelTests
             {
                 return name switch
                 {
-                    nameof(Columns.StateColumnResourceContainerRuntimeUnhealthy) => new(name, "Container runtime issue. <a href=\"https://aka.ms/dotnet/aspire/container-runtime-unhealthy\">More information</a>."),
+                    nameof(Columns.StateColumnResourceContainerRuntimeUnhealthy) => new(name, "Container runtime issue. <a href=\"https://aka.ms/aspire/container-runtime-unhealthy\">More information</a>."),
                     nameof(Columns.RunningAndUnhealthyResourceStateToolTip) => new(name, "Resource is running but not in a healthy state."),
                     nameof(Columns.StateColumnResourceWaiting) => new(name, "Resource is waiting for other resources to be in a running and healthy state."),
                     nameof(Columns.StateColumnResourceNotStarted) => new(name, "Resource has not started because it's configured to not automatically start."),
