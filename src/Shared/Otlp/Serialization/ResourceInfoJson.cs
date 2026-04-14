@@ -48,6 +48,12 @@ internal sealed class ResourceInfoJson
     public bool HasMetrics { get; set; }
 
     /// <summary>
+    /// Gets or sets the latest timestamp observed across logs, traces, and metrics for this resource.
+    /// </summary>
+    [JsonPropertyName("latestTelemetryTimestamp")]
+    public DateTime? LatestTelemetryTimestamp { get; set; }
+
+    /// <summary>
     /// Gets the composite name by combining Name and InstanceId.
     /// </summary>
     /// <returns>The composite name (e.g., "catalogservice-abc123" or "catalogservice").</returns>

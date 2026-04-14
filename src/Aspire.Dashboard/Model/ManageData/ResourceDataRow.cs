@@ -31,6 +31,11 @@ public sealed class ResourceDataRow
     public List<TelemetryDataRow> TelemetryData { get; set; } = [];
 
     /// <summary>
+    /// Gets the latest telemetry timestamp for this resource row.
+    /// </summary>
+    public DateTime? LatestTelemetryTimestamp { get; init; }
+
+    /// <summary>
     /// Gets whether this resource is telemetry-only (no corresponding ResourceViewModel).
     /// </summary>
     public bool IsTelemetryOnly => Resource is null && OtlpResource is not null;

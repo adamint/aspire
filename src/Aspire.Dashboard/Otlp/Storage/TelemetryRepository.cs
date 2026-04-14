@@ -51,6 +51,9 @@ public sealed partial class TelemetryRepository : IDisposable
     private readonly HashSet<(OtlpResource Resource, string PropertyKey)> _logPropertyKeys = new();
     private readonly HashSet<(OtlpResource Resource, string PropertyKey)> _tracePropertyKeys = new();
     private readonly Dictionary<ResourceKey, int> _resourceUnviewedErrorLogs = new();
+    private readonly ConcurrentDictionary<ResourceKey, DateTime> _latestLogTimestamps = new();
+    private readonly ConcurrentDictionary<ResourceKey, DateTime> _latestTraceTimestamps = new();
+    private readonly ConcurrentDictionary<ResourceKey, DateTime> _latestMetricTimestamps = new();
 
     private readonly ReaderWriterLockSlim _tracesLock = new();
     private readonly Dictionary<string, OtlpScope> _traceScopes = new();
@@ -178,6 +181,45 @@ public sealed partial class TelemetryRepository : IDisposable
         finally
         {
             _logsLock.ExitReadLock();
+        }
+    }
+
+    public DateTime? GetLatestTelemetryTimestamp(ResourceKey key)
+    {
+        var resources = GetResources(key, includeUninstrumentedPeers: true);
+        if (resources.Count == 0)
+        {
+            return null;
+        }
+
+        DateTime? latest = null;
+
+        foreach (var resource in resources)
+        {
+            if (_latestLogTimestamps.TryGetValue(resource.ResourceKey, out var logTs))
+            {
+                UpdateLatest(logTs, ref latest);
+            }
+
+            if (_latestTraceTimestamps.TryGetValue(resource.ResourceKey, out var traceTs))
+            {
+                UpdateLatest(traceTs, ref latest);
+            }
+
+            if (_latestMetricTimestamps.TryGetValue(resource.ResourceKey, out var metricTs))
+            {
+                UpdateLatest(metricTs, ref latest);
+            }
+        }
+
+        return latest;
+
+        static void UpdateLatest(DateTime candidate, ref DateTime? latest)
+        {
+            if (latest is null || candidate > latest.Value)
+            {
+                latest = candidate;
+            }
         }
     }
 
@@ -411,9 +453,21 @@ public sealed partial class TelemetryRepository : IDisposable
             _logsLock.ExitWriteLock();
         }
 
-        // Push logs to watchers outside the lock
+        // Track latest log timestamp for this resource
         if (addedLogs is not null)
         {
+            var maxLogTs = addedLogs[0].TimeStamp;
+            for (var i = 1; i < addedLogs.Count; i++)
+            {
+                if (addedLogs[i].TimeStamp > maxLogTs)
+                {
+                    maxLogTs = addedLogs[i].TimeStamp;
+                }
+            }
+
+            _latestLogTimestamps.AddOrUpdate(resourceView.ResourceKey, maxLogTs, (_, existing) => maxLogTs > existing ? maxLogTs : existing);
+
+            // Push logs to watchers outside the lock
             PushLogsToWatchers(addedLogs, resourceView.ResourceKey);
         }
     }
@@ -809,12 +863,18 @@ public sealed partial class TelemetryRepository : IDisposable
                 foreach (var resource in resources)
                 {
                     SetResourceHasTraces(resource, false);
+                    _latestTraceTimestamps.TryRemove(resource.ResourceKey, out _);
                 }
             }
         }
         finally
         {
             _tracesLock.ExitWriteLock();
+        }
+
+        if (resources is null || resources.Count == 0)
+        {
+            _latestTraceTimestamps.Clear();
         }
 
         RaiseSubscriptionChanged(_tracesSubscriptions);
@@ -853,12 +913,18 @@ public sealed partial class TelemetryRepository : IDisposable
                 {
                     SetResourceHasLogs(resource, false);
                     _resourceUnviewedErrorLogs.Remove(resource.ResourceKey);
+                    _latestLogTimestamps.TryRemove(resource.ResourceKey, out _);
                 }
             }
         }
         finally
         {
             _logsLock.ExitWriteLock();
+        }
+
+        if (resources is null || resources.Count == 0)
+        {
+            _latestLogTimestamps.Clear();
         }
 
         RaiseSubscriptionChanged(_logSubscriptions);
@@ -868,6 +934,9 @@ public sealed partial class TelemetryRepository : IDisposable
     {
         if (_resources.TryRemove(resourceKey, out _))
         {
+            _latestLogTimestamps.TryRemove(resourceKey, out _);
+            _latestTraceTimestamps.TryRemove(resourceKey, out _);
+            _latestMetricTimestamps.TryRemove(resourceKey, out _);
             RaiseSubscriptionChanged(_resourceSubscriptions);
         }
     }
@@ -888,6 +957,12 @@ public sealed partial class TelemetryRepository : IDisposable
         {
             resource.ClearMetrics();
             SetResourceHasMetrics(resource, false);
+            _latestMetricTimestamps.TryRemove(resource.ResourceKey, out _);
+        }
+
+        if (!resourceKey.HasValue)
+        {
+            _latestMetricTimestamps.Clear();
         }
 
         RaiseSubscriptionChanged(_metricsSubscriptions);
@@ -1071,8 +1146,13 @@ public sealed partial class TelemetryRepository : IDisposable
                 continue;
             }
 
-            resourceView.Resource.AddMetrics(context, rm.ScopeMetrics);
+            var latestMetricTs = resourceView.Resource.AddMetrics(context, rm.ScopeMetrics);
             SetResourceHasMetrics(resourceView.Resource, true);
+
+            if (latestMetricTs is { } metricTs)
+            {
+                _latestMetricTimestamps.AddOrUpdate(resourceView.ResourceKey, metricTs, (_, existing) => metricTs > existing ? metricTs : existing);
+            }
         }
 
         RaiseSubscriptionChanged(_metricsSubscriptions);
@@ -1285,9 +1365,22 @@ public sealed partial class TelemetryRepository : IDisposable
             _tracesLock.ExitWriteLock();
         }
 
-        // Push spans to watchers outside the lock
+        // Track latest trace timestamp for this resource using the span's actual end time,
+        // not trace.LastUpdatedDate which is DateTime.UtcNow (receipt time, not signal time).
         if (addedSpans is not null)
         {
+            var maxTraceTs = DateTime.MinValue;
+            foreach (var span in addedSpans)
+            {
+                if (span.EndTime > maxTraceTs)
+                {
+                    maxTraceTs = span.EndTime;
+                }
+            }
+
+            _latestTraceTimestamps.AddOrUpdate(resourceView.ResourceKey, maxTraceTs, (_, existing) => maxTraceTs > existing ? maxTraceTs : existing);
+
+            // Push spans to watchers outside the lock
             PushSpansToWatchers(addedSpans, resourceView.ResourceKey);
         }
 

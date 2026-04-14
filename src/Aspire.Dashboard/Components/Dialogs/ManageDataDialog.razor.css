@@ -14,6 +14,21 @@
     display: inline-flex;
 }
 
+::deep .manage-data-sort-button {
+    font-weight: 600;
+    padding: 0;
+}
+
+::deep .manage-data-timestamp {
+    white-space: nowrap;
+}
+
+::deep .manage-data-summary {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow: visible;
+}
+
 .button-container {
     display: grid;
     grid-template-columns: 1fr auto;

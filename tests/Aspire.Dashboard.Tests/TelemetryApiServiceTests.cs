@@ -147,7 +147,7 @@ public class TelemetryApiServiceTests
         // Assert - should only return the non-error span
         Assert.NotNull(result);
         Assert.Equal(1, result.ReturnedCount);
-        
+
         // Serialize to check content
         var json = System.Text.Json.JsonSerializer.Serialize(result.Data);
         Assert.DoesNotContain("error-span", json);
@@ -189,7 +189,7 @@ public class TelemetryApiServiceTests
         // Assert - should only return the error span
         Assert.NotNull(result);
         Assert.Equal(1, result.ReturnedCount);
-        
+
         var json = System.Text.Json.JsonSerializer.Serialize(result.Data);
         Assert.Contains("error-span", json);
         Assert.DoesNotContain("ok-span", json);
@@ -248,7 +248,7 @@ public class TelemetryApiServiceTests
         // Assert - should only return 1 trace (the one without errors)
         Assert.NotNull(result);
         Assert.Equal(1, result.ReturnedCount);
-        
+
         // Verify with null filter returns both
         var allResult = service.GetTraces(resourceNames: null, hasError: null, limit: null);
         Assert.NotNull(allResult);
@@ -308,7 +308,7 @@ public class TelemetryApiServiceTests
         // Assert - should only return 1 trace (the one with errors)
         Assert.NotNull(result);
         Assert.Equal(1, result.ReturnedCount);
-        
+
         // Verify with null filter returns both
         var allResult = service.GetTraces(resourceNames: null, hasError: null, limit: null);
         Assert.NotNull(allResult);
@@ -609,6 +609,64 @@ public class TelemetryApiServiceTests
         Assert.NotNull(result);
         Assert.Equal(totalLogs, result.TotalCount);
         Assert.Equal(totalLogs, result.ReturnedCount);
+    }
+
+    [Fact]
+    public void GetResources_IncludesLatestTelemetryTimestamp()
+    {
+        var repository = CreateRepository();
+        var expectedTimestamp = s_testTime.AddMinutes(7);
+
+        repository.AddLogs(new AddContext(), new RepeatedField<ResourceLogs>
+        {
+            new ResourceLogs
+            {
+                Resource = CreateResource(name: "service1", instanceId: "inst1"),
+                ScopeLogs =
+                {
+                    new ScopeLogs
+                    {
+                        Scope = CreateScope("TestLogger"),
+                        LogRecords =
+                        {
+                            CreateLogRecord(time: expectedTimestamp, message: "log", severity: SeverityNumber.Info)
+                        }
+                    }
+                }
+            }
+        });
+
+        var service = CreateService(repository);
+
+        var resources = service.GetResources();
+
+        var resource = Assert.Single(resources);
+        Assert.Equal("service1", resource.Name);
+        Assert.Equal("inst1", resource.InstanceId);
+        Assert.Equal(expectedTimestamp, resource.LatestTelemetryTimestamp);
+    }
+
+    [Fact]
+    public void GetResources_ResourceWithoutSignalData_HasNullLatestTelemetryTimestamp()
+    {
+        var repository = CreateRepository();
+
+        repository.AddTraces(new AddContext(), new RepeatedField<ResourceSpans>
+        {
+            new ResourceSpans
+            {
+                Resource = CreateResource(name: "service2", instanceId: "inst2")
+            }
+        });
+
+        var service = CreateService(repository);
+
+        var resources = service.GetResources();
+
+        var resource = Assert.Single(resources);
+        Assert.Equal("service2", resource.Name);
+        Assert.Equal("inst2", resource.InstanceId);
+        Assert.Null(resource.LatestTelemetryTimestamp);
     }
 
     /// <summary>

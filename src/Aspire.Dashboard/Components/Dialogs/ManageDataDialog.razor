@@ -13,7 +13,7 @@
                     ItemSize="46"
                     Virtualize="true"
                     GenerateHeader="GenerateHeaderOption.Sticky"
-                    GridTemplateColumns="2fr 1fr"
+                    GridTemplateColumns="2fr 1.5fr 1.25fr"
                     TGridItem="ManageDataGridItem"
                     OnRowClick="@OnRowClicked"
                     ShowHover="true"
@@ -30,7 +30,12 @@
                                               OnClick="OnSelectAllClicked"
                                               Disabled="@(_resourceDataRows.Count == 0)"
                                               style="margin-right: 8px;" />
-                                @ControlsStringsLoc[nameof(ControlsStrings.NameColumnHeader)]
+                                <FluentButton Appearance="Appearance.Lightweight"
+                                              Class="manage-data-sort-button"
+                                              IconEnd="@GetSortIcon(ManageDataSortColumn.Name)"
+                                              OnClick="OnNameHeaderClicked">
+                                    @ControlsStringsLoc[nameof(ControlsStrings.NameColumnHeader)]
+                                </FluentButton>
                             </div>
                         </div>
                     </div>
@@ -93,10 +98,28 @@
                     </span>
                 </ChildContent>
             </TemplateColumn>
+            <TemplateColumn Title="@ControlsStringsLoc[nameof(ControlsStrings.TimestampColumnHeader)]">
+                <HeaderCellItemTemplate>
+                    <div style="display: flex; justify-content: flex-start; width: 100%;">
+                        <FluentButton Appearance="Appearance.Lightweight"
+                                      Class="manage-data-sort-button"
+                                      IconEnd="@GetSortIcon(ManageDataSortColumn.Timestamp)"
+                                      OnClick="OnTimestampHeaderClicked">
+                            @ControlsStringsLoc[nameof(ControlsStrings.TimestampColumnHeader)]
+                        </FluentButton>
+                    </div>
+                </HeaderCellItemTemplate>
+                <ChildContent>
+                    @if (context.IsResourceRow && context.ResourceRow is not null)
+                    {
+                        <span class="manage-data-timestamp">@GetTimestampText(context.ResourceRow)</span>
+                    }
+                </ChildContent>
+            </TemplateColumn>
             <TemplateColumn Title="@Loc[nameof(Dialogs.ManageDataSummaryColumnHeader)]">
                 @if (context.IsResourceRow && context.ResourceRow is not null)
                 {
-                    <span @onclick:stopPropagation="true">
+                    <span @onclick:stopPropagation="true" class="manage-data-summary">
                         @foreach (var dataRow in context.ResourceRow.TelemetryData)
                         {
                             <FluentButton Appearance="Appearance.Lightweight"

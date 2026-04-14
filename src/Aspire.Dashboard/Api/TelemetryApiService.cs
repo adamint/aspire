@@ -393,7 +393,8 @@ internal sealed class TelemetryApiService(
                 DisplayName = r.ResourceKey.GetCompositeName(),
                 HasLogs = r.HasLogs,
                 HasTraces = r.HasTraces,
-                HasMetrics = r.HasMetrics
+                HasMetrics = r.HasMetrics,
+                LatestTelemetryTimestamp = telemetryRepository.GetLatestTelemetryTimestamp(r.ResourceKey)
             })
             .ToArray();
     }

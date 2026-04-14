@@ -57,8 +57,10 @@ public class OtlpResource : IOtlpResource
         Context = context;
     }
 
-    public void AddMetrics(AddContext context, RepeatedField<ScopeMetrics> scopeMetrics)
+    public DateTime? AddMetrics(AddContext context, RepeatedField<ScopeMetrics> scopeMetrics)
     {
+        DateTime? latestTimestamp = null;
+
         _metricsLock.EnterWriteLock();
 
         try
@@ -117,7 +119,11 @@ public class OtlpResource : IOtlpResource
                         continue;
                     }
 
-                    AddMetrics(instrument, metric, context, ref tempAttributes);
+                    var metricMaxTs = AddMetrics(instrument, metric, context, ref tempAttributes);
+                    if (metricMaxTs is not null && (latestTimestamp is null || metricMaxTs.Value > latestTimestamp.Value))
+                    {
+                        latestTimestamp = metricMaxTs;
+                    }
                 }
             }
         }
@@ -125,6 +131,8 @@ public class OtlpResource : IOtlpResource
         {
             _metricsLock.ExitWriteLock();
         }
+
+        return latestTimestamp;
     }
 
     private static int GetMetricDataPointCount(Metric metric)
@@ -140,8 +148,10 @@ public class OtlpResource : IOtlpResource
         };
     }
 
-    private void AddMetrics(OtlpInstrument instrument, Metric metric, AddContext context, ref KeyValuePair<string, string>[]? tempAttributes)
+    private DateTime? AddMetrics(OtlpInstrument instrument, Metric metric, AddContext context, ref KeyValuePair<string, string>[]? tempAttributes)
     {
+        DateTime? maxTimestamp = null;
+
         switch (metric.DataCase)
         {
             case Metric.DataOneofCase.Gauge:
@@ -150,6 +160,7 @@ public class OtlpResource : IOtlpResource
                     try
                     {
                         instrument.FindScope(d.Attributes, ref tempAttributes).AddPointValue(d, Context);
+                        UpdateMaxTimestamp(OtlpHelpers.UnixNanoSecondsToDateTime(d.TimeUnixNano), ref maxTimestamp);
                         context.SuccessCount++;
                     }
                     catch (Exception ex)
@@ -165,6 +176,7 @@ public class OtlpResource : IOtlpResource
                     try
                     {
                         instrument.FindScope(d.Attributes, ref tempAttributes).AddPointValue(d, Context);
+                        UpdateMaxTimestamp(OtlpHelpers.UnixNanoSecondsToDateTime(d.TimeUnixNano), ref maxTimestamp);
                         context.SuccessCount++;
                     }
                     catch (Exception ex)
@@ -180,6 +192,7 @@ public class OtlpResource : IOtlpResource
                     try
                     {
                         instrument.FindScope(d.Attributes, ref tempAttributes).AddHistogramValue(d, Context);
+                        UpdateMaxTimestamp(OtlpHelpers.UnixNanoSecondsToDateTime(d.TimeUnixNano), ref maxTimestamp);
                         context.SuccessCount++;
                     }
                     catch (Exception ex)
@@ -197,6 +210,16 @@ public class OtlpResource : IOtlpResource
                 context.FailureCount += metric.ExponentialHistogram.DataPoints.Count;
                 Context.Logger.LogInformation("Error adding exponential histogram metrics. Exponential histogram is not supported.");
                 break;
+        }
+
+        return maxTimestamp;
+
+        static void UpdateMaxTimestamp(DateTime candidate, ref DateTime? max)
+        {
+            if (max is null || candidate > max.Value)
+            {
+                max = candidate;
+            }
         }
     }
 
@@ -267,6 +290,40 @@ public class OtlpResource : IOtlpResource
                 instruments.Add(instrument.Value.Summary);
             }
             return instruments;
+        }
+        finally
+        {
+            _metricsLock.ExitReadLock();
+        }
+    }
+
+    internal DateTime? GetLatestMetricTimestamp()
+    {
+        _metricsLock.EnterReadLock();
+
+        try
+        {
+            DateTime? latest = null;
+
+            foreach (var instrument in _instruments.Values)
+            {
+                foreach (var dimension in instrument.Dimensions.Values)
+                {
+                    var values = dimension.Values;
+                    if (values.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    var candidate = values[^1].End;
+                    if (latest is null || candidate > latest.Value)
+                    {
+                        latest = candidate;
+                    }
+                }
+            }
+
+            return latest;
         }
         finally
         {

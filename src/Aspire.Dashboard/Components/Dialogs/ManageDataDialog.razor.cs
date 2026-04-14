@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Collections.Concurrent;
+using System.Globalization;
 using Aspire.Dashboard.Extensions;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Model.ManageData;
@@ -60,6 +61,7 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
     private readonly Dictionary<string, ResourceDataRow> _resourceDataRows = new(StringComparers.ResourceName);
     private readonly HashSet<string> _expandedResourceNames = new(StringComparers.ResourceName);
     private readonly HashSet<(string ResourceName, AspireDataType DataType)> _selectedRows = [];
+    private readonly Dictionary<string, DateTime?> _timestampSortSnapshots = new(StringComparers.ResourceName);
     private readonly CancellationTokenSource _cts = new();
     private readonly Icon _iconUnselectedMultiple = new Icons.Regular.Size20.CheckboxUnchecked().WithColor(Color.FillInverse);
     private readonly Icon _iconSelectedMultiple = new Icons.Filled.Size20.CheckboxChecked();
@@ -70,12 +72,20 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
     private bool _isRemoving;
     private string? _errorMessage;
     private bool _isImporting;
+    private Subscription? _logsSubscription;
+    private Subscription? _metricsSubscription;
     private Subscription? _resourcesSubscription;
+    private Subscription? _tracesSubscription;
+    private ManageDataSortColumn _sortColumn = ManageDataSortColumn.Name;
+    private bool _sortDescending;
 
     protected override async Task OnInitializedAsync()
     {
         // Subscribe to telemetry changes
         _resourcesSubscription = TelemetryRepository.OnNewResources(OnTelemetryChangedAsync);
+        _logsSubscription = TelemetryRepository.OnNewLogs(resourceKey: null, SubscriptionType.Other, OnTelemetryChangedAsync);
+        _metricsSubscription = TelemetryRepository.OnNewMetrics(resourceKey: null, SubscriptionType.Other, OnTelemetryChangedAsync);
+        _tracesSubscription = TelemetryRepository.OnNewTraces(resourceKey: null, SubscriptionType.Other, OnTelemetryChangedAsync);
 
         if (DashboardClient.IsEnabled)
         {
@@ -148,6 +158,7 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
 
         // Remove selections for resources that no longer exist
         _selectedRows.RemoveWhere(r => !_resourceDataRows.ContainsKey(r.ResourceName));
+        RemoveMissingTimestampSnapshots();
     }
 
     private async Task SubscribeResourcesAsync()
@@ -225,11 +236,14 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
             Resource = resource,
             OtlpResource = otlpResource,
             Name = resource.Name,
-            TelemetryData = data
+            TelemetryData = data,
+            LatestTelemetryTimestamp = otlpResource is not null
+                ? TelemetryRepository.GetLatestTelemetryTimestamp(otlpResource.ResourceKey)
+                : TelemetryRepository.GetLatestTelemetryTimestamp(new ResourceKey(resource.Name, InstanceId: null))
         };
     }
 
-    private static ResourceDataRow CreateTelemetryOnlyResourceDataRow(OtlpResource otlpResource)
+    private ResourceDataRow CreateTelemetryOnlyResourceDataRow(OtlpResource otlpResource)
     {
         var data = new List<TelemetryDataRow>();
         var resourceName = otlpResource.ResourceKey.GetCompositeName();
@@ -240,7 +254,8 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
             Resource = null,
             OtlpResource = otlpResource,
             Name = otlpResource.ResourceKey.GetCompositeName(),
-            TelemetryData = data
+            TelemetryData = data,
+            LatestTelemetryTimestamp = TelemetryRepository.GetLatestTelemetryTimestamp(otlpResource.ResourceKey)
         };
     }
 
@@ -279,8 +294,7 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
     {
         var items = new List<ManageDataGridItem>();
 
-        // Sort by display name (works for both ResourceViewModel resources and telemetry-only resources)
-        foreach (var resourceRow in _resourceDataRows.Values.OrderBy(r => r.Name, StringComparers.ResourceName))
+        foreach (var resourceRow in GetSortedResourceRows())
         {
             // Add the resource row
             items.Add(new ManageDataGridItem
@@ -305,6 +319,119 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
         }
 
         return items.AsQueryable();
+    }
+
+    private IEnumerable<ResourceDataRow> GetSortedResourceRows()
+    {
+        // Sort by latest telemetry timestamp, if sort column has a value, then sorts by display name
+        return _sortColumn switch
+        {
+            ManageDataSortColumn.Timestamp when _sortDescending => _resourceDataRows.Values
+                .OrderBy(r => GetTimestampSortValue(r) is null ? 1 : 0)
+                .ThenByDescending(GetTimestampSortValue)
+                .ThenBy(r => r.Name, StringComparers.ResourceName),
+            ManageDataSortColumn.Timestamp => _resourceDataRows.Values
+                .OrderBy(r => GetTimestampSortValue(r) is null ? 1 : 0)
+                .ThenBy(GetTimestampSortValue)
+                .ThenBy(r => r.Name, StringComparers.ResourceName),
+            _ when _sortDescending => _resourceDataRows.Values.OrderByDescending(r => r.Name, StringComparers.ResourceName),
+            _ => _resourceDataRows.Values.OrderBy(r => r.Name, StringComparers.ResourceName)
+        };
+    }
+
+    private DateTime? GetTimestampSortValue(ResourceDataRow row)
+    {
+        if (_timestampSortSnapshots.TryGetValue(row.Name, out var snapshot))
+        {
+            return snapshot;
+        }
+
+        return row.LatestTelemetryTimestamp;
+    }
+
+    private void ToggleNameSort()
+    {
+        if (_sortColumn == ManageDataSortColumn.Name)
+        {
+            _sortDescending = !_sortDescending;
+        }
+        else
+        {
+            _sortColumn = ManageDataSortColumn.Name;
+            _sortDescending = false;
+        }
+    }
+
+    private void ToggleTimestampSort()
+    {
+        RefreshTimestampSortSnapshots();
+
+        if (_sortColumn == ManageDataSortColumn.Timestamp)
+        {
+            _sortDescending = !_sortDescending;
+        }
+        else
+        {
+            _sortColumn = ManageDataSortColumn.Timestamp;
+            _sortDescending = true;
+        }
+    }
+
+    private void RefreshTimestampSortSnapshots()
+    {
+        _timestampSortSnapshots.Clear();
+
+        foreach (var (resourceName, resourceRow) in _resourceDataRows)
+        {
+            _timestampSortSnapshots[resourceName] = resourceRow.LatestTelemetryTimestamp;
+        }
+    }
+
+    private void RemoveMissingTimestampSnapshots()
+    {
+        var missingNames = _timestampSortSnapshots.Keys
+            .Where(name => !_resourceDataRows.ContainsKey(name))
+            .ToList();
+
+        foreach (var name in missingNames)
+        {
+            _timestampSortSnapshots.Remove(name);
+        }
+
+        foreach (var (resourceName, resourceRow) in _resourceDataRows)
+        {
+            _timestampSortSnapshots.TryAdd(resourceName, resourceRow.LatestTelemetryTimestamp);
+        }
+    }
+
+    private void OnNameHeaderClicked()
+    {
+        ToggleNameSort();
+    }
+
+    private void OnTimestampHeaderClicked()
+    {
+        ToggleTimestampSort();
+    }
+
+    private Icon? GetSortIcon(ManageDataSortColumn column)
+    {
+        if (_sortColumn != column)
+        {
+            return null;
+        }
+
+        return _sortDescending ? new Icons.Regular.Size12.ChevronDown() : new Icons.Regular.Size12.ChevronUp();
+    }
+
+    private string GetTimestampText(ResourceDataRow resourceRow)
+    {
+        if (resourceRow.LatestTelemetryTimestamp is not { } timestamp)
+        {
+            return string.Empty;
+        }
+
+        return FormatHelpers.FormatDateTime(TimeProvider, timestamp, MillisecondsDisplay.None, CultureInfo.CurrentCulture);
     }
 
     private void OnRowClicked(FluentDataGridRow<ManageDataGridItem> row)
@@ -663,7 +790,10 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
 
     public async ValueTask DisposeAsync()
     {
+        _logsSubscription?.Dispose();
+        _metricsSubscription?.Dispose();
         _resourcesSubscription?.Dispose();
+        _tracesSubscription?.Dispose();
 
         await _cts.CancelAsync();
 
@@ -680,5 +810,11 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
         }
 
         _cts.Dispose();
+    }
+
+    private enum ManageDataSortColumn
+    {
+        Name,
+        Timestamp
     }
 }

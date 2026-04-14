@@ -4,6 +4,8 @@
 using Aspire.Dashboard.Otlp.Model;
 using Aspire.Dashboard.Otlp.Storage;
 using Google.Protobuf.Collections;
+using OpenTelemetry.Proto.Logs.V1;
+using OpenTelemetry.Proto.Metrics.V1;
 using OpenTelemetry.Proto.Trace.V1;
 using Xunit;
 using static Aspire.Tests.Shared.Telemetry.TelemetryTestHelpers;
@@ -144,6 +146,106 @@ public class ResourceTests
         // Assert
         Assert.Equal("app1-19572b19", instance1Name);
         Assert.Equal("app1-f66e2b1e", instance2Name);
+    }
+
+    [Fact]
+    public void GetLatestTelemetryTimestamp_ReturnsLatestAcrossSignals()
+    {
+        var repository = CreateRepository();
+
+        var resource = CreateResource(name: "app1", instanceId: "123");
+
+        repository.AddLogs(new AddContext(), new RepeatedField<ResourceLogs>
+        {
+            new ResourceLogs
+            {
+                Resource = resource,
+                ScopeLogs =
+                {
+                    new ScopeLogs
+                    {
+                        Scope = CreateScope("TestLogger"),
+                        LogRecords = { CreateLogRecord(time: new DateTime(2026, 4, 8, 10, 0, 0, DateTimeKind.Utc)) }
+                    }
+                }
+            }
+        });
+
+        repository.AddMetrics(new AddContext(), new RepeatedField<ResourceMetrics>
+        {
+            new ResourceMetrics
+            {
+                Resource = resource,
+                ScopeMetrics =
+                {
+                    new ScopeMetrics
+                    {
+                        Scope = CreateScope(name: "test-meter"),
+                        Metrics =
+                        {
+                            CreateSumMetric(metricName: "test", startTime: new DateTime(2026, 4, 8, 10, 5, 0, DateTimeKind.Utc))
+                        }
+                    }
+                }
+            }
+        });
+
+        var latest = repository.GetLatestTelemetryTimestamp(new ResourceKey("app1", "123"));
+
+        // Metric timestamp is later than log timestamp, so it wins
+        Assert.Equal(new DateTime(2026, 4, 8, 10, 5, 0, DateTimeKind.Utc), latest);
+    }
+
+    [Fact]
+    public void GetLatestTelemetryTimestamp_ReturnsNullWhenResourceHasNoSignals()
+    {
+        var repository = CreateRepository();
+
+        var latest = repository.GetLatestTelemetryTimestamp(new ResourceKey("missing", "123"));
+
+        Assert.Null(latest);
+    }
+
+    [Fact]
+    public void GetLatestTelemetryTimestamp_WithNameOnlyKeyAggregatesReplicas()
+    {
+        var repository = CreateRepository();
+
+        repository.AddLogs(new AddContext(), new RepeatedField<ResourceLogs>
+        {
+            new ResourceLogs
+            {
+                Resource = CreateResource(name: "app1", instanceId: "123"),
+                ScopeLogs =
+                {
+                    new ScopeLogs
+                    {
+                        Scope = CreateScope("TestLogger"),
+                        LogRecords = { CreateLogRecord(time: new DateTime(2026, 4, 8, 10, 0, 0, DateTimeKind.Utc)) }
+                    }
+                }
+            }
+        });
+
+        repository.AddLogs(new AddContext(), new RepeatedField<ResourceLogs>
+        {
+            new ResourceLogs
+            {
+                Resource = CreateResource(name: "app1", instanceId: "456"),
+                ScopeLogs =
+                {
+                    new ScopeLogs
+                    {
+                        Scope = CreateScope("TestLogger"),
+                        LogRecords = { CreateLogRecord(time: new DateTime(2026, 4, 8, 10, 10, 0, DateTimeKind.Utc)) }
+                    }
+                }
+            }
+        });
+
+        var latest = repository.GetLatestTelemetryTimestamp(new ResourceKey("app1", InstanceId: null));
+
+        Assert.Equal(new DateTime(2026, 4, 8, 10, 10, 0, DateTimeKind.Utc), latest);
     }
 
     private static void AddResource(TelemetryRepository repository, string name, string? instanceId = null)
