@@ -90,11 +90,20 @@ internal sealed class AppHostLauncher(
             : MultipleAppHostProjectsFoundBehavior.Prompt;
 
         // Failure mode 1: Project not found
-        var searchResult = await projectLocator.UseOrFindAppHostProjectFileAsync(
-            passedAppHostProjectFile,
-            multipleAppHostBehavior,
-            createSettingsFile: false,
-            cancellationToken);
+        AppHostProjectSearchResult searchResult;
+        try
+        {
+            searchResult = await projectLocator.UseOrFindAppHostProjectFileAsync(
+                passedAppHostProjectFile,
+                multipleAppHostBehavior,
+                createSettingsFile: false,
+                cancellationToken);
+        }
+        catch (ProjectLocatorException ex)
+        {
+            interactionService.DisplayError(ex.Message);
+            return ExitCodeConstants.FailedToFindProject;
+        }
 
         var effectiveAppHostFile = searchResult.SelectedProjectFile;
 

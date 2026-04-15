@@ -112,7 +112,7 @@ public class StartCommandTests(ITestOutputHelper outputHelper)
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
-        Assert.NotEqual(ExitCodeConstants.Success, exitCode);
+        Assert.Equal(ExitCodeConstants.FailedToFindProject, exitCode);
     }
 
     [Fact]
@@ -142,6 +142,6 @@ public class StartCommandTests(ITestOutputHelper outputHelper)
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
-        Assert.NotEqual(ExitCodeConstants.Success, exitCode);
+        Assert.Equal(ExitCodeConstants.FailedToFindProject, exitCode);
     }
 }
