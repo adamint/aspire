@@ -76,18 +76,6 @@
 			"request": "attach",
 			"processId": "${command:pickProcess}",
 			"justMyCode": false
-		},
-		{
-			"name": "Run TestShop AppHost",
-			"type": "aspire",
-			"request": "launch",
-			"program": "${workspaceFolder}/playground/TestShop"
-		},
-		{
-			"name": "Run Stress AppHost",
-			"type": "aspire",
-			"request": "launch",
-			"program": "${workspaceFolder}/playground/Stress"
 		}
 	]
 }

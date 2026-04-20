@@ -493,24 +493,6 @@ namespace Aspire.Dashboard.Resources {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to Clear parameter filter.
-        /// </summary>
-        public static string ResourcesParametersFilterClear {
-            get {
-                return ResourceManager.GetString("ResourcesParametersFilterClear", resourceCulture);
-            }
-        }
-
-        /// <summary>
-        ///   Looks up a localized string similar to View parameters ({0}).
-        /// </summary>
-        public static string ResourcesViewRelatedParameters {
-            get {
-                return ResourceManager.GetString("ResourcesViewRelatedParameters", resourceCulture);
-            }
-        }
-
-        /// <summary>
         ///   Looks up a localized string similar to No filters.
         /// </summary>
         public static string ResourcesNotFiltered {

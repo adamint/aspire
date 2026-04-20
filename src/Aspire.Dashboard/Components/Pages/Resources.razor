@@ -32,17 +32,6 @@
 
             @if (ViewportInformation.IsDesktop)
             {
-                @if (ResourceName is not null && PageViewModel.SelectedViewKind == ResourceViewKind.Parameters)
-                {
-                    <FluentButton slot="end"
-                                  Appearance="Appearance.Accent"
-                                  IconEnd="@(new Icons.Regular.Size16.Dismiss())"
-                                  OnClick="ClearRelatedResourceFilterAsync"
-                                  Title="@Loc[nameof(Dashboard.Resources.Resources.ResourcesParametersFilterClear)]">
-                        @ResourceName
-                    </FluentButton>
-                }
-
                 <FluentButton id="resourceFilterButton" slot="end"
                               Appearance="@(NoFiltersSet ? Appearance.Stealth : Appearance.Accent)"
                               IconEnd="@(new Icons.Regular.Size20.Filter())"
@@ -61,16 +50,6 @@
             }
             else
             {
-                @if (ResourceName is not null && PageViewModel.SelectedViewKind == ResourceViewKind.Parameters)
-                {
-                    <FluentButton Appearance="Appearance.Accent"
-                                  IconEnd="@(new Icons.Regular.Size16.Dismiss())"
-                                  OnClick="ClearRelatedResourceFilterAsync"
-                                  Title="@Loc[nameof(Dashboard.Resources.Resources.ResourcesParametersFilterClear)]">
-                        @ResourceName
-                    </FluentButton>
-                }
-
                 foreach (var item in _resourcesMenuItems)
                 {
                     <FluentButton IconStart="@item.Icon"
@@ -84,7 +63,6 @@
                     <ResourceFilters ResourceStates="@PageViewModel.ResourceStatesToVisibility"
                                      ResourceTypes="@PageViewModel.ResourceTypesToVisibility"
                                      ResourceHealthStates="@PageViewModel.ResourceHealthStatusesToVisibility"
-                                     ShowResourceTypes="@(PageViewModel.SelectedViewKind != ResourceViewKind.Parameters)"
                                      OnAllFilterVisibilityCheckedChangedAsync="@OnAllFilterVisibilityCheckedChangedAsync"
                                      OnResourceFilterVisibilityChangedAsync="@OnResourceFilterVisibilityChangedAsync" />
                 </div>
@@ -101,7 +79,6 @@
                     <ResourceFilters ResourceStates="@PageViewModel.ResourceStatesToVisibility"
                                      ResourceTypes="@PageViewModel.ResourceTypesToVisibility"
                                      ResourceHealthStates="@PageViewModel.ResourceHealthStatusesToVisibility"
-                                     ShowResourceTypes="@(PageViewModel.SelectedViewKind != ResourceViewKind.Parameters)"
                                      OnAllFilterVisibilityCheckedChangedAsync="@OnAllFilterVisibilityCheckedChangedAsync"
                                      OnResourceFilterVisibilityChangedAsync="@OnResourceFilterVisibilityChangedAsync" />
                 </Body>
@@ -200,7 +177,6 @@
                                             <AspireTemplateColumn ColumnId="@ValueColumn" ColumnManager="@_manager" Title="@ControlsStringsLoc[nameof(ControlsStrings.PropertyGridValueColumnHeader)]" Tooltip="true" TooltipText="@(ctx => GetParameterValue(ctx.Resource) is var pv && (pv.IsSensitive || pv.IsUnresolved) ? null : pv.Value)">
                                                 @{
                                                     var paramValue = GetParameterValue(context.Resource);
-                                                    var setCommand = paramValue.IsUnresolved ? GetSetParameterCommand(context.Resource) : null;
                                                 }
                                                 @if (paramValue.Value is not null)
                                                 {
@@ -211,21 +187,10 @@
                                                 }
                                                 else if (paramValue.IsUnresolved)
                                                 {
-                                                    if (setCommand is not null)
-                                                    {
-                                                        <span class="cellText" @onclick:stopPropagation="true">
-                                                            <button type="button"
-                                                                    class="value-not-set-link"
-                                                                    @onclick="@(() => ExecuteResourceCommandAsync(context.Resource, setCommand))"
-                                                                    title="@ControlsStringsLoc[nameof(ControlsStrings.ParameterSetValueAction)]">
-                                                                @ControlsStringsLoc[nameof(ControlsStrings.ParameterValueNotSet)]
-                                                            </button>
-                                                        </span>
-                                                    }
-                                                    else
-                                                    {
-                                                        <span class="cellText">@ControlsStringsLoc[nameof(ControlsStrings.ParameterValueNotSet)]</span>
-                                                    }
+                                                    <span class="cellText" @onclick:stopPropagation="true">
+                                                        <ParameterValueDisplay Resource="context.Resource"
+                                                                               OnExecuteCommandAsync="ExecuteResourceCommandAsync" />
+                                                    </span>
                                                 }
                                                 else
                                                 {
@@ -244,8 +209,7 @@
                                                                      OnViewDetails="@((buttonId) => ShowResourceDetailsAsync(context.Resource, buttonId))"
                                                                      Resource="context.Resource"
                                                                      MaxHighlightedCount="_maxHighlightedCount"
-                                                                     ResourceByName="@_resourceByName"
-                                                                     OnViewRelatedParameters="ViewRelatedParametersAsync" />
+                                                                     ResourceByName="@_resourceByName" />
                                                 </div>
                                             </AspireTemplateColumn>
                                         </ChildContent>

@@ -50,9 +50,6 @@ public partial class ResourceActions : ComponentBase
     [Parameter]
     public required ConcurrentDictionary<string, ResourceViewModel> ResourceByName { get; set; }
 
-    [Parameter]
-    public Func<ResourceViewModel, Task>? OnViewRelatedParameters { get; set; }
-
     [CascadingParameter]
     public required ViewportInformation ViewportInformation { get; set; }
 
@@ -73,8 +70,7 @@ public partial class ResourceActions : ComponentBase
             IsCommandExecuting,
             showViewDetails: true,
             showConsoleLogsItem: true,
-            showUrls: false,
-            onViewRelatedParameters: OnViewRelatedParameters);
+            showUrls: false);
 
         // If display is desktop then we display highlighted commands next to the ... button.
         if (ViewportInformation.IsDesktop)

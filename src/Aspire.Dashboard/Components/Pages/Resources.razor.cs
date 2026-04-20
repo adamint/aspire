@@ -155,15 +155,6 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
             return false;
         }
 
-        // When filtering parameters by a related resource, only show parameters that are related to that resource
-        if (PageViewModel.SelectedViewKind == ResourceViewKind.Parameters && ResourceName is not null)
-        {
-            if (!IsParameterRelatedToResource(resource, ResourceName))
-            {
-                return false;
-            }
-        }
-
         // In Parameters view, ignore resource type filtering since we always show only parameters
         return (PageViewModel.SelectedViewKind == ResourceViewKind.Parameters || IsKeyValueTrue(resource.ResourceType, PageViewModel.ResourceTypesToVisibility))
                && IsKeyValueTrue(resource.State ?? string.Empty, PageViewModel.ResourceStatesToVisibility)
@@ -605,7 +596,7 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
             UpdateFromResource(resourceViewModel.Value);
         }
 
-        if (ResourceName is not null && PageViewModel.SelectedViewKind != ResourceViewKind.Parameters)
+        if (ResourceName is not null)
         {
             if (_resourceByName.TryGetValue(ResourceName, out var selectedResource))
             {
@@ -660,8 +651,7 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
                 (resource, command) => DashboardCommandExecutor.IsExecuting(resource.Name, command.Name),
                 showViewDetails: true,
                 showConsoleLogsItem: true,
-                showUrls: true,
-                onViewRelatedParameters: ViewRelatedParametersAsync);
+                showUrls: true);
 
             // The previous context menu should always be closed by this point but complete just in case.
             _contextMenuClosedTcs?.TrySetResult();
@@ -790,55 +780,6 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
             return (value, property.IsValueSensitive, isUnresolved);
         }
         return (null, false, isUnresolved);
-    }
-
-    private static CommandViewModel? GetSetParameterCommand(ResourceViewModel resource)
-    {
-        foreach (var command in resource.Commands)
-        {
-            if (string.Equals(command.Name, "parameter-set", StringComparison.Ordinal))
-            {
-                return command;
-            }
-        }
-        return null;
-    }
-
-    private bool IsParameterRelatedToResource(ResourceViewModel parameter, string relatedResourceName)
-    {
-        if (_resourceByName.TryGetValue(relatedResourceName, out var relatedResource))
-        {
-            foreach (var relationship in relatedResource.Relationships)
-            {
-                if (string.Equals(relationship.ResourceName, parameter.DisplayName, StringComparisons.ResourceName))
-                {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private async Task ClearRelatedResourceFilterAsync()
-    {
-        ResourceName = null;
-        await this.AfterViewModelChangedAsync(_contentLayout, waitToApplyMobileChange: false);
-        await _dataGrid.SafeRefreshDataAsync();
-    }
-
-    private async Task ViewRelatedParametersAsync(ResourceViewModel resource)
-    {
-        ResourceName = resource.Name;
-        if (PageViewModel.SelectedViewKind == ResourceViewKind.Parameters)
-        {
-            // Already on the Parameters tab, just refresh the grid with the new filter
-            await _dataGrid.SafeRefreshDataAsync();
-            await InvokeAsync(StateHasChanged);
-        }
-        else
-        {
-            await OnViewChangedAsync(ResourceViewKind.Parameters);
-        }
     }
 
     private static string GetUrlsTooltip(ResourceViewModel resource)
@@ -994,7 +935,6 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
         public required IDictionary<string, bool> ResourceTypesToVisibility { get; set; }
         public required IDictionary<string, bool> ResourceStatesToVisibility { get; set; }
         public required IDictionary<string, bool> ResourceHealthStatusesToVisibility { get; set; }
-        public string? Resource { get; set; }
     }
 
     public enum ResourceViewKind
@@ -1018,8 +958,8 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
     public string GetUrlFromSerializableViewModel(ResourcesPageState serializable)
     {
         return DashboardUrls.ResourcesUrl(
-            resource: serializable.Resource,
             view: serializable.ViewKind,
+            // add resource?
             hiddenTypes: SerializeFiltersToString(serializable.ResourceTypesToVisibility),
             hiddenStates: SerializeFiltersToString(serializable.ResourceStatesToVisibility),
             hiddenHealthStates: SerializeFiltersToString(serializable.ResourceHealthStatusesToVisibility));
@@ -1038,8 +978,7 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
             ViewKind = PageViewModel.SelectedViewKind != ResourceViewKind.Table ? PageViewModel.SelectedViewKind.ToString() : null,
             ResourceTypesToVisibility = PageViewModel.ResourceTypesToVisibility,
             ResourceStatesToVisibility = PageViewModel.ResourceStatesToVisibility,
-            ResourceHealthStatusesToVisibility = PageViewModel.ResourceHealthStatusesToVisibility,
-            Resource = PageViewModel.SelectedViewKind == ResourceViewKind.Parameters ? ResourceName : null
+            ResourceHealthStatusesToVisibility = PageViewModel.ResourceHealthStatusesToVisibility
         };
     }
 

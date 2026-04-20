@@ -237,11 +237,6 @@
         <target state="translated">Sem filtros</target>
         <note />
       </trans-unit>
-      <trans-unit id="ResourcesParametersFilterClear">
-        <source>Clear parameter filter</source>
-        <target state="new">Clear parameter filter</target>
-        <note />
-      </trans-unit>
       <trans-unit id="ResourcesResourceStatesHeader">
         <source>State</source>
         <target state="translated">Estado</target>
@@ -296,11 +291,6 @@
         <source>URLs</source>
         <target state="translated">URLs</target>
         <note />
-      </trans-unit>
-      <trans-unit id="ResourcesViewRelatedParameters">
-        <source>View parameters ({0})</source>
-        <target state="new">View parameters ({0})</target>
-        <note>{0} is the number of parameters</note>
       </trans-unit>
       <trans-unit id="TotalItemsFooterParametersPluralText">
         <source>Showing &lt;strong&gt;{0} parameters&lt;/strong&gt;</source>

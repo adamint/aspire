@@ -3,17 +3,14 @@
 @inject IStringLocalizer<Dashboard.Resources.Resources> Loc
 
 <FluentStack Orientation="Orientation.Vertical" VerticalGap="15">
-    @if (ShowResourceTypes)
-    {
-        <fieldset class="filter-group">
-            <legend>@Loc[nameof(Resources.Resources.ResourcesResourceTypesHeader)]</legend>
-            <SelectResourceOptions
-                Id="resource-types"
-                Values="ResourceTypes"
-                OnAllValuesCheckedChangedAsync="OnAllFilterVisibilityCheckedChangedAsync"
-                OnValueVisibilityChangedAsync="OnResourceFilterVisibilityChangedAsync" />
-        </fieldset>
-    }
+    <fieldset class="filter-group">
+        <legend>@Loc[nameof(Resources.Resources.ResourcesResourceTypesHeader)]</legend>
+        <SelectResourceOptions
+            Id="resource-types"
+            Values="ResourceTypes"
+            OnAllValuesCheckedChangedAsync="OnAllFilterVisibilityCheckedChangedAsync"
+            OnValueVisibilityChangedAsync="OnResourceFilterVisibilityChangedAsync" />
+    </fieldset>
     <fieldset class="filter-group">
         <legend>@Loc[nameof(Resources.Resources.ResourcesResourceStatesHeader)]</legend>
         <SelectResourceOptions
@@ -36,9 +33,6 @@
 
     [Parameter, EditorRequired]
     public required ConcurrentDictionary<string, bool> ResourceTypes { get; set; }
-
-    [Parameter]
-    public bool ShowResourceTypes { get; set; } = true;
 
     [Parameter, EditorRequired]
     public required ConcurrentDictionary<string, bool> ResourceStates { get; set; }
