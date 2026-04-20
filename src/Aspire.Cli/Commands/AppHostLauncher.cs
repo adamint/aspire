@@ -10,6 +10,7 @@ using Aspire.Cli.Interaction;
 using Aspire.Cli.Processes;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Resources;
+using Aspire.Cli.Telemetry;
 using Aspire.Cli.Utils;
 using Microsoft.Extensions.Logging;
 
@@ -26,6 +27,7 @@ internal sealed class AppHostLauncher(
     IInteractionService interactionService,
     IAuxiliaryBackchannelMonitor backchannelMonitor,
     ICliHostEnvironment hostEnvironment,
+    AspireCliTelemetry telemetry,
     ILogger<AppHostLauncher> logger,
     TimeProvider timeProvider)
 {
@@ -101,8 +103,7 @@ internal sealed class AppHostLauncher(
         }
         catch (ProjectLocatorException ex)
         {
-            interactionService.DisplayError(ex.Message);
-            return ExitCodeConstants.FailedToFindProject;
+            return BaseCommand.HandleProjectLocatorException(ex, interactionService, telemetry);
         }
 
         var effectiveAppHostFile = searchResult.SelectedProjectFile;
