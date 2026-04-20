@@ -102,7 +102,7 @@ internal class ResourceStateViewModel(string text, Icon icon, Color color)
     /// <remarks>
     /// This is a static method so it can be called at the level of the parent column.
     /// </remarks>
-    internal static string? GetResourceStateTooltip(ResourceViewModel resource, IStringLocalizer<Columns> loc)
+    internal static string GetResourceStateTooltip(ResourceViewModel resource, IStringLocalizer<Columns> loc)
     {
         if (resource.IsStopped())
         {
@@ -138,7 +138,23 @@ internal class ResourceStateViewModel(string text, Icon icon, Color color)
             return loc[nameof(Columns.StateColumnResourceNotStarted)];
         }
 
-        return null;
+        return GetStateText(resource, loc);
+    }
+
+    /// <summary>
+    /// Gets additional tooltip content for a resource state, returning null when the
+    /// tooltip would simply repeat the text already shown in the state column.
+    /// </summary>
+    /// <remarks>
+    /// Used by UI surfaces (such as the state column's <c>InfoPopover</c>) that should only
+    /// render extra tooltip content when it adds information beyond the displayed state text.
+    /// </remarks>
+    internal static string? GetAdditionalResourceStateTooltip(ResourceViewModel resource, IStringLocalizer<Columns> loc)
+    {
+        var tooltip = GetResourceStateTooltip(resource, loc);
+        var stateText = GetStateText(resource, loc);
+
+        return string.Equals(tooltip, stateText, StringComparison.Ordinal) ? null : tooltip;
     }
 
     private static string GetStateText(ResourceViewModel resource, IStringLocalizer<Columns> loc)

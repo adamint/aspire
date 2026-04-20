@@ -93,7 +93,7 @@ public class ResourceStateViewModelTests
         var localizer = new TestStringLocalizer<Columns>();
 
         // Act
-        var tooltip = ResourceStateViewModel.GetResourceStateTooltip(resource, localizer);
+        var tooltip = ResourceStateViewModel.GetAdditionalResourceStateTooltip(resource, localizer);
         var vm = ResourceStateViewModel.GetStateViewModel(resource, localizer);
 
         // Assert
