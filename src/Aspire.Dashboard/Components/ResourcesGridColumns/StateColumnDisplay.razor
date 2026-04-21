@@ -4,7 +4,6 @@
 @{
     // Create view model every render. The resource state may have changed.
     var vm = ResourceStateViewModel.GetStateViewModel(Resource, Loc);
-    var tooltipMarkup = ResourceStateViewModel.GetAdditionalResourceStateTooltip(Resource, Loc);
 }
 
 <div class="state-column-cell">
@@ -20,10 +19,4 @@
         UnviewedErrorCounts="UnviewedErrorCounts"
         Resource="@Resource" />
 
-    @if (tooltipMarkup is not null)
-    {
-        <InfoPopover AnchorId="@($"state-{Resource.Name}")">
-            @((MarkupString)tooltipMarkup)
-        </InfoPopover>
-    }
 </div>

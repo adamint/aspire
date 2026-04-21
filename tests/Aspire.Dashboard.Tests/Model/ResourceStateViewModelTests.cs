@@ -1,13 +1,11 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Globalization;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Resources;
 using Aspire.Tests.Shared.DashboardModel;
 using Google.Protobuf.WellKnownTypes;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.Extensions.Localization;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Xunit;
 using Enum = System.Enum;
@@ -35,11 +33,11 @@ public class ResourceStateViewModelTests
         /* expected output */ $"Localized:{nameof(Columns.StateColumnResourceExited)}:CustomResource", "RecordStop", Color.Info, "Finished")]
     [InlineData(
         /* state */ "Container", KnownResourceState.Unknown, null, null, null,
-        /* expected output */ null, "CircleHint", Color.Info, "Unknown")]
+        /* expected output */ "Unknown", "CircleHint", Color.Info, "Unknown")]
     // Health checks
     [InlineData(
         /* state */ "Container", KnownResourceState.Running, null, "Healthy", null,
-        /* expected output */ null, "CheckmarkCircle", Color.Success, "Running")]
+        /* expected output */ "Running", "CheckmarkCircle", Color.Success, "Running")]
     [InlineData(
         /* state */ "Container", KnownResourceState.Running, null, "", null,
         /* expected output */ $"Localized:{nameof(Columns.RunningAndUnhealthyResourceStateToolTip)}", "CheckmarkCircleWarning", Color.Warning, "Running (Unhealthy)")]
@@ -48,13 +46,13 @@ public class ResourceStateViewModelTests
         /* expected output */ $"Localized:{nameof(Columns.RunningAndUnhealthyResourceStateToolTip)}", "CheckmarkCircleWarning", Color.Warning, "Running (Unhealthy)")]
     [InlineData(
         /* state */ "Container", KnownResourceState.Running, null, "Healthy", "warning",
-        /* expected output */ null, "Warning", Color.Warning, "Running")]
+        /* expected output */ "Running", "Warning", Color.Warning, "Running")]
     [InlineData(
         /* state */ "Container", KnownResourceState.Running, null, "Healthy", "NOT_A_VALID_STATE_STYLE",
-        /* expected output */ null, "Circle", Color.Neutral, "Running")]
+        /* expected output */ "Running", "Circle", Color.Neutral, "Running")]
     [InlineData(
         /* state */ "Container", KnownResourceState.Running, null, null, "info",
-        /* expected output */ null, "Info", Color.Info, "Running")]
+        /* expected output */ "Running", "Info", Color.Info, "Running")]
     [InlineData(
         /* state */ "Container", KnownResourceState.RuntimeUnhealthy, null, null, null,
         /* expected output */ $"Localized:{nameof(Columns.StateColumnResourceContainerRuntimeUnhealthy)}", "Warning", Color.Warning, "Runtime unhealthy")]
@@ -93,7 +91,7 @@ public class ResourceStateViewModelTests
         var localizer = new TestStringLocalizer<Columns>();
 
         // Act
-        var tooltip = ResourceStateViewModel.GetAdditionalResourceStateTooltip(resource, localizer);
+        var tooltip = ResourceStateViewModel.GetResourceStateTooltip(resource, localizer);
         var vm = ResourceStateViewModel.GetStateViewModel(resource, localizer);
 
         // Assert
@@ -102,62 +100,5 @@ public class ResourceStateViewModelTests
         Assert.Equal(expectedIconName, vm.Icon.Name);
         Assert.Equal(expectedColor, vm.Color);
         Assert.Equal(expectedText, vm.Text);
-    }
-
-    [Fact]
-    public void GetResourceStateTooltip_ExitedCustomResource_EncodesResourceType()
-    {
-        var resource = ModelTestHelpers.CreateResource(
-            state: KnownResourceState.Exited,
-            resourceType: "<marquee>An HTML resource type!</marquee>");
-
-        var tooltip = ResourceStateViewModel.GetResourceStateTooltip(resource, new HtmlTestStringLocalizer());
-
-        Assert.Equal("&lt;marquee&gt;An HTML resource type!&lt;/marquee&gt; is no longer running", tooltip);
-    }
-
-    [Fact]
-    public void GetResourceStateTooltip_RuntimeUnhealthyContainer_PreservesLocalizedMarkup()
-    {
-        var resource = ModelTestHelpers.CreateResource(state: KnownResourceState.RuntimeUnhealthy);
-
-        var tooltip = ResourceStateViewModel.GetResourceStateTooltip(resource, new HtmlTestStringLocalizer());
-
-        Assert.Contains("<a href=\"https://aka.ms/aspire/container-runtime-unhealthy\"", tooltip);
-    }
-
-    private sealed class HtmlTestStringLocalizer : IStringLocalizer<Columns>
-    {
-        public LocalizedString this[string name]
-        {
-            get
-            {
-                return name switch
-                {
-                    nameof(Columns.StateColumnResourceContainerRuntimeUnhealthy) => new(name, "Container runtime issue. <a href=\"https://aka.ms/aspire/container-runtime-unhealthy\">More information</a>."),
-                    nameof(Columns.RunningAndUnhealthyResourceStateToolTip) => new(name, "Resource is running but not in a healthy state."),
-                    nameof(Columns.StateColumnResourceWaiting) => new(name, "Resource is waiting for other resources to be in a running and healthy state."),
-                    nameof(Columns.StateColumnResourceNotStarted) => new(name, "Resource has not started because it's configured to not automatically start."),
-                    _ => new(name, name)
-                };
-            }
-        }
-
-        public LocalizedString this[string name, params object[] arguments]
-        {
-            get
-            {
-                var format = name switch
-                {
-                    nameof(Columns.StateColumnResourceExited) => "{0} is no longer running",
-                    nameof(Columns.StateColumnResourceExitedUnexpectedly) => "{0} exited unexpectedly with exit code {1}",
-                    _ => name
-                };
-
-                return new(name, string.Format(CultureInfo.CurrentCulture, format, arguments));
-            }
-        }
-
-        public IEnumerable<LocalizedString> GetAllStrings(bool includeParentCultures) => [];
     }
 }

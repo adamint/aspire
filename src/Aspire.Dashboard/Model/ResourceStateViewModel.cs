@@ -1,7 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Net;
 using Aspire.Dashboard.Extensions;
 using Aspire.Dashboard.Resources;
 using Humanizer;
@@ -106,17 +105,15 @@ internal class ResourceStateViewModel(string text, Icon icon, Color color)
     {
         if (resource.IsStopped())
         {
-            var encodedResourceType = WebUtility.HtmlEncode(resource.ResourceType);
-
             if (resource.TryGetExitCode(out var exitCode) && exitCode is not 0)
             {
                 // Process completed unexpectedly, hence the non-zero code. This is almost certainly an error, so warn users.
-                return loc.GetString(nameof(Columns.StateColumnResourceExitedUnexpectedly), encodedResourceType, exitCode);
+                return loc.GetString(nameof(Columns.StateColumnResourceExitedUnexpectedly), resource.ResourceType, exitCode);
             }
             else
             {
                 // Process completed, which may not have been unexpected.
-                return loc.GetString(nameof(Columns.StateColumnResourceExited), encodedResourceType);
+                return loc.GetString(nameof(Columns.StateColumnResourceExited), resource.ResourceType);
             }
         }
         else if (resource is { KnownState: KnownResourceState.Running, HealthStatus: not HealthStatus.Healthy })
@@ -138,23 +135,8 @@ internal class ResourceStateViewModel(string text, Icon icon, Color color)
             return loc[nameof(Columns.StateColumnResourceNotStarted)];
         }
 
+        // Fallback to text displayed in column.
         return GetStateText(resource, loc);
-    }
-
-    /// <summary>
-    /// Gets additional tooltip content for a resource state, returning null when the
-    /// tooltip would simply repeat the text already shown in the state column.
-    /// </summary>
-    /// <remarks>
-    /// Used by UI surfaces (such as the state column's <c>InfoPopover</c>) that should only
-    /// render extra tooltip content when it adds information beyond the displayed state text.
-    /// </remarks>
-    internal static string? GetAdditionalResourceStateTooltip(ResourceViewModel resource, IStringLocalizer<Columns> loc)
-    {
-        var tooltip = GetResourceStateTooltip(resource, loc);
-        var stateText = GetStateText(resource, loc);
-
-        return string.Equals(tooltip, stateText, StringComparison.Ordinal) ? null : tooltip;
     }
 
     private static string GetStateText(ResourceViewModel resource, IStringLocalizer<Columns> loc)

@@ -19,10 +19,10 @@
       </trans-unit>
       <trans-unit id="StateColumnResourceContainerRuntimeUnhealthy">
         <source>Container runtime was found but appears to be unhealthy. Ensure that it is running.
-For more information, see &lt;a href="https://aka.ms/aspire/container-runtime-unhealthy" target="_blank" rel="noopener noreferrer"&gt;https://aka.ms/aspire/container-runtime-unhealthy&lt;/a&gt;.</source>
+For more information, see https://aka.ms/aspire/container-runtime-unhealthy</source>
         <target state="needs-review-translation">Die Containerruntime wurde gefunden, scheint aber fehlerhaft zu sein. Stellen Sie sicher, dass sie ausgeführt wird.
 Weitere Informationen finden Sie unter https://aka.ms/dotnet/aspire/container-runtime-unhealthy</target>
-        <note>Contains a new line. The link provided is html markup and should not be translated or otherwise modified.</note>
+        <note>Contains a new line</note>
       </trans-unit>
       <trans-unit id="StateColumnResourceExited">
         <source>{0} is no longer running</source>
@@ -33,11 +33,6 @@ Weitere Informationen finden Sie unter https://aka.ms/dotnet/aspire/container-ru
         <source>{0} exited unexpectedly with exit code {1}</source>
         <target state="translated">{0} wurde unerwartet mit dem Exitcode {1} beendet.</target>
         <note>{0} is a resource type, {1} is a number</note>
-      </trans-unit>
-      <trans-unit id="StateColumnResourceInfoButton">
-        <source>More information about resource state</source>
-        <target state="new">More information about resource state</target>
-        <note />
       </trans-unit>
       <trans-unit id="StateColumnResourceNotStarted">
         <source>Resource has not started because it's configured to not automatically start.</source>
