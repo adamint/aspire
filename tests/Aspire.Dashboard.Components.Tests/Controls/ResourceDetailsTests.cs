@@ -8,6 +8,8 @@ using Aspire.Dashboard.Components.Tests.Shared;
 using Aspire.Dashboard.Model;
 using Aspire.Tests.Shared.DashboardModel;
 using Bunit;
+using Google.Protobuf.WellKnownTypes;
+using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.FluentUI.AspNetCore.Components;
@@ -472,5 +474,87 @@ public class ResourceDetailsTests : DashboardTestContext
             h => Assert.Equal("delta-check", h.Name),
             h => Assert.Equal("GAMMA-Check", h.Name),
             h => Assert.Equal("zebra-check", h.Name));
+    }
+
+    [Fact]
+    public async Task UnsetParameterResource_RendersValueNotSetButton_AndInvokesSetCommand()
+    {
+        ResourceSetupHelpers.SetupResourceDetails(this);
+
+        var setCommand = new CommandViewModel(
+            CommandViewModel.SetParameterCommand,
+            CommandViewModelState.Enabled,
+            displayName: "Set value",
+            displayDescription: "Set the parameter value",
+            confirmationMessage: string.Empty,
+            parameter: null,
+            isHighlighted: false,
+            iconName: string.Empty,
+            iconVariant: IconVariant.Regular);
+
+        var properties = new Dictionary<string, ResourcePropertyViewModel>
+        {
+            [KnownProperties.Parameter.Value] = new ResourcePropertyViewModel(
+                KnownProperties.Parameter.Value,
+                Value.ForString("Parameter 'p' not found in configuration."),
+                isValueSensitive: false,
+                knownProperty: new KnownProperty(KnownProperties.Parameter.Value, _ => "Value"),
+                priority: 0)
+        };
+
+        var resource = ModelTestHelpers.CreateResource(
+            resourceName: "myparameter",
+            resourceType: KnownResourceTypes.Parameter,
+            stateStyle: "warning",
+            properties: properties,
+            commands: ImmutableArray.Create(setCommand));
+
+        CommandViewModel? capturedCommand = null;
+        var cut = RenderComponent<ResourceDetails>(builder =>
+        {
+            builder.Add(p => p.Resource, resource);
+            builder.Add(p => p.ResourceByName, new ConcurrentDictionary<string, ResourceViewModel>([new KeyValuePair<string, ResourceViewModel>(resource.Name, resource)]));
+            builder.Add(p => p.CommandSelected, EventCallback.Factory.Create<CommandViewModel>(this, c => capturedCommand = c));
+            builder.Add(p => p.IsCommandExecuting, (_, _) => false);
+        });
+
+        var button = cut.Find("button.value-not-set-link");
+        Assert.Equal("Value not set", button.TextContent.Trim());
+
+        await button.ClickAsync(new MouseEventArgs());
+
+        Assert.NotNull(capturedCommand);
+        Assert.Equal(CommandViewModel.SetParameterCommand, capturedCommand!.Name);
+    }
+
+    [Fact]
+    public void RunningParameterResource_DoesNotRenderValueNotSetButton()
+    {
+        ResourceSetupHelpers.SetupResourceDetails(this);
+
+        var properties = new Dictionary<string, ResourcePropertyViewModel>
+        {
+            [KnownProperties.Parameter.Value] = new ResourcePropertyViewModel(
+                KnownProperties.Parameter.Value,
+                Value.ForString("resolved-value"),
+                isValueSensitive: false,
+                knownProperty: new KnownProperty(KnownProperties.Parameter.Value, _ => "Value"),
+                priority: 0)
+        };
+
+        var resource = ModelTestHelpers.CreateResource(
+            resourceName: "myparameter",
+            resourceType: KnownResourceTypes.Parameter,
+            state: KnownResourceState.Running,
+            properties: properties);
+
+        var cut = RenderComponent<ResourceDetails>(builder =>
+        {
+            builder.Add(p => p.Resource, resource);
+            builder.Add(p => p.ResourceByName, new ConcurrentDictionary<string, ResourceViewModel>([new KeyValuePair<string, ResourceViewModel>(resource.Name, resource)]));
+            builder.Add(p => p.IsCommandExecuting, (_, _) => false);
+        });
+
+        Assert.Empty(cut.FindAll("button.value-not-set-link"));
     }
 }

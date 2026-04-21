@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using Aspire.Dashboard.Components.Controls.PropertyValues;
 using Aspire.Dashboard.Components.Pages;
+using Aspire.Dashboard.Extensions;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Model.Assistant;
 using Aspire.Dashboard.Resources;
@@ -198,6 +199,21 @@ public partial class ResourceDetails : IComponentWithTelemetry, IDisposable
                 },
             };
 
+            // For parameter resources whose value is unset, render the same "Value not set" affordance
+            // as the parameters grid so the details panel stays consistent with the grid.
+            if (_resource.IsParameter && !_resource.IsRunningState())
+            {
+                _valueComponents[KnownProperties.Parameter.Value] = new ComponentMetadata
+                {
+                    Type = typeof(ParameterValueDisplayCell),
+                    Parameters =
+                    {
+                        ["Resource"] = _resource,
+                        ["OnExecuteCommandAsync"] = (Func<ResourceViewModel, CommandViewModel, Task>)ExecuteParameterCommandAsync,
+                    }
+                };
+            }
+
             UpdateResourceActionsMenu();
         }
 
@@ -275,6 +291,11 @@ public partial class ResourceDetails : IComponentWithTelemetry, IDisposable
             showViewDetails: false,
             showConsoleLogsItem: true,
             showUrls: true);
+    }
+
+    private async Task ExecuteParameterCommandAsync(ResourceViewModel resource, CommandViewModel command)
+    {
+        await CommandSelected.InvokeAsync(command);
     }
 
     private IEnumerable<ResourceDetailRelationshipViewModel> GetRelationships()
