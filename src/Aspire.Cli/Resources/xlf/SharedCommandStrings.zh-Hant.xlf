@@ -12,6 +12,11 @@
         <target state="new">No running AppHost found. Use 'aspire run' to start one first.</target>
         <note />
       </trans-unit>
+      <trans-unit id="AppHostNotRunningAtPath">
+        <source>No running AppHost found at '{0}'. Use 'aspire run' to start one first.</source>
+        <target state="new">No running AppHost found at '{0}'. Use 'aspire run' to start one first.</target>
+        <note>{0} is the AppHost project path.</note>
+      </trans-unit>
       <trans-unit id="FormatOptionDescription">
         <source>Output format for detached AppHost results</source>
         <target state="new">Output format for detached AppHost results</target>

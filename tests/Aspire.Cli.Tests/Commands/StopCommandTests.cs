@@ -3,6 +3,7 @@
 
 using Aspire.Cli.Commands;
 using Aspire.Cli.Projects;
+using Aspire.Cli.Resources;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
 using Microsoft.Extensions.DependencyInjection;
@@ -68,10 +69,12 @@ public class StopCommandTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var projectLocatorInvoked = false;
+        var interactionService = new TestInteractionService();
         var resolvedProjectFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "Resolved.AppHost", "Resolved.AppHost.csproj"));
 
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
         {
+            options.InteractionServiceFactory = _ => interactionService;
             options.ProjectLocatorFactory = _ => new TestProjectLocator
             {
                 UseOrFindAppHostProjectFileWithBehaviorAsyncCallback = (projectFile, _, _, _) =>
@@ -90,5 +93,9 @@ public class StopCommandTests(ITestOutputHelper outputHelper)
 
         Assert.True(projectLocatorInvoked);
         Assert.Equal(ExitCodeConstants.Success, exitCode);
+        var displayedMessage = Assert.Single(interactionService.DisplayedMessages);
+        Assert.Equal(
+            string.Format(SharedCommandStrings.AppHostNotRunningAtPath, Path.Combine("Resolved.AppHost", "Resolved.AppHost.csproj")),
+            displayedMessage.Message);
     }
 }

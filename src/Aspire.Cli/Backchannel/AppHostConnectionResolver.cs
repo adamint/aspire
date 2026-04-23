@@ -142,7 +142,12 @@ internal sealed class AppHostConnectionResolver(
                 }
             }
 
-            return new AppHostConnectionResult { ErrorMessage = notFoundMessage };
+            var displayPath = Path.GetRelativePath(executionContext.WorkingDirectory.FullName, targetPath);
+
+            return new AppHostConnectionResult
+            {
+                ErrorMessage = string.Format(CultureInfo.CurrentCulture, SharedCommandStrings.AppHostNotRunningAtPath, displayPath)
+            };
         }
 
         // Socket-first approach: Scan for running AppHosts via their sockets
