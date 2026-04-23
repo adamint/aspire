@@ -152,6 +152,16 @@
         <target state="needs-review-translation">L'argument de projet n'a pas été spécifié et aucun fichier de projet hôte d'application n'a été détecté.</target>
         <note />
       </trans-unit>
+      <trans-unit id="ProjectOptionSpecifiedDirectoryContainsMultipleAppHosts">
+        <source>The --apphost option specified a directory that contains multiple AppHost project files.</source>
+        <target state="new">The --apphost option specified a directory that contains multiple AppHost project files.</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="ProjectOptionSpecifiedDirectoryContainsNoAppHosts">
+        <source>The --apphost option specified a directory that does not contain any AppHost project files.</source>
+        <target state="new">The --apphost option specified a directory that does not contain any AppHost project files.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="RequiredCapability">
         <source>Required Capability</source>
         <target state="translated">Capacité requise</target>

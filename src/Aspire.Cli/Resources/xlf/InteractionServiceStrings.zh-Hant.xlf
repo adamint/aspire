@@ -152,6 +152,16 @@
         <target state="needs-review-translation">未指定專案引數，且未偵測到任何主控處理程序專案檔案。</target>
         <note />
       </trans-unit>
+      <trans-unit id="ProjectOptionSpecifiedDirectoryContainsMultipleAppHosts">
+        <source>The --apphost option specified a directory that contains multiple AppHost project files.</source>
+        <target state="new">The --apphost option specified a directory that contains multiple AppHost project files.</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="ProjectOptionSpecifiedDirectoryContainsNoAppHosts">
+        <source>The --apphost option specified a directory that does not contain any AppHost project files.</source>
+        <target state="new">The --apphost option specified a directory that does not contain any AppHost project files.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="RequiredCapability">
         <source>Required Capability</source>
         <target state="translated">必要的功能</target>

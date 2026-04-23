@@ -90,31 +90,44 @@ internal sealed class AppHostConnectionResolver(
         // Fast path: If --apphost was specified, check directly for its socket
         if (projectFile is not null)
         {
-            try
-            {
-                var searchResult = await projectLocator.UseOrFindAppHostProjectFileAsync(
-                    projectFile,
-                    MultipleAppHostProjectsFoundBehavior.Throw,
-                    createSettingsFile: false,
-                    cancellationToken).ConfigureAwait(false);
+            var explicitDirectory = Directory.Exists(projectFile.FullName);
 
-                projectFile = searchResult.SelectedProjectFile;
-            }
-            catch (ProjectLocatorException ex)
+            if (explicitDirectory)
             {
-                var (exitCode, errorMessage) = ProjectLocatorErrorHelper.GetExitCodeAndMessage(ex);
+                try
+                {
+                    var searchResult = await projectLocator.UseOrFindAppHostProjectFileAsync(
+                        projectFile,
+                        MultipleAppHostProjectsFoundBehavior.Throw,
+                        createSettingsFile: false,
+                        cancellationToken).ConfigureAwait(false);
+
+                    projectFile = searchResult.SelectedProjectFile;
+                }
+                catch (ProjectLocatorException ex)
+                {
+                    var (exitCode, errorMessage) = GetProjectResolutionError(ex, explicitDirectory);
+                    return new AppHostConnectionResult
+                    {
+                        ErrorMessage = errorMessage,
+                        ExitCode = exitCode,
+                    };
+                }
+
+                if (projectFile is null)
+                {
+                    return new AppHostConnectionResult
+                    {
+                        ErrorMessage = InteractionServiceStrings.ProjectOptionSpecifiedDirectoryContainsNoAppHosts,
+                        ExitCode = ExitCodeConstants.FailedToFindProject,
+                    };
+                }
+            }
+            else if (!projectFile.Exists)
+            {
                 return new AppHostConnectionResult
                 {
-                    ErrorMessage = errorMessage,
-                    ExitCode = exitCode,
-                };
-            }
-
-            if (projectFile is null)
-            {
-                return new AppHostConnectionResult
-                {
-                    ErrorMessage = InteractionServiceStrings.ProjectOptionNotSpecifiedNoCsprojFound,
+                    ErrorMessage = InteractionServiceStrings.ProjectOptionDoesntExist,
                     ExitCode = ExitCodeConstants.FailedToFindProject,
                 };
             }
@@ -203,6 +216,25 @@ internal sealed class AppHostConnectionResolver(
         }
 
         return new AppHostConnectionResult { Connection = selectedConnection };
+    }
+
+    private static (int ExitCode, string ErrorMessage) GetProjectResolutionError(ProjectLocatorException ex, bool explicitDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(ex);
+
+        if (!explicitDirectory)
+        {
+            return ProjectLocatorErrorHelper.GetExitCodeAndMessage(ex);
+        }
+
+        return ex.FailureReason switch
+        {
+            ProjectLocatorFailureReason.MultipleProjectFilesFound
+                => (ExitCodeConstants.FailedToFindProject, InteractionServiceStrings.ProjectOptionSpecifiedDirectoryContainsMultipleAppHosts),
+            ProjectLocatorFailureReason.ProjectFileDoesntExist or ProjectLocatorFailureReason.NoProjectFileFound
+                => (ExitCodeConstants.FailedToFindProject, InteractionServiceStrings.ProjectOptionSpecifiedDirectoryContainsNoAppHosts),
+            _ => ProjectLocatorErrorHelper.GetExitCodeAndMessage(ex)
+        };
     }
 
     /// <summary>

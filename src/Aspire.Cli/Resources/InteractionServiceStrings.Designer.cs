@@ -322,6 +322,24 @@ namespace Aspire.Cli.Resources {
         }
 
         /// <summary>
+        ///   Looks up a localized string similar to The --apphost option specified a directory that contains multiple apphost project files..
+        /// </summary>
+        public static string ProjectOptionSpecifiedDirectoryContainsMultipleAppHosts {
+            get {
+                return ResourceManager.GetString("ProjectOptionSpecifiedDirectoryContainsMultipleAppHosts", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to The --apphost option specified a directory that does not contain any apphost project files..
+        /// </summary>
+        public static string ProjectOptionSpecifiedDirectoryContainsNoAppHosts {
+            get {
+                return ResourceManager.GetString("ProjectOptionSpecifiedDirectoryContainsNoAppHosts", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to The --apphost option was not specified and multiple apphost project files were detected..
         /// </summary>
         public static string ProjectOptionNotSpecifiedMultipleAppHostsFound {

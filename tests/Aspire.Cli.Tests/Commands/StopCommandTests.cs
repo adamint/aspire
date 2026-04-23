@@ -70,6 +70,7 @@ public class StopCommandTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var projectLocatorInvoked = false;
         var interactionService = new TestInteractionService();
+        var appHostDirectory = workspace.WorkspaceRoot.CreateSubdirectory("some-directory");
         var resolvedProjectFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "Resolved.AppHost", "Resolved.AppHost.csproj"));
 
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
@@ -87,7 +88,7 @@ public class StopCommandTests(ITestOutputHelper outputHelper)
         using var provider = services.BuildServiceProvider();
 
         var command = provider.GetRequiredService<RootCommand>();
-        var result = command.Parse("stop --apphost some-directory");
+        var result = command.Parse($"stop --apphost \"{appHostDirectory.FullName}\"");
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
