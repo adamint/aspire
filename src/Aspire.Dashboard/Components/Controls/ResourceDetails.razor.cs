@@ -158,7 +158,22 @@ public partial class ResourceDetails : IComponentWithTelemetry, IDisposable
 
             _resource = Resource;
             _displayedResourcePropertyViewModels.Clear();
-            _displayedResourcePropertyViewModels.AddRange(_resource.Properties.Select(p => new DisplayedResourcePropertyViewModel(p.Value, Loc, TimeProvider)));
+            foreach (var property in _resource.Properties.Values)
+            {
+                var displayedProperty = property;
+
+                // An unresolved secret parameter has no value to hide, so keep the placeholder visible
+                // in the details grid instead of routing it through masking behavior.
+                if (_resource.IsParameter &&
+                    !_resource.IsRunningState() &&
+                    property.KnownProperty?.Key == KnownProperties.Parameter.Value &&
+                    property.IsValueSensitive)
+                {
+                    displayedProperty = new ResourcePropertyViewModel(property.Name, property.Value, isValueSensitive: false, property.KnownProperty, property.Priority);
+                }
+
+                _displayedResourcePropertyViewModels.Add(new DisplayedResourcePropertyViewModel(displayedProperty, Loc, TimeProvider));
+            }
 
             // Collapse details sections when they have no data.
             _isUrlsExpanded = GetUrls().Count > 0;

@@ -260,7 +260,7 @@ public sealed class CommandViewModel
 
     public static bool IsKnownCommand(string command)
     {
-        return s_knownResourceCommands.Contains(command);
+        return s_knownResourceCommands.Contains(command, StringComparers.CommandName);
     }
 
     public string GetDisplayName()

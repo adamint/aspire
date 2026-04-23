@@ -144,7 +144,7 @@ public sealed class ParameterProcessor(
     {
         // Add the "Set parameter" command if the app is running and the interaction service is available.
         // This command allows the user to set the parameter value at runtime.
-        if (executionContext.IsRunMode && interactionService.IsAvailable && !parameterResource.Annotations.OfType<ResourceCommandAnnotation>().Any(a => a.Name == KnownResourceCommands.SetParameterCommand))
+        if (executionContext.IsRunMode && interactionService.IsAvailable && !parameterResource.Annotations.OfType<ResourceCommandAnnotation>().Any(a => a.Name.Equals(KnownResourceCommands.SetParameterCommand, StringComparisons.CommandName)))
         {
             AddSetParameterCommand(parameterResource);
         }

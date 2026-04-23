@@ -1,4 +1,4 @@
-@using Aspire.Dashboard.Model
+﻿@using Aspire.Dashboard.Model
 @using Aspire.Dashboard.Resources
 @inject IStringLocalizer<ControlsStrings> ControlsStringsLoc
 
@@ -31,7 +31,7 @@ else
         SetCommand = null;
         foreach (var command in Resource.Commands)
         {
-            if (string.Equals(command.Name, CommandViewModel.SetParameterCommand, StringComparison.Ordinal)
+            if (string.Equals(command.Name, CommandViewModel.SetParameterCommand, StringComparisons.CommandName)
                 && command.State != CommandViewModelState.Hidden)
             {
                 SetCommand = command;
