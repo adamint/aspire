@@ -173,6 +173,13 @@ internal sealed class AddCommand : BaseCommand
             var filteredPackagesWithShortName = packagesWithShortName
                 .Where(p => p.FriendlyName == integrationName || p.Package.Id == integrationName);
 
+            var version = parseResult.GetValue(s_versionOption);
+
+            if (!filteredPackagesWithShortName.Any() && integrationName is not null && version is not null && !_hostEnvironment.SupportsInteractiveInput)
+            {
+                throw new EmptyChoicesException(string.Format(CultureInfo.CurrentCulture, AddCommandStrings.SpecifiedVersionRequiresExactPackageMatch, integrationName));
+            }
+
             if (!filteredPackagesWithShortName.Any() && integrationName is not null)
             {
                 // If we didn't get an exact match on the friendly name or the package ID
@@ -192,8 +199,6 @@ internal sealed class AddCommand : BaseCommand
                         .Select(x => x.Package)
                         .ToList();
             }
-
-            var version = parseResult.GetValue(s_versionOption);
 
             // If we didn't match any, show a complete list. If we matched one, and its
             // an exact match, then we still prompt, but it will only prompt for
@@ -354,14 +359,17 @@ internal sealed class AddCommand : BaseCommand
                 var preferredVersionPackage = packageVersions.First(p => p.Package.Version == preferredVersion);
                 return preferredVersionPackage;
             }
-            else // search all versions of the selected package for a match
+
+            var allVersions = await InteractionService.ShowStatusAsync(
+                string.Format(CultureInfo.CurrentCulture, AddCommandStrings.SearchingForSpecifiedPackageVersion, selectedPackage.Package.Id, preferredVersion),
+                async () => await GetAllPackageVersions(workingDirectory, packageVersions, cancellationToken));
+            var matchedPreferredVersionPackage = allVersions.FirstOrDefault(packageVersion => packageVersion.Package.Version == preferredVersion);
+            if (matchedPreferredVersionPackage.Package is not null)
             {
-                var allVersions = await GetAllPackageVersions(workingDirectory, possiblePackages, cancellationToken);
-                if (allVersions.Any(packageVersion => packageVersion.Package.Version == preferredVersion))
-                {
-                    return allVersions.First(package => package.Package.Version == preferredVersion);
-                }
+                return matchedPreferredVersionPackage;
             }
+
+            throw new EmptyChoicesException(string.Format(CultureInfo.CurrentCulture, AddCommandStrings.SpecifiedVersionNotFoundForPackage, selectedPackage.Package.Id, preferredVersion));
         }
 
         // When PR hives are present, prefer the package that exactly matches the installed
