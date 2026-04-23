@@ -1,7 +1,9 @@
 @using Aspire.Dashboard.Components.Controls
 @using Aspire.Dashboard.Model
 
-<ParameterValueDisplay Resource="@Resource" OnExecuteCommandAsync="@OnExecuteCommandAsync" />
+<ParameterValueDisplay Resource="@Resource"
+                       OnExecuteCommandAsync="@OnExecuteCommandAsync"
+                       IsCommandExecuting="@IsCommandExecuting" />
 
 @code {
     [Parameter, EditorRequired]
@@ -9,6 +11,9 @@
 
     [Parameter, EditorRequired]
     public required Func<ResourceViewModel, CommandViewModel, Task> OnExecuteCommandAsync { get; set; }
+
+    [Parameter, EditorRequired]
+    public required Func<ResourceViewModel, CommandViewModel, bool> IsCommandExecuting { get; set; }
 
     // GridValue forwards Value and HighlightText to all dynamic value components.
     // Accept and ignore them so DynamicComponent parameter binding succeeds.

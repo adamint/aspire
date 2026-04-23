@@ -164,8 +164,7 @@ public partial class ResourceDetails : IComponentWithTelemetry, IDisposable
 
                 // An unresolved secret parameter has no value to hide, so keep the placeholder visible
                 // in the details grid instead of routing it through masking behavior.
-                if (_resource.IsParameter &&
-                    !_resource.IsRunningState() &&
+                if (_resource.HasMissingParameterValueState() &&
                     property.KnownProperty?.Key == KnownProperties.Parameter.Value &&
                     property.IsValueSensitive)
                 {
@@ -216,7 +215,7 @@ public partial class ResourceDetails : IComponentWithTelemetry, IDisposable
 
             // For parameter resources whose value is unset, render the same "Value not set" affordance
             // as the parameters grid so the details panel stays consistent with the grid.
-            if (_resource.IsParameter && !_resource.IsRunningState())
+            if (_resource.HasMissingParameterValueState())
             {
                 _valueComponents[KnownProperties.Parameter.Value] = new ComponentMetadata
                 {
@@ -225,6 +224,7 @@ public partial class ResourceDetails : IComponentWithTelemetry, IDisposable
                     {
                         ["Resource"] = _resource,
                         ["OnExecuteCommandAsync"] = (Func<ResourceViewModel, CommandViewModel, Task>)ExecuteParameterCommandAsync,
+                        ["IsCommandExecuting"] = IsCommandExecuting,
                     }
                 };
             }

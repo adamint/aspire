@@ -7,6 +7,8 @@ namespace Aspire.Dashboard.Extensions;
 
 internal static class ResourceViewModelExtensions
 {
+    private const string MissingParameterValueState = "Value missing";
+
     public static bool IsRunningState(this ResourceViewModel resource)
     {
         return resource.KnownState is KnownResourceState.Running;
@@ -45,6 +47,11 @@ internal static class ResourceViewModelExtensions
     public static bool IsWaiting(this ResourceViewModel resource)
     {
         return resource.KnownState is KnownResourceState.Waiting;
+    }
+
+    public static bool HasMissingParameterValueState(this ResourceViewModel resource)
+    {
+        return resource.IsParameter && string.Equals(resource.State, MissingParameterValueState, StringComparisons.ResourceState);
     }
 
     public static bool IsUnknownState(this ResourceViewModel resource) => resource.KnownState is KnownResourceState.Unknown;

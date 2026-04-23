@@ -189,7 +189,8 @@
                                                 {
                                                     <span class="cellText" @onclick:stopPropagation="true">
                                                         <ParameterValueDisplay Resource="context.Resource"
-                                                                               OnExecuteCommandAsync="ExecuteResourceCommandAsync" />
+                                                                               OnExecuteCommandAsync="ExecuteResourceCommandAsync"
+                                                                               IsCommandExecuting="@((resource, command) => DashboardCommandExecutor.IsExecuting(resource.Name, command.Name))" />
                                                     </span>
                                                 }
                                                 else
