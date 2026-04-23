@@ -31,9 +31,12 @@ internal sealed class RenderCommand : BaseCommand
     private static readonly Dictionary<string, string> s_choices = new()
     {
         ["displaymessage"] = "Display message (all emojis)",
+        ["displaystyles"] = "Display error, success, subtle, and cancellation messages",
         ["showstatus"] = "Show status spinner (first 5 emojis)",
         ["showstatus-markup"] = "Show status with markup rendered",
         ["showstatus-escaped"] = "Show status with markup escaped",
+        ["choice"] = "Selection prompt with formatted choices",
+        ["choice-simple"] = "Selection prompt without formatter",
         ["mixed"] = "Mixed interaction service methods",
         ["publish-summary-all"] = "Publish summary timeline (stress scenarios)",
         ["exit"] = "Exit",
@@ -111,7 +114,7 @@ internal sealed class RenderCommand : BaseCommand
                 "What do you want to test?",
                 s_choices.Keys,
                 key => s_choices[key],
-                cancellationToken);
+                cancellationToken: cancellationToken);
 
             var exitCode = await ExecuteChoiceAsync(choice, parseResult.GetValue(s_consoleWidthOption), cancellationToken);
             if (choice == "exit" || exitCode != ExitCodeConstants.Success)
@@ -136,12 +139,18 @@ internal sealed class RenderCommand : BaseCommand
             {
                 case "displaymessage":
                     return TestDisplayMessage();
+                case "displaystyles":
+                    return TestDisplayStyles();
                 case "showstatus":
                     return await TestShowStatusAsync(cancellationToken);
                 case "showstatus-markup":
                     return await TestShowStatusWithMarkupAsync(cancellationToken);
                 case "showstatus-escaped":
                     return await TestShowStatusEscapedAsync(cancellationToken);
+                case "choice":
+                    return await TestChoiceWithFormatterAsync(cancellationToken);
+                case "choice-simple":
+                    return await TestChoiceSimpleAsync(cancellationToken);
                 case "mixed":
                     await TestMixedMethodsAsync(cancellationToken);
                     return ExitCodeConstants.Success;
@@ -191,6 +200,15 @@ internal sealed class RenderCommand : BaseCommand
         return ExitCodeConstants.Success;
     }
 
+    private int TestDisplayStyles()
+    {
+        InteractionService.DisplayError("This is an error message.");
+        InteractionService.DisplaySuccess("Operation completed successfully.");
+        InteractionService.DisplaySubtleMessage("This is a subtle hint.");
+        InteractionService.DisplayCancellationMessage();
+        return ExitCodeConstants.Success;
+    }
+
     private async Task<int> TestShowStatusAsync(CancellationToken cancellationToken)
     {
         foreach (var emoji in s_allEmojis.Take(5))
@@ -237,6 +255,42 @@ internal sealed class RenderCommand : BaseCommand
         return ExitCodeConstants.Success;
     }
 
+    private async Task<int> TestChoiceWithFormatterAsync(CancellationToken cancellationToken)
+    {
+        var packages = new[]
+        {
+            ("Aspire.Hosting.Redis", "9.2.0", "[green]stable[/]"),
+            ("Aspire.Hosting.PostgreSQL", "9.2.0", "[green]stable[/]"),
+            ("Aspire.Hosting.RabbitMQ", "9.1.0", "[yellow]preview[/]"),
+            ("Aspire.Hosting.MongoDB [Deprecated]", "9.0.0", "[red]deprecated[/]"),
+            ("Aspire.Hosting.Kafka", "9.2.0", "[green]stable[/]"),
+            ("Aspire.Hosting.MySql [Preview]", "9.1.0", "[yellow]preview[/]"),
+        };
+
+        var selected = await InteractionService.PromptForSelectionAsync(
+            "Select a [bold blue]package[/] to install:",
+            packages,
+            p => $"{p.Item1.EscapeMarkup()} [dim]v{p.Item2}[/] ({p.Item3})",
+            cancellationToken: cancellationToken);
+
+        InteractionService.DisplayMessage(KnownEmojis.Package, $"Selected: {selected.Item1} v{selected.Item2}");
+        return ExitCodeConstants.Success;
+    }
+
+    private async Task<int> TestChoiceSimpleAsync(CancellationToken cancellationToken)
+    {
+        var environments = new[] { "Development", "Staging", "Production" };
+
+        var selected = await InteractionService.PromptForSelectionAsync(
+            "Select a target environment:",
+            environments,
+            e => e,
+            cancellationToken: cancellationToken);
+
+        InteractionService.DisplayMessage(KnownEmojis.Rocket, $"Deploying to {selected}...");
+        return ExitCodeConstants.Success;
+    }
+
     private async Task TestMixedMethodsAsync(CancellationToken cancellationToken)
     {
         InteractionService.DisplayMessage(KnownEmojis.Rocket, "Starting mixed methods test...");
@@ -269,14 +323,14 @@ internal sealed class RenderCommand : BaseCommand
 
         var name = await InteractionService.PromptForStringAsync(
             "Enter a test value",
-            defaultValue: "hello",
+            binding: PromptBinding.CreateDefault<string?>("hello"),
             cancellationToken: cancellationToken);
 
-        InteractionService.DisplayMessage(KnownEmojis.CheckMark, $"You entered: {name}");
+        InteractionService.DisplayMessage(KnownEmojis.CheckMarkButton, $"You entered: {name}");
 
-        var confirmed = await InteractionService.ConfirmAsync(
+        var confirmed = await InteractionService.PromptConfirmAsync(
             "Do you want to continue?",
-            defaultValue: true,
+            binding: PromptBinding.CreateDefault(true),
             cancellationToken: cancellationToken);
 
         if (confirmed)

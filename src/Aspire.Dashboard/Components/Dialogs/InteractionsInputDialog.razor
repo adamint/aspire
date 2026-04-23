@@ -43,6 +43,7 @@
                                                  @bind-Value="input.ViewModel.Value"
                                                  Placeholder="@input.ViewModel.Input.Placeholder"
                                                  Required="input.ViewModel.Input.Required"
+                                                 AutoComplete="off"
                                                  Immediate="true"
                                                  AutoComplete="off"
                                                  Disabled="input.ViewModel.InputDisabled"
@@ -90,7 +91,8 @@
                                 *@
                                 @if (!localItem.Input.AllowCustomChoice)
                                 {
-                                    <FluentSelect TOption="SelectViewModel<string>"
+                                    <FluentSelect @key="input.ViewModel.InputKey"
+                                                  TOption="SelectViewModel<string>"
                                                   @ref="@_elementRefs[input.ViewModel]"
                                                   @bind-Value="input.ViewModel.Value"
                                                   Placeholder="@input.ViewModel.Input.Placeholder"
@@ -107,7 +109,8 @@
                                 }
                                 else
                                 {
-                                    <FluentCombobox TOption="SelectViewModel<string>"
+                                    <FluentCombobox @key="input.ViewModel.InputKey"
+                                                    TOption="SelectViewModel<string>"
                                                     @ref="@_elementRefs[input.ViewModel]"
                                                     @bind-Value="input.ViewModel.Value"
                                                     Placeholder="@input.ViewModel.Input.Placeholder"
@@ -138,7 +141,7 @@
                                                 @bind-Value="input.ViewModel.IsChecked"
                                                 Label="@input.ViewModel.Input.Label"
                                                 Placeholder="@input.ViewModel.Input.Placeholder"
-                                                AriaLabel="@input.ViewModel.Input.Description"
+                                                AriaLabel="@input.ViewModel.Input.Label"
                                                 Disabled="input.ViewModel.InputDisabled"
                                                 aria-describedby="@input.DescriptionId" />
                             </InteractionInputField>
@@ -183,24 +186,3 @@
         </FluentButton>
     }
 </FluentDialogFooter>
-
-@code {
-    private RenderFragment? GetDescriptionContent(InteractionInput vm, string? id)
-    {
-        @if (!string.IsNullOrEmpty(vm.Description))
-        {
-            return
-            @<div class="input-description" id="@id">
-            @if (vm.EnableDescriptionMarkdown)
-            {
-                    <MarkdownRenderer MarkdownProcessor="@_markdownProcessor" Markdown="@vm.Description" SuppressParagraphOnNewLines="true" />
-            }
-            else
-            {
-                    <span>@vm.Description</span>
-            }
-            </div>;
-        }
-        return null;
-    }
-}

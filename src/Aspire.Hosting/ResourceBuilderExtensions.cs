@@ -715,24 +715,25 @@ public static class ResourceBuilderExtensions
 
                 if (flags.HasFlag(ReferenceEnvironmentInjectionFlags.ServiceDiscovery))
                 {
-                    // Use the endpoint's scheme (not name) in the service discovery key so that
-                    // .NET service discovery can correctly match the scheme segment to the URI scheme.
-                    var scheme = endpoint.Scheme;
-                    if (!schemeIndexTracker.TryGetValue(scheme, out var index))
+                    // Use the endpoint's scheme for "http" and "https" endpoint names to handle
+                    // TLS upgrades correctly. For all other endpoint names, use the endpoint name
+                    // so that .NET service discovery's named endpoint resolution can match them.
+                    var schemeKey = endpoint.IsHttpSchemeNamedEndpoint ? endpoint.Scheme : endpointName;
+                    if (!schemeIndexTracker.TryGetValue(schemeKey, out var index))
                     {
                         index = 0;
                     }
 
                     // Find the next unused index for this scheme in case of collisions with other callbacks.
-                    var key = $"services__{serviceName}__{scheme}__{index}";
+                    var key = $"services__{serviceName}__{schemeKey}__{index}";
                     while (context.EnvironmentVariables.ContainsKey(key))
                     {
                         index++;
-                        key = $"services__{serviceName}__{scheme}__{index}";
+                        key = $"services__{serviceName}__{schemeKey}__{index}";
                     }
 
                     context.EnvironmentVariables[key] = endpoint;
-                    schemeIndexTracker[scheme] = index + 1;
+                    schemeIndexTracker[schemeKey] = index + 1;
                 }
             }
         };
@@ -1280,9 +1281,9 @@ public static class ResourceBuilderExtensions
     ///                        });
     /// </code>
     /// </example>
-    /// <para>This method is not available in polyglot app hosts. Use the parameter-based overload instead.</para>
+    /// <para>This method is not available in polyglot app hosts. Use the callback-based endpoint mutation export instead.</para>
     /// </remarks>
-    [AspireExportIgnore(Reason = "EndpointAnnotation has read-only properties AllocatedEndpointSnapshot and AllAllocatedEndpoints that are not ATS-compatible. Callback-free variant is exported.")]
+    [AspireExportIgnore(Reason = "Polyglot app hosts use the internal withEndpointCallback export, which exposes EndpointUpdateContext instead of EndpointAnnotation.")]
     [System.Diagnostics.CodeAnalysis.SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "<Pending>")]
     public static IResourceBuilder<T> WithEndpoint<T>(this IResourceBuilder<T> builder, [EndpointName] string endpointName, Action<EndpointAnnotation> callback, bool createIfNotExists = true) where T : IResourceWithEndpoints
     {
@@ -1315,6 +1316,45 @@ public static class ResourceBuilderExtensions
         }
 
         return builder;
+    }
+
+    [AspireExport(Description = "Updates a named endpoint via callback")]
+    internal static IResourceBuilder<T> WithEndpointCallback<T>(this IResourceBuilder<T> builder, [EndpointName] string endpointName, Action<EndpointUpdateContext> callback, bool createIfNotExists = true) where T : IResourceWithEndpoints
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(endpointName);
+        ArgumentNullException.ThrowIfNull(callback);
+
+        return builder.WithEndpoint(endpointName, endpoint => callback(new EndpointUpdateContext(endpoint)), createIfNotExists);
+    }
+
+    [AspireExport(Description = "Updates an HTTP endpoint via callback")]
+    internal static IResourceBuilder<T> WithHttpEndpointCallback<T>(this IResourceBuilder<T> builder, Action<EndpointUpdateContext> callback, [EndpointName] string? name = null, bool createIfNotExists = true) where T : IResourceWithEndpoints
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(callback);
+
+        return builder.WithWellKnownEndpointCallback(callback, name ?? "http", createIfNotExists, static (resourceBuilder, endpointName) => resourceBuilder.WithHttpEndpoint(name: endpointName));
+    }
+
+    [AspireExport(Description = "Updates an HTTPS endpoint via callback")]
+    internal static IResourceBuilder<T> WithHttpsEndpointCallback<T>(this IResourceBuilder<T> builder, Action<EndpointUpdateContext> callback, [EndpointName] string? name = null, bool createIfNotExists = true) where T : IResourceWithEndpoints
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentNullException.ThrowIfNull(callback);
+
+        return builder.WithWellKnownEndpointCallback(callback, name ?? "https", createIfNotExists, static (resourceBuilder, endpointName) => resourceBuilder.WithHttpsEndpoint(name: endpointName));
+    }
+
+    private static IResourceBuilder<T> WithWellKnownEndpointCallback<T>(this IResourceBuilder<T> builder, Action<EndpointUpdateContext> callback, string endpointName, bool createIfNotExists, Action<IResourceBuilder<T>, string> createEndpoint) where T : IResourceWithEndpoints
+    {
+        if (createIfNotExists &&
+            !builder.Resource.Annotations.OfType<EndpointAnnotation>().Any(endpoint => string.Equals(endpoint.Name, endpointName, StringComparisons.EndpointAnnotationName)))
+        {
+            createEndpoint(builder, endpointName);
+        }
+
+        return builder.WithEndpoint(endpointName, endpoint => callback(new EndpointUpdateContext(endpoint)), createIfNotExists: false);
     }
 
     /// <summary>
@@ -3939,7 +3979,6 @@ public static class ResourceBuilderExtensions
     /// The callback receives a <see cref="ContainerImagePushOptionsCallbackContext"/> that provides access to the resource
     /// and the <see cref="ContainerImagePushOptions"/> that can be modified.
     /// Multiple callbacks can be registered on the same resource, and they will be invoked in the order they were added.
-    /// <para>This method is not available in polyglot app hosts.</para>
     /// </remarks>
     /// <example>
     /// Configure a custom image name and tag for a container resource:
@@ -3953,7 +3992,7 @@ public static class ResourceBuilderExtensions
     /// </code>
     /// </example>
     [Experimental("ASPIREPIPELINES003", UrlFormat = "https://aka.ms/aspire/diagnostics#{0}")]
-    [AspireExportIgnore(Reason = "ContainerImagePushOptionsCallbackContext exposes IResource — not usable from polyglot hosts.")]
+    [AspireExportIgnore(Reason = "Polyglot app hosts use the async callback overload.")]
     public static IResourceBuilder<T> WithImagePushOptions<T>(
         this IResourceBuilder<T> builder,
         Action<ContainerImagePushOptionsCallbackContext> callback)
@@ -3979,7 +4018,6 @@ public static class ResourceBuilderExtensions
     /// The callback receives a <see cref="ContainerImagePushOptionsCallbackContext"/> that provides access to the resource
     /// and the <see cref="ContainerImagePushOptions"/> that can be modified.
     /// Multiple callbacks can be registered on the same resource, and they will be invoked in the order they were added.
-    /// <para>This method is not available in polyglot app hosts.</para>
     /// </remarks>
     /// <example>
     /// Configure image options asynchronously by retrieving values from configuration:
@@ -3994,7 +4032,7 @@ public static class ResourceBuilderExtensions
     /// </code>
     /// </example>
     [Experimental("ASPIREPIPELINES003", UrlFormat = "https://aka.ms/aspire/diagnostics#{0}")]
-    [AspireExportIgnore(Reason = "ContainerImagePushOptionsCallbackContext exposes IResource — not usable from polyglot hosts.")]
+[AspireExport(Description = "Sets image push options via callback")]
     public static IResourceBuilder<T> WithImagePushOptions<T>(
         this IResourceBuilder<T> builder,
         Func<ContainerImagePushOptionsCallbackContext, Task> callback)

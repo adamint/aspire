@@ -2,6 +2,8 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 #pragma warning disable ASPIREPIPELINES001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+#pragma warning disable ASPIREPIPELINES002
+#pragma warning disable ASPIREINTERACTION001
 
 using System.Globalization;
 using System.Text;
@@ -15,6 +17,7 @@ using Aspire.Hosting.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Aspire.Hosting.Kubernetes;
 
@@ -117,6 +120,27 @@ internal static partial class HelmDeploymentEngine
         var model = factoryContext.PipelineContext.Model;
         var steps = new List<PipelineStep>();
 
+        // Step 0: Check prerequisites — verify Helm CLI is available
+        var checkPrereqStep = new PipelineStep
+        {
+            Name = $"check-helm-prereqs-{environment.Name}",
+            Description = $"Verifies Helm CLI is available for {environment.Name}.",
+            Action = ctx =>
+            {
+                var helmPath = PathLookupHelper.FindFullPathFromPath("helm");
+                if (helmPath is null)
+                {
+                    throw new InvalidOperationException(
+                        "Helm CLI not found. Install it from https://helm.sh/docs/intro/install/ " +
+                        "and ensure it is available on your PATH.");
+                }
+
+                ctx.Logger.LogDebug("Helm CLI found at: {HelmPath}", helmPath);
+                return Task.CompletedTask;
+            }
+        };
+        steps.Add(checkPrereqStep);
+
         // Step 1: Prepare - resolve values.yaml with actual image references and parameter values
         var prepareStep = new PipelineStep
         {
@@ -126,6 +150,7 @@ internal static partial class HelmDeploymentEngine
         };
         prepareStep.DependsOn(WellKnownPipelineSteps.Publish);
         prepareStep.DependsOn(WellKnownPipelineSteps.Build);
+        prepareStep.DependsOn($"check-helm-prereqs-{environment.Name}");
         steps.Add(prepareStep);
 
         // Step 2: Helm deploy - run helm upgrade --install
@@ -152,7 +177,45 @@ internal static partial class HelmDeploymentEngine
         instructionsStep.RequiredBy(WellKnownPipelineSteps.Deploy);
         steps.Add(instructionsStep);
 
-        // Step 4: Helm uninstall (teardown)
+        // Step 4: Destroy confirmation + uninstall (used by aspire destroy)
+        var helmDestroyStep = new PipelineStep
+        {
+            Name = $"destroy-helm-{environment.Name}",
+            Description = $"Confirms and destroys the Helm deployment for {environment.Name}.",
+            Action = async ctx =>
+            {
+                // Check deployment state to verify this environment was actually deployed
+                var deploymentStateManager = ctx.Services.GetRequiredService<IDeploymentStateManager>();
+                var stateSection = await deploymentStateManager.AcquireSectionAsync($"Helm:{environment.Name}", ctx.CancellationToken).ConfigureAwait(false);
+                var savedReleaseName = stateSection.Data["ReleaseName"]?.ToString();
+                var savedNamespace = stateSection.Data["Namespace"]?.ToString();
+
+                if (string.IsNullOrEmpty(savedReleaseName))
+                {
+                    await ctx.ReportingStep.CompleteAsync(
+                        $"No Helm deployment state found for '{environment.Name}'. Nothing to destroy.",
+                        CompletionState.Completed,
+                        ctx.CancellationToken).ConfigureAwait(false);
+                    return;
+                }
+
+                // Use saved state for the confirmation message (more accurate than recomputing)
+                var @namespace = savedNamespace ?? "default";
+                await ConfirmDestroyAsync(ctx, $"Uninstall Helm release '{savedReleaseName}' from namespace '{@namespace}'? This action cannot be undone.").ConfigureAwait(false);
+                await HelmUninstallAsync(ctx, environment, savedReleaseName, @namespace).ConfigureAwait(false);
+
+                ctx.Summary.Add("🗑️ Helm Release", savedReleaseName);
+                ctx.Summary.Add("☸️ Namespace", @namespace);
+
+                // Clean up deployment state for this environment
+                await deploymentStateManager.DeleteSectionAsync(stateSection, ctx.CancellationToken).ConfigureAwait(false);
+            },
+            DependsOnSteps = [WellKnownPipelineSteps.DestroyPrereq]
+        };
+        helmDestroyStep.RequiredBy(WellKnownPipelineSteps.Destroy);
+        steps.Add(helmDestroyStep);
+
+        // Step 5: Helm uninstall (teardown, callable directly via aspire do without confirmation)
         var helmUninstallStep = new PipelineStep
         {
             Name = $"helm-uninstall-{environment.Name}",
@@ -242,7 +305,8 @@ internal static partial class HelmDeploymentEngine
     {
         if (environment.CapturedHelmValues.Count == 0
             && environment.CapturedHelmCrossReferences.Count == 0
-            && environment.CapturedHelmImageReferences.Count == 0)
+            && environment.CapturedHelmImageReferences.Count == 0
+            && environment.CapturedHelmValueProviders.Count == 0)
         {
             return;
         }
@@ -285,6 +349,20 @@ internal static partial class HelmDeploymentEngine
             if (resolvedImage is not null)
             {
                 SetOverrideValue(overrideValues, imageRef.Section, imageRef.ResourceKey, imageRef.ValueKey, resolvedImage);
+            }
+        }
+
+        // Phase 4: Resolve generic IValueProvider references.
+        // During publish, values backed by IValueProvider (e.g., Bicep output references,
+        // connection strings) are written as empty placeholders. At deploy time, we call
+        // GetValueAsync() to resolve the actual values from external sources.
+        // This is cloud-provider agnostic — any IValueProvider implementation works.
+        foreach (var valueProviderRef in environment.CapturedHelmValueProviders)
+        {
+            var resolvedValue = await valueProviderRef.ValueProvider.GetValueAsync(cancellationToken).ConfigureAwait(false);
+            if (resolvedValue is not null)
+            {
+                SetOverrideValue(overrideValues, valueProviderRef.Section, valueProviderRef.ResourceKey, valueProviderRef.ValueKey, resolvedValue);
             }
         }
 
@@ -360,8 +438,21 @@ internal static partial class HelmDeploymentEngine
         {
             try
             {
+                var helmRunner = context.Services.GetRequiredService<IHelmRunner>();
+
                 // Verify helm is available
-                await VerifyToolAvailableAsync("helm", context.CancellationToken).ConfigureAwait(false);
+                try
+                {
+                    var versionExitCode = await helmRunner.RunAsync("version --short", cancellationToken: context.CancellationToken).ConfigureAwait(false);
+                    if (versionExitCode != 0)
+                    {
+                        throw new InvalidOperationException("'helm' is installed but returned an error. Ensure 'helm' is properly configured and your cluster is accessible.");
+                    }
+                }
+                catch (Exception ex) when (ex is not InvalidOperationException and not OperationCanceledException)
+                {
+                    throw new InvalidOperationException("'helm' was not found. Please install 'helm' and ensure it is available on your PATH to deploy to Kubernetes.", ex);
+                }
 
                 var valuesFilePath = Path.Combine(outputPath, "values.yaml");
                 var arguments = new StringBuilder();
@@ -370,13 +461,16 @@ internal static partial class HelmDeploymentEngine
                 arguments.Append(" --create-namespace");
                 arguments.Append(" --wait");
 
+                if (environment.KubeConfigPath is not null)
+                {
+                    arguments.Append(CultureInfo.InvariantCulture, $" --kubeconfig \"{environment.KubeConfigPath}\"");
+                }
+
                 if (File.Exists(valuesFilePath))
                 {
                     arguments.Append(CultureInfo.InvariantCulture, $" -f \"{valuesFilePath}\"");
                 }
 
-                // Pass deploy-time override values (resolved secrets/parameters) after the
-                // base values.yaml so they take precedence via Helm's merge behavior.
                 var deployValuesFilePath = Path.Combine(outputPath, GetDeployValuesFileName(environment.Name));
                 if (File.Exists(deployValuesFilePath))
                 {
@@ -385,51 +479,41 @@ internal static partial class HelmDeploymentEngine
 
                 context.Logger.LogDebug("Running helm {Arguments}", arguments);
 
-                var stdoutBuilder = new StringBuilder();
                 var stderrBuilder = new StringBuilder();
 
-                var spec = new ProcessSpec("helm")
-                {
-                    Arguments = arguments.ToString(),
-                    WorkingDirectory = outputPath,
-                    ThrowOnNonZeroReturnCode = false,
-                    InheritEnv = true,
-                    OnOutputData = output =>
-                    {
-                        stdoutBuilder.AppendLine(output);
-                        context.Logger.LogDebug("helm (stdout): {Output}", output);
-                    },
-                    OnErrorData = error =>
+                var exitCode = await helmRunner.RunAsync(
+                    arguments.ToString(),
+                    workingDirectory: outputPath,
+                    onOutputData: output => context.Logger.LogDebug("helm (stdout): {Output}", output),
+                    onErrorData: error =>
                     {
                         stderrBuilder.AppendLine(error);
                         context.Logger.LogDebug("helm (stderr): {Error}", error);
                     },
-                };
+                    cancellationToken: context.CancellationToken).ConfigureAwait(false);
 
-                var (pendingProcessResult, processDisposable) = ProcessUtil.Run(spec);
-
-                await using (processDisposable.ConfigureAwait(false))
+                if (exitCode != 0)
                 {
-                    var processResult = await pendingProcessResult
-                        .WaitAsync(context.CancellationToken)
-                        .ConfigureAwait(false);
+                    var errorOutput = stderrBuilder.ToString().Trim();
+                    var message = string.IsNullOrEmpty(errorOutput)
+                        ? $"helm upgrade --install failed with exit code {exitCode}"
+                        : $"helm upgrade --install failed: {errorOutput}";
 
-                    if (processResult.ExitCode != 0)
-                    {
-                        var errorOutput = stderrBuilder.ToString().Trim();
-                        var message = string.IsNullOrEmpty(errorOutput)
-                            ? $"helm upgrade --install failed with exit code {processResult.ExitCode}"
-                            : $"helm upgrade --install failed: {errorOutput}";
+                    throw new InvalidOperationException(message);
+                }
+                else
+                {
+                    // Persist deployment state so destroy can find the release
+                    var deploymentStateManager = context.Services.GetRequiredService<IDeploymentStateManager>();
+                    var stateSection = await deploymentStateManager.AcquireSectionAsync($"Helm:{environment.Name}", context.CancellationToken).ConfigureAwait(false);
+                    stateSection.Data["ReleaseName"] = releaseName;
+                    stateSection.Data["Namespace"] = @namespace;
+                    await deploymentStateManager.SaveSectionAsync(stateSection, context.CancellationToken).ConfigureAwait(false);
 
-                        throw new InvalidOperationException(message);
-                    }
-                    else
-                    {
-                        await deployTask.CompleteAsync(
-                            new MarkdownString($"Helm release **{releaseName}** deployed to namespace **{@namespace}**"),
-                            CompletionState.Completed,
-                            context.CancellationToken).ConfigureAwait(false);
-                    }
+                    await deployTask.CompleteAsync(
+                        new MarkdownString($"Helm release **{releaseName}** deployed to namespace **{@namespace}**"),
+                        CompletionState.Completed,
+                        context.CancellationToken).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -459,7 +543,7 @@ internal static partial class HelmDeploymentEngine
 
         try
         {
-            var endpoints = await GetServiceEndpointsAsync(computeResource.Name.ToServiceName(), @namespace, context.Logger, context.CancellationToken).ConfigureAwait(false);
+            var endpoints = await GetServiceEndpointsAsync(computeResource.Name.ToServiceName(), @namespace, environment.KubeConfigPath, context.Logger, context.CancellationToken).ConfigureAwait(false);
 
             if (endpoints.Count > 0)
             {
@@ -492,6 +576,11 @@ internal static partial class HelmDeploymentEngine
             context.Summary.Add(
                 "📊 Dashboard",
                 new MarkdownString($"`kubectl port-forward -n {@namespace} svc/{dashboardServiceName} 18888:18888` then open [http://localhost:18888](http://localhost:18888)"));
+
+            var dashboardDeploymentName = environment.Dashboard.Resource.Name.ToKubernetesResourceName();
+            context.Summary.Add(
+                "🔑 Dashboard login",
+                new MarkdownString($"`kubectl logs -n {@namespace} -l app.kubernetes.io/component={dashboardDeploymentName} --tail=50` to retrieve the login token"));
         }
 
         // Helm status and resource inspection
@@ -513,7 +602,11 @@ internal static partial class HelmDeploymentEngine
     {
         var @namespace = await ResolveNamespaceAsync(context, environment).ConfigureAwait(false);
         var releaseName = await ResolveReleaseNameAsync(context, environment).ConfigureAwait(false);
+        await HelmUninstallAsync(context, environment, releaseName, @namespace).ConfigureAwait(false);
+    }
 
+    private static async Task HelmUninstallAsync(PipelineStepContext context, KubernetesEnvironmentResource environment, string releaseName, string @namespace)
+    {
         var uninstallTask = await context.ReportingStep.CreateTaskAsync(
             new MarkdownString($"Uninstalling Helm release **{releaseName}** from namespace **{@namespace}**"),
             context.CancellationToken).ConfigureAwait(false);
@@ -522,40 +615,32 @@ internal static partial class HelmDeploymentEngine
         {
             try
             {
+                var helmRunner = context.Services.GetRequiredService<IHelmRunner>();
                 var arguments = $"uninstall {releaseName} --namespace {@namespace}";
+
+                if (environment.KubeConfigPath is not null)
+                {
+                    arguments += $" --kubeconfig \"{environment.KubeConfigPath}\"";
+                }
 
                 context.Logger.LogDebug("Running helm {Arguments}", arguments);
 
-                var spec = new ProcessSpec("helm")
+                var exitCode = await helmRunner.RunAsync(
+                    arguments,
+                    onOutputData: output => context.Logger.LogDebug("helm (stdout): {Output}", output),
+                    onErrorData: error => context.Logger.LogDebug("helm (stderr): {Error}", error),
+                    cancellationToken: context.CancellationToken).ConfigureAwait(false);
+
+                if (exitCode != 0)
                 {
-                    Arguments = arguments,
-                    ThrowOnNonZeroReturnCode = false,
-                    InheritEnv = true,
-                    OnOutputData = output => context.Logger.LogDebug("helm (stdout): {Output}", output),
-                    OnErrorData = error => context.Logger.LogDebug("helm (stderr): {Error}", error),
-                };
-
-                var (pendingProcessResult, processDisposable) = ProcessUtil.Run(spec);
-
-                await using (processDisposable.ConfigureAwait(false))
+                    throw new InvalidOperationException($"helm uninstall failed with exit code {exitCode}");
+                }
+                else
                 {
-                    var processResult = await pendingProcessResult
-                        .WaitAsync(context.CancellationToken)
-                        .ConfigureAwait(false);
-
-                    if (processResult.ExitCode != 0)
-                    {
-                        await uninstallTask.FailAsync(
-                            $"helm uninstall failed with exit code {processResult.ExitCode}",
-                            cancellationToken: context.CancellationToken).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        await uninstallTask.CompleteAsync(
-                            new MarkdownString($"Helm release **{releaseName}** uninstalled from namespace **{@namespace}**"),
-                            CompletionState.Completed,
-                            context.CancellationToken).ConfigureAwait(false);
-                    }
+                    await uninstallTask.CompleteAsync(
+                        new MarkdownString($"Helm release **{releaseName}** uninstalled from namespace **{@namespace}**"),
+                        CompletionState.Completed,
+                        context.CancellationToken).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -569,15 +654,56 @@ internal static partial class HelmDeploymentEngine
         }
     }
 
+    private static async Task ConfirmDestroyAsync(PipelineStepContext context, string message)
+    {
+        var options = context.Services.GetRequiredService<IOptions<PipelineOptions>>();
+
+        if (!options.Value.SkipConfirmation)
+        {
+            var interactionService = context.Services.GetRequiredService<IInteractionService>();
+
+            if (!interactionService.IsAvailable)
+            {
+                throw new InvalidOperationException(
+                    "Cannot perform destructive operation without confirmation. Use --yes to skip the confirmation prompt in non-interactive mode.");
+            }
+
+            var result = await interactionService.PromptNotificationAsync(
+                "Destroy environment",
+                message,
+                new NotificationInteractionOptions
+                {
+                    Intent = MessageIntent.Confirmation,
+                    ShowSecondaryButton = true,
+                    ShowDismiss = false,
+                    PrimaryButtonText = "Destroy",
+                    SecondaryButtonText = "Cancel"
+                },
+                context.CancellationToken).ConfigureAwait(false);
+
+            if (result.Canceled || !result.Data)
+            {
+                context.Logger.LogInformation("User canceled the destroy operation.");
+                throw new OperationCanceledException("Destroy operation canceled by user.");
+            }
+        }
+    }
+
     private static async Task<List<string>> GetServiceEndpointsAsync(
         string serviceName,
         string @namespace,
+        string? kubeConfigPath,
         ILogger logger,
         CancellationToken cancellationToken)
     {
         var endpoints = new List<string>();
 
         var arguments = $"get service {serviceName} --namespace {@namespace} -o json";
+
+        if (kubeConfigPath is not null)
+        {
+            arguments += $" --kubeconfig \"{kubeConfigPath}\"";
+        }
         var stdoutBuilder = new StringBuilder();
 
         var spec = new ProcessSpec("kubectl")
@@ -653,40 +779,5 @@ internal static partial class HelmDeploymentEngine
         }
 
         return endpoints;
-    }
-
-    private static async Task VerifyToolAvailableAsync(string tool, CancellationToken cancellationToken)
-    {
-        var spec = new ProcessSpec(tool)
-        {
-            Arguments = "version --short",
-            ThrowOnNonZeroReturnCode = false,
-            InheritEnv = true,
-            OnOutputData = _ => { },
-            OnErrorData = _ => { },
-        };
-
-        try
-        {
-            var (pendingProcessResult, processDisposable) = ProcessUtil.Run(spec);
-
-            await using (processDisposable.ConfigureAwait(false))
-            {
-                var result = await pendingProcessResult
-                    .WaitAsync(cancellationToken)
-                    .ConfigureAwait(false);
-
-                if (result.ExitCode != 0)
-                {
-                    throw new InvalidOperationException(
-                        $"'{tool}' is installed but returned an error. Ensure '{tool}' is properly configured and your cluster is accessible.");
-                }
-            }
-        }
-        catch (Exception ex) when (ex is not InvalidOperationException and not OperationCanceledException)
-        {
-            throw new InvalidOperationException(
-                $"'{tool}' was not found. Please install '{tool}' and ensure it is available on your PATH to deploy to Kubernetes.", ex);
-        }
     }
 }
