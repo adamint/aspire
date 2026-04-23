@@ -1041,7 +1041,7 @@ internal sealed class DotNetCliRunner(
         {
             cliArgs.Add("--exact-match");
         }
-        else // 'exaxt-match' flag causes the take and skip arguments to be ignored
+        else // 'exact-match' flag causes the take and skip arguments to be ignored
         {
             cliArgs.AddRange([
                 "--take",

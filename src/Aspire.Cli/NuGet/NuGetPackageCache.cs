@@ -206,7 +206,7 @@ internal sealed class NuGetPackageCache(IDotNetCliRunner cliRunner, IMemoryCache
             // Apply deprecated package filter unless the user wants to show deprecated packages
             if (!features.IsFeatureEnabled(KnownFeatures.ShowDeprecatedPackages, defaultValue: false))
             {
-                return !DeprecatedPackages.IsDeprecated(p.Id);;
+                return !DeprecatedPackages.IsDeprecated(p.Id);
             }
             return true;
         };

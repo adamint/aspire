@@ -315,7 +315,7 @@ internal sealed class AddCommand : BaseCommand
     private static async Task<IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)>> GetAllPackageVersions(DirectoryInfo workingDirectory, IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)> possiblePackages, CancellationToken cancellationToken)
     {
         var distinctPackageIds = possiblePackages.DistinctBy(package => package.Package.Id);
-        var channels = possiblePackages.Select(package => package.Channel);
+        var channels = possiblePackages.Select(package => package.Channel).Distinct();
 
         var versions = new List<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)>();
         foreach (var channel in channels)
