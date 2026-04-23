@@ -11,17 +11,3 @@
 ::deep.resource-details-layout > fluent-toolbar {
     grid-area: toolbar;
 }
-
-::deep .state-description {
-    padding: calc(var(--design-unit) * 2px) calc(var(--design-unit) * 3px);
-    border-bottom: calc(var(--stroke-width) * 1px) solid var(--neutral-stroke-divider-rest);
-    display: flex;
-    flex-direction: column;
-    gap: calc(var(--design-unit) * 1px);
-}
-
-::deep .state-description-label {
-    font-weight: 600;
-    color: var(--neutral-foreground-hint);
-    font-size: var(--type-ramp-minus-1-font-size);
-}

@@ -33,20 +33,6 @@
                         @FilteredResourceProperties.Count()
                     </FluentBadge>
                 </div>
-                @{
-                    var stateViewModel = ResourceStateViewModel.GetStateViewModel(Resource, ColumnsLoc);
-                    var stateDescription = ResourceStateViewModel.GetResourceStateTooltip(Resource, ColumnsLoc);
-                }
-                @if (!string.IsNullOrWhiteSpace(stateDescription) && !string.Equals(stateDescription, stateViewModel.Text, StringComparison.Ordinal))
-                {
-                    <div class="state-description">
-                        <div class="state-description-label">@ControlStringsLoc[nameof(ControlsStrings.ResourceDetailsStateDescriptionHeader)]</div>
-                        <GridValue ValueDescription="@ControlStringsLoc[nameof(ControlsStrings.ResourceDetailsStateDescriptionHeader)]"
-                                   Value="@stateDescription"
-                                   EnableHighlighting="@(!string.IsNullOrEmpty(_filter))"
-                                   HighlightText="@_filter" />
-                    </div>
-                }
                 <PropertyGrid TItem="DisplayedResourcePropertyViewModel"
                               Items="@FilteredResourceProperties"
                               IsValueMaskedChanged="@OnValueMaskedChanged"

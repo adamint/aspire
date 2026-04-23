@@ -367,6 +367,29 @@ public class ResourceDetailsTests : DashboardTestContext
     }
 
     [Fact]
+    public void Render_StateDescription_ShowsAsResourceDetailEntry()
+    {
+        // Arrange
+        ResourceSetupHelpers.SetupResourceDetails(this);
+
+        var resource = ModelTestHelpers.CreateResource(
+            resourceName: "app1",
+            state: KnownResourceState.Waiting);
+
+        // Act
+        var cut = RenderComponent<ResourceDetails>(builder =>
+        {
+            builder.Add(p => p.Resource, resource);
+            builder.Add(p => p.ResourceByName, new ConcurrentDictionary<string, ResourceViewModel>([new KeyValuePair<string, ResourceViewModel>(resource.Name, resource)]));
+        });
+
+        // Assert
+        var resourcePropertyGrid = cut.FindAll(".property-grid")[0];
+        Assert.Contains("State description", resourcePropertyGrid.TextContent);
+        Assert.Empty(cut.FindAll(".state-description"));
+    }
+
+    [Fact]
     public void FilteredEnvironmentVariables_SortedByName()
     {
         // Arrange
