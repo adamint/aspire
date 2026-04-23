@@ -5,9 +5,8 @@ using Microsoft.AspNetCore.InternalTesting;
 using System.Xml.Linq;
 using System.Xml;
 using Aspire.Cli.Packaging;
-using Aspire.Cli.NuGet;
+using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
-using Aspire.Shared;
 
 namespace Aspire.Cli.Tests.Packaging;
 
@@ -27,31 +26,6 @@ public class NuGetConfigMergerTests
         return new FileInfo(path);
     }
 
-    private sealed class FakeNuGetPackageCache : INuGetPackageCache
-    {
-        public Task<IEnumerable<Aspire.Shared.NuGetPackageCli>> GetTemplatePackagesAsync(DirectoryInfo workingDirectory, bool prerelease, FileInfo? nugetConfigFile, CancellationToken cancellationToken)
-        {
-            _ = workingDirectory; _ = prerelease; _ = nugetConfigFile; _ = cancellationToken; return Task.FromResult<IEnumerable<Aspire.Shared.NuGetPackageCli>>([]);
-        }
-        public Task<IEnumerable<Aspire.Shared.NuGetPackageCli>> GetIntegrationPackagesAsync(DirectoryInfo workingDirectory, bool prerelease, FileInfo? nugetConfigFile, CancellationToken cancellationToken)
-        {
-            _ = workingDirectory; _ = prerelease; _ = nugetConfigFile; _ = cancellationToken; return Task.FromResult<IEnumerable<Aspire.Shared.NuGetPackageCli>>([]);
-        }
-        public Task<IEnumerable<Aspire.Shared.NuGetPackageCli>> GetCliPackagesAsync(DirectoryInfo workingDirectory, bool prerelease, FileInfo? nugetConfigFile, CancellationToken cancellationToken)
-        {
-            _ = workingDirectory; _ = prerelease; _ = nugetConfigFile; _ = cancellationToken; return Task.FromResult<IEnumerable<Aspire.Shared.NuGetPackageCli>>([]);
-        }
-        public Task<IEnumerable<Aspire.Shared.NuGetPackageCli>> GetPackagesAsync(DirectoryInfo workingDirectory, string packageId, Func<string, bool>? filter, bool prerelease, FileInfo? nugetConfigFile, bool useCache, CancellationToken cancellationToken)
-        {
-            _ = workingDirectory; _ = packageId; _ = filter; _ = prerelease; _ = nugetConfigFile; _ = useCache; _ = cancellationToken; return Task.FromResult<IEnumerable<Aspire.Shared.NuGetPackageCli>>([]);
-        }
-
-        public Task<IEnumerable<NuGetPackageCli>> GetPackageVersionsAsync(DirectoryInfo workingDirectory, string exactPackageId, bool prerelease, FileInfo? nugetConfigFile, bool useCache, CancellationToken cancellationToken)
-        {
-            _ = workingDirectory; _ = exactPackageId; _ = prerelease; _ = nugetConfigFile; _ = useCache; _ = cancellationToken; return Task.FromResult<IEnumerable<NuGetPackageCli>>([]);
-        }
-    }
-
     private static PackageChannel CreateChannel(PackageMapping[] mappings) => PackageChannel.CreateExplicitChannel("test", PackageChannelQuality.Both, mappings, new FakeNuGetPackageCache());
 
     [Fact]
@@ -66,14 +40,14 @@ public class NuGetConfigMergerTests
             new PackageMapping(PackageMapping.AllPackages, "https://feed2.example")
         };
 
-        var channel = CreateChannel(mappings);
-        await NuGetConfigMerger.CreateOrUpdateAsync(root, channel).DefaultTimeout();
+    var channel = CreateChannel(mappings);
+    await NuGetConfigMerger.CreateOrUpdateAsync(root, channel).DefaultTimeout();
 
         var targetConfigPath = Path.Combine(root.FullName, "nuget.config");
         Assert.True(File.Exists(targetConfigPath));
 
-        using var tempConfig = await TemporaryNuGetConfig.CreateAsync(mappings);
-        var expected = await File.ReadAllTextAsync(tempConfig.ConfigFile.FullName);
+    using var tempConfig = await TemporaryNuGetConfig.CreateAsync(mappings);
+    var expected = await File.ReadAllTextAsync(tempConfig.ConfigFile.FullName);
         var actual = await File.ReadAllTextAsync(targetConfigPath);
         Assert.Equal(NormalizeLineEndings(expected), NormalizeLineEndings(actual));
     }
@@ -90,8 +64,8 @@ public class NuGetConfigMergerTests
             new PackageMapping(PackageMapping.AllPackages, "https://feed2.example")
         };
 
-        var channel = CreateChannel(mappings);
-        await NuGetConfigMerger.CreateOrUpdateAsync(root, channel).DefaultTimeout();
+    var channel = CreateChannel(mappings);
+    await NuGetConfigMerger.CreateOrUpdateAsync(root, channel).DefaultTimeout();
 
         var targetConfigPath = Path.Combine(root.FullName, "nuget.config");
         Assert.True(File.Exists(targetConfigPath));
@@ -134,8 +108,8 @@ public class NuGetConfigMergerTests
             new PackageMapping("Microsoft.*", "https://feed2.example") // feed2 missing
         };
 
-        var channel = CreateChannel(mappings);
-        await NuGetConfigMerger.CreateOrUpdateAsync(root, channel).DefaultTimeout();
+    var channel = CreateChannel(mappings);
+    await NuGetConfigMerger.CreateOrUpdateAsync(root, channel).DefaultTimeout();
 
         var xml = XDocument.Load(Path.Combine(root.FullName, "nuget.config"));
         var packageSources = xml.Root!.Element("packageSources")!;
@@ -173,8 +147,8 @@ public class NuGetConfigMergerTests
             new PackageMapping("Lib.*", "https://new.example")
         };
 
-        var channel = CreateChannel(mappings);
-        await NuGetConfigMerger.CreateOrUpdateAsync(root, channel).DefaultTimeout();
+    var channel = CreateChannel(mappings);
+    await NuGetConfigMerger.CreateOrUpdateAsync(root, channel).DefaultTimeout();
 
         var xml = XDocument.Load(Path.Combine(root.FullName, "nuget.config"));
         var packageSources = xml.Root!.Element("packageSources")!;
@@ -213,8 +187,8 @@ public class NuGetConfigMergerTests
             new PackageMapping("Microsoft.*", "https://feed2.example")
         };
 
-        var channel = CreateChannel(mappings);
-        await NuGetConfigMerger.CreateOrUpdateAsync(root, channel).DefaultTimeout();
+    var channel = CreateChannel(mappings);
+    await NuGetConfigMerger.CreateOrUpdateAsync(root, channel).DefaultTimeout();
 
         var xml = XDocument.Load(Path.Combine(root.FullName, "nuget.config"));
         var psm = xml.Root!.Element("packageSourceMapping");
@@ -227,9 +201,9 @@ public class NuGetConfigMergerTests
     {
         using var workspace = TemporaryWorkspace.Create(_outputHelper);
         var root = workspace.WorkspaceRoot;
-        var mappings = new[] { new PackageMapping("Aspire.*", "https://feed.example") };
-        var channel = CreateChannel(mappings);
-        Assert.True(NuGetConfigMerger.HasMissingSources(root, channel));
+    var mappings = new[] { new PackageMapping("Aspire.*", "https://feed.example") };
+    var channel = CreateChannel(mappings);
+    Assert.True(NuGetConfigMerger.HasMissingSources(root, channel));
     }
 
     [Fact]
@@ -259,8 +233,8 @@ public class NuGetConfigMergerTests
             new PackageMapping("Aspire.*", "https://feed2.example") // should be feed2, but config has feed1
         };
 
-        var channel = CreateChannel(mappings);
-        Assert.True(NuGetConfigMerger.HasMissingSources(root, channel));
+    var channel = CreateChannel(mappings);
+    Assert.True(NuGetConfigMerger.HasMissingSources(root, channel));
     }
 
     [Fact]
@@ -294,8 +268,8 @@ public class NuGetConfigMergerTests
             new PackageMapping("Microsoft.*", "https://feed2.example")
         };
 
-        var channel = CreateChannel(mappings);
-        Assert.False(NuGetConfigMerger.HasMissingSources(root, channel));
+    var channel = CreateChannel(mappings);
+    Assert.False(NuGetConfigMerger.HasMissingSources(root, channel));
     }
 
     [Fact]
@@ -328,7 +302,7 @@ public class NuGetConfigMergerTests
 
         var xml = XDocument.Load(Path.Combine(root.FullName, "nuget.config"));
         var packageSources = xml.Root!.Element("packageSources")!;
-
+        
         // Existing sources should still be present with their original keys
         Assert.Contains(packageSources.Elements("add"), e => (string?)e.Attribute("key") == "nuget" && (string?)e.Attribute("value") == "https://api.nuget.org/v3/index.json");
         Assert.Contains(packageSources.Elements("add"), e => (string?)e.Attribute("key") == "dotnet9" && (string?)e.Attribute("value") == "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet9/nuget/v3/index.json");
@@ -378,7 +352,7 @@ public class NuGetConfigMergerTests
 
         var xml = XDocument.Load(Path.Combine(root.FullName, "nuget.config"));
         var packageSources = xml.Root!.Element("packageSources")!;
-
+        
         // All original sources should still be present
         Assert.Contains(packageSources.Elements("add"), e => (string?)e.Attribute("key") == "nuget.org");
         Assert.Contains(packageSources.Elements("add"), e => (string?)e.Attribute("key") == "custom");
@@ -394,7 +368,7 @@ public class NuGetConfigMergerTests
         // Since the original config had NO packageSourceMapping, all existing sources should get "*" patterns
         // so they can continue to serve packages
         var psm = xml.Root!.Element("packageSourceMapping")!;
-
+        
         // The aspire source should have its specific pattern
         var aspireMapping = psm.Elements("packageSource").FirstOrDefault(ps => (string?)ps.Attribute("key") == "https://example.com/aspire-daily");
         Assert.NotNull(aspireMapping);
@@ -447,7 +421,7 @@ public class NuGetConfigMergerTests
 
         var xml = XDocument.Load(Path.Combine(root.FullName, "nuget.config"));
         var packageSources = xml.Root!.Element("packageSources")!;
-
+        
         // Original source should still be present
         Assert.Contains(packageSources.Elements("add"), e => (string?)e.Attribute("key") == "nuget.org");
 
@@ -460,7 +434,7 @@ public class NuGetConfigMergerTests
 
         // Package source mapping should have both the original wildcard and the new specific mappings
         var psm = xml.Root!.Element("packageSourceMapping")!;
-
+        
         // Original nuget.org should still have the wildcard pattern
         var nugetMapping = psm.Elements("packageSource").FirstOrDefault(ps => (string?)ps.Attribute("key") == "nuget.org");
         Assert.NotNull(nugetMapping);
@@ -513,31 +487,31 @@ public class NuGetConfigMergerTests
 
         var xml = XDocument.Load(Path.Combine(root.FullName, "nuget.config"));
         var packageSources = xml.Root!.Element("packageSources")!;
-
+        
         // The PR hive source should be removed because it's safe to remove and no longer needed
-        Assert.DoesNotContain(packageSources.Elements("add"),
+        Assert.DoesNotContain(packageSources.Elements("add"), 
             e => (string?)e.Attribute("value") == "C:\\Users\\user\\.aspire\\hives\\invalid-pr");
-
+        
         // The user-defined source should be preserved even though its patterns were remapped
-        Assert.Contains(packageSources.Elements("add"),
+        Assert.Contains(packageSources.Elements("add"), 
             e => (string?)e.Attribute("value") == "https://valid.example");
-
+        
         // NuGet.org should be added for all the patterns
-        Assert.Contains(packageSources.Elements("add"),
+        Assert.Contains(packageSources.Elements("add"), 
             e => (string?)e.Attribute("value") == "https://api.nuget.org/v3/index.json");
 
         var psm = xml.Root!.Element("packageSourceMapping")!;
-
+        
         // The PR hive source should not have any mapping entries (removed entirely)
-        Assert.DoesNotContain(psm.Elements("packageSource"),
+        Assert.DoesNotContain(psm.Elements("packageSource"), 
             ps => (string?)ps.Attribute("key") == "C:\\Users\\user\\.aspire\\hives\\invalid-pr");
-
+        
         // The user-defined source should get a wildcard pattern to remain functional
         var validExampleMapping = psm.Elements("packageSource")
             .FirstOrDefault(ps => (string?)ps.Attribute("key") == "https://valid.example");
         Assert.NotNull(validExampleMapping);
         Assert.Contains(validExampleMapping.Elements("package"), p => (string?)p.Attribute("pattern") == "*");
-
+        
         // NuGet.org should have all the patterns
         var nugetMapping = psm.Elements("packageSource")
             .FirstOrDefault(ps => (string?)ps.Attribute("key") == "https://api.nuget.org/v3/index.json");
@@ -545,7 +519,7 @@ public class NuGetConfigMergerTests
         Assert.Contains(nugetMapping.Elements("package"), p => (string?)p.Attribute("pattern") == "Aspire*");
         Assert.Contains(nugetMapping.Elements("package"), p => (string?)p.Attribute("pattern") == "Microsoft.Extensions.ServiceDiscovery*");
         Assert.Contains(nugetMapping.Elements("package"), p => (string?)p.Attribute("pattern") == "*");
-
+        
         // There should be two packageSource elements (nuget.org and valid.example)
         Assert.Equal(2, psm.Elements("packageSource").Count());
     }
@@ -562,7 +536,7 @@ public class NuGetConfigMergerTests
         };
 
         var channel = CreateChannel(mappings);
-
+        
         bool callbackInvoked = false;
         FileInfo? callbackTargetFile = null;
         XmlDocument? callbackOriginalContent = null;
@@ -601,7 +575,7 @@ public class NuGetConfigMergerTests
         };
 
         var channel = CreateChannel(mappings);
-
+        
         bool callbackInvoked = false;
 
         await NuGetConfigMerger.CreateOrUpdateAsync(root, channel, (targetFile, originalContent, proposedContent, cancellationToken) =>
@@ -633,7 +607,7 @@ public class NuGetConfigMergerTests
               </packageSources>
             </configuration>
             """;
-
+        
         await WriteConfigAsync(root, existingConfig).DefaultTimeout();
 
         var mappings = new[]
@@ -642,7 +616,7 @@ public class NuGetConfigMergerTests
         };
 
         var channel = CreateChannel(mappings);
-
+        
         bool callbackInvoked = false;
         FileInfo? callbackTargetFile = null;
         XmlDocument? callbackOriginalContent = null;
@@ -684,7 +658,7 @@ public class NuGetConfigMergerTests
               </packageSources>
             </configuration>
             """;
-
+        
         await WriteConfigAsync(root, existingConfig).DefaultTimeout();
         var originalContent = await File.ReadAllTextAsync(Path.Combine(root.FullName, "nuget.config")).DefaultTimeout();
 
@@ -694,7 +668,7 @@ public class NuGetConfigMergerTests
         };
 
         var channel = CreateChannel(mappings);
-
+        
         bool callbackInvoked = false;
 
         await NuGetConfigMerger.CreateOrUpdateAsync(root, channel, (targetFile, originalContent, proposedContent, cancellationToken) =>
@@ -724,7 +698,7 @@ public class NuGetConfigMergerTests
         };
 
         var channel = CreateChannel(mappings);
-
+        
         // Call without callback - should work as before
         await NuGetConfigMerger.CreateOrUpdateAsync(root, channel).DefaultTimeout();
 
