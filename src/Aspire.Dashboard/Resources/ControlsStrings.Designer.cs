@@ -844,7 +844,7 @@ namespace Aspire.Dashboard.Resources {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to State description.
+        ///   Looks up a localized string similar to State details.
         /// </summary>
         public static string ResourceDetailsStateDescriptionHeader {
             get {

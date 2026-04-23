@@ -385,7 +385,7 @@ public class ResourceDetailsTests : DashboardTestContext
 
         // Assert
         var resourcePropertyGrid = cut.FindAll(".property-grid")[0];
-        Assert.Contains("State description", resourcePropertyGrid.TextContent);
+        Assert.Contains("State details", resourcePropertyGrid.TextContent);
         Assert.Empty(cut.FindAll(".state-description"));
     }
 
