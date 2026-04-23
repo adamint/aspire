@@ -256,6 +256,157 @@ public class AddCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task AddCommandDoesNotPromptForVersionWhenSpecifiedVersionIsFoundViaExactMatchSearch()
+    {
+        var promptedForVersion = false;
+        var selectedPackageVersion = string.Empty;
+        var exactMatchQueries = new List<string>();
+
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.AddCommandPrompterFactory = (sp) =>
+            {
+                var interactionService = sp.GetRequiredService<IInteractionService>();
+                var prompter = new TestAddCommandPrompter(interactionService);
+                prompter.PromptForIntegrationVersionCallback = (packages) =>
+                {
+                    promptedForVersion = true;
+                    throw new InvalidOperationException("Should not have been prompted for integration version.");
+                };
+
+                return prompter;
+            };
+
+            options.ProjectLocatorFactory = _ => new TestProjectLocator();
+
+            options.DotNetCliRunnerFactory = (sp) =>
+            {
+                var runner = new TestDotNetCliRunner();
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, invocationOptions, cancellationToken) =>
+                {
+                    if (!exactMatch)
+                    {
+                        return (0, [
+                            new NuGetPackage
+                            {
+                                Id = "Aspire.Hosting.Redis",
+                                Source = "nuget",
+                                Version = "13.3.0"
+                            }
+                        ]);
+                    }
+
+                    exactMatchQueries.Add(query);
+
+                    return query switch
+                    {
+                        "Aspire.Hosting.Redis" => (0, [
+                            new NuGetPackage { Id = "Aspire.Hosting.Redis", Source = "nuget", Version = "13.3.0" },
+                            new NuGetPackage { Id = "Aspire.Hosting.Redis", Source = "nuget", Version = "13.2.0" }
+                        ]),
+                        _ => (0, Array.Empty<NuGetPackage>())
+                    };
+                };
+
+                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, nugetSource, noRestore, invocationOptions, cancellationToken) =>
+                {
+                    selectedPackageVersion = packageVersion;
+                    return 0;
+                };
+
+                return runner;
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<AddCommand>();
+        var result = command.Parse("add redis --version 13.2.0");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(0, exitCode);
+        Assert.False(promptedForVersion);
+        Assert.Equal("13.2.0", selectedPackageVersion);
+        Assert.Equal(2, exactMatchQueries.Count);
+        Assert.All(exactMatchQueries, query => Assert.Equal("Aspire.Hosting.Redis", query));
+    }
+
+    [Fact]
+    public async Task AddCommandSearchesEachPackageIdOnceWhenExactMatchFallsBackAcrossSharedChannel()
+    {
+        var promptedForVersion = false;
+        var selectedPackageVersion = string.Empty;
+        var exactMatchQueryCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.AddCommandPrompterFactory = (sp) =>
+            {
+                var interactionService = sp.GetRequiredService<IInteractionService>();
+                var prompter = new TestAddCommandPrompter(interactionService);
+                prompter.PromptForIntegrationVersionCallback = (packages) =>
+                {
+                    promptedForVersion = true;
+                    throw new InvalidOperationException("Should not have been prompted for integration version.");
+                };
+
+                return prompter;
+            };
+
+            options.ProjectLocatorFactory = _ => new TestProjectLocator();
+
+            options.DotNetCliRunnerFactory = (sp) =>
+            {
+                var runner = new TestDotNetCliRunner();
+                runner.SearchPackagesAsyncCallback = (dir, query, exactMatch, prerelease, take, skip, nugetSource, useCache, invocationOptions, cancellationToken) =>
+                {
+                    if (!exactMatch)
+                    {
+                        return (0, [
+                            new NuGetPackage { Id = "Aspire.Hosting.Redis", Source = "implicit", Version = "13.3.0" },
+                            new NuGetPackage { Id = "Aspire.Hosting.Redis", Source = "implicit", Version = "13.3.1" }
+                        ]);
+                    }
+
+                    exactMatchQueryCounts[query] = exactMatchQueryCounts.GetValueOrDefault(query) + 1;
+
+                    return query switch
+                    {
+                        "Aspire.Hosting.Redis" => (0, [
+                            new NuGetPackage { Id = "Aspire.Hosting.Redis", Source = "implicit", Version = "13.3.0" },
+                            new NuGetPackage { Id = "Aspire.Hosting.Redis", Source = "implicit", Version = "13.2.0" }
+                        ]),
+                        _ => (0, Array.Empty<NuGetPackage>())
+                    };
+                };
+
+                runner.AddPackageAsyncCallback = (projectFilePath, packageName, packageVersion, nugetSource, noRestore, invocationOptions, cancellationToken) =>
+                {
+                    selectedPackageVersion = packageVersion;
+                    return 0;
+                };
+
+                return runner;
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<AddCommand>();
+        var result = command.Parse("add redis --version 13.2.0");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(0, exitCode);
+        Assert.False(promptedForVersion);
+        Assert.Equal("13.2.0", selectedPackageVersion);
+        Assert.Equal(2, exactMatchQueryCounts["Aspire.Hosting.Redis"]);
+    }
+
+    [Fact]
     public async Task AddCommandPromptsForDisambiguation()
     {
         IEnumerable<(string FriendlyName, NuGetPackage Package, PackageChannel Channel)>? promptedPackages = null;

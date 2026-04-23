@@ -1380,6 +1380,57 @@ public class DotNetCliRunnerTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task SearchPackagesAsync_WithExactMatch_UsesExactMatchFlagWithoutPaginationArguments()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var options = new ProcessInvocationOptions { SuppressLogging = true };
+        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var runner = DotNetCliRunnerTestHelper.Create(
+            provider,
+            executionContext,
+            (args, _, _, invocationOptions) =>
+            {
+                Assert.Contains("package", args);
+                Assert.Contains("search", args);
+                Assert.Contains("Aspire.Hosting.Redis", args);
+                Assert.Contains("--exact-match", args);
+                Assert.DoesNotContain("--take", args);
+                Assert.DoesNotContain("--skip", args);
+
+                invocationOptions.StandardOutputCallback?.Invoke(
+                    """
+                    {"version":1,"searchResult":[{"sourceName":"nuget.org","packages":[{"id":"Aspire.Hosting.Redis","latestVersion":"13.3.0"}]}]}
+                    """);
+            },
+            0);
+
+        var result = await runner.SearchPackagesAsync(
+            workspace.WorkspaceRoot,
+            "Aspire.Hosting.Redis",
+            exactMatch: true,
+            prerelease: false,
+            take: 100,
+            skip: 200,
+            nugetConfigFile: null,
+            useCache: false,
+            options,
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Collection(
+            result.Packages!,
+            package =>
+            {
+                Assert.Equal("Aspire.Hosting.Redis", package.Id);
+                Assert.Equal("13.3.0", package.Version);
+            });
+    }
+
+    [Fact]
     public async Task InstallTemplateAsync_UsesLocalPackagePathForLocalFolderSource()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);

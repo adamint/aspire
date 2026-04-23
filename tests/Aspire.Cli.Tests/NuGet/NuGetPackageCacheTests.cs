@@ -200,4 +200,60 @@ public class NuGetPackageCacheTests(ITestOutputHelper outputHelper)
         Assert.DoesNotContain("aspire.hosting.dapr", packageIds);
         Assert.DoesNotContain("ASPIRE.HOSTING.DAPR", packageIds);
     }
+
+    [Fact]
+    public async Task GetPackageVersionsAsync_UsesExactMatchSearch()
+    {
+        bool? observedExactMatch = null;
+        int observedTake = -1;
+        int observedSkip = -1;
+        bool? observedUseCache = null;
+
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
+        {
+            configure.DotNetCliRunnerFactory = (sp) =>
+            {
+                var runner = new TestDotNetCliRunner();
+                runner.SearchPackagesAsyncCallback = (_, query, exactMatch, prerelease, take, skip, nugetConfigFile, useCache, options, cancellationToken) =>
+                {
+                    observedExactMatch = exactMatch;
+                    observedTake = take;
+                    observedSkip = skip;
+                    observedUseCache = useCache;
+
+                    return query switch
+                    {
+                        "Aspire.Hosting.Redis" => (0, [
+                            new NuGetPackage { Id = "Aspire.Hosting.Redis", Version = "13.3.0", Source = "nuget.org" },
+                            new NuGetPackage { Id = "Aspire.Hosting.Redis", Version = "13.2.0", Source = "nuget.org" }
+                        ]),
+                        _ => (0, Array.Empty<NuGetPackage>())
+                    };
+                };
+
+                return runner;
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+
+        var nuGetPackageCache = provider.GetRequiredService<INuGetPackageCache>();
+        var packages = (await nuGetPackageCache.GetPackageVersionsAsync(
+            workspace.WorkspaceRoot,
+            "Aspire.Hosting.Redis",
+            prerelease: false,
+            nugetConfigFile: null,
+            useCache: true,
+            CancellationToken.None)).OrderBy(package => package.Version).ToArray();
+
+        Assert.True(observedExactMatch);
+        Assert.Equal(0, observedTake);
+        Assert.Equal(0, observedSkip);
+        Assert.True(observedUseCache);
+        Assert.Collection(
+            packages,
+            package => Assert.Equal("13.2.0", package.Version),
+            package => Assert.Equal("13.3.0", package.Version));
+    }
 }
