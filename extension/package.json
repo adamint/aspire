@@ -48,6 +48,30 @@
   "main": "./dist/extension.js",
   "l10n": "./l10n",
   "contributes": {
+    "languages": [
+      {
+        "id": "aspire-apphost",
+        "filenames": [
+          "apphost.ts",
+          "apphost.js",
+          "apphost.cs"
+        ],
+        "icon": {
+          "light": "./resources/aspire-apphost.svg",
+          "dark": "./resources/aspire-apphost.svg"
+        }
+      },
+      {
+        "id": "aspire-config",
+        "filenames": [
+          "aspire.config.json"
+        ],
+        "icon": {
+          "light": "./resources/aspire-config.svg",
+          "dark": "./resources/aspire-config.svg"
+        }
+      }
+    ],
     "mcpServerDefinitionProviders": [
       {
         "id": "aspire-mcp-server",
