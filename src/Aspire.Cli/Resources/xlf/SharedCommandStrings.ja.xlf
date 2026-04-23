@@ -13,8 +13,8 @@
         <note />
       </trans-unit>
       <trans-unit id="AppHostNotRunningAtPath">
-        <source>No running AppHost found at '{0}'. Use 'aspire run' to start one first.</source>
-        <target state="new">No running AppHost found at '{0}'. Use 'aspire run' to start one first.</target>
+        <source>No AppHost is currently running for '{0}'. Use 'aspire run' to start it first.</source>
+        <target state="new">No AppHost is currently running for '{0}'. Use 'aspire run' to start it first.</target>
         <note>{0} is the AppHost project path.</note>
       </trans-unit>
       <trans-unit id="FormatOptionDescription">
