@@ -588,6 +588,31 @@ internal class ProjectLocatorException(string message, ProjectLocatorFailureReas
     public ProjectLocatorFailureReason FailureReason { get; } = failureReason;
 }
 
+internal static class ProjectLocatorErrorHelper
+{
+    public static (int ExitCode, string ErrorMessage) GetExitCodeAndMessage(ProjectLocatorException ex)
+    {
+        ArgumentNullException.ThrowIfNull(ex);
+
+        return ex.FailureReason switch
+        {
+            ProjectLocatorFailureReason.UnsupportedProjects
+                => (ExitCodeConstants.SdkNotInstalled, InteractionServiceStrings.NoSupportedAppHostsFound),
+            ProjectLocatorFailureReason.ProjectFileNotAppHostProject
+                => (ExitCodeConstants.FailedToFindProject, InteractionServiceStrings.SpecifiedProjectFileNotAppHostProject),
+            ProjectLocatorFailureReason.ProjectFileDoesntExist
+                => (ExitCodeConstants.FailedToFindProject, InteractionServiceStrings.ProjectOptionDoesntExist),
+            ProjectLocatorFailureReason.MultipleProjectFilesFound
+                => (ExitCodeConstants.FailedToFindProject, InteractionServiceStrings.ProjectOptionNotSpecifiedMultipleAppHostsFound),
+            ProjectLocatorFailureReason.NoProjectFileFound
+                => (ExitCodeConstants.FailedToFindProject, InteractionServiceStrings.ProjectOptionNotSpecifiedNoCsprojFound),
+            ProjectLocatorFailureReason.AppHostsMayNotBeBuildable
+                => (ExitCodeConstants.FailedToFindProject, InteractionServiceStrings.UnbuildableAppHostsDetected),
+            _ => (ExitCodeConstants.FailedToFindProject, string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.UnexpectedErrorOccurred, ex.Message))
+        };
+    }
+}
+
 internal enum ProjectLocatorFailureReason
 {
     ProjectFileDoesntExist,

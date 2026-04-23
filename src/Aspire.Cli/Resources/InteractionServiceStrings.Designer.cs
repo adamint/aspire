@@ -241,6 +241,15 @@ namespace Aspire.Cli.Resources {
         }
 
         /// <summary>
+        ///   Looks up a localized string similar to No supported app hosts were found..
+        /// </summary>
+        public static string NoSupportedAppHostsFound {
+            get {
+                return ResourceManager.GetString("NoSupportedAppHostsFound", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to The value &apos;{0}&apos; is not valid for {1}..
         /// </summary>
         public static string NonInteractiveInvalidValue {
