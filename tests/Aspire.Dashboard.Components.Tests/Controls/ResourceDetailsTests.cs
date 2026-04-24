@@ -504,7 +504,7 @@ public class ResourceDetailsTests : DashboardTestContext
 
         var resource = CreateParameterResource(
             resourceName: "myparameter",
-            state: "Value missing",
+            state: nameof(KnownResourceState.ValueMissing),
             stateStyle: "warning",
             properties: properties,
             commands: ImmutableArray.Create(setCommand));
@@ -555,7 +555,7 @@ public class ResourceDetailsTests : DashboardTestContext
 
         var resource = CreateParameterResource(
             resourceName: "myparameter",
-            state: "Value missing",
+            state: nameof(KnownResourceState.ValueMissing),
             stateStyle: "warning",
             properties: properties,
             commands: ImmutableArray.Create(setCommand));
@@ -606,7 +606,7 @@ public class ResourceDetailsTests : DashboardTestContext
 
         var resource = CreateParameterResource(
             resourceName: "mysecretparameter",
-            state: "Value missing",
+            state: nameof(KnownResourceState.ValueMissing),
             stateStyle: "warning",
             properties: properties,
             commands: ImmutableArray.Create(setCommand));
