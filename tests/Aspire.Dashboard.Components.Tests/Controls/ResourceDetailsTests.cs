@@ -4,6 +4,7 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using Aspire.Dashboard.Components.Controls;
+using Aspire.Dashboard.Resources;
 using Aspire.Dashboard.Components.Tests.Shared;
 using Aspire.Dashboard.Model;
 using Aspire.Tests.Shared.DashboardModel;
@@ -385,8 +386,8 @@ public class ResourceDetailsTests : DashboardTestContext
 
         // Assert
         var resourcePropertyGrid = cut.FindAll(".property-grid")[0];
-        Assert.Contains("State details", resourcePropertyGrid.TextContent);
-        Assert.Empty(cut.FindAll(".state-description"));
+        Assert.Contains(ControlsStrings.ResourceDetailsStateDescriptionHeader, resourcePropertyGrid.TextContent);
+        Assert.Contains(Columns.StateColumnResourceWaiting, resourcePropertyGrid.TextContent);
     }
 
     [Fact]
