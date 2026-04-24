@@ -382,6 +382,108 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
         Assert.False(promptedForOutputPath, "Should not have prompted for output path");
     }
 
+    [Fact]
+    public async Task InitCommand_WhenCSharpLanguageIsPromptedAndSaved_DoesNotFailDueToPrecedingConfigFileWrite_Regression15750()
+    {
+        // Regression test for https://github.com/microsoft/aspire/issues/15750
+        //
+        // Bug: LanguageService.GetOrPromptForProjectAsync persists appHost.language to
+        // aspire.config.json BEFORE CreateEmptyAppHostAsync invokes
+        // dotnet new aspire-apphost-singlefile.  The dotnet new template also emits
+        // aspire.config.json into the same working directory, so the pre-existing file
+        // causes a collision and dotnet new fails.
+        //
+        // This test drives the interactive prompt path (no --language flag) so the
+        // language-save happens, mirrors the collision by failing NewProjectAsync when
+        // aspire.config.json already exists, and then asserts the command succeeds with
+        // a final config containing both appHost.path and appHost.language.
+        // Against the current buggy code the test will fail because the command returns
+        // a non-zero exit code due to the collision.
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            // Override the language service to mirror the real LanguageService behaviour:
+            // when GetOrPromptForProjectAsync is called without an explicit language id and
+            // saveSelection is true, it persists the selection to aspire.config.json via
+            // ConfigurationService before returning the C# project.
+            options.LanguageServiceFactory = (sp) =>
+            {
+                var defaultCsharpProject = sp.GetRequiredService<DotNetAppHostProject>();
+                return new TestLanguageService
+                {
+                    DefaultProject = defaultCsharpProject,
+                    GetOrPromptForProjectAsyncCallback = async (explicitLanguage, saveSelection, ct) =>
+                    {
+                        if (string.IsNullOrWhiteSpace(explicitLanguage) && saveSelection)
+                        {
+                            // Reproduce the exact write that real LanguageService performs via
+                            // ConfigurationService.SetConfigurationAsync("appHost.language", "csharp").
+                            var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, "aspire.config.json");
+                            await File.WriteAllTextAsync(configPath,
+                                """{"appHost":{"language":"csharp"}}""", ct);
+                        }
+
+                        return defaultCsharpProject;
+                    }
+                };
+            };
+
+            options.DotNetCliRunnerFactory = (sp) =>
+            {
+                var runner = new TestDotNetCliRunner();
+
+                runner.InstallTemplateAsyncCallback = (packageName, version, nugetSource, force, invocationOptions, ct) =>
+                    (ExitCode: 0, TemplateVersion: "10.0.0");
+
+                runner.NewProjectAsyncCallback = (templateName, projectName, outputPath, invocationOptions, ct) =>
+                {
+                    // Simulate dotnet new aspire-apphost-singlefile running in the working
+                    // directory (UseWorkingDirectory = true).  The real dotnet new tool fails
+                    // with a non-zero exit code when aspire.config.json already exists there.
+                    var outputDir = Path.GetFullPath(outputPath);
+                    var configFilePath = Path.Combine(outputDir, "aspire.config.json");
+
+                    if (File.Exists(configFilePath))
+                    {
+                        // Collision: aspire.config.json was written by the language save.
+                        return 1;
+                    }
+
+                    // No collision: create the files the template would produce.
+                    // After the production fix (tasks 2 and 3) the final config retains
+                    // both the template-written path and the language that was persisted
+                    // before (or merged back after) dotnet new runs.
+                    File.WriteAllText(Path.Combine(outputDir, "apphost.cs"), "// apphost");
+                    File.WriteAllText(configFilePath, """{"appHost":{"path":"apphost.cs","language":"csharp"}}""");
+                    return 0;
+                };
+
+                return runner;
+            };
+
+            options.PackagingServiceFactory = _ => CreatePackagingServiceWithTemplatePackages();
+        });
+
+        using var serviceProvider = services.BuildServiceProvider();
+        var initCommand = serviceProvider.GetRequiredService<InitCommand>();
+
+        // Act: run without --language to exercise the interactive prompt+save path.
+        var parseResult = initCommand.Parse("init --suppress-agent-init");
+        var exitCode = await parseResult.InvokeAsync().DefaultTimeout();
+
+        // Assert: the command must succeed and the final aspire.config.json must contain
+        // both the template's appHost.path entry and the language selection.
+        Assert.Equal(ExitCodeConstants.Success, exitCode);
+
+        var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, "aspire.config.json");
+        Assert.True(File.Exists(configPath), "aspire.config.json should exist after init");
+
+        var configJson = await File.ReadAllTextAsync(configPath);
+        Assert.Contains("apphost.cs", configJson);
+        Assert.Contains("csharp", configJson);
+    }
+
     private static TestPackagingService CreatePackagingServiceWithTemplatePackages() => new()
     {
         GetChannelsAsyncCallback = _ =>

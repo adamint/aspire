@@ -134,8 +134,11 @@ internal sealed class InitCommand : BaseCommand, IPackageMetaPrefetchingCommand
         var agentInitBinding = PromptBinding.CreateInvertedBoolConfirm(parseResult, NewCommand.s_suppressAgentInitOption, defaultValue: true);
 
         // Get the language selection (from command line, config, or prompt).
+        // Do not save yet – for the no-solution C# path the aspire-apphost-singlefile
+        // template will write aspire.config.json (including appHost.language) and a
+        // pre-create write would cause a file-collision that makes dotnet new fail.
         var explicitLanguage = parseResult.GetValue(_languageOption);
-        var selectedProject = await _languageService.GetOrPromptForProjectAsync(explicitLanguage, saveSelection: true, cancellationToken);
+        var selectedProject = await _languageService.GetOrPromptForProjectAsync(explicitLanguage, saveSelection: false, cancellationToken);
 
         // For non-C# languages, skip solution detection and create polyglot apphost.
         if (selectedProject.LanguageId != KnownLanguageId.CSharp)
@@ -158,6 +161,8 @@ internal sealed class InitCommand : BaseCommand, IPackageMetaPrefetchingCommand
                 return polyglotResult;
             }
 
+            // Persist language selection after scaffolding succeeds.
+            await _languageService.SetLanguageAsync(selectedProject, cancellationToken: cancellationToken);
             return await _agentInitCommand.PromptAndChainAsync(InteractionService, polyglotResult, _executionContext.WorkingDirectory, agentInitBinding, cancellationToken);
         }
 
@@ -196,6 +201,15 @@ internal sealed class InitCommand : BaseCommand, IPackageMetaPrefetchingCommand
         {
             InteractionService.DisplayError(string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.ProjectCouldNotBeCreated, ExecutionContext.LogFilePath));
             return initResult;
+        }
+
+        // For the solution-based path, persist the language selection now that creation
+        // succeeded. The no-solution (single-file) path skips this because the
+        // aspire-apphost-singlefile template writes aspire.config.json (including
+        // appHost.language) so no separate write is needed.
+        if (initContext.SelectedSolutionFile is not null)
+        {
+            await _languageService.SetLanguageAsync(selectedProject, cancellationToken: cancellationToken);
         }
 
         return await _agentInitCommand.PromptAndChainAsync(InteractionService, initResult, workspaceRoot, agentInitBinding, cancellationToken);
