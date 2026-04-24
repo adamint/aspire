@@ -24,7 +24,8 @@ internal interface IProjectLocator
     /// <summary>
     /// Resolves the AppHost project file from <c>.aspire/settings.json</c> only, without any
     /// user interaction or recursive filesystem scanning. Returns <c>null</c> when no settings
-    /// file or <c>appHostPath</c> entry is found.
+    /// file or <c>appHostPath</c> entry is found, or when the configured path is no longer a
+    /// valid AppHost project.
     /// </summary>
     Task<FileInfo?> GetAppHostFromSettingsAsync(CancellationToken cancellationToken = default);
 }
@@ -183,7 +184,32 @@ internal sealed class ProjectLocator(
     /// <inheritdoc />
     public async Task<FileInfo?> GetAppHostFromSettingsAsync(CancellationToken cancellationToken = default)
     {
-        return await GetAppHostProjectFileFromSettingsAsync(silent: true, cancellationToken);
+        return await GetValidatedAppHostProjectFileFromSettingsAsync(silent: true, cancellationToken);
+    }
+
+    private async Task<FileInfo?> GetValidatedAppHostProjectFileFromSettingsAsync(bool silent, CancellationToken cancellationToken)
+    {
+        var settingsAppHost = await GetAppHostProjectFileFromSettingsAsync(silent, cancellationToken);
+        if (settingsAppHost is null)
+        {
+            return null;
+        }
+
+        var handler = projectFactory.TryGetProject(settingsAppHost);
+        if (handler is null)
+        {
+            logger.LogWarning("Ignoring AppHost path '{AppHostPath}' from settings because no project handler can process it.", settingsAppHost.FullName);
+            return null;
+        }
+
+        var validationResult = await handler.ValidateAppHostAsync(settingsAppHost, cancellationToken);
+        if (validationResult.IsValid)
+        {
+            return settingsAppHost;
+        }
+
+        logger.LogWarning("Ignoring AppHost path '{AppHostPath}' from settings because it is no longer a valid AppHost project.", settingsAppHost.FullName);
+        return null;
     }
 
     private async Task<FileInfo?> GetAppHostProjectFileFromSettingsAsync(bool silent, CancellationToken cancellationToken)
@@ -362,7 +388,7 @@ internal sealed class ProjectLocator(
             }
         }
 
-        var settingsAppHost = await GetAppHostProjectFileFromSettingsAsync(silent: true, cancellationToken);
+        var settingsAppHost = await GetValidatedAppHostProjectFileFromSettingsAsync(silent: true, cancellationToken);
 
         logger.LogDebug("No project file specified, searching for apphost projects in {CurrentDirectory}", executionContext.WorkingDirectory);
         var results = await FindAppHostProjectFilesAsync(
