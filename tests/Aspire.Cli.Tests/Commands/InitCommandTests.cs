@@ -413,6 +413,13 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
                 return new TestLanguageService
                 {
                     DefaultProject = defaultCsharpProject,
+                    GetOrPromptForProjectSelectionAsyncCallback = (explicitLanguage, saveSelection, ct) =>
+                    {
+                        Assert.Null(explicitLanguage);
+                        Assert.False(saveSelection);
+
+                        return Task.FromResult(new AppHostProjectSelection(defaultCsharpProject, ShouldPersistSelection: true));
+                    },
                     GetOrPromptForProjectAsyncCallback = async (explicitLanguage, saveSelection, ct) =>
                     {
                         if (string.IsNullOrWhiteSpace(explicitLanguage) && saveSelection)
@@ -451,9 +458,6 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
                     }
 
                     // No collision: create the files the template would produce.
-                    // After the production fix (tasks 2 and 3) the final config retains
-                    // both the template-written path and the language that was persisted
-                    // before (or merged back after) dotnet new runs.
                     File.WriteAllText(Path.Combine(outputDir, "apphost.cs"), "// apphost");
                     File.WriteAllText(configFilePath, """{"appHost":{"path":"apphost.cs","language":"csharp"}}""");
                     return 0;
@@ -482,6 +486,156 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
         var configJson = await File.ReadAllTextAsync(configPath);
         Assert.Contains("apphost.cs", configJson);
         Assert.Contains("csharp", configJson);
+    }
+
+    [Fact]
+    public async Task InitCommand_WhenLanguageIsExplicit_DoesNotPersistLanguageAgain()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var scaffolded = false;
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.LanguageServiceFactory = (sp) =>
+            {
+                var projectFactory = sp.GetRequiredService<IAppHostProjectFactory>();
+                var tsProject = projectFactory.GetProject(CreateTypeScriptLanguageInfo());
+
+                return new TestLanguageService
+                {
+                    DefaultProject = tsProject,
+                    GetOrPromptForProjectSelectionAsyncCallback = (explicitLanguage, saveSelection, ct) =>
+                    {
+                        Assert.Equal(KnownLanguageId.TypeScript, explicitLanguage);
+                        Assert.False(saveSelection);
+
+                        return Task.FromResult(new AppHostProjectSelection(tsProject, ShouldPersistSelection: false));
+                    },
+                    SetLanguageAsyncCallback = (_, _, _) => throw new InvalidOperationException("Explicit language selection should not be persisted again.")
+                };
+            };
+        });
+
+        services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
+        {
+            ScaffoldAsyncCallback = (context, cancellationToken) =>
+            {
+                scaffolded = true;
+                return Task.FromResult(true);
+            }
+        });
+
+        using var serviceProvider = services.BuildServiceProvider();
+        var initCommand = serviceProvider.GetRequiredService<InitCommand>();
+
+        var parseResult = initCommand.Parse($"init --language {KnownLanguageId.TypeScript} --suppress-agent-init");
+        var exitCode = await parseResult.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(ExitCodeConstants.Success, exitCode);
+        Assert.True(scaffolded);
+    }
+
+    [Fact]
+    public async Task InitCommand_WhenLanguageIsConfigured_DoesNotPersistLanguageAgain()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var scaffolded = false;
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.LanguageServiceFactory = (sp) =>
+            {
+                var projectFactory = sp.GetRequiredService<IAppHostProjectFactory>();
+                var tsProject = projectFactory.GetProject(CreateTypeScriptLanguageInfo());
+
+                return new TestLanguageService
+                {
+                    DefaultProject = tsProject,
+                    GetOrPromptForProjectSelectionAsyncCallback = (explicitLanguage, saveSelection, ct) =>
+                    {
+                        Assert.Null(explicitLanguage);
+                        Assert.False(saveSelection);
+
+                        return Task.FromResult(new AppHostProjectSelection(tsProject, ShouldPersistSelection: false));
+                    },
+                    SetLanguageAsyncCallback = (_, _, _) => throw new InvalidOperationException("Configured language selection should not be persisted again.")
+                };
+            };
+        });
+
+        services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
+        {
+            ScaffoldAsyncCallback = (context, cancellationToken) =>
+            {
+                scaffolded = true;
+                return Task.FromResult(true);
+            }
+        });
+
+        using var serviceProvider = services.BuildServiceProvider();
+        var initCommand = serviceProvider.GetRequiredService<InitCommand>();
+
+        var parseResult = initCommand.Parse("init --suppress-agent-init");
+        var exitCode = await parseResult.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(ExitCodeConstants.Success, exitCode);
+        Assert.True(scaffolded);
+    }
+
+    [Fact]
+    public async Task InitCommand_WhenLanguageIsPrompted_PersistsLanguageAfterScaffoldingSucceeds()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var scaffolded = false;
+        var persistedLanguage = false;
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.LanguageServiceFactory = (sp) =>
+            {
+                var projectFactory = sp.GetRequiredService<IAppHostProjectFactory>();
+                var tsProject = projectFactory.GetProject(CreateTypeScriptLanguageInfo());
+
+                return new TestLanguageService
+                {
+                    DefaultProject = tsProject,
+                    GetOrPromptForProjectSelectionAsyncCallback = (explicitLanguage, saveSelection, ct) =>
+                    {
+                        Assert.Null(explicitLanguage);
+                        Assert.False(saveSelection);
+
+                        return Task.FromResult(new AppHostProjectSelection(tsProject, ShouldPersistSelection: true));
+                    },
+                    SetLanguageAsyncCallback = (project, isGlobal, ct) =>
+                    {
+                        Assert.Same(tsProject, project);
+                        Assert.False(isGlobal);
+
+                        persistedLanguage = true;
+                        return Task.CompletedTask;
+                    }
+                };
+            };
+        });
+
+        services.AddSingleton<IScaffoldingService>(new TestScaffoldingService
+        {
+            ScaffoldAsyncCallback = (context, cancellationToken) =>
+            {
+                scaffolded = true;
+                return Task.FromResult(true);
+            }
+        });
+
+        using var serviceProvider = services.BuildServiceProvider();
+        var initCommand = serviceProvider.GetRequiredService<InitCommand>();
+
+        var parseResult = initCommand.Parse("init --suppress-agent-init");
+        var exitCode = await parseResult.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(ExitCodeConstants.Success, exitCode);
+        Assert.True(scaffolded);
+        Assert.True(persistedLanguage);
     }
 
     private static TestPackagingService CreatePackagingServiceWithTemplatePackages() => new()
@@ -522,6 +676,14 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
             }
         };
     }
+
+    private static LanguageInfo CreateTypeScriptLanguageInfo() => new(
+        LanguageId: new LanguageId(KnownLanguageId.TypeScript),
+        DisplayName: "TypeScript (Node.js)",
+        PackageName: "@aspire/app-host",
+        DetectionPatterns: ["apphost.ts"],
+        CodeGenerator: "typescript",
+        AppHostFileName: "apphost.ts");
 
     [Fact]
     public async Task InitCommandWithChannelOptionUsesSpecifiedChannel()
