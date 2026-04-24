@@ -115,7 +115,7 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         var dir1 = workspace.WorkspaceRoot.CreateSubdirectory("dir1");
         var dir2 = dir1.CreateSubdirectory("dir2");
 
-        var targetAppHostDirectory = dir2.CreateSubdirectory("TargetAppHost");
+        var targetAppHostDirectory = workspace.WorkspaceRoot.CreateSubdirectory("TargetAppHost");
         var targetAppHostProjectFile = new FileInfo(Path.Combine(targetAppHostDirectory.FullName, "TargetAppHost.csproj"));
         await File.WriteAllTextAsync(targetAppHostProjectFile.FullName, "Not a real apphost");
 
@@ -129,7 +129,7 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         });
         writer.Close();
 
-        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var executionContext = CreateExecutionContext(dir2);
         var projectLocator = CreateProjectLocator(executionContext);
 
         var foundAppHost = await projectLocator.UseOrFindAppHostProjectFileAsync(null, createSettingsFile: true).DefaultTimeout();

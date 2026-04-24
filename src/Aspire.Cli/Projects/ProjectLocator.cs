@@ -342,6 +342,8 @@ internal sealed class ProjectLocator(
             }
         }
 
+        var settingsAppHost = await GetAppHostProjectFileFromSettingsAsync(silent: true, cancellationToken);
+
         logger.LogDebug("No project file specified, searching for apphost projects in {CurrentDirectory}", executionContext.WorkingDirectory);
         var results = await FindAppHostProjectFilesAsync(executionContext.WorkingDirectory, cancellationToken);
 
@@ -351,28 +353,39 @@ internal sealed class ProjectLocator(
 
         if (results.BuildableAppHost.Count == 0 && results.UnbuildableSuspectedAppHostProjects.Count == 0)
         {
-            if (results.HasUnsupportedProjects)
+            if (settingsAppHost is not null)
+            {
+                selectedAppHost = settingsAppHost;
+            }
+            else if (results.HasUnsupportedProjects)
             {
                 throw new ProjectLocatorException(ErrorStrings.NoProjectFileFound, ProjectLocatorFailureReason.UnsupportedProjects);
             }
-
-            throw new ProjectLocatorException(ErrorStrings.NoProjectFileFound, ProjectLocatorFailureReason.NoProjectFileFound);
+            else
+            {
+                throw new ProjectLocatorException(ErrorStrings.NoProjectFileFound, ProjectLocatorFailureReason.NoProjectFileFound);
+            }
         }
         else if (results.BuildableAppHost.Count == 0 && results.UnbuildableSuspectedAppHostProjects.Count > 0)
         {
-            throw new ProjectLocatorException(ErrorStrings.AppHostsMayNotBeBuildable, ProjectLocatorFailureReason.AppHostsMayNotBeBuildable);
+            if (settingsAppHost is not null)
+            {
+                selectedAppHost = settingsAppHost;
+            }
+            else
+            {
+                throw new ProjectLocatorException(ErrorStrings.AppHostsMayNotBeBuildable, ProjectLocatorFailureReason.AppHostsMayNotBeBuildable);
+            }
         }
         else if (results.BuildableAppHost.Count == 1)
         {
-            selectedAppHost = results.BuildableAppHost[0];
+            selectedAppHost = settingsAppHost ?? results.BuildableAppHost[0];
         }
         else if (results.BuildableAppHost.Count > 1)
         {
             // Check if a previously-selected apphost is cached in settings and
             // is still among the discovered candidates. If so, reuse it to avoid
             // prompting the user every time when nothing has changed.
-            var settingsAppHost = await GetAppHostProjectFileFromSettingsAsync(silent: true, cancellationToken);
-
             var pathComparison = OperatingSystem.IsWindows()
                 ? StringComparison.OrdinalIgnoreCase
                 : StringComparison.Ordinal;
