@@ -1320,6 +1320,63 @@ builder.Build().Run();");
     }
 
     [Fact]
+    public async Task UseOrFindAppHostProjectFile_MultipleAppHosts_NoConfig_ThrowBehavior_CancelsRemainingValidationEarly()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var appHost1File = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "AppHost1.csproj"));
+        await File.WriteAllTextAsync(appHost1File.FullName, "Not a real apphost");
+
+        var appHost2File = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "AppHost2.csproj"));
+        await File.WriteAllTextAsync(appHost2File.FullName, "Not a real apphost");
+
+        var slowValidationFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "SlowValidation.csproj"));
+        await File.WriteAllTextAsync(slowValidationFile.FullName, "Not a real apphost");
+
+        var slowValidationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var slowValidationCanceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var projectFactory = new TestAppHostProjectFactory
+        {
+            ValidateAppHostAsyncCallback = async (projectFile, cancellationToken) =>
+            {
+                if (string.Equals(projectFile.FullName, slowValidationFile.FullName, StringComparison.Ordinal))
+                {
+                    slowValidationStarted.TrySetResult();
+
+                    try
+                    {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        slowValidationCanceled.TrySetResult();
+                        throw;
+                    }
+                }
+
+                if (string.Equals(projectFile.FullName, appHost2File.FullName, StringComparison.Ordinal))
+                {
+                    await slowValidationStarted.Task.DefaultTimeout();
+                }
+
+                return new AppHostValidationResult(IsValid: true);
+            }
+        };
+
+        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var projectLocator = CreateProjectLocator(executionContext, projectFactory: projectFactory);
+
+        var ex = await Assert.ThrowsAsync<ProjectLocatorException>(async () =>
+        {
+            await projectLocator.UseOrFindAppHostProjectFileAsync(null, MultipleAppHostProjectsFoundBehavior.Throw, createSettingsFile: false, CancellationToken.None).DefaultTimeout();
+        });
+
+        Assert.Equal(ProjectLocatorFailureReason.MultipleProjectFilesFound, ex.FailureReason);
+        await slowValidationCanceled.Task.DefaultTimeout();
+    }
+
+    [Fact]
     public async Task UseOrFindAppHostProjectFile_WithSettingsAndMultipleAppHosts_ThrowBehavior_UsesCachedSelection()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);

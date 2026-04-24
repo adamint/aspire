@@ -42,11 +42,11 @@ internal sealed class ProjectLocator(
 
     public async Task<List<FileInfo>> FindAppHostProjectFilesAsync(string searchDirectory, CancellationToken cancellationToken)
     {
-        var allCandidates = await FindAppHostProjectFilesAsync(new DirectoryInfo(searchDirectory), cancellationToken);
+        var allCandidates = await FindAppHostProjectFilesAsync(new DirectoryInfo(searchDirectory), stopAfterMultipleBuildableAppHosts: false, cancellationToken);
         return [..allCandidates.BuildableAppHost, ..allCandidates.UnbuildableSuspectedAppHostProjects];
     }
 
-    private async Task<(List<FileInfo> BuildableAppHost, List<FileInfo> UnbuildableSuspectedAppHostProjects, bool HasUnsupportedProjects)> FindAppHostProjectFilesAsync(DirectoryInfo searchDirectory, CancellationToken cancellationToken)
+    private async Task<(List<FileInfo> BuildableAppHost, List<FileInfo> UnbuildableSuspectedAppHostProjects, bool HasUnsupportedProjects)> FindAppHostProjectFilesAsync(DirectoryInfo searchDirectory, bool stopAfterMultipleBuildableAppHosts, CancellationToken cancellationToken)
     {
         using var activity = telemetry.StartDiagnosticActivity();
 
@@ -65,9 +65,14 @@ internal sealed class ProjectLocator(
 
             interactionService.DisplayMessage(KnownEmojis.MagnifyingGlassTiltedLeft, InteractionServiceStrings.FindingAppHosts);
 
+            using var validationCancellationTokenSource = stopAfterMultipleBuildableAppHosts
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+                : null;
+            var validationCancellationToken = validationCancellationTokenSource?.Token ?? cancellationToken;
+
             var parallelOptions = new ParallelOptions
             {
-                CancellationToken = cancellationToken,
+                CancellationToken = validationCancellationToken,
                 MaxDegreeOfParallelism = Environment.ProcessorCount
             };
 
@@ -116,44 +121,56 @@ internal sealed class ProjectLocator(
                 }
             }
 
-            await Parallel.ForEachAsync(candidatesWithHandlers, parallelOptions, async (candidate, ct) =>
+            try
             {
-                var (candidateFile, handler) = candidate;
+                await Parallel.ForEachAsync(candidatesWithHandlers, parallelOptions, async (candidate, ct) =>
+                {
+                    var (candidateFile, handler) = candidate;
 
-                // Validate the candidate file using the handler
-                var validationResult = await handler.ValidateAppHostAsync(candidateFile, ct);
+                    // Validate the candidate file using the handler
+                    var validationResult = await handler.ValidateAppHostAsync(candidateFile, ct);
 
-                if (validationResult.IsValid)
-                {
-                    logger.LogDebug("Found {Language} apphost {CandidateFile}", handler.DisplayName, candidateFile.FullName);
-                    var relativePath = Path.GetRelativePath(executionContext.WorkingDirectory.FullName, candidateFile.FullName);
-                    interactionService.DisplaySubtleMessage(relativePath);
-                    lock (lockObject)
+                    if (validationResult.IsValid)
                     {
-                        appHostProjects.Add(candidateFile);
+                        logger.LogDebug("Found {Language} apphost {CandidateFile}", handler.DisplayName, candidateFile.FullName);
+                        var relativePath = Path.GetRelativePath(executionContext.WorkingDirectory.FullName, candidateFile.FullName);
+                        interactionService.DisplaySubtleMessage(relativePath);
+                        lock (lockObject)
+                        {
+                            appHostProjects.Add(candidateFile);
+
+                            if (stopAfterMultipleBuildableAppHosts && appHostProjects.Count >= 2)
+                            {
+                                validationCancellationTokenSource?.Cancel();
+                            }
+                        }
                     }
-                }
-                else if (validationResult.IsUnsupported)
-                {
-                    var relativePath = Path.GetRelativePath(executionContext.WorkingDirectory.FullName, candidateFile.FullName);
-                    interactionService.DisplayMessage(KnownEmojis.Warning, string.Format(CultureInfo.CurrentCulture, ErrorStrings.ProjectFileUnsupportedInCurrentEnvironment, relativePath));
-                    logger.LogDebug("Skipping unsupported project {CandidateFile}", candidateFile.FullName);
-                    hasUnsupportedProjects = true;
-                }
-                else if (validationResult.IsPossiblyUnbuildable)
-                {
-                    var relativePath = Path.GetRelativePath(executionContext.WorkingDirectory.FullName, candidateFile.FullName);
-                    interactionService.DisplayMessage(KnownEmojis.Warning, string.Format(CultureInfo.CurrentCulture, ErrorStrings.ProjectFileMayBeUnbuildableAppHost, relativePath));
-                    lock (lockObject)
+                    else if (validationResult.IsUnsupported)
                     {
-                        unbuildableSuspectedAppHostProjects.Add(candidateFile);
+                        var relativePath = Path.GetRelativePath(executionContext.WorkingDirectory.FullName, candidateFile.FullName);
+                        interactionService.DisplayMessage(KnownEmojis.Warning, string.Format(CultureInfo.CurrentCulture, ErrorStrings.ProjectFileUnsupportedInCurrentEnvironment, relativePath));
+                        logger.LogDebug("Skipping unsupported project {CandidateFile}", candidateFile.FullName);
+                        hasUnsupportedProjects = true;
                     }
-                }
-                else
-                {
-                    logger.LogTrace("File {CandidateFile} is not a valid Aspire host", candidateFile.FullName);
-                }
-            });
+                    else if (validationResult.IsPossiblyUnbuildable)
+                    {
+                        var relativePath = Path.GetRelativePath(executionContext.WorkingDirectory.FullName, candidateFile.FullName);
+                        interactionService.DisplayMessage(KnownEmojis.Warning, string.Format(CultureInfo.CurrentCulture, ErrorStrings.ProjectFileMayBeUnbuildableAppHost, relativePath));
+                        lock (lockObject)
+                        {
+                            unbuildableSuspectedAppHostProjects.Add(candidateFile);
+                        }
+                    }
+                    else
+                    {
+                        logger.LogTrace("File {CandidateFile} is not a valid Aspire host", candidateFile.FullName);
+                    }
+                });
+            }
+            catch (OperationCanceledException) when (validationCancellationTokenSource?.IsCancellationRequested is true && !cancellationToken.IsCancellationRequested)
+            {
+                logger.LogDebug("Stopping AppHost discovery early after finding multiple valid AppHost projects.");
+            }
 
             // This sort is done here to make results deterministic since we get all the app
             // host information in parallel and the order may vary.
@@ -263,7 +280,10 @@ internal sealed class ProjectLocator(
                 var directory = new DirectoryInfo(projectFile.FullName);
 
                 // Reuse the main search logic
-                var searchResults = await FindAppHostProjectFilesAsync(directory, cancellationToken);
+                var searchResults = await FindAppHostProjectFilesAsync(
+                    directory,
+                    stopAfterMultipleBuildableAppHosts: multipleAppHostProjectsFoundBehavior is MultipleAppHostProjectsFoundBehavior.Throw,
+                    cancellationToken);
                 var appHostProjects = searchResults.BuildableAppHost;
 
                 interactionService.DisplayEmptyLine();
@@ -345,7 +365,10 @@ internal sealed class ProjectLocator(
         var settingsAppHost = await GetAppHostProjectFileFromSettingsAsync(silent: true, cancellationToken);
 
         logger.LogDebug("No project file specified, searching for apphost projects in {CurrentDirectory}", executionContext.WorkingDirectory);
-        var results = await FindAppHostProjectFilesAsync(executionContext.WorkingDirectory, cancellationToken);
+        var results = await FindAppHostProjectFilesAsync(
+            executionContext.WorkingDirectory,
+            stopAfterMultipleBuildableAppHosts: multipleAppHostProjectsFoundBehavior is MultipleAppHostProjectsFoundBehavior.Throw && settingsAppHost is null,
+            cancellationToken);
 
         logger.LogDebug("Found {ProjectFileCount} project files.", results.BuildableAppHost.Count);
 
