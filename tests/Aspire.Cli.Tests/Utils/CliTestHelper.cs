@@ -70,6 +70,11 @@ internal static class CliTestHelper
 
         options.ConfigurationCallback(configurationValues);
 
+        if (options.DisableAnsi)
+        {
+            configurationValues.TryAdd("NO_COLOR", "1");
+        }
+
         configBuilder.AddInMemoryCollection(configurationValues);
 
         var globalSettingsFilePath = Path.Combine(options.WorkingDirectory.FullName, ".aspire", "settings.global.json");
@@ -81,10 +86,12 @@ internal static class CliTestHelper
 
         services.AddLogging(b => b.SetMinimumLevel(LogLevel.Trace)).AddXunitLogging(outputHelper);
 
-        // Register logging options for test
+        // Register logging options for test. The FileLoggerProvider is created inside the
+        // factory callback so the DI container owns the instance and disposes it (closing
+        // the log file handle) when the ServiceProvider is disposed.
         var testLogsDirectory = Path.Combine(options.WorkingDirectory.FullName, ".aspire", "logs");
         var testLogFilePath = FileLoggerProvider.GenerateLogFilePath(testLogsDirectory, TimeProvider.System);
-        services.AddSingleton(new FileLoggerProvider(testLogFilePath, new TestStartupErrorWriter()));
+        services.AddSingleton(sp => new FileLoggerProvider(testLogFilePath, new TestStartupErrorWriter()));
         services.AddSingleton(new Program.CliLoggingOptions(ConsoleLogLevel: null, DebugMode: false, LogsDirectory: testLogsDirectory, LogFilePath: testLogFilePath));
 
         services.AddMemoryCache();
@@ -155,6 +162,7 @@ internal static class CliTestHelper
 
         services.AddSingleton<IEnvironmentCheck, WslEnvironmentCheck>();
         services.AddSingleton<IEnvironmentCheck, DotNetSdkCheck>();
+        services.AddSingleton<IEnvironmentCheck, TypeScriptAppHostToolingCheck>();
         services.AddSingleton<IEnvironmentCheck, DeprecatedWorkloadCheck>();
         services.AddSingleton<IEnvironmentCheck, DevCertsCheck>();
         services.AddSingleton<IEnvironmentCheck, ContainerRuntimeCheck>();
@@ -521,7 +529,7 @@ internal sealed class CliServiceCollectionTestOptions
         var nuGetPackageCache = serviceProvider.GetRequiredService<INuGetPackageCache>();
         var features = serviceProvider.GetRequiredService<IFeatures>();
         var configuration = serviceProvider.GetRequiredService<IConfiguration>();
-        return new PackagingService(executionContext, nuGetPackageCache, features, configuration);
+        return new PackagingService(executionContext, nuGetPackageCache, features, configuration, NullLogger<PackagingService>.Instance);
     };
 
     public Func<IServiceProvider, IDiskCache> DiskCacheFactory { get; set; } = (IServiceProvider serviceProvider) => new NullDiskCache();

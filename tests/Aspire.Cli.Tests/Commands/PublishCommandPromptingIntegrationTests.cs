@@ -42,7 +42,7 @@ public class PublishCommandPromptingIntegrationTests(ITestOutputHelper outputHel
 
         services.AddSingleton<IInteractionService>(consoleService);
 
-        var serviceProvider = services.BuildServiceProvider();
+        using var serviceProvider = services.BuildServiceProvider();
         var command = serviceProvider.GetRequiredService<RootCommand>();
 
         // Act
@@ -88,7 +88,7 @@ public class PublishCommandPromptingIntegrationTests(ITestOutputHelper outputHel
 
         services.AddSingleton<IInteractionService>(consoleService);
 
-        var serviceProvider = services.BuildServiceProvider();
+        using var serviceProvider = services.BuildServiceProvider();
         var command = serviceProvider.GetRequiredService<RootCommand>();
 
         // Act
@@ -140,7 +140,7 @@ public class PublishCommandPromptingIntegrationTests(ITestOutputHelper outputHel
 
         services.AddSingleton<IInteractionService>(consoleService);
 
-        var serviceProvider = services.BuildServiceProvider();
+        using var serviceProvider = services.BuildServiceProvider();
         var command = serviceProvider.GetRequiredService<RootCommand>();
 
         // Act
@@ -187,7 +187,7 @@ public class PublishCommandPromptingIntegrationTests(ITestOutputHelper outputHel
 
         services.AddSingleton<IInteractionService>(consoleService);
 
-        var serviceProvider = services.BuildServiceProvider();
+        using var serviceProvider = services.BuildServiceProvider();
         var command = serviceProvider.GetRequiredService<RootCommand>();
 
         // Act
@@ -233,7 +233,7 @@ public class PublishCommandPromptingIntegrationTests(ITestOutputHelper outputHel
 
         services.AddSingleton<IInteractionService>(consoleService);
 
-        var serviceProvider = services.BuildServiceProvider();
+        using var serviceProvider = services.BuildServiceProvider();
         var command = serviceProvider.GetRequiredService<RootCommand>();
 
         // Act
@@ -291,7 +291,7 @@ public class PublishCommandPromptingIntegrationTests(ITestOutputHelper outputHel
 
         services.AddSingleton<IInteractionService>(consoleService);
 
-        var serviceProvider = services.BuildServiceProvider();
+        using var serviceProvider = services.BuildServiceProvider();
         var command = serviceProvider.GetRequiredService<RootCommand>();
 
         // Act
@@ -370,7 +370,7 @@ public class PublishCommandPromptingIntegrationTests(ITestOutputHelper outputHel
 
         services.AddSingleton<IInteractionService>(consoleService);
 
-        var serviceProvider = services.BuildServiceProvider();
+        using var serviceProvider = services.BuildServiceProvider();
         var command = serviceProvider.GetRequiredService<RootCommand>();
 
         // Act
@@ -438,7 +438,7 @@ public class PublishCommandPromptingIntegrationTests(ITestOutputHelper outputHel
 
         services.AddSingleton<IInteractionService>(consoleService);
 
-        var serviceProvider = services.BuildServiceProvider();
+        using var serviceProvider = services.BuildServiceProvider();
         var command = serviceProvider.GetRequiredService<RootCommand>();
 
         // Act
@@ -490,7 +490,7 @@ public class PublishCommandPromptingIntegrationTests(ITestOutputHelper outputHel
 
         services.AddSingleton<IInteractionService>(consoleService);
 
-        var serviceProvider = services.BuildServiceProvider();
+        using var serviceProvider = services.BuildServiceProvider();
         var command = serviceProvider.GetRequiredService<RootCommand>();
 
         // Act
@@ -545,7 +545,7 @@ public class PublishCommandPromptingIntegrationTests(ITestOutputHelper outputHel
 
         services.AddSingleton<IInteractionService>(consoleService);
 
-        var serviceProvider = services.BuildServiceProvider();
+        using var serviceProvider = services.BuildServiceProvider();
         var command = serviceProvider.GetRequiredService<RootCommand>();
 
         // Act
@@ -616,7 +616,7 @@ public class PublishCommandPromptingIntegrationTests(ITestOutputHelper outputHel
 
         services.AddSingleton<IInteractionService>(consoleService);
 
-        var serviceProvider = services.BuildServiceProvider();
+        using var serviceProvider = services.BuildServiceProvider();
         var command = serviceProvider.GetRequiredService<RootCommand>();
 
         // Act - use the --debug flag
@@ -660,7 +660,7 @@ public class PublishCommandPromptingIntegrationTests(ITestOutputHelper outputHel
 
         services.AddSingleton<IInteractionService>(consoleService);
 
-        var serviceProvider = services.BuildServiceProvider();
+        using var serviceProvider = services.BuildServiceProvider();
         var command = serviceProvider.GetRequiredService<RootCommand>();
 
         // Act
@@ -703,7 +703,7 @@ public class PublishCommandPromptingIntegrationTests(ITestOutputHelper outputHel
 
         services.AddSingleton<IInteractionService>(consoleService);
 
-        var serviceProvider = services.BuildServiceProvider();
+        using var serviceProvider = services.BuildServiceProvider();
         var command = serviceProvider.GetRequiredService<RootCommand>();
 
         // Act
@@ -873,9 +873,9 @@ internal sealed class TestConsoleInteractionServiceWithPromptTracking : IInterac
         }
     }
 
-    public Task<string> PromptForStringAsync(string promptText, string? defaultValue = null, Func<string, ValidationResult>? validator = null, bool isSecret = false, bool required = false, CancellationToken cancellationToken = default)
+    public Task<string> PromptForStringAsync(string promptText, Func<string, ValidationResult>? validator = null, bool isSecret = false, bool required = false, PromptBinding<string?>? binding = null, CancellationToken cancellationToken = default)
     {
-        StringPromptCalls.Add(new StringPromptCall(promptText, defaultValue, isSecret));
+        StringPromptCalls.Add(new StringPromptCall(promptText, binding?.DefaultValue, isSecret));
 
         if (_shouldCancel || cancellationToken.IsCancellationRequested)
         {
@@ -887,13 +887,13 @@ internal sealed class TestConsoleInteractionServiceWithPromptTracking : IInterac
             return Task.FromResult(response.response);
         }
 
-        return Task.FromResult(defaultValue ?? string.Empty);
+        return Task.FromResult(binding?.DefaultValue ?? string.Empty);
     }
 
-    public Task<string> PromptForFilePathAsync(string promptText, string? defaultValue = null, Func<string, ValidationResult>? validator = null, bool directory = false, bool required = false, CancellationToken cancellationToken = default)
-        => PromptForStringAsync(promptText, defaultValue, validator, isSecret: false, required, cancellationToken);
+    public Task<string> PromptForFilePathAsync(string promptText, Func<string, ValidationResult>? validator = null, bool directory = false, bool required = false, PromptBinding<string?>? binding = null, CancellationToken cancellationToken = default)
+        => PromptForStringAsync(promptText, validator, isSecret: false, required, binding, cancellationToken);
 
-    public Task<T> PromptForSelectionAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter, CancellationToken cancellationToken = default) where T : notnull
+    public Task<T> PromptForSelectionAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter, PromptBinding<string?>? binding = null, CancellationToken cancellationToken = default) where T : notnull
     {
         if (_shouldCancel || cancellationToken.IsCancellationRequested)
         {
@@ -913,7 +913,7 @@ internal sealed class TestConsoleInteractionServiceWithPromptTracking : IInterac
         return Task.FromResult(choices.First());
     }
 
-    public Task<IReadOnlyList<T>> PromptForSelectionsAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter, IEnumerable<T>? preSelected = null, bool optional = false, CancellationToken cancellationToken = default) where T : notnull
+    public Task<IReadOnlyList<T>> PromptForSelectionsAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter, IEnumerable<T>? preSelected = null, bool optional = false, PromptBinding<string?>? binding = null, CancellationToken cancellationToken = default) where T : notnull
     {
         if (_shouldCancel || cancellationToken.IsCancellationRequested)
         {
@@ -931,8 +931,9 @@ internal sealed class TestConsoleInteractionServiceWithPromptTracking : IInterac
         return Task.FromResult<IReadOnlyList<T>>(choices.ToList());
     }
 
-    public Task<bool> ConfirmAsync(string promptText, bool defaultValue = true, CancellationToken cancellationToken = default)
+    public Task<bool> PromptConfirmAsync(string promptText, PromptBinding<bool>? binding = null, CancellationToken cancellationToken = default)
     {
+        var defaultValue = binding?.DefaultValue ?? false;
         BooleanPromptCalls.Add(new BooleanPromptCall(promptText, defaultValue));
 
         if (_shouldCancel || cancellationToken.IsCancellationRequested)

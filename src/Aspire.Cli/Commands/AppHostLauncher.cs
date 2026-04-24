@@ -12,6 +12,7 @@ using Aspire.Cli.Projects;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Telemetry;
 using Aspire.Cli.Utils;
+using Aspire.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Cli.Commands;
@@ -255,7 +256,8 @@ internal sealed class AppHostLauncher(
                 executablePath,
                 childArgs,
                 executionContext.WorkingDirectory.FullName,
-                IsExtensionEnvironmentVariable);
+                IsExtensionEnvironmentVariable,
+                new Dictionary<string, string> { [KnownConfigNames.CliRunDetached] = "true" });
         }
         catch (Exception ex)
         {

@@ -1,7 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using Aspire.Cli.Resources;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Deployment.EndToEnd.Tests.Helpers;
 using Hex1b.Automation;
@@ -19,6 +18,7 @@ public sealed class AcrPurgeTaskDeploymentTests(ITestOutputHelper output)
     private static readonly TimeSpan s_testTimeout = TimeSpan.FromMinutes(30);
 
     [Fact]
+    [ActiveIssue("https://github.com/microsoft/aspire/issues/16229")]
     public async Task DeployPythonStarterWithPurgeTask()
     {
         using var cts = new CancellationTokenSource(s_testTimeout);
@@ -74,19 +74,10 @@ public sealed class AcrPurgeTaskDeploymentTests(ITestOutputHelper output)
             output.WriteLine("Step 1: Preparing environment...");
             await auto.PrepareEnvironmentAsync(workspace, counter);
 
-            // Step 2: Set up CLI environment (in CI)
+            // Step 2: Set up CLI environment
             // Python apphosts need the full bundle because
             // the prebuilt AppHost server is required for aspire new with Python templates.
-            if (DeploymentE2ETestHelpers.IsRunningInCI)
-            {
-                var prNumber = DeploymentE2ETestHelpers.GetPrNumber();
-                if (prNumber > 0)
-                {
-                    output.WriteLine($"Step 2: Installing Aspire bundle from PR #{prNumber}...");
-                    await auto.InstallAspireBundleFromPullRequestAsync(prNumber, counter);
-                }
-                await auto.SourceAspireBundleEnvironmentAsync(counter);
-            }
+            await auto.InstallCurrentBuildAspireBundleAsync(counter, output);
 
             // Step 3: Create Python FastAPI project using aspire new
             output.WriteLine("Step 3: Creating Python FastAPI project...");
@@ -145,24 +136,9 @@ await builder.build().run();
 
             // Step 8: First deployment to Azure
             output.WriteLine("Step 8: Starting first Azure deployment...");
-            var pipelineSucceeded = false;
             await auto.TypeAsync("aspire deploy --clear-cache");
             await auto.EnterAsync();
-            await auto.WaitUntilAsync(s =>
-            {
-                if (s.ContainsText(ConsoleActivityLoggerStrings.PipelineSucceeded))
-                {
-                    pipelineSucceeded = true;
-                    return true;
-                }
-                return s.ContainsText(ConsoleActivityLoggerStrings.PipelineFailed);
-            }, timeout: TimeSpan.FromMinutes(30), description: "pipeline succeeded or failed");
-
-            if (!pipelineSucceeded)
-            {
-                throw new InvalidOperationException("First deployment pipeline failed. Check the terminal output for details.");
-            }
-
+            await auto.WaitForPipelineSuccessAsync(timeout: TimeSpan.FromMinutes(30));
             await auto.WaitForSuccessPromptAsync(counter, TimeSpan.FromMinutes(2));
 
             // Step 9: Get the ACR name and count tags before second deploy
@@ -195,27 +171,12 @@ await builder.build().run();
             // Step 11: Second deployment to push new images
             // Clear the terminal so WaitUntilTextAsync doesn't match the pipeline succeeded text from the first deploy
             output.WriteLine("Step 11: Starting second Azure deployment...");
-            var pipeline2Succeeded = false;
             await auto.TypeAsync("export TERM=xterm && clear");
             await auto.EnterAsync();
             await auto.WaitForSuccessPromptAsync(counter);
             await auto.TypeAsync("aspire deploy");
             await auto.EnterAsync();
-            await auto.WaitUntilAsync(s =>
-            {
-                if (s.ContainsText(ConsoleActivityLoggerStrings.PipelineSucceeded))
-                {
-                    pipeline2Succeeded = true;
-                    return true;
-                }
-                return s.ContainsText(ConsoleActivityLoggerStrings.PipelineFailed);
-            }, timeout: TimeSpan.FromMinutes(30), description: "pipeline succeeded or failed");
-
-            if (!pipeline2Succeeded)
-            {
-                throw new InvalidOperationException("Second deployment pipeline failed. Check the terminal output for details.");
-            }
-
+            await auto.WaitForPipelineSuccessAsync(timeout: TimeSpan.FromMinutes(30));
             await auto.WaitForSuccessPromptAsync(counter, TimeSpan.FromMinutes(2));
 
             // Step 12: Verify there are now multiple tags (from both deploys)
