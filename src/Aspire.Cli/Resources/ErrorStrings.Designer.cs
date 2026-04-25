@@ -269,6 +269,14 @@ namespace Aspire.Cli.Resources {
             }
         }
 
+        public static string AppHostPathCannotBeSetWithConfigCommand
+        {
+            get
+            {
+                return ResourceManager.GetString("AppHostPathCannotBeSetWithConfigCommand", resourceCulture);
+            }
+        }
+
         public static string ConfigurationKeyNotFound
         {
             get

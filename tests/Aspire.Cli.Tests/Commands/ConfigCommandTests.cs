@@ -756,6 +756,52 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
         var featuresObject = settings["features"]!.AsObject();
         Assert.Equal("nested-value", featuresObject["polyglotSupportEnabled"]?.ToString());
     }
+
+    [Theory]
+    [InlineData("appHost.path")]
+    [InlineData("appHost:path")]
+    [InlineData("appHostPath")]
+    public async Task ConfigSetCommand_AppHostPath_ReturnsInvalidCommand(string key)
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<Aspire.Cli.Commands.RootCommand>();
+        var result = command.Parse($"config set {key} AppHost.csproj");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(ExitCodeConstants.InvalidCommand, exitCode);
+
+        var settingsPath = provider.GetRequiredService<IConfigurationService>().GetSettingsFilePath(isGlobal: false);
+        if (File.Exists(settingsPath))
+        {
+            var json = await File.ReadAllTextAsync(settingsPath);
+            Assert.DoesNotContain("AppHost.csproj", json);
+        }
+
+        Assert.False(File.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName)));
+    }
+
+    [Fact]
+    public async Task ConfigSetCommand_AppHostLanguage_RemainsAllowed()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<Aspire.Cli.Commands.RootCommand>();
+        var result = command.Parse("config set appHost.language typescript/nodejs");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(ExitCodeConstants.Success, exitCode);
+
+        var settingsPath = provider.GetRequiredService<IConfigurationService>().GetSettingsFilePath(isGlobal: false);
+        var json = await File.ReadAllTextAsync(settingsPath);
+        Assert.Contains("typescript/nodejs", json);
+    }
 }
 
 public class TestConfigurationService : IConfigurationService

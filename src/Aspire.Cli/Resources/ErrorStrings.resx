@@ -201,6 +201,9 @@
   <data name="ConfigurationValueRequired" xml:space="preserve">
     <value>Configuration value is required.</value>
   </data>
+  <data name="AppHostPathCannotBeSetWithConfigCommand" xml:space="preserve">
+    <value>The AppHost path cannot be set with 'aspire config set'. Use a local aspire.config.json file created by the CLI or pass the AppHost path to commands that accept one.</value>
+  </data>
   <data name="ConfigurationKeyNotFound" xml:space="preserve">
     <value>Configuration key {0} not found.</value>
   </data>
