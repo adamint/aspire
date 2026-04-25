@@ -52,6 +52,18 @@ public class AppHostConnectionResolverTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public void IsProjectResolutionError_WithNonProjectResolutionExitCode_ReturnsFalse()
+    {
+        var result = new AppHostConnectionResult
+        {
+            ErrorMessage = "failed",
+            ExitCode = ExitCodeConstants.FailedToCreateNewProject
+        };
+
+        Assert.False(result.IsProjectResolutionError);
+    }
+
+    [Fact]
     public async Task ResolveConnectionAsync_WithExplicitDirectoryAndMultipleAppHosts_ReturnsDirectorySpecificError()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);

@@ -28,7 +28,7 @@ internal sealed class AppHostConnectionResult
     public int? ExitCode { get; init; }
 
     [MemberNotNullWhen(true, nameof(ExitCode))]
-    public bool IsProjectResolutionError => ExitCode is not null;
+    public bool IsProjectResolutionError => ExitCode is ExitCodeConstants.FailedToFindProject or ExitCodeConstants.SdkNotInstalled;
 }
 
 /// <summary>
