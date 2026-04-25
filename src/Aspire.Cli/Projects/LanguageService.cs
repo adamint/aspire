@@ -106,10 +106,10 @@ internal sealed class LanguageService : ILanguageService
     /// <inheritdoc />
     public async Task<IAppHostProject> GetOrPromptForProjectAsync(
         string? explicitLanguageId = null,
-        bool saveSelection = true,
+        bool saveLanguageSelection = true,
         CancellationToken cancellationToken = default)
     {
-        var selection = await GetOrPromptForProjectSelectionAsync(explicitLanguageId, saveSelection, cancellationToken);
+        var selection = await GetOrPromptForProjectSelectionAsync(explicitLanguageId, saveLanguageSelection, cancellationToken);
 
         return selection.Project;
     }
@@ -117,7 +117,7 @@ internal sealed class LanguageService : ILanguageService
     /// <inheritdoc />
     public async Task<AppHostProjectSelection> GetOrPromptForProjectSelectionAsync(
         string? explicitLanguageId = null,
-        bool saveSelection = true,
+        bool saveLanguageSelection = true,
         CancellationToken cancellationToken = default)
     {
         // If explicitly specified, use that
@@ -144,12 +144,12 @@ internal sealed class LanguageService : ILanguageService
         var (selectedProject, selectedLanguage) = await PromptForProjectWithLanguageAsync(cancellationToken);
 
         // Save the language ID
-        if (saveSelection)
+        if (saveLanguageSelection)
         {
             await SetLanguageAsync(selectedLanguage.LanguageId, isGlobal: false, cancellationToken);
             _interactionService.DisplayMessage(KnownEmojis.CheckMarkButton, $"Language preference saved to local configuration: {selectedProject.DisplayName}");
         }
 
-        return new AppHostProjectSelection(selectedProject, ShouldPersistSelection: !saveSelection);
+        return new AppHostProjectSelection(selectedProject, ShouldPersistSelection: !saveLanguageSelection);
     }
 }

@@ -47,11 +47,11 @@ internal sealed class TestLanguageService : ILanguageService
         return Task.FromResult(DefaultProject);
     }
 
-    public Task<IAppHostProject> GetOrPromptForProjectAsync(string? explicitLanguageId = null, bool saveSelection = true, CancellationToken cancellationToken = default)
+    public Task<IAppHostProject> GetOrPromptForProjectAsync(string? explicitLanguageId = null, bool saveLanguageSelection = true, CancellationToken cancellationToken = default)
     {
         if (GetOrPromptForProjectAsyncCallback is not null)
         {
-            return GetOrPromptForProjectAsyncCallback(explicitLanguageId, saveSelection, cancellationToken);
+            return GetOrPromptForProjectAsyncCallback(explicitLanguageId, saveLanguageSelection, cancellationToken);
         }
 
         if (DefaultProject is null)
@@ -62,14 +62,14 @@ internal sealed class TestLanguageService : ILanguageService
         return Task.FromResult(DefaultProject);
     }
 
-    public async Task<AppHostProjectSelection> GetOrPromptForProjectSelectionAsync(string? explicitLanguageId = null, bool saveSelection = true, CancellationToken cancellationToken = default)
+    public async Task<AppHostProjectSelection> GetOrPromptForProjectSelectionAsync(string? explicitLanguageId = null, bool saveLanguageSelection = true, CancellationToken cancellationToken = default)
     {
         if (GetOrPromptForProjectSelectionAsyncCallback is not null)
         {
-            return await GetOrPromptForProjectSelectionAsyncCallback(explicitLanguageId, saveSelection, cancellationToken);
+            return await GetOrPromptForProjectSelectionAsyncCallback(explicitLanguageId, saveLanguageSelection, cancellationToken);
         }
 
-        var project = await GetOrPromptForProjectAsync(explicitLanguageId, saveSelection, cancellationToken);
+        var project = await GetOrPromptForProjectAsync(explicitLanguageId, saveLanguageSelection, cancellationToken);
         return new AppHostProjectSelection(project, ShouldPersistSelection: false);
     }
 }

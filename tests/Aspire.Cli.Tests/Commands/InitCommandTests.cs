@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Globalization;
+using Aspire.Cli.Configuration;
 using Aspire.Cli.Commands;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Packaging;
@@ -403,26 +404,27 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
 
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
         {
-            // Override the language service to mirror the real LanguageService behaviour:
+            // Override the language service to mirror the real LanguageService behavior:
             // when GetOrPromptForProjectAsync is called without an explicit language id and
-            // saveSelection is true, it persists the selection to aspire.config.json via
+            // saveLanguageSelection is true, it persists the selection to aspire.config.json via
             // ConfigurationService before returning the C# project.
             options.LanguageServiceFactory = (sp) =>
             {
                 var defaultCsharpProject = sp.GetRequiredService<DotNetAppHostProject>();
+                var configurationService = sp.GetRequiredService<IConfigurationService>();
                 return new TestLanguageService
                 {
                     DefaultProject = defaultCsharpProject,
-                    GetOrPromptForProjectSelectionAsyncCallback = (explicitLanguage, saveSelection, ct) =>
+                    GetOrPromptForProjectSelectionAsyncCallback = (explicitLanguage, saveLanguageSelection, ct) =>
                     {
                         Assert.Null(explicitLanguage);
-                        Assert.False(saveSelection);
+                        Assert.False(saveLanguageSelection);
 
                         return Task.FromResult(new AppHostProjectSelection(defaultCsharpProject, ShouldPersistSelection: true));
                     },
-                    GetOrPromptForProjectAsyncCallback = async (explicitLanguage, saveSelection, ct) =>
+                    GetOrPromptForProjectAsyncCallback = async (explicitLanguage, saveLanguageSelection, ct) =>
                     {
-                        if (string.IsNullOrWhiteSpace(explicitLanguage) && saveSelection)
+                        if (string.IsNullOrWhiteSpace(explicitLanguage) && saveLanguageSelection)
                         {
                             // Reproduce the exact write that real LanguageService performs via
                             // ConfigurationService.SetConfigurationAsync("appHost.language", "csharp").
@@ -432,6 +434,13 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
                         }
 
                         return defaultCsharpProject;
+                    },
+                    SetLanguageAsyncCallback = (project, isGlobal, ct) =>
+                    {
+                        Assert.Same(defaultCsharpProject, project);
+                        Assert.False(isGlobal);
+
+                        return configurationService.SetConfigurationAsync("appHost.language", project.LanguageId, isGlobal, ct);
                     }
                 };
             };
@@ -457,9 +466,9 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
                         return 1;
                     }
 
-                    // No collision: create the files the template would produce.
+                    // No collision: create the files that an older single-file template would produce.
                     File.WriteAllText(Path.Combine(outputDir, "apphost.cs"), "// apphost");
-                    File.WriteAllText(configFilePath, """{"appHost":{"path":"apphost.cs","language":"csharp"}}""");
+                    File.WriteAllText(configFilePath, """{"appHost":{"path":"apphost.cs"}}""");
                     return 0;
                 };
 
@@ -504,10 +513,10 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
                 return new TestLanguageService
                 {
                     DefaultProject = tsProject,
-                    GetOrPromptForProjectSelectionAsyncCallback = (explicitLanguage, saveSelection, ct) =>
+                    GetOrPromptForProjectSelectionAsyncCallback = (explicitLanguage, saveLanguageSelection, ct) =>
                     {
                         Assert.Equal(KnownLanguageId.TypeScript, explicitLanguage);
-                        Assert.False(saveSelection);
+                        Assert.False(saveLanguageSelection);
 
                         return Task.FromResult(new AppHostProjectSelection(tsProject, ShouldPersistSelection: false));
                     },
@@ -551,10 +560,10 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
                 return new TestLanguageService
                 {
                     DefaultProject = tsProject,
-                    GetOrPromptForProjectSelectionAsyncCallback = (explicitLanguage, saveSelection, ct) =>
+                    GetOrPromptForProjectSelectionAsyncCallback = (explicitLanguage, saveLanguageSelection, ct) =>
                     {
                         Assert.Null(explicitLanguage);
-                        Assert.False(saveSelection);
+                        Assert.False(saveLanguageSelection);
 
                         return Task.FromResult(new AppHostProjectSelection(tsProject, ShouldPersistSelection: false));
                     },
@@ -599,10 +608,10 @@ public class InitCommandTests(ITestOutputHelper outputHelper)
                 return new TestLanguageService
                 {
                     DefaultProject = tsProject,
-                    GetOrPromptForProjectSelectionAsyncCallback = (explicitLanguage, saveSelection, ct) =>
+                    GetOrPromptForProjectSelectionAsyncCallback = (explicitLanguage, saveLanguageSelection, ct) =>
                     {
                         Assert.Null(explicitLanguage);
-                        Assert.False(saveSelection);
+                        Assert.False(saveLanguageSelection);
 
                         return Task.FromResult(new AppHostProjectSelection(tsProject, ShouldPersistSelection: true));
                     },

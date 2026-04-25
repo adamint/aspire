@@ -135,10 +135,10 @@ internal sealed class InitCommand : BaseCommand, IPackageMetaPrefetchingCommand
 
         // Get the language selection (from command line, config, or prompt).
         // Do not save yet – for the no-solution C# path the aspire-apphost-singlefile
-        // template will write aspire.config.json (including appHost.language) and a
+        // template will write aspire.config.json and a
         // pre-create write would cause a file-collision that makes dotnet new fail.
         var explicitLanguage = parseResult.GetValue(_languageOption);
-        var projectSelection = await _languageService.GetOrPromptForProjectSelectionAsync(explicitLanguage, saveSelection: false, cancellationToken);
+        var projectSelection = await _languageService.GetOrPromptForProjectSelectionAsync(explicitLanguage, saveLanguageSelection: false, cancellationToken);
         var selectedProject = projectSelection.Project;
 
         // For non-C# languages, skip solution detection and create polyglot apphost.
@@ -207,11 +207,9 @@ internal sealed class InitCommand : BaseCommand, IPackageMetaPrefetchingCommand
             return initResult;
         }
 
-        // For the solution-based path, persist prompted language selections now that
-        // creation succeeded. The no-solution (single-file) path skips this because the
-        // aspire-apphost-singlefile template writes aspire.config.json (including
-        // appHost.language) so no separate write is needed.
-        if (initContext.SelectedSolutionFile is not null && projectSelection.ShouldPersistSelection)
+        // Persist prompted language selections after creation succeeds. This is delayed so
+        // the single-file C# template can create aspire.config.json before the language is merged.
+        if (projectSelection.ShouldPersistSelection)
         {
             await _languageService.SetLanguageAsync(selectedProject, cancellationToken: cancellationToken);
         }
