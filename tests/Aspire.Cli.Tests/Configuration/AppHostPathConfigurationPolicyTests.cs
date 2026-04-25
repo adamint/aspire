@@ -1,0 +1,67 @@
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+
+using Aspire.Cli.Configuration;
+using Aspire.Cli.Tests.Utils;
+
+namespace Aspire.Cli.Tests.Configuration;
+
+public class AppHostPathConfigurationPolicyTests(ITestOutputHelper outputHelper)
+{
+    [Theory]
+    [InlineData("appHost.path")]
+    [InlineData("appHost:path")]
+    [InlineData("APPHOST.PATH")]
+    [InlineData("appHostPath")]
+    [InlineData("APPHOSTPATH")]
+    public void IsAppHostPathKey_ReturnsTrue_ForBlockedKeys(string key)
+    {
+        Assert.True(AppHostPathConfigurationPolicy.IsAppHostPathKey(key));
+    }
+
+    [Theory]
+    [InlineData("appHost.language")]
+    [InlineData("appHost:language")]
+    [InlineData("channel")]
+    [InlineData("features.defaultWatchEnabled")]
+    [InlineData("")]
+    public void IsAppHostPathKey_ReturnsFalse_ForOtherKeys(string key)
+    {
+        Assert.False(AppHostPathConfigurationPolicy.IsAppHostPathKey(key));
+    }
+
+    [Theory]
+    [InlineData("""{ "appHost": { "path": "AppHost.csproj" } }""", "appHost.path")]
+    [InlineData("""{ "appHostPath": "../AppHost.csproj" }""", "appHostPath")]
+    [InlineData("""{ "appHost:path": "AppHost.csproj" }""", "appHost:path")]
+    public void TryFindAppHostPathKey_ReturnsConfiguredKey(string json, string expectedKey)
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var path = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        File.WriteAllText(path, json);
+
+        Assert.True(AppHostPathConfigurationPolicy.TryFindAppHostPathKey(path, out var key));
+        Assert.Equal(expectedKey, key);
+    }
+
+    [Fact]
+    public void TryFindAppHostPathKey_ReturnsFalse_WhenNoAppHostPathIsConfigured()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var path = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        File.WriteAllText(path, """{ "appHost": { "language": "typescript/nodejs" }, "channel": "daily" }""");
+
+        Assert.False(AppHostPathConfigurationPolicy.TryFindAppHostPathKey(path, out var key));
+        Assert.Null(key);
+    }
+
+    [Fact]
+    public void TryFindAppHostPathKey_ReturnsFalse_WhenFileDoesNotExist()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var path = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+
+        Assert.False(AppHostPathConfigurationPolicy.TryFindAppHostPathKey(path, out var key));
+        Assert.Null(key);
+    }
+}
