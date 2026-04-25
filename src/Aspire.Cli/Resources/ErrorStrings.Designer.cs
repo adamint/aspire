@@ -277,6 +277,14 @@ namespace Aspire.Cli.Resources {
             }
         }
 
+        public static string GlobalAppHostPathIgnored
+        {
+            get
+            {
+                return ResourceManager.GetString("GlobalAppHostPathIgnored", resourceCulture);
+            }
+        }
+
         public static string ConfigurationKeyNotFound
         {
             get
