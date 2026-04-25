@@ -12,6 +12,11 @@
         <target state="needs-review-translation">AppHost 与 CLI 不兼容。必须将 AppHost 更新为支持 {0} 功能的版本。</target>
         <note />
       </trans-unit>
+      <trans-unit id="AppHostPathCannotBeSetWithConfigCommand">
+        <source>The AppHost path cannot be set with 'aspire config set'. Use a local aspire.config.json file created by the CLI or pass the AppHost path to commands that accept one.</source>
+        <target state="new">The AppHost path cannot be set with 'aspire config set'. Use a local aspire.config.json file created by the CLI or pass the AppHost path to commands that accept one.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="AppHostWasSpecifiedButDoesntExist">
         <source>AppHost file was specified in '{0}' but it does not exist at '{1}'.</source>
         <target state="needs-review-translation">AppHost 文件是在 ‘{0}’ 中指定的，但它在 ‘{1}’ 中不存在。</target>
@@ -116,6 +121,11 @@
         <source>Failed to search for packages. Exit code: {0}.</source>
         <target state="translated">未能搜索包。退出代码: {0}。</target>
         <note>{0} is a number</note>
+      </trans-unit>
+      <trans-unit id="GlobalAppHostPathIgnored">
+        <source>Global settings file '{0}' contains '{1}', which is not supported. AppHost paths must be configured locally.</source>
+        <target state="new">Global settings file '{0}' contains '{1}', which is not supported. AppHost paths must be configured locally.</target>
+        <note>{0} is the global settings file path, {1} is the configured key such as appHost.path or appHostPath.</note>
       </trans-unit>
       <trans-unit id="InvalidJsonInConfigFile">
         <source>The configuration file '{0}' contains invalid JSON: {1}</source>

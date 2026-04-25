@@ -12,6 +12,11 @@
         <target state="needs-review-translation">Der AppHost ist nicht mit der CLI kompatibel. Der AppHost muss auf eine Version aktualisiert werden, die die {0}-Funktion unterstützt.</target>
         <note />
       </trans-unit>
+      <trans-unit id="AppHostPathCannotBeSetWithConfigCommand">
+        <source>The AppHost path cannot be set with 'aspire config set'. Use a local aspire.config.json file created by the CLI or pass the AppHost path to commands that accept one.</source>
+        <target state="new">The AppHost path cannot be set with 'aspire config set'. Use a local aspire.config.json file created by the CLI or pass the AppHost path to commands that accept one.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="AppHostWasSpecifiedButDoesntExist">
         <source>AppHost file was specified in '{0}' but it does not exist at '{1}'.</source>
         <target state="needs-review-translation">Die AppHost-Datei wurde in „{0}“ angegeben, ist aber unter „{1}“ nicht vorhanden.</target>
@@ -116,6 +121,11 @@
         <source>Failed to search for packages. Exit code: {0}.</source>
         <target state="translated">Fehler beim Suchen nach Paketen. Exitcode: {0}.</target>
         <note>{0} is a number</note>
+      </trans-unit>
+      <trans-unit id="GlobalAppHostPathIgnored">
+        <source>Global settings file '{0}' contains '{1}', which is not supported. AppHost paths must be configured locally.</source>
+        <target state="new">Global settings file '{0}' contains '{1}', which is not supported. AppHost paths must be configured locally.</target>
+        <note>{0} is the global settings file path, {1} is the configured key such as appHost.path or appHostPath.</note>
       </trans-unit>
       <trans-unit id="InvalidJsonInConfigFile">
         <source>The configuration file '{0}' contains invalid JSON: {1}</source>
