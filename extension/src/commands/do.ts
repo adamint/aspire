@@ -20,7 +20,7 @@ export async function doCommand(terminalProvider: AspireTerminalProvider, editor
  */
 async function resolveStep(terminalProvider: AspireTerminalProvider): Promise<string | null | undefined> {
     const configInfo = await getConfigInfo(terminalProvider);
-    if (configInfo?.Capabilities?.includes('pipelines')) {
+    if (configInfo?.capabilities?.includes('pipelines')) {
         // New CLI: it will prompt for the step via interaction service
         return null;
     }

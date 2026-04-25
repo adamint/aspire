@@ -4,30 +4,30 @@
  */
 
 export interface FeatureInfo {
-    Name: string;
-    Description: string;
-    DefaultValue: boolean;
+    name: string;
+    description: string;
+    defaultValue: boolean;
 }
 
 export interface PropertyInfo {
-    Name: string;
-    Type: string;
-    Description: string;
-    Required: boolean;
-    SubProperties?: PropertyInfo[];
-    AdditionalPropertiesType?: string;
+    name: string;
+    type: string;
+    description: string;
+    required: boolean;
+    subProperties?: PropertyInfo[];
+    additionalPropertiesType?: string;
 }
 
 export interface SettingsSchema {
-    Properties: PropertyInfo[];
+    properties: PropertyInfo[];
 }
 
 export interface ConfigInfo {
-    LocalSettingsPath: string;
-    GlobalSettingsPath: string;
-    AvailableFeatures: FeatureInfo[];
-    LocalSettingsSchema: SettingsSchema;
-    GlobalSettingsSchema: SettingsSchema;
-    ConfigFileSchema?: SettingsSchema;
-    Capabilities?: string[];
+    localSettingsPath: string;
+    globalSettingsPath: string;
+    availableFeatures: FeatureInfo[];
+    localSettingsSchema: SettingsSchema;
+    globalSettingsSchema: SettingsSchema;
+    configFileSchema?: SettingsSchema;
+    capabilities?: string[];
 }

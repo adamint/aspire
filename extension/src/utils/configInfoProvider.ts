@@ -32,7 +32,7 @@ export async function getConfigInfo(terminalProvider: AspireTerminalProvider): P
 
                 try {
                     const configInfo = JSON.parse(output.trim()) as ConfigInfo;
-                    extensionLogOutputChannel.info(`Got config info: ${configInfo.AvailableFeatures.length} features available`);
+                    extensionLogOutputChannel.info(`Got config info: ${configInfo.availableFeatures.length} features available`);
                     resolve(configInfo);
                 } catch (error) {
                     extensionLogOutputChannel.error(strings.failedToParseConfigInfo(error));
