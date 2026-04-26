@@ -9,6 +9,8 @@ namespace Aspire.Cli.Configuration;
 internal static class AppHostPathConfigurationPolicy
 {
     public const string LegacyAppHostPathKey = "appHostPath";
+    public const string AppHostKey = "appHost";
+    public const string PathKey = "path";
     public const string AppHostPathKey = "appHost.path";
     public const string AppHostPathConfigurationKey = "appHost:path";
 
@@ -56,9 +58,9 @@ internal static class AppHostPathConfigurationPolicy
             return true;
         }
 
-        if (settings.TryGetPropertyValue("appHost", out var appHostNode) &&
+        if (settings.TryGetPropertyValue(AppHostKey, out var appHostNode) &&
             appHostNode is JsonObject appHost &&
-            appHost.ContainsKey("path"))
+            appHost.ContainsKey(PathKey))
         {
             key = AppHostPathKey;
             return true;
