@@ -12,11 +12,6 @@
         <target state="needs-review-translation">Host aplikacji jest niezgodny z interfejsem wiersza polecenia. Host aplikacji musi zostać zaktualizowany do wersji obsługującej funkcję {0}.</target>
         <note />
       </trans-unit>
-      <trans-unit id="AppHostPathCannotBeSetWithConfigCommand">
-        <source>The AppHost path cannot be set with 'aspire config set'. Use a local aspire.config.json file created by the CLI or pass the AppHost path to commands that accept one.</source>
-        <target state="new">The AppHost path cannot be set with 'aspire config set'. Use a local aspire.config.json file created by the CLI or pass the AppHost path to commands that accept one.</target>
-        <note />
-      </trans-unit>
       <trans-unit id="AppHostWasSpecifiedButDoesntExist">
         <source>AppHost file was specified in '{0}' but it does not exist at '{1}'.</source>
         <target state="needs-review-translation">Plik AppHost został określony w ścieżce „{0}”, ale nie istnieje w lokalizacji „{1}”.</target>
@@ -122,6 +117,11 @@
         <target state="translated">Nie można wyszukać pakietów. Kod zakończenia: {0}.</target>
         <note>{0} is a number</note>
       </trans-unit>
+      <trans-unit id="GlobalAppHostPathCannotBeSetWithConfigCommand">
+        <source>The AppHost path cannot be set in global settings. Use 'appHost.path' in a local aspire.config.json file instead.</source>
+        <target state="new">The AppHost path cannot be set in global settings. Use 'appHost.path' in a local aspire.config.json file instead.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="GlobalAppHostPathIgnored">
         <source>Global settings file '{0}' contains '{1}', which is not supported. AppHost paths must be configured locally.</source>
         <target state="new">Global settings file '{0}' contains '{1}', which is not supported. AppHost paths must be configured locally.</target>
@@ -140,6 +140,11 @@
       <trans-unit id="InvalidSocketPath">
         <source>The provided extension socket path needs two valid parts.</source>
         <target state="translated">Podana ścieżka gniazda rozszerzenia wymaga dwóch prawidłowych części.</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="LegacyAppHostPathCannotBeSetWithConfigCommand">
+        <source>The legacy AppHost path key 'appHostPath' cannot be set with 'aspire config set'. Use 'appHost.path' in a local aspire.config.json file instead.</source>
+        <target state="new">The legacy AppHost path key 'appHostPath' cannot be set with 'aspire config set'. Use 'appHost.path' in a local aspire.config.json file instead.</target>
         <note />
       </trans-unit>
       <trans-unit id="MinimumSdkVersionNotMet">

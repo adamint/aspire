@@ -177,9 +177,15 @@ internal sealed class ConfigCommand : BaseCommand
 
         private async Task<int> ExecuteAsync(string key, string value, bool isGlobal, CancellationToken cancellationToken)
         {
-            if (AppHostPathConfigurationPolicy.IsAppHostPathKey(key))
+            if (isGlobal && AppHostPathConfigurationPolicy.IsAppHostPathKey(key))
             {
-                InteractionService.DisplayError(ErrorStrings.AppHostPathCannotBeSetWithConfigCommand);
+                InteractionService.DisplayError(ErrorStrings.GlobalAppHostPathCannotBeSetWithConfigCommand);
+                return ExitCodeConstants.InvalidCommand;
+            }
+
+            if (AppHostPathConfigurationPolicy.IsLegacyAppHostPathKey(key))
+            {
+                InteractionService.DisplayError(ErrorStrings.LegacyAppHostPathCannotBeSetWithConfigCommand);
                 return ExitCodeConstants.InvalidCommand;
             }
 

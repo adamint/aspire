@@ -760,10 +760,11 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
     [Theory]
     [InlineData("appHost.path")]
     [InlineData("appHost:path")]
-    [InlineData("appHostPath")]
-    public async Task ConfigSetCommand_AppHostPath_ReturnsInvalidCommand(string key)
+    public async Task ConfigSetCommand_LocalAppHostPath_RemainsAllowed(string key)
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
+        File.Delete(Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "settings.json"));
+
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
         using var provider = services.BuildServiceProvider();
 
@@ -772,16 +773,60 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
+        Assert.Equal(ExitCodeConstants.Success, exitCode);
+
+        var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        var json = await File.ReadAllTextAsync(configPath);
+        var settings = JsonNode.Parse(json)?.AsObject();
+
+        Assert.NotNull(settings);
+        var appHost = settings["appHost"]?.AsObject();
+        Assert.NotNull(appHost);
+        Assert.Equal("AppHost.csproj", appHost["path"]?.ToString());
+        Assert.False(settings.ContainsKey("appHost:path"));
+    }
+
+    [Theory]
+    [InlineData("appHost.path")]
+    [InlineData("appHost:path")]
+    [InlineData("appHostPath")]
+    public async Task ConfigSetCommand_GlobalAppHostPath_ReturnsInvalidCommand(string key)
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<Aspire.Cli.Commands.RootCommand>();
+        var result = command.Parse($"config set {key} AppHost.csproj --global");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
         Assert.Equal(ExitCodeConstants.InvalidCommand, exitCode);
 
-        var settingsPath = provider.GetRequiredService<IConfigurationService>().GetSettingsFilePath(isGlobal: false);
+        var settingsPath = provider.GetRequiredService<IConfigurationService>().GetSettingsFilePath(isGlobal: true);
         if (File.Exists(settingsPath))
         {
             var json = await File.ReadAllTextAsync(settingsPath);
             Assert.DoesNotContain("AppHost.csproj", json);
         }
+    }
 
-        Assert.False(File.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName)));
+    [Fact]
+    public async Task ConfigSetCommand_LegacyAppHostPath_ReturnsInvalidCommand()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<Aspire.Cli.Commands.RootCommand>();
+        var result = command.Parse("config set appHostPath AppHost.csproj");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(ExitCodeConstants.InvalidCommand, exitCode);
+
+        var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        Assert.False(File.Exists(configPath));
     }
 
     [Fact]

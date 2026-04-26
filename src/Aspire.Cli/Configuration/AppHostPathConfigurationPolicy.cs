@@ -12,6 +12,9 @@ internal static class AppHostPathConfigurationPolicy
     public const string AppHostPathKey = "appHost.path";
     public const string AppHostPathConfigurationKey = "appHost:path";
 
+    public static bool IsLegacyAppHostPathKey(string key) =>
+        string.Equals(key, LegacyAppHostPathKey, StringComparison.OrdinalIgnoreCase);
+
     public static bool IsAppHostPathKey(string key)
     {
         var normalizedKey = key.Replace(':', '.');
