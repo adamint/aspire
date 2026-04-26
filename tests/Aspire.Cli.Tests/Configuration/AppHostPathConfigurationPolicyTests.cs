@@ -56,6 +56,17 @@ public class AppHostPathConfigurationPolicyTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public void TryFindAppHostPathKey_ReturnsFalse_WhenFileContainsInvalidJson()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var path = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        File.WriteAllText(path, """{ "appHost": { "path": "AppHost.csproj" }""");
+
+        Assert.False(AppHostPathConfigurationPolicy.TryFindAppHostPathKey(path, out var key));
+        Assert.Null(key);
+    }
+
+    [Fact]
     public void TryFindAppHostPathKey_ReturnsFalse_WhenFileDoesNotExist()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
