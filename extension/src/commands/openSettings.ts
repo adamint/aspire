@@ -19,7 +19,7 @@ export async function openLocalSettingsCommand(terminalProvider: AspireTerminalP
         return;
     }
 
-    const settingsPath = configInfo.localSettingsPath;
+    const settingsPath = configInfo.LocalSettingsPath;
     await ensureFileExists(settingsPath);
     
     const document = await vscode.workspace.openTextDocument(settingsPath);
@@ -37,7 +37,7 @@ export async function openGlobalSettingsCommand(terminalProvider: AspireTerminal
         return;
     }
 
-    const settingsPath = configInfo.globalSettingsPath;
+    const settingsPath = configInfo.GlobalSettingsPath;
     await ensureFileExists(settingsPath);
     
     const document = await vscode.workspace.openTextDocument(settingsPath);
