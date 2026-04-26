@@ -191,7 +191,7 @@ public class Program
                 globalSettingsFile.FullName,
                 key);
 
-            errorWriter.WriteMarkup($"[yellow]{warning.EscapeMarkup()}[/]", KnownEmojis.Warning);
+            errorWriter.WriteMarkup(warning.EscapeMarkup(), KnownEmojis.Warning);
         }
     }
 

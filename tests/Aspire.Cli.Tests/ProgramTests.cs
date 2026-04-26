@@ -76,7 +76,7 @@ public class ProgramTests(ITestOutputHelper outputHelper)
 
         Assert.Empty(errorWriter.Lines);
         var line = Assert.Single(errorWriter.MarkupLines);
-        Assert.Contains("[yellow]", line, StringComparison.Ordinal);
+        Assert.DoesNotContain("[yellow]", line, StringComparison.Ordinal);
         Assert.Contains(settingsPath, line, StringComparison.Ordinal);
         Assert.Contains("appHost.path", line, StringComparison.Ordinal);
     }
