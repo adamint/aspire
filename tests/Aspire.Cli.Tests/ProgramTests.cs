@@ -92,5 +92,6 @@ public class ProgramTests(ITestOutputHelper outputHelper)
         Program.WarnIfGlobalSettingsContainAppHostPath(new FileInfo(settingsPath), errorWriter);
 
         Assert.Empty(errorWriter.Lines);
+        Assert.Empty(errorWriter.MarkupLines);
     }
 }

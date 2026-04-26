@@ -789,6 +789,36 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
     [Theory]
     [InlineData("appHost.path")]
     [InlineData("appHost:path")]
+    public async Task ConfigSetCommand_LocalAppHostPath_MigratesLegacySettingsFile(string key)
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var legacySettingsPath = Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "settings.json");
+        await File.WriteAllTextAsync(legacySettingsPath, """{ "channel": "daily" }""");
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<Aspire.Cli.Commands.RootCommand>();
+        var result = command.Parse($"config set {key} AppHost.csproj");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(ExitCodeConstants.Success, exitCode);
+
+        var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        var json = await File.ReadAllTextAsync(configPath);
+        var settings = JsonNode.Parse(json)?.AsObject();
+
+        Assert.NotNull(settings);
+        Assert.Equal("daily", settings["channel"]?.ToString());
+        var appHost = settings["appHost"]?.AsObject();
+        Assert.NotNull(appHost);
+        Assert.Equal("AppHost.csproj", appHost["path"]?.ToString());
+    }
+
+    [Theory]
+    [InlineData("appHost.path")]
+    [InlineData("appHost:path")]
     [InlineData("appHostPath")]
     public async Task ConfigSetCommand_GlobalAppHostPath_ReturnsInvalidCommand(string key)
     {

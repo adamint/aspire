@@ -69,6 +69,22 @@ internal static class ConfigurationHelper
         return Path.Combine(workingDirectory, ".aspire", "settings.json");
     }
 
+    internal static DirectoryInfo? GetLegacySettingsRootDirectory(FileInfo settingsFile)
+    {
+        if (!string.Equals(settingsFile.Name, AspireJsonConfiguration.FileName, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var settingsDirectory = settingsFile.Directory;
+        if (settingsDirectory is null || !string.Equals(settingsDirectory.Name, AspireJsonConfiguration.SettingsFolder, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return settingsDirectory.Parent;
+    }
+
     /// <summary>
     /// Searches upward from <paramref name="startDirectory"/> for the nearest
     /// <c>aspire.config.json</c> or legacy <c>.aspire/settings.json</c>.

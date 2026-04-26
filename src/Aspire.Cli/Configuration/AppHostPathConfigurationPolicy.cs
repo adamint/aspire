@@ -18,12 +18,17 @@ internal static class AppHostPathConfigurationPolicy
     public static bool IsLegacyAppHostPathKey(string key) =>
         string.Equals(key, LegacyAppHostPathKey, StringComparison.OrdinalIgnoreCase);
 
-    public static bool IsAppHostPathKey(string key)
+    public static bool IsHierarchicalAppHostPathKey(string key)
     {
         var normalizedKey = key.Replace(':', '.');
 
-        return string.Equals(normalizedKey, AppHostPathKey, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(normalizedKey, LegacyAppHostPathKey, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(normalizedKey, AppHostPathKey, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsAppHostPathKey(string key)
+    {
+        return IsHierarchicalAppHostPathKey(key)
+            || IsLegacyAppHostPathKey(key);
     }
 
     public static bool TryFindAppHostPathKey(string filePath, out string? key)
@@ -44,7 +49,7 @@ internal static class AppHostPathConfigurationPolicy
                 return false;
             }
 
-            settings = JsonNode.Parse(content, documentOptions: ConfigurationHelper.ParseOptions)?.AsObject();
+            settings = JsonNode.Parse(content, documentOptions: ConfigurationHelper.ParseOptions) as JsonObject;
         }
         catch (JsonException)
         {
