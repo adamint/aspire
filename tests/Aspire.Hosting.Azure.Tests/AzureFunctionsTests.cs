@@ -101,6 +101,28 @@ public class AzureFunctionsTests
     }
 
     [Fact]
+    public void AddAzureFunctionsProject_IncludesSuppressBuildInLaunchConfiguration()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create();
+        var funcApp = builder.AddAzureFunctionsProject<TestProjectSuppressBuild>("funcapp");
+
+        var launchConfiguration = GetAzureFunctionsLaunchConfiguration(funcApp.Resource);
+
+        Assert.True(launchConfiguration["suppress_build"]?.GetValue<bool>());
+    }
+
+    [Fact]
+    public void AddAzureFunctionsProject_OmitsSuppressBuildFromLaunchConfigurationByDefault()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create();
+        var funcApp = builder.AddAzureFunctionsProject<TestProject>("funcapp");
+
+        var launchConfiguration = GetAzureFunctionsLaunchConfiguration(funcApp.Resource);
+
+        Assert.False(launchConfiguration.ContainsKey("suppress_build"));
+    }
+
+    [Fact]
     public void AddAzureFunctionsProject_WiresUpHttpEndpointCorrectly_WhenMultiplePortArgumentsProvided()
     {
         using var builder = TestDistributedApplicationBuilder.Create();
@@ -457,6 +479,23 @@ public class AzureFunctionsTests
     private static Task<(JsonNode ManifestNode, string BicepText)> GetManifestWithBicep(IResource resource) =>
         AzureManifestUtils.GetManifestWithBicep(resource, skipPreparer: true);
 
+    private static JsonObject GetAzureFunctionsLaunchConfiguration(AzureFunctionsProjectResource resource)
+    {
+        var supportsDebuggingAnnotation = Assert.Single(resource.Annotations, a => a.GetType().Name == "SupportsDebuggingAnnotation");
+        var annotator = (Delegate)supportsDebuggingAnnotation.GetType().GetProperty("LaunchConfigurationAnnotator")!.GetValue(supportsDebuggingAnnotation)!;
+
+        var executableType = typeof(DistributedApplication).Assembly.GetType("Aspire.Hosting.Dcp.Model.Executable", throwOnError: true)!;
+        var executable = executableType.GetMethod("Create", BindingFlags.Public | BindingFlags.Static)!.Invoke(null, ["funcapp", "dotnet"])!;
+
+        annotator.DynamicInvoke(executable, "Debug");
+
+        var metadata = executableType.GetProperty("Metadata")!.GetValue(executable)!;
+        var annotations = (IDictionary<string, string>)metadata.GetType().GetProperty("Annotations")!.GetValue(metadata)!;
+        var launchConfigurations = JsonNode.Parse(annotations["executable.usvc-dev.developer.microsoft.com/launch-configurations"])!.AsArray();
+
+        return Assert.IsType<JsonObject>(Assert.Single(launchConfigurations)!);
+    }
+
     private sealed class TestProject : IProjectMetadata
     {
         public string ProjectPath => "some-path";
@@ -468,6 +507,24 @@ public class AzureFunctionsTests
                 ["funcapp"] = new()
                 {
                     CommandLineArgs = "--port 7071",
+                    LaunchBrowser = false,
+                }
+            }
+        };
+    }
+
+    private sealed class TestProjectSuppressBuild : IProjectMetadata
+    {
+        public string ProjectPath => "some-path";
+
+        public bool SuppressBuild => true;
+
+        public LaunchSettings LaunchSettings => new()
+        {
+            Profiles = new Dictionary<string, LaunchProfile>
+            {
+                ["funcapp"] = new()
+                {
                     LaunchBrowser = false,
                 }
             }

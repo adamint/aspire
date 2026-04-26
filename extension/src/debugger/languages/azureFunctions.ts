@@ -7,6 +7,7 @@ import { ResourceDebuggerExtension } from '../debuggerExtensions';
 import { registerRunCleanup } from '../runCleanupRegistry';
 
 const AF_EXTENSION_ID = 'ms-azuretools.vscode-azurefunctions';
+const NO_BUILD_ARG = '--no-build';
 
 /**
  * Result from the Azure Functions extension's startFuncProcess API.
@@ -38,6 +39,16 @@ const workerPidsByRunId = new Map<string, number>();
 
 /** Tracks the VS Code Task executions (func host start) by runId for cleanup. */
 const taskExecutionsByRunId = new Map<string, vscode.TaskExecution>();
+
+export function getAzureFunctionsHostStartArgs(args: string[] | undefined, suppressBuild: boolean | undefined): string[] {
+    const startArgs = [...(args ?? [])];
+
+    if (suppressBuild === true && !startArgs.some(arg => arg.toLowerCase() === NO_BUILD_ARG)) {
+        startArgs.push(NO_BUILD_ARG);
+    }
+
+    return startArgs;
+}
 
 /** Kill the func host task and worker process for the given runId, if any. */
 function killFuncProcess(runId: string): void {
@@ -126,8 +137,7 @@ export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
         // Start func host via the Azure Functions extension API.
         // The API creates a VS Code Task running "func host start", polls
         // /admin/host/status until ready, then finds the dotnet worker child
-        // process and returns its PID. We let func handle the build itself
-        // so it outputs to its expected bin/output/ location.
+        // process and returns its PID.
         //
         // The AF extension API has no stopFuncProcess method, so we track the
         // VS Code Task it creates by diffing taskExecutions before/after the call.
@@ -135,7 +145,8 @@ export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
         extensionLogOutputChannel.info(`Got Azure Functions API (version ${api.apiVersion}), calling startFuncProcess`);
 
         const executionsBefore = new Set(vscode.tasks.taskExecutions);
-        const result = await api.startFuncProcess(projectDir, args ?? [], dcpEnv);
+        const startArgs = getAzureFunctionsHostStartArgs(args, launchConfig.suppress_build);
+        const result = await api.startFuncProcess(projectDir, startArgs, dcpEnv);
 
         // Find the new task execution that was created by startFuncProcess.
         // Filter by task name containing "func" to reduce the chance of capturing

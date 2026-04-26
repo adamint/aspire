@@ -69,6 +69,7 @@ export function isBrowserLaunchConfiguration(obj: any): obj is BrowserLaunchConf
 export interface AzureFunctionsLaunchConfiguration extends ExecutableLaunchConfiguration {
     type: "azure-functions";
     project_path: string;
+    suppress_build?: boolean;
 }
 
 export function isAzureFunctionsLaunchConfiguration(obj: any): obj is AzureFunctionsLaunchConfiguration {

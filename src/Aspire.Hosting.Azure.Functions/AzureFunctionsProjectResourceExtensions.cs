@@ -187,7 +187,12 @@ public static class AzureFunctionsProjectResourceExtensions
         var functionsBuilder = builder.AddResource(resource)
             .WithAnnotation(projectMetadata)
             .WithAnnotation(new AzureFunctionsAnnotation())
-            .WithDebugSupport(mode => new AzureFunctionsLaunchConfiguration { ProjectPath = projectMetadata.ProjectPath, Mode = mode }, "azure-functions");
+            .WithDebugSupport(mode => new AzureFunctionsLaunchConfiguration
+            {
+                ProjectPath = projectMetadata.ProjectPath,
+                Mode = mode,
+                SuppressBuild = projectMetadata.SuppressBuild
+            }, "azure-functions");
 #pragma warning restore ASPIREEXTENSION001
 
         // Only validate Azure Functions Core Tools in run mode (not during publish)
@@ -449,5 +454,9 @@ public static class AzureFunctionsProjectResourceExtensions
 
         [JsonPropertyName("project_path")]
         public string ProjectPath { get; set; } = string.Empty;
+
+        [JsonPropertyName("suppress_build")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+        public bool SuppressBuild { get; set; }
     }
 }
