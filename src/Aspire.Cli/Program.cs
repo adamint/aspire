@@ -185,11 +185,13 @@ public class Program
     {
         if (AppHostPathConfigurationPolicy.TryFindAppHostPathKey(globalSettingsFile.FullName, out var key))
         {
-            errorWriter.WriteLine(string.Format(
+            var warning = string.Format(
                 CultureInfo.CurrentCulture,
                 ErrorStrings.GlobalAppHostPathIgnored,
                 globalSettingsFile.FullName,
-                key));
+                key);
+
+            errorWriter.WriteMarkup($"[yellow]{warning.EscapeMarkup()}[/]", KnownEmojis.Warning);
         }
     }
 
