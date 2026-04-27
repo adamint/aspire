@@ -7,13 +7,25 @@ retryButton.addEventListener("click", retry);
 
 function handleReconnectStateChanged(event) {
     if (event.detail.state === "show") {
-        reconnectModal.showModal();
+        showReconnectDialog();
     } else if (event.detail.state === "hide") {
-        reconnectModal.close();
+        closeReconnectDialog();
     } else if (event.detail.state === "failed") {
         document.addEventListener("visibilitychange", retryWhenDocumentBecomesVisible);
     } else if (event.detail.state === "rejected") {
         location.reload();
+    }
+}
+
+function showReconnectDialog() {
+    if (!reconnectModal.open) {
+        reconnectModal.show();
+    }
+}
+
+function closeReconnectDialog() {
+    if (reconnectModal.open) {
+        reconnectModal.close();
     }
 }
 
