@@ -165,6 +165,7 @@ public class DcpExecutorTests
 
         Assert.True(exe.TryGetAnnotationAsObjectList<AppLaunchArgumentAnnotation>(CustomResource.ResourceAppArgsAnnotation, out var argAnnotations));
         Assert.Equal(expectedAnnotations, argAnnotations.Select(a => a.Argument));
+        AssertEffectiveArgumentIndexesMatchSpecArgs(argAnnotations, exe.Spec.Args);
     }
 
     [Theory]
@@ -201,6 +202,7 @@ public class DcpExecutorTests
 
         Assert.True(exe.TryGetAnnotationAsObjectList<AppLaunchArgumentAnnotation>(CustomResource.ResourceAppArgsAnnotation, out var argAnnotations));
         Assert.Equal(toolArgs, argAnnotations.Select(a => a.Argument));
+        AssertEffectiveArgumentIndexesMatchSpecArgs(argAnnotations, exe.Spec.Args);
     }
 
     [Fact]
@@ -244,6 +246,7 @@ public class DcpExecutorTests
         Assert.Single(exe1.Spec.Args!, a => a == "--test");
         Assert.True(exe1.TryGetAnnotationAsObjectList<AppLaunchArgumentAnnotation>(CustomResource.ResourceAppArgsAnnotation, out var argAnnotations1));
         Assert.Single(argAnnotations1, a => a.Argument == "--test");
+        AssertEffectiveArgumentIndexesMatchSpecArgs(argAnnotations1, exe1.Spec.Args);
 
         var reference = appExecutor.GetResource(exe1.Metadata.Name);
 
@@ -262,6 +265,7 @@ public class DcpExecutorTests
         Assert.Single(exe2.Spec.Args!, a => a == "--test");
         Assert.True(exe2.TryGetAnnotationAsObjectList<AppLaunchArgumentAnnotation>(CustomResource.ResourceAppArgsAnnotation, out var argAnnotations2));
         Assert.Single(argAnnotations2, a => a.Argument == "--test");
+        AssertEffectiveArgumentIndexesMatchSpecArgs(argAnnotations2, exe2.Spec.Args);
     }
 
     [Fact]
@@ -2853,6 +2857,10 @@ public class DcpExecutorTests
         await appExecutor.RunApplicationAsync();
 
         Assert.Equal(1, callCount);
+
+        var container = Assert.Single(kubernetesService.CreatedResources.OfType<Container>(), c => c.AppModelResourceName == "aContainer");
+        Assert.True(container.TryGetAnnotationAsObjectList<AppLaunchArgumentAnnotation>(CustomResource.ResourceAppArgsAnnotation, out var argAnnotations));
+        AssertEffectiveArgumentIndexesMatchSpecArgs(argAnnotations, container.Spec.Args);
     }
 
     // Ensures that command-line argument callbacks are invoked after the OnResourceStarting event is raised for the resource,
@@ -3319,6 +3327,21 @@ public class DcpExecutorTests
             .AddTimeout(TimeSpan.FromMilliseconds(timeoutMilliseconds))
             .Build();
         return retry.Execute(check);
+    }
+
+    private static void AssertEffectiveArgumentIndexesMatchSpecArgs(IReadOnlyList<AppLaunchArgumentAnnotation> argAnnotations, IReadOnlyList<string>? specArgs)
+    {
+        foreach (var annotation in argAnnotations)
+        {
+            if (annotation.EffectiveArgumentIndex is not int index)
+            {
+                continue;
+            }
+
+            Assert.NotNull(specArgs);
+            Assert.InRange(index, 0, specArgs.Count - 1);
+            Assert.Equal(annotation.Argument, specArgs[index]);
+        }
     }
 
     private sealed class TestExecutableResource(string directory) : ExecutableResource("TestExecutable", "test", directory);
