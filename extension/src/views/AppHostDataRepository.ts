@@ -205,7 +205,7 @@ export class AppHostDataRepository {
         if (this._shouldWatchWorkspace) {
             this._startDescribeWatch();
         } else {
-            this._stopDescribeWatch();
+            this._stopDescribeWatch({ clearWorkspaceResources: true });
         }
 
         if (this._shouldPoll) {
@@ -279,6 +279,8 @@ export class AppHostDataRepository {
             return;
         }
 
+        this._loadingWorkspace = true;
+        this._updateLoadingContext();
         this._describeStartPending = true;
         const startVersion = ++this._describeStartVersion;
 
@@ -354,7 +356,7 @@ export class AppHostDataRepository {
         });
     }
 
-    private _stopDescribeWatch(): void {
+    private _stopDescribeWatch(options?: { clearWorkspaceResources?: boolean }): void {
         this._describeStartVersion++;
         this._describeStartPending = false;
         if (this._describeRestartTimer) {
@@ -366,6 +368,18 @@ export class AppHostDataRepository {
             this._describeProcess.kill();
             this._describeProcess = undefined;
         }
+        if (options?.clearWorkspaceResources) {
+            this._clearWorkspaceResources();
+        }
+    }
+
+    private _clearWorkspaceResources(): void {
+        if (this._workspaceResources.size === 0) {
+            return;
+        }
+
+        this._workspaceResources.clear();
+        this._updateWorkspaceContext();
     }
 
     private _handleDescribeLine(line: string): void {

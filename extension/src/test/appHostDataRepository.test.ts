@@ -94,6 +94,25 @@ suite('AppHostDataRepository', () => {
         repository.dispose();
     });
 
+    test('hiding workspace panel clears workspace resources', async () => {
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        repository.setPanelVisible(true);
+        await waitForMicrotasks();
+
+        const lineCallback = spawnStub.firstCall.args[3].lineCallback;
+        lineCallback(JSON.stringify({ name: 'api' }));
+
+        assert.strictEqual(repository.workspaceResources.length, 1);
+
+        repository.setPanelVisible(false);
+
+        assert.strictEqual(repository.workspaceResources.length, 0);
+
+        repository.dispose();
+    });
+
     test('hiding workspace panel before cli path resolves prevents describe watch from starting', async () => {
         const cliPath = createDeferred<string>();
         getCliPathStub.returns(cliPath.promise);
