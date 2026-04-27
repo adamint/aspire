@@ -18,8 +18,8 @@ public sealed class CSharpInitTests(ITestOutputHelper output)
 {
     /// <summary>
     /// Runs <c>aspire init</c> interactively, accepts the default <c>&gt; C#</c> selection from the
-    /// language prompt, handles any NuGet.config prompt that may follow, and verifies that both
-    /// <c>apphost.cs</c> and <c>aspire.config.json</c> are created with the expected content.
+    /// language prompt, accepts the default URL format, handles any NuGet.config prompt that may follow,
+    /// and verifies that both <c>apphost.cs</c> and <c>aspire.config.json</c> are created with the expected content.
     /// </summary>
     [CaptureWorkspaceOnFailure]
     [Fact]
@@ -50,18 +50,28 @@ public sealed class CSharpInitTests(ITestOutputHelper output)
             description: "language selection prompt with default '> C#'");
         await auto.EnterAsync();
 
-        // After selecting C#, wait for either a NuGet.config prompt or init completion.
+        await auto.WaitUntilAsync(
+            s => new CellPatternSearcher().Find("Use *.dev.localhost URLs").Search(s).Count > 0,
+            timeout: TimeSpan.FromSeconds(10),
+            description: "URLs prompt");
+        await auto.EnterAsync();
+
         var waitingForNuGetConfigPrompt = new CellPatternSearcher().Find("NuGet.config");
         var waitingForInitComplete = new CellPatternSearcher().Find("Aspire initialization complete");
+        var sawNuGetConfigPrompt = false;
 
-        await auto.WaitUntilAsync(
-            s => waitingForNuGetConfigPrompt.Search(s).Count > 0
-                || waitingForInitComplete.Search(s).Count > 0,
+        await auto.WaitUntilAsync(s =>
+        {
+            sawNuGetConfigPrompt = waitingForNuGetConfigPrompt.Search(s).Count > 0;
+            return sawNuGetConfigPrompt || waitingForInitComplete.Search(s).Count > 0;
+        },
             timeout: TimeSpan.FromMinutes(2),
             description: "NuGet.config prompt or aspire initialization complete");
 
-        // Dismiss NuGet.config prompt if it appeared (pressing Enter is a no-op if init already completed).
-        await auto.EnterAsync();
+        if (sawNuGetConfigPrompt)
+        {
+            await auto.EnterAsync();
+        }
 
         await auto.WaitUntilAsync(
             s => waitingForInitComplete.Search(s).Count > 0,
