@@ -1,0 +1,125 @@
+import * as assert from 'assert';
+import * as sinon from 'sinon';
+import * as vscode from 'vscode';
+import { EventEmitter } from 'events';
+import { PassThrough } from 'stream';
+import { AppHostDataRepository } from '../views/AppHostDataRepository';
+import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
+import * as cliModule from '../debugger/languages/cli';
+
+class TestChildProcess extends EventEmitter {
+    stdout = new PassThrough();
+    stderr = new PassThrough();
+    killed = false;
+
+    kill(): boolean {
+        this.killed = true;
+        this.emit('close', null);
+        return true;
+    }
+}
+
+suite('AppHostDataRepository', () => {
+    let terminalProvider: AspireTerminalProvider;
+    let subscriptions: vscode.Disposable[];
+    let getCliPathStub: sinon.SinonStub;
+    let spawnStub: sinon.SinonStub;
+
+    setup(() => {
+        subscriptions = [];
+        terminalProvider = new AspireTerminalProvider(subscriptions);
+        getCliPathStub = sinon.stub(terminalProvider, 'getAspireCliExecutablePath').resolves('aspire');
+        spawnStub = sinon.stub(cliModule, 'spawnCliProcess');
+        spawnStub.callsFake(() => new TestChildProcess());
+    });
+
+    teardown(() => {
+        spawnStub.restore();
+        getCliPathStub.restore();
+        subscriptions.forEach(subscription => subscription.dispose());
+    });
+
+    test('activate does not start describe watch while panel is hidden', async () => {
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        await waitForMicrotasks();
+
+        assert.strictEqual(getCliPathStub.called, false);
+        assert.strictEqual(spawnStub.called, false);
+
+        repository.dispose();
+    });
+
+    test('visible workspace panel starts describe watch', async () => {
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        repository.setPanelVisible(true);
+        await waitForMicrotasks();
+
+        assert.strictEqual(getCliPathStub.calledOnce, true);
+        assert.strictEqual(spawnStub.calledOnce, true);
+        assert.deepStrictEqual(spawnStub.firstCall.args[2], ['describe', '--follow', '--format', 'json']);
+
+        repository.dispose();
+    });
+
+    test('visible workspace panel before activation starts describe watch once', async () => {
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.setPanelVisible(true);
+        repository.activate();
+        await waitForMicrotasks();
+
+        assert.strictEqual(getCliPathStub.calledOnce, true);
+        assert.strictEqual(spawnStub.calledOnce, true);
+
+        repository.dispose();
+    });
+
+    test('hiding workspace panel stops describe watch', async () => {
+        const childProcess = new TestChildProcess();
+        spawnStub.returns(childProcess);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        repository.setPanelVisible(true);
+        await waitForMicrotasks();
+
+        repository.setPanelVisible(false);
+
+        assert.strictEqual(childProcess.killed, true);
+
+        repository.dispose();
+    });
+
+    test('hiding workspace panel before cli path resolves prevents describe watch from starting', async () => {
+        const cliPath = createDeferred<string>();
+        getCliPathStub.returns(cliPath.promise);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        repository.setPanelVisible(true);
+        repository.setPanelVisible(false);
+        cliPath.resolve('aspire');
+        await waitForMicrotasks();
+
+        assert.strictEqual(spawnStub.called, false);
+
+        repository.dispose();
+    });
+});
+
+async function waitForMicrotasks(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+}
+
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve: (value: T) => void = () => { };
+    const promise = new Promise<T>(promiseResolve => {
+        resolve = promiseResolve;
+    });
+    return { promise, resolve };
+}
