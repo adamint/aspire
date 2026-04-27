@@ -94,4 +94,21 @@ public class ProgramTests(ITestOutputHelper outputHelper)
         Assert.Empty(errorWriter.Lines);
         Assert.Empty(errorWriter.MarkupLines);
     }
+
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("true")]
+    [InlineData("""{ "appHost": { "path": "AppHost.csproj" }""")]
+    public void WarnIfGlobalSettingsContainAppHostPath_DoesNotWarn_WhenGlobalConfigCannotBeLoaded(string content)
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var settingsPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        File.WriteAllText(settingsPath, content);
+        var errorWriter = new TestStartupErrorWriter();
+
+        Program.WarnIfGlobalSettingsContainAppHostPath(new FileInfo(settingsPath), errorWriter);
+
+        Assert.Empty(errorWriter.Lines);
+        Assert.Empty(errorWriter.MarkupLines);
+    }
 }

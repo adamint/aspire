@@ -4,6 +4,7 @@
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Documentation.ApiDocs;
 using Aspire.Cli.Documentation.Docs;
+using Aspire.Cli.Resources;
 using Aspire.Cli.Tests.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
@@ -817,13 +818,17 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
-    [InlineData("appHost.path")]
-    [InlineData("appHost:path")]
-    [InlineData("appHostPath")]
-    public async Task ConfigSetCommand_GlobalAppHostPath_ReturnsInvalidCommand(string key)
+    [InlineData("appHost.path", nameof(ErrorStrings.GlobalAppHostPathCannotBeSetWithConfigCommand))]
+    [InlineData("appHost:path", nameof(ErrorStrings.GlobalAppHostPathCannotBeSetWithConfigCommand))]
+    [InlineData("appHostPath", nameof(ErrorStrings.LegacyAppHostPathCannotBeSetWithConfigCommand))]
+    public async Task ConfigSetCommand_GlobalAppHostPath_ReturnsInvalidCommand(string key, string expectedErrorResourceName)
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
-        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        var testInteractionService = new TestInteractionService();
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.InteractionServiceFactory = _ => testInteractionService;
+        });
         using var provider = services.BuildServiceProvider();
 
         var command = provider.GetRequiredService<Aspire.Cli.Commands.RootCommand>();
@@ -832,6 +837,7 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
         Assert.Equal(ExitCodeConstants.InvalidCommand, exitCode);
+        Assert.Equal(GetErrorString(expectedErrorResourceName), Assert.Single(testInteractionService.DisplayedErrors));
 
         var settingsPath = provider.GetRequiredService<IConfigurationService>().GetSettingsFilePath(isGlobal: true);
         if (File.Exists(settingsPath))
@@ -839,6 +845,16 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
             var json = await File.ReadAllTextAsync(settingsPath);
             Assert.DoesNotContain("AppHost.csproj", json);
         }
+    }
+
+    private static string GetErrorString(string resourceName)
+    {
+        return resourceName switch
+        {
+            nameof(ErrorStrings.GlobalAppHostPathCannotBeSetWithConfigCommand) => ErrorStrings.GlobalAppHostPathCannotBeSetWithConfigCommand,
+            nameof(ErrorStrings.LegacyAppHostPathCannotBeSetWithConfigCommand) => ErrorStrings.LegacyAppHostPathCannotBeSetWithConfigCommand,
+            _ => throw new ArgumentOutOfRangeException(nameof(resourceName), resourceName, null)
+        };
     }
 
     [Fact]

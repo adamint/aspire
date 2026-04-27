@@ -1,9 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using Aspire.Cli.Utils;
+using Microsoft.Extensions.Configuration;
 
 namespace Aspire.Cli.Configuration;
 
@@ -25,65 +23,23 @@ internal static class AppHostPathConfigurationPolicy
         return string.Equals(normalizedKey, AppHostPathKey, StringComparison.OrdinalIgnoreCase);
     }
 
-    public static bool IsAppHostPathKey(string key)
+    public static bool IsGloballySettableKey(string key)
     {
-        return IsHierarchicalAppHostPathKey(key)
-            || IsLegacyAppHostPathKey(key);
+        return !IsHierarchicalAppHostPathKey(key)
+            && !IsLegacyAppHostPathKey(key);
     }
 
-    public static bool TryFindAppHostPathKey(string filePath, out string? key)
+    public static bool TryFindAppHostPathKey(IConfiguration configuration, out string? key)
     {
         key = null;
 
-        if (!File.Exists(filePath))
-        {
-            return false;
-        }
-
-        JsonObject? settings;
-        try
-        {
-            var content = File.ReadAllText(filePath);
-            if (string.IsNullOrWhiteSpace(content))
-            {
-                return false;
-            }
-
-            settings = JsonNode.Parse(content, documentOptions: ConfigurationHelper.ParseOptions) as JsonObject;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-        catch (IOException)
-        {
-            return false;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
-
-        if (settings is null)
-        {
-            return false;
-        }
-
-        if (settings.ContainsKey(LegacyAppHostPathKey))
+        if (configuration[LegacyAppHostPathKey] is not null)
         {
             key = LegacyAppHostPathKey;
             return true;
         }
 
-        if (settings.ContainsKey(AppHostPathConfigurationKey))
-        {
-            key = AppHostPathConfigurationKey;
-            return true;
-        }
-
-        if (settings.TryGetPropertyValue(AppHostKey, out var appHostNode) &&
-            appHostNode is JsonObject appHost &&
-            appHost.ContainsKey(PathKey))
+        if (configuration[AppHostPathConfigurationKey] is not null)
         {
             key = AppHostPathKey;
             return true;

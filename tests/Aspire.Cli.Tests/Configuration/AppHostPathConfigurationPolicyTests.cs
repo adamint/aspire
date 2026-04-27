@@ -3,6 +3,7 @@
 
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Tests.Utils;
+using Aspire.Cli.Utils;
 
 namespace Aspire.Cli.Tests.Configuration;
 
@@ -14,9 +15,9 @@ public class AppHostPathConfigurationPolicyTests(ITestOutputHelper outputHelper)
     [InlineData("APPHOST.PATH")]
     [InlineData("appHostPath")]
     [InlineData("APPHOSTPATH")]
-    public void IsAppHostPathKey_ReturnsTrue_ForBlockedKeys(string key)
+    public void IsGloballySettableKey_ReturnsFalse_ForBlockedKeys(string key)
     {
-        Assert.True(AppHostPathConfigurationPolicy.IsAppHostPathKey(key));
+        Assert.False(AppHostPathConfigurationPolicy.IsGloballySettableKey(key));
     }
 
     [Theory]
@@ -25,22 +26,23 @@ public class AppHostPathConfigurationPolicyTests(ITestOutputHelper outputHelper)
     [InlineData("channel")]
     [InlineData("features.defaultWatchEnabled")]
     [InlineData("")]
-    public void IsAppHostPathKey_ReturnsFalse_ForOtherKeys(string key)
+    public void IsGloballySettableKey_ReturnsTrue_ForOtherKeys(string key)
     {
-        Assert.False(AppHostPathConfigurationPolicy.IsAppHostPathKey(key));
+        Assert.True(AppHostPathConfigurationPolicy.IsGloballySettableKey(key));
     }
 
     [Theory]
     [InlineData("""{ "appHost": { "path": "AppHost.csproj" } }""", "appHost.path")]
     [InlineData("""{ "appHostPath": "../AppHost.csproj" }""", "appHostPath")]
-    [InlineData("""{ "appHost:path": "AppHost.csproj" }""", "appHost:path")]
+    [InlineData("""{ "appHost:path": "AppHost.csproj" }""", "appHost.path")]
     public void TryFindAppHostPathKey_ReturnsConfiguredKey(string json, string expectedKey)
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var path = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
         File.WriteAllText(path, json);
 
-        Assert.True(AppHostPathConfigurationPolicy.TryFindAppHostPathKey(path, out var key));
+        Assert.True(ConfigurationHelper.TryLoadSettingsFile(path, out var configuration));
+        Assert.True(AppHostPathConfigurationPolicy.TryFindAppHostPathKey(configuration, out var key));
         Assert.Equal(expectedKey, key);
     }
 
@@ -53,8 +55,7 @@ public class AppHostPathConfigurationPolicyTests(ITestOutputHelper outputHelper)
         var path = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
         File.WriteAllText(path, json);
 
-        Assert.False(AppHostPathConfigurationPolicy.TryFindAppHostPathKey(path, out var key));
-        Assert.Null(key);
+        Assert.False(ConfigurationHelper.TryLoadSettingsFile(path, out _));
     }
 
     [Fact]
@@ -64,7 +65,8 @@ public class AppHostPathConfigurationPolicyTests(ITestOutputHelper outputHelper)
         var path = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
         File.WriteAllText(path, """{ "appHost": { "language": "typescript/nodejs" }, "channel": "daily" }""");
 
-        Assert.False(AppHostPathConfigurationPolicy.TryFindAppHostPathKey(path, out var key));
+        Assert.True(ConfigurationHelper.TryLoadSettingsFile(path, out var configuration));
+        Assert.False(AppHostPathConfigurationPolicy.TryFindAppHostPathKey(configuration, out var key));
         Assert.Null(key);
     }
 
@@ -75,8 +77,7 @@ public class AppHostPathConfigurationPolicyTests(ITestOutputHelper outputHelper)
         var path = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
         File.WriteAllText(path, """{ "appHost": { "path": "AppHost.csproj" }""");
 
-        Assert.False(AppHostPathConfigurationPolicy.TryFindAppHostPathKey(path, out var key));
-        Assert.Null(key);
+        Assert.False(ConfigurationHelper.TryLoadSettingsFile(path, out _));
     }
 
     [Fact]
@@ -85,7 +86,6 @@ public class AppHostPathConfigurationPolicyTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         var path = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
 
-        Assert.False(AppHostPathConfigurationPolicy.TryFindAppHostPathKey(path, out var key));
-        Assert.Null(key);
+        Assert.False(ConfigurationHelper.TryLoadSettingsFile(path, out _));
     }
 }

@@ -183,7 +183,8 @@ public class Program
 
     internal static void WarnIfGlobalSettingsContainAppHostPath(FileInfo globalSettingsFile, IStartupErrorWriter errorWriter)
     {
-        if (AppHostPathConfigurationPolicy.TryFindAppHostPathKey(globalSettingsFile.FullName, out var key))
+        if (ConfigurationHelper.TryLoadSettingsFile(globalSettingsFile.FullName, out var globalSettings) &&
+            AppHostPathConfigurationPolicy.TryFindAppHostPathKey(globalSettings, out var key))
         {
             var warning = string.Format(
                 CultureInfo.CurrentCulture,
