@@ -13,6 +13,8 @@ public class ReconnectScriptTests
         var script = ReadDashboardScript("app-reconnect.js");
 
         Assert.DoesNotContain("showModal", script);
+        Assert.Contains("reconnectModal.addEventListener(\"cancel\"", script);
+        Assert.Contains("event.preventDefault();", script);
         Assert.Contains("reconnectModal.show();", script);
     }
 
