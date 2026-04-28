@@ -39,7 +39,7 @@ jobs:
   prepare-release:
     name: Prepare Extension Release
     runs-on: ubuntu-latest
-    if: ${{ github.repository_owner == 'microsoft' }}
+    if: ${{ github.repository_owner == 'adamint' }}
     steps:
       - name: Check if user is authorized
         env:
@@ -369,12 +369,11 @@ jobs:
           cat "$WORK_DIR/changelog_entry.md"
           echo "========================"
 
-      - name: Generate GitHub App Token
+      - name: Use GITHUB_TOKEN for fork validation
         id: app-token
-        uses: actions/create-github-app-token@df432ceedc7162793a195dd1713ff69aefc7379e # v2.0.6
-        with:
-          app-id: ${{ secrets.ASPIRE_BOT_APP_ID }}
-          private-key: ${{ secrets.ASPIRE_BOT_PRIVATE_KEY }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: echo "token=${GITHUB_TOKEN}" >> "$GITHUB_OUTPUT"
 
       - name: Create draft pull request
         env:
