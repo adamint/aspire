@@ -1,7 +1,8 @@
 # Create your first Aspire app
 
-[Create a new Aspire project](command:aspire-vscode.new) to scaffold a new solution from a starter template.
+[Create a new Aspire project](command:aspire-vscode.new) to scaffold a new Aspire application from a starter template.
 The starter template gives you:
+
 - An **AppHost** that orchestrates your services, connections, and startup order
 - A sample **API service** with health checks
 - A **web frontend** that references the API
@@ -42,7 +43,7 @@ await builder
 await builder.build().run();
 ```
 
-The examples above show C# and TypeScript AppHosts. The Aspire extension also recognizes `apphost.js`.
+The examples above show C# and TypeScript AppHosts. JavaScript AppHosts such as `apphost.js` use the same model and are also recognized by the Aspire extension.
 
 | Concept | What it does |
 |---|---|
