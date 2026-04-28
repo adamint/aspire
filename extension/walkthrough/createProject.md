@@ -42,7 +42,7 @@ await builder
 await builder.build().run();
 ```
 
-The examples above start with C# and TypeScript. The Aspire extension also recognizes `apphost.js`, and this walkthrough can grow with additional language examples as more Aspire AppHost templates and docs are added.
+The examples above show example C# and TypeScript apphosts. The Aspire extension also recognizes `apphost.js`.
 
 | Concept | What it does |
 |---|---|
