@@ -70,7 +70,6 @@ export class AppHostDataRepository {
     // ── Workspace mode state (describe --follow) ──
     private _workspaceResources: Map<string, ResourceJson> = new Map();
     private _describeProcess: ChildProcessWithoutNullStreams | undefined;
-    private _describeRestarting = false;
     private _describeRestartDelay = 5000;
     private _describeRestartTimer: ReturnType<typeof setTimeout> | undefined;
     private _describeReceivedData = false;
@@ -294,16 +293,23 @@ export class AppHostDataRepository {
             extensionLogOutputChannel.info('Starting aspire describe --follow for workspace resources');
 
             this._describeReceivedData = false;
-            this._describeProcess = spawnCliProcess(this._terminalProvider, cliPath, args, {
+            const describeProcess = spawnCliProcess(this._terminalProvider, cliPath, args, {
                 noExtensionVariables: true,
                 lineCallback: (line) => {
+                    if (this._describeProcess !== describeProcess) {
+                        return;
+                    }
                     this._handleDescribeLine(line);
                 },
                 exitCallback: (code) => {
+                    if (this._describeProcess !== describeProcess) {
+                        return;
+                    }
+
                     extensionLogOutputChannel.info(`aspire describe --follow exited with code ${code}`);
                     this._describeProcess = undefined;
 
-                    if (!this._disposed && !this._describeRestarting) {
+                    if (!this._disposed) {
                         if (!this._describeReceivedData && code !== 0) {
                             // The process exited with a non-zero code without ever producing valid data.
                             // This is expected when no apphost is running. Don't set the error state
@@ -323,24 +329,28 @@ export class AppHostDataRepository {
                             extensionLogOutputChannel.info(`Restarting describe --follow in ${delay}ms`);
                             this._describeRestartTimer = setTimeout(() => {
                                 this._describeRestartTimer = undefined;
-                                if (!this._disposed) {
+                                if (!this._disposed && this._shouldWatchWorkspace) {
                                     this._startDescribeWatch();
                                 }
                             }, delay);
                         }
                     }
-                    this._describeRestarting = false;
                 },
                 errorCallback: (error) => {
+                    if (this._describeProcess !== describeProcess) {
+                        return;
+                    }
+
                     extensionLogOutputChannel.warn(`aspire describe --follow error: ${error.message}`);
                     this._describeProcess = undefined;
-                    if (!this._disposed && !this._describeRestarting) {
+                    if (!this._disposed) {
                         this._loadingWorkspace = false;
                         this._updateLoadingContext();
                         this._setError(errorFetchingAppHosts(error.message));
                     }
                 }
             });
+            this._describeProcess = describeProcess;
         }).catch(error => {
             if (this._disposed || !this._shouldWatchWorkspace || startVersion !== this._describeStartVersion) {
                 return;
@@ -364,9 +374,9 @@ export class AppHostDataRepository {
             this._describeRestartTimer = undefined;
         }
         if (this._describeProcess) {
-            this._describeRestarting = true;
-            this._describeProcess.kill();
+            const describeProcess = this._describeProcess;
             this._describeProcess = undefined;
+            describeProcess.kill();
         }
         if (options?.clearWorkspaceResources) {
             this._clearWorkspaceResources();

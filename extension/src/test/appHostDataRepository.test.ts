@@ -128,6 +128,34 @@ suite('AppHostDataRepository', () => {
 
         repository.dispose();
     });
+
+    test('late close from stopped describe watch does not orphan replacement watch', async () => {
+        const firstChildProcess = new TestChildProcess();
+        const secondChildProcess = new TestChildProcess();
+        spawnStub.onFirstCall().returns(firstChildProcess);
+        spawnStub.onSecondCall().returns(secondChildProcess);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        repository.setPanelVisible(true);
+        await waitForMicrotasks();
+        const firstLineCallback = spawnStub.firstCall.args[3].lineCallback;
+        const firstExitCallback = spawnStub.firstCall.args[3].exitCallback;
+
+        repository.setPanelVisible(false);
+        repository.setPanelVisible(true);
+        await waitForMicrotasks();
+
+        firstLineCallback(JSON.stringify({ name: 'stale' }));
+        firstExitCallback(0);
+        repository.setPanelVisible(false);
+
+        assert.strictEqual(repository.workspaceResources.length, 0);
+        assert.strictEqual(firstChildProcess.killed, true);
+        assert.strictEqual(secondChildProcess.killed, true);
+
+        repository.dispose();
+    });
 });
 
 async function waitForMicrotasks(): Promise<void> {
