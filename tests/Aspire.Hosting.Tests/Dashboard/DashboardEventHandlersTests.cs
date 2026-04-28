@@ -228,6 +228,38 @@ public class DashboardEventHandlersTests(ITestOutputHelper testOutputHelper)
     }
 
     [Theory]
+    [InlineData("ASPIRE_DASHBOARD_AI_DISABLED", "false")]
+    [InlineData("aspire_dashboard_ai_disabled", "false")]
+    [InlineData("ASPIRE_DASHBOARD_AI_DISABLED", "true")]
+    public async Task ConfigureEnvironmentVariables_HasExtensionHostEnv_RespectsExplicitDashboardAISetting(string key, string value)
+    {
+        var resourceLoggerService = new ResourceLoggerService();
+        var resourceNotificationService = ResourceNotificationServiceTestHelpers.Create();
+        var configurationBuilder = new ConfigurationBuilder();
+        configurationBuilder.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [KnownConfigNames.ExtensionEndpoint] = "https://localhost:1234",
+            [key] = value
+        });
+        var configuration = configurationBuilder.Build();
+        var dashboardOptions = Options.Create(new DashboardOptions
+        {
+            DashboardPath = "test.dll",
+            DashboardUrl = "http://localhost:8080",
+            OtlpGrpcEndpointUrl = "http://localhost:4317",
+        });
+        var hook = CreateHook(resourceLoggerService, resourceNotificationService, configuration, dashboardOptions: dashboardOptions);
+
+        var envVars = new Dictionary<string, object>();
+        var dashboardResource = new ExecutableResource("aspire-dashboard", "dashboard.exe", ".");
+
+        await hook.ConfigureEnvironmentVariables(new EnvironmentCallbackContext(new DistributedApplicationExecutionContext(DistributedApplicationOperation.Run), environmentVariables: envVars, resource: dashboardResource));
+
+        Assert.Equal(value, envVars.GetValueOrDefault(key));
+        Assert.Single(envVars, envVar => string.Equals(envVar.Key, DashboardConfigNames.DashboardAIDisabledName.EnvVarName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
     [InlineData("https://localhost:17131", "localhost", 9999, "https")]
     [InlineData("https://aspire-dashboard.dev.localhost:17131", "aspire-dashboard.dev.localhost", 9999, "https")]
     [InlineData("http://myapp.localhost:8080", "myapp.localhost", 5555, "http")]
