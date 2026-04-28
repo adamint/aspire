@@ -28,7 +28,12 @@ on:
 
 permissions:
   contents: write
+  models: read
   pull-requests: write
+
+concurrency:
+  group: extension-release
+  cancel-in-progress: false
 
 jobs:
   prepare-release:
@@ -36,6 +41,27 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.repository_owner == 'microsoft' }}
     steps:
+      - name: Check if user is authorized
+        env:
+          ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -eo pipefail
+
+          echo "Checking if ${ACTOR} is authorized to run extension releases..."
+          PERMISSION=$(gh api "repos/${REPOSITORY}/collaborators/${ACTOR}/permission" --jq '.permission')
+          echo "User permission level: ${PERMISSION}"
+
+          if [[ "$PERMISSION" != "admin" && "$PERMISSION" != "maintain" ]]; then
+            echo "❌ ERROR: User ${ACTOR} does not have sufficient permissions."
+            echo "Required: 'admin' or 'maintain' permission level."
+            echo "Current: '${PERMISSION}'"
+            exit 1
+          fi
+
+          echo "✓ User ${ACTOR} is authorized (permission: ${PERMISSION})"
+
       - name: Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -47,6 +73,8 @@ jobs:
           INPUT_FROM_SHA: ${{ inputs.from_sha }}
           INPUT_TO_SHA: ${{ inputs.to_sha }}
         run: |
+          set -eo pipefail
+
           TO_SHA="$INPUT_TO_SHA"
           if [ -z "$TO_SHA" ]; then
             TO_SHA=$(git rev-parse origin/main)
@@ -71,6 +99,8 @@ jobs:
         env:
           INPUT_VERSION: ${{ inputs.release_version }}
         run: |
+          set -eo pipefail
+
           VERSION="$INPUT_VERSION"
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "❌ Invalid version format: $VERSION"
@@ -84,6 +114,8 @@ jobs:
         env:
           INPUT_VERSION: ${{ inputs.release_version }}
         run: |
+          set -eo pipefail
+
           CURRENT_VERSION=$(jq -r '.version' extension/package.json)
           NEW_VERSION="$INPUT_VERSION"
 
@@ -122,6 +154,11 @@ jobs:
           FROM_SHA: ${{ steps.resolve-sha.outputs.from_sha }}
           TO_SHA: ${{ steps.resolve-sha.outputs.to_sha }}
         run: |
+          set -eo pipefail
+
+          WORK_DIR="${RUNNER_TEMP}/extension-release/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "$WORK_DIR"
+
           echo "Generating commit log for extension changes..."
 
           # Get commit messages for extension/ changes
@@ -129,21 +166,22 @@ jobs:
 
           if [ -z "$COMMITS" ]; then
             echo "⚠️ No extension-specific commits found in range. Using all commits."
-            COMMITS=$(git log --oneline --no-merges "${FROM_SHA}..${TO_SHA}" 2>/dev/null | head -100)
+            COMMITS=$(git log --oneline --no-merges --max-count=100 "${FROM_SHA}..${TO_SHA}" 2>/dev/null || echo "")
           fi
 
           # Get diffstat for extension/
           DIFFSTAT=$(git diff --stat "${FROM_SHA}..${TO_SHA}" -- extension/ 2>/dev/null || echo "")
 
-          # Get the actual diff (truncated for AI context)
-          DIFF_CONTENT=$(git diff "${FROM_SHA}..${TO_SHA}" -- extension/src/ extension/package.json extension/package.nls.json 2>/dev/null | head -3000)
+          # Get the actual diff, capped by bytes so the API request stays bounded.
+          git diff "${FROM_SHA}..${TO_SHA}" -- extension/src/ extension/package.json extension/package.nls.json > "$WORK_DIR/diff-full.txt"
+          head -c 200000 "$WORK_DIR/diff-full.txt" > "$WORK_DIR/diff.txt"
+          rm "$WORK_DIR/diff-full.txt"
 
           # Write to files for the AI step
-          echo "$COMMITS" > /tmp/commits.txt
-          echo "$DIFFSTAT" > /tmp/diffstat.txt
-          echo "$DIFF_CONTENT" > /tmp/diff.txt
+          printf '%s\n' "$COMMITS" > "$WORK_DIR/commits.txt"
+          printf '%s\n' "$DIFFSTAT" > "$WORK_DIR/diffstat.txt"
 
-          COMMIT_COUNT=$(echo "$COMMITS" | grep -c . || echo "0")
+          COMMIT_COUNT=$(printf '%s\n' "$COMMITS" | awk 'NF { count++ } END { print count + 0 }')
           echo "commit_count=$COMMIT_COUNT" >> "$GITHUB_OUTPUT"
           echo "✓ Found $COMMIT_COUNT extension commits in range"
 
@@ -154,9 +192,9 @@ jobs:
           NEW_VERSION: ${{ inputs.release_version }}
           CURRENT_VERSION: ${{ steps.version-check.outputs.current_version }}
         run: |
-          COMMITS=$(cat /tmp/commits.txt)
-          DIFFSTAT=$(cat /tmp/diffstat.txt)
-          DIFF=$(cat /tmp/diff.txt)
+          set -eo pipefail
+
+          WORK_DIR="${RUNNER_TEMP}/extension-release/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           # Build the prompt
           PROMPT=$(cat <<'PROMPT_END'
@@ -167,7 +205,7 @@ jobs:
           - Group changes into categories: "Features", "Bug Fixes", "Improvements", and optionally "Breaking Changes"
           - Only include categories that have entries
           - Each entry should be a single bullet point, written in past tense
-          - Focus on what changed from the user's perspective, not implementation details
+          - Focus on what changed from the end-user perspective, not implementation details
           - Do NOT mention commit SHAs or PR numbers
           - Keep it concise — aim for 3-15 bullet points total
           - Use markdown formatting
@@ -187,23 +225,20 @@ jobs:
           # Combine context into a file
           {
             echo "COMMIT LOG:"
-            cat /tmp/commits.txt
+            cat "$WORK_DIR/commits.txt"
             echo ""
             echo "DIFF STATISTICS:"
-            cat /tmp/diffstat.txt
+            cat "$WORK_DIR/diffstat.txt"
             echo ""
-            echo "CODE DIFF (truncated):"
-            cat /tmp/diff.txt
-          } > /tmp/context.txt
+            echo "CODE DIFF (truncated to 200000 bytes):"
+            cat "$WORK_DIR/diff.txt"
+          } > "$WORK_DIR/context.txt"
 
-          # Call GitHub Models API
-          # Escape the content for JSON
-          ESCAPED_PROMPT=$(printf '%s' "$PROMPT" | jq -Rs .)
-          ESCAPED_CONTEXT=$(jq -Rs . < /tmp/context.txt)
+          CONTEXT=$(cat "$WORK_DIR/context.txt")
 
           REQUEST_BODY=$(jq -n \
-            --argjson system "$ESCAPED_PROMPT" \
-            --argjson user "$ESCAPED_CONTEXT" \
+            --arg system "$PROMPT" \
+            --arg user "$CONTEXT" \
             '{
               "messages": [
                 {"role": "system", "content": $system},
@@ -215,44 +250,58 @@ jobs:
 
           echo "Calling GitHub Models API for release notes generation..."
 
-          RESPONSE=$(curl -s -X POST \
+          HTTP_CODE=$(curl -sS -o "$WORK_DIR/ai_response.json" -w "%{http_code}" --max-time 60 --retry 2 -X POST \
             "https://models.github.ai/inference/chat/completions" \
             -H "Authorization: Bearer $GITHUB_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "$REQUEST_BODY")
+            -d "$REQUEST_BODY") || {
+              CURL_EXIT=$?
+              echo "⚠️ GitHub Models API request failed with curl exit code ${CURL_EXIT}"
+              HTTP_CODE="000"
+              : > "$WORK_DIR/ai_response.json"
+            }
+
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "⚠️ GitHub Models API returned HTTP $HTTP_CODE"
+            cat "$WORK_DIR/ai_response.json"
+          fi
 
           # Extract the generated text
-          AI_NOTES=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty')
+          AI_NOTES=$(jq -r '.choices[0].message.content // empty' "$WORK_DIR/ai_response.json" 2>/dev/null || true)
+          USED_AI_NOTES=true
 
           if [ -z "$AI_NOTES" ]; then
             echo "⚠️ AI generation failed or returned empty. Using commit log as fallback."
-            echo "API Response: $RESPONSE"
-            AI_NOTES="### Changes"
+            USED_AI_NOTES=false
+            AI_NOTES="### Changes (auto-generated from commits)"
             while IFS= read -r line; do
               if [ -n "$line" ]; then
                 # Strip the SHA prefix from "abc1234 Some message"
                 MSG=$(echo "$line" | sed 's/^[a-f0-9]* //')
                 AI_NOTES="${AI_NOTES}"$'\n'"- ${MSG}"
               fi
-            done < /tmp/commits.txt
+            done < "$WORK_DIR/commits.txt"
           fi
 
+          echo "used_ai_notes=$USED_AI_NOTES" >> "$GITHUB_OUTPUT"
           echo "✓ Release notes generated"
 
           # Write to file (avoids multiline output issues)
-          printf '%s\n' "$AI_NOTES" > /tmp/release_notes.md
+          printf '%s\n' "$AI_NOTES" > "$WORK_DIR/release_notes.md"
 
           # Also create the full changelog entry
           {
             echo "## v${NEW_VERSION}"
             echo ""
             printf '%s\n' "$AI_NOTES"
-          } > /tmp/changelog_entry.md
+          } > "$WORK_DIR/changelog_entry.md"
 
       - name: Update package.json version
         env:
           NEW_VERSION: ${{ inputs.release_version }}
         run: |
+          set -eo pipefail
+
           cd extension
           jq --arg v "$NEW_VERSION" '.version = $v' package.json > package.json.tmp
           mv package.json.tmp package.json
@@ -262,18 +311,30 @@ jobs:
         env:
           NEW_VERSION: ${{ inputs.release_version }}
         run: |
+          set -eo pipefail
+
+          WORK_DIR="${RUNNER_TEMP}/extension-release/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           CHANGELOG="extension/CHANGELOG.md"
-          ENTRY=$(cat /tmp/changelog_entry.md)
+          ENTRY=$(cat "$WORK_DIR/changelog_entry.md")
 
           if [ -f "$CHANGELOG" ]; then
-            # Prepend new entry after the title line
-            {
-              head -1 "$CHANGELOG"
-              echo ""
-              echo "$ENTRY"
-              echo ""
-              tail -n +2 "$CHANGELOG"
-            } > "${CHANGELOG}.tmp"
+            HEADER=$(head -1 "$CHANGELOG")
+            if [[ "$HEADER" == \#* ]]; then
+              {
+                echo "$HEADER"
+                echo ""
+                echo "$ENTRY"
+                echo ""
+                tail -n +2 "$CHANGELOG"
+              } > "${CHANGELOG}.tmp"
+            else
+              echo "⚠️ CHANGELOG.md does not start with a Markdown header. Prepending entry at the top."
+              {
+                echo "$ENTRY"
+                echo ""
+                cat "$CHANGELOG"
+              } > "${CHANGELOG}.tmp"
+            fi
             mv "${CHANGELOG}.tmp" "$CHANGELOG"
           else
             {
@@ -286,7 +347,7 @@ jobs:
           echo "✓ Updated $CHANGELOG"
           echo ""
           echo "=== Changelog Entry ==="
-          cat /tmp/changelog_entry.md
+          cat "$WORK_DIR/changelog_entry.md"
           echo "========================"
 
       - name: Generate GitHub App Token
@@ -303,16 +364,17 @@ jobs:
           CURRENT_VERSION: ${{ steps.version-check.outputs.current_version }}
           FROM_SHA: ${{ steps.resolve-sha.outputs.from_sha }}
           TO_SHA: ${{ steps.resolve-sha.outputs.to_sha }}
+          USED_AI_NOTES: ${{ steps.ai-release-notes.outputs.used_ai_notes }}
         run: |
+          set -eo pipefail
+
+          WORK_DIR="${RUNNER_TEMP}/extension-release/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           BRANCH_NAME="extension-release/v${NEW_VERSION}"
 
           # Configure git to use the app token for push
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
-
-          # Delete existing branch if present (idempotent re-runs)
-          git push origin --delete "$BRANCH_NAME" 2>/dev/null || true
 
           # Create branch and commit
           git checkout -B "$BRANCH_NAME"
@@ -321,14 +383,20 @@ jobs:
           git push --force-with-lease origin "$BRANCH_NAME"
 
           # Build PR body via temp file to avoid quoting issues
-          RELEASE_NOTES=$(cat /tmp/release_notes.md)
+          RELEASE_NOTES=$(cat "$WORK_DIR/release_notes.md")
           {
             echo "## VS Code Extension Release v${NEW_VERSION}"
             echo ""
             echo "**Version bump:** ${CURRENT_VERSION} → ${NEW_VERSION}"
             echo "**Commit range:** [\`${FROM_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${FROM_SHA})..[\`${TO_SHA:0:7}\`](https://github.com/${{ github.repository }}/commit/${TO_SHA})"
             echo ""
-            echo "### AI-Generated Release Notes"
+            if [ "$USED_AI_NOTES" = "true" ]; then
+              echo "### AI-Generated Release Notes"
+            else
+              echo "### Release Notes (auto-generated from commits)"
+              echo ""
+              echo "> **Note:** AI release note generation failed or returned empty, so this section was generated from commit messages."
+            fi
             echo ""
             printf '%s\n' "$RELEASE_NOTES"
             echo ""
@@ -336,21 +404,21 @@ jobs:
             echo ""
             echo '> **Note:** Review the generated release notes in `extension/CHANGELOG.md` and edit as needed before merging.'
             echo '> After merging, publish the extension using the standard extension build and publish pipeline.'
-          } > /tmp/pr_body.md
+          } > "$WORK_DIR/pr_body.md"
 
           # Create or update draft PR
           EXISTING_PR=$(gh pr list --head "$BRANCH_NAME" --base main --json number --jq '.[0].number // empty' 2>/dev/null || true)
           if [ -n "$EXISTING_PR" ]; then
             gh pr edit "$EXISTING_PR" \
               --title "Prepare VS Code extension release v${NEW_VERSION}" \
-              --body-file /tmp/pr_body.md
+              --body-file "$WORK_DIR/pr_body.md"
             echo "✓ Updated existing draft PR #${EXISTING_PR} for extension release v${NEW_VERSION}"
           else
             gh pr create \
               --base main \
               --head "$BRANCH_NAME" \
               --title "Prepare VS Code extension release v${NEW_VERSION}" \
-              --body-file /tmp/pr_body.md \
+              --body-file "$WORK_DIR/pr_body.md" \
               --draft
             echo "✓ Created draft PR for extension release v${NEW_VERSION}"
           fi
