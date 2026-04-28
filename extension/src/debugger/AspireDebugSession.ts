@@ -316,8 +316,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       this._disposables.push(disposable);
     }
     catch (err) {
-      extensionLogOutputChannel.error(`Error starting AppHost debug session: ${err}`);
-      vscode.window.showErrorMessage(String(err));
+      const errorMessage = String(err);
+      extensionLogOutputChannel.error(`Error starting AppHost debug session: ${errorMessage}`);
+      this.sendMessageWithEmoji("❌", errorMessage, true, 'stderr');
+      vscode.window.showErrorMessage(errorMessage);
       this.dispose();
     }
   }
@@ -504,8 +506,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     this._onDidSendMessage.fire(event);
   }
 
-  sendMessageWithEmoji(emoji: string, message: string, addNewLine: boolean = true) {
-    this.sendMessage(`${emoji}  ${message}`, addNewLine);
+  sendMessageWithEmoji(emoji: string, message: string, addNewLine: boolean = true, category: 'stdout' | 'stderr' = 'stdout') {
+    this.sendMessage(`${emoji}  ${message}`, addNewLine, category);
   }
 
   sendMessage(message: string, addNewLine: boolean = true, category: 'stdout' | 'stderr' = 'stdout') {
