@@ -18,9 +18,24 @@ public class ConsoleInteractionServiceTests
 {
     private static ConsoleInteractionService CreateInteractionService(IAnsiConsole console, CliExecutionContext? executionContext = null, ICliHostEnvironment? hostEnvironment = null)
     {
+        return CreateInteractionService(console, console, executionContext, hostEnvironment);
+    }
+
+    private static ConsoleInteractionService CreateInteractionService(IAnsiConsole outputConsole, IAnsiConsole errorConsole, CliExecutionContext? executionContext = null, ICliHostEnvironment? hostEnvironment = null)
+    {
         executionContext ??= new CliExecutionContext(new DirectoryInfo("."), new DirectoryInfo("."), new DirectoryInfo("."), new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-runtimes")), new DirectoryInfo(Path.Combine(Path.GetTempPath(), "aspire-test-logs")), "test.log");
-        var consoleEnvironment = new ConsoleEnvironment(console, console);
+        var consoleEnvironment = new ConsoleEnvironment(outputConsole, errorConsole);
         return new ConsoleInteractionService(consoleEnvironment, executionContext, hostEnvironment ?? TestHelpers.CreateInteractiveHostEnvironment(), NullLoggerFactory.Instance);
+    }
+
+    private static IAnsiConsole CreateTestConsole(StringBuilder output)
+    {
+        return AnsiConsole.Create(new AnsiConsoleSettings
+        {
+            Ansi = AnsiSupport.No,
+            ColorSystem = ColorSystemSupport.NoColors,
+            Out = new AnsiConsoleOutput(new StringWriter(output))
+        });
     }
 
     [Fact]
@@ -52,12 +67,7 @@ public class ConsoleInteractionServiceTests
     {
         // Arrange
         var output = new StringBuilder();
-        var console = AnsiConsole.Create(new AnsiConsoleSettings
-        {
-            Ansi = AnsiSupport.No,
-            ColorSystem = ColorSystemSupport.NoColors,
-            Out = new AnsiConsoleOutput(new StringWriter(output))
-        });
+        var console = CreateTestConsole(output);
         
         var interactionService = CreateInteractionService(console);
         var errorMessage = "The JSON value could not be converted to <Type>. Path: $.values[0].Type | LineNumber: 0 | BytePositionInLine: 121.";
@@ -72,16 +82,24 @@ public class ConsoleInteractionServiceTests
     }
 
     [Fact]
+    public void DisplayError_WritesToErrorStream()
+    {
+        var output = new StringBuilder();
+        var error = new StringBuilder();
+        var interactionService = CreateInteractionService(CreateTestConsole(output), CreateTestConsole(error));
+
+        interactionService.DisplayError("Failed to start resource.");
+
+        Assert.Empty(output.ToString());
+        Assert.Contains("Failed to start resource.", error.ToString());
+    }
+
+    [Fact]
     public void DisplaySubtleMessage_WithMarkupCharacters_DoesNotCauseMarkupParsingError()
     {
         // Arrange
         var output = new StringBuilder();
-        var console = AnsiConsole.Create(new AnsiConsoleSettings
-        {
-            Ansi = AnsiSupport.No,
-            ColorSystem = ColorSystemSupport.NoColors,
-            Out = new AnsiConsoleOutput(new StringWriter(output))
-        });
+        var console = CreateTestConsole(output);
         
         var interactionService = CreateInteractionService(console);
         var message = "Path with <brackets> and [markup] characters";
@@ -100,12 +118,7 @@ public class ConsoleInteractionServiceTests
     {
         // Arrange
         var output = new StringBuilder();
-        var console = AnsiConsole.Create(new AnsiConsoleSettings
-        {
-            Ansi = AnsiSupport.No,
-            ColorSystem = ColorSystemSupport.NoColors,
-            Out = new AnsiConsoleOutput(new StringWriter(output))
-        });
+        var console = CreateTestConsole(output);
         
         var interactionService = CreateInteractionService(console);
         var lines = new[]
@@ -123,6 +136,26 @@ public class ConsoleInteractionServiceTests
         Assert.Contains("Command output with <angle> brackets", outputString);
         // EscapeMarkup() escapes [ to [[ for Spectre's parser, but Spectre renders [[ back to literal [
         Assert.Contains("Error output with [square] brackets", outputString);
+    }
+
+    [Fact]
+    public void DisplayLines_WritesLinesToOriginalStreams()
+    {
+        var output = new StringBuilder();
+        var error = new StringBuilder();
+        var interactionService = CreateInteractionService(CreateTestConsole(output), CreateTestConsole(error));
+        var lines = new[]
+        {
+            (OutputLineStream.StdOut, "standard output"),
+            (OutputLineStream.StdErr, "standard error")
+        };
+
+        interactionService.DisplayLines(lines);
+
+        Assert.Contains("standard output", output.ToString());
+        Assert.DoesNotContain("standard error", output.ToString());
+        Assert.Contains("standard error", error.ToString());
+        Assert.DoesNotContain("standard output", error.ToString());
     }
 
     [Fact]

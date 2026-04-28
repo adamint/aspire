@@ -326,32 +326,37 @@ internal class ConsoleInteractionService : IInteractionService
         var cliInformationalVersion = VersionHelper.GetDefaultTemplateVersion();
 
         DisplayError(InteractionServiceStrings.AppHostNotCompatibleConsiderUpgrading);
-        MessageConsole.WriteLine();
-        MessageConsole.MarkupLine(
+        _errorConsole.WriteLine();
+        _errorConsole.MarkupLine(
             $"\t[bold]{InteractionServiceStrings.AspireHostingSDKVersion}[/]: {appHostHostingVersion.EscapeMarkup()}");
-        MessageConsole.MarkupLine($"\t[bold]{InteractionServiceStrings.AspireCLIVersion}[/]: {cliInformationalVersion.EscapeMarkup()}");
-        MessageConsole.MarkupLine($"\t[bold]{InteractionServiceStrings.RequiredCapability}[/]: {ex.RequiredCapability.EscapeMarkup()}");
-        MessageConsole.WriteLine();
+        _errorConsole.MarkupLine($"\t[bold]{InteractionServiceStrings.AspireCLIVersion}[/]: {cliInformationalVersion.EscapeMarkup()}");
+        _errorConsole.MarkupLine($"\t[bold]{InteractionServiceStrings.RequiredCapability}[/]: {ex.RequiredCapability.EscapeMarkup()}");
+        _errorConsole.WriteLine();
         return ExitCodeConstants.AppHostIncompatible;
     }
 
     public void DisplayError(string errorMessage)
     {
-        DisplayMessage(KnownEmojis.CrossMark, $"[red bold]{errorMessage.EscapeMarkup()}[/]", allowMarkup: true);
+        DisplayMessage(_errorConsole, _stderrLogger, KnownEmojis.CrossMark, $"[red bold]{errorMessage.EscapeMarkup()}[/]", allowMarkup: true);
     }
 
     public void DisplayMessage(KnownEmoji emoji, string message, bool allowMarkup = false)
     {
-        if (MessageLogger.IsEnabled(LogLevel.Information))
+        DisplayMessage(MessageConsole, MessageLogger, emoji, message, allowMarkup);
+    }
+
+    private static void DisplayMessage(IAnsiConsole console, ILogger logger, KnownEmoji emoji, string message, bool allowMarkup)
+    {
+        if (logger.IsEnabled(LogLevel.Information))
         {
             // Only attempt to parse/remove markup when the message is expected to contain it.
             // Plain text messages may contain characters like '[' that would be rejected by the markup parser.
             var logMessage = allowMarkup ? message.RemoveMarkup() : message;
-            MessageLogger.LogInformation("{Message}", ConsoleHelpers.FormatEmojiPrefix(emoji, MessageConsole, replaceEmoji: true) + logMessage);
+            logger.LogInformation("{Message}", ConsoleHelpers.FormatEmojiPrefix(emoji, console, replaceEmoji: true) + logMessage);
         }
 
         var displayMessage = allowMarkup ? message : message.EscapeMarkup();
-        MessageConsole.MarkupLine(ConsoleHelpers.FormatEmojiPrefix(emoji, MessageConsole) + displayMessage);
+        console.MarkupLine(ConsoleHelpers.FormatEmojiPrefix(emoji, console) + displayMessage);
     }
 
     public void DisplayPlainText(string message)
@@ -437,11 +442,11 @@ internal class ConsoleInteractionService : IInteractionService
         {
             if (stream == OutputLineStream.StdOut)
             {
-                MessageConsole.MarkupLine(line.EscapeMarkup());
+                _outConsole.MarkupLine(line.EscapeMarkup());
             }
             else
             {
-                MessageConsole.MarkupLine($"[red]{line.EscapeMarkup()}[/]");
+                _errorConsole.MarkupLine($"[red]{line.EscapeMarkup()}[/]");
             }
         }
     }
