@@ -106,6 +106,16 @@ internal sealed class AppHostConnectionResolver(
                 }
             }
 
+            if (matchingSockets.Length == 0)
+            {
+                var matchingConnection = await FindMonitorConnectionByAppHostPathAsync(targetPath, cancellationToken).ConfigureAwait(false);
+                if (matchingConnection is not null)
+                {
+                    logger.LogDebug("Resolved AppHost by case-insensitive path comparison: {AppHostPath}", matchingConnection.AppHostInfo?.AppHostPath);
+                    return new AppHostConnectionResult { Connection = matchingConnection };
+                }
+            }
+
             return new AppHostConnectionResult { ErrorMessage = notFoundMessage };
         }
 
@@ -162,6 +172,18 @@ internal sealed class AppHostConnectionResolver(
         }
 
         return new AppHostConnectionResult { Connection = selectedConnection };
+    }
+
+    private async Task<IAppHostAuxiliaryBackchannel?> FindMonitorConnectionByAppHostPathAsync(
+        string appHostPath,
+        CancellationToken cancellationToken)
+    {
+        await backchannelMonitor.ScanAsync(cancellationToken).ConfigureAwait(false);
+
+        var normalizedAppHostPath = Path.GetFullPath(appHostPath);
+        return backchannelMonitor.Connections.FirstOrDefault(c =>
+            c.AppHostInfo?.AppHostPath is { } candidatePath &&
+            string.Equals(Path.GetFullPath(candidatePath), normalizedAppHostPath, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
