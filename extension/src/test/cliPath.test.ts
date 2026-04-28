@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as sinon from 'sinon';
 import * as os from 'os';
 import * as path from 'path';
-import { getDefaultCliInstallPaths, resolveCliPath, CliPathDependencies } from '../utils/cliPath';
+import { getDefaultCliInstallPaths, resolveCliPath, clearCliPathCache, CliPathDependencies } from '../utils/cliPath';
 
 const bundlePath = '/home/user/.aspire/bin/aspire';
 const globalToolPath = '/home/user/.dotnet/tools/aspire';
@@ -206,6 +206,41 @@ suite('utils/cliPath tests', () => {
             assert.strictEqual(result.source, 'default-install');
             assert.ok(setConfiguredPath.notCalled, 'should not re-set the path if it already matches');
         });
+
+        test('clearCliPathCache does not throw', () => {
+            clearCliPathCache();
+        });
+
+        test('coalesces concurrent resolutions for the same dependency set', async () => {
+            let releaseIsOnPath: (() => void) | undefined;
+            let signalIsOnPathStarted: (() => void) | undefined;
+            const isOnPathStarted = new Promise<void>(resolve => {
+                signalIsOnPathStarted = resolve;
+            });
+
+            const isOnPath = sinon.stub().callsFake(async () => {
+                signalIsOnPathStarted?.();
+                await new Promise<void>(resolveRelease => {
+                    releaseIsOnPath = resolveRelease;
+                });
+                return true;
+            });
+
+            const deps = createMockDeps({
+                isOnPath,
+            });
+
+            const firstResolution = resolveCliPath(deps);
+            await isOnPathStarted;
+            const secondResolution = resolveCliPath(deps);
+
+            assert.strictEqual(isOnPath.callCount, 1, 'should only run PATH probe once');
+            assert.ok(releaseIsOnPath, 'expected first resolution to be in progress');
+
+            releaseIsOnPath();
+
+            const [firstResult, secondResult] = await Promise.all([firstResolution, secondResolution]);
+            assert.deepStrictEqual(firstResult, secondResult);
+        });
     });
 });
-

@@ -306,7 +306,7 @@ internal sealed class DashboardRunCommand : BaseCommand
         };
     }
 
-    private void RenderDashboardSummary(DashboardInfo info, string logFilePath)
+    private void RenderDashboardSummary(DashboardInfo info, string? logFilePath)
     {
         _interactionService.DisplayEmptyLine();
         var grid = new Grid();
@@ -343,9 +343,12 @@ internal sealed class DashboardRunCommand : BaseCommand
         grid.AddRow(Text.Empty, Text.Empty);
 
         // Logs row
-        grid.AddRow(
-            new Align(new Markup($"[bold green]{logsLabel}[/]:"), HorizontalAlignment.Right),
-            new Text(logFilePath));
+        if (logFilePath is not null)
+        {
+            grid.AddRow(
+                new Align(new Markup($"[bold green]{logsLabel}[/]:"), HorizontalAlignment.Right),
+                new Text(logFilePath));
+        }
 
         var padder = new Padder(grid, new Padding(3, 0));
         _interactionService.DisplayRenderable(padder);
