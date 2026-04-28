@@ -268,7 +268,10 @@ internal sealed class RunCommand : BaseCommand
                 {
                     InteractionService.DisplayLines(outputCollector.GetLines());
                 }
-                InteractionService.DisplayError(string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.ProjectCouldNotBeBuilt, ExecutionContext.LogFilePath));
+                InteractionService.DisplayError(CommandInteractionHelpers.FormatMessageWithOptionalLogFile(
+                    InteractionServiceStrings.ProjectCouldNotBeBuilt,
+                    InteractionServiceStrings.ProjectCouldNotBeBuiltWithoutLogFile,
+                    ExecutionContext.LogFilePath));
                 return await pendingRun;
             }
 
