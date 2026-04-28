@@ -38,6 +38,15 @@ internal sealed class UpdateCommand : BaseCommand
     {
         Description = UpdateCommandStrings.SelfOptionDescription
     };
+    private static readonly Option<bool> s_yesOption = new("--yes")
+    {
+        Description = UpdateCommandStrings.YesOptionDescription,
+        Aliases = { "-y" }
+    };
+    private static readonly Option<string?> s_nugetConfigDirOption = new("--nuget-config-dir")
+    {
+        Description = UpdateCommandStrings.NuGetConfigDirOptionDescription
+    };
     private readonly Option<string?> _channelOption;
     private readonly Option<string?> _qualityOption;
 
@@ -68,6 +77,8 @@ internal sealed class UpdateCommand : BaseCommand
 
         Options.Add(s_appHostOption);
         Options.Add(s_selfOption);
+        Options.Add(s_yesOption);
+        Options.Add(s_nugetConfigDirOption);
 
         // Customize description based on whether staging channel is enabled
         var isStagingEnabled = KnownFeatures.IsStagingChannelEnabled(_features, _configuration);
@@ -180,11 +191,13 @@ internal sealed class UpdateCommand : BaseCommand
                 if (hasHives)
                 {
                     // Prompt for channel selection
+                    var channelBinding = PromptBinding.Create(parseResult, _channelOption);
                     channel = await InteractionService.PromptForSelectionAsync(
                         UpdateCommandStrings.SelectChannelPrompt,
                         allChannels,
                         (c) => $"{c.Name.EscapeMarkup()} ({c.SourceDetails.EscapeMarkup()})",
-                        cancellationToken);
+                        binding: channelBinding,
+                        cancellationToken: cancellationToken);
                 }
                 else
                 {
@@ -195,24 +208,28 @@ internal sealed class UpdateCommand : BaseCommand
             }
 
             // Update packages using the appropriate project handler
+            var confirmBinding = PromptBinding.CreateWithInteractiveDefault(parseResult, s_yesOption, true);
+            var nugetConfigDirBinding = PromptBinding.Create(parseResult, s_nugetConfigDirOption);
             var updateContext = new UpdatePackagesContext
             {
                 AppHostFile = projectFile,
-                Channel = channel
+                Channel = channel,
+                ConfirmBinding = confirmBinding,
+                NuGetConfigDirBinding = nugetConfigDirBinding
             };
             await project.UpdatePackagesAsync(updateContext, cancellationToken);
 
             // After successful project update, check if CLI update is available and prompt
             // Only prompt if the channel supports CLI downloads (has a non-null CliDownloadBaseUrl)
-            if (_cliDownloader is not null && 
-                _updateNotifier.IsUpdateAvailable() && 
+            if (_cliDownloader is not null &&
+                _updateNotifier.IsUpdateAvailable() &&
                 !string.IsNullOrEmpty(channel.CliDownloadBaseUrl))
             {
-                var shouldUpdateCli = await InteractionService.ConfirmAsync(
+                var shouldUpdateCli = await InteractionService.PromptConfirmAsync(
                     UpdateCommandStrings.UpdateCliAfterProjectUpdatePrompt,
-                    defaultValue: true,
-                    cancellationToken);
-                
+                    binding: confirmBinding,
+                    cancellationToken: cancellationToken);
+
                 if (shouldUpdateCli)
                 {
                     // Use the same channel that was selected for the project update
@@ -242,18 +259,18 @@ internal sealed class UpdateCommand : BaseCommand
                 // Only prompt for self-update if not running as dotnet tool and downloader is available
                 if (_cliDownloader is not null)
                 {
-                    var shouldUpdateCli = await InteractionService.ConfirmAsync(
+                    var shouldUpdateCli = await InteractionService.PromptConfirmAsync(
                         UpdateCommandStrings.NoAppHostFoundUpdateCliPrompt,
-                        defaultValue: true,
-                        cancellationToken);
-                    
+                        binding: PromptBinding.Create(parseResult, s_yesOption, false),
+                        cancellationToken: cancellationToken);
+
                     if (shouldUpdateCli)
                     {
                         return await ExecuteSelfUpdateAsync(parseResult, cancellationToken);
                     }
                 }
             }
-            
+
             return HandleProjectLocatorException(ex, InteractionService, Telemetry);
         }
         catch (OperationCanceledException)
@@ -278,11 +295,13 @@ internal sealed class UpdateCommand : BaseCommand
             var channels = isStagingEnabled
                 ? new[] { PackageChannelNames.Stable, PackageChannelNames.Staging, PackageChannelNames.Daily }
                 : new[] { PackageChannelNames.Stable, PackageChannelNames.Daily };
+            var channelBinding = PromptBinding.Create(parseResult, _channelOption);
             channel = await InteractionService.PromptForSelectionAsync(
                 "Select the channel to update to:",
                 channels,
                 q => q,
-                cancellationToken);
+                binding: channelBinding,
+                cancellationToken: cancellationToken);
         }
 
         try
@@ -375,17 +394,18 @@ internal sealed class UpdateCommand : BaseCommand
             }
 
             // Backup current executable if it exists
-            var unixTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            var backupPath = $"{targetExePath}.old.{unixTimestamp}";
+            var exeDir = Path.GetDirectoryName(targetExePath)!;
+            FileDeleteHelper.TryCleanupOldItems(exeDir, exeName);
+
+            string? backupPath = null;
             if (File.Exists(targetExePath))
             {
                 InteractionService.DisplayMessage(KnownEmojis.FloppyDisk, "Backing up current CLI...");
-                _logger.LogDebug("Creating backup: {BackupPath}", backupPath);
-
-                // Clean up old backup files
-                CleanupOldBackupFiles(targetExePath);
 
                 // Rename current executable to .old.[timestamp]
+                var unixTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                backupPath = $"{targetExePath}.old.{unixTimestamp}";
+                _logger.LogDebug("Creating backup: {BackupPath}", backupPath);
                 File.Move(targetExePath, backupPath);
             }
 
@@ -410,7 +430,7 @@ internal sealed class UpdateCommand : BaseCommand
                 }
 
                 // If we get here, the update was successful, clean up old backups
-                CleanupOldBackupFiles(targetExePath);
+                FileDeleteHelper.TryCleanupOldItems(exeDir, exeName);
 
                 // The new binary will extract its embedded bundle on first run via EnsureExtractedAsync.
                 // No proactive extraction needed — the payload is inside the new binary's embedded resources,
@@ -426,7 +446,7 @@ internal sealed class UpdateCommand : BaseCommand
             {
                 // If anything goes wrong, restore the backup
                 _logger.LogWarning("Update failed, restoring backup");
-                if (File.Exists(backupPath))
+                if (backupPath is not null && File.Exists(backupPath))
                 {
                     if (File.Exists(targetExePath))
                     {
@@ -460,11 +480,11 @@ internal sealed class UpdateCommand : BaseCommand
 
         var pathSeparator = Path.PathSeparator;
         var paths = pathEnv.Split(pathSeparator, StringSplitOptions.RemoveEmptyEntries);
-        
-        return paths.Any(p => 
-            string.Equals(Path.GetFullPath(p.Trim()), Path.GetFullPath(directory), 
-                RuntimeInformation.IsOSPlatform(OSPlatform.Windows) 
-                    ? StringComparison.OrdinalIgnoreCase 
+
+        return paths.Any(p =>
+            string.Equals(Path.GetFullPath(p.Trim()), Path.GetFullPath(directory),
+                RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                    ? StringComparison.OrdinalIgnoreCase
                     : StringComparison.Ordinal));
     }
 
@@ -506,52 +526,19 @@ internal sealed class UpdateCommand : BaseCommand
 
             var output = await process.StandardOutput.ReadToEndAsync(cancellationToken);
             await process.WaitForExitAsync(cancellationToken);
-            
+
             if (process.ExitCode == 0)
             {
                 var version = output.Trim();
                 InteractionService.DisplaySuccess($"Updated to version: {version}");
                 return version;
             }
-            
+
             return null;
         }
         catch
         {
             return null;
-        }
-    }
-
-    internal void CleanupOldBackupFiles(string targetExePath)
-    {
-        try
-        {
-            var directory = Path.GetDirectoryName(targetExePath);
-            if (string.IsNullOrEmpty(directory))
-            {
-                return;
-            }
-
-            var exeName = Path.GetFileName(targetExePath);
-            var searchPattern = $"{exeName}.old.*";
-
-            var oldBackupFiles = Directory.GetFiles(directory, searchPattern);
-            foreach (var backupFile in oldBackupFiles)
-            {
-                try
-                {
-                    File.Delete(backupFile);
-                    _logger.LogDebug("Deleted old backup file: {BackupFile}", backupFile);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Failed to delete old backup file: {BackupFile}", backupFile);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug(ex, "Failed to cleanup old backup files for: {TargetExePath}", targetExePath);
         }
     }
 

@@ -33,13 +33,18 @@
         <note />
       </trans-unit>
       <trans-unit id="LanguageOptionDescription">
-        <source>The programming language for the apphost</source>
-        <target state="new">The programming language for the apphost</target>
+        <source>The programming language for the AppHost</source>
+        <target state="new">The programming language for the AppHost</target>
         <note />
       </trans-unit>
       <trans-unit id="NameArgumentDescription">
         <source>The name of the project to create</source>
         <target state="needs-review-translation">Der Name des zu erstellenden Projekts.</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="NonInteractiveTemplateRequired">
+        <source>A template must be specified when running in non-interactive mode. Use 'aspire new &lt;template&gt;'.</source>
+        <target state="new">A template must be specified when running in non-interactive mode. Use 'aspire new &lt;template&gt;'.</target>
         <note />
       </trans-unit>
       <trans-unit id="OutputArgumentDescription">

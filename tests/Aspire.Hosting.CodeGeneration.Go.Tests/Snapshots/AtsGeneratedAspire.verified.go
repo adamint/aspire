@@ -1,4 +1,4 @@
-﻿// aspire.go - Capability-based Aspire SDK
+// aspire.go - Capability-based Aspire SDK
 // GENERATED CODE - DO NOT EDIT
 
 package aspire
@@ -83,6 +83,28 @@ func (d *TestDeeplyNestedDto) ToMap() map[string]any {
 		"NestedData": SerializeValue(d.NestedData),
 		"MetadataArray": SerializeValue(d.MetadataArray),
 	}
+}
+
+// ============================================================================
+// Exported Values
+// ============================================================================
+
+var TestConfigs = struct {
+	Default *TestConfigDto
+	Profiles struct {
+		Development *TestConfigDto
+	}
+	Secure *TestConfigDto
+	UnicodeGreeting string
+}{
+	Default: &TestConfigDto{Name: "default", Port: 6379, Enabled: true, OptionalField: "cache"},
+	Profiles: struct {
+		Development *TestConfigDto
+	}{
+		Development: &TestConfigDto{Name: "development", Port: 5001, Enabled: false, OptionalField: nil},
+	},
+	Secure: &TestConfigDto{Name: "secure", Port: 6380, Enabled: true, OptionalField: nil},
+	UnicodeGreeting: "你好こんにちは",
 }
 
 // ============================================================================
@@ -476,6 +498,19 @@ func (s *TestDatabaseResource) WithDependency(dependency *IResourceWithConnectio
 	return result.(*IResource), nil
 }
 
+// WithUnionDependency adds a dependency from a string or another resource
+func (s *TestDatabaseResource) WithUnionDependency(dependency any) (*IResource, error) {
+	reqArgs := map[string]any{
+		"builder": SerializeValue(s.Handle()),
+	}
+	reqArgs["dependency"] = SerializeValue(dependency)
+	result, err := s.Client().InvokeCapability("Aspire.Hosting.CodeGeneration.Go.Tests/withUnionDependency", reqArgs)
+	if err != nil {
+		return nil, err
+	}
+	return result.(*IResource), nil
+}
+
 // WithEndpoints sets the endpoints
 func (s *TestDatabaseResource) WithEndpoints(endpoints []string) (*IResource, error) {
 	reqArgs := map[string]any{
@@ -745,6 +780,62 @@ func (s *TestEnvironmentContext) SetPriority(value float64) (*TestEnvironmentCon
 		return nil, err
 	}
 	return result.(*TestEnvironmentContext), nil
+}
+
+// TestMutableCollectionContext wraps a handle for Aspire.Hosting.CodeGeneration.Go.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestMutableCollectionContext.
+type TestMutableCollectionContext struct {
+	HandleWrapperBase
+	tags *AspireList[string]
+	counts *AspireDict[string, float64]
+}
+
+// NewTestMutableCollectionContext creates a new TestMutableCollectionContext.
+func NewTestMutableCollectionContext(handle *Handle, client *AspireClient) *TestMutableCollectionContext {
+	return &TestMutableCollectionContext{
+		HandleWrapperBase: NewHandleWrapperBase(handle, client),
+	}
+}
+
+// Tags gets the Tags property
+func (s *TestMutableCollectionContext) Tags() *AspireList[string] {
+	if s.tags == nil {
+		s.tags = NewAspireListWithGetter[string](s.Handle(), s.Client(), "Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestMutableCollectionContext.tags")
+	}
+	return s.tags
+}
+
+// SetTags sets the Tags property
+func (s *TestMutableCollectionContext) SetTags(value *AspireList[string]) (*TestMutableCollectionContext, error) {
+	reqArgs := map[string]any{
+		"context": SerializeValue(s.Handle()),
+	}
+	reqArgs["value"] = SerializeValue(value)
+	result, err := s.Client().InvokeCapability("Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestMutableCollectionContext.setTags", reqArgs)
+	if err != nil {
+		return nil, err
+	}
+	return result.(*TestMutableCollectionContext), nil
+}
+
+// Counts gets the Counts property
+func (s *TestMutableCollectionContext) Counts() *AspireDict[string, float64] {
+	if s.counts == nil {
+		s.counts = NewAspireDictWithGetter[string, float64](s.Handle(), s.Client(), "Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestMutableCollectionContext.counts")
+	}
+	return s.counts
+}
+
+// SetCounts sets the Counts property
+func (s *TestMutableCollectionContext) SetCounts(value *AspireDict[string, float64]) (*TestMutableCollectionContext, error) {
+	reqArgs := map[string]any{
+		"context": SerializeValue(s.Handle()),
+	}
+	reqArgs["value"] = SerializeValue(value)
+	result, err := s.Client().InvokeCapability("Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestMutableCollectionContext.setCounts", reqArgs)
+	if err != nil {
+		return nil, err
+	}
+	return result.(*TestMutableCollectionContext), nil
 }
 
 // TestRedisResource wraps a handle for Aspire.Hosting.CodeGeneration.Go.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestRedisResource.
@@ -1020,6 +1111,19 @@ func (s *TestRedisResource) WithDependency(dependency *IResourceWithConnectionSt
 	}
 	reqArgs["dependency"] = SerializeValue(dependency)
 	result, err := s.Client().InvokeCapability("Aspire.Hosting.CodeGeneration.Go.Tests/withDependency", reqArgs)
+	if err != nil {
+		return nil, err
+	}
+	return result.(*IResource), nil
+}
+
+// WithUnionDependency adds a dependency from a string or another resource
+func (s *TestRedisResource) WithUnionDependency(dependency any) (*IResource, error) {
+	reqArgs := map[string]any{
+		"builder": SerializeValue(s.Handle()),
+	}
+	reqArgs["dependency"] = SerializeValue(dependency)
+	result, err := s.Client().InvokeCapability("Aspire.Hosting.CodeGeneration.Go.Tests/withUnionDependency", reqArgs)
 	if err != nil {
 		return nil, err
 	}
@@ -1534,6 +1638,19 @@ func (s *TestVaultResource) WithDependency(dependency *IResourceWithConnectionSt
 	return result.(*IResource), nil
 }
 
+// WithUnionDependency adds a dependency from a string or another resource
+func (s *TestVaultResource) WithUnionDependency(dependency any) (*IResource, error) {
+	reqArgs := map[string]any{
+		"builder": SerializeValue(s.Handle()),
+	}
+	reqArgs["dependency"] = SerializeValue(dependency)
+	result, err := s.Client().InvokeCapability("Aspire.Hosting.CodeGeneration.Go.Tests/withUnionDependency", reqArgs)
+	if err != nil {
+		return nil, err
+	}
+	return result.(*IResource), nil
+}
+
 // WithEndpoints sets the endpoints
 func (s *TestVaultResource) WithEndpoints(endpoints []string) (*IResource, error) {
 	reqArgs := map[string]any{
@@ -1733,6 +1850,9 @@ func init() {
 	RegisterHandleWrapper("Aspire.Hosting.CodeGeneration.Go.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestCollectionContext", func(h *Handle, c *AspireClient) any {
 		return NewTestCollectionContext(h, c)
 	})
+	RegisterHandleWrapper("Aspire.Hosting.CodeGeneration.Go.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestMutableCollectionContext", func(h *Handle, c *AspireClient) any {
+		return NewTestMutableCollectionContext(h, c)
+	})
 	RegisterHandleWrapper("Aspire.Hosting.CodeGeneration.Go.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestRedisResource", func(h *Handle, c *AspireClient) any {
 		return NewTestRedisResource(h, c)
 	})
@@ -1763,6 +1883,9 @@ func init() {
 	RegisterHandleWrapper("Aspire.Hosting/Dict<string,string>", func(h *Handle, c *AspireClient) any {
 		return &AspireDict[any, any]{HandleWrapperBase: NewHandleWrapperBase(h, c)}
 	})
+	RegisterHandleWrapper("Aspire.Hosting/Dict<string,number>", func(h *Handle, c *AspireClient) any {
+		return &AspireDict[any, any]{HandleWrapperBase: NewHandleWrapperBase(h, c)}
+	})
 }
 
 // ============================================================================
@@ -1777,6 +1900,13 @@ func Connect() (*AspireClient, error) {
 	}
 	client := NewAspireClient(socketPath)
 	if err := client.Connect(); err != nil {
+		return nil, err
+	}
+	authToken := os.Getenv("ASPIRE_REMOTE_APPHOST_TOKEN")
+	if authToken == "" {
+		return nil, fmt.Errorf("ASPIRE_REMOTE_APPHOST_TOKEN environment variable not set. Run this application using `aspire run`")
+	}
+	if err := client.Authenticate(authToken); err != nil {
 		return nil, err
 	}
 	client.OnDisconnect(func() { os.Exit(1) })
@@ -1803,7 +1933,7 @@ func CreateBuilder(options *CreateBuilderOptions) (*IDistributedApplicationBuild
 			resolvedOptions["ProjectDirectory"] = pwd
 		}
 	}
-	result, err := client.InvokeCapability("Aspire.Hosting/createBuilderWithOptions", map[string]any{"options": resolvedOptions})
+	result, err := client.InvokeCapability("Aspire.Hosting/createBuilder", map[string]any{"argsOrOptions": resolvedOptions})
 	if err != nil {
 		return nil, err
 	}

@@ -5,6 +5,7 @@ using System.CommandLine;
 using System.CommandLine.Parsing;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Aspire.Cli.Agents;
@@ -18,6 +19,7 @@ using Aspire.Cli.Caching;
 using Aspire.Cli.Certificates;
 using Aspire.Cli.Commands;
 using Aspire.Cli.Secrets;
+using Aspire.Cli.Documentation.ApiDocs;
 using Microsoft.AspNetCore.Certificates.Generation;
 using Aspire.Cli.Commands.Sdk;
 using Aspire.Cli.Configuration;
@@ -27,7 +29,7 @@ using Aspire.Cli.Git;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Layout;
 using Aspire.Cli.Mcp;
-using Aspire.Cli.Mcp.Docs;
+using Aspire.Cli.Documentation.Docs;
 using Aspire.Cli.NuGet;
 using Aspire.Cli.Packaging;
 using Aspire.Cli.Projects;
@@ -53,9 +55,7 @@ public class Program
 {
     private static string GetUsersAspirePath()
     {
-        var homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var aspirePath = Path.Combine(homeDirectory, ".aspire");
-        return aspirePath;
+        return CliPathHelper.GetAspireHomeDirectory();
     }
 
     /// <summary>
@@ -181,6 +181,21 @@ public class Program
         return newPath;
     }
 
+    internal static void WarnIfGlobalSettingsContainAppHostPath(FileInfo globalSettingsFile, IStartupErrorWriter errorWriter)
+    {
+        if (ConfigurationHelper.TryLoadSettingsFile(globalSettingsFile.FullName, out var globalSettings) &&
+            AppHostPathConfigurationPolicy.TryFindAppHostPathKey(globalSettings, out var key))
+        {
+            var warning = string.Format(
+                CultureInfo.CurrentCulture,
+                ErrorStrings.GlobalAppHostPathIgnored,
+                globalSettingsFile.FullName,
+                key);
+
+            errorWriter.WriteMarkup(warning.EscapeMarkup(), KnownEmojis.Warning);
+        }
+    }
+
     /// <summary>
     /// Creates and configures an <see cref="ILoggerFactory"/> for the CLI application.
     /// Sets up OpenTelemetry logging, file logging, console logging, log-level filters,
@@ -216,6 +231,16 @@ public class Program
             {
                 builder.AddFilter("Aspire.Cli", consoleLogLevel.Value);
                 builder.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
+            }
+            else
+            {
+                // Default writing debug level logs to file.
+                builder.AddFilter<FileLoggerProvider>(null, LogLevel.Debug);
+
+                // These categories are very verbose at Debug; suppress their Debug output by
+                // raising the minimum to Information unless an explicit log level is requested.
+                builder.AddFilter<FileLoggerProvider>("Microsoft.Extensions.Http.DefaultHttpClientFactory", LogLevel.Information);
+                builder.AddFilter<FileLoggerProvider>("Aspire.Cli.Certificates.NativeCertificateToolRunner", LogLevel.Information);
             }
 
             // Configure console logging based on --verbosity or --debug
@@ -270,6 +295,7 @@ public class Program
         ConfigurationHelper.RegisterSettingsFiles(builder.Configuration, workingDirectory, globalSettingsFile);
 
         TrySetLocaleOverride(LocaleHelpers.GetLocaleOverride(builder.Configuration), startupContext.Logger, startupContext.ErrorWriter);
+        WarnIfGlobalSettingsContainAppHostPath(globalSettingsFile, startupContext.ErrorWriter);
 
 #if !DEBUG
         // In release builds, limit shutdown wait time for telemetry flush to 200ms
@@ -286,6 +312,9 @@ public class Program
 
         // Register file logger provider for components that write directly to the log file
         builder.Services.AddSingleton(startupContext.FileLoggerProvider);
+
+        // Register logging options so components can read the user's chosen log level
+        builder.Services.AddSingleton(startupContext.LoggingOptions);
 
         // Configure OpenTelemetry tracing. TelemetryManager reads configuration and creates
         // separate TracerProvider instances:
@@ -323,7 +352,8 @@ public class Program
         builder.Services.AddSingleton(BuildConfigurationService);
         builder.Services.AddSingleton<IFeatures, Features>();
         builder.Services.AddTelemetryServices();
-        builder.Services.AddTransient<IDotNetCliExecutionFactory, DotNetCliExecutionFactory>();
+        builder.Services.AddTransient<IProcessExecutionFactory, ProcessExecutionFactory>();
+        builder.Services.AddTransient<LayoutProcessRunner>();
 
         // Register certificate tool runner - uses native CertificateManager directly (no subprocess needed)
         builder.Services.AddSingleton(sp => CertificateManager.Create(sp.GetRequiredService<ILogger<NativeCertificateToolRunner>>()));
@@ -363,11 +393,14 @@ public class Program
         builder.Services.AddSingleton<ResourceColorMap>();
         builder.Services.AddMemoryCache();
 
-        // MCP server: aspire.dev docs services.
+        // aspire.dev documentation services.
         builder.Services.AddSingleton<IDocsCache, DocsCache>();
         builder.Services.AddHttpClient<IDocsFetcher, DocsFetcher>();
         builder.Services.AddSingleton<IDocsIndexService, DocsIndexService>();
         builder.Services.AddSingleton<IDocsSearchService, DocsSearchService>();
+        builder.Services.AddSingleton<IApiDocsCache, ApiDocsCache>();
+        builder.Services.AddHttpClient<IApiDocsFetcher, ApiDocsFetcher>();
+        builder.Services.AddSingleton<IApiDocsIndexService, ApiDocsIndexService>();
 
         // Bundle layout services (for polyglot apphost without .NET SDK).
         // Registered before NuGetPackageCache so the factory can choose implementation.
@@ -424,6 +457,7 @@ public class Program
         // Environment checking services.
         builder.Services.AddSingleton<IEnvironmentCheck, WslEnvironmentCheck>();
         builder.Services.AddSingleton<IEnvironmentCheck, DotNetSdkCheck>();
+        builder.Services.AddSingleton<IEnvironmentCheck, TypeScriptAppHostToolingCheck>();
         builder.Services.AddSingleton<IEnvironmentCheck, DeprecatedWorkloadCheck>();
         builder.Services.AddSingleton<IEnvironmentCheck, DevCertsCheck>();
         builder.Services.AddSingleton<IEnvironmentCheck, ContainerRuntimeCheck>();
@@ -454,8 +488,11 @@ public class Program
         builder.Services.AddTransient<CertificatesCleanCommand>();
         builder.Services.AddTransient<CertificatesTrustCommand>();
         builder.Services.AddTransient<DoctorCommand>();
+        builder.Services.AddTransient<DashboardCommand>();
+        builder.Services.AddTransient<DashboardRunCommand>();
         builder.Services.AddTransient<UpdateCommand>();
         builder.Services.AddTransient<DeployCommand>();
+        builder.Services.AddTransient<DestroyCommand>();
         builder.Services.AddTransient<DoCommand>();
         builder.Services.AddTransient<ExecCommand>();
         builder.Services.AddTransient<McpCommand>();
@@ -471,6 +508,10 @@ public class Program
         builder.Services.AddTransient<TelemetrySpansCommand>();
         builder.Services.AddTransient<TelemetryTracesCommand>();
         builder.Services.AddTransient<ExportCommand>();
+        builder.Services.AddTransient<ApiCommand>();
+        builder.Services.AddTransient<ApiListCommand>();
+        builder.Services.AddTransient<ApiSearchCommand>();
+        builder.Services.AddTransient<ApiGetCommand>();
         builder.Services.AddTransient<DocsCommand>();
         builder.Services.AddTransient<DocsListCommand>();
         builder.Services.AddTransient<DocsSearchCommand>();
@@ -517,7 +558,8 @@ public class Program
         var hivesDirectory = GetHivesDirectory();
         var cacheDirectory = GetCacheDirectory();
         var sdksDirectory = GetSdksDirectory();
-        return new CliExecutionContext(workingDirectory, hivesDirectory, cacheDirectory, sdksDirectory, new DirectoryInfo(logsDirectory), logFilePath, debugMode);
+        var packagesDirectory = GetPackagesDirectory();
+        return new CliExecutionContext(workingDirectory, hivesDirectory, cacheDirectory, sdksDirectory, new DirectoryInfo(logsDirectory), logFilePath, debugMode, packagesDirectory: packagesDirectory);
     }
 
     private static DirectoryInfo GetCacheDirectory()
@@ -525,6 +567,13 @@ public class Program
         var homeDirectory = GetUsersAspirePath();
         var cacheDirectoryPath = Path.Combine(homeDirectory, "cache");
         return new DirectoryInfo(cacheDirectoryPath);
+    }
+
+    private static DirectoryInfo GetPackagesDirectory()
+    {
+        var homeDirectory = GetUsersAspirePath();
+        var packagesDirectoryPath = Path.Combine(homeDirectory, "packages");
+        return new DirectoryInfo(packagesDirectoryPath);
     }
 
     private static void TrySetLocaleOverride(string? localeOverride, ILogger logger, IStartupErrorWriter errorWriter)
@@ -610,6 +659,9 @@ public class Program
         var configuration = serviceProvider.GetRequiredService<IConfiguration>();
         var hostEnvironment = serviceProvider.GetRequiredService<ICliHostEnvironment>();
         var isPlayground = CliHostEnvironment.IsPlaygroundMode(configuration);
+        var supportsAnsi = hostEnvironment.SupportsAnsi;
+        var supportsInteractiveOutput = hostEnvironment.SupportsInteractiveOutput;
+        var usePlaygroundFormatting = isPlayground && supportsAnsi && supportsInteractiveOutput;
 
         // Create custom output that handles width detection better in CI environments
         // and encapsulates ASPIRE_CONSOLE_WIDTH environment variable handling
@@ -617,22 +669,16 @@ public class Program
 
         var settings = new AnsiConsoleSettings()
         {
-            Ansi = isPlayground ? AnsiSupport.Yes : AnsiSupport.Detect,
-            Interactive = isPlayground ? InteractionSupport.Yes : InteractionSupport.Detect,
-            ColorSystem = isPlayground ? ColorSystemSupport.Standard : ColorSystemSupport.Detect,
+            Ansi = supportsAnsi ? AnsiSupport.Yes : AnsiSupport.No,
+            Interactive = supportsInteractiveOutput ? InteractionSupport.Detect : InteractionSupport.No,
+            ColorSystem = supportsAnsi ? ColorSystemSupport.EightBit : ColorSystemSupport.NoColors,
             Out = output,
         };
 
-        // Use SupportsAnsi from hostEnvironment which already checks ASPIRE_ANSI_PASS_THRU
-        if (hostEnvironment.SupportsAnsi)
+        if (usePlaygroundFormatting)
         {
-            settings.Ansi = AnsiSupport.Yes;
-            // Using EightBit color system for better color support of Aspire brand colors in terminals that support ANSI
-            settings.ColorSystem = ColorSystemSupport.EightBit;
-        }
+            settings.Interactive = InteractionSupport.Yes;
 
-        if (isPlayground)
-        {
             // Enrichers interfere with interactive playground experience so
             // this suppresses the default enrichers so that the CLI experience
             // is more like what we would get in an interactive experience.
@@ -643,8 +689,7 @@ public class Program
             };
         }
 
-        var ansiConsole = AnsiConsole.Create(settings);
-        return ansiConsole;
+        return AnsiConsole.Create(settings);
     }
 
     public static async Task<int> Main(string[] args)
@@ -658,6 +703,13 @@ public class Program
             cts.Cancel();
             eventArgs.Cancel = true;
         };
+        using var sigTermRegistration = OperatingSystem.IsWindows()
+            ? null
+            : PosixSignalRegistration.Create(PosixSignal.SIGTERM, context =>
+            {
+                cts.Cancel();
+                context.Cancel = true;
+            });
 
         Console.OutputEncoding = Encoding.UTF8;
 
@@ -673,6 +725,7 @@ public class Program
         // Logging the log file path is useful so that when console logging is enabled (for example with --log-level debug),
         // the path is written to the console logger (stderr) for easier discovery.
         logger.LogInformation("Log file: {LogFilePath}", loggingOptions.LogFilePath);
+        logger.LogInformation("CLI process ID: {ProcessId}", Environment.ProcessId);
 
         IHost? app = null;
         try
@@ -695,6 +748,9 @@ public class Program
         // Immediately get telemetry and telemetry manager so they are created by DI and telemetry is configured.
         var telemetry = app.Services.GetRequiredService<AspireCliTelemetry>();
         var telemetryManager = app.Services.GetRequiredService<TelemetryManager>();
+
+        // Log feature state at startup for diagnostics
+        app.Services.GetRequiredService<IFeatures>().LogFeatureState();
 
         // Display first run experience if this is the first time the CLI is run on this machine
         await DisplayFirstTimeUseNoticeIfNeededAsync(app.Services, args, cts.Token);

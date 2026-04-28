@@ -23,6 +23,11 @@ internal sealed class PythonModuleBuilder
     public StringBuilder DtoClasses { get; } = new();
 
     /// <summary>
+    /// Gets the exported value definitions.
+    /// </summary>
+    public StringBuilder ExportedValues { get; } = new();
+
+    /// <summary>
     /// Gets the type class definitions (context types, wrapper types).
     /// </summary>
     public Dictionary<string, StringBuilder> TypeClasses { get; } = new();
@@ -117,6 +122,16 @@ internal sealed class PythonModuleBuilder
             output.AppendLine("# ============================================================================");
             output.AppendLine();
             output.Append(DtoClasses);
+        }
+
+        if (ExportedValues.Length > 0)
+        {
+            output.AppendLine();
+            output.AppendLine("# ============================================================================");
+            output.AppendLine("# Exported Values");
+            output.AppendLine("# ============================================================================");
+            output.AppendLine();
+            output.Append(ExportedValues);
         }
 
         // Type Classes
@@ -235,6 +250,7 @@ internal sealed class PythonModuleBuilder
         import time
         import abc
         import datetime
+        import types
         import typing
         from functools import cached_property as _cached_property
         from contextlib import AbstractContextManager
@@ -1095,6 +1111,11 @@ internal sealed class PythonModuleBuilder
                 self._check_connection()
                 return self._send_request("ping")
 
+            def authenticate(self, token: str) -> None:
+                '''Authenticate to the AppHost server with a session token.'''
+                if not bool(self._send_request("authenticate", token)):
+                    raise RuntimeError("Failed to authenticate to the AppHost server.")
+
             def invoke_capability(
                 self,
                 capability_id: str,
@@ -1726,10 +1747,9 @@ internal sealed class PythonModuleBuilder
                 return self._handle
 
             def __enter__(self) -> DistributedApplicationBuilder:
-                self._client.connect()
                 self._handle = self._client.invoke_capability(
-                    'Aspire.Hosting/createBuilderWithOptions',
-                    {'options': self._options}
+                    'Aspire.Hosting/createBuilder',
+                    {'argsOrOptions': self._options}
                 )
                 return self
 
@@ -1760,6 +1780,14 @@ internal sealed class PythonModuleBuilder
                 )
 
             client = AspireClient(socket_path, debug=debug, heartbeat_interval=heartbeat_interval)
+            client.connect()
+            auth_token = os.environ.get('ASPIRE_REMOTE_APPHOST_TOKEN')
+            if not auth_token:
+                raise ValueError(
+                    'ASPIRE_REMOTE_APPHOST_TOKEN environment variable not set. '
+                    'Run this application using `aspire run`.'
+                )
+            client.authenticate(auth_token)
             return client
 
 

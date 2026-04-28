@@ -4,12 +4,24 @@ parameters:
     default: ''
   - name: channel
     type: string
+  - name: artifactVersion
+    type: string
+    default: ''
+  - name: archiveRoot
+    type: string
+    default: ''
+  - name: skipUrlValidation
+    type: boolean
+    default: false
+  # runInstallTest is derived from skipUrlValidation (they are logical inverses).
+  # Callers should only set skipUrlValidation; install tests run when URLs are valid.
 
 steps:
   - pwsh: |
       $ErrorActionPreference = 'Stop'
       $version = '${{ parameters.version }}'
       $channel = '${{ parameters.channel }}'
+      $artifactVersion = '${{ parameters.artifactVersion }}'
 
       if ([string]::IsNullOrWhiteSpace($version)) {
         Write-Error "Version parameter is required"
@@ -34,9 +46,11 @@ steps:
 
       Write-Host "Version: $version"
       Write-Host "Channel: $channel"
+      Write-Host "Artifact version: $(if ([string]::IsNullOrWhiteSpace($artifactVersion)) { $version } else { $artifactVersion })"
       Write-Host "Template dir: $templateDir"
       Write-Host "Artifact name: $artifactName"
       Write-Host "##vso[task.setvariable variable=CliVersion]$version"
+      Write-Host "##vso[task.setvariable variable=CliArtifactVersion]$(if ([string]::IsNullOrWhiteSpace($artifactVersion)) { $version } else { $artifactVersion })"
       Write-Host "##vso[task.setvariable variable=WinGetTemplateDir]$templateDir"
       Write-Host "##vso[task.setvariable variable=WinGetArtifactName]$artifactName"
     displayName: 🟣Set version ${{ parameters.version }}
@@ -68,17 +82,29 @@ steps:
   - pwsh: |
       $ErrorActionPreference = 'Stop'
       $version = '$(CliVersion)'
+      $artifactVersion = '$(CliArtifactVersion)'
       $outputPath = '$(Build.StagingDirectory)/winget-manifests'
       $templateDir = '$(Build.SourcesDirectory)/eng/winget/$(WinGetTemplateDir)'
 
       Write-Host "Generating WinGet manifests for Aspire.Cli version $version"
       Write-Host "Using template directory: $templateDir"
 
-      & "$(Build.SourcesDirectory)/eng/winget/generate-manifests.ps1" `
-        -Version $version `
-        -TemplateDir $templateDir `
-        -OutputPath $outputPath `
-        -ValidateUrls
+      $args = @{
+        Version = $version
+        ArtifactVersion = $artifactVersion
+        TemplateDir = $templateDir
+        OutputPath = $outputPath
+      }
+
+      if (-not [string]::IsNullOrWhiteSpace('${{ parameters.archiveRoot }}')) {
+        $args.ArchiveRoot = '${{ parameters.archiveRoot }}'
+      }
+
+      if ('${{ parameters.skipUrlValidation }}' -eq 'true') {
+        $args.SkipUrlValidation = $true
+      }
+
+      & "$(Build.SourcesDirectory)/eng/winget/generate-manifests.ps1" @args
 
       if ($LASTEXITCODE -ne 0) {
         Write-Error "generate-manifests.ps1 failed with exit code $LASTEXITCODE"
@@ -199,6 +225,7 @@ steps:
         exit 1
       }
     displayName: 🟣Test WinGet manifest install/uninstall
+    condition: and(succeeded(), eq(${{ parameters.skipUrlValidation }}, false))
 
   - pwsh: |
       Copy-Item "$(Build.SourcesDirectory)/eng/winget/dogfood.ps1" "$(Build.StagingDirectory)/winget-manifests/dogfood.ps1"

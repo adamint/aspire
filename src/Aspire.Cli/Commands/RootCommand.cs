@@ -120,6 +120,7 @@ internal sealed class RootCommand : BaseRootCommand
         AddCommand addCommand,
         PublishCommand publishCommand,
         DeployCommand deployCommand,
+        DestroyCommand destroyCommand,
         DoCommand doCommand,
         ConfigCommand configCommand,
         CacheCommand cacheCommand,
@@ -131,6 +132,7 @@ internal sealed class RootCommand : BaseRootCommand
         AgentCommand agentCommand,
         TelemetryCommand telemetryCommand,
         ExportCommand exportCommand,
+        DashboardCommand dashboardCommand,
         DocsCommand docsCommand,
         SecretCommand secretCommand,
         SdkCommand sdkCommand,
@@ -214,6 +216,7 @@ internal sealed class RootCommand : BaseRootCommand
         Subcommands.Add(certificatesCommand);
         Subcommands.Add(doctorCommand);
         Subcommands.Add(deployCommand);
+        Subcommands.Add(destroyCommand);
         Subcommands.Add(doCommand);
         Subcommands.Add(updateCommand);
         Subcommands.Add(extensionInternalCommand);
@@ -222,6 +225,7 @@ internal sealed class RootCommand : BaseRootCommand
         Subcommands.Add(telemetryCommand);
         Subcommands.Add(exportCommand);
         Subcommands.Add(docsCommand);
+        Subcommands.Add(dashboardCommand);
         Subcommands.Add(secretCommand);
 
 #if DEBUG

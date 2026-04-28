@@ -5,12 +5,14 @@ using System.CommandLine;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Telemetry;
 using Aspire.Cli.Utils;
+using Aspire.TypeSystem;
 using Microsoft.Extensions.Logging;
 using Semver;
 using Spectre.Console;
@@ -18,7 +20,7 @@ using Spectre.Console;
 namespace Aspire.Cli.Commands.Sdk;
 
 /// <summary>
-/// Command for dumping ATS capabilities from Aspire integration libraries.
+/// Command for dumping ATS capabilities and exported values from Aspire integration libraries.
 /// Supports multiple output formats for different use cases.
 /// 
 /// Usage:
@@ -87,7 +89,7 @@ internal sealed class SdkDumpCommand : BaseCommand
                 }
 
                 integrations.Add(IntegrationReference.FromProject(
-                    Path.GetFileNameWithoutExtension(projectFile.FullName),
+                    IntegrationAssemblyNameResolver.Resolve(projectFile),
                     projectFile.FullName));
             }
             else if (arg.Contains('@'))
@@ -127,7 +129,7 @@ internal sealed class SdkDumpCommand : BaseCommand
         return await InteractionService.ShowStatusAsync(
             "Scanning capabilities...",
             async () => await DumpCapabilitiesAsync(integrations, outputFile, format, cancellationToken),
-            emoji: KnownEmojis.MagnifyingGlassTiltedRight);
+            emoji: KnownEmojis.MagnifyingGlassTiltedLeft);
     }
 
     private async Task<int> DumpCapabilitiesAsync(
@@ -164,84 +166,73 @@ internal sealed class SdkDumpCommand : BaseCommand
                 return ExitCodeConstants.FailedToBuildArtifacts;
             }
 
-            // Start the server
-            var currentPid = Environment.ProcessId;
-            var (socketPath, serverProcess, _) = appHostServerProject.Run(currentPid, new Dictionary<string, string>());
+            await using var serverSession = AppHostServerSession.Start(
+                appHostServerProject,
+                environmentVariables: null,
+                debug: false,
+                _logger);
 
-            try
+            // Connect and get capabilities
+            var rpcClient = await serverSession.GetRpcClientAsync(cancellationToken);
+
+            var exportAssemblyNames = integrations.Count > 0
+                ? integrations.Select(i => i.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()
+                : null;
+
+            _logger.LogDebug("Fetching capabilities via RPC");
+            var capabilities = exportAssemblyNames is not null
+                ? await rpcClient.GetCapabilitiesForAssembliesAsync(exportAssemblyNames, cancellationToken)
+                : await rpcClient.GetCapabilitiesAsync(cancellationToken);
+
+            // Output Info-level diagnostics to stderr via logger (shown with -d flag)
+            var infoDiagnostics = capabilities.Diagnostics.Where(d => d.Severity == "Info").ToList();
+            foreach (var diag in infoDiagnostics)
             {
-                // Connect and get capabilities
-                await using var rpcClient = await AppHostRpcClient.ConnectAsync(socketPath, cancellationToken);
-
-                _logger.LogDebug("Fetching capabilities via RPC");
-                var capabilities = await rpcClient.GetCapabilitiesAsync(cancellationToken);
-
-                // Output Info-level diagnostics to stderr via logger (shown with -d flag)
-                var infoDiagnostics = capabilities.Diagnostics.Where(d => d.Severity == "Info").ToList();
-                foreach (var diag in infoDiagnostics)
-                {
-                    var location = string.IsNullOrEmpty(diag.Location) ? "" : $" [{diag.Location}]";
-                    _logger.LogDebug("{Message}{Location}", diag.Message, location);
-                }
-
-                // Remove Info diagnostics from output (they go to stderr only)
-                capabilities.Diagnostics.RemoveAll(d => d.Severity == "Info");
-
-                // Stamp package versions for integrations that have them
-                var packageVersions = integrations
-                    .Where(i => i.IsPackageReference)
-                    .Select(i => new PackageInfo { Name = i.Name, Version = i.Version! })
-                    .ToList();
-                if (packageVersions.Count > 0)
-                {
-                    capabilities.Packages = packageVersions;
-                }
-
-                // Format the output
-                var output = format switch
-                {
-                    OutputFormat.Json => FormatJson(capabilities),
-                    OutputFormat.Ci => FormatCi(capabilities),
-                    _ => FormatPretty(capabilities)
-                };
-
-                // Write output
-                if (outputFile is not null)
-                {
-                    var outputDir = outputFile.Directory;
-                    if (outputDir is not null && !outputDir.Exists)
-                    {
-                        outputDir.Create();
-                    }
-                    await File.WriteAllTextAsync(outputFile.FullName, output, cancellationToken);
-                    InteractionService.DisplaySuccess($"Capabilities written to {outputFile.FullName}");
-                }
-                else
-                {
-                    // Output to stdout
-                    InteractionService.DisplayRawText(output, consoleOverride: ConsoleOutput.Standard);
-                }
-
-                // Return error code if there are errors in diagnostics
-                var hasErrors = capabilities.Diagnostics.Exists(d => d.Severity == "Error");
-                return hasErrors ? ExitCodeConstants.InvalidCommand : ExitCodeConstants.Success;
+                var location = string.IsNullOrEmpty(diag.Location) ? "" : $" [{diag.Location}]";
+                _logger.LogDebug("{Message}{Location}", diag.Message, location);
             }
-            finally
+
+            // Remove Info diagnostics from output (they go to stderr only)
+            capabilities.Diagnostics.RemoveAll(d => d.Severity == "Info");
+
+            // Stamp package versions for integrations that have them
+            var packageVersions = integrations
+                .Where(i => i.IsPackageReference)
+                .Select(i => new PackageInfo { Name = i.Name, Version = i.Version! })
+                .ToList();
+            if (packageVersions.Count > 0)
             {
-                // Stop the server - just try to kill, catch if already exited
-                try
-                {
-                    serverProcess.Kill(entireProcessTree: true);
-                }
-                catch (InvalidOperationException)
-                {
-                    // Process already exited - this is fine
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Error killing AppHost server process");
-                }
+                capabilities.Packages = packageVersions;
             }
+
+            // Format the output
+            var output = format switch
+            {
+                OutputFormat.Json => FormatJson(capabilities),
+                OutputFormat.Ci => FormatCi(capabilities),
+                _ => FormatPretty(capabilities)
+            };
+
+            // Write output
+            if (outputFile is not null)
+            {
+                var outputDir = outputFile.Directory;
+                if (outputDir is not null && !outputDir.Exists)
+                {
+                    outputDir.Create();
+                }
+                await File.WriteAllTextAsync(outputFile.FullName, output, cancellationToken);
+                InteractionService.DisplaySuccess($"Capabilities written to {outputFile.FullName}");
+            }
+            else
+            {
+                // Output to stdout
+                InteractionService.DisplayRawText(output, consoleOverride: ConsoleOutput.Standard);
+            }
+
+            // Return error code if there are errors in diagnostics
+            var hasErrors = capabilities.Diagnostics.Exists(d => d.Severity == "Error");
+            return hasErrors ? ExitCodeConstants.InvalidCommand : ExitCodeConstants.Success;
         }
         finally
         {
@@ -345,6 +336,26 @@ internal sealed class SdkDumpCommand : BaseCommand
             sb.AppendLine();
         }
 
+        if (capabilities.ExportedValues.Count > 0)
+        {
+            sb.AppendLine("# Exported Values");
+            foreach (var value in capabilities.ExportedValues
+                .OrderBy(value => string.Join(".", value.PathSegments), StringComparer.Ordinal))
+            {
+                var descriptionSuffix = string.IsNullOrEmpty(value.Description)
+                    ? ""
+                    : string.Format(CultureInfo.InvariantCulture, " # {0}", value.Description);
+                sb.AppendLine(string.Format(
+                    CultureInfo.InvariantCulture,
+                    "{0}: {1} = {2}{3}",
+                    string.Join(".", value.PathSegments),
+                    value.Type.TypeId,
+                    value.Value?.ToRelaxedJsonString() ?? "null",
+                    descriptionSuffix));
+            }
+            sb.AppendLine();
+        }
+
         // Capabilities
         sb.AppendLine("# Capabilities");
         foreach (var c in capabilities.Capabilities.OrderBy(c => c.CapabilityId))
@@ -378,6 +389,7 @@ internal sealed class SdkDumpCommand : BaseCommand
         sb.AppendLine(string.Format(CultureInfo.InvariantCulture, "   Handle Types:  {0}", capabilities.HandleTypes.Count));
         sb.AppendLine(string.Format(CultureInfo.InvariantCulture, "   DTO Types:     {0}", capabilities.DtoTypes.Count));
         sb.AppendLine(string.Format(CultureInfo.InvariantCulture, "   Enum Types:    {0}", capabilities.EnumTypes.Count));
+        sb.AppendLine(string.Format(CultureInfo.InvariantCulture, "   Exported Values:  {0}", capabilities.ExportedValues.Count));
         sb.AppendLine(string.Format(CultureInfo.InvariantCulture, "   Capabilities:  {0}", capabilities.Capabilities.Count));
         if (errorCount > 0 || warningCount > 0)
         {
@@ -471,6 +483,30 @@ internal sealed class SdkDumpCommand : BaseCommand
             sb.AppendLine();
         }
 
+        if (capabilities.ExportedValues.Count > 0)
+        {
+            sb.AppendLine("Exported Values (copied into guest SDKs)");
+            sb.AppendLine("--------------------------------------------------------------------------------");
+            foreach (var value in capabilities.ExportedValues
+                .OrderBy(value => string.Join(".", value.PathSegments), StringComparer.Ordinal))
+            {
+                sb.AppendLine(string.Format(
+                    CultureInfo.InvariantCulture,
+                    "   {0}: {1}",
+                    string.Join(".", value.PathSegments),
+                    SimplifyTypeName(value.Type.TypeId)));
+                sb.AppendLine(string.Format(
+                    CultureInfo.InvariantCulture,
+                    "      {0}",
+                    value.Value?.ToRelaxedJsonString() ?? "null"));
+                if (!string.IsNullOrEmpty(value.Description))
+                {
+                    sb.AppendLine(string.Format(CultureInfo.InvariantCulture, "      {0}", value.Description));
+                }
+            }
+            sb.AppendLine();
+        }
+
         // Capabilities (grouped by category if available)
         sb.AppendLine("Capabilities");
         sb.AppendLine("--------------------------------------------------------------------------------");
@@ -538,6 +574,7 @@ internal sealed class CapabilitiesInfo
     public List<HandleTypeInfo> HandleTypes { get; set; } = [];
     public List<DtoTypeInfo> DtoTypes { get; set; } = [];
     public List<EnumTypeInfo> EnumTypes { get; set; } = [];
+    public List<ExportedValueInfo> ExportedValues { get; set; } = [];
     public List<DiagnosticInfo> Diagnostics { get; set; } = [];
 }
 
@@ -627,6 +664,14 @@ internal sealed class EnumTypeInfo
     public List<string> Values { get; set; } = [];
 }
 
+internal sealed class ExportedValueInfo
+{
+    public List<string> PathSegments { get; set; } = [];
+    public TypeRefInfo Type { get; set; } = null!;
+    public JsonNode? Value { get; set; }
+    public string? Description { get; set; }
+}
+
 internal sealed class DiagnosticInfo
 {
     public string Severity { get; set; } = "";
@@ -649,6 +694,7 @@ internal sealed class DiagnosticInfo
 [JsonSerializable(typeof(DtoTypeInfo))]
 [JsonSerializable(typeof(DtoPropertyInfo))]
 [JsonSerializable(typeof(EnumTypeInfo))]
+[JsonSerializable(typeof(ExportedValueInfo))]
 [JsonSerializable(typeof(DiagnosticInfo))]
 internal partial class CapabilitiesJsonContext : JsonSerializerContext
 {

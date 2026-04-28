@@ -24,7 +24,8 @@ internal interface IProjectLocator
     /// <summary>
     /// Resolves the AppHost project file from <c>.aspire/settings.json</c> only, without any
     /// user interaction or recursive filesystem scanning. Returns <c>null</c> when no settings
-    /// file or <c>appHostPath</c> entry is found.
+    /// file or <c>appHostPath</c> entry is found, or when the configured path is no longer a
+    /// valid AppHost project.
     /// </summary>
     Task<FileInfo?> GetAppHostFromSettingsAsync(CancellationToken cancellationToken = default);
 }
@@ -42,11 +43,11 @@ internal sealed class ProjectLocator(
 
     public async Task<List<FileInfo>> FindAppHostProjectFilesAsync(string searchDirectory, CancellationToken cancellationToken)
     {
-        var allCandidates = await FindAppHostProjectFilesAsync(new DirectoryInfo(searchDirectory), cancellationToken);
+        var allCandidates = await FindAppHostProjectFilesAsync(new DirectoryInfo(searchDirectory), stopAfterMultipleBuildableAppHosts: false, cancellationToken);
         return [..allCandidates.BuildableAppHost, ..allCandidates.UnbuildableSuspectedAppHostProjects];
     }
 
-    private async Task<(List<FileInfo> BuildableAppHost, List<FileInfo> UnbuildableSuspectedAppHostProjects, bool HasUnsupportedProjects)> FindAppHostProjectFilesAsync(DirectoryInfo searchDirectory, CancellationToken cancellationToken)
+    private async Task<(List<FileInfo> BuildableAppHost, List<FileInfo> UnbuildableSuspectedAppHostProjects, bool HasUnsupportedProjects)> FindAppHostProjectFilesAsync(DirectoryInfo searchDirectory, bool stopAfterMultipleBuildableAppHosts, CancellationToken cancellationToken)
     {
         using var activity = telemetry.StartDiagnosticActivity();
 
@@ -65,9 +66,14 @@ internal sealed class ProjectLocator(
 
             interactionService.DisplayMessage(KnownEmojis.MagnifyingGlassTiltedLeft, InteractionServiceStrings.FindingAppHosts);
 
+            using var validationCancellationTokenSource = stopAfterMultipleBuildableAppHosts
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+                : null;
+            var validationCancellationToken = validationCancellationTokenSource?.Token ?? cancellationToken;
+
             var parallelOptions = new ParallelOptions
             {
-                CancellationToken = cancellationToken,
+                CancellationToken = validationCancellationToken,
                 MaxDegreeOfParallelism = Environment.ProcessorCount
             };
 
@@ -116,44 +122,56 @@ internal sealed class ProjectLocator(
                 }
             }
 
-            await Parallel.ForEachAsync(candidatesWithHandlers, parallelOptions, async (candidate, ct) =>
+            try
             {
-                var (candidateFile, handler) = candidate;
+                await Parallel.ForEachAsync(candidatesWithHandlers, parallelOptions, async (candidate, ct) =>
+                {
+                    var (candidateFile, handler) = candidate;
 
-                // Validate the candidate file using the handler
-                var validationResult = await handler.ValidateAppHostAsync(candidateFile, ct);
+                    // Validate the candidate file using the handler
+                    var validationResult = await handler.ValidateAppHostAsync(candidateFile, ct);
 
-                if (validationResult.IsValid)
-                {
-                    logger.LogDebug("Found {Language} apphost {CandidateFile}", handler.DisplayName, candidateFile.FullName);
-                    var relativePath = Path.GetRelativePath(executionContext.WorkingDirectory.FullName, candidateFile.FullName);
-                    interactionService.DisplaySubtleMessage(relativePath);
-                    lock (lockObject)
+                    if (validationResult.IsValid)
                     {
-                        appHostProjects.Add(candidateFile);
+                        logger.LogDebug("Found {Language} apphost {CandidateFile}", handler.DisplayName, candidateFile.FullName);
+                        var relativePath = Path.GetRelativePath(executionContext.WorkingDirectory.FullName, candidateFile.FullName);
+                        interactionService.DisplaySubtleMessage(relativePath);
+                        lock (lockObject)
+                        {
+                            appHostProjects.Add(candidateFile);
+
+                            if (stopAfterMultipleBuildableAppHosts && appHostProjects.Count >= 2)
+                            {
+                                validationCancellationTokenSource?.Cancel();
+                            }
+                        }
                     }
-                }
-                else if (validationResult.IsUnsupported)
-                {
-                    var relativePath = Path.GetRelativePath(executionContext.WorkingDirectory.FullName, candidateFile.FullName);
-                    interactionService.DisplayMessage(KnownEmojis.Warning, string.Format(CultureInfo.CurrentCulture, ErrorStrings.ProjectFileUnsupportedInCurrentEnvironment, relativePath));
-                    logger.LogDebug("Skipping unsupported project {CandidateFile}", candidateFile.FullName);
-                    hasUnsupportedProjects = true;
-                }
-                else if (validationResult.IsPossiblyUnbuildable)
-                {
-                    var relativePath = Path.GetRelativePath(executionContext.WorkingDirectory.FullName, candidateFile.FullName);
-                    interactionService.DisplayMessage(KnownEmojis.Warning, string.Format(CultureInfo.CurrentCulture, ErrorStrings.ProjectFileMayBeUnbuildableAppHost, relativePath));
-                    lock (lockObject)
+                    else if (validationResult.IsUnsupported)
                     {
-                        unbuildableSuspectedAppHostProjects.Add(candidateFile);
+                        var relativePath = Path.GetRelativePath(executionContext.WorkingDirectory.FullName, candidateFile.FullName);
+                        interactionService.DisplayMessage(KnownEmojis.Warning, string.Format(CultureInfo.CurrentCulture, ErrorStrings.ProjectFileUnsupportedInCurrentEnvironment, relativePath));
+                        logger.LogDebug("Skipping unsupported project {CandidateFile}", candidateFile.FullName);
+                        hasUnsupportedProjects = true;
                     }
-                }
-                else
-                {
-                    logger.LogTrace("File {CandidateFile} is not a valid Aspire host", candidateFile.FullName);
-                }
-            });
+                    else if (validationResult.IsPossiblyUnbuildable)
+                    {
+                        var relativePath = Path.GetRelativePath(executionContext.WorkingDirectory.FullName, candidateFile.FullName);
+                        interactionService.DisplayMessage(KnownEmojis.Warning, string.Format(CultureInfo.CurrentCulture, ErrorStrings.ProjectFileMayBeUnbuildableAppHost, relativePath));
+                        lock (lockObject)
+                        {
+                            unbuildableSuspectedAppHostProjects.Add(candidateFile);
+                        }
+                    }
+                    else
+                    {
+                        logger.LogTrace("File {CandidateFile} is not a valid Aspire host", candidateFile.FullName);
+                    }
+                });
+            }
+            catch (OperationCanceledException) when (validationCancellationTokenSource?.IsCancellationRequested is true && !cancellationToken.IsCancellationRequested)
+            {
+                logger.LogDebug("Stopping AppHost discovery early after finding multiple valid AppHost projects.");
+            }
 
             // This sort is done here to make results deterministic since we get all the app
             // host information in parallel and the order may vary.
@@ -166,12 +184,32 @@ internal sealed class ProjectLocator(
     /// <inheritdoc />
     public async Task<FileInfo?> GetAppHostFromSettingsAsync(CancellationToken cancellationToken = default)
     {
-        return await GetAppHostProjectFileFromSettingsAsync(silent: true, cancellationToken);
+        return await GetValidatedAppHostProjectFileFromSettingsAsync(silent: true, cancellationToken);
     }
 
-    private async Task<FileInfo?> GetAppHostProjectFileFromSettingsAsync(CancellationToken cancellationToken)
+    private async Task<FileInfo?> GetValidatedAppHostProjectFileFromSettingsAsync(bool silent, CancellationToken cancellationToken)
     {
-        return await GetAppHostProjectFileFromSettingsAsync(silent: false, cancellationToken);
+        var settingsAppHost = await GetAppHostProjectFileFromSettingsAsync(silent, cancellationToken);
+        if (settingsAppHost is null)
+        {
+            return null;
+        }
+
+        var handler = projectFactory.TryGetProject(settingsAppHost);
+        if (handler is null)
+        {
+            logger.LogWarning("Ignoring AppHost path '{AppHostPath}' from settings because no project handler can process it.", settingsAppHost.FullName);
+            return null;
+        }
+
+        var validationResult = await handler.ValidateAppHostAsync(settingsAppHost, cancellationToken);
+        if (validationResult.IsValid)
+        {
+            return settingsAppHost;
+        }
+
+        logger.LogWarning("Ignoring AppHost path '{AppHostPath}' from settings because it is no longer a valid AppHost project.", settingsAppHost.FullName);
+        return null;
     }
 
     private async Task<FileInfo?> GetAppHostProjectFileFromSettingsAsync(bool silent, CancellationToken cancellationToken)
@@ -268,7 +306,10 @@ internal sealed class ProjectLocator(
                 var directory = new DirectoryInfo(projectFile.FullName);
 
                 // Reuse the main search logic
-                var searchResults = await FindAppHostProjectFilesAsync(directory, cancellationToken);
+                var searchResults = await FindAppHostProjectFilesAsync(
+                    directory,
+                    stopAfterMultipleBuildableAppHosts: multipleAppHostProjectsFoundBehavior is MultipleAppHostProjectsFoundBehavior.Throw,
+                    cancellationToken);
                 var appHostProjects = searchResults.BuildableAppHost;
 
                 interactionService.DisplayEmptyLine();
@@ -297,7 +338,7 @@ internal sealed class ProjectLocator(
                             InteractionServiceStrings.SelectAppHostToUse,
                             appHostProjects,
                             file => $"{file.Name.EscapeMarkup()} ({Path.GetRelativePath(executionContext.WorkingDirectory.FullName, file.FullName).EscapeMarkup()})",
-                            cancellationToken
+                            cancellationToken: cancellationToken
                         );
                     }
                     else if (multipleAppHostProjectsFoundBehavior is MultipleAppHostProjectsFoundBehavior.None)
@@ -347,20 +388,13 @@ internal sealed class ProjectLocator(
             }
         }
 
-        projectFile = await GetAppHostProjectFileFromSettingsAsync(cancellationToken);
-
-        if (projectFile is not null)
-        {
-            if (createSettingsFile)
-            {
-                await CreateSettingsFileAsync(projectFile, cancellationToken);
-            }
-
-            return new AppHostProjectSearchResult(projectFile, [projectFile]);
-        }
+        var settingsAppHost = await GetValidatedAppHostProjectFileFromSettingsAsync(silent: true, cancellationToken);
 
         logger.LogDebug("No project file specified, searching for apphost projects in {CurrentDirectory}", executionContext.WorkingDirectory);
-        var results = await FindAppHostProjectFilesAsync(executionContext.WorkingDirectory, cancellationToken);
+        var results = await FindAppHostProjectFilesAsync(
+            executionContext.WorkingDirectory,
+            stopAfterMultipleBuildableAppHosts: multipleAppHostProjectsFoundBehavior is MultipleAppHostProjectsFoundBehavior.Throw && settingsAppHost is null,
+            cancellationToken);
 
         logger.LogDebug("Found {ProjectFileCount} project files.", results.BuildableAppHost.Count);
 
@@ -368,30 +402,60 @@ internal sealed class ProjectLocator(
 
         if (results.BuildableAppHost.Count == 0 && results.UnbuildableSuspectedAppHostProjects.Count == 0)
         {
-            if (results.HasUnsupportedProjects)
+            if (settingsAppHost is not null)
+            {
+                selectedAppHost = settingsAppHost;
+            }
+            else if (results.HasUnsupportedProjects)
             {
                 throw new ProjectLocatorException(ErrorStrings.NoProjectFileFound, ProjectLocatorFailureReason.UnsupportedProjects);
             }
-
-            throw new ProjectLocatorException(ErrorStrings.NoProjectFileFound, ProjectLocatorFailureReason.NoProjectFileFound);
+            else
+            {
+                throw new ProjectLocatorException(ErrorStrings.NoProjectFileFound, ProjectLocatorFailureReason.NoProjectFileFound);
+            }
         }
         else if (results.BuildableAppHost.Count == 0 && results.UnbuildableSuspectedAppHostProjects.Count > 0)
         {
-            throw new ProjectLocatorException(ErrorStrings.AppHostsMayNotBeBuildable, ProjectLocatorFailureReason.AppHostsMayNotBeBuildable);
+            if (settingsAppHost is not null)
+            {
+                selectedAppHost = settingsAppHost;
+            }
+            else
+            {
+                throw new ProjectLocatorException(ErrorStrings.AppHostsMayNotBeBuildable, ProjectLocatorFailureReason.AppHostsMayNotBeBuildable);
+            }
         }
         else if (results.BuildableAppHost.Count == 1)
         {
-            selectedAppHost = results.BuildableAppHost[0];
+            selectedAppHost = settingsAppHost ?? results.BuildableAppHost[0];
         }
         else if (results.BuildableAppHost.Count > 1)
         {
-            selectedAppHost = multipleAppHostProjectsFoundBehavior switch
+            // Check if a previously-selected apphost is cached in settings and
+            // is still among the discovered candidates. If so, reuse it to avoid
+            // prompting the user every time when nothing has changed.
+            var pathComparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+
+            if (settingsAppHost is not null
+                && results.BuildableAppHost.Any(f => string.Equals(f.FullName, settingsAppHost.FullName, pathComparison)))
             {
-                MultipleAppHostProjectsFoundBehavior.Throw => throw new ProjectLocatorException(ErrorStrings.MultipleProjectFilesFound, ProjectLocatorFailureReason.MultipleProjectFilesFound),
-                MultipleAppHostProjectsFoundBehavior.Prompt => await interactionService.PromptForSelectionAsync(InteractionServiceStrings.SelectAppHostToUse, results.BuildableAppHost, projectFile => $"{projectFile.Name.EscapeMarkup()} ({Path.GetRelativePath(executionContext.WorkingDirectory.FullName, projectFile.FullName).EscapeMarkup()})", cancellationToken),
-                MultipleAppHostProjectsFoundBehavior.None => null,
-                _ => selectedAppHost
-            };
+                logger.LogDebug("Using previously-selected AppHost from settings: {AppHost}", settingsAppHost.FullName);
+                selectedAppHost = settingsAppHost;
+            }
+            else
+            {
+                // No valid cached selection — prompt or error based on interactivity.
+                selectedAppHost = multipleAppHostProjectsFoundBehavior switch
+                {
+                    MultipleAppHostProjectsFoundBehavior.Throw => throw new ProjectLocatorException(ErrorStrings.MultipleProjectFilesFound, ProjectLocatorFailureReason.MultipleProjectFilesFound),
+                    MultipleAppHostProjectsFoundBehavior.Prompt => await interactionService.PromptForSelectionAsync(InteractionServiceStrings.SelectAppHostToUse, results.BuildableAppHost, projectFile => $"{projectFile.Name.EscapeMarkup()} ({Path.GetRelativePath(executionContext.WorkingDirectory.FullName, projectFile.FullName).EscapeMarkup()})", cancellationToken: cancellationToken),
+                    MultipleAppHostProjectsFoundBehavior.None => null,
+                    _ => selectedAppHost
+                };
+            }
         }
 
         if (createSettingsFile)
@@ -410,6 +474,47 @@ internal sealed class ProjectLocator(
 
     private async Task CreateSettingsFileAsync(FileInfo projectFile, CancellationToken cancellationToken)
     {
+        // Search from the apphost's directory upward for an existing config file.
+        // This handles the case where "aspire new" created a project in a subdirectory
+        // and the user runs "aspire run" from the parent without cd-ing first.
+        if (projectFile.Directory is { } appHostDir)
+        {
+            var nearAppHost = ConfigurationHelper.FindNearestConfigFilePath(appHostDir);
+            if (nearAppHost is not null)
+            {
+                var configDir = Path.GetDirectoryName(nearAppHost)!;
+
+                // For legacy .aspire/settings.json, the config root is the parent of .aspire/
+                var trimmedConfigDir = configDir.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (string.Equals(Path.GetFileName(trimmedConfigDir), ".aspire", StringComparison.OrdinalIgnoreCase))
+                {
+                    var parentDir = Directory.GetParent(trimmedConfigDir);
+                    if (parentDir is not null)
+                    {
+                        configDir = parentDir.FullName;
+                    }
+                }
+
+                var existingConfig = AspireConfigFile.Load(configDir);
+                if (existingConfig?.AppHost?.Path is { } existingPath)
+                {
+                    // Resolve the stored path relative to the config file's directory.
+                    var resolvedPath = Path.GetFullPath(
+                        Path.IsPathRooted(existingPath) ? existingPath : Path.Combine(configDir, existingPath));
+
+                    // Only skip creation if the config already points to the discovered apphost.
+                    // If the path is stale/invalid, fall through so the config gets healed.
+                    if (string.Equals(resolvedPath, projectFile.FullName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        logger.LogDebug(
+                            "Config at {Path} already references apphost {AppHost}, skipping creation",
+                            nearAppHost, projectFile.FullName);
+                        return;
+                    }
+                }
+            }
+        }
+
         var settingsFile = GetOrCreateLocalAspireConfigFile();
         var fileExisted = settingsFile.Exists;
 
@@ -438,7 +543,7 @@ internal sealed class ProjectLocator(
 
         var relativeSettingsFilePath = Path.GetRelativePath(executionContext.WorkingDirectory.FullName, settingsFile.FullName).Replace(Path.DirectorySeparatorChar, '/');
         var message = fileExisted ? InteractionServiceStrings.UpdatedSettingsFile : InteractionServiceStrings.CreatedSettingsFile;
-        interactionService.DisplayMessage(KnownEmojis.FileCabinet, string.Format(CultureInfo.CurrentCulture, message, $"[bold]'{relativeSettingsFilePath.EscapeMarkup()}'[/]"), allowMarkup: true);
+        interactionService.DisplayMessage(KnownEmojis.FloppyDisk, string.Format(CultureInfo.CurrentCulture, message, $"[bold]'{relativeSettingsFilePath.EscapeMarkup()}'[/]"), allowMarkup: true);
     }
 
     private FileInfo GetOrCreateLocalAspireConfigFile()
@@ -451,7 +556,7 @@ internal sealed class ProjectLocator(
             return settingsFile;
         }
 
-        var legacySettingsRootDirectory = GetLegacySettingsRootDirectory(settingsFile);
+        var legacySettingsRootDirectory = ConfigurationHelper.GetLegacySettingsRootDirectory(settingsFile);
         if (legacySettingsRootDirectory is null)
         {
             var newConfigPath = Path.Combine(executionContext.WorkingDirectory.FullName, AspireConfigFile.FileName);
@@ -477,22 +582,6 @@ internal sealed class ProjectLocator(
         // LoadOrCreate handles the legacy fallback and migration internally,
         // including saving the migrated config to disk.
         _ = AspireConfigFile.LoadOrCreate(settingsRootDirectory.FullName);
-    }
-
-    private static DirectoryInfo? GetLegacySettingsRootDirectory(FileInfo settingsFile)
-    {
-        if (!string.Equals(settingsFile.Name, AspireJsonConfiguration.FileName, StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        var settingsDirectory = settingsFile.Directory;
-        if (settingsDirectory is null || !string.Equals(settingsDirectory.Name, AspireJsonConfiguration.SettingsFolder, StringComparison.OrdinalIgnoreCase))
-        {
-            return null;
-        }
-
-        return settingsDirectory.Parent;
     }
 
     private static FileInfo[] FindMatchingFiles(DirectoryInfo searchDirectory, string pattern, EnumerationOptions options, string? excludePath)
@@ -539,7 +628,6 @@ internal sealed class ProjectLocator(
 
         return null;
     }
-
 }
 
 internal class ProjectLocatorException(string message, ProjectLocatorFailureReason failureReason) : System.Exception(message)

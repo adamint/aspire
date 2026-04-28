@@ -39,14 +39,18 @@ internal sealed class AtsContextFactory
             {
                 logger.LogError("[ATS] {Message} at {Location}", diagnostic.Message, diagnostic.Location);
             }
+            else if (diagnostic.Severity == AtsDiagnosticSeverity.Info)
+            {
+                logger.LogDebug("[ATS] {Message} at {Location}", diagnostic.Message, diagnostic.Location);
+            }
             else
             {
                 logger.LogWarning("[ATS] {Message} at {Location}", diagnostic.Message, diagnostic.Location);
             }
         }
 
-        logger.LogDebug("Scanned {CapabilityCount} capabilities, {HandleTypeCount} handle types, {DtoCount} DTOs, {EnumCount} enums",
-            result.Capabilities.Count, result.HandleTypes.Count, result.DtoTypes.Count, result.EnumTypes.Count);
+        logger.LogDebug("Scanned {CapabilityCount} capabilities, {HandleTypeCount} handle types, {DtoCount} DTOs, {EnumCount} enums, {ExportedValueCount} exported values",
+            result.Capabilities.Count, result.HandleTypes.Count, result.DtoTypes.Count, result.EnumTypes.Count, result.ExportedValues.Count);
 
         return result.ToAtsContext();
     }

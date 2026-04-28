@@ -43,7 +43,7 @@ public static class AzureManagedRedisExtensions
     /// </code>
     /// </example>
     /// </remarks>
-    [AspireExport("addAzureManagedRedis", Description = "Adds an Azure Managed Redis resource")]
+    [AspireExport(Description = "Adds an Azure Managed Redis resource")]
     public static IResourceBuilder<AzureManagedRedisResource> AddAzureManagedRedis(
         this IDistributedApplicationBuilder builder,
         [ResourceName] string name)
@@ -81,7 +81,7 @@ public static class AzureManagedRedisExtensions
     /// </code>
     /// </example>
     /// </remarks>
-    [AspireExport("runAsContainer", Description = "Configures Azure Managed Redis to run in a local container", RunSyncOnBackgroundThread = true)]
+    [AspireExport(Description = "Configures Azure Managed Redis to run in a local container", RunSyncOnBackgroundThread = true)]
     public static IResourceBuilder<AzureManagedRedisResource> RunAsContainer(
         this IResourceBuilder<AzureManagedRedisResource> builder,
         Action<IResourceBuilder<RedisResource>>? configureContainer = null)
@@ -126,7 +126,7 @@ public static class AzureManagedRedisExtensions
     /// </code>
     /// </example>
     /// </remarks>
-    [AspireExport("withAccessKeyAuthentication", Description = "Configures Azure Managed Redis to use access key authentication")]
+    [AspireExportIgnore(Reason = "Polyglot app hosts use the internal withAccessKeyAuthentication dispatcher export.")]
     public static IResourceBuilder<AzureManagedRedisResource> WithAccessKeyAuthentication(this IResourceBuilder<AzureManagedRedisResource> builder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -151,13 +151,25 @@ public static class AzureManagedRedisExtensions
         return builder.WithAccessKeyAuthentication(kv);
     }
 
+    [AspireExport("withAccessKeyAuthentication", Description = "Configures Azure Managed Redis to use access key authentication")]
+    internal static IResourceBuilder<AzureManagedRedisResource> WithAccessKeyAuthenticationForPolyglot(
+        this IResourceBuilder<AzureManagedRedisResource> builder,
+        IResourceBuilder<IAzureKeyVaultResource>? keyVaultBuilder = null)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        return keyVaultBuilder is null
+            ? builder.WithAccessKeyAuthentication()
+            : builder.WithAccessKeyAuthentication(keyVaultBuilder);
+    }
+
     /// <summary>
     /// Configures the resource to use access key authentication for Azure Managed Redis.
     /// </summary>
     /// <param name="builder">The Azure Managed Redis resource builder.</param>
     /// <param name="keyVaultBuilder">The Azure Key Vault resource builder where the connection string used to connect to this AzureManagedRedisResource will be stored.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{AzureManagedRedisResource}"/> builder.</returns>
-    [AspireExport("withAccessKeyAuthenticationWithKeyVault", Description = "Configures Azure Managed Redis to use access key authentication with a specific Key Vault")]
+    [AspireExportIgnore(Reason = "Polyglot app hosts use the internal withAccessKeyAuthentication dispatcher export.")]
     public static IResourceBuilder<AzureManagedRedisResource> WithAccessKeyAuthentication(this IResourceBuilder<AzureManagedRedisResource> builder, IResourceBuilder<IAzureKeyVaultResource> keyVaultBuilder)
     {
         ArgumentNullException.ThrowIfNull(builder);

@@ -105,6 +105,12 @@ namespace Aspire.Cli.Resources {
             }
         }
 
+        internal static string AgentInitOptionDescription {
+            get {
+                return ResourceManager.GetString("AgentInitOptionDescription", resourceCulture);
+            }
+        }
+
         internal static string PipelineLogLevelOptionDescription {
             get {
                 return ResourceManager.GetString("PipelineLogLevelOptionDescription", resourceCulture);
@@ -120,6 +126,18 @@ namespace Aspire.Cli.Resources {
         internal static string PipelineEnvironmentOptionDescription {
             get {
                 return ResourceManager.GetString("PipelineEnvironmentOptionDescription", resourceCulture);
+            }
+        }
+
+        internal static string PipelineStepTimelineLabel {
+            get {
+                return ResourceManager.GetString("PipelineStepTimelineLabel", resourceCulture);
+            }
+        }
+
+        internal static string PipelineStepsSummaryTitle {
+            get {
+                return ResourceManager.GetString("PipelineStepsSummaryTitle", resourceCulture);
             }
         }
     }

@@ -23,11 +23,13 @@ void main() throws Exception {
         var laws = builder.addAzureLogAnalyticsWorkspace("laws");
         var env3 = builder.addAzureContainerAppEnvironment("myenv3");
         env3.withAzureLogAnalyticsWorkspace(laws);
+        var customDomain = builder.addParameter("customDomain");
+        var certificateName = builder.addParameter("certificateName");
         // === PublishAsAzureContainerApp ===
         // Test publishAsAzureContainerApp on a container resource with callback
         var web = builder.addContainer("web", "myregistry/web:latest");
         web.publishAsAzureContainerApp((infrastructure, app) -> {
-            // Configure container app via callback
+            app.configureCustomDomain(customDomain, certificateName);
         });
         // Test publishAsAzureContainerAppJob on an executable resource
         var api = builder.addExecutable("api", "dotnet", ".", new String[] { "run" });
@@ -36,17 +38,17 @@ void main() throws Exception {
         // Test publishAsAzureContainerAppJob (parameterless - manual trigger)
         var worker = builder.addContainer("worker", "myregistry/worker:latest");
         worker.publishAsAzureContainerAppJob();
-        // Test publishAsConfiguredAzureContainerAppJob (with callback)
+        // Test publishAsAzureContainerAppJob (with callback)
         var processor = builder.addContainer("processor", "myregistry/processor:latest");
-        processor.publishAsConfiguredAzureContainerAppJob((infrastructure, job) -> {
+        processor.publishAsAzureContainerAppJob((infrastructure, job) -> {
             // Configure the container app job here
         });
         // Test publishAsScheduledAzureContainerAppJob (simple - no callback)
         var scheduler = builder.addContainer("scheduler", "myregistry/scheduler:latest");
         scheduler.publishAsScheduledAzureContainerAppJob("0 0 * * *");
-        // Test publishAsConfiguredScheduledAzureContainerAppJob (with callback)
+        // Test publishAsScheduledAzureContainerAppJob (with callback)
         var reporter = builder.addContainer("reporter", "myregistry/reporter:latest");
-        reporter.publishAsConfiguredScheduledAzureContainerAppJob("0 */6 * * *", (infrastructure, job) -> {
+        reporter.publishAsScheduledAzureContainerAppJob("0 */6 * * *", (infrastructure, job) -> {
                 // Configure the scheduled job here
             });
         builder.build().run();

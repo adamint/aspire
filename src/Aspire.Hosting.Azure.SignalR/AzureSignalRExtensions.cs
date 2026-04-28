@@ -140,7 +140,7 @@ public static class AzureSignalRExtensions
     /// <param name="builder">The Azure SignalR resource builder.</param>
     /// <param name="configureContainer">Callback that exposes underlying container used for emulation to allow for customization.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
-    [AspireExport("runAsEmulator", Description = "Configures an Azure SignalR resource to be emulated. This resource requires an Azure SignalR resource to be added to the application model. Please note that the resource will be emulated in Serverless mode.", RunSyncOnBackgroundThread = true)]
+    [AspireExport(Description = "Configures an Azure SignalR resource to be emulated. This resource requires an Azure SignalR resource to be added to the application model. Please note that the resource will be emulated in Serverless mode.", RunSyncOnBackgroundThread = true)]
     public static IResourceBuilder<AzureSignalRResource> RunAsEmulator(this IResourceBuilder<AzureSignalRResource> builder, Action<IResourceBuilder<AzureSignalREmulatorResource>>? configureContainer = null)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -211,7 +211,7 @@ public static class AzureSignalRExtensions
     /// <param name="roles">The Azure SignalR roles to be assigned (for example, <see cref="AzureSignalRRole.SignalRContributor"/>).</param>
     /// <returns>The updated <see cref="IResourceBuilder{T}"/> with the applied role assignments.</returns>
     /// <exception cref="ArgumentException">Thrown when a role value is not a valid <see cref="AzureSignalRRole"/> value.</exception>
-    [AspireExport("withSignalRRoleAssignments", Description = "Assigns Azure SignalR roles to a resource")]
+    [AspireExport("withSignalRRoleAssignments", MethodName = "withRoleAssignments", Description = "Assigns Azure SignalR roles to a resource")]
     internal static IResourceBuilder<T> WithRoleAssignments<T>(
         this IResourceBuilder<T> builder,
         IResourceBuilder<AzureSignalRResource> target,

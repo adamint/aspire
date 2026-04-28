@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+#pragma warning disable ASPIREPIPELINES001
+#pragma warning disable ASPIREAZURE002 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 #pragma warning disable ASPIREAZURE003 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 
 using System.Diagnostics;
@@ -8,7 +10,7 @@ using System.Diagnostics.CodeAnalysis;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Azure;
 using Aspire.Hosting.Azure.AppContainers;
-using Aspire.Hosting.Lifecycle;
+using Aspire.Hosting.Pipelines;
 using Azure.Provisioning;
 using Azure.Provisioning.AppContainers;
 using Azure.Provisioning.ContainerRegistry;
@@ -38,16 +40,51 @@ public static class AzureContainerAppExtensions
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        // ensure AzureProvisioning is added first so the AzureResourcePreparer lifecycle hook runs before AzureContainerAppsInfrastructure
         builder.AddAzureProvisioning();
 
-        // AzureContainerAppsInfrastructure will handle adding role assignments,
+        // The per-environment prepare-azure-container-apps-{name} steps handle role assignments,
         // so Azure resources don't need to add the default role assignments themselves
         builder.Services.Configure<AzureProvisioningOptions>(o => o.SupportsTargetedRoleAssignments = true);
 
-        builder.Services.TryAddEventingSubscriber<AzureContainerAppsInfrastructure>();
+        // Register the pipeline step idempotently. AddAzureContainerAppsInfrastructureCore can be
+        // called more than once (e.g. when AddAzureContainerAppEnvironment is called for multiple
+        // environments). The marker singleton ensures we only add the step the first time.
+        //
+        // The per-environment work (creating ContainerApp resources and DeploymentTargetAnnotations)
+        // is registered as a separate per-environment pipeline step on AzureContainerAppEnvironmentResource.
+        // This global step only validates that no resource has a PublishAs* annotation when there are
+        // no AzureContainerAppEnvironmentResource instances in the model.
+        if (builder.Services.All(d => d.ServiceType != typeof(ContainerAppsPipelineStepMarker)))
+        {
+            builder.Services.AddSingleton<ContainerAppsPipelineStepMarker>();
+
+            builder.Pipeline.AddStep(
+                name: ContainerAppsPipelineStepMarker.StepName,
+                action: ctx =>
+                {
+                    if (!ctx.Model.Resources.OfType<AzureContainerAppEnvironmentResource>().Any())
+                    {
+                        foreach (var r in ctx.Model.GetComputeResources())
+                        {
+                            if (r.HasAnnotationOfType<AzureContainerAppCustomizationAnnotation>() ||
+                                r.HasAnnotationOfType<AzureContainerAppJobCustomizationAnnotation>())
+                            {
+                                throw new InvalidOperationException($"Resource '{r.Name}' is configured to publish as an Azure Container App, but there are no '{nameof(AzureContainerAppEnvironmentResource)}' resources. Ensure you have added one by calling '{nameof(AddAzureContainerAppEnvironment)}'.");
+                            }
+                        }
+                    }
+
+                    return Task.CompletedTask;
+                },
+                requiredBy: WellKnownPipelineSteps.BeforeStart);
+        }
 
         return builder;
+    }
+
+    private sealed class ContainerAppsPipelineStepMarker
+    {
+        public const string StepName = "validate-azure-container-apps";
     }
 
     /// <summary>
@@ -56,7 +93,7 @@ public static class AzureContainerAppExtensions
     /// <param name="builder">The distributed application builder.</param>
     /// <param name="name">The name of the resource.</param>
     /// <returns><see cref="IResourceBuilder{T}"/></returns>
-    [AspireExport("addAzureContainerAppEnvironment", Description = "Adds an Azure Container App Environment resource")]
+    [AspireExport(Description = "Adds an Azure Container App Environment resource")]
     public static IResourceBuilder<AzureContainerAppEnvironmentResource> AddAzureContainerAppEnvironment(this IDistributedApplicationBuilder builder, string name)
     {
         builder.AddAzureContainerAppsInfrastructureCore();
@@ -410,7 +447,7 @@ public static class AzureContainerAppExtensions
     /// This method allows for reusing the previously deployed resources if the application was deployed using
     /// azd without calling <see cref="AddAzureContainerAppEnvironment"/>
     /// </remarks>
-    [AspireExport("withAzdResourceNaming", Description = "Configures resources to use azd naming conventions")]
+    [AspireExport(Description = "Configures resources to use azd naming conventions")]
     public static IResourceBuilder<AzureContainerAppEnvironmentResource> WithAzdResourceNaming(this IResourceBuilder<AzureContainerAppEnvironmentResource> builder)
     {
         builder.Resource.UseAzdNamingConvention = true;
@@ -440,7 +477,7 @@ public static class AzureContainerAppExtensions
     /// Use <see cref="WithAzdResourceNaming"/> to change those names as well.
     /// </para>
     /// </remarks>
-    [AspireExport("withCompactResourceNaming", Description = "Configures resources to use compact naming for length-constrained Azure resources")]
+    [AspireExport(Description = "Configures resources to use compact naming for length-constrained Azure resources")]
     [Experimental("ASPIREACANAMING001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
     public static IResourceBuilder<AzureContainerAppEnvironmentResource> WithCompactResourceNaming(this IResourceBuilder<AzureContainerAppEnvironmentResource> builder)
     {
@@ -454,7 +491,7 @@ public static class AzureContainerAppExtensions
     /// <param name="builder">The AzureContainerAppEnvironmentResource to configure.</param>
     /// <param name="enable">Whether to include the Aspire dashboard. Default is true.</param>
     /// <returns><see cref="IResourceBuilder{T}"/></returns>
-    [AspireExport("withDashboard", Description = "Configures whether the Aspire dashboard is included in the container app environment")]
+    [AspireExport(Description = "Configures whether the Aspire dashboard is included in the container app environment")]
     public static IResourceBuilder<AzureContainerAppEnvironmentResource> WithDashboard(this IResourceBuilder<AzureContainerAppEnvironmentResource> builder, bool enable = true)
     {
         builder.Resource.EnableDashboard = enable;
@@ -473,7 +510,7 @@ public static class AzureContainerAppExtensions
     /// Note that explicit ports specified for development (e.g., port 8080) are still normalized
     /// to standard ports (80/443) as required by Azure Container Apps.
     /// </remarks>
-    [AspireExport("withHttpsUpgrade", Description = "Configures whether HTTP endpoints are upgraded to HTTPS")]
+    [AspireExport(Description = "Configures whether HTTP endpoints are upgraded to HTTPS")]
     public static IResourceBuilder<AzureContainerAppEnvironmentResource> WithHttpsUpgrade(this IResourceBuilder<AzureContainerAppEnvironmentResource> builder, bool upgrade = true)
     {
         builder.Resource.PreserveHttpEndpoints = !upgrade;
@@ -487,7 +524,7 @@ public static class AzureContainerAppExtensions
     /// <param name="workspaceBuilder">The resource builder for the <see cref="AzureLogAnalyticsWorkspaceResource"/> to use.</param>
     /// <returns><see cref="IResourceBuilder{T}"/></returns>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="builder"/> or <paramref name="workspaceBuilder"/> is null.</exception>
-    [AspireExport("withAzureLogAnalyticsWorkspace", Description = "Configures the container app environment to use a specific Log Analytics Workspace")]
+    [AspireExport(Description = "Configures the container app environment to use a specific Log Analytics Workspace")]
     public static IResourceBuilder<AzureContainerAppEnvironmentResource> WithAzureLogAnalyticsWorkspace(this IResourceBuilder<AzureContainerAppEnvironmentResource> builder, IResourceBuilder<AzureLogAnalyticsWorkspaceResource> workspaceBuilder)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -503,28 +540,16 @@ public static class AzureContainerAppExtensions
     {
         var configureInfrastructure = (AzureResourceInfrastructure infrastructure) =>
         {
-            var registry = AzureProvisioningResource.CreateExistingOrNewProvisionableResource(infrastructure,
-                (identifier, resourceName) =>
+            ContainerRegistryInfrastructure.ConfigureContainerRegistry(infrastructure,
+                configureNewRegistry: (newRegistry, infra) =>
                 {
-                    var resource = ContainerRegistryService.FromExisting(identifier);
-                    resource.Name = resourceName;
-                    return resource;
-                },
-                (infra) =>
-                {
-                    var newRegistry = new ContainerRegistryService(infra.AspireResource.GetBicepIdentifier())
-                    {
-                        Sku = new ContainerRegistrySku { Name = ContainerRegistrySkuName.Basic },
-                        Tags = { { "aspire-resource-name", infra.AspireResource.Name } }
-                    };
-
                     if (containerAppEnvironment.UseAzdNamingConvention)
                     {
                         var resourceToken = new ProvisioningVariable("resourceToken", typeof(string))
                         {
                             Value = BicepFunction.GetUniqueString(BicepFunction.GetResourceGroup().Id)
                         };
-                        infrastructure.Add(resourceToken);
+                        infra.Add(resourceToken);
 
                         newRegistry.Name = new FunctionCallExpression(
                             new IdentifierExpression("replace"),
@@ -535,13 +560,7 @@ public static class AzureContainerAppExtensions
                             new StringLiteralExpression("-"),
                             new StringLiteralExpression(""));
                     }
-
-                    return newRegistry;
                 });
-
-            infrastructure.Add(registry);
-            infrastructure.Add(new ProvisioningOutput("name", typeof(string)) { Value = registry.Name });
-            infrastructure.Add(new ProvisioningOutput("loginServer", typeof(string)) { Value = registry.LoginServer });
         };
 
         var resource = new AzureContainerRegistryResource(name, configureInfrastructure);

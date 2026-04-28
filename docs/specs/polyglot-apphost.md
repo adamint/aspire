@@ -29,7 +29,7 @@ The polyglot apphost feature allows developers to write Aspire app hosts in non-
 
 You run `aspire run`, and the CLI starts both the .NET AppHost server and your guest runtime locally on the same machine.
 
-**No IDL required.** Unlike gRPC/protobuf or OpenAPI, ATS doesn't introduce a separate interface definition language. The .NET type system is already expressive enough. Integration authors simply add `[AspireExport]` attributes to existing extension methods—their C# code *is* the schema. The scanner extracts everything it needs from the compiled assemblies.
+**No IDL required.** Unlike gRPC/protobuf or OpenAPI, ATS doesn't introduce a separate interface definition language. The .NET type system is already expressive enough. Integration authors annotate their existing APIs with `[AspireExport]`, `[AspireDto]`, and `[AspireValue]` as needed—their C# code *is* the schema. The scanner extracts everything it needs from the compiled assemblies.
 
 **Key Concepts:**
 - **Primitive** - JSON-native types (`string`, `number`, `boolean`, `null`) that serialize directly
@@ -38,12 +38,13 @@ You run `aspire run`, and the CLI starts both the .NET AppHost server and your g
 - **Handle** - An opaque typed reference to a .NET object
 - **DTO** - A serializable data transfer object (marked with `[AspireDto]`)
 - **Enum** - A .NET enum type that serializes as its string name
+- **Exported Value** - An immutable predefined value (marked with `[AspireValue]`) emitted into guest SDK catalogs
 
 ---
 
 ## Design Philosophy
 
-ATS leverages .NET's rich type system rather than replacing it. The `[AspireExport]` and `[AspireDto]` attributes mark what should be exposed—the rest is inferred from the C# signatures. This means:
+ATS leverages .NET's rich type system rather than replacing it. The `[AspireExport]`, `[AspireDto]`, and `[AspireValue]` attributes mark what should be exposed—the rest is inferred from the C# signatures. This means:
 
 - Integration authors write **normal C# extension methods**
 - The scanner **extracts types, parameters, and relationships** at build time
@@ -342,6 +343,8 @@ public class RedisResource : ContainerResource { }
 // Type ID = Aspire.Hosting/Aspire.Hosting.IDistributedApplicationBuilder
 ```
 
+Assembly-level exports are the mechanism for exposing framework or third-party types that live in a different assembly than the capabilities that use them. Even in that case, the ATS type ID still comes from the exported CLR type's assembly and full type name, not from the assembly that declares the attribute.
+
 ### Type Categories
 
 ATS categorizes types for serialization and code generation using `AtsTypeCategory`:
@@ -357,6 +360,8 @@ ATS categorizes types for serialization and code generation using `AtsTypeCatego
 | `List` | Mutable `List<T>` | Handle when exposed as property; JSON array when passed as parameter |
 | `Dict` | Mutable `Dictionary<K,V>` | Handle when exposed as property; JSON object when passed as parameter |
 
+In addition to these type categories, ATS can export **immutable value catalogs** with `[AspireValue]`. Exported values are snapped at scan time, serialized as JSON, and emitted directly into generated guest SDKs. They are not runtime handles or capabilities.
+
 ### Type System Notes (Compatibility and Semantics)
 
 This section captures expectations that keep guest runtimes stable and APIs evolvable.
@@ -364,6 +369,7 @@ This section captures expectations that keep guest runtimes stable and APIs evol
 - **Type identity stability:** ATS type IDs are derived from `{AssemblyName}/{FullTypeName}`. Renames or namespace moves are breaking changes. Prefer additive changes or introduce new types.
 - **Nullability and optional parameters:** Use nullable types or optional parameters to express optionality. Guests should treat missing values and explicit `null` as equivalent only when the parameter is declared nullable.
 - **DTO evolution:** DTOs are structural JSON objects. Additive changes (new optional fields) are safer than renames/removals. Guests should ignore unknown DTO fields to remain forward-compatible.
+- **Exported value evolution:** Exported value paths (for example, `FoundryModels.OpenAI.Gpt41Mini`) are guest SDK surface area. Prefer additive catalogs over renaming or moving existing exported values.
 - **Enum evolution:** New enum members are non-breaking for hosts, but older guests may not recognize them. Guests should handle unknown enum strings defensively.
 - **Capabilities and versioning:** Capability IDs are stable and globally unique. Rename by adding a new capability ID and keeping the old one for compatibility.
 - **Handle lifetime:** Handles are valid only while the host process runs. Guests must handle `HANDLE_NOT_FOUND` when a handle is stale or disposed.
@@ -397,6 +403,25 @@ public static class ResourceExtensions
 ```
 
 Because `RedisResource` implements `IResourceWithEnvironment` (via `ContainerResource`), the scanner adds `withEnvironment` to `RedisResource`'s capability list.
+
+#### Cross-Assembly Type Exports
+
+Use `[assembly: AspireExport(typeof(T))]` when a capability assembly needs to expose a type defined in another assembly:
+
+```csharp
+// In Aspire.Hosting/Ats/AtsTypeMappings.cs
+[assembly: AspireExport(typeof(IConfiguration))]
+[assembly: AspireExport(typeof(IHostEnvironment), ExposeProperties = true)]
+```
+
+At startup, the remote host creates one ATS context by scanning all loaded assemblies together. That shared scan is what lets one assembly export a type while another assembly contributes capabilities that consume or return it.
+
+- **Type identity still comes from the exported CLR type.** For example, `[assembly: AspireExport(typeof(IConfiguration))]` produces the ATS type ID `Microsoft.Extensions.Configuration.Abstractions/Microsoft.Extensions.Configuration.IConfiguration`, even though the attribute is declared in `Aspire.Hosting`.
+- **Exported handle types are merged by ATS type ID across the full scan.** Re-exporting the same type from multiple assemblies does not create multiple ATS handle types.
+- **Capabilities are merged from all scanned assemblies, but capability IDs must remain unique.** If two assemblies export the same capability ID, scanning emits a diagnostic error.
+- **Cross-assembly resolution is scan-order independent.** If one assembly exports a type and another references it, the scanner resolves it after collecting the complete type universe from every scanned assembly.
+
+This is how Aspire's core hosting assembly exports framework types such as `IConfiguration`, `IConfigurationSection`, and `IHostEnvironment` while keeping them in the same flattened capability model as types exported directly from integration packages.
 
 #### Flattening in Action
 
@@ -503,6 +528,41 @@ public sealed class ContainerMountOptions
 |-----------|-------------------|----------------------|
 | Input (JSON → .NET) | Deserialized | **Error** |
 | Output (.NET → JSON) | Serialized | Marshaled as Handle |
+
+### Exported Values
+
+Immutable predefined values can be emitted into generated guest SDKs with `[AspireValue]`:
+
+```csharp
+[AspireDto]
+public sealed class FoundryModel
+{
+    public required string Name { get; init; }
+    public required string Version { get; init; }
+    public required string Format { get; init; }
+
+    public static class OpenAI
+    {
+        [AspireValue("FoundryModels")]
+        public static readonly FoundryModel Gpt41Mini = new()
+        {
+            Name = "gpt-4.1-mini",
+            Version = "2025-04-14",
+            Format = "OpenAI"
+        };
+    }
+}
+```
+
+Guest SDKs receive a separate predefined-value catalog while the DTO shape remains unchanged. For example, guest code can use `FoundryModels.OpenAI.Gpt41Mini` anywhere a `FoundryModel` DTO is accepted.
+
+Exported values are intended for immutable, side-effect-free members only:
+
+- Public static readonly fields
+- Public static get-only properties
+- Value types limited to primitives, enums, DTOs, and copied JSON-compatible shapes
+
+They are evaluated during scanning, not invoked dynamically at runtime.
 
 ### Enums
 
@@ -897,9 +957,9 @@ The CLI generates language-specific SDKs from ATS capabilities.
 ### Process
 
 1. Load assemblies from AppHost server build
-2. Scan for `[AspireExport]` attributes using `AtsCapabilityScanner`
+2. Scan for `[AspireExport]`, `[AspireDto]`, and `[AspireValue]` metadata using `AtsCapabilityScanner`
 3. Expand interface targets to concrete implementations
-4. Generate language-specific SDK
+4. Generate language-specific SDK, including predefined value catalogs
 
 ### Capability Expansion
 
@@ -1326,7 +1386,7 @@ public interface ICodeGenerator
 }
 ```
 
-The generator receives an `AtsContext` containing all scanned capabilities, types, DTOs, and enums. It produces language-specific SDK files.
+The generator receives an `AtsContext` containing all scanned capabilities, types, DTOs, enums, and exported values. It produces language-specific SDK files.
 
 ### Step 2: Register in CLI
 
@@ -1415,6 +1475,7 @@ public sealed class AtsContext
     public IReadOnlyList<AtsTypeInfo> HandleTypes { get; init; }
     public IReadOnlyList<AtsDtoTypeInfo> DtoTypes { get; init; }
     public IReadOnlyList<AtsEnumTypeInfo> EnumTypes { get; init; }
+    public IReadOnlyList<AtsExportedValueInfo> ExportedValues { get; init; }
     public IReadOnlyList<AtsDiagnostic> Diagnostics { get; init; }
 }
 ```
@@ -1433,11 +1494,17 @@ public sealed class AtsContext
 - `Name` - Simple enum name (e.g., `ContainerLifetime`)
 - `Values` - List of enum member names
 
+**AtsExportedValueInfo** contains:
+- `PathSegments` - Guest SDK catalog path segments (for example, `["FoundryModels", "OpenAI", "Gpt41Mini"]`)
+- `Type` - ATS type metadata for the snapped value
+- `Value` - Snapped JSON payload emitted into guest SDKs
+- `Description` - Optional XML documentation summary
+
 **Generation steps:**
 
 1. Group capabilities by target type
 2. Generate builder classes with methods for each capability
-3. Generate DTO classes, enums, handle wrappers
+3. Generate DTO classes, enums, exported value catalogs, and handle wrappers
 4. Implement JSON-RPC client for the language
 
 ---

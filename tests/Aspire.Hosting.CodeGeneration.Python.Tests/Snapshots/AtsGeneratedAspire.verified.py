@@ -1,4 +1,4 @@
-﻿#   -------------------------------------------------------------
+#   -------------------------------------------------------------
 #   Copyright (c) Microsoft Corporation. All rights reserved.
 #   Licensed under the MIT License. See LICENSE in project root for information.
 #
@@ -19,6 +19,7 @@ import threading
 import time
 import abc
 import datetime
+import types
 import typing
 from functools import cached_property as _cached_property
 from contextlib import AbstractContextManager
@@ -875,6 +876,11 @@ class AspireClient:
         self._check_connection()
         return self._send_request("ping")
 
+    def authenticate(self, token: str) -> None:
+        '''Authenticate to the AppHost server with a session token.'''
+        if not bool(self._send_request("authenticate", token)):
+            raise RuntimeError("Failed to authenticate to the AppHost server.")
+
     def invoke_capability(
         self,
         capability_id: str,
@@ -1551,6 +1557,18 @@ class TestNestedDto(typing.TypedDict, total=False):
 
 
 # ============================================================================
+# Exported Values
+# ============================================================================
+
+TestConfigs = types.SimpleNamespace()
+TestConfigs.Default = typing.cast(TestConfigDto, { "Name": "default", "Port": 6379, "Enabled": True, "OptionalField": "cache" })
+TestConfigs.Profiles = types.SimpleNamespace()
+TestConfigs.Profiles.Development = typing.cast(TestConfigDto, { "Name": "development", "Port": 5001, "Enabled": False, "OptionalField": None })
+TestConfigs.Secure = typing.cast(TestConfigDto, { "Name": "secure", "Port": 6380, "Enabled": True, "OptionalField": None })
+TestConfigs.UnicodeGreeting = "你好こんにちは"
+
+
+# ============================================================================
 # Type Classes
 # ============================================================================
 
@@ -1570,10 +1588,9 @@ class DistributedApplicationBuilder:
         return self._handle
 
     def __enter__(self) -> DistributedApplicationBuilder:
-        self._client.connect()
         self._handle = self._client.invoke_capability(
-            'Aspire.Hosting/createBuilderWithOptions',
-            {'options': self._options}
+            'Aspire.Hosting/createBuilder',
+            {'argsOrOptions': self._options}
         )
         return self
 
@@ -1610,11 +1627,14 @@ class DistributedApplicationBuilder:
         return typing.cast(TestVaultResource, result)
 
 
+class AbstractValueProvider(abc.ABC):
+    """Abstract base class for AbstractValueProvider."""
+
 class AbstractManifestExpressionProvider(abc.ABC):
     """Abstract base class for AbstractManifestExpressionProvider."""
 
-class AbstractValueProvider(abc.ABC):
-    """Abstract base class for AbstractValueProvider."""
+class AbstractExpressionValue(abc.ABC):
+    """Abstract base class for AbstractExpressionValue."""
 
 class AbstractValueWithReferences(abc.ABC):
     """Abstract base class for AbstractValueWithReferences."""
@@ -1778,6 +1798,56 @@ class TestEnvironmentContext:
         )
 
 
+class TestMutableCollectionContext:
+    """Type class for TestMutableCollectionContext."""
+
+    def __init__(self, handle: Handle, client: AspireClient) -> None:
+        self._handle = handle
+        self._client = client
+
+    def __repr__(self) -> str:
+        return f"TestMutableCollectionContext(handle={self._handle.handle_id})"
+
+    @_uncached_property
+    def handle(self) -> Handle:
+        """The underlying object reference handle."""
+        return self._handle
+
+    @_uncached_property
+    def tags(self) -> AspireList[str]:
+        """Gets the Tags property"""
+        result = self._client.invoke_capability(
+            'Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestMutableCollectionContext.tags',
+            {'context': self._handle}
+        )
+        return typing.cast(AspireList[str], result)
+
+    @tags.setter
+    def tags(self, value: AspireList[str]) -> None:
+        """Sets the Tags property"""
+        self._client.invoke_capability(
+            'Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestMutableCollectionContext.setTags',
+            {'context': self._handle, 'value': value}
+        )
+
+    @_uncached_property
+    def counts(self) -> AspireDict[str, int]:
+        """Gets the Counts property"""
+        result = self._client.invoke_capability(
+            'Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestMutableCollectionContext.counts',
+            {'context': self._handle}
+        )
+        return typing.cast(AspireDict[str, int], result)
+
+    @counts.setter
+    def counts(self, value: AspireDict[str, int]) -> None:
+        """Sets the Counts property"""
+        self._client.invoke_capability(
+            'Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestMutableCollectionContext.setCounts',
+            {'context': self._handle, 'value': value}
+        )
+
+
 class TestResourceContext:
     """Type class for TestResourceContext."""
 
@@ -1907,6 +1977,10 @@ class AbstractResource(abc.ABC):
         """Adds a dependency on another resource"""
 
     @abc.abstractmethod
+    def with_union_dependency(self, dependency: str | AbstractResourceWithConnectionString) -> typing.Self:
+        """Adds a dependency from a string or another resource"""
+
+    @abc.abstractmethod
     def with_endpoints(self, endpoints: typing.Iterable[str]) -> typing.Self:
         """Sets the endpoints"""
 
@@ -1939,7 +2013,7 @@ class AbstractResourceWithArgs(AbstractResource):
     """Abstract base class for AbstractResourceWithArgs interface."""
 
 
-class AbstractResourceWithConnectionString(AbstractResource, AbstractManifestExpressionProvider, AbstractValueProvider, AbstractValueWithReferences):
+class AbstractResourceWithConnectionString(AbstractResource, AbstractExpressionValue, AbstractValueWithReferences):
     """Abstract base class for AbstractResourceWithConnectionString interface."""
 
     @abc.abstractmethod
@@ -2001,6 +2075,7 @@ class _BaseResourceKwargs(typing.TypedDict, total=False):
     validator: typing.Callable[[TestResourceContext], bool]
     test_wait_for: AbstractResource
     dependency: AbstractResourceWithConnectionString
+    union_dependency: str | AbstractResourceWithConnectionString
     endpoints: typing.Iterable[str]
     cancellable_operation: typing.Callable[[CancellationToken], None]
     merge_label: str | tuple[str, str]
@@ -2141,6 +2216,17 @@ class _BaseResource(AbstractResource):
         rpc_args['dependency'] = dependency
         result = self._client.invoke_capability(
             'Aspire.Hosting.CodeGeneration.Python.Tests/withDependency',
+            rpc_args,
+        )
+        self._handle = self._wrap_builder(result)
+        return self
+
+    def with_union_dependency(self, dependency: str | AbstractResourceWithConnectionString) -> typing.Self:
+        """Adds a dependency from a string or another resource"""
+        rpc_args: dict[str, typing.Any] = {'builder': self._handle}
+        rpc_args['dependency'] = dependency
+        result = self._client.invoke_capability(
+            'Aspire.Hosting.CodeGeneration.Python.Tests/withUnionDependency',
             rpc_args,
         )
         self._handle = self._wrap_builder(result)
@@ -2317,6 +2403,13 @@ class _BaseResource(AbstractResource):
                 handle = self._wrap_builder(client.invoke_capability('Aspire.Hosting.CodeGeneration.Python.Tests/withDependency', rpc_args))
             else:
                 raise TypeError("Invalid type for option 'dependency'. Expected: AbstractResourceWithConnectionString")
+        if _union_dependency := kwargs.pop("union_dependency", None):
+            if _validate_type(_union_dependency, str | AbstractResourceWithConnectionString):
+                rpc_args: dict[str, typing.Any] = {"builder": handle}
+                rpc_args["dependency"] = typing.cast(str | AbstractResourceWithConnectionString, _union_dependency)
+                handle = self._wrap_builder(client.invoke_capability('Aspire.Hosting.CodeGeneration.Python.Tests/withUnionDependency', rpc_args))
+            else:
+                raise TypeError("Invalid type for option 'union_dependency'. Expected: str | AbstractResourceWithConnectionString")
         if _endpoints := kwargs.pop("endpoints", None):
             if _validate_type(_endpoints, typing.Iterable[str]):
                 rpc_args: dict[str, typing.Any] = {"builder": handle}
@@ -2730,6 +2823,14 @@ def _get_client(*, debug: bool, heartbeat_interval: int | None) -> AspireClient:
         )
 
     client = AspireClient(socket_path, debug=debug, heartbeat_interval=heartbeat_interval)
+    client.connect()
+    auth_token = os.environ.get('ASPIRE_REMOTE_APPHOST_TOKEN')
+    if not auth_token:
+        raise ValueError(
+            'ASPIRE_REMOTE_APPHOST_TOKEN environment variable not set. '
+            'Run this application using `aspire run`.'
+        )
+    client.authenticate(auth_token)
     return client
 
 
@@ -2806,9 +2907,11 @@ _register_handle_wrapper("Aspire.Hosting/Aspire.Hosting.ApplicationModel.Referen
 _register_handle_wrapper("System.Private.CoreLib/System.Threading.CancellationToken", CancellationToken)
 _register_handle_wrapper("Aspire.Hosting/List<string>", AspireList)
 _register_handle_wrapper("Aspire.Hosting/Dict<string,string>", AspireDict)
+_register_handle_wrapper("Aspire.Hosting/Dict<string,number>", AspireDict)
 _register_handle_wrapper("Aspire.Hosting.CodeGeneration.Python.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestCallbackContext", TestCallbackContext)
 _register_handle_wrapper("Aspire.Hosting.CodeGeneration.Python.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestCollectionContext", TestCollectionContext)
 _register_handle_wrapper("Aspire.Hosting.CodeGeneration.Python.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestEnvironmentContext", TestEnvironmentContext)
+_register_handle_wrapper("Aspire.Hosting.CodeGeneration.Python.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestMutableCollectionContext", TestMutableCollectionContext)
 _register_handle_wrapper("Aspire.Hosting.CodeGeneration.Python.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestResourceContext", TestResourceContext)
 _register_handle_wrapper("Aspire.Hosting/Aspire.Hosting.ApplicationModel.Resource", _BaseResource)
 _register_handle_wrapper("Aspire.Hosting/Aspire.Hosting.ApplicationModel.ContainerResource", ContainerResource)

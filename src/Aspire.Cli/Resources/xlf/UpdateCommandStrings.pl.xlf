@@ -8,12 +8,12 @@
         <note />
       </trans-unit>
       <trans-unit id="AnalyzeAppHost">
-        <source>Analyze apphost</source>
+        <source>Analyze AppHost</source>
         <target state="needs-review-translation">Analizowanie hosta aplikacji</target>
         <note />
       </trans-unit>
       <trans-unit id="AnalyzeAppHostSdk">
-        <source>Analyze apphost SDK</source>
+        <source>Analyze AppHost SDK</source>
         <target state="needs-review-translation">Analizowanie zestawu SDK hosta aplikacji</target>
         <note />
       </trans-unit>
@@ -113,7 +113,7 @@
         <note />
       </trans-unit>
       <trans-unit id="FallbackParsingWarning">
-        <source>Note: Update plan generated using fallback parsing due to unresolvable apphost SDK. Dependency analysis may have reduced accuracy.</source>
+        <source>Note: Update plan generated using fallback parsing due to unresolvable AppHost SDK. Dependency analysis may have reduced accuracy.</source>
         <target state="needs-review-translation">Uwaga: plan aktualizacji został wygenerowany przy użyciu analizy zapasowej z powodu nierozpoznanego zestawu AppHost SDK. Analiza zależności może być mniej dokładna.</target>
         <note />
       </trans-unit>
@@ -138,7 +138,7 @@
         <note />
       </trans-unit>
       <trans-unit id="NoAppHostFoundUpdateCliPrompt">
-        <source>No Aspire apphost project found. Would you like to update the Aspire CLI instead?</source>
+        <source>No Aspire AppHost project found. Would you like to update the Aspire CLI instead?</source>
         <target state="needs-review-translation">Nie znaleziono projektu Aspire AppHost. Czy chcesz zamiast tego zaktualizować narzędzie Aspire CLI?</target>
         <note />
       </trans-unit>
@@ -157,6 +157,16 @@
         <target state="translated">Nie można zapisać w katalogu instalacyjnym „{0}”. Uruchom aktualizację z podniesionymi uprawnieniami (np. używając programu sudo w systemie Linux lub macOS).</target>
         <note />
       </trans-unit>
+      <trans-unit id="NuGetConfigDirOptionDescription">
+        <source>Directory to create or update the NuGet.config file in</source>
+        <target state="new">Directory to create or update the NuGet.config file in</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="PackageNotFoundInChannelWarningFormat">
+        <source>No package found with ID '{0}' in channel '{1}'. Skipping.</source>
+        <target state="new">No package found with ID '{0}' in channel '{1}'. Skipping.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="PackageReferenceNoIdentity">
         <source>Package reference does not have Identity.</source>
         <target state="translated">Odwołanie do pakietu nie ma tożsamości.</target>
@@ -173,7 +183,7 @@
         <note />
       </trans-unit>
       <trans-unit id="ProjectArgumentDescription">
-        <source>The path to the Aspire apphost project file</source>
+        <source>The path to the Aspire AppHost project file</source>
         <target state="needs-review-translation">Ścieżka do pliku projektu hosta AppHost platformy Aspire.</target>
         <note />
       </trans-unit>
@@ -255,6 +265,11 @@
       <trans-unit id="WhichDirectoryNuGetConfigPrompt">
         <source>Which directory for NuGet.config file?</source>
         <target state="translated">Który katalog dla pliku NuGet.config?</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="YesOptionDescription">
+        <source>Automatically confirm all update prompts without asking</source>
+        <target state="new">Automatically confirm all update prompts without asking</target>
         <note />
       </trans-unit>
     </body>

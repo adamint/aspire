@@ -146,9 +146,12 @@
     <value>Channel to use for templates (stable, staging, daily)</value>
   </data>
   <data name="LanguageOptionDescription" xml:space="preserve">
-    <value>The programming language for the apphost</value>
+    <value>The programming language for the AppHost</value>
   </data>
   <data name="ResolvingTemplateVersion" xml:space="preserve">
     <value>Resolving template version...</value>
+  </data>
+  <data name="NonInteractiveTemplateRequired" xml:space="preserve">
+    <value>A template must be specified when running in non-interactive mode. Use 'aspire new &lt;template&gt;'.</value>
   </data>
 </root>

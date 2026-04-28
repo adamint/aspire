@@ -8,12 +8,12 @@
         <note />
       </trans-unit>
       <trans-unit id="AnalyzeAppHost">
-        <source>Analyze apphost</source>
+        <source>Analyze AppHost</source>
         <target state="needs-review-translation">分析应用主机</target>
         <note />
       </trans-unit>
       <trans-unit id="AnalyzeAppHostSdk">
-        <source>Analyze apphost SDK</source>
+        <source>Analyze AppHost SDK</source>
         <target state="needs-review-translation">分析应用主机 SDK</target>
         <note />
       </trans-unit>
@@ -113,7 +113,7 @@
         <note />
       </trans-unit>
       <trans-unit id="FallbackParsingWarning">
-        <source>Note: Update plan generated using fallback parsing due to unresolvable apphost SDK. Dependency analysis may have reduced accuracy.</source>
+        <source>Note: Update plan generated using fallback parsing due to unresolvable AppHost SDK. Dependency analysis may have reduced accuracy.</source>
         <target state="needs-review-translation">注意: 由于 AppHost SDK 无法解析，已采用回退解析生成更新计划。依赖项分析的准确性可能有所降低。</target>
         <note />
       </trans-unit>
@@ -138,7 +138,7 @@
         <note />
       </trans-unit>
       <trans-unit id="NoAppHostFoundUpdateCliPrompt">
-        <source>No Aspire apphost project found. Would you like to update the Aspire CLI instead?</source>
+        <source>No Aspire AppHost project found. Would you like to update the Aspire CLI instead?</source>
         <target state="needs-review-translation">找不到 Aspire AppHost 项目。是否改为更新 Aspire CLI?</target>
         <note />
       </trans-unit>
@@ -157,6 +157,16 @@
         <target state="translated">无法写入安装目录“{0}”。请使用提升的权限运行更新(例如，在 Linux/macOS 上使用 sudo)。</target>
         <note />
       </trans-unit>
+      <trans-unit id="NuGetConfigDirOptionDescription">
+        <source>Directory to create or update the NuGet.config file in</source>
+        <target state="new">Directory to create or update the NuGet.config file in</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="PackageNotFoundInChannelWarningFormat">
+        <source>No package found with ID '{0}' in channel '{1}'. Skipping.</source>
+        <target state="new">No package found with ID '{0}' in channel '{1}'. Skipping.</target>
+        <note />
+      </trans-unit>
       <trans-unit id="PackageReferenceNoIdentity">
         <source>Package reference does not have Identity.</source>
         <target state="translated">包引用没有标识。</target>
@@ -173,7 +183,7 @@
         <note />
       </trans-unit>
       <trans-unit id="ProjectArgumentDescription">
-        <source>The path to the Aspire apphost project file</source>
+        <source>The path to the Aspire AppHost project file</source>
         <target state="needs-review-translation">Aspire AppHost 项目文件的路径。</target>
         <note />
       </trans-unit>
@@ -255,6 +265,11 @@
       <trans-unit id="WhichDirectoryNuGetConfigPrompt">
         <source>Which directory for NuGet.config file?</source>
         <target state="translated">NuGet.config 文件位于哪个目录?</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="YesOptionDescription">
+        <source>Automatically confirm all update prompts without asking</source>
+        <target state="new">Automatically confirm all update prompts without asking</target>
         <note />
       </trans-unit>
     </body>

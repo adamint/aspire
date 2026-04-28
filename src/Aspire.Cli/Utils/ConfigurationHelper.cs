@@ -69,6 +69,100 @@ internal static class ConfigurationHelper
         return Path.Combine(workingDirectory, ".aspire", "settings.json");
     }
 
+    internal static DirectoryInfo? GetLegacySettingsRootDirectory(FileInfo settingsFile)
+    {
+        if (!string.Equals(settingsFile.Name, AspireJsonConfiguration.FileName, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var settingsDirectory = settingsFile.Directory;
+        if (settingsDirectory is null || !string.Equals(settingsDirectory.Name, AspireJsonConfiguration.SettingsFolder, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return settingsDirectory.Parent;
+    }
+
+    /// <summary>
+    /// Searches upward from <paramref name="startDirectory"/> for the nearest
+    /// <c>aspire.config.json</c> or legacy <c>.aspire/settings.json</c>.
+    /// </summary>
+    /// <returns>The full path to the config file, or <c>null</c> if none is found.</returns>
+    internal static string? FindNearestConfigFilePath(DirectoryInfo startDirectory)
+    {
+        var searchDir = startDirectory;
+        while (searchDir is not null)
+        {
+            var configPath = Path.Combine(searchDir.FullName, AspireConfigFile.FileName);
+            if (File.Exists(configPath))
+            {
+                return configPath;
+            }
+
+            var legacyPath = BuildPathToSettingsJsonFile(searchDir.FullName);
+            if (File.Exists(legacyPath))
+            {
+                return legacyPath;
+            }
+
+            searchDir = searchDir.Parent;
+        }
+
+        return null;
+    }
+
+    internal static bool TryLoadSettingsFile(string filePath, out IConfigurationRoot configuration)
+    {
+        configuration = new ConfigurationRoot([]);
+
+        if (!File.Exists(filePath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var content = File.ReadAllText(filePath);
+
+            if (string.IsNullOrWhiteSpace(content))
+            {
+                return false;
+            }
+
+            var node = JsonNode.Parse(content, documentOptions: ParseOptions);
+            if (node is not JsonObject)
+            {
+                return false;
+            }
+
+            var cleanJson = node.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+            var bytes = System.Text.Encoding.UTF8.GetBytes(cleanJson);
+            configuration = new ConfigurationBuilder()
+                .AddJsonStream(new MemoryStream(bytes))
+                .Build();
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>
     /// Serializes a JsonObject and writes it to a settings file, creating the directory if needed.
     /// </summary>

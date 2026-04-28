@@ -9,9 +9,9 @@ namespace Aspire.Hosting.ApplicationModel;
 /// <summary>
 /// Represents an endpoint reference for a resource with endpoints.
 /// </summary>
-[AspireExport(ExposeProperties = true)]
+[AspireExport(ExposeProperties = true, ExposeMethods = true)]
 [DebuggerDisplay("Resource = {Resource.Name}, EndpointName = {EndpointName}, IsAllocated = {IsAllocated}")]
-public sealed class EndpointReference : IManifestExpressionProvider, IValueProvider, IValueWithReferences
+public sealed class EndpointReference : IExpressionValue, IManifestExpressionProvider, IValueProvider, IValueWithReferences
 {
     // A reference to the endpoint annotation if it exists.
     private EndpointAnnotation? _endpointAnnotation;
@@ -70,6 +70,15 @@ public sealed class EndpointReference : IManifestExpressionProvider, IValueProvi
     public bool TlsEnabled => Exists && EndpointAnnotation.TlsEnabled;
 
     /// <summary>
+    /// Gets a value indicating whether the endpoint name is "http" or "https", ignoring case. This is a convention used to identify
+    /// endpoints that will be resolved based on the scheme of the endpoint in service discovery rather than by the specific endpoint name.
+    /// This is done to allow http endpoints that are dynamically updated to https to be mapped correctly despite the endpoint name no longer
+    /// matching the scheme.
+    /// </summary>
+    public bool IsHttpSchemeNamedEndpoint => string.Equals(EndpointName, "http", StringComparisons.EndpointAnnotationUriScheme) ||
+        string.Equals(EndpointName, "https", StringComparisons.EndpointAnnotationUriScheme);
+
+    /// <summary>
     /// Gets a value indicating whether this endpoint is excluded from the default set when referencing the resource's endpoints.
     /// </summary>
     /// <remarks>
@@ -85,7 +94,7 @@ public sealed class EndpointReference : IManifestExpressionProvider, IValueProvi
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The URL of the endpoint.</returns>
-    [AspireExport("getValueAsync", Description = "Gets the URL of the endpoint asynchronously")]
+    [AspireExport(Description = "Gets the URL of the endpoint asynchronously")]
     public ValueTask<string?> GetValueAsync(CancellationToken cancellationToken = default) => Property(EndpointProperty.Url).GetValueAsync(cancellationToken);
 
     /// <summary>
@@ -94,6 +103,7 @@ public sealed class EndpointReference : IManifestExpressionProvider, IValueProvi
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <param name="context">The context for value resolution.</param>
     /// <returns>The URL of the endpoint.</returns>
+    [AspireExportIgnore]
     public ValueTask<string?> GetValueAsync(ValueProviderContext context, CancellationToken cancellationToken = default) => Property(EndpointProperty.Url).GetValueAsync(context, cancellationToken);
 
     /// <summary>
@@ -128,6 +138,7 @@ public sealed class EndpointReference : IManifestExpressionProvider, IValueProvi
     /// </summary>
     /// <param name="property">The <see cref="EndpointProperty"/> enum value to use in the reference.</param>
     /// <returns>An <see cref="EndpointReferenceExpression"/> representing the specified <see cref="EndpointProperty"/>.</returns>
+    [AspireExportIgnore]
     public EndpointReferenceExpression Property(EndpointProperty property)
     {
         return new(this, property);
@@ -298,7 +309,7 @@ public sealed class EndpointReference : IManifestExpressionProvider, IValueProvi
 /// <param name="property">The property of the endpoint.</param>
 [AspireExport(ExposeProperties = true)]
 [DebuggerDisplay("EndpointExpression = {ValueExpression}, Property = {Property}, Endpoint = {Endpoint.EndpointName}")]
-public class EndpointReferenceExpression(EndpointReference endpointReference, EndpointProperty property) : IManifestExpressionProvider, IValueProvider, IValueWithReferences
+public class EndpointReferenceExpression(EndpointReference endpointReference, EndpointProperty property) : IExpressionValue, IManifestExpressionProvider, IValueProvider, IValueWithReferences
 {
     /// <summary>
     /// Gets the <see cref="EndpointReference"/>.

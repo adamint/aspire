@@ -7,7 +7,9 @@ void main() throws Exception {
         var staticFilesSource = builder.addContainer("static-files-source", "nginx");
         var backend = builder.addContainer("backend", "nginx");
         backend.withHttpEndpoint(new WithHttpEndpointOptions().name("http").targetPort(80.0));
+        var backendService = builder.addProject("backend-service", "./src/BackendService");
         var externalBackend = builder.addExternalService("external-backend", "https://example.com");
+        externalBackend.withHttpHealthCheck();
         var proxy = builder.addYarp("proxy");
         proxy.withHostPort(8080.0);
         proxy.withHostHttpsPort(8443.0);
@@ -22,19 +24,20 @@ void main() throws Exception {
         proxy.withBuildSecret("MY_SECRET", buildSecret);
         proxy.withConfiguration((config) -> {
             var endpoint = backend.getEndpoint("http");
-            var backendService = backend;
             var endpointCluster = config.addClusterFromEndpoint(endpoint);
             var resourceCluster = config.addClusterFromResource(backendService);
             var externalServiceCluster = config.addClusterFromExternalService(externalBackend);
             var singleDestinationCluster = config.addClusterWithDestination("single-destination", "https://example.net");
             var multiDestinationCluster = config.addClusterWithDestinations("multi-destination", new String[] { "https://example.org", "https://example.edu" });
-            var routeFromEndpoint = config.addRouteFromEndpoint("/from-endpoint/{**catchall}", endpoint);
-            var routeFromResource = config.addRouteFromResource("/from-resource/{**catchall}", backendService);
-            var routeFromExternalService = config.addRouteFromExternalService("/from-external/{**catchall}", externalBackend);
+            var routeFromEndpoint = config.addRoute("/from-endpoint/{**catchall}", endpoint);
+            var routeFromResource = config.addRoute("/from-resource/{**catchall}", backendService);
+            var routeFromExternalService = config.addRoute("/from-external/{**catchall}", externalBackend);
+            var routeFromString = config.addRoute("/from-string/{**catchall}", "https://example.route");
             var catchAllRoute = config.addCatchAllRoute(endpointCluster);
-            var catchAllRouteFromEndpoint = config.addCatchAllRouteFromEndpoint(endpoint);
-            var catchAllRouteFromResource = config.addCatchAllRouteFromResource(backendService);
-            var catchAllRouteFromExternalService = config.addCatchAllRouteFromExternalService(externalBackend);
+            var catchAllRouteFromEndpoint = config.addCatchAllRoute(endpoint);
+            var catchAllRouteFromResource = config.addCatchAllRoute(backendService);
+            var catchAllRouteFromExternalService = config.addCatchAllRoute(externalBackend);
+            var catchAllRouteFromString = config.addCatchAllRoute("https://example.catchall");
 
             var forwarderRequestConfig = new YarpForwarderRequestConfig();
             forwarderRequestConfig.setActivityTimeout(30_000_000.0);
@@ -120,10 +123,12 @@ void main() throws Exception {
             routeFromEndpoint.withTransform(Map.ofEntries(Map.entry("PathPrefix", "/endpoint"), Map.entry("RequestHeadersCopy", "true")));
             routeFromResource.withTransform(Map.ofEntries(Map.entry("PathPrefix", "/resource")));
             routeFromExternalService.withTransform(Map.ofEntries(Map.entry("PathPrefix", "/external")));
+            routeFromString.withTransform(Map.ofEntries(Map.entry("PathPrefix", "/string")));
             catchAllRoute.withTransform(Map.ofEntries(Map.entry("PathPrefix", "/cluster")));
             catchAllRouteFromEndpoint.withTransform(Map.ofEntries(Map.entry("PathPrefix", "/catchall-endpoint")));
             catchAllRouteFromResource.withTransform(Map.ofEntries(Map.entry("PathPrefix", "/catchall-resource")));
             catchAllRouteFromExternalService.withTransform(Map.ofEntries(Map.entry("PathPrefix", "/catchall-external")));
+            catchAllRouteFromString.withTransform(Map.ofEntries(Map.entry("PathPrefix", "/catchall-string")));
             config.addRoute("/resource/{**catchall}", resourceCluster);
             config.addRoute("/external/{**catchall}", externalServiceCluster);
             config.addRoute("/single/{**catchall}", singleDestinationCluster);

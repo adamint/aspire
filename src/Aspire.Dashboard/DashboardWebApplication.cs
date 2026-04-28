@@ -3,6 +3,7 @@
 
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Net.Sockets;
 using System.Reflection;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -46,6 +47,21 @@ namespace Aspire.Dashboard;
 
 public sealed class DashboardWebApplication : IAsyncDisposable
 {
+    /// <summary>
+    /// Exit code returned for unexpected startup errors.
+    /// </summary>
+    public const int ExitCodeUnexpectedError = DashboardExitCodes.UnexpectedError;
+
+    /// <summary>
+    /// Exit code returned when dashboard configuration is invalid.
+    /// </summary>
+    public const int ExitCodeValidationFailure = DashboardExitCodes.ValidationFailure;
+
+    /// <summary>
+    /// Exit code returned when the configured address is already in use.
+    /// </summary>
+    public const int ExitCodeAddressInUse = DashboardExitCodes.AddressInUse;
+
     private const string DashboardAuthCookieName = ".Aspire.Dashboard.Auth";
     private const string DashboardAntiForgeryCookieName = ".Aspire.Dashboard.Antiforgery";
     private readonly WebApplication _app;
@@ -254,6 +270,8 @@ public sealed class DashboardWebApplication : IAsyncDisposable
         // Data from the server.
         builder.Services.TryAddSingleton<IDashboardClient, DashboardClient>();
 
+        builder.Services.TryAddSingleton<INotificationService, NotificationService>();
+        builder.Services.TryAddSingleton(TimeProvider.System);
         builder.Services.TryAddScoped<DashboardCommandExecutor>();
 
         builder.Services.AddSingleton<PauseManager>();
@@ -383,9 +401,11 @@ public sealed class DashboardWebApplication : IAsyncDisposable
                 _logger.LogWarning("OTLP server is unsecured. Untrusted apps can send telemetry to the dashboard. For more information, visit https://go.microsoft.com/fwlink/?linkid=2267030");
             }
 
+            _logger.LogDebug("Dashboard API disabled: {ApiDisabled}", _dashboardOptionsMonitor.CurrentValue.Api.Disabled.GetValueOrDefault());
+
             // Only show API security warning if API is enabled and unsecured
             // API runs on the frontend endpoint (no separate accessor needed)
-            if (_dashboardOptionsMonitor.CurrentValue.Api.Enabled.GetValueOrDefault() &&
+            if (!_dashboardOptionsMonitor.CurrentValue.Api.Disabled.GetValueOrDefault() &&
                 _dashboardOptionsMonitor.CurrentValue.Api.AuthMode == ApiAuthMode.Unsecured)
             {
                 _logger.LogWarning("Dashboard API is unsecured. Untrusted apps can access sensitive telemetry data.");
@@ -896,11 +916,37 @@ public sealed class DashboardWebApplication : IAsyncDisposable
     {
         if (_validationFailures.Count > 0)
         {
-            return -1;
+            return ExitCodeValidationFailure;
         }
 
-        _app.Run();
-        return 0;
+        try
+        {
+            _app.Run();
+            return 0;
+        }
+        catch (IOException ex) when (ContainsAddressInUse(ex))
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            return ExitCodeAddressInUse;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            return ExitCodeUnexpectedError;
+        }
+    }
+
+    private static bool ContainsAddressInUse(Exception ex)
+    {
+        for (var current = ex.InnerException; current is not null; current = current.InnerException)
+        {
+            if (current is SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse })
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public Task StartAsync(CancellationToken cancellationToken = default)

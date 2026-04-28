@@ -5,10 +5,13 @@
 .DESCRIPTION
     This script generates the required WinGet manifest files (version, locale, and installer)
     from templates by substituting version numbers, URLs, and computing SHA256 hashes.
-    Installer URLs are derived from the version and RIDs using the ci.dot.net URL pattern.
+    Installer URLs are derived from the installer version, artifact version, and RIDs using the ci.dot.net URL pattern.
 
 .PARAMETER Version
-    The version number for the package (e.g., "13.3.0-preview.1.26111.5").
+    The package version and installer filename version (e.g., "13.2.0").
+
+.PARAMETER ArtifactVersion
+    The version segment used in the ci.dot.net artifact path. Defaults to Version.
 
 .PARAMETER TemplateDir
     The directory containing the manifest templates to use.
@@ -24,13 +27,18 @@
     e.g., "./manifests/m/Microsoft/Aspire/{Version}" for Microsoft.Aspire
     or "./manifests/m/Microsoft/Aspire/Prerelease/{Version}" for Microsoft.Aspire.Prerelease.
 
+.PARAMETER ArchiveRoot
+    Root directory containing locally built CLI archives. When specified, SHA256 hashes
+    are computed from matching local files instead of downloading from installer URLs.
+
 .PARAMETER ReleaseNotesUrl
     URL to the release notes page. If not specified, derived from the version
     (e.g., "13.2.0" -> "https://aspire.dev/whats-new/aspire-13-2/").
 
-.PARAMETER ValidateUrls
-    When specified, verifies that all installer URLs are accessible (HTTP HEAD request)
-    before downloading them to compute SHA256 hashes.
+.PARAMETER SkipUrlValidation
+    When specified, skips all URL operations: both the HEAD-request validation and downloading
+    installer files to compute SHA256 hashes. Placeholder hashes are used instead.
+    This is useful for PR validation where the installer URLs have not been published yet.
 
 .EXAMPLE
     ./generate-manifests.ps1 -Version "13.3.0-preview.1.26111.5" `
@@ -38,14 +46,18 @@
 
 .EXAMPLE
     ./generate-manifests.ps1 -Version "13.2.0" `
+        -ArtifactVersion "13.2.0-preview.1.26111.5" `
         -TemplateDir "./eng/winget/microsoft.aspire" `
-        -Rids "win-x64,win-arm64" -ValidateUrls
+        -Rids "win-x64,win-arm64"
 #>
 
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$Version,
+
+    [Parameter(Mandatory = $false)]
+    [string]$ArtifactVersion,
 
     [Parameter(Mandatory = $true)]
     [string]$TemplateDir,
@@ -57,13 +69,20 @@ param(
     [string]$OutputPath,
 
     [Parameter(Mandatory = $false)]
+    [string]$ArchiveRoot,
+
+    [Parameter(Mandatory = $false)]
     [string]$ReleaseNotesUrl,
 
     [Parameter(Mandatory = $false)]
-    [switch]$ValidateUrls
+    [switch]$SkipUrlValidation
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($ArtifactVersion)) {
+    $ArtifactVersion = $Version
+}
 
 # Determine script paths
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -71,6 +90,11 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 # Validate template directory
 if (-not (Test-Path $TemplateDir)) {
     Write-Error "Template directory not found: $TemplateDir"
+    exit 1
+}
+
+if ($ArchiveRoot -and -not (Test-Path $ArchiveRoot)) {
+    Write-Error "Archive root directory not found: $ArchiveRoot"
     exit 1
 }
 
@@ -133,14 +157,15 @@ function Get-ArchitectureFromRid {
 }
 
 # Build installer URL from version and RID
-# Pattern: https://ci.dot.net/public/aspire/{version}/aspire-cli-{rid}-{version}.zip
+# Pattern: https://ci.dot.net/public/aspire/{artifactVersion}/aspire-cli-{rid}-{version}.zip
 function Get-InstallerUrl {
     param(
         [string]$Version,
+        [string]$ArtifactVersion,
         [string]$Rid
     )
 
-    return "https://ci.dot.net/public/aspire/$Version/aspire-cli-$Rid-$Version.zip"
+    return "https://ci.dot.net/public/aspire/$ArtifactVersion/aspire-cli-$Rid-$Version.zip"
 }
 
 # Function to compute SHA256 hash of a file downloaded from URL
@@ -167,6 +192,43 @@ function Get-RemoteFileSha256 {
             Remove-Item $tempFile -Force
         }
     }
+}
+
+function Get-LocalArchivePath {
+    param(
+        [string]$ArchiveRoot,
+        [string]$Rid,
+        [string]$Version
+    )
+
+    $archiveName = "aspire-cli-$Rid-$Version.zip"
+    $matches = @(Get-ChildItem -Path $ArchiveRoot -File -Recurse -Filter $archiveName | Sort-Object FullName)
+    if ($matches.Count -eq 0) {
+        Write-Error "Could not find local archive '$archiveName' under '$ArchiveRoot'"
+        exit 1
+    }
+
+    if ($matches.Count -gt 1) {
+        $matchList = $matches | ForEach-Object { "  $($_.FullName)" }
+        Write-Error "Found multiple local archives named '$archiveName' under '$ArchiveRoot':`n$($matchList -join "`n")"
+        exit 1
+    }
+
+    return $matches[0].FullName
+}
+
+function Get-LocalFileSha256 {
+    param(
+        [string]$Path,
+        [string]$Description
+    )
+
+    Write-Host "Computing SHA256 for $Description from local file..."
+    Write-Host "  Path: $Path"
+
+    $hash = (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToUpperInvariant()
+    Write-Host "  SHA256: $hash"
+    return $hash
 }
 
 # Function to process a template file
@@ -199,12 +261,37 @@ Write-Host ""
 $installerEntries = @()
 foreach ($rid in $ridList) {
     $arch = Get-ArchitectureFromRid -Rid $rid
-    $url = Get-InstallerUrl -Version $Version -Rid $rid
+    $url = Get-InstallerUrl -Version $Version -ArtifactVersion $ArtifactVersion -Rid $rid
     $installerEntries += @{ Rid = $rid; Architecture = $arch; Url = $url }
 }
 
-# Validate URLs are accessible before downloading (fast-fail)
-if ($ValidateUrls) {
+if ($ArchiveRoot) {
+    Write-Host "Computing SHA256 hashes from local archives in $ArchiveRoot..."
+
+    $installersYaml = "Installers:"
+    foreach ($entry in $installerEntries) {
+        $archivePath = Get-LocalArchivePath -ArchiveRoot $ArchiveRoot -Rid $entry.Rid -Version $Version
+        $sha256 = Get-LocalFileSha256 -Path $archivePath -Description "$($entry.Rid) installer"
+
+        $installersYaml += "`n- Architecture: $($entry.Architecture)"
+        $installersYaml += "`n  InstallerUrl: $($entry.Url)"
+        $installersYaml += "`n  InstallerSha256: $sha256"
+    }
+} elseif ($SkipUrlValidation) {
+    Write-Host "SkipUrlValidation specified — using placeholder SHA256 hashes (installer URLs will not be validated or downloaded)"
+    Write-Host ""
+
+    $installersYaml = "Installers:"
+    foreach ($entry in $installerEntries) {
+        $placeholderHash = "0" * 64
+        Write-Host "  $($entry.Rid): URL=$($entry.Url), SHA256=$placeholderHash (placeholder)"
+
+        $installersYaml += "`n- Architecture: $($entry.Architecture)"
+        $installersYaml += "`n  InstallerUrl: $($entry.Url)"
+        $installersYaml += "`n  InstallerSha256: $placeholderHash"
+    }
+} else {
+    # Validate URLs are accessible before downloading (fast-fail)
     Write-Host "Validating installer URLs..."
     $failed = $false
     foreach ($entry in $installerEntries) {
@@ -224,17 +311,17 @@ if ($ValidateUrls) {
         exit 1
     }
     Write-Host ""
-}
 
-Write-Host "Computing SHA256 hashes..."
+    Write-Host "Computing SHA256 hashes by downloading from URLs..."
 
-$installersYaml = "Installers:"
-foreach ($entry in $installerEntries) {
-    $sha256 = Get-RemoteFileSha256 -Url $entry.Url -Description "$($entry.Rid) installer"
+    $installersYaml = "Installers:"
+    foreach ($entry in $installerEntries) {
+        $sha256 = Get-RemoteFileSha256 -Url $entry.Url -Description "$($entry.Rid) installer"
 
-    $installersYaml += "`n- Architecture: $($entry.Architecture)"
-    $installersYaml += "`n  InstallerUrl: $($entry.Url)"
-    $installersYaml += "`n  InstallerSha256: $sha256"
+        $installersYaml += "`n- Architecture: $($entry.Architecture)"
+        $installersYaml += "`n  InstallerUrl: $($entry.Url)"
+        $installersYaml += "`n  InstallerSha256: $sha256"
+    }
 }
 
 # Define substitutions
@@ -288,6 +375,6 @@ Write-Host "Successfully generated WinGet manifests at: $OutputPath"
 Write-Host ""
 Write-Host "Next steps:"
 Write-Host "  1. Validate manifests: winget validate --manifest `"$OutputPath`""
-Write-Host "  2. Submit to winget-pkgs: wingetcreate submit --token YOUR_PAT `"$OutputPath`""
+Write-Host "  2. Submit to winget-pkgs: wingetcreate submit --token YOUR_PAT `"$([System.IO.Path]::Combine($OutputPath, "$PackageIdentifier.yaml"))`" `"$([System.IO.Path]::Combine($OutputPath, "$PackageIdentifier.installer.yaml"))`" `"$([System.IO.Path]::Combine($OutputPath, "$PackageIdentifier.locale.en-US.yaml"))`""
 
 exit 0

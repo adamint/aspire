@@ -30,7 +30,7 @@ public static class AzureSearchExtensions
     ///
     /// These can be replaced by calling <see cref="WithRoleAssignments{T}(IResourceBuilder{T}, IResourceBuilder{AzureSearchResource}, SearchBuiltInRole[])"/>.
     /// </remarks>
-    [AspireExport("addAzureSearch", Description = "Adds an Azure AI Search service resource")]
+    [AspireExport(Description = "Adds an Azure AI Search service resource")]
     public static IResourceBuilder<AzureSearchResource> AddAzureSearch(this IDistributedApplicationBuilder builder, [ResourceName] string name)
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -146,7 +146,7 @@ public static class AzureSearchExtensions
     /// <param name="roles">The Azure AI Search roles to be assigned.</param>
     /// <returns>The updated <see cref="IResourceBuilder{T}"/> with the applied role assignments.</returns>
     /// <exception cref="ArgumentException">Thrown when a role value is not a valid <see cref="AzureSearchRole"/> value.</exception>
-    [AspireExport("withSearchRoleAssignments", Description = "Assigns Azure AI Search roles to a resource")]
+    [AspireExport("withSearchRoleAssignments", MethodName = "withRoleAssignments", Description = "Assigns Azure AI Search roles to a resource")]
     internal static IResourceBuilder<T> WithRoleAssignments<T>(
         this IResourceBuilder<T> builder,
         IResourceBuilder<AzureSearchResource> target,

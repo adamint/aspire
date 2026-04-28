@@ -109,6 +109,22 @@ namespace Aspire.Cli.Resources {
             }
         }
 
+        public static string CertificatesNotTrustedNonInteractive
+        {
+            get
+            {
+                return ResourceManager.GetString("CertificatesNotTrustedNonInteractive", resourceCulture);
+            }
+        }
+
+        public static string CertificatesPartiallyTrustedNonInteractive
+        {
+            get
+            {
+                return ResourceManager.GetString("CertificatesPartiallyTrustedNonInteractive", resourceCulture);
+            }
+        }
+
         public static string FailedToRetrieveCachedTemplatePackages
         {
             get
@@ -253,6 +269,30 @@ namespace Aspire.Cli.Resources {
             }
         }
 
+        public static string GlobalAppHostPathCannotBeSetWithConfigCommand
+        {
+            get
+            {
+                return ResourceManager.GetString("GlobalAppHostPathCannotBeSetWithConfigCommand", resourceCulture);
+            }
+        }
+
+        public static string LegacyAppHostPathCannotBeSetWithConfigCommand
+        {
+            get
+            {
+                return ResourceManager.GetString("LegacyAppHostPathCannotBeSetWithConfigCommand", resourceCulture);
+            }
+        }
+
+        public static string GlobalAppHostPathIgnored
+        {
+            get
+            {
+                return ResourceManager.GetString("GlobalAppHostPathIgnored", resourceCulture);
+            }
+        }
+
         public static string ConfigurationKeyNotFound
         {
             get
@@ -306,6 +346,13 @@ namespace Aspire.Cli.Resources {
             get
             {
                 return ResourceManager.GetString("ProjectFileMayBeUnbuildableAppHost", resourceCulture);
+            }
+        }
+        public static string ProjectFilesCreatedButNodeToolsNotFound
+        {
+            get
+            {
+                return ResourceManager.GetString("ProjectFilesCreatedButNodeToolsNotFound", resourceCulture);
             }
         }
         public static string AppHostsMayNotBeBuildable

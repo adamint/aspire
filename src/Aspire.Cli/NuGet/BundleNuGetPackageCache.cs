@@ -18,15 +18,18 @@ namespace Aspire.Cli.NuGet;
 internal sealed class BundleNuGetPackageCache : INuGetPackageCache
 {
     private readonly IBundleService _bundleService;
+    private readonly LayoutProcessRunner _layoutProcessRunner;
     private readonly ILogger<BundleNuGetPackageCache> _logger;
     private readonly IFeatures _features;
 
     public BundleNuGetPackageCache(
         IBundleService bundleService,
+        LayoutProcessRunner layoutProcessRunner,
         ILogger<BundleNuGetPackageCache> logger,
         IFeatures features)
     {
         _bundleService = bundleService;
+        _layoutProcessRunner = layoutProcessRunner;
         _logger = logger;
         _features = features;
     }
@@ -39,7 +42,8 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
     {
         var packages = await SearchPackagesInternalAsync(
             workingDirectory,
-            "Aspire.ProjectTemplates",
+            query: "Aspire.ProjectTemplates",
+            exactMatch: false,
             prerelease,
             nugetConfigFile,
             cancellationToken).ConfigureAwait(false);
@@ -55,7 +59,8 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
     {
         var packages = await SearchPackagesInternalAsync(
             workingDirectory,
-            "Aspire.Hosting",
+            query: "Aspire.Hosting",
+            exactMatch: false,
             prerelease,
             nugetConfigFile,
             cancellationToken).ConfigureAwait(false);
@@ -71,7 +76,8 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
     {
         var packages = await SearchPackagesInternalAsync(
             workingDirectory,
-            "Aspire.Cli",
+            query: "Aspire.Cli",
+            exactMatch: false,
             prerelease,
             nugetConfigFile,
             cancellationToken).ConfigureAwait(false);
@@ -90,7 +96,8 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
     {
         var packages = await SearchPackagesInternalAsync(
             workingDirectory,
-            packageId,
+            query: packageId,
+            exactMatch: false,
             prerelease,
             nugetConfigFile,
             cancellationToken).ConfigureAwait(false);
@@ -98,9 +105,30 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
         return FilterPackages(packages, filter);
     }
 
+    public async Task<IEnumerable<NuGetPackage>> GetPackageVersionsAsync(
+        DirectoryInfo workingDirectory,
+        string exactPackageId,
+        bool prerelease,
+        FileInfo? nugetConfigFile,
+        bool useCache,
+        CancellationToken cancellationToken)
+    {
+        var packages = await SearchPackagesInternalAsync(
+            workingDirectory,
+            query: exactPackageId,
+            exactMatch: true,
+            prerelease,
+            nugetConfigFile,
+            cancellationToken).ConfigureAwait(false);
+
+        bool FilterExactIdMatch(string? id) => string.Equals(id, exactPackageId, StringComparison.Ordinal);
+        return FilterPackages(packages, FilterExactIdMatch);
+    }
+
     private async Task<IEnumerable<NuGetPackage>> SearchPackagesInternalAsync(
         DirectoryInfo workingDirectory,
         string query,
+        bool exactMatch,
         bool prerelease,
         FileInfo? nugetConfigFile,
         CancellationToken cancellationToken)
@@ -155,7 +183,7 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
         _logger.LogDebug("NuGet search args: {Args}", string.Join(" ", args));
         _logger.LogDebug("Working directory: {WorkingDir}", workingDirectory.FullName);
 
-        var (exitCode, output, error) = await LayoutProcessRunner.RunAsync(
+        var (exitCode, output, error) = await _layoutProcessRunner.RunAsync(
             managedPath,
             args,
             workingDirectory: workingDirectory.FullName,
@@ -192,12 +220,30 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
             }
 
             // Convert to NuGetPackage format
-            return result.Packages.Select(p => new NuGetPackage
+            if (!exactMatch)
             {
-                Id = p.Id,
-                Version = p.Version,
-                Source = p.Source ?? string.Empty
-            }).ToList();
+                return result.Packages.Select(p => new NuGetPackage
+                {
+                    Id = p.Id,
+                    Version = p.Version,
+                    Source = p.Source ?? string.Empty
+                }).ToList();
+            }
+            else
+            {
+                var exactMatchResultPackage = result.Packages
+                    .FirstOrDefault(p => p.Id.Equals(query, StringComparison.Ordinal));
+                if (exactMatchResultPackage is null || exactMatchResultPackage.AllVersions is null)
+                {
+                    return [];
+                }
+                return exactMatchResultPackage.AllVersions.Select(packageVersion => new NuGetPackage
+                {
+                    Id = exactMatchResultPackage.Id,
+                    Version = packageVersion,
+                    Source = exactMatchResultPackage.Source ?? string.Empty
+                }).ToList();
+            }
         }
         catch (JsonException ex)
         {
@@ -208,6 +254,7 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
 
     private IEnumerable<NuGetPackage> FilterPackages(IEnumerable<NuGetPackage> packages, Func<string, bool>? filter)
     {
+        var showDeprecatedPackages = _features.IsFeatureEnabled(KnownFeatures.ShowDeprecatedPackages, defaultValue: false);
         var effectiveFilter = (NuGetPackage p) =>
         {
             if (filter is not null)
@@ -218,7 +265,7 @@ internal sealed class BundleNuGetPackageCache : INuGetPackageCache
             var isOfficialPackage = IsOfficialOrCommunityToolkitPackage(p.Id);
 
             // Apply deprecated package filter unless the user wants to show deprecated packages
-            if (isOfficialPackage && !_features.IsFeatureEnabled(KnownFeatures.ShowDeprecatedPackages, defaultValue: false))
+            if (isOfficialPackage && !showDeprecatedPackages)
             {
                 return !DeprecatedPackages.IsDeprecated(p.Id);
             }

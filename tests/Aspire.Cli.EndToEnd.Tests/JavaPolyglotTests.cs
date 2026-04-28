@@ -18,10 +18,10 @@ public sealed class JavaPolyglotTests(ITestOutputHelper output)
     public async Task CreateJavaAppHostWithViteApp()
     {
         var repoRoot = CliE2ETestHelpers.GetRepoRoot();
-        var installMode = CliE2ETestHelpers.DetectDockerInstallMode(repoRoot);
+        var strategy = CliInstallStrategy.Detect(output.WriteLine);
         var workspace = TemporaryWorkspace.Create(output);
 
-        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, installMode, output, variant: CliE2ETestHelpers.DockerfileVariant.PolyglotJava, mountDockerSocket: true, workspace: workspace);
+        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, variant: CliE2ETestHelpers.DockerfileVariant.PolyglotJava, mountDockerSocket: true, workspace: workspace);
 
         var pendingRun = terminal.RunAsync(TestContext.Current.CancellationToken);
 
@@ -29,7 +29,7 @@ public sealed class JavaPolyglotTests(ITestOutputHelper output)
         var auto = new Hex1bTerminalAutomator(terminal, defaultTimeout: TimeSpan.FromSeconds(500));
 
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
-        await auto.InstallAspireCliInDockerAsync(installMode, counter);
+        await auto.InstallAspireCliAsync(strategy, counter);
         await auto.EnableExperimentalJavaSupportAsync(counter);
 
         await auto.TypeAsync("aspire init");
@@ -72,7 +72,7 @@ public sealed class JavaPolyglotTests(ITestOutputHelper output)
 
         await auto.TypeAsync("aspire run");
         await auto.EnterAsync();
-        await auto.WaitUntilTextAsync("Press CTRL+C to stop the apphost and exit.", timeout: TimeSpan.FromMinutes(3));
+        await auto.WaitUntilTextAsync("Press CTRL+C to stop the AppHost and exit.", timeout: TimeSpan.FromMinutes(3));
 
         await auto.Ctrl().KeyAsync(Hex1b.Input.Hex1bKey.C);
         await auto.WaitForSuccessPromptAsync(counter);

@@ -1,4 +1,4 @@
-﻿//! aspire.rs - Capability-based Aspire SDK
+//! aspire.rs - Capability-based Aspire SDK
 //! GENERATED CODE - DO NOT EDIT
 
 use std::collections::HashMap;
@@ -134,6 +134,35 @@ impl TestDeeplyNestedDto {
         map.insert("NestedData".to_string(), serde_json::to_value(&self.nested_data).unwrap_or(Value::Null));
         map.insert("MetadataArray".to_string(), serde_json::to_value(&self.metadata_array).unwrap_or(Value::Null));
         map
+    }
+}
+
+// ============================================================================
+// Exported Values
+// ============================================================================
+
+pub mod test_configs {
+    use super::*;
+
+    pub fn default() -> TestConfigDto {
+        serde_json::from_value::<TestConfigDto>(serde_json::json!({"Name":"default","Port":6379,"Enabled":true,"OptionalField":"cache"}))
+            .expect("generated exported value should deserialize")
+    }
+    pub mod profiles {
+        use super::*;
+
+        pub fn development() -> TestConfigDto {
+            serde_json::from_value::<TestConfigDto>(serde_json::json!({"Name":"development","Port":5001,"Enabled":false,"OptionalField":null}))
+                .expect("generated exported value should deserialize")
+        }
+    }
+    pub fn secure() -> TestConfigDto {
+        serde_json::from_value::<TestConfigDto>(serde_json::json!({"Name":"secure","Port":6380,"Enabled":true,"OptionalField":null}))
+            .expect("generated exported value should deserialize")
+    }
+    pub fn unicode_greeting() -> String {
+        serde_json::from_value::<String>(serde_json::json!("你好こんにちは"))
+            .expect("generated exported value should deserialize")
     }
 }
 
@@ -567,6 +596,16 @@ impl TestDatabaseResource {
         Ok(IResource::new(handle, self.client.clone()))
     }
 
+    /// Adds a dependency from a string or another resource
+    pub fn with_union_dependency(&self, dependency: Value) -> Result<IResource, Box<dyn std::error::Error>> {
+        let mut args: HashMap<String, Value> = HashMap::new();
+        args.insert("builder".to_string(), self.handle.to_json());
+        args.insert("dependency".to_string(), serde_json::to_value(&dependency).unwrap_or(Value::Null));
+        let result = self.client.invoke_capability("Aspire.Hosting.CodeGeneration.Rust.Tests/withUnionDependency", args)?;
+        let handle: Handle = serde_json::from_value(result)?;
+        Ok(IResource::new(handle, self.client.clone()))
+    }
+
     /// Sets the endpoints
     pub fn with_endpoints(&self, endpoints: Vec<String>) -> Result<IResource, Box<dyn std::error::Error>> {
         let mut args: HashMap<String, Value> = HashMap::new();
@@ -795,6 +834,62 @@ impl TestEnvironmentContext {
     }
 }
 
+/// Wrapper for Aspire.Hosting.CodeGeneration.Rust.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestMutableCollectionContext
+pub struct TestMutableCollectionContext {
+    handle: Handle,
+    client: Arc<AspireClient>,
+}
+
+impl HasHandle for TestMutableCollectionContext {
+    fn handle(&self) -> &Handle {
+        &self.handle
+    }
+}
+
+impl TestMutableCollectionContext {
+    pub fn new(handle: Handle, client: Arc<AspireClient>) -> Self {
+        Self { handle, client }
+    }
+
+    pub fn handle(&self) -> &Handle {
+        &self.handle
+    }
+
+    pub fn client(&self) -> &Arc<AspireClient> {
+        &self.client
+    }
+
+    /// Gets the Tags property
+    pub fn tags(&self) -> AspireList<String> {
+        AspireList::with_getter(self.handle.clone(), self.client.clone(), "Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestMutableCollectionContext.tags")
+    }
+
+    /// Sets the Tags property
+    pub fn set_tags(&self, value: AspireList<String>) -> Result<TestMutableCollectionContext, Box<dyn std::error::Error>> {
+        let mut args: HashMap<String, Value> = HashMap::new();
+        args.insert("context".to_string(), self.handle.to_json());
+        args.insert("value".to_string(), value.handle().to_json());
+        let result = self.client.invoke_capability("Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestMutableCollectionContext.setTags", args)?;
+        let handle: Handle = serde_json::from_value(result)?;
+        Ok(TestMutableCollectionContext::new(handle, self.client.clone()))
+    }
+
+    /// Gets the Counts property
+    pub fn counts(&self) -> AspireDict<String, f64> {
+        AspireDict::with_getter(self.handle.clone(), self.client.clone(), "Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestMutableCollectionContext.counts")
+    }
+
+    /// Sets the Counts property
+    pub fn set_counts(&self, value: AspireDict<String, f64>) -> Result<TestMutableCollectionContext, Box<dyn std::error::Error>> {
+        let mut args: HashMap<String, Value> = HashMap::new();
+        args.insert("context".to_string(), self.handle.to_json());
+        args.insert("value".to_string(), value.handle().to_json());
+        let result = self.client.invoke_capability("Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes/TestMutableCollectionContext.setCounts", args)?;
+        let handle: Handle = serde_json::from_value(result)?;
+        Ok(TestMutableCollectionContext::new(handle, self.client.clone()))
+    }
+}
+
 /// Wrapper for Aspire.Hosting.CodeGeneration.Rust.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestRedisResource
 pub struct TestRedisResource {
     handle: Handle,
@@ -1017,6 +1112,16 @@ impl TestRedisResource {
         args.insert("builder".to_string(), self.handle.to_json());
         args.insert("dependency".to_string(), dependency.handle().to_json());
         let result = self.client.invoke_capability("Aspire.Hosting.CodeGeneration.Rust.Tests/withDependency", args)?;
+        let handle: Handle = serde_json::from_value(result)?;
+        Ok(IResource::new(handle, self.client.clone()))
+    }
+
+    /// Adds a dependency from a string or another resource
+    pub fn with_union_dependency(&self, dependency: Value) -> Result<IResource, Box<dyn std::error::Error>> {
+        let mut args: HashMap<String, Value> = HashMap::new();
+        args.insert("builder".to_string(), self.handle.to_json());
+        args.insert("dependency".to_string(), serde_json::to_value(&dependency).unwrap_or(Value::Null));
+        let result = self.client.invoke_capability("Aspire.Hosting.CodeGeneration.Rust.Tests/withUnionDependency", args)?;
         let handle: Handle = serde_json::from_value(result)?;
         Ok(IResource::new(handle, self.client.clone()))
     }
@@ -1448,6 +1553,16 @@ impl TestVaultResource {
         Ok(IResource::new(handle, self.client.clone()))
     }
 
+    /// Adds a dependency from a string or another resource
+    pub fn with_union_dependency(&self, dependency: Value) -> Result<IResource, Box<dyn std::error::Error>> {
+        let mut args: HashMap<String, Value> = HashMap::new();
+        args.insert("builder".to_string(), self.handle.to_json());
+        args.insert("dependency".to_string(), serde_json::to_value(&dependency).unwrap_or(Value::Null));
+        let result = self.client.invoke_capability("Aspire.Hosting.CodeGeneration.Rust.Tests/withUnionDependency", args)?;
+        let handle: Handle = serde_json::from_value(result)?;
+        Ok(IResource::new(handle, self.client.clone()))
+    }
+
     /// Sets the endpoints
     pub fn with_endpoints(&self, endpoints: Vec<String>) -> Result<IResource, Box<dyn std::error::Error>> {
         let mut args: HashMap<String, Value> = HashMap::new();
@@ -1613,6 +1728,9 @@ pub fn connect() -> Result<Arc<AspireClient>, Box<dyn std::error::Error>> {
         .map_err(|_| "REMOTE_APP_HOST_SOCKET_PATH environment variable not set. Run this application using `aspire run`")?;
     let client = Arc::new(AspireClient::new(&socket_path));
     client.connect()?;
+    let auth_token = std::env::var("ASPIRE_REMOTE_APPHOST_TOKEN")
+        .map_err(|_| "ASPIRE_REMOTE_APPHOST_TOKEN environment variable not set. Run this application using `aspire run`")?;
+    client.authenticate(&auth_token)?;
     Ok(client)
 }
 
@@ -1635,8 +1753,8 @@ pub fn create_builder(options: Option<CreateBuilderOptions>) -> Result<IDistribu
         }
     }
     let mut args: HashMap<String, Value> = HashMap::new();
-    args.insert("options".to_string(), serde_json::to_value(resolved_options).unwrap_or(Value::Null));
-    let result = client.invoke_capability("Aspire.Hosting/createBuilderWithOptions", args)?;
+    args.insert("argsOrOptions".to_string(), serde_json::to_value(resolved_options).unwrap_or(Value::Null));
+    let result = client.invoke_capability("Aspire.Hosting/createBuilder", args)?;
     let handle: Handle = serde_json::from_value(result)?;
     Ok(IDistributedApplicationBuilder::new(handle, client))
 }

@@ -26,10 +26,10 @@ public sealed class AgentCommandTests(ITestOutputHelper output)
     public async Task AgentCommands_AllHelpOutputs_AreCorrect()
     {
         var repoRoot = CliE2ETestHelpers.GetRepoRoot();
-        var installMode = CliE2ETestHelpers.DetectDockerInstallMode(repoRoot);
+        var strategy = CliInstallStrategy.Detect(output.WriteLine);
         var workspace = TemporaryWorkspace.Create(output);
 
-        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, installMode, output, workspace: workspace);
+        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, workspace: workspace);
 
         var pendingRun = terminal.RunAsync(TestContext.Current.CancellationToken);
 
@@ -38,7 +38,7 @@ public sealed class AgentCommandTests(ITestOutputHelper output)
 
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
 
-        await auto.InstallAspireCliInDockerAsync(installMode, counter);
+        await auto.InstallAspireCliAsync(strategy, counter);
 
         // Test 1: aspire agent --help
         await auto.TypeAsync("aspire agent --help");
@@ -88,10 +88,10 @@ public sealed class AgentCommandTests(ITestOutputHelper output)
     public async Task AgentInitCommand_MigratesDeprecatedConfig()
     {
         var repoRoot = CliE2ETestHelpers.GetRepoRoot();
-        var installMode = CliE2ETestHelpers.DetectDockerInstallMode(repoRoot);
+        var strategy = CliInstallStrategy.Detect(output.WriteLine);
         var workspace = TemporaryWorkspace.Create(output);
 
-        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, installMode, output, workspace: workspace);
+        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, workspace: workspace);
 
         var pendingRun = terminal.RunAsync(TestContext.Current.CancellationToken);
 
@@ -105,7 +105,7 @@ public sealed class AgentCommandTests(ITestOutputHelper output)
 
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
 
-        await auto.InstallAspireCliInDockerAsync(installMode, counter);
+        await auto.InstallAspireCliAsync(strategy, counter);
 
         // Step 1: Create deprecated config file using Claude Code format (.mcp.json)
         // This simulates a config that was created by an older version of the CLI
@@ -137,8 +137,8 @@ public sealed class AgentCommandTests(ITestOutputHelper output)
         await auto.WaitUntilAsync(
             s => s.ContainsText("skills should be installed"),
             timeout: TimeSpan.FromSeconds(30), description: "skill selection prompt");
-        await auto.DownAsync();
-        await auto.TypeAsync(" "); // Deselect playwright-cli to avoid npm dependency in CI
+        // Playwright and dotnet-inspect are no longer pre-selected, so just accept
+        // the defaults (only the aspire skill is selected).
         await auto.EnterAsync();
         await auto.WaitUntilTextAsync("configuration complete", timeout: TimeSpan.FromSeconds(30));
         await auto.WaitForSuccessPromptFailFastAsync(counter);
@@ -163,10 +163,10 @@ public sealed class AgentCommandTests(ITestOutputHelper output)
     public async Task DoctorCommand_DetectsDeprecatedAgentConfig()
     {
         var repoRoot = CliE2ETestHelpers.GetRepoRoot();
-        var installMode = CliE2ETestHelpers.DetectDockerInstallMode(repoRoot);
+        var strategy = CliInstallStrategy.Detect(output.WriteLine);
         var workspace = TemporaryWorkspace.Create(output);
 
-        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, installMode, output, workspace: workspace);
+        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, workspace: workspace);
 
         var pendingRun = terminal.RunAsync(TestContext.Current.CancellationToken);
 
@@ -177,7 +177,7 @@ public sealed class AgentCommandTests(ITestOutputHelper output)
 
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
 
-        await auto.InstallAspireCliInDockerAsync(installMode, counter);
+        await auto.InstallAspireCliAsync(strategy, counter);
 
         // Create deprecated config file
         File.WriteAllText(configPath, """{"mcpServers":{"aspire":{"command":"aspire","args":["mcp","start"]}}}""");
@@ -203,10 +203,10 @@ public sealed class AgentCommandTests(ITestOutputHelper output)
     public async Task AgentInitCommand_DefaultSelection_InstallsSkillOnly()
     {
         var repoRoot = CliE2ETestHelpers.GetRepoRoot();
-        var installMode = CliE2ETestHelpers.DetectDockerInstallMode(repoRoot);
+        var strategy = CliInstallStrategy.Detect(output.WriteLine);
         var workspace = TemporaryWorkspace.Create(output);
 
-        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, installMode, output, workspace: workspace);
+        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, workspace: workspace);
 
         var pendingRun = terminal.RunAsync(TestContext.Current.CancellationToken);
 
@@ -218,7 +218,7 @@ public sealed class AgentCommandTests(ITestOutputHelper output)
 
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
 
-        await auto.InstallAspireCliInDockerAsync(installMode, counter);
+        await auto.InstallAspireCliAsync(strategy, counter);
 
         // Create .vscode folder so the scanner detects VS Code environment
         Directory.CreateDirectory(vscodePath);
@@ -237,8 +237,8 @@ public sealed class AgentCommandTests(ITestOutputHelper output)
         await auto.WaitUntilAsync(
             s => s.ContainsText("skills should be installed"),
             timeout: TimeSpan.FromSeconds(30), description: "skill selection prompt");
-        await auto.DownAsync();
-        await auto.TypeAsync(" "); // Deselect playwright-cli to avoid npm dependency in CI
+        // Playwright and dotnet-inspect are no longer pre-selected, so just accept
+        // the defaults (only the aspire skill is selected).
         await auto.EnterAsync();
         await auto.WaitUntilTextAsync("configuration complete", timeout: TimeSpan.FromSeconds(30));
         await auto.WaitForSuccessPromptFailFastAsync(counter);

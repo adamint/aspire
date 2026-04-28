@@ -15,15 +15,16 @@ namespace Aspire.Cli.EndToEnd.Tests;
 /// </summary>
 public sealed class SmokeTests(ITestOutputHelper output)
 {
+    [CaptureWorkspaceOnFailure]
     [Fact]
     public async Task CreateAndRunAspireStarterProject()
     {
         var repoRoot = CliE2ETestHelpers.GetRepoRoot();
-        var installMode = CliE2ETestHelpers.DetectDockerInstallMode(repoRoot);
+        var strategy = CliInstallStrategy.Detect(output.WriteLine);
 
         var workspace = TemporaryWorkspace.Create(output);
 
-        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, installMode, output, mountDockerSocket: true, workspace: workspace);
+        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, mountDockerSocket: true, workspace: workspace);
 
         var pendingRun = terminal.RunAsync(TestContext.Current.CancellationToken);
 
@@ -34,7 +35,7 @@ public sealed class SmokeTests(ITestOutputHelper output)
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
 
         // Install the Aspire CLI
-        await auto.InstallAspireCliInDockerAsync(installMode, counter);
+        await auto.InstallAspireCliAsync(strategy, counter);
 
         // Create a new project using aspire new
         await auto.AspireNewAsync("AspireStarterApp", counter);
@@ -48,13 +49,13 @@ public sealed class SmokeTests(ITestOutputHelper output)
         // incorrectly detected (e.g., AppHost.cs was incorrectly treated as a single-file apphost)
         await auto.WaitUntilAsync(s =>
         {
-            if (s.ContainsText("Select an apphost to use:"))
+            if (s.ContainsText("Select an AppHost to use:"))
             {
                 throw new InvalidOperationException(
                     "Unexpected apphost selection prompt detected! " +
                     "This indicates multiple apphosts were incorrectly detected.");
             }
-            return s.ContainsText("Press CTRL+C to stop the apphost and exit.");
+            return s.ContainsText("Press CTRL+C to stop the AppHost and exit.");
         }, timeout: TimeSpan.FromMinutes(2), description: "Press CTRL+C message (aspire run started)");
 
         // Stop the running apphost with Ctrl+C

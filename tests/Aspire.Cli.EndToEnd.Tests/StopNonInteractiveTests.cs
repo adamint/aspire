@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Globalization;
 using Aspire.Cli.EndToEnd.Tests.Helpers;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Tests.Utils;
@@ -19,11 +20,11 @@ public sealed class StopNonInteractiveTests(ITestOutputHelper output)
     public async Task StopNonInteractiveSingleAppHost()
     {
         var repoRoot = CliE2ETestHelpers.GetRepoRoot();
-        var installMode = CliE2ETestHelpers.DetectDockerInstallMode(repoRoot);
+        var strategy = CliInstallStrategy.Detect(output.WriteLine);
 
         var workspace = TemporaryWorkspace.Create(output);
 
-        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, installMode, output, mountDockerSocket: true, workspace: workspace);
+        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, mountDockerSocket: true, workspace: workspace);
 
         var pendingRun = terminal.RunAsync(TestContext.Current.CancellationToken);
 
@@ -31,7 +32,7 @@ public sealed class StopNonInteractiveTests(ITestOutputHelper output)
         var auto = new Hex1bTerminalAutomator(terminal, defaultTimeout: TimeSpan.FromSeconds(500));
 
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
-        await auto.InstallAspireCliInDockerAsync(installMode, counter);
+        await auto.InstallAspireCliAsync(strategy, counter);
 
         // Create a new project using aspire new
         await auto.AspireNewAsync("TestStopApp", counter);
@@ -76,11 +77,11 @@ public sealed class StopNonInteractiveTests(ITestOutputHelper output)
     public async Task StopAllAppHostsFromAppHostDirectory()
     {
         var repoRoot = CliE2ETestHelpers.GetRepoRoot();
-        var installMode = CliE2ETestHelpers.DetectDockerInstallMode(repoRoot);
+        var strategy = CliInstallStrategy.Detect(output.WriteLine);
 
         var workspace = TemporaryWorkspace.Create(output);
 
-        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, installMode, output, mountDockerSocket: true, workspace: workspace);
+        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, mountDockerSocket: true, workspace: workspace);
 
         var pendingRun = terminal.RunAsync(TestContext.Current.CancellationToken);
 
@@ -88,7 +89,7 @@ public sealed class StopNonInteractiveTests(ITestOutputHelper output)
         var auto = new Hex1bTerminalAutomator(terminal, defaultTimeout: TimeSpan.FromSeconds(500));
 
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
-        await auto.InstallAspireCliInDockerAsync(installMode, counter);
+        await auto.InstallAspireCliAsync(strategy, counter);
 
         // Create first project
         await auto.AspireNewAsync("App1", counter);
@@ -143,11 +144,11 @@ public sealed class StopNonInteractiveTests(ITestOutputHelper output)
     public async Task StopAllAppHostsFromUnrelatedDirectory()
     {
         var repoRoot = CliE2ETestHelpers.GetRepoRoot();
-        var installMode = CliE2ETestHelpers.DetectDockerInstallMode(repoRoot);
+        var strategy = CliInstallStrategy.Detect(output.WriteLine);
 
         var workspace = TemporaryWorkspace.Create(output);
 
-        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, installMode, output, mountDockerSocket: true, workspace: workspace);
+        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, mountDockerSocket: true, workspace: workspace);
 
         var pendingRun = terminal.RunAsync(TestContext.Current.CancellationToken);
 
@@ -155,7 +156,7 @@ public sealed class StopNonInteractiveTests(ITestOutputHelper output)
         var auto = new Hex1bTerminalAutomator(terminal, defaultTimeout: TimeSpan.FromSeconds(500));
 
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
-        await auto.InstallAspireCliInDockerAsync(installMode, counter);
+        await auto.InstallAspireCliAsync(strategy, counter);
 
         // Create first project
         await auto.AspireNewAsync("App1", counter);
@@ -215,11 +216,11 @@ public sealed class StopNonInteractiveTests(ITestOutputHelper output)
     public async Task StopNonInteractiveMultipleAppHostsShowsError()
     {
         var repoRoot = CliE2ETestHelpers.GetRepoRoot();
-        var installMode = CliE2ETestHelpers.DetectDockerInstallMode(repoRoot);
+        var strategy = CliInstallStrategy.Detect(output.WriteLine);
 
         var workspace = TemporaryWorkspace.Create(output);
 
-        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, installMode, output, mountDockerSocket: true, workspace: workspace);
+        using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, mountDockerSocket: true, workspace: workspace);
 
         var pendingRun = terminal.RunAsync(TestContext.Current.CancellationToken);
 
@@ -227,7 +228,7 @@ public sealed class StopNonInteractiveTests(ITestOutputHelper output)
         var auto = new Hex1bTerminalAutomator(terminal, defaultTimeout: TimeSpan.FromSeconds(500));
 
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
-        await auto.InstallAspireCliInDockerAsync(installMode, counter);
+        await auto.InstallAspireCliAsync(strategy, counter);
 
         // Create first project
         await auto.AspireNewAsync("App1", counter);
@@ -264,7 +265,9 @@ public sealed class StopNonInteractiveTests(ITestOutputHelper output)
         // Try to stop in non-interactive mode - should get an error about multiple AppHosts
         await auto.TypeAsync("aspire stop --non-interactive");
         await auto.EnterAsync();
-        await auto.WaitUntilTextAsync("Multiple apphosts are running", timeout: TimeSpan.FromSeconds(30));
+        await auto.WaitUntilTextAsync(
+            string.Format(CultureInfo.InvariantCulture, StopCommandStrings.MultipleAppHostsNonInteractive, "--apphost", "--all"),
+            timeout: TimeSpan.FromSeconds(30));
         await auto.WaitForAnyPromptAsync(counter, TimeSpan.FromSeconds(30));
 
         // Clear screen

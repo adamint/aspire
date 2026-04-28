@@ -1,5 +1,9 @@
 syntax: glob
 
+### GitHub Agentic Workflows ###
+.github/aw/logs/
+.worktrees/
+
 ### VisualStudio ###
 
 # Tools directory
@@ -120,11 +124,13 @@ Session.vim
 config.ps1
 **/IISApplications
 
+# Language server cache files
+*.lscache
 
 # Node.js modules
 node_modules/
 
-# Generated Aspire TypeScript modules
+# Generated Aspire polyglot modules
 .modules/
 
 # Maven build outputs
@@ -136,10 +142,6 @@ playground/**/.java-build/
 playground/**/*.class
 tests/PolyglotAppHosts/**/.java-build/
 tests/PolyglotAppHosts/**/Java/**/*.class
-
-# Generated Java AppHost SDK sources
-/playground/JavaAppHost/.modules/
-/tests/PolyglotAppHosts/**/Java/.modules/
 
 # Ignore cache created with the Angular CLI.
 .angular/
@@ -181,9 +183,6 @@ tests/PolyglotAppHosts/**/TypeScript/dist/
 #Aspire CLI
 .aspire/
 
-# Required for polyglot apps
-!tests/PolyglotAppHosts/**/.aspire/
-
 # Release notes automation output
 tools/ReleaseNotes/analysis-output/
 tools/ReleaseNotes/release-notes-*.md
@@ -194,6 +193,7 @@ extension/.localization/
 extension/out/
 extension/node_modules/
 extension/.vscode-test/
+extension/.version
 
 # Generated extension localization files (regenerated from XLF during build)
 extension/l10n/bundle.l10n.json
@@ -205,3 +205,4 @@ extension/package.nls.*.json
 
 # Azure Functions local settings (may contain encrypted secrets)
 local.settings.json
+diagnostics.log

@@ -35,7 +35,6 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
     private readonly IDotNetCliRunner _runner;
     private readonly IPackagingService _packagingService;
     private readonly IConfiguration _configuration;
-    private readonly IConfigurationService _configurationService;
     private readonly IFeatures _features;
     private readonly ILanguageDiscovery _languageDiscovery;
     private readonly ILogger<GuestAppHostProject> _logger;
@@ -56,7 +55,6 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         IDotNetCliRunner runner,
         IPackagingService packagingService,
         IConfiguration configuration,
-        IConfigurationService configurationService,
         IFeatures features,
         ILanguageDiscovery languageDiscovery,
         ILogger<GuestAppHostProject> logger,
@@ -71,7 +69,6 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         _runner = runner;
         _packagingService = packagingService;
         _configuration = configuration;
-        _configurationService = configurationService;
         _features = features;
         _languageDiscovery = languageDiscovery;
         _logger = logger;
@@ -165,27 +162,27 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
 
     /// <summary>
     /// Resolves the directory containing the nearest aspire.config.json (or legacy settings file)
-    /// by using the already-resolved path from <see cref="IConfigurationService"/>.
+    /// by searching upward from <paramref name="appHostDirectory"/>.
     /// Falls back to <paramref name="appHostDirectory"/> when no config file is found.
     /// </summary>
-    private DirectoryInfo GetConfigDirectory(DirectoryInfo appHostDirectory)
+    private static DirectoryInfo GetConfigDirectory(DirectoryInfo appHostDirectory)
     {
-        var settingsFilePath = _configurationService.GetSettingsFilePath(isGlobal: false);
-        var settingsFile = new FileInfo(settingsFilePath);
-
-        // If the settings file exists and has a parent directory, use that
-        if (settingsFile.Directory is { Exists: true })
+        // Search from the apphost's directory upward to find the nearest config file.
+        var nearAppHost = ConfigurationHelper.FindNearestConfigFilePath(appHostDirectory);
+        if (nearAppHost is not null)
         {
-            // For legacy .aspire/settings.json, the config directory is the parent of .aspire/
-            // TODO: Remove legacy .aspire/ check once confident most users have migrated.
-            // Tracked by https://github.com/microsoft/aspire/issues/15239
-            if (string.Equals(settingsFile.Directory.Name, ".aspire", StringComparison.OrdinalIgnoreCase)
-                && settingsFile.Directory.Parent is not null)
+            var configFile = new FileInfo(nearAppHost);
+            if (configFile.Directory is { Exists: true })
             {
-                return settingsFile.Directory.Parent;
-            }
+                // For legacy .aspire/settings.json, the config directory is the parent of .aspire/
+                if (string.Equals(configFile.Directory.Name, ".aspire", StringComparison.OrdinalIgnoreCase)
+                    && configFile.Directory.Parent is not null)
+                {
+                    return configFile.Directory.Parent;
+                }
 
-            return settingsFile.Directory;
+                return configFile.Directory;
+            }
         }
 
         return appHostDirectory;
@@ -207,7 +204,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         }
     }
 
-    private void SaveConfiguration(AspireConfigFile config, DirectoryInfo directory)
+    private static void SaveConfiguration(AspireConfigFile config, DirectoryInfo directory)
     {
         var configDir = GetConfigDirectory(directory);
         config.Save(configDir.FullName);
@@ -256,42 +253,28 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         }
 
         // Step 2: Start the AppHost server temporarily for code generation
-        var currentPid = Environment.ProcessId;
-        var (socketPath, serverProcess, _) = appHostServerProject.Run(currentPid);
+        await using var serverSession = AppHostServerSession.Start(
+            appHostServerProject,
+            environmentVariables: null,
+            debug: false,
+            _logger);
 
-        try
-        {
-            // Step 3: Connect to server
-            await using var rpcClient = await AppHostRpcClient.ConnectAsync(socketPath, cancellationToken);
+        // Step 3: Connect to server
+        var rpcClient = await serverSession.GetRpcClientAsync(cancellationToken);
 
-            // Step 4: Generate SDK code via RPC
-            // This must happen before dependency installation because the generated
-            // code directory (.modules) may not exist yet and dependency files reference it.
-            await GenerateCodeViaRpcAsync(
-                directory.FullName,
-                rpcClient,
-                integrations,
-                cancellationToken);
+        // Step 4: Generate SDK code via RPC
+        // This must happen before dependency installation because the generated
+        // code directory (.modules) may not exist yet and dependency files reference it.
+        await GenerateCodeViaRpcAsync(
+            directory.FullName,
+            rpcClient,
+            integrations,
+            cancellationToken);
 
-            // Step 5: Install dependencies using GuestRuntime (best effort - don't block code generation)
-            await InstallDependenciesAsync(directory, rpcClient, cancellationToken);
-            return true;
-        }
-        finally
-        {
-            // Step 6: Stop the server (we were just generating code)
-            if (!serverProcess.HasExited)
-            {
-                try
-                {
-                    serverProcess.Kill(entireProcessTree: true);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Error killing AppHost server process after code generation");
-                }
-            }
-        }
+        // Step 5: Install dependencies using GuestRuntime (best effort - don't block code generation)
+        await InstallDependenciesAsync(directory, rpcClient, treatMissingJavaScriptToolAsWarning: true, cancellationToken: cancellationToken);
+
+        return true;
     }
 
     Task<bool> IGuestAppHostSdkGenerator.BuildAndGenerateSdkAsync(DirectoryInfo directory, CancellationToken cancellationToken)
@@ -400,8 +383,12 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
             // Signal that build/preparation is complete
             context.BuildCompletionSource?.TrySetResult(true);
 
-            // Read launch settings and set shared environment variables
-            var launchSettingsEnvVars = GetServerEnvironmentVariables(directory);
+            // Read launch settings once and reuse them for both the temporary server and guest AppHost.
+            var launchProfileEnvironmentVariables = ReadLaunchSettingsEnvironmentVariables(directory);
+            var launchSettingsEnvVars = GetServerEnvironmentVariables(
+                launchProfileEnvironmentVariables,
+                defaultEnvironment: AppHostEnvironmentDefaults.DevelopmentEnvironmentName,
+                args: context.UnmatchedTokens);
 
             // Apply certificate environment variables (e.g., SSL_CERT_DIR on Linux)
             foreach (var kvp in certEnvVars)
@@ -422,8 +409,15 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
             var enableHotReload = _features.IsFeatureEnabled(KnownFeatures.DefaultWatchEnabled, defaultValue: false);
 
             // Start the AppHost server process
-            var currentPid = Environment.ProcessId;
-            var (socketPath, appHostServerProcess, appHostServerOutputCollector) = appHostServerProject.Run(currentPid, launchSettingsEnvVars, debug: context.Debug);
+            await using var serverSession = AppHostServerSession.Start(
+                appHostServerProject,
+                launchSettingsEnvVars,
+                context.Debug,
+                _logger);
+            var socketPath = serverSession.SocketPath;
+            var appHostServerProcess = serverSession.ServerProcess;
+            var appHostServerOutputCollector = serverSession.Output;
+            var authenticationToken = serverSession.AuthenticationToken;
 
             // The backchannel completion source is the contract with RunCommand
             // We signal this when the backchannel is ready, RunCommand uses it for UX
@@ -443,7 +437,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
             }
 
             // Step 5: Connect to server for RPC calls
-            await using var rpcClient = await AppHostRpcClient.ConnectAsync(socketPath, cancellationToken);
+            var rpcClient = await serverSession.GetRpcClientAsync(cancellationToken);
 
             // Step 6: Generate SDK code via RPC if needed
             // This must happen before dependency installation because the generated
@@ -460,7 +454,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
 
             // Step 7: Install dependencies (using GuestRuntime)
             // The GuestRuntime will skip if the RuntimeSpec doesn't have InstallDependencies configured
-            var installResult = await InstallDependenciesAsync(directory, rpcClient, cancellationToken);
+            var installResult = await InstallDependenciesAsync(directory, rpcClient, treatMissingJavaScriptToolAsWarning: false, cancellationToken: cancellationToken);
             if (installResult != 0)
             {
                 context.BackchannelCompletionSource?.TrySetException(
@@ -483,13 +477,18 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
 
             // Step 8: Execute the guest apphost
 
-            // Pass the socket path, project directory, and apphost file path to the guest process
-            var environmentVariables = new Dictionary<string, string>(context.EnvironmentVariables)
-            {
-                ["REMOTE_APP_HOST_SOCKET_PATH"] = socketPath,
-                ["ASPIRE_PROJECT_DIRECTORY"] = directory.FullName,
-                ["ASPIRE_APPHOST_FILEPATH"] = appHostFile.FullName
-            };
+            // Pass the launch profile and certificate environment variables through to the guest AppHost
+            // so it sees the same dashboard and resource service endpoints as the temporary .NET server.
+            var environmentVariables = CreateGuestEnvironmentVariables(
+                context.EnvironmentVariables,
+                launchProfileEnvironmentVariables,
+                certEnvVars,
+                defaultEnvironment: AppHostEnvironmentDefaults.DevelopmentEnvironmentName,
+                args: context.UnmatchedTokens);
+            environmentVariables["REMOTE_APP_HOST_SOCKET_PATH"] = socketPath;
+            environmentVariables["ASPIRE_PROJECT_DIRECTORY"] = directory.FullName;
+            environmentVariables["ASPIRE_APPHOST_FILEPATH"] = appHostFile.FullName;
+            environmentVariables[KnownConfigNames.RemoteAppHostToken] = authenticationToken;
 
             // Pass debug flag to the guest process
             if (context.Debug)
@@ -597,19 +596,95 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         }
     }
 
-    internal Dictionary<string, string> GetServerEnvironmentVariables(DirectoryInfo directory)
+    internal Dictionary<string, string> GetServerEnvironmentVariables(
+        DirectoryInfo directory,
+        string? defaultEnvironment = AppHostEnvironmentDefaults.DevelopmentEnvironmentName,
+        bool includeLaunchProfileEnvironmentVariables = true,
+        string[]? args = null)
     {
-        var envVars = ReadLaunchSettingsEnvironmentVariables(directory) ?? new Dictionary<string, string>();
+        return GetServerEnvironmentVariables(
+            ReadLaunchSettingsEnvironmentVariables(directory),
+            defaultEnvironment,
+            includeLaunchProfileEnvironmentVariables,
+            args: args);
+    }
 
-        // Support ASPIRE_ENVIRONMENT from the launch profile to set both DOTNET_ENVIRONMENT and ASPNETCORE_ENVIRONMENT
-        envVars.TryGetValue("ASPIRE_ENVIRONMENT", out var environment);
-        environment ??= "Development";
-
-        // Set the environment for the AppHost server process
-        envVars["DOTNET_ENVIRONMENT"] = environment;
-        envVars["ASPNETCORE_ENVIRONMENT"] = environment;
-
+    internal static Dictionary<string, string> GetServerEnvironmentVariables(
+        IDictionary<string, string>? launchProfileEnvironmentVariables,
+        string? defaultEnvironment = AppHostEnvironmentDefaults.DevelopmentEnvironmentName,
+        bool includeLaunchProfileEnvironmentVariables = true,
+        IReadOnlyDictionary<string, string?>? inheritedEnvironmentVariables = null,
+        string[]? args = null)
+    {
+        var envVars = new Dictionary<string, string>();
+        MergeLaunchProfileEnvironmentVariables(launchProfileEnvironmentVariables, envVars, includeLaunchProfileEnvironmentVariables);
+        AppHostEnvironmentDefaults.ApplyEffectiveEnvironment(envVars, defaultEnvironment, inheritedEnvironmentVariables, args);
         return envVars;
+    }
+
+    internal Dictionary<string, string> CreateGuestEnvironmentVariables(
+        DirectoryInfo directory,
+        IDictionary<string, string> contextEnvironmentVariables,
+        IDictionary<string, string>? additionalEnvironmentVariables = null,
+        string? defaultEnvironment = null,
+        bool includeLaunchProfileEnvironmentVariables = true,
+        string[]? args = null)
+    {
+        return CreateGuestEnvironmentVariables(
+            contextEnvironmentVariables,
+            ReadLaunchSettingsEnvironmentVariables(directory),
+            additionalEnvironmentVariables,
+            defaultEnvironment,
+            includeLaunchProfileEnvironmentVariables,
+            args: args);
+    }
+
+    internal static Dictionary<string, string> CreateGuestEnvironmentVariables(
+        IDictionary<string, string> contextEnvironmentVariables,
+        IDictionary<string, string>? launchProfileEnvironmentVariables,
+        IDictionary<string, string>? additionalEnvironmentVariables = null,
+        string? defaultEnvironment = null,
+        bool includeLaunchProfileEnvironmentVariables = true,
+        IReadOnlyDictionary<string, string?>? inheritedEnvironmentVariables = null,
+        string[]? args = null)
+    {
+        var environmentVariables = new Dictionary<string, string>(contextEnvironmentVariables);
+
+        MergeLaunchProfileEnvironmentVariables(
+            launchProfileEnvironmentVariables,
+            environmentVariables,
+            includeLaunchProfileEnvironmentVariables);
+
+        if (additionalEnvironmentVariables is not null)
+        {
+            foreach (var (key, value) in additionalEnvironmentVariables)
+            {
+                environmentVariables[key] = value;
+            }
+        }
+
+        AppHostEnvironmentDefaults.ApplyEffectiveEnvironment(environmentVariables, defaultEnvironment, inheritedEnvironmentVariables, args);
+
+        return environmentVariables;
+    }
+
+    private static void MergeLaunchProfileEnvironmentVariables(
+        IDictionary<string, string>? launchProfileEnvironmentVariables,
+        IDictionary<string, string> environmentVariables,
+        bool includeLaunchProfileEnvironmentVariables = true)
+    {
+        if (launchProfileEnvironmentVariables is not null)
+        {
+            foreach (var (key, value) in launchProfileEnvironmentVariables)
+            {
+                if (!includeLaunchProfileEnvironmentVariables && AppHostEnvironmentDefaults.IsEnvironmentVariableName(key))
+                {
+                    continue;
+                }
+
+                environmentVariables[key] = value;
+            }
+        }
     }
 
     private Dictionary<string, string>? ReadLaunchSettingsEnvironmentVariables(DirectoryInfo directory)
@@ -783,8 +858,13 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
             // Store output collector in context for exception handling
             context.OutputCollector = prepareOutput;
 
-            // Read launch settings and set shared environment variables
-            var launchSettingsEnvVars = GetServerEnvironmentVariables(directory);
+            // Read launch settings once and reuse them for both the temporary server and guest AppHost.
+            var launchProfileEnvironmentVariables = ReadLaunchSettingsEnvironmentVariables(directory);
+            var launchSettingsEnvVars = GetServerEnvironmentVariables(
+                launchProfileEnvironmentVariables,
+                defaultEnvironment: AppHostEnvironmentDefaults.ProductionEnvironmentName,
+                includeLaunchProfileEnvironmentVariables: false,
+                args: context.Arguments);
 
             // Generate a backchannel socket path for CLI to connect to AppHost server
             var backchannelSocketPath = GetBackchannelSocketPath();
@@ -796,8 +876,15 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
             launchSettingsEnvVars[KnownConfigNames.AspireUserSecretsId] = UserSecretsPathHelper.ComputeSyntheticUserSecretsId(appHostFile.FullName);
 
             // Step 2: Start the AppHost server process(it opens the backchannel for progress reporting)
-            var currentPid = Environment.ProcessId;
-            var (jsonRpcSocketPath, appHostServerProcess, appHostServerOutputCollector) = appHostServerProject.Run(currentPid, launchSettingsEnvVars, debug: context.Debug);
+            await using var serverSession = AppHostServerSession.Start(
+                appHostServerProject,
+                launchSettingsEnvVars,
+                context.Debug,
+                _logger);
+            var jsonRpcSocketPath = serverSession.SocketPath;
+            var appHostServerProcess = serverSession.ServerProcess;
+            var appHostServerOutputCollector = serverSession.Output;
+            var authenticationToken = serverSession.AuthenticationToken;
 
             // Start connecting to the backchannel
             if (context.BackchannelCompletionSource is not null)
@@ -816,7 +903,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
             }
 
             // Step 3: Connect to server for RPC calls
-            await using var rpcClient = await AppHostRpcClient.ConnectAsync(jsonRpcSocketPath, cancellationToken);
+            var rpcClient = await serverSession.GetRpcClientAsync(cancellationToken);
 
             // Step 4: Generate code via RPC if needed
             // This must happen before dependency installation because the generated
@@ -833,7 +920,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
 
             // Step 5: Install dependencies if needed (using GuestRuntime)
             // The GuestRuntime will skip if the RuntimeSpec doesn't have InstallDependencies configured
-            var installResult = await InstallDependenciesAsync(directory, rpcClient, cancellationToken);
+            var installResult = await InstallDependenciesAsync(directory, rpcClient, treatMissingJavaScriptToolAsWarning: false, cancellationToken: cancellationToken);
             if (installResult != 0)
             {
                 context.BackchannelCompletionSource?.TrySetException(
@@ -854,13 +941,18 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
                 return installResult;
             }
 
-            // Pass the socket path, project directory, and apphost file path to the guest process
-            var environmentVariables = new Dictionary<string, string>(context.EnvironmentVariables)
-            {
-                ["REMOTE_APP_HOST_SOCKET_PATH"] = jsonRpcSocketPath,
-                ["ASPIRE_PROJECT_DIRECTORY"] = directory.FullName,
-                ["ASPIRE_APPHOST_FILEPATH"] = appHostFile.FullName
-            };
+            // Pass the launch profile environment variables through to the guest AppHost so publish mode
+            // uses the same dashboard and resource service endpoints as the temporary .NET server.
+            var environmentVariables = CreateGuestEnvironmentVariables(
+                context.EnvironmentVariables,
+                launchProfileEnvironmentVariables,
+                defaultEnvironment: AppHostEnvironmentDefaults.ProductionEnvironmentName,
+                includeLaunchProfileEnvironmentVariables: false,
+                args: context.Arguments);
+            environmentVariables["REMOTE_APP_HOST_SOCKET_PATH"] = jsonRpcSocketPath;
+            environmentVariables["ASPIRE_PROJECT_DIRECTORY"] = directory.FullName;
+            environmentVariables["ASPIRE_APPHOST_FILEPATH"] = appHostFile.FullName;
+            environmentVariables[KnownConfigNames.RemoteAppHostToken] = authenticationToken;
 
             // Step 6: Execute the guest apphost for publishing
             // Pass the publish arguments (e.g., --operation publish --step deploy)
@@ -935,11 +1027,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
     /// </summary>
     private static string GetBackchannelSocketPath()
     {
-        var homeDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        var aspireCliPath = Path.Combine(homeDirectory, ".aspire", "cli", "backchannels");
-        Directory.CreateDirectory(aspireCliPath);
-        var socketName = $"{Guid.NewGuid():N}.sock";
-        return Path.Combine(aspireCliPath, socketName);
+        return CliPathHelper.CreateUnixDomainSocketPath("cli.sock");
     }
 
     /// <summary>
@@ -963,9 +1051,9 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         {
             try
             {
-                _logger.LogTrace("Attempting to connect to AppHost server backchannel at {SocketPath} (attempt {Attempt})", socketPath, ++connectionAttempts);
+                _logger.LogTrace("Attempting to connect to AppHost server backchannel at {SocketPath} (attempt {Attempt})", socketPath, connectionAttempts);
                 // Pass enableHotReload as autoReconnect - the backchannel will handle reconnection internally
-                await _backchannel.ConnectAsync(socketPath, autoReconnect: enableHotReload, cancellationToken).ConfigureAwait(false);
+                await _backchannel.ConnectAsync(socketPath, autoReconnect: enableHotReload, retryCount: connectionAttempts, cancellationToken).ConfigureAwait(false);
                 backchannelCompletionSource.TrySetResult(_backchannel);
                 _logger.LogDebug("Connected to AppHost server backchannel at {SocketPath}", socketPath);
                 return;
@@ -1005,6 +1093,10 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
                 _logger.LogError(ex, "Failed to connect to AppHost server backchannel");
                 backchannelCompletionSource.TrySetException(ex);
                 return;
+            }
+            finally
+            {
+                connectionAttempts++;
             }
         }
     }
@@ -1098,7 +1190,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
 
         if (updates.Count == 0 && newSdkVersion is null)
         {
-            _interactionService.DisplayMessage(KnownEmojis.CheckMark, UpdateCommandStrings.ProjectUpToDateMessage);
+            _interactionService.DisplayMessage(KnownEmojis.CheckMarkButton, UpdateCommandStrings.ProjectUpToDateMessage);
             return new UpdatePackagesResult { UpdatesApplied = false };
         }
 
@@ -1115,7 +1207,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         _interactionService.DisplayEmptyLine();
 
         // Confirm with user
-        if (!await _interactionService.ConfirmAsync(UpdateCommandStrings.PerformUpdatesPrompt, true, cancellationToken))
+        if (!await _interactionService.PromptConfirmAsync(UpdateCommandStrings.PerformUpdatesPrompt, context.ConfirmBinding, cancellationToken: cancellationToken))
         {
             return new UpdatePackagesResult { UpdatesApplied = false };
         }
@@ -1284,16 +1376,23 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
     /// Ensures the GuestRuntime is created.
     /// </summary>
     private async Task EnsureRuntimeCreatedAsync(
+        DirectoryInfo directory,
         IAppHostRpcClient rpcClient,
         CancellationToken cancellationToken)
     {
         if (_guestRuntime is null)
         {
             var runtimeSpec = await rpcClient.GetRuntimeSpecAsync(_resolvedLanguage.LanguageId, cancellationToken);
+            if (TypeScriptAppHostToolchainResolver.IsTypeScriptLanguage(_resolvedLanguage))
+            {
+                var toolchain = TypeScriptAppHostToolchainResolver.Resolve(directory);
+                runtimeSpec = TypeScriptAppHostToolchainResolver.ApplyToRuntimeSpec(runtimeSpec, toolchain);
+            }
+
             _guestRuntime = new GuestRuntime(runtimeSpec, _logger, _fileLoggerProvider);
 
-            _logger.LogDebug("Created GuestRuntime for {Language}: Execute={Command} {Args}",
-                _resolvedLanguage.LanguageId,
+            _logger.LogDebug("Created GuestRuntime for {RuntimeDisplayName}: Execute={Command} {Args}",
+                runtimeSpec.DisplayName,
                 runtimeSpec.Execute.Command,
                 string.Join(" ", runtimeSpec.Execute.Args));
         }
@@ -1309,9 +1408,10 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
     private async Task<int> InstallDependenciesAsync(
         DirectoryInfo directory,
         IAppHostRpcClient rpcClient,
+        bool treatMissingJavaScriptToolAsWarning,
         CancellationToken cancellationToken)
     {
-        await EnsureRuntimeCreatedAsync(rpcClient, cancellationToken);
+        await EnsureRuntimeCreatedAsync(directory, rpcClient, cancellationToken);
 
         if (_guestRuntime is null)
         {
@@ -1346,6 +1446,12 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
             {
                 _interactionService.DisplayError($"Failed to install {_resolvedLanguage?.DisplayName ?? "guest"} dependencies.");
             }
+
+            if (treatMissingJavaScriptToolAsWarning && MissingJavaScriptToolWarning.IsMatch(lines))
+            {
+                _interactionService.DisplayMessage(KnownEmojis.Warning, MissingJavaScriptToolWarning.GetMessage(directory, _resolvedLanguage));
+                return 0;
+            }
         }
 
         return result;
@@ -1363,7 +1469,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         IGuestProcessLauncher launcher,
         CancellationToken cancellationToken)
     {
-        await EnsureRuntimeCreatedAsync(rpcClient, cancellationToken);
+        await EnsureRuntimeCreatedAsync(directory, rpcClient, cancellationToken);
 
         if (_guestRuntime is null)
         {
@@ -1385,7 +1491,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         IAppHostRpcClient rpcClient,
         CancellationToken cancellationToken)
     {
-        await EnsureRuntimeCreatedAsync(rpcClient, cancellationToken);
+        await EnsureRuntimeCreatedAsync(directory, rpcClient, cancellationToken);
 
         if (_guestRuntime is null)
         {

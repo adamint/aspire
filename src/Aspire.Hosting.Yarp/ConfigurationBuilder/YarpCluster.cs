@@ -25,8 +25,22 @@ public class YarpCluster
     /// </summary>
     /// <param name="endpoint">The endpoint to target.</param>
     internal YarpCluster(EndpointReference endpoint)
-        : this(endpoint.Resource.Name, $"{endpoint.Scheme}://_{endpoint.EndpointName}.{endpoint.Resource.Name}")
+        : this(endpoint.Resource.Name, BuildEndpointTarget(endpoint))
     {
+    }
+
+    private static string BuildEndpointTarget(EndpointReference endpoint)
+    {
+        // For endpoints named "http" or "https", use standard resolution without
+        // the named endpoint prefix since the scheme key already matches the scheme.
+        // For all other endpoint names, use the named endpoint DNS-SD convention
+        // which .NET service discovery resolves via the endpoint name in the config key.
+        if (endpoint.IsHttpSchemeNamedEndpoint)
+        {
+            return $"{endpoint.Scheme}://{endpoint.Resource.Name}";
+        }
+
+        return $"{endpoint.Scheme}://_{endpoint.EndpointName}.{endpoint.Resource.Name}";
     }
 
     /// <summary>
@@ -124,7 +138,7 @@ public static class YarpClusterExtensions
     /// <summary>
     /// Set the forwarder request configuration for the cluster.
     /// </summary>
-    [AspireExport("withForwarderRequestConfig", Description = "Sets the forwarder request configuration for the cluster.")]
+    [AspireExport(Description = "Sets the forwarder request configuration for the cluster.")]
     internal static YarpCluster WithForwarderRequestConfig(this YarpCluster cluster, YarpForwarderRequestConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
@@ -147,7 +161,7 @@ public static class YarpClusterExtensions
     /// <summary>
     /// Set the HTTP client configuration for the cluster.
     /// </summary>
-    [AspireExport("withHttpClientConfig", Description = "Sets the HTTP client configuration for the cluster.")]
+    [AspireExport(Description = "Sets the HTTP client configuration for the cluster.")]
     internal static YarpCluster WithHttpClientConfig(this YarpCluster cluster, YarpHttpClientConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
@@ -170,7 +184,7 @@ public static class YarpClusterExtensions
     /// <summary>
     /// Set the session affinity configuration for the cluster.
     /// </summary>
-    [AspireExport("withSessionAffinityConfig", Description = "Sets the session affinity configuration for the cluster.")]
+    [AspireExport(Description = "Sets the session affinity configuration for the cluster.")]
     internal static YarpCluster WithSessionAffinityConfig(this YarpCluster cluster, YarpSessionAffinityConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
@@ -193,7 +207,7 @@ public static class YarpClusterExtensions
     /// <summary>
     /// Set the health check configuration for the cluster.
     /// </summary>
-    [AspireExport("withHealthCheckConfig", Description = "Sets the health check configuration for the cluster.")]
+    [AspireExport(Description = "Sets the health check configuration for the cluster.")]
     internal static YarpCluster WithHealthCheckConfig(this YarpCluster cluster, YarpHealthCheckConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
@@ -205,7 +219,7 @@ public static class YarpClusterExtensions
     /// <summary>
     /// Set the LoadBalancingPolicy for the cluster.
     /// </summary>
-    [AspireExport("withLoadBalancingPolicy", Description = "Sets the load balancing policy for the cluster.")]
+    [AspireExport(Description = "Sets the load balancing policy for the cluster.")]
     public static YarpCluster WithLoadBalancingPolicy(this YarpCluster cluster, string policy)
     {
         cluster.Configure(c => c with { LoadBalancingPolicy = policy });
