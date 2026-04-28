@@ -21,6 +21,10 @@ function createMockDeps(overrides: Partial<CliPathDependencies> = {}): CliPathDe
 }
 
 suite('utils/cliPath tests', () => {
+    teardown(() => {
+        clearCliPathCache();
+        sinon.restore();
+    });
 
     suite('getDefaultCliInstallPaths', () => {
         test('returns bundle path (~/.aspire/bin) as first entry', () => {
@@ -241,6 +245,99 @@ suite('utils/cliPath tests', () => {
 
             const [firstResult, secondResult] = await Promise.all([firstResolution, secondResolution]);
             assert.deepStrictEqual(firstResult, secondResult);
+        });
+
+        test('caches successful resolutions for the same dependency set', async () => {
+            const isOnPath = sinon.stub().resolves(true);
+            const deps = createMockDeps({
+                isOnPath,
+            });
+
+            const firstResult = await resolveCliPath(deps);
+            const secondResult = await resolveCliPath(deps);
+
+            assert.deepStrictEqual(firstResult, secondResult);
+            assert.strictEqual(isOnPath.callCount, 1, 'should reuse the cached CLI path resolution');
+        });
+
+        test('does not cache unavailable resolutions', async () => {
+            const isOnPath = sinon.stub();
+            isOnPath.onFirstCall().resolves(false);
+            isOnPath.onSecondCall().resolves(true);
+
+            const deps = createMockDeps({
+                isOnPath,
+                findAtDefaultPath: async () => undefined,
+            });
+
+            const unavailableResult = await resolveCliPath(deps);
+            const availableResult = await resolveCliPath(deps);
+
+            assert.strictEqual(unavailableResult.available, false);
+            assert.strictEqual(availableResult.available, true);
+            assert.strictEqual(availableResult.source, 'path');
+            assert.strictEqual(isOnPath.callCount, 2, 'should re-probe when the previous resolution was unavailable');
+        });
+
+        test('clearCliPathCache invalidates cached resolutions', async () => {
+            const isOnPath = sinon.stub();
+            isOnPath.onFirstCall().resolves(true);
+            isOnPath.onSecondCall().resolves(false);
+            const findAtDefaultPath = sinon.stub().resolves(bundlePath);
+
+            const deps = createMockDeps({
+                isOnPath,
+                findAtDefaultPath,
+            });
+
+            const firstResult = await resolveCliPath(deps);
+            const cachedResult = await resolveCliPath(deps);
+
+            assert.strictEqual(firstResult.source, 'path');
+            assert.strictEqual(cachedResult.source, 'path');
+            assert.strictEqual(isOnPath.callCount, 1, 'should use the cached result before invalidation');
+
+            clearCliPathCache();
+
+            const refreshedResult = await resolveCliPath(deps);
+
+            assert.strictEqual(refreshedResult.source, 'default-install');
+            assert.strictEqual(refreshedResult.cliPath, bundlePath);
+            assert.strictEqual(isOnPath.callCount, 2, 'should re-probe after cache invalidation');
+            assert.ok(findAtDefaultPath.calledOnce, 'should probe default paths after cache invalidation');
+        });
+
+        test('clearCliPathCache prevents stale in-flight resolutions from updating configuration', async () => {
+            let releaseFindAtDefaultPath: (() => void) | undefined;
+            let signalFindAtDefaultPathStarted: (() => void) | undefined;
+            const findAtDefaultPathStarted = new Promise<void>(resolve => {
+                signalFindAtDefaultPathStarted = resolve;
+            });
+            const setConfiguredPath = sinon.stub().resolves();
+
+            const deps = createMockDeps({
+                isOnPath: async () => false,
+                findAtDefaultPath: async () => {
+                    signalFindAtDefaultPathStarted?.();
+                    await new Promise<void>(resolveRelease => {
+                        releaseFindAtDefaultPath = resolveRelease;
+                    });
+                    return bundlePath;
+                },
+                setConfiguredPath,
+            });
+
+            const resolution = resolveCliPath(deps);
+            await findAtDefaultPathStarted;
+
+            clearCliPathCache();
+            assert.ok(releaseFindAtDefaultPath, 'expected CLI path resolution to be in progress');
+            releaseFindAtDefaultPath();
+
+            const result = await resolution;
+
+            assert.strictEqual(result.source, 'default-install');
+            assert.ok(setConfiguredPath.notCalled, 'should not update configuration from a stale resolution after cache invalidation');
         });
     });
 });

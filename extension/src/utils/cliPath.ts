@@ -9,8 +9,8 @@ import { extensionLogOutputChannel } from './logging';
 const execFileAsync = promisify(execFile);
 const fsAccessAsync = promisify(fs.access);
 
-let cachedCliPathResult: CliPathResolutionResult | undefined;
-const pendingCliPathResolutions = new WeakMap<CliPathDependencies, Promise<CliPathResolutionResult>>();
+let cachedCliPathResults = new WeakMap<CliPathDependencies, CliPathResolutionResult>();
+let pendingCliPathResolutions = new WeakMap<CliPathDependencies, Promise<CliPathResolutionResult>>();
 let cliPathCacheGeneration = 0;
 
 /**
@@ -140,23 +140,23 @@ const defaultDependencies: CliPathDependencies = {
  */
 export function clearCliPathCache(): void {
     cliPathCacheGeneration++;
-    cachedCliPathResult = undefined;
-    pendingCliPathResolutions.delete(defaultDependencies);
+    cachedCliPathResults = new WeakMap<CliPathDependencies, CliPathResolutionResult>();
+    pendingCliPathResolutions = new WeakMap<CliPathDependencies, Promise<CliPathResolutionResult>>();
 }
 
-function shouldMutateConfiguration(useCache: boolean, cacheGeneration: number): boolean {
-    return !useCache || cacheGeneration === cliPathCacheGeneration;
+function shouldMutateConfiguration(cacheGeneration: number): boolean {
+    return cacheGeneration === cliPathCacheGeneration;
 }
 
-function setCachedResultIfCurrent(result: CliPathResolutionResult, useCache: boolean, cacheGeneration: number): CliPathResolutionResult {
-    if (useCache && cacheGeneration === cliPathCacheGeneration) {
-        cachedCliPathResult = result;
+function setCachedResultIfCurrent(deps: CliPathDependencies, result: CliPathResolutionResult, cacheGeneration: number): CliPathResolutionResult {
+    if (cacheGeneration === cliPathCacheGeneration) {
+        cachedCliPathResults.set(deps, result);
     }
 
     return result;
 }
 
-async function resolveCliPathCore(deps: CliPathDependencies, useCache: boolean, cacheGeneration: number): Promise<CliPathResolutionResult> {
+async function resolveCliPathCore(deps: CliPathDependencies, cacheGeneration: number): Promise<CliPathResolutionResult> {
     const configuredPath = deps.getConfiguredPath();
     const defaultPaths = deps.getDefaultPaths();
 
@@ -164,7 +164,7 @@ async function resolveCliPathCore(deps: CliPathDependencies, useCache: boolean, 
     if (configuredPath && !defaultPaths.includes(configuredPath)) {
         const isValid = await deps.tryExecute(configuredPath);
         if (isValid) {
-            return setCachedResultIfCurrent({ cliPath: configuredPath, available: true, source: 'configured' }, useCache, cacheGeneration);
+            return setCachedResultIfCurrent(deps, { cliPath: configuredPath, available: true, source: 'configured' }, cacheGeneration);
         }
 
         extensionLogOutputChannel.warn(`Configured CLI path is invalid: ${configuredPath}`);
@@ -176,24 +176,24 @@ async function resolveCliPathCore(deps: CliPathDependencies, useCache: boolean, 
     if (onPath) {
         // If we previously auto-set the path to a default install location, clear it
         // since PATH is now working
-        if (defaultPaths.includes(configuredPath) && shouldMutateConfiguration(useCache, cacheGeneration)) {
+        if (defaultPaths.includes(configuredPath) && shouldMutateConfiguration(cacheGeneration)) {
             extensionLogOutputChannel.info('Clearing aspireCliExecutablePath setting since CLI is on PATH');
             await deps.setConfiguredPath('');
         }
 
-        return setCachedResultIfCurrent({ cliPath: 'aspire', available: true, source: 'path' }, useCache, cacheGeneration);
+        return setCachedResultIfCurrent(deps, { cliPath: 'aspire', available: true, source: 'path' }, cacheGeneration);
     }
 
     // 3. Check default installation paths (~/.aspire/bin first, then ~/.dotnet/tools)
     const foundPath = await deps.findAtDefaultPath();
     if (foundPath) {
         // Update the setting so future invocations use this path
-        if (configuredPath !== foundPath && shouldMutateConfiguration(useCache, cacheGeneration)) {
+        if (configuredPath !== foundPath && shouldMutateConfiguration(cacheGeneration)) {
             extensionLogOutputChannel.info('Updating aspireCliExecutablePath setting to use default install location');
             await deps.setConfiguredPath(foundPath);
         }
 
-        return setCachedResultIfCurrent({ cliPath: foundPath, available: true, source: 'default-install' }, useCache, cacheGeneration);
+        return setCachedResultIfCurrent(deps, { cliPath: foundPath, available: true, source: 'default-install' }, cacheGeneration);
     }
 
     // 4. CLI not found anywhere. Don't cache so we re-probe next time.
@@ -213,11 +213,11 @@ async function resolveCliPathCore(deps: CliPathDependencies, useCache: boolean, 
  * the setting is cleared to prefer PATH.
  */
 export async function resolveCliPath(deps: CliPathDependencies = defaultDependencies): Promise<CliPathResolutionResult> {
-    const useCache = deps === defaultDependencies;
     const cacheGeneration = cliPathCacheGeneration;
 
-    if (useCache && cachedCliPathResult) {
-        return cachedCliPathResult;
+    const cachedResult = cachedCliPathResults.get(deps);
+    if (cachedResult) {
+        return cachedResult;
     }
 
     const pendingResolution = pendingCliPathResolutions.get(deps);
@@ -225,7 +225,7 @@ export async function resolveCliPath(deps: CliPathDependencies = defaultDependen
         return pendingResolution;
     }
 
-    const resolution = resolveCliPathCore(deps, useCache, cacheGeneration);
+    const resolution = resolveCliPathCore(deps, cacheGeneration);
     pendingCliPathResolutions.set(deps, resolution);
 
     const clearPending = () => {
