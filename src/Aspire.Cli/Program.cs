@@ -722,7 +722,7 @@ public class Program
             app?.Dispose();
 
             logger.LogError(ex, "Failed to load configuration or start CLI.");
-            errorWriter.WriteLine(ex.Message);
+            errorWriter.WriteLine(GetExceptionDetails(ex));
             return ExitCodeConstants.FailedToStartCli;
         }
 
@@ -795,7 +795,7 @@ public class Program
 
                 telemetry.RecordError("An unexpected error occurred.", ex);
 
-                errorWriter.WriteLine(string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.UnexpectedErrorOccurred, ex.Message));
+                errorWriter.WriteLine(string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.UnexpectedErrorOccurred, GetExceptionDetails(ex)));
             }
 
             // Log exit code for debugging
@@ -815,6 +815,11 @@ public class Program
             await app.StopAsync().ConfigureAwait(false);
             await shutdownTelemetryTask;
         }
+    }
+
+    private static string GetExceptionDetails(Exception ex)
+    {
+        return ex.ToString();
     }
 
     private static string GetCommandName(ParseResult r)

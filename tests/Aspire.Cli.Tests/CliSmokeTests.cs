@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Aspire.Cli.Configuration;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.DotNet.RemoteExecutor;
 
@@ -119,6 +120,55 @@ public class CliSmokeTests(ITestOutputHelper outputHelper)
         }, options: s_remoteInvokeOptions);
 
         outputHelper.WriteLine(result.Process.StandardOutput.ReadToEnd());
+    }
+
+    [Fact]
+    public void UnexpectedStartupExceptionWritesExceptionDetailsToStderr()
+    {
+        var homeDirectory = Directory.CreateTempSubdirectory("aspire-cli-test-home-");
+        var aspireDirectory = Path.Combine(homeDirectory.FullName, ".aspire");
+        Directory.CreateDirectory(aspireDirectory);
+        File.WriteAllText(Path.Combine(aspireDirectory, AspireConfigFile.FileName), "{");
+
+        var options = new RemoteInvokeOptions
+        {
+            StartInfo = { RedirectStandardOutput = true }
+        };
+        options.StartInfo.Environment["HOME"] = homeDirectory.FullName;
+        options.StartInfo.Environment["USERPROFILE"] = homeDirectory.FullName;
+
+        try
+        {
+            using var result = RemoteExecutor.Invoke(async () =>
+            {
+                await using var errorWriter = new StringWriter();
+                var oldError = Console.Error;
+
+                try
+                {
+                    Console.SetError(errorWriter);
+
+                    var exitCode = await Program.Main(["--no-logo"]).DefaultTimeout();
+
+                    var errorOutput = errorWriter.ToString();
+                    Console.WriteLine($"Error output: {errorOutput}");
+
+                    Assert.Equal(ExitCodeConstants.FailedToStartCli, exitCode);
+                    Assert.Contains("System.InvalidOperationException", errorOutput);
+                    Assert.Contains(AspireConfigFile.FileName, errorOutput);
+                }
+                finally
+                {
+                    Console.SetError(oldError);
+                }
+            }, options: options);
+
+            outputHelper.WriteLine(result.Process.StandardOutput.ReadToEnd());
+        }
+        finally
+        {
+            homeDirectory.Delete(recursive: true);
+        }
     }
 
 #if DEBUG
