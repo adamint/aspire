@@ -1,9 +1,13 @@
 import * as assert from 'assert';
 import * as path from 'path';
-import { shortenPath } from '../views/AppHostDataRepository';
-import { getResourceContextValue, getResourceIcon, resolveAppHostSourcePath, buildResourceDescription } from '../views/AspireAppHostTreeProvider';
-import type { ResourceJson } from '../views/AppHostDataRepository';
+import * as sinon from 'sinon';
+import * as vscode from 'vscode';
+import * as cliModule from '../debugger/languages/cli';
+import { AppHostDataRepository, shortenPath } from '../views/AppHostDataRepository';
+import { AspireAppHostTreeProvider, getResourceContextValue, getResourceIcon, resolveAppHostSourcePath, buildResourceDescription } from '../views/AspireAppHostTreeProvider';
+import type { AppHostDisplayInfo, ResourceJson, ViewMode } from '../views/AppHostDataRepository';
 import { ResourceState, HealthStatus, StateStyle } from '../editor/resourceConstants';
+import type { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 
 function makeResource(overrides: Partial<ResourceJson> = {}): ResourceJson {
     const base: ResourceJson = {
@@ -25,6 +29,43 @@ function makeResource(overrides: Partial<ResourceJson> = {}): ResourceJson {
 
 function buildPath(...segments: string[]): string {
     return path.join(...segments);
+}
+
+function makeAppHost(overrides: Partial<AppHostDisplayInfo> = {}): AppHostDisplayInfo {
+    return {
+        appHostPath: '/test/AppHost.csproj',
+        appHostPid: 1234,
+        cliPid: null,
+        dashboardUrl: null,
+        resources: null,
+        ...overrides,
+    };
+}
+
+function makeTerminalProvider(): AspireTerminalProvider {
+    return {
+        getAspireCliExecutablePath: async () => 'aspire',
+        createEnvironment: () => ({}),
+        sendAspireCommandToAspireTerminal: () => { },
+    } as unknown as AspireTerminalProvider;
+}
+
+function makeTreeProvider(appHosts: readonly AppHostDisplayInfo[], viewMode: ViewMode = 'global'): AspireAppHostTreeProvider {
+    const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+    const repository = {
+        viewMode,
+        appHosts,
+        workspaceResources: [],
+        workspaceAppHostPath: undefined,
+        workspaceAppHostName: undefined,
+        onDidChangeData,
+    } as unknown as AppHostDataRepository;
+
+    return new AspireAppHostTreeProvider(repository, makeTerminalProvider());
+}
+
+async function flushPromises(): Promise<void> {
+    await new Promise(resolve => setImmediate(resolve));
 }
 
 suite('shortenPath', () => {
@@ -50,6 +91,120 @@ suite('shortenPath', () => {
 
     test('two segments returns parent/filename', () => {
         assert.strictEqual(shortenPath('MyApp/AppHost.cs'), 'MyApp/AppHost.cs');
+    });
+});
+
+suite('AspireAppHostTreeProvider', () => {
+    let sandbox: sinon.SinonSandbox;
+
+    setup(() => {
+        sandbox = sinon.createSandbox();
+    });
+
+    teardown(() => {
+        sandbox.restore();
+    });
+
+    test('global apphost labels add enough parent folders to disambiguate duplicate filenames', () => {
+        const appHosts = [
+            makeAppHost({
+                appHostPath: '/workspace/apps/Store/AppHost.csproj',
+                appHostPid: 1,
+            }),
+            makeAppHost({
+                appHostPath: '/workspace/samples/Store/AppHost.csproj',
+                appHostPid: 2,
+            }),
+        ];
+        const provider = makeTreeProvider(appHosts);
+
+        const labels = provider.getChildren().map(item => item.label);
+
+        assert.deepStrictEqual(labels, [
+            'apps/Store/AppHost.csproj',
+            'samples/Store/AppHost.csproj',
+        ]);
+    });
+
+    test('global apphost labels keep single-path shortening behavior', () => {
+        const provider = makeTreeProvider([
+            makeAppHost({
+                appHostPath: '/workspace/apps/Store/AppHost.cs',
+                appHostPid: 1,
+            }),
+        ]);
+
+        const [item] = provider.getChildren();
+
+        assert.strictEqual(item.label, 'Store/AppHost.cs');
+    });
+
+    test('dashboard quick pick labels add enough parent folders to disambiguate duplicate filenames', async () => {
+        const appHosts = [
+            makeAppHost({
+                appHostPath: '/workspace/apps/Store/AppHost.csproj',
+                appHostPid: 1,
+                dashboardUrl: 'http://localhost:1001',
+            }),
+            makeAppHost({
+                appHostPath: '/workspace/samples/Store/AppHost.csproj',
+                appHostPid: 2,
+                dashboardUrl: 'http://localhost:1002',
+            }),
+        ];
+        const provider = makeTreeProvider(appHosts);
+        const showQuickPickStub = sandbox.stub(vscode.window, 'showQuickPick').resolves(undefined);
+
+        await provider.openDashboard();
+
+        const items = showQuickPickStub.getCall(0).args[0] as readonly vscode.QuickPickItem[];
+        assert.deepStrictEqual(items.map(item => item.label), [
+            'apps/Store/AppHost.csproj',
+            'samples/Store/AppHost.csproj',
+        ]);
+    });
+});
+
+suite('AppHostDataRepository', () => {
+    let sandbox: sinon.SinonSandbox;
+
+    setup(() => {
+        sandbox = sinon.createSandbox();
+    });
+
+    teardown(() => {
+        sandbox.restore();
+    });
+
+    test('workspace apphost name uses all candidates to disambiguate duplicate filenames', async () => {
+        let lineCallback: ((line: string) => void) | undefined;
+        sandbox.stub(vscode.workspace, 'workspaceFolders').value([{
+            uri: vscode.Uri.file('/workspace'),
+            name: 'workspace',
+            index: 0,
+        }]);
+        sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, options) => {
+            lineCallback = options?.lineCallback;
+            return { kill: () => { } } as any;
+        });
+        const repository = new AppHostDataRepository(makeTerminalProvider());
+
+        try {
+            await flushPromises();
+            assert.ok(lineCallback);
+
+            lineCallback(JSON.stringify({
+                selected_project_file: '/workspace/apps/Store/AppHost.csproj',
+                all_project_file_candidates: [
+                    '/workspace/apps/Store/AppHost.csproj',
+                    '/workspace/samples/Store/AppHost.csproj',
+                ],
+            }));
+
+            assert.strictEqual(repository.workspaceAppHostName, 'apps/Store/AppHost.csproj');
+        } finally {
+            repository.dispose();
+        }
     });
 });
 
