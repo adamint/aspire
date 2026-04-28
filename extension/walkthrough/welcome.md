@@ -12,7 +12,7 @@ Aspire streamlines building, running, debugging, and deploying distributed apps.
 
 ### How it works
 
-1. Define your services and their connections in an **apphost** project
+1. Define your services and their connections in an **AppHost** project
 2. Run everything locally with a single command
 3. Monitor it all through the **Aspire Dashboard**
 4. Deploy the same architecture definition to production
