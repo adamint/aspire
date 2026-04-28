@@ -174,7 +174,7 @@ jobs:
 
           # Get the actual diff, capped by bytes so the API request stays bounded.
           git diff "${FROM_SHA}..${TO_SHA}" -- extension/src/ extension/package.json extension/package.nls.json > "$WORK_DIR/diff-full.txt"
-          head -c 200000 "$WORK_DIR/diff-full.txt" > "$WORK_DIR/diff.txt"
+          head -c 20000 "$WORK_DIR/diff-full.txt" > "$WORK_DIR/diff.txt"
           rm "$WORK_DIR/diff-full.txt"
 
           # Write to files for the AI step
@@ -230,7 +230,7 @@ jobs:
             echo "DIFF STATISTICS:"
             cat "$WORK_DIR/diffstat.txt"
             echo ""
-            echo "CODE DIFF (truncated to 200000 bytes):"
+            echo "CODE DIFF (truncated to 20000 bytes):"
             cat "$WORK_DIR/diff.txt"
           } > "$WORK_DIR/context.txt"
 
