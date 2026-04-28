@@ -134,7 +134,7 @@
     <comment>{0} is the AppHost project path.</comment>
   </data>
   <data name="AppHostOptionDescription" xml:space="preserve">
-    <value>The path to the Aspire AppHost project file</value>
+    <value>The path to the Aspire AppHost project file or a directory to search</value>
   </data>
   <data name="FormatOptionDescription" xml:space="preserve">
     <value>Output format for detached AppHost results</value>

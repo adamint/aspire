@@ -38,8 +38,8 @@
         <note />
       </trans-unit>
       <trans-unit id="AppHostOptionDescription">
-        <source>The path to the Aspire AppHost project file</source>
-        <target state="new">The path to the Aspire AppHost project file</target>
+        <source>The path to the Aspire AppHost project file or a directory to search</source>
+        <target state="new">The path to the Aspire AppHost project file or a directory to search</target>
         <note />
       </trans-unit>
       <trans-unit id="PipelineEnvironmentOptionDescription">
