@@ -194,8 +194,8 @@
       </trans-unit>
       <trans-unit id="UnexpectedErrorOccurred">
         <source>An unexpected error occurred: {0}</source>
-        <target state="translated">予期しないエラーが発生しました: {0}</target>
-        <note>{0} is the exception message</note>
+        <target state="needs-review-translation">予期しないエラーが発生しました: {0}</target>
+        <note>{0} is the exception details</note>
       </trans-unit>
       <trans-unit id="UpdatedSettingsFile">
         <source>Updated settings file at {0}.</source>

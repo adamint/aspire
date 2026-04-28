@@ -211,7 +211,7 @@
   </data>
   <data name="UnexpectedErrorOccurred" xml:space="preserve">
     <value>An unexpected error occurred: {0}</value>
-    <comment>{0} is the exception message</comment>
+    <comment>{0} is the exception details</comment>
   </data>
   <data name="SeeLogsAt" xml:space="preserve">
     <value>See logs at {0}</value>
