@@ -183,7 +183,14 @@ internal sealed class AppHostConnectionResolver(
         var normalizedAppHostPath = Path.GetFullPath(appHostPath);
         return backchannelMonitor.Connections.FirstOrDefault(c =>
             c.AppHostInfo?.AppHostPath is { } candidatePath &&
-            string.Equals(Path.GetFullPath(candidatePath), normalizedAppHostPath, StringComparison.OrdinalIgnoreCase));
+            string.Equals(Path.GetFullPath(candidatePath), normalizedAppHostPath, GetAppHostPathComparison()));
+    }
+
+    private static StringComparison GetAppHostPathComparison()
+    {
+        return OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
     }
 
     /// <summary>

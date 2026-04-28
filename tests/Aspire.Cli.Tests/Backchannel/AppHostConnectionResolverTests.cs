@@ -10,7 +10,7 @@ namespace Aspire.Cli.Tests.Backchannel;
 public class AppHostConnectionResolverTests
 {
     [Fact]
-    public async Task ResolveConnectionAsync_FallsBackToCaseInsensitiveMonitorLookupWhenAppHostPathCasingDiffers()
+    public async Task ResolveConnectionAsync_FallsBackToPlatformPathComparisonWhenAppHostPathCasingDiffers()
     {
         var basePath = Path.Combine(Directory.GetCurrentDirectory(), "case-lookup-" + Guid.NewGuid().ToString("N"));
         var workingDirectory = new DirectoryInfo(Path.Combine(basePath, "repo"));
@@ -50,8 +50,17 @@ public class AppHostConnectionResolverTests
             "No AppHost found",
             CancellationToken.None);
 
-        Assert.True(result.Success, result.ErrorMessage);
-        Assert.Same(connection, result.Connection);
+        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
+        {
+            Assert.True(result.Success, result.ErrorMessage);
+            Assert.Same(connection, result.Connection);
+        }
+        else
+        {
+            Assert.False(result.Success);
+            Assert.Equal("No AppHost found", result.ErrorMessage);
+        }
+
         Assert.Equal(1, monitor.ScanCallCount);
     }
 }
