@@ -1,13 +1,15 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Diagnostics.CodeAnalysis;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
+using System.Text.Json;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Resources;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
-using Microsoft.Extensions.Configuration;
 
 namespace Aspire.Hosting;
 
@@ -21,39 +23,60 @@ public static class BrowserLogsBuilderExtensions
     internal const string BrowserConfigurationKey = "Browser";
     internal const string BrowserPropertyName = "Browser";
     internal const string BrowserExecutablePropertyName = "Browser executable";
+    internal const string BrowserHostOwnershipPropertyName = "Browser host ownership";
     internal const string ProfileConfigurationKey = "Profile";
     internal const string ProfilePropertyName = "Profile";
+    internal const string UserDataModeConfigurationKey = "UserDataMode";
+    internal const string UserDataModePropertyName = "User data mode";
+    internal const BrowserUserDataMode DefaultUserDataMode = BrowserConfiguration.DefaultUserDataMode;
     internal const string TargetUrlPropertyName = "Target URL";
     internal const string ActiveSessionsPropertyName = "Active sessions";
     internal const string BrowserSessionsPropertyName = "Browser sessions";
     internal const string ActiveSessionCountPropertyName = "Active session count";
     internal const string TotalSessionsLaunchedPropertyName = "Total sessions launched";
+    internal const string LastErrorPropertyName = "Last error";
     internal const string LastSessionPropertyName = "Last session";
     internal const string OpenTrackedBrowserCommandName = "open-tracked-browser";
+    internal const string CaptureScreenshotCommandName = "capture-screenshot";
+    private static readonly JsonSerializerOptions s_commandResultJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = true
+    };
 
     /// <summary>
-    /// Adds a child resource that can open the application's primary browser endpoint in a tracked browser session and
-    /// surface browser console output in the dashboard console logs.
+    /// Adds a child resource that can open the application's primary browser endpoint in a tracked browser session,
+    /// surface browser diagnostics, and capture screenshots.
     /// </summary>
     /// <typeparam name="T">The type of resource being configured.</typeparam>
     /// <param name="builder">The resource builder.</param>
     /// <param name="browser">
     /// The browser to launch. When not specified, the tracked browser uses the configured value from
-    /// <c>Aspire:Hosting:BrowserLogs</c> and otherwise prefers an installed <c>"chrome"</c> browser, then an installed
-    /// <c>"msedge"</c> browser, before finally falling back to <c>"chrome"</c>. Supported values include logical
+    /// <c>Aspire:Hosting:BrowserLogs</c> and otherwise prefers an installed <c>"msedge"</c> browser in shared user data
+    /// mode, an installed <c>"chrome"</c> browser in isolated user data mode, and finally falls back to <c>"chrome"</c>.
+    /// Supported values include logical
     /// browser names such as <c>"msedge"</c> and <c>"chrome"</c>, or an explicit browser executable path.
     /// </param>
     /// <param name="profile">
-    /// Optional Chromium profile directory name to use. When not specified, the tracked browser uses the configured
-    /// value from <c>Aspire:Hosting:BrowserLogs</c> if present.
+    /// Optional Chromium profile name or directory name to use. Only valid when the effective user data mode
+    /// is <see cref="BrowserUserDataMode.Shared"/>. When not specified, the tracked browser uses the
+    /// configured value from <c>Aspire:Hosting:BrowserLogs</c> if present.
+    /// </param>
+    /// <param name="userDataMode">
+    /// Optional <see cref="BrowserUserDataMode"/> that selects whether the tracked browser launches against
+    /// a persistent Aspire-managed user data directory shared across all AppHosts on the machine
+    /// (<see cref="BrowserUserDataMode.Shared"/>, the default) or a per-AppHost persistent user data directory
+    /// (<see cref="BrowserUserDataMode.Isolated"/>). Both modes use Aspire-managed paths under
+    /// <c>%LocalAppData%\Aspire\BrowserData</c> on Windows (or platform equivalents); the user's normal browser
+    /// profile is never used. When not specified, the tracked browser uses the configured value from
+    /// <c>Aspire:Hosting:BrowserLogs</c> and otherwise defaults to <see cref="BrowserUserDataMode.Shared"/>.
     /// </param>
     /// <returns>A reference to the original <see cref="IResourceBuilder{T}"/> for further chaining.</returns>
     /// <remarks>
     /// <para>
     /// This method adds a child browser logs resource beneath the parent resource represented by <paramref name="builder"/>.
     /// The child resource exposes a dashboard command that launches a Chromium-based browser in a tracked mode, attaches to
-    /// the browser's debugging protocol, and forwards browser console, error, and exception output to the child resource's
-    /// console log stream.
+    /// the browser's debugging protocol, forwards browser console, error, exception, and network output to the child
+    /// resource's console log stream, and can capture screenshots as command artifacts.
     /// </para>
     /// <para>
     /// The tracked browser session uses the <a href="https://chromedevtools.github.io/devtools-protocol/">Chrome DevTools
@@ -64,10 +87,13 @@ public static class BrowserLogsBuilderExtensions
     /// endpoints when selecting the browser target URL.
     /// </para>
     /// <para>
-    /// Browser and profile settings can also be supplied from configuration using
-    /// <c>Aspire:Hosting:BrowserLogs:Browser</c> and <c>Aspire:Hosting:BrowserLogs:Profile</c>, or scoped to a
-    /// specific resource with <c>Aspire:Hosting:BrowserLogs:{ResourceName}:Browser</c> and
-    /// <c>Aspire:Hosting:BrowserLogs:{ResourceName}:Profile</c>. Explicit method arguments override configuration.
+    /// Browser, profile, and user data mode settings can also be supplied from configuration using
+    /// <c>Aspire:Hosting:BrowserLogs:Browser</c>, <c>Aspire:Hosting:BrowserLogs:Profile</c>, and
+    /// <c>Aspire:Hosting:BrowserLogs:UserDataMode</c>, or scoped to a specific resource with
+    /// <c>Aspire:Hosting:BrowserLogs:{ResourceName}:Browser</c>,
+    /// <c>Aspire:Hosting:BrowserLogs:{ResourceName}:Profile</c>, and
+    /// <c>Aspire:Hosting:BrowserLogs:{ResourceName}:UserDataMode</c>. Explicit method arguments override
+    /// configuration.
     /// </para>
     /// </remarks>
     /// <example>
@@ -81,8 +107,12 @@ public static class BrowserLogsBuilderExtensions
     /// </code>
     /// </example>
     [Experimental("ASPIREBROWSERLOGS001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
-    [AspireExport(Description = "Adds a child browser logs resource that opens tracked browser sessions and captures browser logs.")]
-    public static IResourceBuilder<T> WithBrowserLogs<T>(this IResourceBuilder<T> builder, string? browser = null, string? profile = null)
+    [AspireExport(Description = "Adds a child browser logs resource that opens tracked browser sessions, captures browser logs, and captures screenshots.")]
+    public static IResourceBuilder<T> WithBrowserLogs<T>(
+        this IResourceBuilder<T> builder,
+        string? browser = null,
+        string? profile = null,
+        BrowserUserDataMode? userDataMode = null)
         where T : IResourceWithEndpoints
     {
         ArgumentNullException.ThrowIfNull(builder);
@@ -92,8 +122,13 @@ public static class BrowserLogsBuilderExtensions
         builder.ApplicationBuilder.Services.TryAddSingleton<IBrowserLogsSessionManager, BrowserLogsSessionManager>();
 
         var parentResource = builder.Resource;
-        var settings = ResolveSettings(builder.ApplicationBuilder.Configuration, parentResource.Name, browser, profile);
-        var browserLogsResource = new BrowserLogsResource($"{parentResource.Name}-browser-logs", parentResource, settings, browser, profile);
+        var configurationOverrides = new BrowserConfigurationOverrides(browser, profile, userDataMode);
+        var initialConfiguration = BrowserConfiguration.Resolve(builder.ApplicationBuilder.Configuration, parentResource.Name, configurationOverrides);
+        var browserLogsResource = new BrowserLogsResource(
+            $"{parentResource.Name}-browser-logs",
+            parentResource,
+            initialConfiguration,
+            configurationOverrides);
         browserLogsResource.Annotations.Add(NameValidationPolicyAnnotation.None);
 
         builder.ApplicationBuilder.AddResource(browserLogsResource)
@@ -105,7 +140,7 @@ public static class BrowserLogsBuilderExtensions
                 ResourceType = BrowserResourceType,
                 CreationTimeStamp = DateTime.UtcNow,
                 State = KnownResourceStates.NotStarted,
-                Properties = CreateInitialProperties(parentResource.Name, settings)
+                Properties = CreateInitialProperties(parentResource.Name, initialConfiguration)
             })
             .WithCommand(
                 OpenTrackedBrowserCommandName,
@@ -115,10 +150,10 @@ public static class BrowserLogsBuilderExtensions
                     try
                     {
                         var configuration = context.ServiceProvider.GetRequiredService<IConfiguration>();
-                        var currentSettings = browserLogsResource.ResolveCurrentSettings(configuration);
+                        var currentConfiguration = browserLogsResource.ResolveCurrentConfiguration(configuration);
                         var url = ResolveBrowserUrl(parentResource);
                         var sessionManager = context.ServiceProvider.GetRequiredService<IBrowserLogsSessionManager>();
-                        await sessionManager.StartSessionAsync(browserLogsResource, currentSettings, context.ResourceName, url, context.CancellationToken).ConfigureAwait(false);
+                        await sessionManager.StartSessionAsync(browserLogsResource, currentConfiguration, context.ResourceName, url, context.CancellationToken).ConfigureAwait(false);
                         return CommandResults.Success();
                     }
                     catch (Exception ex)
@@ -155,6 +190,58 @@ public static class BrowserLogsBuilderExtensions
 
                         return ResourceCommandState.Disabled;
                     }
+                })
+            .WithCommand(
+                CaptureScreenshotCommandName,
+                CommandStrings.CaptureScreenshotName,
+                async context =>
+                {
+                    try
+                    {
+                        var sessionManager = context.ServiceProvider.GetRequiredService<IBrowserLogsSessionManager>();
+                        var result = await sessionManager.CaptureScreenshotAsync(context.ResourceName, context.CancellationToken).ConfigureAwait(false);
+                        var resultJson = JsonSerializer.Serialize(
+                            new BrowserLogsScreenshotCommandResult(
+                                result.Artifact.ResourceName,
+                                result.SessionId,
+                                result.Browser,
+                                result.BrowserExecutable,
+                                result.BrowserHostOwnership,
+                                result.ProcessId,
+                                result.TargetId,
+                                result.TargetUrl.ToString(),
+                                result.Artifact.FilePath,
+                                result.Artifact.MimeType,
+                                result.Artifact.SizeBytes,
+                                result.Artifact.CreatedAt),
+                            s_commandResultJsonOptions);
+
+                        return CommandResults.Success(
+                            $"Captured screenshot to '{result.Artifact.FilePath}'.",
+                            new CommandResultData
+                            {
+                                Value = resultJson,
+                                Format = CommandResultFormat.Json,
+                                DisplayImmediately = true
+                            });
+                    }
+                    catch (Exception ex)
+                    {
+                        return CommandResults.Failure(ex.Message);
+                    }
+                },
+                new CommandOptions
+                {
+                    Description = CommandStrings.CaptureScreenshotDescription,
+                    IconName = "Camera",
+                    IconVariant = IconVariant.Regular,
+                    UpdateState = context =>
+                    {
+                        var childState = context.ResourceSnapshot.State?.Text;
+                        return childState == KnownResourceStates.Running
+                            ? ResourceCommandState.Enabled
+                            : ResourceCommandState.Disabled;
+                    }
                 });
 
         builder.OnBeforeResourceStarted((_, @event, _) => RefreshBrowserLogsResourceAsync(@event.Services.GetRequiredService<ResourceNotificationService>()))
@@ -166,15 +253,16 @@ public static class BrowserLogsBuilderExtensions
         Task RefreshBrowserLogsResourceAsync(ResourceNotificationService notifications) =>
             notifications.PublishUpdateAsync(browserLogsResource, snapshot => snapshot);
 
-        static ImmutableArray<ResourcePropertySnapshot> CreateInitialProperties(string resourceName, BrowserLogsSettings settings)
+        static ImmutableArray<ResourcePropertySnapshot> CreateInitialProperties(string resourceName, BrowserConfiguration configuration)
         {
             List<ResourcePropertySnapshot> properties =
             [
                 new(CustomResourceKnownProperties.Source, resourceName),
-                new(BrowserPropertyName, settings.Browser)
+                new(BrowserPropertyName, configuration.Browser),
+                new(UserDataModePropertyName, configuration.UserDataMode.ToString())
             ];
 
-            if (settings.Profile is { } profile)
+            if (configuration.Profile is { } profile)
             {
                 properties.Add(new ResourcePropertySnapshot(ProfilePropertyName, profile));
             }
@@ -201,13 +289,13 @@ public static class BrowserLogsBuilderExtensions
 
             if (endpointAnnotation is null)
             {
-                throw new InvalidOperationException($"Resource '{resource.Name}' does not have an HTTP or HTTPS endpoint. Browser logs require an endpoint to navigate to.");
+                throw new InvalidOperationException(string.Format(CultureInfo.CurrentCulture, MessageStrings.BrowserLogsResourceMissingHttpEndpoint, resource.Name));
             }
 
             var endpointReference = resource.GetEndpoint(endpointAnnotation.Name);
             if (!endpointReference.IsAllocated)
             {
-                throw new InvalidOperationException($"Endpoint '{endpointAnnotation.Name}' for resource '{resource.Name}' has not been allocated yet.");
+                throw new InvalidOperationException(string.Format(CultureInfo.CurrentCulture, MessageStrings.BrowserLogsEndpointNotAllocated, endpointAnnotation.Name, resource.Name));
             }
 
             return new Uri(endpointReference.Url, UriKind.Absolute);
@@ -222,46 +310,17 @@ public static class BrowserLogsBuilderExtensions
         }
     }
 
-    internal static BrowserLogsSettings ResolveSettings(IConfiguration configuration, string resourceName, string? browser, string? profile)
-    {
-        var browserLogsSection = configuration.GetSection(BrowserLogsConfigurationSectionName);
-        var resourceSection = browserLogsSection.GetSection(resourceName);
-
-        var resolvedBrowser = browser
-            ?? resourceSection[BrowserConfigurationKey]
-            ?? browserLogsSection[BrowserConfigurationKey]
-            ?? GetDefaultBrowser();
-        var resolvedProfile = profile
-            ?? resourceSection[ProfileConfigurationKey]
-            ?? browserLogsSection[ProfileConfigurationKey];
-
-        if (string.IsNullOrWhiteSpace(resolvedBrowser))
-        {
-            throw new InvalidOperationException("Tracked browser configuration resolved an empty browser value.");
-        }
-
-        if (resolvedProfile is not null && string.IsNullOrWhiteSpace(resolvedProfile))
-        {
-            throw new InvalidOperationException("Tracked browser configuration resolved an empty profile value.");
-        }
-
-        return new BrowserLogsSettings(resolvedBrowser, resolvedProfile);
-    }
-
-    internal static string GetDefaultBrowser(Func<string, string?> resolveBrowserExecutable)
-    {
-        if (resolveBrowserExecutable("chrome") is not null)
-        {
-            return "chrome";
-        }
-
-        if (resolveBrowserExecutable("msedge") is not null)
-        {
-            return "msedge";
-        }
-
-        return "chrome";
-    }
-
-    private static string GetDefaultBrowser() => GetDefaultBrowser(BrowserLogsRunningSession.TryResolveBrowserExecutable);
+    private sealed record BrowserLogsScreenshotCommandResult(
+        string ResourceName,
+        string SessionId,
+        string Browser,
+        string BrowserExecutable,
+        string BrowserHostOwnership,
+        int? ProcessId,
+        string TargetId,
+        string TargetUrl,
+        string Path,
+        string MimeType,
+        long SizeBytes,
+        DateTimeOffset CreatedAt);
 }

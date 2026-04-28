@@ -5,5 +5,17 @@ namespace Aspire.Hosting;
 
 internal interface IBrowserLogsSessionManager
 {
-    Task StartSessionAsync(BrowserLogsResource resource, BrowserLogsSettings settings, string resourceName, Uri url, CancellationToken cancellationToken);
+    Task StartSessionAsync(BrowserLogsResource resource, BrowserConfiguration configuration, string resourceName, Uri url, CancellationToken cancellationToken);
+
+    Task<BrowserLogsScreenshotCaptureResult> CaptureScreenshotAsync(string resourceName, CancellationToken cancellationToken);
 }
+
+internal sealed record BrowserLogsScreenshotCaptureResult(
+    string SessionId,
+    string Browser,
+    string BrowserExecutable,
+    string BrowserHostOwnership,
+    int? ProcessId,
+    string TargetId,
+    Uri TargetUrl,
+    BrowserLogsArtifact Artifact);
