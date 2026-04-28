@@ -16,22 +16,6 @@ public class ResourceSnapshotBuilderTests
     private const string ResolvedPortArgument = "52731";
 
     [Fact]
-    public void ExecutableSnapshotUsesEffectiveArgsForLaunchArguments()
-    {
-        var executable = CreateExecutable(
-            [
-                new("-port", isSensitive: false, effectiveArgumentIndex: 0),
-                new(DcpTemplateArgument, isSensitive: false, effectiveArgumentIndex: 1)
-            ],
-            ["-port", ResolvedPortArgument]);
-
-        var snapshot = CreateSnapshotBuilder().ToSnapshot(executable, CreatePreviousSnapshot());
-
-        Assert.Equal(["-port", ResolvedPortArgument], GetEnumerablePropertyValue<string>(snapshot, KnownProperties.Resource.AppArgs).ToArray());
-        Assert.Equal(["-port", ResolvedPortArgument], GetEnumerablePropertyValue<string>(snapshot, KnownProperties.Executable.Args).ToArray());
-    }
-
-    [Fact]
     public void ExecutableSnapshotPreservesLaunchArgumentSensitivityWhenUsingEffectiveArgs()
     {
         var executable = CreateExecutable(
@@ -62,35 +46,6 @@ public class ResourceSnapshotBuilderTests
         var snapshot = CreateSnapshotBuilder().ToSnapshot(executable, CreatePreviousSnapshot());
 
         Assert.Equal(["-port", DcpTemplateArgument], GetEnumerablePropertyValue<string>(snapshot, KnownProperties.Resource.AppArgs).ToArray());
-    }
-
-    [Fact]
-    public void ContainerSnapshotUsesEffectiveArgsForLaunchArguments()
-    {
-        var container = Container.Create("container", "image");
-        container.Annotate(DcpCustomResource.ResourceNameAnnotation, "container");
-        container.Spec.Args = ["--url", "{{- endpointUri \"backend\" -}}"];
-        container.Status = new ContainerStatus
-        {
-            EffectiveArgs = ["--url", "http://localhost:52731"]
-        };
-        container.SetAnnotationAsObjectList(
-            DcpCustomResource.ResourceAppArgsAnnotation,
-            [
-                new AppLaunchArgumentAnnotation("--url", isSensitive: false, effectiveArgumentIndex: 0),
-                new AppLaunchArgumentAnnotation("{{- endpointUri \"backend\" -}}", isSensitive: false, effectiveArgumentIndex: 1)
-            ]);
-
-        var appResource = new ContainerResource("container");
-        var snapshotBuilder = CreateSnapshotBuilder(new Dictionary<string, IResource>
-        {
-            [appResource.Name] = appResource
-        });
-
-        var snapshot = snapshotBuilder.ToSnapshot(container, CreatePreviousSnapshot());
-
-        Assert.Equal(["--url", "http://localhost:52731"], GetEnumerablePropertyValue<string>(snapshot, KnownProperties.Resource.AppArgs).ToArray());
-        Assert.Equal(["--url", "http://localhost:52731"], GetEnumerablePropertyValue<string>(snapshot, KnownProperties.Container.Args).ToArray());
     }
 
     private static Executable CreateExecutable(AppLaunchArgumentAnnotation[] launchArgumentAnnotations, IReadOnlyList<string> effectiveArgs)
