@@ -99,11 +99,16 @@ public class Program
         if (args is not null && args.Length > 0)
         {
             // Check for --debug or -d (backward compatibility)
-            debugMode = args.Any(a => a == "--debug" || a == "-d");
+            debugMode = args.TakeWhile(a => a != "--").Any(a => a == "--debug" || a == "-d");
 
             // Check for --log-level or -l
             for (var i = 0; i < args.Length; i++)
             {
+                if (args[i] == "--")
+                {
+                    break;
+                }
+
                 if ((args[i] == "--log-level" || args[i] == "-l") && i + 1 < args.Length)
                 {
                     if (Enum.TryParse<LogLevel>(args[i + 1], ignoreCase: true, out var parsedLevel))

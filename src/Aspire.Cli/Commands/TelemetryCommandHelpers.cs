@@ -324,10 +324,7 @@ internal static class TelemetryCommandHelpers
             interactionService.DisplayMessage(KnownEmojis.Information, hint);
         }
 
-        if (logFilePath is not null)
-        {
-            interactionService.DisplayMessage(KnownEmojis.PageFacingUp, string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeLogsAt, logFilePath));
-        }
+        CommandInteractionHelpers.DisplaySeeLogsMessage(interactionService, logFilePath);
     }
 
     /// <summary>

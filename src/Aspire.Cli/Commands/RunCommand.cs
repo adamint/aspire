@@ -423,8 +423,7 @@ internal sealed class RunCommand : BaseCommand
             var errorMessage = string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.ErrorConnectingToAppHost, ex.Message);
             Telemetry.RecordError(errorMessage, ex);
             InteractionService.DisplayError(errorMessage);
-            // Don't display raw output - it's already in the log file
-            InteractionService.DisplayMessage(KnownEmojis.PageFacingUp, string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeLogsAt, ExecutionContext.LogFilePath));
+            CommandInteractionHelpers.DisplaySeeLogsMessage(InteractionService, ExecutionContext.LogFilePath);
             return ExitCodeConstants.FailedToDotnetRunAppHost;
         }
         catch (ConnectionLostException) when (isExtensionHost)
@@ -439,8 +438,7 @@ internal sealed class RunCommand : BaseCommand
             var errorMessage = string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.UnexpectedErrorOccurred, ex.Message);
             Telemetry.RecordError(errorMessage, ex);
             InteractionService.DisplayError(errorMessage);
-            // Don't display raw output - it's already in the log file
-            InteractionService.DisplayMessage(KnownEmojis.PageFacingUp, string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeLogsAt, ExecutionContext.LogFilePath));
+            CommandInteractionHelpers.DisplaySeeLogsMessage(InteractionService, ExecutionContext.LogFilePath);
             return ExitCodeConstants.FailedToDotnetRunAppHost;
         }
         finally
@@ -502,10 +500,14 @@ internal sealed class RunCommand : BaseCommand
         var pidLabel = RunCommandStrings.ProcessId;
 
         // Calculate column width based on labels that will actually be displayed
-        var labels = new List<string> { appHostLabel, logsLabel };
+        var labels = new List<string> { appHostLabel };
         if (!isExtensionHost)
         {
             labels.Add(dashboardLabel);
+        }
+        if (logFilePath is not null)
+        {
+            labels.Add(logsLabel);
         }
         if (pid.HasValue)
         {

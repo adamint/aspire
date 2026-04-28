@@ -58,6 +58,23 @@ public class ProgramTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public void ParseLoggingOptions_IgnoresDebugAfterDelimiter()
+    {
+        var options = Program.ParseLoggingOptions(["run", "--", "--debug"]);
+
+        Assert.False(options.DebugMode);
+        Assert.Null(options.ConsoleLogLevel);
+    }
+
+    [Fact]
+    public void ParseLoggingOptions_IgnoresLogLevelAfterDelimiter()
+    {
+        var options = Program.ParseLoggingOptions(["run", "--", "--log-level", "Debug"]);
+
+        Assert.Null(options.ConsoleLogLevel);
+    }
+
+    [Fact]
     public void BuildAnsiConsole_DoesNotReenablePlaygroundFormatting_WhenHostDisablesAnsi()
     {
         var services = new ServiceCollection();
