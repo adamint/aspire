@@ -525,6 +525,13 @@ internal sealed class DashboardEventHandlers(IConfiguration configuration,
             }
         }
 
+        if (!context.EnvironmentVariables.ContainsKey(DashboardConfigNames.DashboardAIDisabledName.EnvVarName) &&
+            ShouldDisableDashboardAIForExtensionHost(configuration))
+        {
+            // VS Code extension sessions expose a debug endpoint, but don't currently serve GHCP endpoints.
+            context.EnvironmentVariables[DashboardConfigNames.DashboardAIDisabledName.EnvVarName] = "true";
+        }
+
         var options = dashboardOptions.Value;
 
         // Options should have been validated these should not be null
@@ -643,6 +650,11 @@ internal sealed class DashboardEventHandlers(IConfiguration configuration,
             context.EnvironmentVariables[DashboardConfigNames.DebugSessionTelemetryOptOutName.EnvVarName] = optOutValue;
         }
 
+    }
+
+    private static bool ShouldDisableDashboardAIForExtensionHost(IConfiguration configuration)
+    {
+        return configuration[KnownConfigNames.ExtensionEndpoint] is { Length: > 0 };
     }
 
     private static void PopulateDashboardUrls(EnvironmentCallbackContext context)

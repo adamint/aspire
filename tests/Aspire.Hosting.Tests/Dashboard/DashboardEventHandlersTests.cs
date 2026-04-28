@@ -160,6 +160,7 @@ public class DashboardEventHandlersTests(ITestOutputHelper testOutputHelper)
         Assert.Equal(debugSessionToken, environmentVariables.GetValueOrDefault(DashboardConfigNames.DebugSessionTokenName.EnvVarName));
         Assert.Equal(debugSessionCert, environmentVariables.GetValueOrDefault(DashboardConfigNames.DebugSessionServerCertificateName.EnvVarName));
         Assert.Equal(telemetryEnabled, bool.TryParse(environmentVariables.GetValueOrDefault(DashboardConfigNames.DebugSessionTelemetryOptOutName.EnvVarName), out var b) ? b : null);
+        Assert.Null(environmentVariables.GetValueOrDefault(DashboardConfigNames.DashboardAIDisabledName.EnvVarName));
     }
 
     [Fact]
@@ -191,6 +192,39 @@ public class DashboardEventHandlersTests(ITestOutputHelper testOutputHelper)
 
         // Assert
         Assert.Equal("true", envVars.Single(e => e.Key == "ASPIRE_DASHBOARD_PURPLE_MONKEY_DISHWASHER").Value);
+    }
+
+    [Fact]
+    public async Task ConfigureEnvironmentVariables_HasExtensionHostEnv_DisablesDashboardAI()
+    {
+        var resourceLoggerService = new ResourceLoggerService();
+        var resourceNotificationService = ResourceNotificationServiceTestHelpers.Create();
+        var configurationBuilder = new ConfigurationBuilder();
+        configurationBuilder.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [KnownConfigNames.ExtensionEndpoint] = "https://localhost:1234",
+            [KnownConfigNames.ExtensionToken] = "extension-token",
+            [KnownConfigNames.ExtensionCert] = "extension-cert",
+            [KnownConfigNames.ExtensionPromptEnabled] = "true",
+            [KnownConfigNames.DebugSessionPort] = "localhost:5678",
+            [KnownConfigNames.DebugSessionToken] = "debug-token",
+            [KnownConfigNames.DebugSessionServerCertificate] = "debug-cert"
+        });
+        var configuration = configurationBuilder.Build();
+        var dashboardOptions = Options.Create(new DashboardOptions
+        {
+            DashboardPath = "test.dll",
+            DashboardUrl = "http://localhost:8080",
+            OtlpGrpcEndpointUrl = "http://localhost:4317",
+        });
+        var hook = CreateHook(resourceLoggerService, resourceNotificationService, configuration, dashboardOptions: dashboardOptions);
+
+        var envVars = new Dictionary<string, object>();
+        var dashboardResource = new ExecutableResource("aspire-dashboard", "dashboard.exe", ".");
+
+        await hook.ConfigureEnvironmentVariables(new EnvironmentCallbackContext(new DistributedApplicationExecutionContext(DistributedApplicationOperation.Run), environmentVariables: envVars, resource: dashboardResource));
+
+        Assert.Equal("true", envVars.GetValueOrDefault(DashboardConfigNames.DashboardAIDisabledName.EnvVarName));
     }
 
     [Theory]
