@@ -180,7 +180,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
         },
         stderrCallback: (data) => {
           for (const line of trimMessage(data)) {
-            this.sendMessageWithEmoji("❌", line, false);
+            this.sendMessageWithEmoji("❌", line, false, 'stderr');
           }
         },
         errorCallback: (error) => {
@@ -316,9 +316,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       this._disposables.push(disposable);
     }
     catch (err) {
-      const errorMessage = String(err);
-      extensionLogOutputChannel.error(`Error starting AppHost debug session: ${errorMessage}`);
-      this.sendMessageWithEmoji("❌", errorMessage, true, 'stderr');
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const errorDetails = err instanceof Error ? (err.stack ?? err.message) : String(err);
+      extensionLogOutputChannel.error(`Error starting AppHost debug session: ${errorDetails}`);
+      this.sendMessageWithEmoji("❌", errorDetails, true, 'stderr');
       vscode.window.showErrorMessage(errorMessage);
       this.dispose();
     }

@@ -79,12 +79,13 @@ suite('Dotnet Debugger Extension Tests', () => {
 
         await aspireDebugSession.startAppHost('/workspace/apphost.ts', ['node', 'apphost.ts'], [], true, { forceBuild: false });
 
-        assert.ok(showErrorMessageStub.calledWith(String(startError)));
+        assert.ok(showErrorMessageStub.calledWith(startError.message));
+        assert.ok(startError.stack);
         assert.ok(outputEvents.some(message =>
             message.type === 'event'
             && message.event === 'output'
             && message.body.category === 'stderr'
-            && message.body.output.includes(String(startError))));
+            && message.body.output.includes(startError.stack)));
 
         outputSubscription.dispose();
     });
