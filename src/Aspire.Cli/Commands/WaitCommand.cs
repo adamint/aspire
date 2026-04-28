@@ -98,10 +98,7 @@ internal sealed class WaitCommand : BaseCommand
 
         if (!result.Success)
         {
-            _interactionService.DisplayError(result.ErrorMessage);
-            return result.IsProjectResolutionError
-                ? result.ExitCode.Value
-                : ExitCodeConstants.FailedToFindProject;
+            return AppHostConnectionResultHandler.DisplayFailureAsError(result, _interactionService, ExitCodeConstants.FailedToFindProject);
         }
 
         var connection = result.Connection!;

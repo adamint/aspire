@@ -165,15 +165,7 @@ internal sealed class LogsCommand : BaseCommand
 
         if (!result.Success)
         {
-            if (result.IsProjectResolutionError)
-            {
-                _interactionService.DisplayError(result.ErrorMessage);
-                return result.ExitCode.Value;
-            }
-
-            // No running AppHosts is not an error - similar to Unix 'ps' returning empty
-            _interactionService.DisplayMessage(KnownEmojis.Information, result.ErrorMessage);
-            return ExitCodeConstants.Success;
+            return AppHostConnectionResultHandler.DisplayFailureAsInformation(result, _interactionService);
         }
 
         var connection = result.Connection!;

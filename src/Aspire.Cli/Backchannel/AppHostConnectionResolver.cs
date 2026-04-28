@@ -106,7 +106,7 @@ internal sealed class AppHostConnectionResolver(
                 }
                 catch (ProjectLocatorException ex)
                 {
-                    var (exitCode, errorMessage) = GetProjectResolutionError(ex, explicitDirectory);
+                    var (exitCode, errorMessage) = ProjectLocatorErrorHelper.GetExitCodeAndMessage(ex, projectOptionSpecifiedAsDirectory: true);
                     return new AppHostConnectionResult
                     {
                         ErrorMessage = errorMessage,
@@ -216,25 +216,6 @@ internal sealed class AppHostConnectionResolver(
         }
 
         return new AppHostConnectionResult { Connection = selectedConnection };
-    }
-
-    private static (int ExitCode, string ErrorMessage) GetProjectResolutionError(ProjectLocatorException ex, bool explicitDirectory)
-    {
-        ArgumentNullException.ThrowIfNull(ex);
-
-        if (!explicitDirectory)
-        {
-            return ProjectLocatorErrorHelper.GetExitCodeAndMessage(ex);
-        }
-
-        return ex.FailureReason switch
-        {
-            ProjectLocatorFailureReason.MultipleProjectFilesFound
-                => (ExitCodeConstants.FailedToFindProject, InteractionServiceStrings.ProjectOptionSpecifiedDirectoryContainsMultipleAppHosts),
-            ProjectLocatorFailureReason.ProjectFileDoesntExist or ProjectLocatorFailureReason.NoProjectFileFound
-                => (ExitCodeConstants.FailedToFindProject, InteractionServiceStrings.ProjectOptionSpecifiedDirectoryContainsNoAppHosts),
-            _ => ProjectLocatorErrorHelper.GetExitCodeAndMessage(ex)
-        };
     }
 
     /// <summary>

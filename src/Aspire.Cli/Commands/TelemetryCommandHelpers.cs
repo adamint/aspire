@@ -259,14 +259,8 @@ internal static class TelemetryCommandHelpers
 
         if (!result.Success)
         {
-            if (result.IsProjectResolutionError)
-            {
-                interactionService.DisplayError(result.ErrorMessage);
-                return DashboardApiResult.Failure(result.ExitCode.Value);
-            }
-
-            interactionService.DisplayMessage(KnownEmojis.Information, result.ErrorMessage);
-            return DashboardApiResult.Failure(ExitCodeConstants.Success);
+            var exitCode = AppHostConnectionResultHandler.DisplayFailureAsInformation(result, interactionService);
+            return DashboardApiResult.Failure(exitCode);
         }
 
         var connection = result.Connection!;

@@ -64,14 +64,7 @@ internal sealed class McpToolsCommand : BaseCommand
 
         if (!result.Success)
         {
-            if (result.IsProjectResolutionError)
-            {
-                _interactionService.DisplayError(result.ErrorMessage);
-                return result.ExitCode.Value;
-            }
-
-            _interactionService.DisplayMessage(KnownEmojis.Information, result.ErrorMessage);
-            return ExitCodeConstants.Success;
+            return AppHostConnectionResultHandler.DisplayFailureAsInformation(result, _interactionService);
         }
 
         var connection = result.Connection!;

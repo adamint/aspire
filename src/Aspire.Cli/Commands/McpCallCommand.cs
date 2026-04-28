@@ -79,10 +79,7 @@ internal sealed class McpCallCommand : BaseCommand
 
         if (!result.Success)
         {
-            _interactionService.DisplayError(result.ErrorMessage);
-            return result.IsProjectResolutionError
-                ? result.ExitCode.Value
-                : ExitCodeConstants.FailedToDotnetRunAppHost;
+            return AppHostConnectionResultHandler.DisplayFailureAsError(result, _interactionService, ExitCodeConstants.FailedToDotnetRunAppHost);
         }
 
         var connection = result.Connection!;

@@ -80,10 +80,7 @@ internal sealed class ResourceCommand : BaseCommand
 
         if (!result.Success)
         {
-            _interactionService.DisplayError(result.ErrorMessage);
-            return result.IsProjectResolutionError
-                ? result.ExitCode.Value
-                : ExitCodeConstants.FailedToFindProject;
+            return AppHostConnectionResultHandler.DisplayFailureAsError(result, _interactionService, ExitCodeConstants.FailedToFindProject);
         }
 
         // Map well-known friendly names (start/stop/restart) to their display metadata

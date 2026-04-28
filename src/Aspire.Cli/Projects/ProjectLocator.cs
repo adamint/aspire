@@ -590,12 +590,16 @@ internal class ProjectLocatorException(string message, ProjectLocatorFailureReas
 
 internal static class ProjectLocatorErrorHelper
 {
-    public static (int ExitCode, string ErrorMessage) GetExitCodeAndMessage(ProjectLocatorException ex)
+    public static (int ExitCode, string ErrorMessage) GetExitCodeAndMessage(ProjectLocatorException ex, bool projectOptionSpecifiedAsDirectory = false)
     {
         ArgumentNullException.ThrowIfNull(ex);
 
         return ex.FailureReason switch
         {
+            ProjectLocatorFailureReason.MultipleProjectFilesFound when projectOptionSpecifiedAsDirectory
+                => (ExitCodeConstants.FailedToFindProject, InteractionServiceStrings.ProjectOptionSpecifiedDirectoryContainsMultipleAppHosts),
+            ProjectLocatorFailureReason.ProjectFileDoesntExist or ProjectLocatorFailureReason.NoProjectFileFound when projectOptionSpecifiedAsDirectory
+                => (ExitCodeConstants.FailedToFindProject, InteractionServiceStrings.ProjectOptionSpecifiedDirectoryContainsNoAppHosts),
             ProjectLocatorFailureReason.UnsupportedProjects
                 => (ExitCodeConstants.SdkNotInstalled, InteractionServiceStrings.NoSupportedAppHostsFound),
             ProjectLocatorFailureReason.ProjectFileNotAppHostProject
