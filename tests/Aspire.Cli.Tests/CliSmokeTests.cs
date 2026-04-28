@@ -154,8 +154,8 @@ public class CliSmokeTests(ITestOutputHelper outputHelper)
                     Console.WriteLine($"Error output: {errorOutput}");
 
                     Assert.Equal(ExitCodeConstants.FailedToStartCli, exitCode);
-                    Assert.Contains("System.InvalidOperationException", errorOutput);
                     Assert.Contains(AspireConfigFile.FileName, errorOutput);
+                    Assert.DoesNotContain("System.InvalidOperationException", errorOutput);
                 }
                 finally
                 {
