@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Diagnostics;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Interaction;
 
@@ -36,11 +37,8 @@ internal static class AppHostConnectionResultHandler
     {
         ArgumentNullException.ThrowIfNull(result);
 
-        if (result.Success)
-        {
-            throw new InvalidOperationException("Cannot handle a successful AppHost connection result as a failure.");
-        }
+        Debug.Assert(!result.Success, "Cannot handle a successful AppHost connection result as a failure.");
 
-        return result.ErrorMessage;
+        return result.ErrorMessage!;
     }
 }
