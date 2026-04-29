@@ -43,7 +43,6 @@ await builder
 await builder.build().run();
 ```
 
-
 | Concept | What it does |
 |---|---|
 | Register a resource | Adds a service, app, container, database, or other resource to the AppHost |
