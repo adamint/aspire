@@ -570,7 +570,7 @@ function createShortenedPathState(filePath: string): ShortenedPathState {
         originalPath: filePath,
         segments,
         depth,
-        label: depth >= 2 ? path.join(...segments.slice(-depth)) : fileName,
+        label: depth >= 2 ? joinPathSegments(segments.slice(-depth)) : fileName,
     };
 }
 
@@ -589,7 +589,11 @@ function expandShortenedPathState(state: ShortenedPathState): void {
         return;
     }
 
-    state.label = path.join(...state.segments.slice(firstCandidateIndex));
+    state.label = joinPathSegments(state.segments.slice(firstCandidateIndex));
+}
+
+function joinPathSegments(segments: readonly string[]): string {
+    return segments.join('/');
 }
 
 function isWindowsDriveSegment(segment: string): boolean {

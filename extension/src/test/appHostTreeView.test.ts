@@ -120,8 +120,8 @@ suite('shortenPaths', () => {
         const result = shortenPaths(paths);
 
         assert.deepStrictEqual(result, [
-            path.join('folder1', 'Project.csproj'),
-            path.join('folder2', 'Project.csproj'),
+            'folder1/Project.csproj',
+            'folder2/Project.csproj',
         ]);
     });
 
@@ -134,8 +134,8 @@ suite('shortenPaths', () => {
         const result = shortenPaths(paths);
 
         assert.deepStrictEqual(result, [
-            path.join('a', 'shared', 'Project.csproj'),
-            path.join('b', 'shared', 'Project.csproj'),
+            'a/shared/Project.csproj',
+            'b/shared/Project.csproj',
         ]);
     });
 
@@ -145,7 +145,7 @@ suite('shortenPaths', () => {
         const result = shortenPaths(paths);
 
         assert.deepStrictEqual(result, [
-            path.join('MyApp', 'AppHost.cs'),
+            'MyApp/AppHost.cs',
         ]);
     });
 
@@ -159,7 +159,7 @@ suite('shortenPaths', () => {
 
         assert.deepStrictEqual(result, [
             'App1.AppHost.csproj',
-            path.join('App2', 'AppHost.cs'),
+            'App2/AppHost.cs',
         ]);
     });
 
