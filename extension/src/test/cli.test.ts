@@ -49,7 +49,7 @@ suite('debugger/languages/cli tests', () => {
             fs.writeFileSync(
                 scriptPath,
                 process.platform === 'win32'
-                    ? '@echo off\r\nset /p dummy=stdout from cli<nul\r\nset /p dummy=stderr from cli<nul 1>&2\r\n'
+                    ? '@echo off\r\nset /p dummy=stdout from cli<nul\r\nset /p dummy=stderr from cli<nul 1>&2\r\nexit /b 0\r\n'
                     : "#!/bin/sh\nprintf 'stdout from cli'\nprintf 'stderr from cli' >&2\n");
             fs.chmodSync(scriptPath, 0o755);
             const command = process.platform === 'win32' ? (process.env.ComSpec ?? 'cmd.exe') : '/bin/sh';
