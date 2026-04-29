@@ -375,6 +375,7 @@ export class AppHostDataRepository {
         }
         if (this._describeProcess) {
             const describeProcess = this._describeProcess;
+            extensionLogOutputChannel.info(`aspire describe --follow exited with code ${code}`);
             this._describeProcess = undefined;
             describeProcess.kill();
         }
@@ -439,6 +440,7 @@ export class AppHostDataRepository {
         if (this._pollingInterval) {
             clearInterval(this._pollingInterval);
             this._pollingInterval = undefined;
+            extensionLogOutputChannel.info(`aspire ps polling stopped`);
         }
     }
 
