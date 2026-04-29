@@ -43,7 +43,6 @@ await builder
 await builder.build().run();
 ```
 
-The examples above show C# and TypeScript AppHosts. JavaScript AppHosts such as `apphost.js` use the same model and are also recognized by the Aspire extension.
 
 | Concept | What it does |
 |---|---|
