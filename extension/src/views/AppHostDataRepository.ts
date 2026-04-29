@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { ChildProcessWithoutNullStreams } from 'child_process';
 import { spawnCliProcess } from '../debugger/languages/cli';
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
@@ -507,6 +508,8 @@ export function shortenPath(filePath: string): string {
     return shortenPaths([filePath])[0] ?? filePath;
 }
 
+const projectFileExtensions = new Set(['.csproj', '.fsproj', '.vbproj']);
+
 export function shortenPaths(filePaths: readonly string[]): string[] {
     const states: ShortenedPathState[] = [];
     const stateByPath = new Map<string, ShortenedPathState>();
@@ -559,23 +562,15 @@ function createShortenedPathState(filePath: string): ShortenedPathState {
     const normalized = filePath.replace(/\\/g, '/').replace(/\/+$/, '');
     const segments = normalized.split('/');
     const fileName = segments[segments.length - 1] || filePath;
-
-    if (fileName.endsWith('.csproj')) {
-        return {
-            originalPath: filePath,
-            segments,
-            depth: 1,
-            label: fileName,
-        };
-    }
-
-    const depth = segments.length >= 2 ? 2 : 1;
+    const extension = path.extname(fileName).toLowerCase();
+    const isProjectFile = projectFileExtensions.has(extension);
+    const depth = !isProjectFile && segments.length >= 2 ? 2 : 1;
 
     return {
         originalPath: filePath,
         segments,
         depth,
-        label: segments.slice(-depth).join('/'),
+        label: depth >= 2 ? path.join(...segments.slice(-depth)) : fileName,
     };
 }
 
@@ -594,7 +589,7 @@ function expandShortenedPathState(state: ShortenedPathState): void {
         return;
     }
 
-    state.label = state.segments.slice(firstCandidateIndex).join('/');
+    state.label = path.join(...state.segments.slice(firstCandidateIndex));
 }
 
 function isWindowsDriveSegment(segment: string): boolean {

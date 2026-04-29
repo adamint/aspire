@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import * as cliModule from '../debugger/languages/cli';
-import { AppHostDataRepository, shortenPath } from '../views/AppHostDataRepository';
+import { AppHostDataRepository, shortenPath, shortenPaths } from '../views/AppHostDataRepository';
 import { AspireAppHostTreeProvider, getResourceContextValue, getResourceIcon, resolveAppHostSourcePath, buildResourceDescription } from '../views/AspireAppHostTreeProvider';
 import type { AppHostDisplayInfo, ResourceJson, ViewMode } from '../views/AppHostDataRepository';
 import { ResourceState, HealthStatus, StateStyle } from '../editor/resourceConstants';
@@ -91,6 +91,101 @@ suite('shortenPath', () => {
 
     test('two segments returns parent/filename', () => {
         assert.strictEqual(shortenPath('MyApp/AppHost.cs'), 'MyApp/AppHost.cs');
+    });
+});
+
+suite('shortenPaths', () => {
+    test('unique project filenames return just the filename', () => {
+        const paths = [
+            '/home/user/folder1/App1.AppHost.csproj',
+            '/home/user/folder2/App2.AppHost.fsproj',
+            '/home/user/folder3/App3.AppHost.vbproj',
+        ];
+
+        const result = shortenPaths(paths);
+
+        assert.deepStrictEqual(result, [
+            'App1.AppHost.csproj',
+            'App2.AppHost.fsproj',
+            'App3.AppHost.vbproj',
+        ]);
+    });
+
+    test('duplicate filenames add parent directory to disambiguate', () => {
+        const paths = [
+            '/home/user/folder1/Project.csproj',
+            '/home/user/folder2/Project.csproj',
+        ];
+
+        const result = shortenPaths(paths);
+
+        assert.deepStrictEqual(result, [
+            path.join('folder1', 'Project.csproj'),
+            path.join('folder2', 'Project.csproj'),
+        ]);
+    });
+
+    test('duplicate filenames with same parent add more segments', () => {
+        const paths = [
+            '/home/a/shared/Project.csproj',
+            '/home/b/shared/Project.csproj',
+        ];
+
+        const result = shortenPaths(paths);
+
+        assert.deepStrictEqual(result, [
+            path.join('a', 'shared', 'Project.csproj'),
+            path.join('b', 'shared', 'Project.csproj'),
+        ]);
+    });
+
+    test('single non-project file returns parent and filename', () => {
+        const paths = ['/home/user/repos/MyApp/AppHost.cs'];
+
+        const result = shortenPaths(paths);
+
+        assert.deepStrictEqual(result, [
+            path.join('MyApp', 'AppHost.cs'),
+        ]);
+    });
+
+    test('mixed project and non-project files use project-aware minimum depth', () => {
+        const paths = [
+            '/home/user/App1/App1.AppHost.csproj',
+            '/home/user/App2/AppHost.cs',
+        ];
+
+        const result = shortenPaths(paths);
+
+        assert.deepStrictEqual(result, [
+            'App1.AppHost.csproj',
+            path.join('App2', 'AppHost.cs'),
+        ]);
+    });
+
+    test('duplicate filenames exhaust segments and return full path', () => {
+        const paths = [
+            'C:\\folder\\Project.csproj',
+            'D:\\folder\\Project.csproj',
+        ];
+
+        const result = shortenPaths(paths);
+
+        assert.deepStrictEqual(result, paths);
+    });
+
+    test('duplicate paths return the same shortened label for each occurrence', () => {
+        const paths = [
+            '/home/user/folder1/Project.csproj',
+            '/home/user/folder1/Project.csproj',
+        ];
+
+        const result = shortenPaths(paths);
+
+        assert.deepStrictEqual(result, [
+            'Project.csproj',
+            'Project.csproj',
+        ]);
     });
 });
 
