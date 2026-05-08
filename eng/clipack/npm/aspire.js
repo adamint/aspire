@@ -6,6 +6,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+// Package names are generated at pack time so changing the npm package name in
+// MSBuild does not require editing this launcher.
 const ridPackageNames = loadRidPackageNames();
 
 function loadRidPackageNames() {
@@ -39,6 +41,8 @@ function detectRid() {
 }
 
 function isMusl() {
+  // npm supports libc-specific packages. Prefer Node's runtime report because
+  // it avoids spawning a process on glibc systems, then fall back to ldd.
   if (process.report && typeof process.report.getReport === 'function') {
     const report = process.report.getReport();
     if (report && report.header && report.header.glibcVersionRuntime) {
@@ -82,12 +86,17 @@ function ensureCachedBinary(sourcePath, binaryName, version, rid) {
   const targetDirectory = path.join(cacheRoot, version, rid, 'bin');
   const targetPath = path.join(targetDirectory, binaryName);
 
+  // The Aspire CLI self-extracts relative to its process path on first run.
+  // Running directly from node_modules could write into read-only package
+  // stores, so copy the native binary to an Aspire-owned writable layout.
   fs.mkdirSync(targetDirectory, { recursive: true });
 
   if (!needsCopy(sourcePath, targetPath)) {
     return targetPath;
   }
 
+  // Copy through a temp file so concurrent first runs never observe a partial
+  // executable at the final path.
   const tempPath = path.join(targetDirectory, `${binaryName}.${process.pid}.${Date.now()}.tmp`);
   fs.copyFileSync(sourcePath, tempPath);
 
@@ -125,6 +134,8 @@ function main() {
     stdio: 'inherit',
     env: {
       ...process.env,
+      // Future CLI-side update detection can use these values to distinguish
+      // npm installs from dotnet tool installs.
       ASPIRE_NPM_PACKAGE: packageJson.name,
       ASPIRE_NPM_PACKAGE_VERSION: packageJson.version,
       ASPIRE_NPM_PACKAGE_RID: rid

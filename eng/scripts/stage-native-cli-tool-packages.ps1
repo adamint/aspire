@@ -89,6 +89,8 @@ function Get-ClassifiedNuGetPackages {
 }
 
 function Get-ClassifiedNpmPackages {
+  # Npm packages are additive to the native CLI nupkgs. If older builds only
+  # downloaded nupkgs, staging should continue and emit a warning below.
   $packages = @(Get-ChildItem -Path $DownloadRoot -Filter "$NpmPackageFilePrefix*.tgz" -File -Recurse |
     Sort-Object FullName)
   $escapedPrefix = [System.Text.RegularExpressions.Regex]::Escape($NpmPackageFilePrefix)
@@ -139,6 +141,8 @@ function Get-PackagesToStage {
     throw "Expected exactly one canonical $PointerPackageDescription pointer package from $CanonicalPointerArtifactName, but found $($canonicalPointerPackages.Count): $($canonicalPointerPackages.File.FullName -join ', ')"
   }
 
+  # Pointer packages are produced for every RID build. Stage exactly one
+  # canonical pointer package and all RID-specific packages.
   $skippedPointerPackages = @($ClassifiedPackages | Where-Object { $_.IsPointerPackage -and $_.ArtifactName -ne $CanonicalPointerArtifactName })
   foreach ($package in $skippedPointerPackages) {
     Write-Host "Skipping non-canonical $PointerPackageDescription pointer package from $($package.ArtifactName): $($package.File.FullName)"

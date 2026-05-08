@@ -116,6 +116,8 @@ if ($ArchivePath) {
   Write-Step "Archive: $ArchivePath"
 }
 
+# npm pack flattens scoped package names into tarball file names, e.g.
+# @microsoft/aspire-cli -> microsoft-aspire-cli-1.0.0.tgz.
 $packageFilePrefix = Get-NpmPackageFilePrefix $PackageName
 $ridPackage = Assert-SinglePackage `
   (Get-ChildItem -Path $effectiveDir -Filter "$packageFilePrefix-$Rid-*.tgz" -ErrorAction SilentlyContinue) `
@@ -150,6 +152,8 @@ try {
       throw "Could not find $binaryName in CLI archive $ArchivePath."
     }
 
+    # The signed native archive remains the canonical payload. The npm RID
+    # tarball must contain the exact same executable bytes.
     if (-not (Test-FileContentEqual $archiveBinaryPath $binaryPath)) {
       $archiveBinary = Get-Item -LiteralPath $archiveBinaryPath
       $npmBinary = Get-Item -LiteralPath $binaryPath
@@ -183,6 +187,8 @@ try {
     throw "Pointer package is missing bin/aspire-package-map.json."
   }
 
+  # The launcher depends on this generated map to resolve the selected RID
+  # package without hardcoding the package scope/name.
   $packageMap = Get-Content -Path $packageMapPath -Raw | ConvertFrom-Json
   if ($packageMap.$Rid -ne $expectedRidPackageName) {
     throw "Pointer package map does not reference $expectedRidPackageName for $Rid."

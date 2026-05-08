@@ -20,6 +20,8 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function New-StringList([string[]]$Values) {
+  # PowerShell enumerates single-item arrays when returning from functions.
+  # Returning a List keeps os/cpu/libc/files as JSON arrays for npm metadata.
   $list = [System.Collections.Generic.List[string]]::new()
   foreach ($value in $Values) {
     $list.Add($value)
@@ -28,6 +30,8 @@ function New-StringList([string[]]$Values) {
 }
 
 function Get-RidPackageInfo([string]$PackageRid) {
+  # Keep npm platform metadata aligned with the RIDs produced by the native
+  # archive build. npm uses os/cpu/libc to install only the matching package.
   switch ($PackageRid) {
     'win-x64' {
       return [ordered]@{
@@ -106,6 +110,8 @@ function Invoke-NpmPack([string]$PackageDirectory, [string]$DestinationDirectory
   }
 }
 
+# MSBuild extracts this from the signed native CLI archive. This script only
+# repackages that payload; it must not rebuild or substitute another binary.
 if (-not (Test-Path -LiteralPath $NativeBinaryPath)) {
   throw "Native binary path does not exist: $NativeBinaryPath"
 }
@@ -173,6 +179,8 @@ foreach ($supportedRid in $supportedRids) {
   $optionalDependencies["$PackageName-$supportedRid"] = $Version
 }
 
+# The launcher reads this map instead of hardcoding package names so package
+# scope/name changes remain an MSBuild property.
 $ridPackageMap = [ordered]@{}
 foreach ($supportedRid in $supportedRids) {
   $ridPackageMap[$supportedRid] = "$PackageName-$supportedRid"
