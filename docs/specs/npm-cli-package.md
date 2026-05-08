@@ -6,6 +6,18 @@ The Aspire CLI npm package POC distributes the native Aspire CLI through npm usi
 
 The POC package name is `@microsoft/aspire-cli`. It is intentionally a POC and does not yet include npm publishing, provenance, registry authentication, or CLI-side npm self-update behavior.
 
+## Research and prior art
+
+This design follows the native npm package pattern used by established packages rather than introducing a custom installer.
+
+- npm's package metadata defines the primitives this POC uses: `bin` exposes a command on PATH, `optionalDependencies` allow platform-specific packages to be skipped when they do not apply, `files` limits packed content, and `os`/`cpu` select packages by `process.platform` and `process.arch`. See the npm package.json documentation for [`bin`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#bin), [`optionalDependencies`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#optionaldependencies), [`files`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#files), [`os`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#os), and [`cpu`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#cpu).
+- [esbuild](https://github.com/evanw/esbuild/blob/main/npm/esbuild/package.json) uses a top-level package with a `bin` entry and platform-specific packages such as [`@esbuild/linux-x64`](https://github.com/evanw/esbuild/blob/main/npm/@esbuild/linux-x64/package.json) listed as optional dependencies. Its platform resolver maps the current Node platform to an optional package and resolves the binary through Node package resolution rather than hardcoded `node_modules` paths.
+- [@vscode/ripgrep](https://github.com/microsoft/vscode-ripgrep/blob/main/packages/ripgrep/package.json) uses the same top-level package plus optional platform package shape for an external CLI binary. A platform package such as [`@vscode/ripgrep-linux-x64`](https://github.com/microsoft/vscode-ripgrep/blob/main/packages/ripgrep-linux-x64/package.json) contains a `bin/` payload and declares `os`/`cpu` metadata.
+- Rollup, SWC, and sharp show the modern `libc` split for Linux native packages. Examples include [`@rollup/rollup-linux-x64-gnu`](https://github.com/rollup/rollup/blob/master/npm/linux-x64-gnu/package.json), [`@swc/core-linux-x64-gnu`](https://github.com/swc-project/swc/blob/main/packages/core/scripts/npm/linux-x64-gnu/package.json), and [`@img/sharp-linux-x64`](https://github.com/lovell/sharp/blob/main/npm/linux-x64/package.json). Their runtime loaders also distinguish glibc from musl before selecting a native package.
+- Yarn's package portability guidance says packages should not write inside their own package directory outside postinstall because package directories may be read-only or backed by package-manager stores. See ["Packages should never write inside their own folder outside of postinstall"](https://yarnpkg.com/advanced/rulebook#packages-should-never-write-inside-their-own-folder-outside-of-postinstall).
+
+The Aspire-specific adaptation is the writable cache. Unlike most native npm CLIs, the Aspire CLI self-extracts an embedded bundle relative to its process path on first run. That means running the binary directly from the RID package would make the extraction root depend on the package-manager layout. Copying to `~/.aspire/npm/<version>/<rid>/bin` keeps npm installation mechanics separate from Aspire's first-run extraction layout.
+
 ## Goals
 
 - Produce npm tarballs as part of the same native CLI package build that produces the dotnet tool packages.
