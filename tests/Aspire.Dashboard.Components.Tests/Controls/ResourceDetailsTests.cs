@@ -3,6 +3,7 @@
 
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Globalization;
 using Aspire.Dashboard.Components.Controls;
 using Aspire.Dashboard.Components.Tests.Shared;
 using Aspire.Dashboard.Model;
@@ -389,7 +390,7 @@ public class ResourceDetailsTests : DashboardTestContext
 
         var resourcePropertyGrid = cut.FindAll(".property-grid")[0];
         Assert.Contains(ControlsStrings.ResourceDetailsStateDescriptionHeader, resourcePropertyGrid.TextContent);
-        Assert.Contains("Resource is waiting for dependencies.", resourcePropertyGrid.TextContent);
+        Assert.Contains(Columns.StateColumnResourceWaiting, resourcePropertyGrid.TextContent);
     }
 
     [Fact]
@@ -424,7 +425,7 @@ public class ResourceDetailsTests : DashboardTestContext
 
         var resourcePropertyGrid = cut.FindAll(".property-grid")[0];
         Assert.Contains(ControlsStrings.ResourceDetailsStateDescriptionHeader, resourcePropertyGrid.TextContent);
-        Assert.Contains("Resource is not configured to start automatically.", resourcePropertyGrid.TextContent);
+        Assert.Contains(Columns.StateColumnResourceNotStarted, resourcePropertyGrid.TextContent);
 
         var startButton = resourcePropertyGrid.QuerySelector("button.state-description-action");
         Assert.NotNull(startButton);
@@ -468,7 +469,7 @@ public class ResourceDetailsTests : DashboardTestContext
 
         var resourcePropertyGrid = cut.FindAll(".property-grid")[0];
         Assert.Contains(ControlsStrings.ResourceDetailsStateDescriptionHeader, resourcePropertyGrid.TextContent);
-        Assert.Contains("Waiting for dependencies: nginx, redis.", resourcePropertyGrid.TextContent);
+        Assert.Contains(string.Format(CultureInfo.InvariantCulture, Columns.StateColumnResourceWaitingFor, "nginx, redis"), resourcePropertyGrid.TextContent);
 
         var links = resourcePropertyGrid.QuerySelectorAll("fluent-anchor");
         Assert.Collection(
