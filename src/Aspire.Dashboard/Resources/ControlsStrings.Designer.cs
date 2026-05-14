@@ -862,7 +862,7 @@ namespace Aspire.Dashboard.Resources {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to Start now.
+        ///   Looks up a localized string similar to Start anyway.
         /// </summary>
         public static string ResourceStateDescriptionStartNowAction {
             get {

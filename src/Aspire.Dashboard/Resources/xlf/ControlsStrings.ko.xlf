@@ -483,8 +483,8 @@
         <note />
       </trans-unit>
       <trans-unit id="ResourceStateDescriptionStartNowAction">
-        <source>Start now</source>
-        <target state="new">Start now</target>
+        <source>Start anyway</source>
+        <target state="new">Start anyway</target>
         <note />
       </trans-unit>
       <trans-unit id="ResumeButtonTitle">

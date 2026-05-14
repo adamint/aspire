@@ -313,7 +313,7 @@
     <value>State details</value>
   </data>
   <data name="ResourceStateDescriptionStartNowAction" xml:space="preserve">
-    <value>Start now</value>
+    <value>Start anyway</value>
   </data>
   <data name="SpanDetailsEventsHeader" xml:space="preserve">
     <value>Events</value>
