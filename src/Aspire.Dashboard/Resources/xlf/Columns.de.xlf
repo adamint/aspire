@@ -40,13 +40,13 @@ Weitere Informationen finden Sie unter https://aka.ms/dotnet/aspire/container-ru
         <note>{0} is a resource type</note>
       </trans-unit>
       <trans-unit id="StateColumnResourceNotStarted">
-        <source>Resource has not started because it's configured to not automatically start.</source>
-        <target state="translated">Die Ressource wurde nicht gestartet, weil sie so eingestellt ist, dass sie nicht automatisch startet.</target>
+        <source>Resource is not configured to start automatically.</source>
+        <target state="needs-review-translation">Die Ressource wurde nicht gestartet, weil sie so eingestellt ist, dass sie nicht automatisch startet.</target>
         <note />
       </trans-unit>
       <trans-unit id="StateColumnResourceWaiting">
-        <source>Resource is waiting for other resources to be in a running and healthy state.</source>
-        <target state="translated">Die Ressource wartet darauf, dass andere Ressourcen in einem fehlerfreien Zustand ausgeführt werden.</target>
+        <source>Resource is waiting for dependencies.</source>
+        <target state="needs-review-translation">Die Ressource wartet darauf, dass andere Ressourcen in einem fehlerfreien Zustand ausgeführt werden.</target>
         <note />
       </trans-unit>
       <trans-unit id="StateColumnResourceWaitingFor">

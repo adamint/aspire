@@ -159,10 +159,10 @@ For more information, see https://aka.ms/aspire/container-runtime-unhealthy</val
     <comment>Contains a new line</comment>
   </data>
   <data name="StateColumnResourceNotStarted" xml:space="preserve">
-    <value>Resource has not started because it's configured to not automatically start.</value>
+    <value>Resource is not configured to start automatically.</value>
   </data>
   <data name="StateColumnResourceWaiting" xml:space="preserve">
-    <value>Resource is waiting for other resources to be in a running and healthy state.</value>
+    <value>Resource is waiting for dependencies.</value>
   </data>
   <data name="StateColumnResourceWaitingFor" xml:space="preserve">
     <value>Waiting for dependencies: {0}.</value>

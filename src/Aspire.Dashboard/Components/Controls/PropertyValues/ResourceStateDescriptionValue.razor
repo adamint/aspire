@@ -4,7 +4,6 @@
 {
     <FluentHighlighter HighlightedText="@HighlightText" Text="@Value" />
 }
-
 else
 {
     <FluentHighlighter HighlightedText="@HighlightText" Text="@_prefix" />
@@ -29,4 +28,16 @@ else
         }
     }
     <FluentHighlighter HighlightedText="@HighlightText" Text="@_suffix" />
+}
+
+@if (StartCommand is not null)
+{
+    <span> </span>
+    <button type="button"
+            class="state-description-action"
+            disabled="@IsStartCommandDisabled"
+            @onclick="OnStartCommandAsync"
+            title="@StartCommandTitle">
+        <FluentHighlighter HighlightedText="@HighlightText" Text="@StartCommand.GetDisplayName()" />
+    </button>
 }

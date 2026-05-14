@@ -1,0 +1,20 @@
+.state-description-action {
+    display: inline;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent-fill-rest);
+    text-decoration: underline;
+    cursor: pointer;
+    font: inherit;
+}
+
+.state-description-action:hover:not(:disabled) {
+    color: var(--accent-fill-hover);
+}
+
+.state-description-action:disabled {
+    cursor: default;
+    opacity: var(--disabled-opacity);
+    text-decoration: none;
+}

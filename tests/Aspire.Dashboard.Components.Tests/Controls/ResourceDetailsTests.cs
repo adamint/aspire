@@ -389,7 +389,50 @@ public class ResourceDetailsTests : DashboardTestContext
 
         var resourcePropertyGrid = cut.FindAll(".property-grid")[0];
         Assert.Contains(ControlsStrings.ResourceDetailsStateDescriptionHeader, resourcePropertyGrid.TextContent);
-        Assert.Contains(Columns.StateColumnResourceWaiting, resourcePropertyGrid.TextContent);
+        Assert.Contains("Resource is waiting for dependencies.", resourcePropertyGrid.TextContent);
+    }
+
+    [Fact]
+    public async Task Render_NotStartedStateDescription_ShowsStartAction()
+    {
+        ResourceSetupHelpers.SetupResourceDetails(this);
+
+        var startCommand = new CommandViewModel(
+            CommandViewModel.StartCommand,
+            CommandViewModelState.Enabled,
+            displayName: "Start",
+            displayDescription: "Start resource",
+            confirmationMessage: string.Empty,
+            argumentInputs: [],
+            isHighlighted: true,
+            iconName: "Play",
+            iconVariant: IconVariant.Filled);
+
+        var resource = ModelTestHelpers.CreateResource(
+            resourceName: "app1",
+            state: KnownResourceState.NotStarted,
+            commands: ImmutableArray.Create(startCommand));
+
+        CommandViewModel? capturedCommand = null;
+        var cut = RenderComponent<ResourceDetails>(builder =>
+        {
+            builder.Add(p => p.Resource, resource);
+            builder.Add(p => p.ResourceByName, new ConcurrentDictionary<string, ResourceViewModel>([new KeyValuePair<string, ResourceViewModel>(resource.Name, resource)]));
+            builder.Add(p => p.CommandSelected, EventCallback.Factory.Create<CommandViewModel>(this, c => capturedCommand = c));
+            builder.Add(p => p.IsCommandExecuting, (_, _) => false);
+        });
+
+        var resourcePropertyGrid = cut.FindAll(".property-grid")[0];
+        Assert.Contains(ControlsStrings.ResourceDetailsStateDescriptionHeader, resourcePropertyGrid.TextContent);
+        Assert.Contains("Resource is not configured to start automatically.", resourcePropertyGrid.TextContent);
+
+        var startButton = resourcePropertyGrid.QuerySelector("button.state-description-action");
+        Assert.NotNull(startButton);
+        Assert.Equal("Start", startButton!.TextContent.Trim());
+
+        await startButton.ClickAsync(new MouseEventArgs());
+
+        Assert.Same(startCommand, capturedCommand);
     }
 
     [Fact]

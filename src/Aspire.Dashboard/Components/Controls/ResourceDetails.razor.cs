@@ -220,7 +220,9 @@ public partial class ResourceDetails : IComponentWithTelemetry, IDisposable
                     {
                         ["Resource"] = _resource,
                         ["ResourceByName"] = ResourceByName,
-                        ["ShowHiddenResources"] = ShowHiddenResources
+                        ["ShowHiddenResources"] = ShowHiddenResources,
+                        ["OnExecuteCommandAsync"] = (Func<ResourceViewModel, CommandViewModel, Task>)ExecuteResourceCommandAsync,
+                        ["IsCommandExecuting"] = IsCommandExecuting,
                     }
                 }
             };
@@ -235,7 +237,7 @@ public partial class ResourceDetails : IComponentWithTelemetry, IDisposable
                     Parameters =
                     {
                         ["Resource"] = _resource,
-                        ["OnExecuteCommandAsync"] = (Func<ResourceViewModel, CommandViewModel, Task>)ExecuteParameterCommandAsync,
+                        ["OnExecuteCommandAsync"] = (Func<ResourceViewModel, CommandViewModel, Task>)ExecuteResourceCommandAsync,
                         ["IsCommandExecuting"] = IsCommandExecuting,
                     }
                 };
@@ -320,7 +322,7 @@ public partial class ResourceDetails : IComponentWithTelemetry, IDisposable
             showUrls: true);
     }
 
-    private async Task ExecuteParameterCommandAsync(ResourceViewModel resource, CommandViewModel command)
+    private async Task ExecuteResourceCommandAsync(ResourceViewModel resource, CommandViewModel command)
     {
         await CommandSelected.InvokeAsync(command);
     }

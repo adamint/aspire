@@ -136,7 +136,7 @@ namespace Aspire.Dashboard.Resources {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to Resource has not started because it&apos;s configured to not automatically start..
+        ///   Looks up a localized string similar to Resource is not configured to start automatically..
         /// </summary>
         public static string StateColumnResourceNotStarted {
             get {
@@ -145,7 +145,7 @@ namespace Aspire.Dashboard.Resources {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to Resource is waiting for other resources to be in a running and healthy state..
+        ///   Looks up a localized string similar to Resource is waiting for dependencies..
         /// </summary>
         public static string StateColumnResourceWaiting {
             get {

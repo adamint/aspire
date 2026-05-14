@@ -14,6 +14,10 @@ public partial class ResourceStateDescriptionValue
     private string _prefix = string.Empty;
     private string _suffix = string.Empty;
     private List<WaitingResource> _waitingResources = [];
+    private CommandViewModel? StartCommand { get; set; }
+    private bool IsStartCommandDisabled => StartCommand is null || StartCommand.State == CommandViewModelState.Disabled || OnExecuteCommandAsync is null || IsStartCommandExecuting;
+    private bool IsStartCommandExecuting => StartCommand is not null && (IsCommandExecuting?.Invoke(Resource, StartCommand) ?? false);
+    private string StartCommandTitle => StartCommand?.GetDisplayDescription() ?? StartCommand?.GetDisplayName() ?? string.Empty;
 
     [Parameter, EditorRequired]
     public required string Value { get; set; }
@@ -30,6 +34,12 @@ public partial class ResourceStateDescriptionValue
     [Parameter]
     public bool ShowHiddenResources { get; set; }
 
+    [Parameter]
+    public Func<ResourceViewModel, CommandViewModel, Task>? OnExecuteCommandAsync { get; set; }
+
+    [Parameter]
+    public Func<ResourceViewModel, CommandViewModel, bool>? IsCommandExecuting { get; set; }
+
     [Inject]
     public required IStringLocalizer<Columns> Loc { get; init; }
 
@@ -38,6 +48,7 @@ public partial class ResourceStateDescriptionValue
         _waitingResources = [];
         _prefix = string.Empty;
         _suffix = string.Empty;
+        StartCommand = GetVisibleStartCommand();
 
         if (!Resource.TryGetWaitingForDependencies(out var dependencies))
         {
@@ -97,6 +108,32 @@ public partial class ResourceStateDescriptionValue
 
         resource = null;
         return false;
+    }
+
+    private CommandViewModel? GetVisibleStartCommand()
+    {
+        foreach (var command in Resource.Commands)
+        {
+            if (string.Equals(command.Name, CommandViewModel.StartCommand, StringComparisons.CommandName) &&
+                command.State != CommandViewModelState.Hidden)
+            {
+                return command;
+            }
+        }
+
+        return null;
+    }
+
+    private Task OnStartCommandAsync()
+    {
+        if (StartCommand is not { } startCommand ||
+            IsStartCommandDisabled ||
+            OnExecuteCommandAsync is not { } onExecuteCommandAsync)
+        {
+            return Task.CompletedTask;
+        }
+
+        return onExecuteCommandAsync(Resource, startCommand);
     }
 
     private sealed record WaitingResource(ResourceViewModel? Resource, string DisplayName);
