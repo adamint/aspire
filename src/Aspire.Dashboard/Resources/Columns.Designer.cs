@@ -100,7 +100,7 @@ namespace Aspire.Dashboard.Resources {
         
         /// <summary>
         ///   Looks up a localized string similar to Container runtime was found but appears to be unhealthy. Ensure that it is running.
-        ///For more information, see https://aka.ms/aspire/container-runtime-unhealthy.
+        ///For more information, see https://aka.ms/aspire/container-runtime-unhealthy..
         /// </summary>
         public static string StateColumnResourceContainerRuntimeUnhealthy {
             get {
@@ -109,7 +109,7 @@ namespace Aspire.Dashboard.Resources {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to {0} is no longer running.
+        ///   Looks up a localized string similar to {0} is no longer running..
         /// </summary>
         public static string StateColumnResourceExited {
             get {
@@ -118,7 +118,7 @@ namespace Aspire.Dashboard.Resources {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to {0} failed to start.
+        ///   Looks up a localized string similar to {0} failed to start..
         /// </summary>
         public static string StateColumnResourceFailedToStart {
             get {
@@ -127,7 +127,7 @@ namespace Aspire.Dashboard.Resources {
         }
         
         /// <summary>
-        ///   Looks up a localized string similar to {0} exited unexpectedly with exit code {1}.
+        ///   Looks up a localized string similar to {0} exited unexpectedly with exit code {1}..
         /// </summary>
         public static string StateColumnResourceExitedUnexpectedly {
             get {
