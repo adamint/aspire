@@ -581,7 +581,13 @@ export class AppHostDataRepository {
             cliPath = await this._terminalProvider.getAspireCliExecutablePath();
         } catch (error) {
             if (this._isCurrentPsFetch(fetchVersion)) {
-                callback(1, '', String(error));
+                const errorMessage = errorFetchingAppHosts(String(error));
+                extensionLogOutputChannel.warn(errorMessage);
+                this._setError(errorMessage);
+                if (this._loadingGlobal) {
+                    this._loadingGlobal = false;
+                    this._updateLoadingContext();
+                }
             }
             return;
         }
