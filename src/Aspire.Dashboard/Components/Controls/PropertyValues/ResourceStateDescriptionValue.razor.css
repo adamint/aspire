@@ -22,8 +22,7 @@
 }
 
 .state-description-action-icon {
-    width: 0.8em;
-    height: 0.8em;
+    display: inline;
     margin-inline-end: 0.2em;
-    vertical-align: -0.05em;
+    vertical-align: text-bottom;
 }

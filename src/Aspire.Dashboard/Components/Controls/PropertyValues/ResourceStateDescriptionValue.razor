@@ -39,7 +39,7 @@ else
             disabled="@IsStartCommandDisabled"
             @onclick="OnStartCommandAsync"
             title="@StartCommandTitle">
-        <FluentIcon Value="@(new Icons.Filled.Size16.Play())" Class="state-description-action-icon" />
+        <FluentIcon Value="@(new Icons.Filled.Size16.Play())" Width="0.8em" Class="state-description-action-icon" />
         <FluentHighlighter HighlightedText="@HighlightText" Text="@ControlsLoc[nameof(ControlsStrings.ResourceStateDescriptionStartNowAction)]" />
     </button>
 }
