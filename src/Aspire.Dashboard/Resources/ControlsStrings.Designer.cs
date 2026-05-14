@@ -860,6 +860,15 @@ namespace Aspire.Dashboard.Resources {
                 return ResourceManager.GetString("ResourceDetailsStateDescriptionHeader", resourceCulture);
             }
         }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Start now.
+        /// </summary>
+        public static string ResourceStateDescriptionStartNowAction {
+            get {
+                return ResourceManager.GetString("ResourceStateDescriptionStartNowAction", resourceCulture);
+            }
+        }
         
         /// <summary>
         ///   Looks up a localized string similar to Type.

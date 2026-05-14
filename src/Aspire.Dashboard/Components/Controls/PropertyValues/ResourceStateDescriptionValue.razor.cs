@@ -43,6 +43,9 @@ public partial class ResourceStateDescriptionValue
     [Inject]
     public required IStringLocalizer<Columns> Loc { get; init; }
 
+    [Inject]
+    public required IStringLocalizer<ControlsStrings> ControlsLoc { get; init; }
+
     protected override void OnParametersSet()
     {
         _waitingResources = [];

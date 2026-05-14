@@ -482,6 +482,11 @@
         <target state="translated">리소스</target>
         <note />
       </trans-unit>
+      <trans-unit id="ResourceStateDescriptionStartNowAction">
+        <source>Start now</source>
+        <target state="new">Start now</target>
+        <note />
+      </trans-unit>
       <trans-unit id="ResumeButtonTitle">
         <source>Resume incoming data</source>
         <target state="translated">들어오는 데이터 다시 시작</target>

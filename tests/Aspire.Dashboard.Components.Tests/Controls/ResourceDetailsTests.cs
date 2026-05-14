@@ -427,9 +427,9 @@ public class ResourceDetailsTests : DashboardTestContext
         Assert.Contains(ControlsStrings.ResourceDetailsStateDescriptionHeader, resourcePropertyGrid.TextContent);
         Assert.Contains(Columns.StateColumnResourceNotStarted, resourcePropertyGrid.TextContent);
 
-        var startButton = resourcePropertyGrid.QuerySelector("button.state-description-action");
+        var startButton = resourcePropertyGrid.QuerySelector("fluent-button.state-description-action");
         Assert.NotNull(startButton);
-        Assert.Equal("Start", startButton!.TextContent.Trim());
+        Assert.Contains(ControlsStrings.ResourceStateDescriptionStartNowAction, startButton!.TextContent);
 
         await startButton.ClickAsync(new MouseEventArgs());
 
