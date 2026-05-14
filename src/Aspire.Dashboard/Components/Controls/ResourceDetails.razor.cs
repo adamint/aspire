@@ -213,6 +213,16 @@ public partial class ResourceDetails : IComponentWithTelemetry, IDisposable
                     Type = typeof(ResourceHealthStateValue),
                     Parameters = { ["Resource"] = _resource }
                 },
+                [StateDescriptionPropertyKey] = new ComponentMetadata
+                {
+                    Type = typeof(ResourceStateDescriptionValue),
+                    Parameters =
+                    {
+                        ["Resource"] = _resource,
+                        ["ResourceByName"] = ResourceByName,
+                        ["ShowHiddenResources"] = ShowHiddenResources
+                    }
+                }
             };
 
             // For parameter resources whose value is unset, render the same "Value not set" affordance

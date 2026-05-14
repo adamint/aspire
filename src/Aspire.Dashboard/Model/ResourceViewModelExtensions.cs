@@ -99,6 +99,11 @@ internal static class ResourceViewModelExtensions
         return resource.TryGetCustomDataBoolArray(KnownProperties.Resource.AppArgsSensitivity, out argParams);
     }
 
+    public static bool TryGetWaitingForDependencies(this ResourceViewModel resource, out ImmutableArray<string> dependencies)
+    {
+        return resource.TryGetCustomDataStringArray(KnownProperties.Resource.WaitingFor, out dependencies) && dependencies.Length > 0;
+    }
+
     private static bool TryGetCustomDataString(this ResourceViewModel resource, string key, [NotNullWhen(returnValue: true)] out string? s)
     {
         if (resource.Properties.TryGetValue(key, out var property) && property.Value.TryConvertToString(out var valueString))

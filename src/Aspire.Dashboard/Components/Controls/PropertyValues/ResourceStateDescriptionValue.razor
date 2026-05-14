@@ -1,0 +1,32 @@
+﻿@using Aspire.Dashboard.Utils
+
+@if (_waitingResources.Count == 0)
+{
+    <FluentHighlighter HighlightedText="@HighlightText" Text="@Value" />
+}
+
+else
+{
+    <FluentHighlighter HighlightedText="@HighlightText" Text="@_prefix" />
+    @for (var index = 0; index < _waitingResources.Count; index++)
+    {
+        var waitingResource = _waitingResources[index];
+
+        if (index > 0)
+        {
+            <span>, </span>
+        }
+
+        if (waitingResource.Resource is { } resource)
+        {
+            <FluentAnchor Href="@DashboardUrls.ResourcesUrl(resource: resource.Name)" Appearance="Appearance.Hypertext">
+                <FluentHighlighter HighlightedText="@HighlightText" Text="@waitingResource.DisplayName" />
+            </FluentAnchor>
+        }
+        else
+        {
+            <FluentHighlighter HighlightedText="@HighlightText" Text="@waitingResource.DisplayName" />
+        }
+    }
+    <FluentHighlighter HighlightedText="@HighlightText" Text="@_suffix" />
+}

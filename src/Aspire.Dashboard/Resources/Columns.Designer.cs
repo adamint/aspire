@@ -152,6 +152,15 @@ namespace Aspire.Dashboard.Resources {
                 return ResourceManager.GetString("StateColumnResourceWaiting", resourceCulture);
             }
         }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Waiting for dependencies: {0}..
+        /// </summary>
+        public static string StateColumnResourceWaitingFor {
+            get {
+                return ResourceManager.GetString("StateColumnResourceWaitingFor", resourceCulture);
+            }
+        }
         
         /// <summary>
         ///   Looks up a localized string similar to Unknown.

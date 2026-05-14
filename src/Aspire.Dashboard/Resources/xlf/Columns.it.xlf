@@ -49,6 +49,11 @@ Per altre informazioni, vedere https://aka.ms/dotnet/aspire/container-runtime-un
         <target state="translated">La risorsa è in attesa che altre risorse siano in esecuzione e in stato integro.</target>
         <note />
       </trans-unit>
+      <trans-unit id="StateColumnResourceWaitingFor">
+        <source>Waiting for dependencies: {0}.</source>
+        <target state="new">Waiting for dependencies: {0}.</target>
+        <note>{0} is a comma-separated list of dependency resource names.</note>
+      </trans-unit>
       <trans-unit id="UnknownStateLabel">
         <source>Unknown</source>
         <target state="translated">Sconosciuto</target>

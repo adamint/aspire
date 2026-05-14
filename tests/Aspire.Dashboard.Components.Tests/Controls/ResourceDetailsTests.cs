@@ -4,10 +4,11 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using Aspire.Dashboard.Components.Controls;
-using Aspire.Dashboard.Resources;
 using Aspire.Dashboard.Components.Tests.Shared;
 using Aspire.Dashboard.Model;
+using Aspire.Dashboard.Resources;
 using Aspire.Dashboard.Tests.Shared;
+using Aspire.Dashboard.Utils;
 using Aspire.Tests.Shared.DashboardModel;
 using Bunit;
 using Google.Protobuf.WellKnownTypes;
@@ -374,24 +375,71 @@ public class ResourceDetailsTests : DashboardTestContext
     [Fact]
     public void Render_StateDescription_ShowsAsResourceDetailEntry()
     {
-        // Arrange
         ResourceSetupHelpers.SetupResourceDetails(this);
 
         var resource = ModelTestHelpers.CreateResource(
             resourceName: "app1",
             state: KnownResourceState.Waiting);
 
-        // Act
         var cut = RenderComponent<ResourceDetails>(builder =>
         {
             builder.Add(p => p.Resource, resource);
             builder.Add(p => p.ResourceByName, new ConcurrentDictionary<string, ResourceViewModel>([new KeyValuePair<string, ResourceViewModel>(resource.Name, resource)]));
         });
 
-        // Assert
         var resourcePropertyGrid = cut.FindAll(".property-grid")[0];
         Assert.Contains(ControlsStrings.ResourceDetailsStateDescriptionHeader, resourcePropertyGrid.TextContent);
         Assert.Contains(Columns.StateColumnResourceWaiting, resourcePropertyGrid.TextContent);
+    }
+
+    [Fact]
+    public void Render_StateDescription_ShowsWaitingForDependenciesAsResourceDetailEntry()
+    {
+        ResourceSetupHelpers.SetupResourceDetails(this);
+
+        var nginx = ModelTestHelpers.CreateResource(resourceName: "nginx");
+        var redis = ModelTestHelpers.CreateResource(resourceName: "redis");
+
+        var resource = ModelTestHelpers.CreateResource(
+            resourceName: "app1",
+            state: KnownResourceState.Waiting,
+            properties: new Dictionary<string, ResourcePropertyViewModel>
+            {
+                [KnownProperties.Resource.WaitingFor] = new(
+                    KnownProperties.Resource.WaitingFor,
+                    Value.ForList(Value.ForString("nginx"), Value.ForString("redis")),
+                    isValueSensitive: false,
+                    knownProperty: null,
+                    priority: 0)
+            });
+
+        var cut = RenderComponent<ResourceDetails>(builder =>
+        {
+            builder.Add(p => p.Resource, resource);
+            builder.Add(p => p.ResourceByName, new ConcurrentDictionary<string, ResourceViewModel>([
+                new KeyValuePair<string, ResourceViewModel>(resource.Name, resource),
+                new KeyValuePair<string, ResourceViewModel>(nginx.Name, nginx),
+                new KeyValuePair<string, ResourceViewModel>(redis.Name, redis)
+            ]));
+        });
+
+        var resourcePropertyGrid = cut.FindAll(".property-grid")[0];
+        Assert.Contains(ControlsStrings.ResourceDetailsStateDescriptionHeader, resourcePropertyGrid.TextContent);
+        Assert.Contains("Waiting for dependencies: nginx, redis.", resourcePropertyGrid.TextContent);
+
+        var links = resourcePropertyGrid.QuerySelectorAll("fluent-anchor");
+        Assert.Collection(
+            links,
+            link =>
+            {
+                Assert.Equal(DashboardUrls.ResourcesUrl(resource: nginx.Name), link.GetAttribute("href"));
+                Assert.Equal("hypertext", link.GetAttribute("appearance"));
+            },
+            link =>
+            {
+                Assert.Equal(DashboardUrls.ResourcesUrl(resource: redis.Name), link.GetAttribute("href"));
+                Assert.Equal("hypertext", link.GetAttribute("appearance"));
+            });
     }
 
     [Fact]

@@ -49,6 +49,11 @@ Weitere Informationen finden Sie unter https://aka.ms/dotnet/aspire/container-ru
         <target state="translated">Die Ressource wartet darauf, dass andere Ressourcen in einem fehlerfreien Zustand ausgeführt werden.</target>
         <note />
       </trans-unit>
+      <trans-unit id="StateColumnResourceWaitingFor">
+        <source>Waiting for dependencies: {0}.</source>
+        <target state="new">Waiting for dependencies: {0}.</target>
+        <note>{0} is a comma-separated list of dependency resource names.</note>
+      </trans-unit>
       <trans-unit id="UnknownStateLabel">
         <source>Unknown</source>
         <target state="translated">Unbekannt</target>

@@ -108,4 +108,26 @@ public class ResourceStateViewModelTests
         Assert.Equal(expectedColor, vm.Color);
         Assert.Equal(expectedText, vm.Text);
     }
+
+    [Fact]
+    public void WaitingResourceTooltipIncludesWaitingForDependenciesWhenPresent()
+    {
+        var resource = ModelTestHelpers.CreateResource(
+            state: KnownResourceState.Waiting,
+            properties: new Dictionary<string, ResourcePropertyViewModel>
+            {
+                [KnownProperties.Resource.WaitingFor] = new(
+                    KnownProperties.Resource.WaitingFor,
+                    Value.ForList(Value.ForString("nginx"), Value.ForString("redis")),
+                    isValueSensitive: false,
+                    knownProperty: null,
+                    priority: 0)
+            });
+
+        var localizer = new TestStringLocalizer<Columns>();
+
+        var tooltip = ResourceStateViewModel.GetResourceStateTooltip(resource, localizer);
+
+        Assert.Equal($"Localized:{nameof(Columns.StateColumnResourceWaitingFor)}:nginx, redis", tooltip);
+    }
 }

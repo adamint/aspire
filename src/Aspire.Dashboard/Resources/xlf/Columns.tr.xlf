@@ -49,6 +49,11 @@ Daha fazla bilgi için bkz. https://aka.ms/dotnet/aspire/container-runtime-unhea
         <target state="translated">Kaynak, diğer kaynakların çalışır durumda ve sağlıklı olmasını bekliyor.</target>
         <note />
       </trans-unit>
+      <trans-unit id="StateColumnResourceWaitingFor">
+        <source>Waiting for dependencies: {0}.</source>
+        <target state="new">Waiting for dependencies: {0}.</target>
+        <note>{0} is a comma-separated list of dependency resource names.</note>
+      </trans-unit>
       <trans-unit id="UnknownStateLabel">
         <source>Unknown</source>
         <target state="translated">Bilinmiyor</target>
