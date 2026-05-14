@@ -250,6 +250,31 @@ suite('AppHostDataRepository global polling', () => {
         repository.dispose();
     });
 
+    test('cli path failure does not disable resources polling', async () => {
+        const clock = sinon.useFakeTimers();
+        getCliPathStub.onFirstCall().rejects(new Error('CLI path unavailable'));
+        getCliPathStub.onSecondCall().resolves('aspire');
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            repository.activate();
+            repository.setViewMode('global');
+            repository.setPanelVisible(true);
+            await waitForMicrotasks();
+
+            assert.strictEqual(spawnStub.called, false);
+
+            clock.tick(30000);
+            await waitForMicrotasks();
+
+            assert.strictEqual(spawnStub.calledOnce, true);
+            assert.deepStrictEqual(spawnStub.firstCall.args[2], ['ps', '--format', 'json', '--resources']);
+        } finally {
+            repository.dispose();
+            clock.restore();
+        }
+    });
+
     test('stopped ps does not start fallback after resources failure', async () => {
         const childProcess = new TestChildProcess();
         spawnStub.returns(childProcess);

@@ -584,6 +584,7 @@ export class AppHostDataRepository {
                 const errorMessage = errorFetchingAppHosts(String(error));
                 extensionLogOutputChannel.warn(errorMessage);
                 this._setError(errorMessage);
+                this._fetchInProgress = false;
                 if (this._loadingGlobal) {
                     this._loadingGlobal = false;
                     this._updateLoadingContext();
