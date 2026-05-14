@@ -561,6 +561,16 @@ public class ResourceNotificationService : IDisposable
                 await ClearWaitingForDependenciesAsync(resource).ConfigureAwait(false);
             }
         }
+        catch (OperationCanceledException ex)
+        {
+            activity.SetError(ex);
+
+            var errorMessage = BuildCancellationErrorMessage(
+                $"Resource '{resource.Name}' failed to wait for dependencies before the operation was cancelled.",
+                resource.Name);
+
+            throw new OperationCanceledException(errorMessage, ex, ex.CancellationToken);
+        }
         catch (Exception ex)
         {
             activity.SetError(ex);

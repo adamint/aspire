@@ -605,6 +605,41 @@ public class ResourceNotificationTests
     }
 
     [Fact]
+    public async Task WaitForDependenciesCancellationMessageIncludesWaitingForDependencies()
+    {
+        var resource = new CustomResource("resource");
+        var dependency = new CustomResource("dependency");
+        resource.Annotations.Add(new WaitAnnotation(dependency, WaitType.WaitUntilStarted));
+
+        var notificationService = ResourceNotificationServiceTestHelpers.Create();
+
+        await notificationService.PublishUpdateAsync(dependency, s => s with
+        {
+            State = KnownResourceStates.Starting
+        }).DefaultTimeout();
+
+        using var cts = new CancellationTokenSource();
+        var waitTask = notificationService.WaitForDependenciesAsync(resource, cts.Token);
+
+        await notificationService.WaitForResourceAsync(
+            resource.Name,
+            re => re.Snapshot.State?.Text == KnownResourceStates.Waiting &&
+                GetWaitingForDependencies(re).SequenceEqual(new[] { dependency.Name }),
+            TestContext.Current.CancellationToken).DefaultTimeout();
+
+        await cts.CancelAsync();
+
+        var ex = await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        {
+            await waitTask;
+        }).DefaultTimeout();
+
+        Assert.Contains("Resource 'resource' failed to wait for dependencies before the operation was cancelled.", ex.Message);
+        Assert.Contains("- Waiting For:", ex.Message);
+        Assert.Contains("  - dependency: State = Starting", ex.Message);
+    }
+
+    [Fact]
     public async Task WaitingOnResourceThrowsOperationCanceledExceptionIfResourceDoesntReachStateBeforeServiceIsDisposed()
     {
         var notificationService = ResourceNotificationServiceTestHelpers.Create();
