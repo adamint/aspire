@@ -1,19 +1,28 @@
 .state-description-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--accent-foreground-rest);
+    cursor: pointer;
+    font: inherit;
+    font-weight: inherit;
+    line-height: inherit;
+    text-decoration: none;
     vertical-align: baseline;
 }
 
-.state-description-action::part(control) {
-    min-width: 0;
-    height: auto;
-    padding: 0 4px;
-    font: inherit;
-    text-decoration: none;
+.state-description-action:hover:not(:disabled) {
+    color: var(--accent-foreground-hover);
 }
 
-.state-description-action::part(start) {
-    margin-inline-end: 2px;
+.state-description-action:disabled {
+    cursor: default;
+    opacity: var(--disabled-opacity);
 }
 
-.state-description-action[disabled]::part(control) {
-    text-decoration: none;
+.state-description-action-icon {
+    flex: none;
 }

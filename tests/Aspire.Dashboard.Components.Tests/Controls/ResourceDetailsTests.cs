@@ -427,7 +427,7 @@ public class ResourceDetailsTests : DashboardTestContext
         Assert.Contains(ControlsStrings.ResourceDetailsStateDescriptionHeader, resourcePropertyGrid.TextContent);
         Assert.Contains(Columns.StateColumnResourceNotStarted, resourcePropertyGrid.TextContent);
 
-        var startButton = resourcePropertyGrid.QuerySelector("fluent-button.state-description-action");
+        var startButton = resourcePropertyGrid.QuerySelector("button.state-description-action");
         Assert.NotNull(startButton);
         Assert.Contains(ControlsStrings.ResourceStateDescriptionStartNowAction, startButton!.TextContent);
 

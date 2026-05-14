@@ -34,12 +34,12 @@ else
 @if (StartCommand is not null)
 {
     <span> </span>
-    <FluentButton Appearance="Appearance.Lightweight"
-                  Class="state-description-action"
-                  Disabled="@IsStartCommandDisabled"
-                  IconStart="new Icons.Filled.Size16.Play()"
-                  OnClick="OnStartCommandAsync"
-                  Title="@StartCommandTitle">
+    <button type="button"
+            class="state-description-action"
+            disabled="@IsStartCommandDisabled"
+            @onclick="OnStartCommandAsync"
+            title="@StartCommandTitle">
+        <FluentIcon Value="@(new Icons.Filled.Size16.Play())" Class="state-description-action-icon" />
         <FluentHighlighter HighlightedText="@HighlightText" Text="@ControlsLoc[nameof(ControlsStrings.ResourceStateDescriptionStartNowAction)]" />
-    </FluentButton>
+    </button>
 }
