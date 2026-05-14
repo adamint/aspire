@@ -1,7 +1,5 @@
 .state-description-action {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
+    display: inline;
     padding: 0;
     border: 0;
     background: none;
@@ -24,5 +22,8 @@
 }
 
 .state-description-action-icon {
-    flex: none;
+    width: 0.8em;
+    height: 0.8em;
+    margin-inline-end: 0.2em;
+    vertical-align: -0.05em;
 }
