@@ -601,12 +601,22 @@ export class AppHostDataRepository {
         let stderr = '';
         let callbackInvoked = false;
 
-        const psProcess = spawnCliProcess(this._terminalProvider, cliPath, args, {
+        let psProcess: ChildProcessWithoutNullStreams | undefined;
+        let psProcessCompletedSynchronously = false;
+        const removePsProcess = () => {
+            if (psProcess) {
+                this._psProcesses.delete(psProcess);
+            } else {
+                psProcessCompletedSynchronously = true;
+            }
+        };
+
+        psProcess = spawnCliProcess(this._terminalProvider, cliPath, args, {
             noExtensionVariables: true,
             stdoutCallback: (data) => { stdout += data; },
             stderrCallback: (data) => { stderr += data; },
             exitCallback: (code) => {
-                this._psProcesses.delete(psProcess);
+                removePsProcess();
                 if (!callbackInvoked) {
                     callbackInvoked = true;
                     if (this._isCurrentPsFetch(fetchVersion)) {
@@ -615,7 +625,7 @@ export class AppHostDataRepository {
                 }
             },
             errorCallback: (error) => {
-                this._psProcesses.delete(psProcess);
+                removePsProcess();
                 extensionLogOutputChannel.warn(errorFetchingAppHosts(error.message));
                 if (!callbackInvoked) {
                     callbackInvoked = true;
@@ -625,7 +635,9 @@ export class AppHostDataRepository {
                 }
             }
         });
-        this._psProcesses.add(psProcess);
+        if (!psProcessCompletedSynchronously) {
+            this._psProcesses.add(psProcess);
+        }
     }
 
     private _terminateProcess(childProcess: ChildProcessWithoutNullStreams, description: string): void {
@@ -679,6 +691,7 @@ export class AppHostDataRepository {
                     cleanup();
                 }
             }, AppHostDataRepository._processShutdownGracePeriodMs);
+            forceKillTimer.unref();
         }
     }
 }

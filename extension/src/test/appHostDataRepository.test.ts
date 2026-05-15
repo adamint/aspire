@@ -11,8 +11,8 @@ class TestChildProcess extends EventEmitter {
     stdout = new PassThrough();
     stderr = new PassThrough();
     killed = false;
-    exitCode = null;
-    signalCode = null;
+    exitCode: number | null = null;
+    signalCode: NodeJS.Signals | null = null;
     killSignals: Array<NodeJS.Signals | number | undefined> = [];
 
     constructor(private readonly _closeOnKill = true) {
@@ -23,9 +23,14 @@ class TestChildProcess extends EventEmitter {
         this.killed = true;
         this.killSignals.push(signal);
         if (this._closeOnKill) {
+            this.exitCode = 0;
             this.emit('close', null);
         }
         return true;
+    }
+
+    markExited(exitCode = 0): void {
+        this.exitCode = exitCode;
     }
 }
 
@@ -187,6 +192,25 @@ suite('AppHostDataRepository', () => {
             clock.restore();
         }
     });
+
+    test('already-exited describe watch is not terminated again', async () => {
+        const childProcess = new TestChildProcess();
+        childProcess.markExited();
+        spawnStub.returns(childProcess);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        repository.setPanelVisible(true);
+        await waitForMicrotasks();
+
+        repository.setPanelVisible(false);
+
+        assert.strictEqual(childProcess.killed, false);
+        assert.strictEqual(childProcess.listenerCount('close'), 0);
+        assert.strictEqual(childProcess.listenerCount('exit'), 0);
+
+        repository.dispose();
+    });
 });
 
 suite('AppHostDataRepository global polling', () => {
@@ -316,6 +340,28 @@ suite('AppHostDataRepository global polling', () => {
         repository.dispose();
 
         assert.strictEqual(fallbackChildProcess.killed, true);
+    });
+
+    test('synchronously completed ps process is not tracked for later termination', async () => {
+        let childProcess: TestChildProcess | undefined;
+        spawnStub.callsFake((_terminalProvider, _cliPath, _args, options) => {
+            childProcess = new TestChildProcess();
+            options.exitCallback(0);
+            return childProcess;
+        });
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        repository.setViewMode('global');
+        repository.setPanelVisible(true);
+        await waitForMicrotasks();
+
+        repository.setPanelVisible(false);
+
+        assert.ok(childProcess);
+        assert.strictEqual(childProcess.killed, false);
+
+        repository.dispose();
     });
 });
 
