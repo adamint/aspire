@@ -21,6 +21,11 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
             settingsFilePath = EnsureAspireConfigFileForAppHostPathSettings(settingsFilePath);
         }
 
+        await SetConfigurationInFileAsync(settingsFilePath, key, value, cancellationToken);
+    }
+
+    internal static async Task SetConfigurationInFileAsync(string settingsFilePath, string key, string value, CancellationToken cancellationToken = default)
+    {
         JsonObject settings;
 
         // Read existing settings or create new

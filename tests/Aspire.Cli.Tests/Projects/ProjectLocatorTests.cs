@@ -654,6 +654,108 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task UseOrFindAppHostProjectFile_UpdatesAppHostAdjacentConfigWhenDiscoveredFromParent()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var srcDirectory = workspace.WorkspaceRoot.CreateSubdirectory("src");
+        var appHostFile = new FileInfo(Path.Combine(srcDirectory.FullName, "apphost.ts"));
+        await File.WriteAllTextAsync(appHostFile.FullName, "// TypeScript apphost");
+
+        var adjacentConfigPath = Path.Combine(srcDirectory.FullName, AspireConfigFile.FileName);
+        await File.WriteAllTextAsync(
+            adjacentConfigPath,
+            """
+            {
+              "sdk": {
+                "version": "10.0.0-preview.5.26311.1"
+              },
+              "packages": {
+                "Aspire.Hosting.Redis": ""
+              }
+            }
+            """);
+
+        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var globalSettingsFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "settings.global.json"));
+        var configurationService = new ConfigurationService(new ConfigurationBuilder().Build(), executionContext, globalSettingsFile, NullLogger<ConfigurationService>.Instance);
+        var projectLocator = CreateProjectLocator(
+            executionContext,
+            configurationService: configurationService,
+            projectFactory: new GuestAppHostFileProjectFactory("apphost.ts"),
+            languageDiscovery: new TestLanguageDiscovery(new LanguageInfo(
+                LanguageId: new LanguageId(KnownLanguageId.TypeScript),
+                DisplayName: "TypeScript (Node.js)",
+                PackageName: "Aspire.Hosting.JavaScript",
+                DetectionPatterns: ["apphost.ts"],
+                CodeGenerator: "TypeScript",
+                AppHostFileName: "apphost.ts")));
+
+        var result = await projectLocator.UseOrFindAppHostProjectFileAsync(
+            projectFile: null,
+            multipleAppHostProjectsFoundBehavior: MultipleAppHostProjectsFoundBehavior.Throw,
+            createSettingsFile: true,
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal(appHostFile.FullName, result.SelectedProjectFile?.FullName);
+        Assert.False(File.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName)));
+
+        var adjacentConfigJson = await File.ReadAllTextAsync(adjacentConfigPath);
+        var adjacentConfig = JsonSerializer.Deserialize<AspireConfigFile>(adjacentConfigJson);
+
+        Assert.Equal("apphost.ts", adjacentConfig?.AppHost?.Path);
+        Assert.Equal(KnownLanguageId.TypeScript, adjacentConfig?.AppHost?.Language);
+        Assert.Contains("\"Aspire.Hosting.Redis\"", adjacentConfigJson, StringComparison.Ordinal);
+        Assert.Contains("\"sdk\"", adjacentConfigJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UseOrFindAppHostProjectFile_HealsStaleAppHostPathInAdjacentConfig()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var srcDirectory = workspace.WorkspaceRoot.CreateSubdirectory("src");
+        var appHostFile = new FileInfo(Path.Combine(srcDirectory.FullName, "apphost.ts"));
+        await File.WriteAllTextAsync(appHostFile.FullName, "// TypeScript apphost");
+
+        var staleConfig = new AspireConfigFile
+        {
+            AppHost = new AspireConfigAppHost
+            {
+                Path = "missing-apphost.ts",
+                Language = KnownLanguageId.TypeScript
+            }
+        };
+        staleConfig.Save(srcDirectory.FullName);
+
+        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var globalSettingsFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "settings.global.json"));
+        var configurationService = new ConfigurationService(new ConfigurationBuilder().Build(), executionContext, globalSettingsFile, NullLogger<ConfigurationService>.Instance);
+        var projectLocator = CreateProjectLocator(
+            executionContext,
+            configurationService: configurationService,
+            projectFactory: new GuestAppHostFileProjectFactory("apphost.ts"),
+            languageDiscovery: new TestLanguageDiscovery(new LanguageInfo(
+                LanguageId: new LanguageId(KnownLanguageId.TypeScript),
+                DisplayName: "TypeScript (Node.js)",
+                PackageName: "Aspire.Hosting.JavaScript",
+                DetectionPatterns: ["apphost.ts"],
+                CodeGenerator: "TypeScript",
+                AppHostFileName: "apphost.ts")));
+
+        var result = await projectLocator.UseOrFindAppHostProjectFileAsync(
+            projectFile: null,
+            multipleAppHostProjectsFoundBehavior: MultipleAppHostProjectsFoundBehavior.Throw,
+            createSettingsFile: true,
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal(appHostFile.FullName, result.SelectedProjectFile?.FullName);
+        Assert.False(File.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName)));
+
+        var healedConfig = AspireConfigFile.Load(srcDirectory.FullName);
+        Assert.Equal("apphost.ts", healedConfig?.AppHost?.Path);
+        Assert.Equal(KnownLanguageId.TypeScript, healedConfig?.AppHost?.Language);
+    }
+
+    [Fact]
     public async Task UseOrFindAppHostProjectFile_MigratesLegacySettingsToAspireConfigJson()
     {
         // Arrange: create a workspace with a legacy .aspire/settings.json
