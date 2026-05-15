@@ -307,7 +307,8 @@ public partial class ResourceDetails : IComponentWithTelemetry, IDisposable
             IsCommandExecuting,
             showViewDetails: false,
             showConsoleLogsItem: true,
-            showUrls: true);
+            showUrls: true,
+            showStartCommand: false);
     }
 
     private async Task ExecuteResourceCommandAsync(ResourceViewModel resource, CommandViewModel command)
