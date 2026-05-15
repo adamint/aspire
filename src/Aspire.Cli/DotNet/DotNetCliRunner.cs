@@ -350,6 +350,7 @@ internal sealed class DotNetCliRunner(
         logger.LogDebug("Starting backchannel connection to AppHost at {SocketPath}", socketPath);
 
         var startTime = DateTimeOffset.UtcNow;
+        var connectionTimeout = GetBackchannelConnectionTimeout();
 
         do
         {
@@ -391,6 +392,14 @@ internal sealed class DotNetCliRunner(
                 // In that case, after 30 seconds we just slow down the polling to
                 // once per second.
                 var waitingFor = DateTimeOffset.UtcNow - startTime;
+                if (execution is null && waitingFor >= connectionTimeout)
+                {
+                    logger.LogError("Timed out waiting for AppHost backchannel after {Timeout} seconds", connectionTimeout.TotalSeconds);
+                    var timeoutException = new TimeoutException($"Timed out waiting for AppHost backchannel after {connectionTimeout.TotalSeconds} seconds. Check the debug logs for more details.");
+                    backchannelCompletionSource.SetException(timeoutException);
+                    return;
+                }
+
                 if (waitingFor > TimeSpan.FromSeconds(10))
                 {
                     logger.LogTrace(ex, "Slow polling for backchannel connection (attempt {Attempt})", connectionAttempts);
@@ -429,6 +438,17 @@ internal sealed class DotNetCliRunner(
             }
 
         } while (await timer.WaitForNextTickAsync(cancellationToken));
+    }
+
+    private TimeSpan GetBackchannelConnectionTimeout()
+    {
+        var configuredValue = configuration[KnownConfigNames.CliBackchannelConnectTimeoutSeconds];
+        if (double.TryParse(configuredValue, CultureInfo.InvariantCulture, out var seconds) && seconds >= 0)
+        {
+            return TimeSpan.FromSeconds(seconds);
+        }
+
+        return TimeSpan.FromSeconds(60);
     }
 
     // Cache expiry/max age handled inside DiskCache implementation.
