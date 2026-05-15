@@ -212,18 +212,6 @@ public partial class ResourceDetails : IComponentWithTelemetry, IDisposable
                 {
                     Type = typeof(ResourceHealthStateValue),
                     Parameters = { ["Resource"] = _resource }
-                },
-                [StateDescriptionPropertyKey] = new ComponentMetadata
-                {
-                    Type = typeof(ResourceStateDescriptionValue),
-                    Parameters =
-                    {
-                        ["Resource"] = _resource,
-                        ["ResourceByName"] = ResourceByName,
-                        ["ShowHiddenResources"] = ShowHiddenResources,
-                        ["OnExecuteCommandAsync"] = (Func<ResourceViewModel, CommandViewModel, Task>)ExecuteResourceCommandAsync,
-                        ["IsCommandExecuting"] = IsCommandExecuting,
-                    }
                 }
             };
 

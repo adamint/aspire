@@ -9,7 +9,6 @@ using Aspire.Dashboard.Components.Tests.Shared;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Resources;
 using Aspire.Dashboard.Tests.Shared;
-using Aspire.Dashboard.Utils;
 using Aspire.Tests.Shared.DashboardModel;
 using Bunit;
 using Google.Protobuf.WellKnownTypes;
@@ -394,46 +393,23 @@ public class ResourceDetailsTests : DashboardTestContext
     }
 
     [Fact]
-    public async Task Render_NotStartedStateDescription_ShowsStartAction()
+    public void Render_NotStartedStateDescription_ShowsDescription()
     {
         ResourceSetupHelpers.SetupResourceDetails(this);
 
-        var startCommand = new CommandViewModel(
-            CommandViewModel.StartCommand,
-            CommandViewModelState.Enabled,
-            displayName: "Start",
-            displayDescription: "Start resource",
-            confirmationMessage: string.Empty,
-            argumentInputs: [],
-            isHighlighted: true,
-            iconName: "Play",
-            iconVariant: IconVariant.Filled);
-
         var resource = ModelTestHelpers.CreateResource(
             resourceName: "app1",
-            state: KnownResourceState.NotStarted,
-            commands: ImmutableArray.Create(startCommand));
+            state: KnownResourceState.NotStarted);
 
-        CommandViewModel? capturedCommand = null;
         var cut = RenderComponent<ResourceDetails>(builder =>
         {
             builder.Add(p => p.Resource, resource);
             builder.Add(p => p.ResourceByName, new ConcurrentDictionary<string, ResourceViewModel>([new KeyValuePair<string, ResourceViewModel>(resource.Name, resource)]));
-            builder.Add(p => p.CommandSelected, EventCallback.Factory.Create<CommandViewModel>(this, c => capturedCommand = c));
-            builder.Add(p => p.IsCommandExecuting, (_, _) => false);
         });
 
         var resourcePropertyGrid = cut.FindAll(".property-grid")[0];
         Assert.Contains(ControlsStrings.ResourceDetailsStateDescriptionHeader, resourcePropertyGrid.TextContent);
         Assert.Contains(Columns.StateColumnResourceNotStarted, resourcePropertyGrid.TextContent);
-
-        var startButton = resourcePropertyGrid.QuerySelector("button.state-description-action");
-        Assert.NotNull(startButton);
-        Assert.Contains(ControlsStrings.ResourceStateDescriptionStartNowAction, startButton!.TextContent);
-
-        await startButton.ClickAsync(new MouseEventArgs());
-
-        Assert.Same(startCommand, capturedCommand);
     }
 
     [Fact]
@@ -471,19 +447,7 @@ public class ResourceDetailsTests : DashboardTestContext
         Assert.Contains(ControlsStrings.ResourceDetailsStateDescriptionHeader, resourcePropertyGrid.TextContent);
         Assert.Contains(string.Format(CultureInfo.InvariantCulture, Columns.StateColumnResourceWaitingFor, "nginx, redis"), resourcePropertyGrid.TextContent);
 
-        var links = resourcePropertyGrid.QuerySelectorAll("fluent-anchor");
-        Assert.Collection(
-            links,
-            link =>
-            {
-                Assert.Equal(DashboardUrls.ResourcesUrl(resource: nginx.Name), link.GetAttribute("href"));
-                Assert.Equal("hypertext", link.GetAttribute("appearance"));
-            },
-            link =>
-            {
-                Assert.Equal(DashboardUrls.ResourcesUrl(resource: redis.Name), link.GetAttribute("href"));
-                Assert.Equal("hypertext", link.GetAttribute("appearance"));
-            });
+        Assert.Empty(resourcePropertyGrid.QuerySelectorAll("fluent-anchor"));
     }
 
     [Fact]

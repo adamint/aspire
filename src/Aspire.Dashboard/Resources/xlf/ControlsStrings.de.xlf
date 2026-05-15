@@ -482,11 +482,6 @@
         <target state="translated">Ressource</target>
         <note />
       </trans-unit>
-      <trans-unit id="ResourceStateDescriptionStartNowAction">
-        <source>Start anyway</source>
-        <target state="new">Start anyway</target>
-        <note />
-      </trans-unit>
       <trans-unit id="ResumeButtonTitle">
         <source>Resume incoming data</source>
         <target state="translated">Fortsetzen eingehender Daten</target>
