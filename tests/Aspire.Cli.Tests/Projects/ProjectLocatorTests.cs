@@ -669,6 +669,15 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
               "sdk": {
                 "version": "10.0.0-preview.5.26311.1"
               },
+              "channel": "staging",
+              "profiles": {
+                "http": {
+                  "applicationUrl": "http://localhost:15071",
+                  "environmentVariables": {
+                    "ASPIRE_ALLOW_UNSECURED_TRANSPORT": "true"
+                  }
+                }
+              },
               "packages": {
                 "Aspire.Hosting.Redis": ""
               }
@@ -705,6 +714,9 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         Assert.Equal("apphost.ts", adjacentConfig?.AppHost?.Path);
         Assert.Equal(KnownLanguageId.TypeScript, adjacentConfig?.AppHost?.Language);
         Assert.Contains("\"Aspire.Hosting.Redis\"", adjacentConfigJson, StringComparison.Ordinal);
+        Assert.Contains("\"channel\"", adjacentConfigJson, StringComparison.Ordinal);
+        Assert.Contains("\"profiles\"", adjacentConfigJson, StringComparison.Ordinal);
+        Assert.Contains("\"ASPIRE_ALLOW_UNSECURED_TRANSPORT\"", adjacentConfigJson, StringComparison.Ordinal);
         Assert.Contains("\"sdk\"", adjacentConfigJson, StringComparison.Ordinal);
     }
 
