@@ -78,13 +78,6 @@ var messaging = builder.AddRabbitMQ("messaging")
                        .WithManagementPlugin()
                        .PublishAsContainer();
 
-// Test-only manual gate for dashboard waiting-state UX. It never starts automatically,
-// so dependents stay in Waiting until the resource is explicitly started from the dashboard.
-var manualStartGate = builder.AddContainer("manualstartgate", "alpine")
-                             .WithEntrypoint("sleep")
-                             .WithArgs("3600")
-                             .WithExplicitStart();
-
 var basketService = builder.AddProject("basketservice", @"..\BasketService\BasketService.csproj")
                            .WithReference(basketCache)
                            .WaitFor(basketCache)
@@ -94,7 +87,6 @@ var basketService = builder.AddProject("basketservice", @"..\BasketService\Baske
 
 var frontend = builder.AddProject<Projects.MyFrontend>("frontend")
     .WithExternalHttpEndpoints()
-    .WaitForStart(manualStartGate)
     .WithReference(basketService)
     .WaitFor(basketService)
     .WithReference(catalogService)
