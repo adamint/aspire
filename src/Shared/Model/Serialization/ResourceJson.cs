@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text.Json.Serialization;
+using System.Text.Json.Nodes;
 
 namespace Aspire.Shared.Model.Serialization;
 
@@ -100,7 +101,7 @@ internal sealed class ResourceJson
     /// The properties of the resource.
     /// Dictionary key is the property name, value is the property value.
     /// </summary>
-    public Dictionary<string, string?>? Properties { get; set; }
+    public Dictionary<string, JsonNode?>? Properties { get; set; }
 
     /// <summary>
     /// The environment variables associated with the resource.

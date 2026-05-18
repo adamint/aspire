@@ -3,6 +3,7 @@
 
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Aspire.Dashboard.Model.Serialization;
 using Aspire.Dashboard.Otlp.Model;
 using Aspire.Otlp.Serialization;
@@ -763,7 +764,7 @@ public sealed class TelemetryExportService
             Properties = resource.Properties.Count > 0
                 ? resource.Properties.OrderBy(p => p.Key).ToDistinctDictionary(
                     p => p.Key,
-                    p => ConvertPropertyValueToString(p.Value.Value))
+                    p => ConvertPropertyValueToJsonNode(p.Value.Value))
                 : null,
             Relationships = relationshipsJson,
             Commands = resource.Commands.Length > 0
@@ -783,30 +784,25 @@ public sealed class TelemetryExportService
         return resourceJson;
     }
 
-    private static string? ConvertPropertyValueToString(Google.Protobuf.WellKnownTypes.Value value)
+    private static JsonNode? ConvertPropertyValueToJsonNode(Google.Protobuf.WellKnownTypes.Value value)
     {
         if (value.TryConvertToString(out var stringValue))
         {
-            return stringValue;
+            return JsonValue.Create(stringValue);
         }
 
-        if (value.ListValue is null)
+        if (value.ListValue is not null)
         {
-            return null;
-        }
-
-        var values = new string[value.ListValue.Values.Count];
-        for (var i = 0; i < value.ListValue.Values.Count; i++)
-        {
-            if (!value.ListValue.Values[i].TryConvertToString(out var elementValue))
+            var array = new JsonArray();
+            foreach (var element in value.ListValue.Values)
             {
-                return null;
+                array.Add(ConvertPropertyValueToJsonNode(element));
             }
 
-            values[i] = elementValue;
+            return array;
         }
 
-        return string.Join(", ", values);
+        return null;
     }
 
     /// <summary>

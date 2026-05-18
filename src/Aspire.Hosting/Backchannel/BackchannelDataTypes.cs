@@ -1056,7 +1056,7 @@ internal sealed class ResourceSnapshot
     /// Gets additional properties as key-value pairs.
     /// This allows for extensibility without changing the schema.
     /// </summary>
-    public Dictionary<string, string?> Properties { get; init; } = [];
+    public Dictionary<string, JsonNode?> Properties { get; init; } = [];
 
     /// <summary>
     /// Gets a value indicating whether this resource is hidden.

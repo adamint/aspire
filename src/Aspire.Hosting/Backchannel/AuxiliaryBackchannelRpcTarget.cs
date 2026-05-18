@@ -834,7 +834,7 @@ internal sealed class AuxiliaryBackchannelRpcTarget(
 
         // Build properties dictionary from ResourcePropertySnapshot
         // Redact sensitive property values to avoid leaking secrets
-        var properties = new Dictionary<string, string?>();
+        var properties = new Dictionary<string, JsonNode?>();
         string[]? waitingFor = null;
         foreach (var prop in snapshot.Properties)
         {
@@ -845,16 +845,7 @@ internal sealed class AuxiliaryBackchannelRpcTarget(
                 continue;
             }
 
-            // Convert value to string representation
-            var stringValue = prop.Value switch
-            {
-                null => null,
-                string s => s,
-                IEnumerable<object> enumerable => string.Join(", ", enumerable),
-                System.Collections.IEnumerable enumerable => string.Join(", ", enumerable.Cast<object>()),
-                _ => prop.Value.ToString()
-            };
-            properties[prop.Name] = stringValue;
+            properties[prop.Name] = ConvertPropertyValueToJsonNode(prop.Value);
 
             if (string.Equals(prop.Name, KnownProperties.Resource.WaitingFor, StringComparisons.ResourcePropertyName))
             {
@@ -912,6 +903,41 @@ internal sealed class AuxiliaryBackchannelRpcTarget(
             McpServer = mcpServer,
             Commands = commands
         };
+    }
+
+    private static JsonNode? ConvertPropertyValueToJsonNode(object? value)
+    {
+        return value switch
+        {
+            null => null,
+            JsonNode jsonNode => jsonNode.DeepClone(),
+            string stringValue => JsonValue.Create(stringValue),
+            bool boolValue => JsonValue.Create(boolValue),
+            byte byteValue => JsonValue.Create(byteValue),
+            sbyte sbyteValue => JsonValue.Create(sbyteValue),
+            short shortValue => JsonValue.Create(shortValue),
+            ushort ushortValue => JsonValue.Create(ushortValue),
+            int intValue => JsonValue.Create(intValue),
+            uint uintValue => JsonValue.Create(uintValue),
+            long longValue => JsonValue.Create(longValue),
+            ulong ulongValue => JsonValue.Create(ulongValue),
+            float floatValue => JsonValue.Create(floatValue),
+            double doubleValue => JsonValue.Create(doubleValue),
+            decimal decimalValue => JsonValue.Create(decimalValue),
+            System.Collections.IEnumerable enumerable => ConvertEnumerablePropertyValueToJsonArray(enumerable),
+            _ => JsonValue.Create(value.ToString())
+        };
+    }
+
+    private static JsonArray ConvertEnumerablePropertyValueToJsonArray(System.Collections.IEnumerable enumerable)
+    {
+        var array = new JsonArray();
+        foreach (var value in enumerable)
+        {
+            array.Add(ConvertPropertyValueToJsonNode(value));
+        }
+
+        return array;
     }
 
     private static string[]? GetStringArrayPropertyValue(object? value)

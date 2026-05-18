@@ -4,6 +4,7 @@
 using System.Globalization;
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Model.Serialization;
 using Aspire.Dashboard.Otlp.Model;
@@ -1211,7 +1212,9 @@ public sealed class TelemetryExportServiceTests
         Assert.NotNull(deserialized.WaitingFor);
         Assert.Equal(["dependency"], deserialized.WaitingFor);
         Assert.NotNull(deserialized.Properties);
-        Assert.Equal("dependency-resource", deserialized.Properties[KnownProperties.Resource.WaitingFor]);
+        var waitingForProperty = Assert.IsType<JsonArray>(deserialized.Properties[KnownProperties.Resource.WaitingFor]);
+        var waitingForPropertyValue = Assert.Single(waitingForProperty);
+        Assert.Equal("dependency-resource", waitingForPropertyValue?.GetValue<string>());
 
         Assert.NotNull(deserialized.Urls);
         Assert.Single(deserialized.Urls);

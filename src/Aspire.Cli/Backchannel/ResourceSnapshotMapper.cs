@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text.Json.Nodes;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Utils;
 using Aspire.Shared;
@@ -83,7 +84,7 @@ internal static class ResourceSnapshotMapper
 
         var properties = snapshot.Properties.OrderBy(p => p.Key).ToDistinctDictionary(
             p => p.Key,
-            p => p.Value);
+            p => p.Value?.DeepClone());
 
         var waitingFor = GetResolvedWaitingForDependencies(snapshot, allSnapshots);
 
@@ -121,7 +122,10 @@ internal static class ResourceSnapshotMapper
                  });
 
         // Get source information using the shared ResourceSourceViewModel
-        var sourceViewModel = ResourceSource.GetSourceModel(snapshot.ResourceType, snapshot.Properties);
+        var stringProperties = snapshot.Properties.OrderBy(p => p.Key).ToDistinctDictionary(
+            p => p.Key,
+            p => ConvertJsonNodeToString(p.Value));
+        var sourceViewModel = ResourceSource.GetSourceModel(snapshot.ResourceType, stringProperties);
 
         // Generate dashboard URL for this resource if a base URL is provided
         string? dashboardUrl = null;
@@ -161,9 +165,10 @@ internal static class ResourceSnapshotMapper
         var waitingFor = snapshot.WaitingFor;
         if (waitingFor is not { Length: > 0 } &&
             snapshot.Properties.TryGetValue(KnownProperties.Resource.WaitingFor, out var waitingForProperty) &&
-            !string.IsNullOrWhiteSpace(waitingForProperty))
+            TryConvertJsonNodeToString(waitingForProperty, out var waitingForPropertyString) &&
+            !string.IsNullOrWhiteSpace(waitingForPropertyString))
         {
-            waitingFor = waitingForProperty.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            waitingFor = waitingForPropertyString.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         }
 
         if (waitingFor is not { Length: > 0 })
@@ -190,6 +195,23 @@ internal static class ResourceSnapshotMapper
         }
 
         return dependencies.Count > 0 ? [.. dependencies] : null;
+    }
+
+    private static string? ConvertJsonNodeToString(JsonNode? node)
+    {
+        return TryConvertJsonNodeToString(node, out var value) ? value : null;
+    }
+
+    private static bool TryConvertJsonNodeToString(JsonNode? node, [System.Diagnostics.CodeAnalysis.NotNullWhen(returnValue: true)] out string? value)
+    {
+        if (node is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var stringValue))
+        {
+            value = stringValue;
+            return true;
+        }
+
+        value = null;
+        return false;
     }
 
     internal static bool IsCommandAvailableToApi(ResourceSnapshotCommand command)
