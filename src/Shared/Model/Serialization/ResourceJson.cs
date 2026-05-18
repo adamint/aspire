@@ -219,6 +219,11 @@ internal sealed class ResourceRelationshipJson
 internal sealed class ResourceCommandJson
 {
     /// <summary>
+    /// The display name of the command.
+    /// </summary>
+    public string? DisplayName { get; set; }
+
+    /// <summary>
     /// The description of the command.
     /// </summary>
     public string? Description { get; set; }

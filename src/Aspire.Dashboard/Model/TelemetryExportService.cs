@@ -775,6 +775,7 @@ public sealed class TelemetryExportService
                         c => c.Name,
                         c => new ResourceCommandJson
                         {
+                            DisplayName = c.GetDisplayName(),
                             Description = c.GetDisplayDescription()
                         })
                 : null,
