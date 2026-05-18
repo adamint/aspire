@@ -763,7 +763,7 @@ public sealed class TelemetryExportService
             Properties = resource.Properties.Count > 0
                 ? resource.Properties.OrderBy(p => p.Key).ToDistinctDictionary(
                     p => p.Key,
-                    p => p.Value.Value.TryConvertToString(out var value) ? value : null)
+                    p => ConvertPropertyValueToString(p.Value.Value))
                 : null,
             Relationships = relationshipsJson,
             Commands = resource.Commands.Length > 0
@@ -781,6 +781,32 @@ public sealed class TelemetryExportService
         };
 
         return resourceJson;
+    }
+
+    private static string? ConvertPropertyValueToString(Google.Protobuf.WellKnownTypes.Value value)
+    {
+        if (value.TryConvertToString(out var stringValue))
+        {
+            return stringValue;
+        }
+
+        if (value.ListValue is null)
+        {
+            return null;
+        }
+
+        var values = new string[value.ListValue.Values.Count];
+        for (var i = 0; i < value.ListValue.Values.Count; i++)
+        {
+            if (!value.ListValue.Values[i].TryConvertToString(out var elementValue))
+            {
+                return null;
+            }
+
+            values[i] = elementValue;
+        }
+
+        return string.Join(", ", values);
     }
 
     /// <summary>

@@ -1210,6 +1210,8 @@ public sealed class TelemetryExportServiceTests
         Assert.Equal("Running", deserialized.State);
         Assert.NotNull(deserialized.WaitingFor);
         Assert.Equal(["dependency"], deserialized.WaitingFor);
+        Assert.NotNull(deserialized.Properties);
+        Assert.Equal("dependency-resource", deserialized.Properties[KnownProperties.Resource.WaitingFor]);
 
         Assert.NotNull(deserialized.Urls);
         Assert.Single(deserialized.Urls);
