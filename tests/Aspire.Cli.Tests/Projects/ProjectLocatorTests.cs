@@ -721,6 +721,76 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task UseOrFindAppHostProjectFile_UpdatesSelectedAppHostAdjacentConfigWhenMultipleAppHostsFound()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var appHost1Directory = workspace.WorkspaceRoot.CreateSubdirectory("AppHost1");
+        var appHost1File = new FileInfo(Path.Combine(appHost1Directory.FullName, "apphost.ts"));
+        await File.WriteAllTextAsync(appHost1File.FullName, "// TypeScript apphost");
+        var appHost1ConfigPath = Path.Combine(appHost1Directory.FullName, AspireConfigFile.FileName);
+        await File.WriteAllTextAsync(appHost1ConfigPath, """
+            {
+              "packages": {
+                "Aspire.Hosting.Redis": ""
+              }
+            }
+            """);
+
+        var appHost2Directory = workspace.WorkspaceRoot.CreateSubdirectory("AppHost2");
+        var appHost2File = new FileInfo(Path.Combine(appHost2Directory.FullName, "apphost.ts"));
+        await File.WriteAllTextAsync(appHost2File.FullName, "// TypeScript apphost");
+        var appHost2ConfigPath = Path.Combine(appHost2Directory.FullName, AspireConfigFile.FileName);
+        await File.WriteAllTextAsync(appHost2ConfigPath, """
+            {
+              "packages": {
+                "Aspire.Hosting.PostgreSQL": ""
+              }
+            }
+            """);
+
+        var interactionService = new TestInteractionService
+        {
+            PromptForSelectionCallback = (_, choices, _, _) =>
+                choices.Cast<FileInfo>().Single(file => file.Directory?.Name == appHost2Directory.Name)
+        };
+        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var globalSettingsFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "settings.global.json"));
+        var configurationService = new ConfigurationService(new ConfigurationBuilder().Build(), executionContext, globalSettingsFile, NullLogger<ConfigurationService>.Instance);
+        var projectLocator = CreateProjectLocator(
+            executionContext,
+            interactionService: interactionService,
+            configurationService: configurationService,
+            projectFactory: new GuestAppHostFileProjectFactory("apphost.ts"),
+            languageDiscovery: new TestLanguageDiscovery(new LanguageInfo(
+                LanguageId: new LanguageId(KnownLanguageId.TypeScript),
+                DisplayName: "TypeScript (Node.js)",
+                PackageName: "Aspire.Hosting.JavaScript",
+                DetectionPatterns: ["apphost.ts"],
+                CodeGenerator: "TypeScript",
+                AppHostFileName: "apphost.ts")));
+
+        var result = await projectLocator.UseOrFindAppHostProjectFileAsync(
+            projectFile: null,
+            multipleAppHostProjectsFoundBehavior: MultipleAppHostProjectsFoundBehavior.Prompt,
+            createSettingsFile: true,
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal(appHost2File.FullName, result.SelectedProjectFile?.FullName);
+        Assert.False(File.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName)));
+
+        var appHost1ConfigJson = await File.ReadAllTextAsync(appHost1ConfigPath);
+        var appHost1Config = JsonSerializer.Deserialize<AspireConfigFile>(appHost1ConfigJson);
+        Assert.Null(appHost1Config?.AppHost?.Path);
+        Assert.Contains("\"Aspire.Hosting.Redis\"", appHost1ConfigJson, StringComparison.Ordinal);
+
+        var appHost2ConfigJson = await File.ReadAllTextAsync(appHost2ConfigPath);
+        var appHost2Config = JsonSerializer.Deserialize<AspireConfigFile>(appHost2ConfigJson);
+        Assert.Equal("apphost.ts", appHost2Config?.AppHost?.Path);
+        Assert.Equal(KnownLanguageId.TypeScript, appHost2Config?.AppHost?.Language);
+        Assert.Contains("\"Aspire.Hosting.PostgreSQL\"", appHost2ConfigJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task UseOrFindAppHostProjectFile_HealsStaleAppHostPathInAdjacentConfig()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
