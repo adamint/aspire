@@ -512,11 +512,12 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
                 launcher = _guestRuntime.CreateDefaultLauncher();
             }
 
-            Task StartBackchannelConnectionAfterGuestAppHostStartsAsync()
+            Task StartBackchannelConnectionAfterGuestAppHostLaunchesAsync()
             {
                 // Guest runtimes can fail during dependency installation or pre-execute checks before
-                // the AppHost is invoked. Defer polling the server backchannel until the execute phase
-                // starts so those early failures don't leave the CLI waiting on an unused stream.
+                // the AppHost is invoked. Defer polling the server backchannel until the launcher has
+                // started or delegated the AppHost so those early failures don't leave the CLI waiting
+                // on an unused stream.
                 _ = StartBackchannelConnectionAsync(appHostServerProcess, backchannelSocketPath, backchannelCompletionSource, enableHotReload, cancellationToken);
                 return Task.CompletedTask;
             }
@@ -524,7 +525,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
             // Start guest apphost - it will connect to AppHost server, define resources.
             // If launcher is an ExtensionGuestLauncher, it delegates to the VS Code extension.
             var (guestExitCode, guestOutput) = await ExecuteGuestAppHostAsync(
-                appHostFile, directory, environmentVariables, enableHotReload, rpcClient, launcher, StartBackchannelConnectionAfterGuestAppHostStartsAsync, cancellationToken);
+                appHostFile, directory, environmentVariables, enableHotReload, rpcClient, launcher, StartBackchannelConnectionAfterGuestAppHostLaunchesAsync, cancellationToken);
 
             // A non-zero exit code at this point means the in-CLI portion of the guest run
             // (typically a PreExecute step like `tsc --noEmit` for TypeScript) failed before
@@ -1487,7 +1488,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         bool watchMode,
         IAppHostRpcClient rpcClient,
         IGuestProcessLauncher launcher,
-        Func<Task>? beforeExecuteAsync,
+        Func<Task>? afterAppHostLaunchedAsync,
         CancellationToken cancellationToken)
     {
         await EnsureRuntimeCreatedAsync(directory, rpcClient, cancellationToken);
@@ -1498,7 +1499,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
             return (CliExitCodes.FailedToDotnetRunAppHost, new OutputCollector());
         }
 
-        return await _guestRuntime.RunAsync(appHostFile, directory, environmentVariables, watchMode, launcher, cancellationToken, beforeExecuteAsync: beforeExecuteAsync);
+        return await _guestRuntime.RunAsync(appHostFile, directory, environmentVariables, watchMode, launcher, cancellationToken, afterAppHostLaunchedAsync: afterAppHostLaunchedAsync);
     }
 
     /// <summary>
