@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Channels;
+using Aspire.Dashboard.Model;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Diagnostics;
 using Aspire.Shared;
@@ -855,7 +856,7 @@ internal sealed class AuxiliaryBackchannelRpcTarget(
             };
             properties[prop.Name] = stringValue;
 
-            if (string.Equals(prop.Name, KnownProperties.Resource.WaitingFor, StringComparisons.ResourceName))
+            if (string.Equals(prop.Name, KnownProperties.Resource.WaitingFor, StringComparisons.ResourcePropertyName))
             {
                 waitingFor = GetStringArrayPropertyValue(prop.Value);
             }
@@ -923,8 +924,8 @@ internal sealed class AuxiliaryBackchannelRpcTarget(
             IEnumerable<object> objects => objects.OfType<string>().Where(static s => !string.IsNullOrEmpty(s)).ToArray(),
             System.Collections.IEnumerable enumerable => enumerable.Cast<object>().OfType<string>().Where(static s => !string.IsNullOrEmpty(s)).ToArray(),
             _ => null
-        } is { Length: > 0 } strings
-            ? strings
+        } is { Length: > 0 } values
+            ? values
             : null;
     }
 
