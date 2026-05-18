@@ -56,9 +56,9 @@ export type ViewMode = 'workspace' | 'global';
  *  - `aspire describe --follow` (workspace mode) — streams resource updates
  *    via NDJSON.  Only active while the tree-view panel is visible **and**
  *    workspace mode is selected.
-    *  - `aspire ps` polling — periodically fetches running app hosts. In global
-    *    mode this backs the full tree; in workspace mode it confirms whether the
-    *    selected workspace AppHost is running when the resource stream is empty.
+ *  - `aspire ps` polling — periodically fetches running app hosts. In global
+ *    mode this backs the full tree; in workspace mode it confirms whether the
+ *    selected workspace AppHost is running when the resource stream is empty.
  */
 export class AppHostDataRepository {
     private static readonly _processShutdownGracePeriodMs = 5000;
@@ -366,7 +366,7 @@ export class AppHostDataRepository {
                     if (!this._describeReceivedData) {
                         extensionLogOutputChannel.warn(`aspire describe --follow exited (code ${code}) without producing data; not auto-restarting.`);
                         this._workspaceResources.clear();
-                        this._updateWorkspaceContext();
+                        this._updateWorkspaceContext({ clearLoading: true });
                         return;
                     }
 
@@ -477,11 +477,12 @@ export class AppHostDataRepository {
         }
     }
 
-    private _updateWorkspaceContext(): void {
+    private _updateWorkspaceContext(options?: { clearLoading?: boolean }): void {
         const hasWorkspaceAppHost = this._workspaceAppHost !== undefined;
         const hasResources = this._workspaceResources.size > 0;
         vscode.commands.executeCommand('setContext', 'aspire.noRunningAppHosts', !hasWorkspaceAppHost && !hasResources);
-        if (this._loadingWorkspace) {
+        const clearLoading = options?.clearLoading ?? (hasResources || hasWorkspaceAppHost);
+        if (this._loadingWorkspace && clearLoading) {
             this._loadingWorkspace = false;
             this._updateLoadingContext();
         }
@@ -852,5 +853,8 @@ function isMatchingAppHostPath(left: string | undefined, right: string | undefin
         return true;
     }
 
+    // `aspire extension get-apphosts` resolves a project file while `aspire ps`
+    // can report the AppHost source file. Match by directory as a fallback to
+    // mirror the CodeLens AppHost resolution strategy.
     return getComparisonKey(path.dirname(normalizedLeft)) === getComparisonKey(path.dirname(normalizedRight));
 }

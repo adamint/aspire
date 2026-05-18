@@ -174,8 +174,8 @@ export class AspireCodeLensProvider implements vscode.CodeLensProvider {
      * Resolution order:
      *  1. Exact path or same-directory match against {@link AppHostDataRepository.appHosts}
      *     (covers global mode and any workspace AppHosts that surface there).
-    *  2. The repository's `workspaceAppHostPath` when workspace live data identifies
-    *     a running AppHost and the document lives in the same directory as that AppHost.
+     *  2. The repository's `workspaceAppHostPath` when workspace live data identifies
+     *     a running AppHost and the document lives in the same directory as that AppHost.
      *
      * The document path itself is intentionally not used as a fallback — for C#
      * AppHosts the CLI requires a `.csproj`, not a `.cs` file.
