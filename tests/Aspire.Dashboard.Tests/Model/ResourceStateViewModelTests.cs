@@ -130,4 +130,59 @@ public class ResourceStateViewModelTests
 
         Assert.Equal($"Localized:{nameof(Columns.StateColumnResourceWaitingFor)}:nginx, redis", tooltip);
     }
+
+    [Fact]
+    public void WaitingResourceTooltipUsesDisplayNamesForNonReplicaDependencies()
+    {
+        var dependency = ModelTestHelpers.CreateResource(
+            resourceName: "messaging-abcxyz",
+            displayName: "messaging");
+
+        var resource = ModelTestHelpers.CreateResource(
+            state: KnownResourceState.Waiting,
+            properties: new Dictionary<string, ResourcePropertyViewModel>
+            {
+                [KnownProperties.Resource.WaitingFor] = new(
+                    KnownProperties.Resource.WaitingFor,
+                    Value.ForList(Value.ForString("messaging-abcxyz")),
+                    isValueSensitive: false,
+                    knownProperty: null,
+                    priority: 0)
+            });
+
+        var localizer = new TestStringLocalizer<Columns>();
+
+        var tooltip = ResourceStateViewModel.GetResourceStateTooltip(resource, localizer, [resource, dependency]);
+
+        Assert.Equal($"Localized:{nameof(Columns.StateColumnResourceWaitingFor)}:messaging", tooltip);
+    }
+
+    [Fact]
+    public void WaitingResourceTooltipUsesUniqueNamesForReplicaDependencies()
+    {
+        var firstDependency = ModelTestHelpers.CreateResource(
+            resourceName: "messaging-abcxyz",
+            displayName: "messaging");
+        var secondDependency = ModelTestHelpers.CreateResource(
+            resourceName: "messaging-defuvw",
+            displayName: "messaging");
+
+        var resource = ModelTestHelpers.CreateResource(
+            state: KnownResourceState.Waiting,
+            properties: new Dictionary<string, ResourcePropertyViewModel>
+            {
+                [KnownProperties.Resource.WaitingFor] = new(
+                    KnownProperties.Resource.WaitingFor,
+                    Value.ForList(Value.ForString("messaging-abcxyz")),
+                    isValueSensitive: false,
+                    knownProperty: null,
+                    priority: 0)
+            });
+
+        var localizer = new TestStringLocalizer<Columns>();
+
+        var tooltip = ResourceStateViewModel.GetResourceStateTooltip(resource, localizer, [resource, firstDependency, secondDependency]);
+
+        Assert.Equal($"Localized:{nameof(Columns.StateColumnResourceWaitingFor)}:messaging-abcxyz", tooltip);
+    }
 }

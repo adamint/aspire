@@ -417,7 +417,7 @@ public class ResourceDetailsTests : DashboardTestContext
     {
         ResourceSetupHelpers.SetupResourceDetails(this);
 
-        var nginx = ModelTestHelpers.CreateResource(resourceName: "nginx");
+        var nginx = ModelTestHelpers.CreateResource(resourceName: "nginx-abcxyz", displayName: "nginx");
         var redis = ModelTestHelpers.CreateResource(resourceName: "redis");
 
         var resource = ModelTestHelpers.CreateResource(
@@ -427,7 +427,7 @@ public class ResourceDetailsTests : DashboardTestContext
             {
                 [KnownProperties.Resource.WaitingFor] = new(
                     KnownProperties.Resource.WaitingFor,
-                    Value.ForList(Value.ForString("nginx"), Value.ForString("redis")),
+                    Value.ForList(Value.ForString("nginx-abcxyz"), Value.ForString("redis")),
                     isValueSensitive: false,
                     knownProperty: null,
                     priority: 0)

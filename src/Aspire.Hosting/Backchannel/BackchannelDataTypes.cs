@@ -988,6 +988,11 @@ internal sealed class ResourceSnapshot
     public string? State { get; init; }
 
     /// <summary>
+    /// Gets the names of resources this resource is waiting for.
+    /// </summary>
+    public string[]? WaitingFor { get; init; }
+
+    /// <summary>
     /// Gets the state style hint (e.g., "success", "error", "warning").
     /// </summary>
     public string? StateStyle { get; init; }

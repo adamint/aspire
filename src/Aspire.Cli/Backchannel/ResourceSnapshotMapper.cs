@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Utils;
 using Aspire.Shared;
 using Aspire.Shared.Model;
@@ -84,6 +85,8 @@ internal static class ResourceSnapshotMapper
             p => p.Key,
             p => p.Value);
 
+        var waitingFor = GetResolvedWaitingForDependencies(snapshot, allSnapshots);
+
         // Build relationships by matching DisplayName
         var relationships = new List<ResourceRelationshipJson>();
         foreach (var relationship in snapshot.Relationships)
@@ -134,6 +137,7 @@ internal static class ResourceSnapshotMapper
             DisplayName = snapshot.DisplayName,
             ResourceType = snapshot.ResourceType,
             State = snapshot.State,
+            WaitingFor = waitingFor,
             StateStyle = snapshot.StateStyle,
             HealthStatus = snapshot.HealthStatus,
             Source = sourceViewModel?.Value,
@@ -150,6 +154,42 @@ internal static class ResourceSnapshotMapper
             Relationships = relationships.ToArray(),
             Commands = commands
         };
+    }
+
+    private static string[]? GetResolvedWaitingForDependencies(ResourceSnapshot snapshot, IReadOnlyList<ResourceSnapshot> allSnapshots)
+    {
+        var waitingFor = snapshot.WaitingFor;
+        if (waitingFor is not { Length: > 0 } &&
+            snapshot.Properties.TryGetValue(KnownProperties.Resource.WaitingFor, out var waitingForProperty) &&
+            !string.IsNullOrWhiteSpace(waitingForProperty))
+        {
+            waitingFor = waitingForProperty.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        }
+
+        if (waitingFor is not { Length: > 0 })
+        {
+            return null;
+        }
+
+        var dependencies = new List<string>();
+        var seenDependencies = new HashSet<string>(StringComparers.ResourceName);
+
+        foreach (var dependency in waitingFor)
+        {
+            var dependencyName = dependency;
+            var matches = ResolveResources(dependency, allSnapshots);
+            if (matches.Count == 1)
+            {
+                dependencyName = GetResourceName(matches[0], allSnapshots);
+            }
+
+            if (seenDependencies.Add(dependencyName))
+            {
+                dependencies.Add(dependencyName);
+            }
+        }
+
+        return dependencies.Count > 0 ? [.. dependencies] : null;
     }
 
     internal static bool IsCommandAvailableToApi(ResourceSnapshotCommand command)

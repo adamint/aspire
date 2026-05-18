@@ -865,6 +865,7 @@ internal sealed class AuxiliaryBackchannelRpcTarget(
         // Build properties dictionary from ResourcePropertySnapshot
         // Redact sensitive property values to avoid leaking secrets
         var properties = new Dictionary<string, string?>();
+        string[]? waitingFor = null;
         foreach (var prop in snapshot.Properties)
         {
             // Redact sensitive property values
@@ -884,6 +885,11 @@ internal sealed class AuxiliaryBackchannelRpcTarget(
                 _ => prop.Value.ToString()
             };
             properties[prop.Name] = stringValue;
+
+            if (string.Equals(prop.Name, KnownProperties.Resource.WaitingFor, StringComparisons.ResourceName))
+            {
+                waitingFor = GetStringArrayPropertyValue(prop.Value);
+            }
         }
 
         // Build commands
@@ -919,6 +925,7 @@ internal sealed class AuxiliaryBackchannelRpcTarget(
             DisplayName = resource.Name,
             ResourceType = snapshot.ResourceType,
             State = snapshot.State?.Text,
+            WaitingFor = waitingFor,
             StateStyle = snapshot.State?.Style,
             IsHidden = snapshot.IsHidden,
             HealthStatus = snapshot.HealthStatus?.ToString(),
@@ -935,6 +942,21 @@ internal sealed class AuxiliaryBackchannelRpcTarget(
             McpServer = mcpServer,
             Commands = commands
         };
+    }
+
+    private static string[]? GetStringArrayPropertyValue(object? value)
+    {
+        return value switch
+        {
+            null => null,
+            string s => [s],
+            IEnumerable<string> strings => strings.Where(static s => !string.IsNullOrEmpty(s)).ToArray(),
+            IEnumerable<object> objects => objects.OfType<string>().Where(static s => !string.IsNullOrEmpty(s)).ToArray(),
+            System.Collections.IEnumerable enumerable => enumerable.Cast<object>().OfType<string>().Where(static s => !string.IsNullOrEmpty(s)).ToArray(),
+            _ => null
+        } is { Length: > 0 } strings
+            ? strings
+            : null;
     }
 
     private static Dictionary<string, string?>? CreateOptionsDictionary(IReadOnlyList<KeyValuePair<string, string>>? options)

@@ -376,7 +376,7 @@ public partial class ResourceDetails : IComponentWithTelemetry, IDisposable
     private void AddStateDescriptionProperty(ResourceViewModel resource)
     {
         var stateViewModel = ResourceStateViewModel.GetStateViewModel(resource, ColumnsLoc);
-        var stateDescription = ResourceStateViewModel.GetResourceStateTooltip(resource, ColumnsLoc);
+        var stateDescription = ResourceStateViewModel.GetResourceStateTooltip(resource, ColumnsLoc, ResourceByName.Values);
 
         if (string.IsNullOrWhiteSpace(stateDescription) || string.Equals(stateDescription, stateViewModel.Text, StringComparison.Ordinal))
         {

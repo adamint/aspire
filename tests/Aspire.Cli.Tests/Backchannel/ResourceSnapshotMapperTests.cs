@@ -95,6 +95,65 @@ public class ResourceSnapshotMapperTests
     }
 
     [Fact]
+    public void MapToResourceJson_ResolvesWaitingForDependencies()
+    {
+        var dependency = new ResourceSnapshot
+        {
+            Name = "messaging-abcxyz",
+            DisplayName = "messaging",
+            ResourceType = "Container",
+            State = "Running"
+        };
+
+        var resource = new ResourceSnapshot
+        {
+            Name = "frontend",
+            DisplayName = "frontend",
+            ResourceType = "Project",
+            State = "Waiting",
+            WaitingFor = ["messaging-abcxyz"]
+        };
+
+        var result = ResourceSnapshotMapper.MapToResourceJson(resource, [resource, dependency]);
+
+        Assert.NotNull(result.WaitingFor);
+        Assert.Equal(["messaging"], result.WaitingFor);
+    }
+
+    [Fact]
+    public void MapToResourceJson_UsesUniqueWaitingForNamesForReplicas()
+    {
+        var firstDependency = new ResourceSnapshot
+        {
+            Name = "messaging-abcxyz",
+            DisplayName = "messaging",
+            ResourceType = "Container",
+            State = "Running"
+        };
+        var secondDependency = new ResourceSnapshot
+        {
+            Name = "messaging-defuvw",
+            DisplayName = "messaging",
+            ResourceType = "Container",
+            State = "Running"
+        };
+
+        var resource = new ResourceSnapshot
+        {
+            Name = "frontend",
+            DisplayName = "frontend",
+            ResourceType = "Project",
+            State = "Waiting",
+            WaitingFor = ["messaging-abcxyz"]
+        };
+
+        var result = ResourceSnapshotMapper.MapToResourceJson(resource, [resource, firstDependency, secondDependency]);
+
+        Assert.NotNull(result.WaitingFor);
+        Assert.Equal(["messaging-abcxyz"], result.WaitingFor);
+    }
+
+    [Fact]
     public void ResolveResources_ByExactName_ReturnsMatch()
     {
         var snapshots = new List<ResourceSnapshot>

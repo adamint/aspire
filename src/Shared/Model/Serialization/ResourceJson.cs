@@ -37,6 +37,11 @@ internal sealed class ResourceJson
     public string? State { get; set; }
 
     /// <summary>
+    /// The display names of resources this resource is waiting for.
+    /// </summary>
+    public string[]? WaitingFor { get; set; }
+
+    /// <summary>
     /// The state style hint (e.g., "success", "error", "warning").
     /// </summary>
     public string? StateStyle { get; set; }
