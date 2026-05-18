@@ -150,5 +150,23 @@ namespace Aspire.Cli.Resources {
                 return ResourceManager.GetString("NonInteractiveTemplateRequired", resourceCulture);
             }
         }
+
+        public static string OutputDirectoryNotEmptyNonInteractive {
+            get {
+                return ResourceManager.GetString("OutputDirectoryNotEmptyNonInteractive", resourceCulture);
+            }
+        }
+
+        public static string OutputDirectoryNotEmptyInteractive {
+            get {
+                return ResourceManager.GetString("OutputDirectoryNotEmptyInteractive", resourceCulture);
+            }
+        }
+
+        public static string OutputPathContainsInvalidCharacters {
+            get {
+                return ResourceManager.GetString("OutputPathContainsInvalidCharacters", resourceCulture);
+            }
+        }
     }
 }

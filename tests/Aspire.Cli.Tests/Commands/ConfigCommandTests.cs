@@ -76,7 +76,7 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
         var result = command.Parse("config");
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
-        Assert.Equal(ExitCodeConstants.InvalidCommand, exitCode);
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
     }
 
     [Fact]
@@ -774,7 +774,7 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
-        Assert.Equal(ExitCodeConstants.Success, exitCode);
+        Assert.Equal(CliExitCodes.Success, exitCode);
 
         var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
         var json = await File.ReadAllTextAsync(configPath);
@@ -804,7 +804,7 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
-        Assert.Equal(ExitCodeConstants.Success, exitCode);
+        Assert.Equal(CliExitCodes.Success, exitCode);
 
         var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
         var json = await File.ReadAllTextAsync(configPath);
@@ -836,7 +836,7 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
-        Assert.Equal(ExitCodeConstants.InvalidCommand, exitCode);
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
         Assert.Equal(GetErrorString(expectedErrorResourceName), Assert.Single(testInteractionService.DisplayedErrors));
 
         var settingsPath = provider.GetRequiredService<IConfigurationService>().GetSettingsFilePath(isGlobal: true);
@@ -869,7 +869,7 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
-        Assert.Equal(ExitCodeConstants.InvalidCommand, exitCode);
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
 
         var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
         Assert.False(File.Exists(configPath));
@@ -887,7 +887,7 @@ public class ConfigCommandTests(ITestOutputHelper outputHelper)
 
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
-        Assert.Equal(ExitCodeConstants.Success, exitCode);
+        Assert.Equal(CliExitCodes.Success, exitCode);
 
         var settingsPath = provider.GetRequiredService<IConfigurationService>().GetSettingsFilePath(isGlobal: false);
         var json = await File.ReadAllTextAsync(settingsPath);
@@ -932,6 +932,11 @@ public class TestConfigurationService : IConfigurationService
     public Task<string?> GetConfigurationAsync(string key, CancellationToken cancellationToken = default)
     {
         return Task.FromResult<string?>(key);
+    }
+
+    public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, CancellationToken cancellationToken = default)
+    {
+        return GetConfigurationAsync(key, cancellationToken);
     }
 
     public string GetSettingsFilePath(bool isGlobal)

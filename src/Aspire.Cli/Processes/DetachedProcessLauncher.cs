@@ -36,13 +36,14 @@ namespace Aspire.Cli.Processes;
 // The solution is platform-specific:
 //
 // ┌─────────┬────────────────────────────────────────────────────────────────┐
-// │ Windows │ P/Invoke CreateProcess with STARTUPINFOEX and an explicit     │
-// │         │ PROC_THREAD_ATTRIBUTE_HANDLE_LIST. This lets us set           │
+// │ Windows │ P/Invoke CreateProcess with CREATE_NEW_CONSOLE,               │
+// │         │ STARTUPINFOEX, SW_HIDE, and an explicit                       │
+// │         │ PROC_THREAD_ATTRIBUTE_HANDLE_LIST. This gives the child an    │
+// │         │ independent console lifetime while still letting us set       │
 // │         │ bInheritHandles=TRUE (required to assign hStdOutput to NUL)   │
-// │         │ while restricting inheritance to ONLY the NUL handle — so the │
+// │         │ and restrict inheritance to ONLY the NUL handle — so the      │
 // │         │ grandchild inherits nothing useful. Child stdout/stderr go to │
-// │         │ the NUL device. This is the same approach used by Docker's    │
-// │         │ Windows container runtime (microsoft/hcsshim).                │
+// │         │ the NUL device.                                               │
 // │         │                                                               │
 // │ Linux / │ Process.Start with RedirectStandard{Output,Error} = true,     │
 // │ macOS   │ then immediately close the parent's read-end pipe streams.    │

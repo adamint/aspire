@@ -12,6 +12,8 @@ namespace Aspire.Cli.Utils;
 
 internal static class ConfigurationHelper
 {
+    internal const string IntegrationCacheFolderName = "integrations";
+
     /// <summary>
     /// Standard options for parsing JSON that may contain non-spec features like comments and trailing commas.
     /// </summary>
@@ -83,6 +85,43 @@ internal static class ConfigurationHelper
         }
 
         return settingsDirectory.Parent;
+    }
+
+    internal static DirectoryInfo GetConfigRootDirectory(DirectoryInfo startDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(startDirectory);
+
+        var configPath = FindNearestConfigFilePath(startDirectory);
+        if (configPath is null)
+        {
+            return startDirectory;
+        }
+
+        var configFile = new FileInfo(configPath);
+
+        // Legacy layout: <root>/.aspire/settings.json -> <root>
+        var legacyRoot = GetLegacySettingsRootDirectory(configFile);
+        if (legacyRoot is not null)
+        {
+            return legacyRoot;
+        }
+
+        // Modern layout: <root>/aspire.config.json -> <root>
+        return configFile.Directory is { Exists: true } configDirectory
+            ? configDirectory
+            : startDirectory;
+    }
+
+    internal static DirectoryInfo GetWorkspaceAspireDirectory(DirectoryInfo startDirectory)
+    {
+        var configRoot = GetConfigRootDirectory(startDirectory);
+        return new DirectoryInfo(Path.Combine(configRoot.FullName, AspireJsonConfiguration.SettingsFolder));
+    }
+
+    internal static DirectoryInfo GetIntegrationCacheDirectory(DirectoryInfo startDirectory)
+    {
+        var workspaceAspireDirectory = GetWorkspaceAspireDirectory(startDirectory);
+        return new DirectoryInfo(Path.Combine(workspaceAspireDirectory.FullName, IntegrationCacheFolderName));
     }
 
     /// <summary>

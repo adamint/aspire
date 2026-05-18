@@ -51,7 +51,6 @@ internal sealed class ProcessInvocationOptions
 
     public bool NoLaunchProfile { get; set; }
     public bool StartDebugSession { get; set; }
-    public bool NoExtensionLaunch { get; set; }
     public bool Debug { get; set; }
 
     /// <summary>
@@ -65,6 +64,7 @@ internal sealed class DotNetCliRunner(
     ILogger<DotNetCliRunner> logger,
     IServiceProvider serviceProvider,
     AspireCliTelemetry telemetry,
+    ProfilingTelemetry profilingTelemetry,
     IConfiguration configuration,
     IDiskCache diskCache,
     IFeatures features,
@@ -76,6 +76,7 @@ internal sealed class DotNetCliRunner(
 
     // Retry configuration for NuGet package search operations
     private const int MaxSearchRetries = 3;
+    private static long s_binlogSequence;
     private static readonly TimeSpan[] s_searchRetryDelays = [TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2)];
 
     private string GetMsBuildServerValue()
@@ -97,18 +98,30 @@ internal sealed class DotNetCliRunner(
         ProcessInvocationOptions options,
         CancellationToken cancellationToken)
     {
+        var dotnetCommand = args.Length > 0 ? args[0] : "execute";
+        using var processActivity = profilingTelemetry.StartDotNetProcess(dotnetCommand, projectFile, workingDirectory, options);
+
         // Build the final environment variables by merging caller-provided env with dotnet-specific settings.
         var finalEnv = env?.ToDictionary() ?? new Dictionary<string, string>();
         ConfigureDotNetEnvironment(finalEnv);
 
         // Resolve the dotnet executable path, preferring the private SDK installation if available.
         var dotnetPath = ResolveDotNetPath(finalEnv);
+        var effectiveArgs = AddBinlogArgumentIfConfigured(args, dotnetCommand, projectFile, workingDirectory, processActivity);
+        processActivity.SetDotNetResolvedExecutable(
+            dotnetPath,
+            effectiveArgs,
+            finalEnv.TryGetValue("DOTNET_CLI_USE_MSBUILD_SERVER", out var msBuildServerValue) ? msBuildServerValue : null);
+        processActivity.SetDotNetArgsCount(effectiveArgs.Length);
+
+        var outputCounters = new ProcessOutputCounters();
+        var instrumentedOptions = CreateInstrumentedProcessOptions(options, processActivity, outputCounters);
 
         // Do not use 'using' here: StartBackchannelAsync runs fire-and-forget and
         // accesses execution.HasExited / ExitCode after this method returns. Disposing
         // the underlying Process while the backchannel task is still polling would
         // cause ObjectDisposedException. Let the GC handle cleanup instead.
-        var execution = executionFactory.CreateExecution(dotnetPath, args, finalEnv, workingDirectory, options);
+        var execution = executionFactory.CreateExecution(dotnetPath, effectiveArgs, finalEnv, workingDirectory, instrumentedOptions);
 
         // Get socket path from env if present
         string? socketPath = null;
@@ -119,7 +132,6 @@ internal sealed class DotNetCliRunner(
         {
             if (ExtensionHelper.IsExtensionHost(interactionService, out var extensionInteractionService, out var extensionBackchannel)
                 && projectFile is not null
-                && !options.NoExtensionLaunch
                 && await extensionBackchannel.HasCapabilityAsync(KnownCapabilities.Project, cancellationToken))
             {
                 await extensionInteractionService.LaunchAppHostAsync(
@@ -130,15 +142,17 @@ internal sealed class DotNetCliRunner(
 
                 _ = StartBackchannelAsync(null, socketPath!, backchannelCompletionSource, cancellationToken);
 
-                return ExitCodeConstants.Success;
+                return CliExitCodes.Success;
             }
         }
 
         var started = execution.Start();
+        processActivity.AddDotNetProcessStartResult(started, started ? execution.ProcessId : null);
 
         if (!started)
         {
-            return ExitCodeConstants.FailedToDotnetRunAppHost;
+            processActivity.SetError("Process failed to start.");
+            return CliExitCodes.FailedToDotnetRunAppHost;
         }
 
         if (backchannelCompletionSource is not null && socketPath is not null)
@@ -146,7 +160,111 @@ internal sealed class DotNetCliRunner(
             _ = StartBackchannelAsync(execution, socketPath, backchannelCompletionSource, cancellationToken);
         }
 
-        return await execution.WaitForExitAsync(cancellationToken);
+        var exitCode = await execution.WaitForExitAsync(cancellationToken);
+        processActivity.SetDotNetCompleted(exitCode, outputCounters.StdoutLineCount, outputCounters.StderrLineCount);
+
+        return exitCode;
+    }
+
+    private string[] AddBinlogArgumentIfConfigured(
+        string[] args,
+        string dotnetCommand,
+        FileInfo? projectFile,
+        DirectoryInfo workingDirectory,
+        ProfilingTelemetry.ActivityScope processActivity)
+    {
+        var binlogDirectory = configuration[KnownConfigNames.CliDotnetBinlogDirectory];
+        if (string.IsNullOrWhiteSpace(binlogDirectory))
+        {
+            return args;
+        }
+
+        if (!SupportsBinlog(dotnetCommand))
+        {
+            // Some dotnet subcommands are not MSBuild entry points and reject /bl.
+            processActivity.SetDotNetBinlogSkippedUnsupportedCommand();
+            return args;
+        }
+
+        var fullBinlogDirectory = Path.IsPathFullyQualified(binlogDirectory)
+            ? binlogDirectory
+            : Path.GetFullPath(Path.Combine(workingDirectory.FullName, binlogDirectory));
+
+        Directory.CreateDirectory(fullBinlogDirectory);
+
+        var binlogPath = Path.Combine(fullBinlogDirectory, CreateBinlogFileName(dotnetCommand, projectFile, workingDirectory));
+        processActivity.SetDotNetBinlogPath(binlogPath);
+
+        return [.. args, $"/bl:{binlogPath}"];
+    }
+
+    private static bool SupportsBinlog(string dotnetCommand)
+    {
+        return dotnetCommand is "build" or "msbuild" or "restore" or "publish" or "test";
+    }
+
+    private static string CreateBinlogFileName(string dotnetCommand, FileInfo? projectFile, DirectoryInfo workingDirectory)
+    {
+        var sequence = Interlocked.Increment(ref s_binlogSequence);
+        var timestamp = DateTimeOffset.UtcNow.ToString("yyyyMMddTHHmmssfff", CultureInfo.InvariantCulture);
+        var scope = projectFile is not null ? Path.GetFileNameWithoutExtension(projectFile.Name) : workingDirectory.Name;
+
+        return $"{timestamp}-{Environment.ProcessId}-{sequence:D4}-{SanitizeFileNamePart(dotnetCommand)}-{SanitizeFileNamePart(scope)}.binlog";
+    }
+
+    private static string SanitizeFileNamePart(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            builder.Append(char.IsAsciiLetterOrDigit(ch) || ch is '-' or '_' or '.' ? ch : '-');
+        }
+
+        var sanitized = builder.ToString().Trim('-');
+        if (string.IsNullOrEmpty(sanitized))
+        {
+            return "dotnet";
+        }
+
+        return sanitized.Length <= 80 ? sanitized : sanitized[..80];
+    }
+
+    private static ProcessInvocationOptions CreateInstrumentedProcessOptions(
+        ProcessInvocationOptions options,
+        ProfilingTelemetry.ActivityScope activity,
+        ProcessOutputCounters outputCounters)
+    {
+        return new ProcessInvocationOptions
+        {
+            NoLaunchProfile = options.NoLaunchProfile,
+            StartDebugSession = options.StartDebugSession,
+            Debug = options.Debug,
+            SuppressLogging = options.SuppressLogging,
+            StandardOutputCallback = line =>
+            {
+                var lineCount = Interlocked.Increment(ref outputCounters.StdoutLineCount);
+                if (lineCount == 1)
+                {
+                    activity.AddDotNetFirstStdoutEvent();
+                }
+                options.StandardOutputCallback?.Invoke(line);
+            },
+            StandardErrorCallback = line =>
+            {
+                var lineCount = Interlocked.Increment(ref outputCounters.StderrLineCount);
+                if (lineCount == 1)
+                {
+                    activity.AddDotNetFirstStderrEvent();
+                }
+                options.StandardErrorCallback?.Invoke(line);
+            }
+        };
+    }
+
+    private sealed class ProcessOutputCounters
+    {
+        public int StdoutLineCount;
+        public int StderrLineCount;
     }
 
     internal static int GetCurrentProcessId() => Environment.ProcessId;
@@ -171,6 +289,10 @@ internal sealed class DotNetCliRunner(
         // Set the CLI process start time for robust orphan detection to prevent PID reuse issues.
         // The AppHost will verify both PID and start time to ensure it's monitoring the correct process.
         env[KnownConfigNames.CliProcessStarted] = GetCurrentProcessStartTimeUnixSeconds().ToString(CultureInfo.InvariantCulture);
+
+        // Pass the CLI log file path so that querying CLI processes (e.g., aspire resource, aspire stop)
+        // can surface it to help users diagnose issues in the managing CLI process.
+        env[KnownConfigNames.CliLogFilePath] = executionContext.LogFilePath;
 
         // Always set MSBUILDTERMINALLOGGER=false for all dotnet command executions to ensure consistent terminal logger behavior
         env[KnownConfigNames.MsBuildTerminalLogger] = "false";
@@ -222,7 +344,7 @@ internal sealed class DotNetCliRunner(
 
     private async Task StartBackchannelAsync(IProcessExecution? execution, string socketPath, TaskCompletionSource<IAppHostCliBackchannel> backchannelCompletionSource, CancellationToken cancellationToken)
     {
-        using var activity = telemetry.StartDiagnosticActivity();
+        using var activity = profilingTelemetry.StartBackchannelConnect(socketPath);
 
         using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(50));
 
@@ -238,7 +360,13 @@ internal sealed class DotNetCliRunner(
             try
             {
                 logger.LogTrace("Attempting to connect to AppHost backchannel at {SocketPath} (attempt {Attempt})", socketPath, connectionAttempts);
+                if (connectionAttempts == 0 || connectionAttempts % 10 == 0)
+                {
+                    activity.AddBackchannelConnectAttemptEvent(connectionAttempts);
+                }
                 await backchannel.ConnectAsync(socketPath, connectionAttempts, cancellationToken).ConfigureAwait(false);
+                activity.SetBackchannelRetryCount(connectionAttempts);
+                activity.AddBackchannelConnectedEvent();
                 backchannelCompletionSource.SetResult(backchannel);
                 // Note: We intentionally do not call Environment.Exit when the backchannel disconnects.
                 // The CLI should complete normally and return the appropriate exit code based on the
@@ -313,7 +441,7 @@ internal sealed class DotNetCliRunner(
         // Get both properties and PackageReference items to determine Aspire.Hosting version
         var (exitCode, jsonDocument) = await GetProjectItemsAndPropertiesAsync(
             projectFile,
-            ["PackageReference", "AspireProjectOrPackageReference"],
+            ["PackageReference", "AspireProjectOrPackageReference", "PackageVersion"],
             ["IsAspireHost", "AspireHostingSDKVersion"],
             options,
             cancellationToken);
@@ -342,31 +470,22 @@ internal sealed class DotNetCliRunner(
                     // Check PackageReference items first
                     if (items.TryGetProperty("PackageReference", out var packageReferences))
                     {
-                        foreach (var packageRef in packageReferences.EnumerateArray())
-                        {
-                            if (packageRef.TryGetProperty("Identity", out var identity) &&
-                                identity.GetString() == "Aspire.Hosting" &&
-                                packageRef.TryGetProperty("Version", out var version))
-                            {
-                                aspireHostingVersion = version.GetString();
-                                break;
-                            }
-                        }
+                        aspireHostingVersion = GetPackageVersion(packageReferences, "Aspire.Hosting") ??
+                            GetPackageVersion(packageReferences, "Aspire.Hosting.AppHost");
                     }
 
                     // Fallback to AspireProjectOrPackageReference items if not found
                     if (aspireHostingVersion == null && items.TryGetProperty("AspireProjectOrPackageReference", out var aspireProjectOrPackageReferences))
                     {
-                        foreach (var aspireRef in aspireProjectOrPackageReferences.EnumerateArray())
-                        {
-                            if (aspireRef.TryGetProperty("Identity", out var identity) &&
-                                identity.GetString() == "Aspire.Hosting" &&
-                                aspireRef.TryGetProperty("Version", out var version))
-                            {
-                                aspireHostingVersion = version.GetString();
-                                break;
-                            }
-                        }
+                        aspireHostingVersion = GetPackageVersion(aspireProjectOrPackageReferences, "Aspire.Hosting") ??
+                            GetPackageVersion(aspireProjectOrPackageReferences, "Aspire.Hosting.AppHost");
+                    }
+
+                    // Fallback to PackageVersion items for Central Package Management if not found
+                    if (aspireHostingVersion == null && items.TryGetProperty("PackageVersion", out var packageVersions))
+                    {
+                        aspireHostingVersion = GetPackageVersion(packageVersions, "Aspire.Hosting") ??
+                            GetPackageVersion(packageVersions, "Aspire.Hosting.AppHost");
                     }
                 }
 
@@ -387,6 +506,21 @@ internal sealed class DotNetCliRunner(
         {
             return (exitCode, false, null);
         }
+    }
+
+    private static string? GetPackageVersion(JsonElement items, string packageId)
+    {
+        foreach (var item in items.EnumerateArray())
+        {
+            if (item.TryGetProperty("Identity", out var identity) &&
+                identity.GetString() == packageId &&
+                item.TryGetProperty("Version", out var version))
+            {
+                return version.GetString();
+            }
+        }
+
+        return null;
     }
 
     public async Task<(int ExitCode, JsonDocument? Output)> GetProjectItemsAndPropertiesAsync(FileInfo projectFile, string[] items, string[] properties, ProcessInvocationOptions options, CancellationToken cancellationToken)
@@ -417,6 +551,16 @@ internal sealed class DotNetCliRunner(
         cliArgsList.Add(projectFile.FullName);
 
         string[] cliArgs = [.. cliArgsList];
+        // These probes parse dotnet/msbuild stdout as machine-readable JSON. Disable
+        // telemetry and workload-update notifications for every property/item probe so
+        // unrelated first-run or workload messages cannot corrupt the JSON stream. This
+        // is intentionally broader than `aspire ls`: the same probe path is used by
+        // AppHost validation in commands such as `run`.
+        var env = new Dictionary<string, string>
+        {
+            [KnownConfigNames.DotnetCliTelemetryOptOut] = "1",
+            [KnownConfigNames.DotnetCliWorkloadUpdateNotifyDisable] = "1"
+        };
 
         var existingStandardOutputCallback = options.StandardOutputCallback;
         var existingStandardErrorCallback = options.StandardErrorCallback;
@@ -440,7 +584,7 @@ internal sealed class DotNetCliRunner(
 
             var exitCode = await ExecuteAsync(
                 args: cliArgs,
-                env: null,
+                env: env,
                 projectFile: projectFile,
                 workingDirectory: projectFile.Directory!,
                 backchannelCompletionSource: null,
@@ -653,7 +797,7 @@ internal sealed class DotNetCliRunner(
             if (stdout is null)
             {
                 logger.LogError("Failed to read stdout from the process. This should never happen.");
-                return (ExitCodeConstants.FailedToInstallTemplates, null);
+                return (CliExitCodes.FailedToInstallTemplates, null);
             }
 
             // NOTE: This parsing logic is hopefully temporary and in the future we'll
@@ -1136,7 +1280,7 @@ internal sealed class DotNetCliRunner(
             if (stdout is null)
             {
                 logger.LogError("Failed to read stdout from the process. This should never happen.");
-                return (ExitCodeConstants.FailedToAddPackage, null);
+                return (CliExitCodes.FailedToAddPackage, null);
             }
 
             try
@@ -1154,7 +1298,7 @@ internal sealed class DotNetCliRunner(
             catch (JsonException ex)
             {
                 logger.LogError($"Failed to read JSON returned by the package search. {ex.Message}");
-                return (ExitCodeConstants.FailedToAddPackage, null);
+                return (CliExitCodes.FailedToAddPackage, null);
             }
 
         }

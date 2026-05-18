@@ -42,6 +42,8 @@ internal class ConsoleInteractionService : IInteractionService
 
     public ConsoleOutput Console { get; set; }
 
+    public bool SupportsLinks => MessageConsole.Profile.Capabilities.Links;
+
     public ConsoleInteractionService(ConsoleEnvironment consoleEnvironment, CliExecutionContext executionContext, ICliHostEnvironment hostEnvironment, ILoggerFactory loggerFactory)
     {
         ArgumentNullException.ThrowIfNull(consoleEnvironment);
@@ -161,10 +163,10 @@ internal class ConsoleInteractionService : IInteractionService
         {
             if (binding != null)
             {
-                if (binding.DefaultValue != null)
+                if (binding.NonInteractiveDefaultValue != null)
                 {
-                    ValidateResolvedStringValue(binding.DefaultValue, required, validator, binding.SymbolDisplayName);
-                    return binding.DefaultValue;
+                    ValidateResolvedStringValue(binding.NonInteractiveDefaultValue, required, validator, binding.SymbolDisplayName);
+                    return binding.NonInteractiveDefaultValue;
                 }
 
                 ThrowNonInteractiveError(binding.SymbolDisplayName);
@@ -210,7 +212,7 @@ internal class ConsoleInteractionService : IInteractionService
         return PromptForStringAsync(promptText, validator, isSecret: false, required, binding, cancellationToken);
     }
 
-    public async Task<T> PromptForSelectionAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter, PromptBinding<string?>? binding = null, CancellationToken cancellationToken = default) where T : notnull
+    public async Task<T> PromptForSelectionAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter, PromptBinding<string?>? binding = null, bool echoSelected = true, CancellationToken cancellationToken = default) where T : notnull
     {
         ArgumentNullException.ThrowIfNull(promptText, nameof(promptText));
         ArgumentNullException.ThrowIfNull(choices, nameof(choices));
@@ -229,9 +231,9 @@ internal class ConsoleInteractionService : IInteractionService
         {
             if (binding != null)
             {
-                if (defaultValue != null)
+                if (binding.NonInteractiveDefaultValue != null)
                 {
-                    return MatchChoiceOrThrow(defaultValue, binding, choicesList, choiceFormatter);
+                    return MatchChoiceOrThrow(binding.NonInteractiveDefaultValue, binding, choicesList, choiceFormatter);
                 }
 
                 ThrowNonInteractiveError(binding.SymbolDisplayName);
@@ -259,10 +261,18 @@ internal class ConsoleInteractionService : IInteractionService
 
         var result = await MessageConsole.PromptAsync(prompt, cancellationToken);
         MessageLogger.LogInformation("Selection result: {Result}", choiceFormatter(result));
+
+        // The SelectionPrompt clears its display after the user selects.
+        // Echo the prompt text and selected value so the user can see what was chosen.
+        if (echoSelected)
+        {
+            MessageConsole.MarkupLine($"{promptText} {choiceFormatter(result)}");
+        }
+
         return result;
     }
 
-    public async Task<IReadOnlyList<T>> PromptForSelectionsAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter, IEnumerable<T>? preSelected = null, bool optional = false, PromptBinding<string?>? binding = null, CancellationToken cancellationToken = default) where T : notnull
+    public async Task<IReadOnlyList<T>> PromptForSelectionsAsync<T>(string promptText, IEnumerable<T> choices, Func<T, string> choiceFormatter, IEnumerable<T>? preSelected = null, bool optional = false, PromptBinding<string?>? binding = null, bool echoSelected = true, CancellationToken cancellationToken = default) where T : notnull
     {
         ArgumentNullException.ThrowIfNull(promptText, nameof(promptText));
         ArgumentNullException.ThrowIfNull(choices, nameof(choices));
@@ -281,9 +291,9 @@ internal class ConsoleInteractionService : IInteractionService
         {
             if (binding != null)
             {
-                if (defaultValue != null)
+                if (binding.NonInteractiveDefaultValue != null)
                 {
-                    return MatchChoicesOrThrow(defaultValue, binding, choicesList, choiceFormatter);
+                    return MatchChoicesOrThrow(binding.NonInteractiveDefaultValue, binding, choicesList, choiceFormatter);
                 }
 
                 ThrowNonInteractiveError(binding.SymbolDisplayName);
@@ -319,6 +329,25 @@ internal class ConsoleInteractionService : IInteractionService
 
         var result = await MessageConsole.PromptAsync(prompt, cancellationToken);
         MessageLogger.LogInformation("Selection results: {Results}", string.Join(", ", result.Select(choiceFormatter)));
+
+        // The MultiSelectionPrompt clears its display after the user selects.
+        // Echo the prompt text and selected values so the user can see what was chosen.
+        if (echoSelected)
+        {
+            if (result.Count == 0)
+            {
+                MessageConsole.MarkupLine($"{promptText} [dim](none)[/]");
+            }
+            else
+            {
+                MessageConsole.MarkupLine(promptText);
+                foreach (var item in result)
+                {
+                    MessageConsole.MarkupLine($"  - {choiceFormatter(item)}");
+                }
+            }
+        }
+
         return result;
     }
 
@@ -333,12 +362,13 @@ internal class ConsoleInteractionService : IInteractionService
         MessageConsole.MarkupLine($"\t[bold]{InteractionServiceStrings.AspireCLIVersion}[/]: {cliInformationalVersion.EscapeMarkup()}");
         MessageConsole.MarkupLine($"\t[bold]{InteractionServiceStrings.RequiredCapability}[/]: {ex.RequiredCapability.EscapeMarkup()}");
         MessageConsole.WriteLine();
-        return ExitCodeConstants.AppHostIncompatible;
+        return CliExitCodes.AppHostIncompatible;
     }
 
-    public void DisplayError(string errorMessage)
+    public void DisplayError(string errorMessage, bool allowMarkup = false)
     {
-        DisplayMessage(KnownEmojis.CrossMark, $"[red bold]{errorMessage.EscapeMarkup()}[/]", allowMarkup: true);
+        var formatted = allowMarkup ? errorMessage : errorMessage.EscapeMarkup();
+        DisplayMessage(KnownEmojis.CrossMark, $"[red bold]{formatted}[/]", allowMarkup: true);
     }
 
     public void DisplayMessage(KnownEmoji emoji, string message, bool allowMarkup = false)
@@ -352,7 +382,21 @@ internal class ConsoleInteractionService : IInteractionService
         }
 
         var displayMessage = allowMarkup ? message : message.EscapeMarkup();
-        MessageConsole.MarkupLine(ConsoleHelpers.FormatEmojiPrefix(emoji, MessageConsole) + displayMessage);
+
+        // Use a grid to keep the icon in a fixed first column so long text wraps
+        // without pushing under the emoji prefix.
+        var grid = new Grid();
+        grid.AddColumn();
+        grid.AddColumn();
+        grid.Columns[0].NoWrap = true;
+        grid.Columns[0].Padding = new Padding(0);
+        grid.Columns[1].Padding = new Padding(0);
+
+        grid.AddRow(
+            new Markup(ConsoleHelpers.FormatEmojiPrefix(emoji, MessageConsole)),
+            new Markup(displayMessage));
+
+        MessageConsole.Write(grid);
     }
 
     public void DisplayPlainText(string message)
@@ -391,7 +435,12 @@ internal class ConsoleInteractionService : IInteractionService
         {
             var renderable = MarkdownToSpectreConverter.ConvertToRenderable(markdown);
             target.Write(renderable);
-            target.WriteLine();
+
+            // A row automatically includes a newline, so we don't need to call WriteLine after writing the renderable.
+            if (renderable is not Rows)
+            {
+                target.WriteLine();
+            }
         }
         finally
         {
@@ -499,7 +548,7 @@ internal class ConsoleInteractionService : IInteractionService
             {
                 if (binding.HasExplicitDefault)
                 {
-                    return binding.DefaultValue;
+                    return binding.NonInteractiveDefaultValue;
                 }
 
                 ThrowNonInteractiveError(binding.SymbolDisplayName);
@@ -529,34 +578,32 @@ internal class ConsoleInteractionService : IInteractionService
     private async Task<bool> PromptConfirmWithSingleKeyAsync(string promptText, char yesChoice, char noChoice, bool defaultValue, CancellationToken cancellationToken)
     {
         MessageConsole.Markup(promptText);
-        MessageConsole.Write($" [{yesChoice}/{noChoice}] ");
+        MessageConsole.Markup($" [blue][[{yesChoice}/{noChoice}]][/]: ");
 
         while (true)
         {
-            var key = await MessageConsole.Input.ReadKeyAsync(intercept: true, cancellationToken);
-            if (key is null)
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (await MessageConsole.Input.ReadKeyAsync(intercept: true, cancellationToken) is not { } key)
             {
-                MessageConsole.WriteLine();
+                continue;
+            }
+
+            if (key.Key == ConsoleKey.Enter || key.KeyChar is '\r' or '\n')
+            {
+                MessageConsole.WriteLine((defaultValue ? yesChoice : noChoice).ToString()); // Echo the default choice
                 return defaultValue;
             }
 
-            if (key.Value.Key == ConsoleKey.Enter || key.Value.KeyChar is '\r' or '\n')
+            if (char.ToLowerInvariant(key.KeyChar) == char.ToLowerInvariant(yesChoice))
             {
-                MessageConsole.WriteLine();
-                return defaultValue;
-            }
-
-            if (key.Value.Key == ConsoleKey.Y || key.Value.KeyChar is 'y' or 'Y')
-            {
-                var echoedChoice = key.Value.KeyChar is 'y' or 'Y' ? key.Value.KeyChar : yesChoice;
-                MessageConsole.WriteLine(echoedChoice.ToString());
+                MessageConsole.WriteLine(key.KeyChar.ToString());
                 return true;
             }
 
-            if (key.Value.Key == ConsoleKey.N || key.Value.KeyChar is 'n' or 'N')
+            if (char.ToLowerInvariant(key.KeyChar) == char.ToLowerInvariant(noChoice))
             {
-                var echoedChoice = key.Value.KeyChar is 'n' or 'N' ? key.Value.KeyChar : noChoice;
-                MessageConsole.WriteLine(echoedChoice.ToString());
+                MessageConsole.WriteLine(key.KeyChar.ToString());
                 return false;
             }
         }
@@ -587,7 +634,7 @@ internal class ConsoleInteractionService : IInteractionService
             _errorConsole.MarkupLine(string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.ToUpdateRunCommand, updateCommand.EscapeMarkup()));
         }
 
-        _errorConsole.MarkupLine(string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.MoreInfoNewCliVersion, UpdateUrl));
+        _errorConsole.MarkupLine(string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.MoreInfoNewCliVersion, MarkupHelpers.SafeLink(this, UpdateUrl)));
     }
 
     internal static T? MatchChoice<T>(string value, IEnumerable<T> choices, Func<T, string> choiceFormatter) where T : notnull
