@@ -759,8 +759,8 @@ internal sealed class ProjectLocator(
 
             // Inherit SDK version from parent/global config if available.
             var inheritedSdkVersion = appHostDirForScopedConfig is not null
-                ? await configurationService.GetConfigurationFromDirectoryAsync("sdk.version", appHostDirForScopedConfig, cancellationToken)
-                    ?? await configurationService.GetConfigurationFromDirectoryAsync("sdkVersion", appHostDirForScopedConfig, cancellationToken)
+                ? await configurationService.GetConfigurationFromDirectoryAsync("sdk.version", appHostDirForScopedConfig, cancellationToken, continueSearchWhenKeyMissing: true)
+                    ?? await configurationService.GetConfigurationFromDirectoryAsync("sdkVersion", appHostDirForScopedConfig, cancellationToken, continueSearchWhenKeyMissing: true)
                 : await configurationService.GetConfigurationAsync("sdk.version", cancellationToken)
                     ?? await configurationService.GetConfigurationAsync("sdkVersion", cancellationToken);
 

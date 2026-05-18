@@ -16,8 +16,9 @@ internal interface IConfigurationService
     /// Reads a configuration value scoped to a specific directory rather than the
     /// process-wide working directory. The lookup walks upward from
     /// <paramref name="startDirectory"/> for the nearest <c>aspire.config.json</c>
-    /// (or legacy <c>.aspire/settings.json</c>); if the key is not present in that file,
-    /// falls back to the global settings file. The process-wide
+    /// (or legacy <c>.aspire/settings.json</c>); if the key is not present in the nearest
+    /// local file, falls back to the global settings file unless continuing past the
+    /// nearest file is explicitly requested. The process-wide
     /// <see cref="Microsoft.Extensions.Configuration.IConfiguration"/> (which is rooted at
     /// the working directory the CLI was launched from) is intentionally NOT consulted,
     /// so commands like <c>aspire update --apphost &lt;path&gt;</c> can resolve config
@@ -27,6 +28,6 @@ internal interface IConfigurationService
     /// Throws <see cref="System.InvalidOperationException"/> if a settings file is found
     /// but cannot be parsed as JSON, matching the behavior of startup-time settings load.
     /// </remarks>
-    Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, CancellationToken cancellationToken = default);
+    Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, CancellationToken cancellationToken = default, bool continueSearchWhenKeyMissing = false);
     string GetSettingsFilePath(bool isGlobal);
 }

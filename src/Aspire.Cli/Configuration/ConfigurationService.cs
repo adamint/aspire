@@ -363,13 +363,16 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
         return Task.FromResult(configuration[configKey]);
     }
 
-    public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, CancellationToken cancellationToken = default)
+    public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, CancellationToken cancellationToken = default, bool continueSearchWhenKeyMissing = false)
     {
         ArgumentNullException.ThrowIfNull(startDirectory);
 
         var configKey = key.Replace('.', ':');
 
-        // 1. Project-relative local settings: walk up from startDirectory.
+        // 1. Project-relative local settings: walk up from startDirectory to find the nearest
+        //    config file. Most command lookups stop at that file, even when it omits the key,
+        //    so a parent directory's unrelated app config doesn't override global settings.
+        //    Targeted inheritance paths can explicitly continue past a key-missing file.
         //    Intentionally bypasses the process-wide IConfiguration (which is rooted at the
         //    CLI's launch cwd via ConfigurationHelper.RegisterSettingsFiles) so that commands
         //    that operate on a path other than cwd (e.g. `aspire update --apphost <elsewhere>`)
@@ -381,11 +384,19 @@ internal sealed class ConfigurationService(IConfiguration configuration, CliExec
             {
                 return Task.FromResult<string?>(configFileValue);
             }
+            else if (File.Exists(configFilePath) && !continueSearchWhenKeyMissing)
+            {
+                break;
+            }
 
             var legacySettingsPath = ConfigurationHelper.BuildPathToSettingsJsonFile(searchDirectory.FullName);
             if (TryReadConfigurationValue(legacySettingsPath, configKey, out var legacySettingsValue))
             {
                 return Task.FromResult<string?>(legacySettingsValue);
+            }
+            else if (File.Exists(legacySettingsPath) && !continueSearchWhenKeyMissing)
+            {
+                break;
             }
         }
 

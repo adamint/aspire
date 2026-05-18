@@ -934,7 +934,7 @@ public class TestConfigurationService : IConfigurationService
         return Task.FromResult<string?>(key);
     }
 
-    public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, CancellationToken cancellationToken = default)
+    public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, CancellationToken cancellationToken = default, bool continueSearchWhenKeyMissing = false)
     {
         return GetConfigurationAsync(key, cancellationToken);
     }

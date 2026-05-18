@@ -1242,7 +1242,7 @@ builder.Build().Run();");
             return Task.FromResult<string?>(null);
         }
 
-        public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, CancellationToken cancellationToken = default)
+        public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, CancellationToken cancellationToken = default, bool continueSearchWhenKeyMissing = false)
         {
             return Task.FromResult<string?>(null);
         }

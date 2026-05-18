@@ -157,14 +157,14 @@ internal sealed class UpdateCommand : BaseCommand
 
             // Resolve the channel using the documented precedence:
             //   1. explicit --channel / hidden --quality
-            //   2. local app config "channel" (relative to the resolved AppHost project, NOT cwd)
+            //   2. nearest local app config "channel" (relative to the resolved AppHost project, NOT cwd)
             //   3. global config "channel"
             //   4. interactive channel prompt when appropriate (PR hives present)
             //   5. implicit/default channel as the documented fallback
             // The directory-scoped lookup is critical: `aspire update --apphost <elsewhere>`
-            // must consult the project's directory tree, not the user's launch cwd. The
-            // process-wide IConfiguration is rooted at the launch cwd at startup, so using
-            // it here would silently read the wrong app's local config (issue #16650).
+            // must consult the selected project's config tree, not the user's launch cwd.
+            // The process-wide IConfiguration is rooted at the launch cwd at startup, so
+            // using it here would silently read the wrong app's local config (issue #16650).
             //
             // Step 3 (global config "channel") is a transitional read-only path: the CLI no
             // longer WRITES the global channel (acquisition scripts and `aspire update --self`
