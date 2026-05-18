@@ -1376,7 +1376,7 @@ public class UpdateCommandTests(ITestOutputHelper outputHelper)
             updateArgs: $"update --apphost {Path.Combine(projectDirectory.FullName, "AppHost.csproj")}",
             projectDirectory: projectDirectory);
 
-        Assert.Equal(ExitCodeConstants.Success, exitCode);
+        Assert.Equal(CliExitCodes.Success, exitCode);
         Assert.False(promptInvoked, "Channel selection prompt should not be shown when channel is configured in the nearest parent config");
         Assert.Equal("daily", updatedWithChannel);
     }
