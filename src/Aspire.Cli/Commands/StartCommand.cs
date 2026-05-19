@@ -85,6 +85,8 @@ internal sealed class StartCommand : BaseCommand
                 debugSessionArgs.Add("--no-build");
             }
 
+            debugSessionArgs.AddRange(globalArgs);
+
             if (additionalArgs.Count > 0)
             {
                 debugSessionArgs.Add("--");
