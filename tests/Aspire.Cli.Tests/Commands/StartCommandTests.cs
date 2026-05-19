@@ -1,13 +1,17 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Diagnostics;
 using System.Globalization;
+using Aspire.Cli.Backchannel;
 using Aspire.Cli.Commands;
+using Aspire.Cli.Processes;
 using Aspire.Cli.Projects;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Cli.Utils;
+using Aspire.Hosting;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -202,6 +206,168 @@ public class StartCommandTests(ITestOutputHelper outputHelper)
 
         var expectedAppHostLogMessage = string.Format(CultureInfo.CurrentCulture, InteractionServiceStrings.SeeAppHostLogsAt, executionContext.AppHostCliLogFilePath);
         Assert.Contains(interactionService.DisplayedMessages, m => m.Message == expectedAppHostLogMessage);
+    }
+
+    [Fact]
+    public async Task StartCommand_WhenRunningInExtensionWithoutDebugSession_StartsVsCodeRunSession()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var appHostFile = CreateAppHostFile(workspace);
+
+        string? workingDirectory = null;
+        string? projectFile = null;
+        bool? debug = null;
+        DebugSessionOptions? options = null;
+
+        var projectLocator = new TestProjectLocator
+        {
+            UseOrFindAppHostProjectFileWithBehaviorAsyncCallback = (_, _, _, _) =>
+                Task.FromResult(new AppHostProjectSearchResult(appHostFile, [appHostFile]))
+        };
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, testOptions =>
+        {
+            testOptions.ProjectLocatorFactory = _ => projectLocator;
+            testOptions.ExtensionBackchannelFactory = _ => new TestExtensionBackchannel();
+            testOptions.CliHostEnvironmentFactory = sp =>
+            {
+                var configuration = sp.GetRequiredService<IConfiguration>();
+                return new CliHostEnvironment(configuration, nonInteractive: false);
+            };
+            testOptions.InteractionServiceFactory = sp =>
+            {
+                var service = new TestExtensionInteractionService(sp);
+                service.StartDebugSessionCallback = (wd, pf, dbg, debugSessionOptions) =>
+                {
+                    workingDirectory = wd;
+                    projectFile = pf;
+                    debug = dbg;
+                    options = debugSessionOptions;
+                };
+                return service;
+            };
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<RootCommand>();
+
+        var result = command.Parse($"start --apphost {appHostFile.FullName} --isolated --no-build -- --custom-arg value");
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal(workspace.WorkspaceRoot.FullName, workingDirectory);
+        Assert.Equal(appHostFile.FullName, projectFile);
+        Assert.False(debug);
+        Assert.NotNull(options);
+        Assert.Equal("run", options.Command);
+        Assert.NotNull(options.Args);
+        Assert.Equal(["--isolated", "--no-build", "--", "--custom-arg", "value"], options.Args);
+    }
+
+    [Fact]
+    public async Task StartCommand_WhenRunningInExtensionWithDebugSession_DoesNotStartVsCodeRunSession()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var appHostFile = CreateAppHostFile(workspace);
+        var startDebugSessionCalled = false;
+        var detachedLauncherCalled = false;
+
+        var projectLocator = new TestProjectLocator
+        {
+            UseOrFindAppHostProjectFileWithBehaviorAsyncCallback = (_, _, _, _) =>
+                Task.FromResult(new AppHostProjectSearchResult(appHostFile, [appHostFile]))
+        };
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, testOptions =>
+        {
+            testOptions.ConfigurationCallback += config => config[KnownConfigNames.ExtensionDebugSessionId] = "existing-session";
+            testOptions.ProjectLocatorFactory = _ => projectLocator;
+            testOptions.ExtensionBackchannelFactory = _ => new TestExtensionBackchannel();
+            testOptions.InteractionServiceFactory = sp =>
+            {
+                var service = new TestExtensionInteractionService(sp);
+                service.StartDebugSessionCallback = (_, _, _, _) => startDebugSessionCalled = true;
+                return service;
+            };
+        });
+
+        services.Replace(ServiceDescriptor.Singleton<IDetachedProcessLauncher>(new TestDetachedProcessLauncher(() => detachedLauncherCalled = true)));
+        services.Replace(ServiceDescriptor.Singleton<TimeProvider>(new InstantTimeoutTimeProvider()));
+
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<RootCommand>();
+
+        var result = command.Parse($"start --apphost {appHostFile.FullName}");
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.FailedToDotnetRunAppHost, exitCode);
+        Assert.False(startDebugSessionCalled);
+        Assert.True(detachedLauncherCalled);
+    }
+
+    [Theory]
+    [InlineData("start --non-interactive --apphost {0}")]
+    [InlineData("start --format json --apphost {0}")]
+    public async Task StartCommand_WhenRunningInExtensionWithDetachedOnlyOption_DoesNotStartVsCodeRunSession(string commandTemplate)
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var appHostFile = CreateAppHostFile(workspace);
+        var startDebugSessionCalled = false;
+        var detachedLauncherCalled = false;
+
+        var projectLocator = new TestProjectLocator
+        {
+            UseOrFindAppHostProjectFileWithBehaviorAsyncCallback = (_, _, _, _) =>
+                Task.FromResult(new AppHostProjectSearchResult(appHostFile, [appHostFile]))
+        };
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, testOptions =>
+        {
+            testOptions.ProjectLocatorFactory = _ => projectLocator;
+            testOptions.ExtensionBackchannelFactory = _ => new TestExtensionBackchannel();
+            testOptions.InteractionServiceFactory = sp =>
+            {
+                var service = new TestExtensionInteractionService(sp);
+                service.StartDebugSessionCallback = (_, _, _, _) => startDebugSessionCalled = true;
+                return service;
+            };
+        });
+
+        services.Replace(ServiceDescriptor.Singleton<IDetachedProcessLauncher>(new TestDetachedProcessLauncher(() => detachedLauncherCalled = true)));
+        services.Replace(ServiceDescriptor.Singleton<TimeProvider>(new InstantTimeoutTimeProvider()));
+
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<RootCommand>();
+
+        var result = command.Parse(string.Format(CultureInfo.InvariantCulture, commandTemplate, appHostFile.FullName));
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.FailedToDotnetRunAppHost, exitCode);
+        Assert.False(startDebugSessionCalled);
+        Assert.True(detachedLauncherCalled);
+    }
+
+    private static FileInfo CreateAppHostFile(TemporaryWorkspace workspace)
+    {
+        var appHostDir = workspace.WorkspaceRoot.CreateSubdirectory("AppHost");
+        var appHostFile = new FileInfo(Path.Combine(appHostDir.FullName, "AppHost.csproj"));
+        File.WriteAllText(appHostFile.FullName, "<Project />");
+
+        return appHostFile;
+    }
+
+    private sealed class TestDetachedProcessLauncher(Action onStart) : IDetachedProcessLauncher
+    {
+        public Process Start(
+            string fileName,
+            IReadOnlyList<string> arguments,
+            string workingDirectory,
+            Func<string, bool>? shouldRemoveEnvironmentVariable = null,
+            IReadOnlyDictionary<string, string>? additionalEnvironmentVariables = null)
+        {
+            onStart();
+            return new Process { StartInfo = new ProcessStartInfo(fileName) };
+        }
     }
 
     /// <summary>

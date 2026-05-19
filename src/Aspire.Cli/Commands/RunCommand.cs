@@ -162,9 +162,15 @@ internal sealed class RunCommand : BaseCommand
             return CommandResult.Failure(CliExitCodes.InvalidCommand, RunCommandStrings.FormatRequiresDetach);
         }
 
-        // Validate that --no-build is not used when watch mode would be enabled
-        // Watch mode is enabled when DefaultWatchEnabled feature is true, or when running under extension host (not in debug session)
-        var watchModeEnabled = _features.IsFeatureEnabled(KnownFeatures.DefaultWatchEnabled, defaultValue: false) || (isExtensionHost && !startDebugSession);
+        // Validate that --no-build is not used when watch mode would be enabled.
+        // The extension terminal path enables watch mode by delegating to VS Code
+        // before an Aspire debug session exists. Once VS Code starts the session,
+        // the child CLI has ASPIRE_EXTENSION_DEBUG_SESSION_ID and can honor
+        // forwarded options from the original terminal command without recursing.
+        var extensionTerminalRunWithoutDebugSession = isExtensionHost
+            && !startDebugSession
+            && string.IsNullOrEmpty(_configuration[KnownConfigNames.ExtensionDebugSessionId]);
+        var watchModeEnabled = _features.IsFeatureEnabled(KnownFeatures.DefaultWatchEnabled, defaultValue: false) || extensionTerminalRunWithoutDebugSession;
         if (noBuild && watchModeEnabled)
         {
             return CommandResult.Failure(CliExitCodes.InvalidCommand, RunCommandStrings.NoBuildNotSupportedWithWatchMode);
