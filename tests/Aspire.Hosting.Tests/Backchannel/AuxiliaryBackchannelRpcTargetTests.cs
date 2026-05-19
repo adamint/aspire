@@ -3,6 +3,7 @@
 
 using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Aspire.Hosting.Diagnostics;
 using Aspire.Hosting.Utils;
 using Microsoft.AspNetCore.InternalTesting;
@@ -254,7 +255,8 @@ public class AuxiliaryBackchannelRpcTargetTests(ITestOutputHelper outputHelper)
 
         // Properties (sensitive values should be redacted)
         Assert.True(snapshot.Properties.TryGetValue(CustomResourceKnownProperties.Source, out var normalValue));
-        Assert.Equal("normal-value", normalValue);
+        var normalJsonValue = Assert.IsAssignableFrom<JsonValue>(normalValue);
+        Assert.Equal("normal-value", normalJsonValue.GetValue<string>());
         Assert.True(snapshot.Properties.TryGetValue("ConnectionString", out var sensitiveValue));
         Assert.Null(sensitiveValue);
 
