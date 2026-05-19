@@ -23,6 +23,14 @@ var _ = time.Second
 // Enums
 // ============================================================================
 
+// ContainerMountType represents ContainerMountType.
+type ContainerMountType string
+
+const (
+	ContainerMountTypeBindMount ContainerMountType = "BindMount"
+	ContainerMountTypeVolume ContainerMountType = "Volume"
+)
+
 // ContainerLifetime represents ContainerLifetime.
 type ContainerLifetime string
 
@@ -138,6 +146,35 @@ const (
 	EndpointPropertyTlsEnabled EndpointProperty = "TlsEnabled"
 )
 
+// InputType represents InputType.
+type InputType string
+
+const (
+	InputTypeText InputType = "Text"
+	InputTypeSecretText InputType = "SecretText"
+	InputTypeChoice InputType = "Choice"
+	InputTypeBoolean InputType = "Boolean"
+	InputTypeNumber InputType = "Number"
+)
+
+// ResourceCommandVisibility represents ResourceCommandVisibility.
+type ResourceCommandVisibility string
+
+const (
+	ResourceCommandVisibilityNone ResourceCommandVisibility = "None"
+	ResourceCommandVisibilityUI ResourceCommandVisibility = "UI"
+	ResourceCommandVisibilityApi ResourceCommandVisibility = "Api"
+)
+
+// ResourceCommandState represents ResourceCommandState.
+type ResourceCommandState string
+
+const (
+	ResourceCommandStateEnabled ResourceCommandState = "Enabled"
+	ResourceCommandStateDisabled ResourceCommandState = "Disabled"
+	ResourceCommandStateHidden ResourceCommandState = "Hidden"
+)
+
 // HttpCommandResultMode represents HttpCommandResultMode.
 type HttpCommandResultMode string
 
@@ -187,6 +224,42 @@ const (
 // ============================================================================
 // DTOs
 // ============================================================================
+
+// InteractionInput represents InteractionInput.
+type InteractionInput struct {
+	Name string `json:"Name,omitempty"`
+	Label string `json:"Label,omitempty"`
+	Description string `json:"Description,omitempty"`
+	EnableDescriptionMarkdown bool `json:"EnableDescriptionMarkdown,omitempty"`
+	InputType InputType `json:"InputType,omitempty"`
+	Required bool `json:"Required,omitempty"`
+	Options []any `json:"Options,omitempty"`
+	DynamicLoading any `json:"DynamicLoading,omitempty"`
+	Value string `json:"Value,omitempty"`
+	Placeholder string `json:"Placeholder,omitempty"`
+	AllowCustomChoice bool `json:"AllowCustomChoice,omitempty"`
+	Disabled bool `json:"Disabled,omitempty"`
+	MaxLength *float64 `json:"MaxLength,omitempty"`
+}
+
+// ToMap converts the DTO to a map for JSON serialization.
+func (d *InteractionInput) ToMap() map[string]any {
+	m := map[string]any{}
+	m["Name"] = serializeValue(d.Name)
+	m["Label"] = serializeValue(d.Label)
+	m["Description"] = serializeValue(d.Description)
+	m["EnableDescriptionMarkdown"] = serializeValue(d.EnableDescriptionMarkdown)
+	m["InputType"] = serializeValue(d.InputType)
+	m["Required"] = serializeValue(d.Required)
+	if d.Options != nil { m["Options"] = serializeValue(d.Options) }
+	if d.DynamicLoading != nil { m["DynamicLoading"] = serializeValue(d.DynamicLoading) }
+	m["Value"] = serializeValue(d.Value)
+	m["Placeholder"] = serializeValue(d.Placeholder)
+	m["AllowCustomChoice"] = serializeValue(d.AllowCustomChoice)
+	m["Disabled"] = serializeValue(d.Disabled)
+	if d.MaxLength != nil { m["MaxLength"] = serializeValue(d.MaxLength) }
+	return m
+}
 
 // AddContainerOptions represents AddContainerOptions.
 type AddContainerOptions struct {
@@ -291,7 +364,7 @@ type ResourceEventDto struct {
 	State string `json:"State,omitempty"`
 	StateStyle string `json:"StateStyle,omitempty"`
 	HealthStatus string `json:"HealthStatus,omitempty"`
-	ExitCode float64 `json:"ExitCode,omitempty"`
+	ExitCode *float64 `json:"ExitCode,omitempty"`
 }
 
 // ToMap converts the DTO to a map for JSON serialization.
@@ -302,7 +375,7 @@ func (d *ResourceEventDto) ToMap() map[string]any {
 	m["State"] = serializeValue(d.State)
 	m["StateStyle"] = serializeValue(d.StateStyle)
 	m["HealthStatus"] = serializeValue(d.HealthStatus)
-	m["ExitCode"] = serializeValue(d.ExitCode)
+	if d.ExitCode != nil { m["ExitCode"] = serializeValue(d.ExitCode) }
 	return m
 }
 
@@ -346,11 +419,14 @@ func (d *CertificateTrustExecutionConfigurationContext) ToMap() map[string]any {
 type CommandOptions struct {
 	Description string `json:"Description,omitempty"`
 	Parameter any `json:"Parameter,omitempty"`
+	Arguments []*InteractionInput `json:"Arguments,omitempty"`
+	ValidateArguments func(...any) any `json:"ValidateArguments,omitempty"`
+	Visibility ResourceCommandVisibility `json:"Visibility,omitempty"`
 	ConfirmationMessage string `json:"ConfirmationMessage,omitempty"`
 	IconName string `json:"IconName,omitempty"`
-	IconVariant IconVariant `json:"IconVariant,omitempty"`
+	IconVariant *IconVariant `json:"IconVariant,omitempty"`
 	IsHighlighted bool `json:"IsHighlighted,omitempty"`
-	UpdateState any `json:"UpdateState,omitempty"`
+	UpdateState func(...any) any `json:"UpdateState,omitempty"`
 }
 
 // ToMap converts the DTO to a map for JSON serialization.
@@ -358,9 +434,12 @@ func (d *CommandOptions) ToMap() map[string]any {
 	m := map[string]any{}
 	m["Description"] = serializeValue(d.Description)
 	if d.Parameter != nil { m["Parameter"] = serializeValue(d.Parameter) }
+	if d.Arguments != nil { m["Arguments"] = serializeValue(d.Arguments) }
+	if d.ValidateArguments != nil { m["ValidateArguments"] = serializeValue(d.ValidateArguments) }
+	m["Visibility"] = serializeValue(d.Visibility)
 	m["ConfirmationMessage"] = serializeValue(d.ConfirmationMessage)
 	m["IconName"] = serializeValue(d.IconName)
-	m["IconVariant"] = serializeValue(d.IconVariant)
+	if d.IconVariant != nil { m["IconVariant"] = serializeValue(d.IconVariant) }
 	m["IsHighlighted"] = serializeValue(d.IsHighlighted)
 	if d.UpdateState != nil { m["UpdateState"] = serializeValue(d.UpdateState) }
 	return m
@@ -371,7 +450,7 @@ type HttpCommandExportOptions struct {
 	Description string `json:"Description,omitempty"`
 	ConfirmationMessage string `json:"ConfirmationMessage,omitempty"`
 	IconName string `json:"IconName,omitempty"`
-	IconVariant IconVariant `json:"IconVariant,omitempty"`
+	IconVariant *IconVariant `json:"IconVariant,omitempty"`
 	IsHighlighted bool `json:"IsHighlighted,omitempty"`
 	CommandName string `json:"CommandName,omitempty"`
 	EndpointName string `json:"EndpointName,omitempty"`
@@ -385,7 +464,7 @@ func (d *HttpCommandExportOptions) ToMap() map[string]any {
 	m["Description"] = serializeValue(d.Description)
 	m["ConfirmationMessage"] = serializeValue(d.ConfirmationMessage)
 	m["IconName"] = serializeValue(d.IconName)
-	m["IconVariant"] = serializeValue(d.IconVariant)
+	if d.IconVariant != nil { m["IconVariant"] = serializeValue(d.IconVariant) }
 	m["IsHighlighted"] = serializeValue(d.IsHighlighted)
 	m["CommandName"] = serializeValue(d.CommandName)
 	m["EndpointName"] = serializeValue(d.EndpointName)
@@ -435,6 +514,80 @@ func (d *GenerateParameterDefault) ToMap() map[string]any {
 	m["MinUpper"] = serializeValue(d.MinUpper)
 	m["MinNumeric"] = serializeValue(d.MinNumeric)
 	m["MinSpecial"] = serializeValue(d.MinSpecial)
+	return m
+}
+
+// ProcessCommandExportOptions represents ProcessCommandExportOptions.
+type ProcessCommandExportOptions struct {
+	ExecutablePath string `json:"ExecutablePath,omitempty"`
+	Arguments []string `json:"Arguments,omitempty"`
+	WorkingDirectory string `json:"WorkingDirectory,omitempty"`
+	EnvironmentVariables map[string]string `json:"EnvironmentVariables,omitempty"`
+	InheritEnvironmentVariables *bool `json:"InheritEnvironmentVariables,omitempty"`
+	StandardInputContent string `json:"StandardInputContent,omitempty"`
+	KillEntireProcessTree *bool `json:"KillEntireProcessTree,omitempty"`
+	CommandOptions *CommandOptions `json:"CommandOptions,omitempty"`
+	MaxOutputLineCount *float64 `json:"MaxOutputLineCount,omitempty"`
+	DisplayImmediately *bool `json:"DisplayImmediately,omitempty"`
+	SuccessExitCodes []float64 `json:"SuccessExitCodes,omitempty"`
+}
+
+// ToMap converts the DTO to a map for JSON serialization.
+func (d *ProcessCommandExportOptions) ToMap() map[string]any {
+	m := map[string]any{}
+	m["ExecutablePath"] = serializeValue(d.ExecutablePath)
+	if d.Arguments != nil { m["Arguments"] = serializeValue(d.Arguments) }
+	m["WorkingDirectory"] = serializeValue(d.WorkingDirectory)
+	if d.EnvironmentVariables != nil { m["EnvironmentVariables"] = serializeValue(d.EnvironmentVariables) }
+	if d.InheritEnvironmentVariables != nil { m["InheritEnvironmentVariables"] = serializeValue(d.InheritEnvironmentVariables) }
+	m["StandardInputContent"] = serializeValue(d.StandardInputContent)
+	if d.KillEntireProcessTree != nil { m["KillEntireProcessTree"] = serializeValue(d.KillEntireProcessTree) }
+	if d.CommandOptions != nil { m["CommandOptions"] = serializeValue(d.CommandOptions) }
+	if d.MaxOutputLineCount != nil { m["MaxOutputLineCount"] = serializeValue(d.MaxOutputLineCount) }
+	if d.DisplayImmediately != nil { m["DisplayImmediately"] = serializeValue(d.DisplayImmediately) }
+	if d.SuccessExitCodes != nil { m["SuccessExitCodes"] = serializeValue(d.SuccessExitCodes) }
+	return m
+}
+
+// ProcessCommandSpecExportData represents ProcessCommandSpecExportData.
+type ProcessCommandSpecExportData struct {
+	ExecutablePath string `json:"ExecutablePath,omitempty"`
+	Arguments []string `json:"Arguments,omitempty"`
+	WorkingDirectory string `json:"WorkingDirectory,omitempty"`
+	EnvironmentVariables map[string]string `json:"EnvironmentVariables,omitempty"`
+	InheritEnvironmentVariables *bool `json:"InheritEnvironmentVariables,omitempty"`
+	StandardInputContent string `json:"StandardInputContent,omitempty"`
+	KillEntireProcessTree *bool `json:"KillEntireProcessTree,omitempty"`
+}
+
+// ToMap converts the DTO to a map for JSON serialization.
+func (d *ProcessCommandSpecExportData) ToMap() map[string]any {
+	m := map[string]any{}
+	m["ExecutablePath"] = serializeValue(d.ExecutablePath)
+	if d.Arguments != nil { m["Arguments"] = serializeValue(d.Arguments) }
+	m["WorkingDirectory"] = serializeValue(d.WorkingDirectory)
+	if d.EnvironmentVariables != nil { m["EnvironmentVariables"] = serializeValue(d.EnvironmentVariables) }
+	if d.InheritEnvironmentVariables != nil { m["InheritEnvironmentVariables"] = serializeValue(d.InheritEnvironmentVariables) }
+	m["StandardInputContent"] = serializeValue(d.StandardInputContent)
+	if d.KillEntireProcessTree != nil { m["KillEntireProcessTree"] = serializeValue(d.KillEntireProcessTree) }
+	return m
+}
+
+// ProcessCommandResultExportOptions represents ProcessCommandResultExportOptions.
+type ProcessCommandResultExportOptions struct {
+	CommandOptions *CommandOptions `json:"CommandOptions,omitempty"`
+	MaxOutputLineCount *float64 `json:"MaxOutputLineCount,omitempty"`
+	DisplayImmediately *bool `json:"DisplayImmediately,omitempty"`
+	SuccessExitCodes []float64 `json:"SuccessExitCodes,omitempty"`
+}
+
+// ToMap converts the DTO to a map for JSON serialization.
+func (d *ProcessCommandResultExportOptions) ToMap() map[string]any {
+	m := map[string]any{}
+	if d.CommandOptions != nil { m["CommandOptions"] = serializeValue(d.CommandOptions) }
+	if d.MaxOutputLineCount != nil { m["MaxOutputLineCount"] = serializeValue(d.MaxOutputLineCount) }
+	if d.DisplayImmediately != nil { m["DisplayImmediately"] = serializeValue(d.DisplayImmediately) }
+	if d.SuccessExitCodes != nil { m["SuccessExitCodes"] = serializeValue(d.SuccessExitCodes) }
 	return m
 }
 
@@ -614,9 +767,9 @@ var WellKnownPipelineTags = struct {
 // Marker interfaces (from interface-metadata types)
 // ============================================================================
 
-// ConfigurationSection marks types implementing IConfigurationSection.
+// ComputeEnvironmentResource marks types implementing IComputeEnvironmentResource.
 // Marker interface.
-type ConfigurationSection interface {
+type ComputeEnvironmentResource interface {
 	handleReference
 }
 
@@ -690,6 +843,62 @@ type TestVaultResource interface {
 // Handle wrappers
 // ============================================================================
 
+// AfterPublishEvent is the public interface for handle type AfterPublishEvent.
+type AfterPublishEvent interface {
+	handleReference
+	Model() DistributedApplicationModel
+	Services() ServiceProvider
+	Err() error
+}
+
+// afterPublishEvent is the unexported impl of AfterPublishEvent.
+type afterPublishEvent struct {
+	*resourceBuilderBase
+}
+
+// newAfterPublishEventFromHandle wraps an existing handle as AfterPublishEvent.
+func newAfterPublishEventFromHandle(h *handle, c *client) AfterPublishEvent {
+	return &afterPublishEvent{resourceBuilderBase: newResourceBuilderBase(h, c)}
+}
+
+// Model gets the Model property
+func (s *afterPublishEvent) Model() DistributedApplicationModel {
+	if s.err != nil { return &distributedApplicationModel{resourceBuilderBase: newErroredResourceBuilder(s.err, s.client)} }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting.Publishing/AfterPublishEvent.model", reqArgs)
+	if err != nil {
+		return &distributedApplicationModel{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	href, ok := result.(handleReference)
+	if !ok {
+		err := fmt.Errorf("aspire: Aspire.Hosting.Publishing/AfterPublishEvent.model returned unexpected type %T", result)
+		return &distributedApplicationModel{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	return &distributedApplicationModel{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
+}
+
+// Services gets the Services property
+func (s *afterPublishEvent) Services() ServiceProvider {
+	if s.err != nil { return &serviceProvider{resourceBuilderBase: newErroredResourceBuilder(s.err, s.client)} }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting.Publishing/AfterPublishEvent.services", reqArgs)
+	if err != nil {
+		return &serviceProvider{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	href, ok := result.(handleReference)
+	if !ok {
+		err := fmt.Errorf("aspire: Aspire.Hosting.Publishing/AfterPublishEvent.services returned unexpected type %T", result)
+		return &serviceProvider{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	return &serviceProvider{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
+}
+
 // AfterResourcesCreatedEvent is the public interface for handle type AfterResourcesCreatedEvent.
 type AfterResourcesCreatedEvent interface {
 	handleReference
@@ -749,6 +958,7 @@ func (s *afterResourcesCreatedEvent) Services() ServiceProvider {
 // AspireStore is the public interface for handle type AspireStore.
 type AspireStore interface {
 	handleReference
+	BasePath() (string, error)
 	GetFileNameWithContent(filenameTemplate string, sourceFilename string) (string, error)
 	Err() error
 }
@@ -761,6 +971,21 @@ type aspireStore struct {
 // newAspireStoreFromHandle wraps an existing handle as AspireStore.
 func newAspireStoreFromHandle(h *handle, c *client) AspireStore {
 	return &aspireStore{resourceBuilderBase: newResourceBuilderBase(h, c)}
+}
+
+// BasePath gets the BasePath property
+func (s *aspireStore) BasePath() (string, error) {
+	if s.err != nil { var zero string; return zero, s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/IAspireStore.basePath", reqArgs)
+	if err != nil {
+		var zero string
+		return zero, err
+	}
+	return decodeAs[string](result)
 }
 
 // GetFileNameWithContent gets a deterministic file path for the specified file contents
@@ -810,6 +1035,7 @@ type Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource interface {
 	WithCertificateTrustScope(scope CertificateTrustScope) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
 	WithChildRelationship(child Resource) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
 	WithCommand(name string, displayName string, executeCommand func(arg ExecuteCommandContext) *ExecuteCommandResult, options ...*WithCommandOptions) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
+	WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
 	WithConfig(config *TestConfigDto) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
 	WithContainerCertificatePaths(options ...*WithContainerCertificatePathsOptions) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
 	WithContainerName(name string) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
@@ -867,6 +1093,8 @@ type Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource interface {
 	WithParentRelationship(parent Resource) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
 	WithPipelineConfiguration(callback func(obj PipelineConfigurationContext)) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
 	WithPipelineStepFactory(stepName string, callback func(arg PipelineStepContext), options ...*WithPipelineStepFactoryOptions) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
+	WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
+	WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
 	WithReference(source any, options ...*WithReferenceOptions) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
 	WithReferenceEnvironment(options *ReferenceEnvironmentInjectionOptions) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
 	WithRelationship(resourceBuilder Resource, type_ string) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource
@@ -1344,6 +1572,19 @@ func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) WithCommand(na
 		for k, v := range merged.ToMap() { reqArgs[k] = v }
 	}
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithComputeEnvironment configures the compute environment for the compute resource
+func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource {
+	if s.err != nil { return s }
+	if computeEnvironmentResource != nil { if err := computeEnvironmentResource.Err(); err != nil { s.setErr(err); return s } }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["computeEnvironmentResource"] = serializeValue(computeEnvironmentResource)
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withComputeEnvironment", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
 
@@ -2270,6 +2511,47 @@ func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) WithPipelineSt
 	return s
 }
 
+// WithProcessCommand adds a process resource command
+func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if options != nil { reqArgs["options"] = serializeValue(options) }
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithProcessCommandFactory adds a process resource command via callback
+func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if createProcessSpec != nil {
+		cb := createProcessSpec
+		shim := func(args ...any) any {
+			return cb(callbackArg[ExecuteCommandContext](args, 0))
+		}
+		reqArgs["createProcessSpec"] = s.client.registerCallback(shim)
+	}
+	if len(options) > 0 {
+		merged := &WithProcessCommandFactoryOptions{}
+		for _, opt := range options {
+			if opt != nil { merged = deepUpdate(merged, opt) }
+		}
+		for k, v := range merged.ToMap() { reqArgs[k] = v }
+	}
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommandFactory", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
 // WithReference adds a reference to another resource
 // Allowed types for parameter source: Resource, EndpointReference, string.
 func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) WithReference(source any, options ...*WithReferenceOptions) Aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource {
@@ -2433,8 +2715,11 @@ func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) WithUrlForEndp
 	if callback != nil {
 		cb := callback
 		shim := func(args ...any) any {
-			cb(callbackArg[*ResourceUrlAnnotation](args, 0))
-			return nil
+			arg0 := callbackArg[*ResourceUrlAnnotation](args, 0)
+			cb(arg0)
+			return map[string]any{
+				"p0": serializeValue(arg0),
+			}
 		}
 		reqArgs["callback"] = s.client.registerCallback(shim)
 	}
@@ -2519,6 +2804,62 @@ func (s *aspire_Hosting_CodeGeneration_Go_TestsTestVaultResource) WithoutHttpsCe
 	}
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withoutHttpsCertificate", reqArgs); err != nil { s.setErr(err) }
 	return s
+}
+
+// BeforePublishEvent is the public interface for handle type BeforePublishEvent.
+type BeforePublishEvent interface {
+	handleReference
+	Model() DistributedApplicationModel
+	Services() ServiceProvider
+	Err() error
+}
+
+// beforePublishEvent is the unexported impl of BeforePublishEvent.
+type beforePublishEvent struct {
+	*resourceBuilderBase
+}
+
+// newBeforePublishEventFromHandle wraps an existing handle as BeforePublishEvent.
+func newBeforePublishEventFromHandle(h *handle, c *client) BeforePublishEvent {
+	return &beforePublishEvent{resourceBuilderBase: newResourceBuilderBase(h, c)}
+}
+
+// Model gets the Model property
+func (s *beforePublishEvent) Model() DistributedApplicationModel {
+	if s.err != nil { return &distributedApplicationModel{resourceBuilderBase: newErroredResourceBuilder(s.err, s.client)} }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting.Publishing/BeforePublishEvent.model", reqArgs)
+	if err != nil {
+		return &distributedApplicationModel{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	href, ok := result.(handleReference)
+	if !ok {
+		err := fmt.Errorf("aspire: Aspire.Hosting.Publishing/BeforePublishEvent.model returned unexpected type %T", result)
+		return &distributedApplicationModel{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	return &distributedApplicationModel{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
+}
+
+// Services gets the Services property
+func (s *beforePublishEvent) Services() ServiceProvider {
+	if s.err != nil { return &serviceProvider{resourceBuilderBase: newErroredResourceBuilder(s.err, s.client)} }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting.Publishing/BeforePublishEvent.services", reqArgs)
+	if err != nil {
+		return &serviceProvider{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	href, ok := result.(handleReference)
+	if !ok {
+		err := fmt.Errorf("aspire: Aspire.Hosting.Publishing/BeforePublishEvent.services returned unexpected type %T", result)
+		return &serviceProvider{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	return &serviceProvider{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
 }
 
 // BeforeResourceStartedEvent is the public interface for handle type BeforeResourceStartedEvent.
@@ -2659,6 +3000,7 @@ type CSharpAppResource interface {
 	WithCertificateTrustScope(scope CertificateTrustScope) CSharpAppResource
 	WithChildRelationship(child Resource) CSharpAppResource
 	WithCommand(name string, displayName string, executeCommand func(arg ExecuteCommandContext) *ExecuteCommandResult, options ...*WithCommandOptions) CSharpAppResource
+	WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) CSharpAppResource
 	WithConfig(config *TestConfigDto) CSharpAppResource
 	WithContainerRegistry(registry Resource) CSharpAppResource
 	WithCorrelationId(correlationId string) CSharpAppResource
@@ -2702,6 +3044,8 @@ type CSharpAppResource interface {
 	WithParentRelationship(parent Resource) CSharpAppResource
 	WithPipelineConfiguration(callback func(obj PipelineConfigurationContext)) CSharpAppResource
 	WithPipelineStepFactory(stepName string, callback func(arg PipelineStepContext), options ...*WithPipelineStepFactoryOptions) CSharpAppResource
+	WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) CSharpAppResource
+	WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) CSharpAppResource
 	WithReference(source any, options ...*WithReferenceOptions) CSharpAppResource
 	WithReferenceEnvironment(options *ReferenceEnvironmentInjectionOptions) CSharpAppResource
 	WithRelationship(resourceBuilder Resource, type_ string) CSharpAppResource
@@ -3153,6 +3497,19 @@ func (s *cSharpAppResource) WithCommand(name string, displayName string, execute
 		for k, v := range merged.ToMap() { reqArgs[k] = v }
 	}
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithComputeEnvironment configures the compute environment for the compute resource
+func (s *cSharpAppResource) WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) CSharpAppResource {
+	if s.err != nil { return s }
+	if computeEnvironmentResource != nil { if err := computeEnvironmentResource.Err(); err != nil { s.setErr(err); return s } }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["computeEnvironmentResource"] = serializeValue(computeEnvironmentResource)
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withComputeEnvironment", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
 
@@ -3876,6 +4233,47 @@ func (s *cSharpAppResource) WithPipelineStepFactory(stepName string, callback fu
 	return s
 }
 
+// WithProcessCommand adds a process resource command
+func (s *cSharpAppResource) WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) CSharpAppResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if options != nil { reqArgs["options"] = serializeValue(options) }
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithProcessCommandFactory adds a process resource command via callback
+func (s *cSharpAppResource) WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) CSharpAppResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if createProcessSpec != nil {
+		cb := createProcessSpec
+		shim := func(args ...any) any {
+			return cb(callbackArg[ExecuteCommandContext](args, 0))
+		}
+		reqArgs["createProcessSpec"] = s.client.registerCallback(shim)
+	}
+	if len(options) > 0 {
+		merged := &WithProcessCommandFactoryOptions{}
+		for _, opt := range options {
+			if opt != nil { merged = deepUpdate(merged, opt) }
+		}
+		for k, v := range merged.ToMap() { reqArgs[k] = v }
+	}
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommandFactory", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
 // WithReference adds a reference to another resource
 // Allowed types for parameter source: Resource, EndpointReference, string.
 func (s *cSharpAppResource) WithReference(source any, options ...*WithReferenceOptions) CSharpAppResource {
@@ -4051,8 +4449,11 @@ func (s *cSharpAppResource) WithUrlForEndpoint(endpointName string, callback fun
 	if callback != nil {
 		cb := callback
 		shim := func(args ...any) any {
-			cb(callbackArg[*ResourceUrlAnnotation](args, 0))
-			return nil
+			arg0 := callbackArg[*ResourceUrlAnnotation](args, 0)
+			cb(arg0)
+			return map[string]any{
+				"p0": serializeValue(arg0),
+			}
 		}
 		reqArgs["callback"] = s.client.registerCallback(shim)
 	}
@@ -4324,20 +4725,99 @@ func (s *configuration) GetConnectionString(name string) (string, error) {
 
 // GetSection gets a configuration section by key
 func (s *configuration) GetSection(key string) ConfigurationSection {
-	if s.err != nil { return nil }
+	if s.err != nil { return &configurationSection{resourceBuilderBase: newErroredResourceBuilder(s.err, s.client)} }
 	ctx := context.Background()
 	reqArgs := map[string]any{
 		"configuration": s.handle.ToJSON(),
 	}
 	reqArgs["key"] = serializeValue(key)
 	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting/getSection", reqArgs)
-	if err != nil { s.setErr(err); return nil }
-	typed, ok := result.(ConfigurationSection)
-	if !ok {
-		s.setErr(fmt.Errorf("aspire: Aspire.Hosting/getSection returned unexpected type %T", result))
-		return nil
+	if err != nil {
+		return &configurationSection{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
 	}
-	return typed
+	href, ok := result.(handleReference)
+	if !ok {
+		err := fmt.Errorf("aspire: Aspire.Hosting/getSection returned unexpected type %T", result)
+		return &configurationSection{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	return &configurationSection{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
+}
+
+// ConfigurationSection is the public interface for handle type ConfigurationSection.
+type ConfigurationSection interface {
+	handleReference
+	Key() (string, error)
+	Path() (string, error)
+	SetValue(value string) ConfigurationSection
+	Value() (string, error)
+	Err() error
+}
+
+// configurationSection is the unexported impl of ConfigurationSection.
+type configurationSection struct {
+	*resourceBuilderBase
+}
+
+// newConfigurationSectionFromHandle wraps an existing handle as ConfigurationSection.
+func newConfigurationSectionFromHandle(h *handle, c *client) ConfigurationSection {
+	return &configurationSection{resourceBuilderBase: newResourceBuilderBase(h, c)}
+}
+
+// Key gets the Key property
+func (s *configurationSection) Key() (string, error) {
+	if s.err != nil { var zero string; return zero, s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Microsoft.Extensions.Configuration/IConfigurationSection.key", reqArgs)
+	if err != nil {
+		var zero string
+		return zero, err
+	}
+	return decodeAs[string](result)
+}
+
+// Path gets the Path property
+func (s *configurationSection) Path() (string, error) {
+	if s.err != nil { var zero string; return zero, s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Microsoft.Extensions.Configuration/IConfigurationSection.path", reqArgs)
+	if err != nil {
+		var zero string
+		return zero, err
+	}
+	return decodeAs[string](result)
+}
+
+// SetValue sets the Value property
+func (s *configurationSection) SetValue(value string) ConfigurationSection {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	reqArgs["value"] = serializeValue(value)
+	if _, err := s.client.invokeCapability(ctx, "Microsoft.Extensions.Configuration/IConfigurationSection.setValue", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// Value gets the Value property
+func (s *configurationSection) Value() (string, error) {
+	if s.err != nil { var zero string; return zero, s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Microsoft.Extensions.Configuration/IConfigurationSection.value", reqArgs)
+	if err != nil {
+		var zero string
+		return zero, err
+	}
+	return decodeAs[string](result)
 }
 
 // ConnectionStringAvailableEvent is the public interface for handle type ConnectionStringAvailableEvent.
@@ -4474,9 +4954,6 @@ type ContainerImagePushOptionsCallbackContext interface {
 	CancellationToken() (*CancellationToken, error)
 	Options() ContainerImagePushOptions
 	Resource() Resource
-	SetCancellationToken(options ...*SetCancellationTokenOptions) ContainerImagePushOptionsCallbackContext
-	SetOptions(value ContainerImagePushOptions) ContainerImagePushOptionsCallbackContext
-	SetResource(value Resource) ContainerImagePushOptionsCallbackContext
 	Err() error
 }
 
@@ -4541,59 +5018,11 @@ func (s *containerImagePushOptionsCallbackContext) Resource() Resource {
 	return typed
 }
 
-// SetCancellationToken sets the CancellationToken property
-func (s *containerImagePushOptionsCallbackContext) SetCancellationToken(options ...*SetCancellationTokenOptions) ContainerImagePushOptionsCallbackContext {
-	if s.err != nil { return s }
-	ctx := context.Background()
-	reqArgs := map[string]any{
-		"context": s.handle.ToJSON(),
-	}
-	if len(options) > 0 {
-		merged := &SetCancellationTokenOptions{}
-		for _, opt := range options {
-			if opt != nil { merged = deepUpdate(merged, opt) }
-		}
-		for k, v := range merged.ToMap() { reqArgs[k] = v }
-		if merged.Value != nil {
-			ctx = merged.Value.Context()
-			if id := s.client.registerCancellation(merged.Value); id != "" {
-				reqArgs["value"] = id
-			}
-		}
-	}
-	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ContainerImagePushOptionsCallbackContext.setCancellationToken", reqArgs); err != nil { s.setErr(err) }
-	return s
-}
-
-// SetOptions sets the Options property
-func (s *containerImagePushOptionsCallbackContext) SetOptions(value ContainerImagePushOptions) ContainerImagePushOptionsCallbackContext {
-	if s.err != nil { return s }
-	if value != nil { if err := value.Err(); err != nil { s.setErr(err); return s } }
-	ctx := context.Background()
-	reqArgs := map[string]any{
-		"context": s.handle.ToJSON(),
-	}
-	reqArgs["value"] = serializeValue(value)
-	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ContainerImagePushOptionsCallbackContext.setOptions", reqArgs); err != nil { s.setErr(err) }
-	return s
-}
-
-// SetResource sets the Resource property
-func (s *containerImagePushOptionsCallbackContext) SetResource(value Resource) ContainerImagePushOptionsCallbackContext {
-	if s.err != nil { return s }
-	if value != nil { if err := value.Err(); err != nil { s.setErr(err); return s } }
-	ctx := context.Background()
-	reqArgs := map[string]any{
-		"context": s.handle.ToJSON(),
-	}
-	reqArgs["value"] = serializeValue(value)
-	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ContainerImagePushOptionsCallbackContext.setResource", reqArgs); err != nil { s.setErr(err) }
-	return s
-}
-
 // ContainerImageReference is the public interface for handle type ContainerImageReference.
 type ContainerImageReference interface {
 	handleReference
+	Resource() Resource
+	ValueExpression() (string, error)
 	Err() error
 }
 
@@ -4607,9 +5036,45 @@ func newContainerImageReferenceFromHandle(h *handle, c *client) ContainerImageRe
 	return &containerImageReference{resourceBuilderBase: newResourceBuilderBase(h, c)}
 }
 
+// Resource gets the Resource property
+func (s *containerImageReference) Resource() Resource {
+	if s.err != nil { return nil }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ContainerImageReference.resource", reqArgs)
+	if err != nil { s.setErr(err); return nil }
+	typed, ok := result.(Resource)
+	if !ok {
+		s.setErr(fmt.Errorf("aspire: Aspire.Hosting.ApplicationModel/ContainerImageReference.resource returned unexpected type %T", result))
+		return nil
+	}
+	return typed
+}
+
+// ValueExpression gets the ValueExpression property
+func (s *containerImageReference) ValueExpression() (string, error) {
+	if s.err != nil { var zero string; return zero, s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ContainerImageReference.valueExpression", reqArgs)
+	if err != nil {
+		var zero string
+		return zero, err
+	}
+	return decodeAs[string](result)
+}
+
 // ContainerMountAnnotation is the public interface for handle type ContainerMountAnnotation.
 type ContainerMountAnnotation interface {
 	handleReference
+	IsReadOnly() (bool, error)
+	Source() (string, error)
+	Target() (string, error)
+	Type() (ContainerMountType, error)
 	Err() error
 }
 
@@ -4623,9 +5088,71 @@ func newContainerMountAnnotationFromHandle(h *handle, c *client) ContainerMountA
 	return &containerMountAnnotation{resourceBuilderBase: newResourceBuilderBase(h, c)}
 }
 
+// IsReadOnly gets the IsReadOnly property
+func (s *containerMountAnnotation) IsReadOnly() (bool, error) {
+	if s.err != nil { var zero bool; return zero, s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ContainerMountAnnotation.isReadOnly", reqArgs)
+	if err != nil {
+		var zero bool
+		return zero, err
+	}
+	return decodeAs[bool](result)
+}
+
+// Source gets the Source property
+func (s *containerMountAnnotation) Source() (string, error) {
+	if s.err != nil { var zero string; return zero, s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ContainerMountAnnotation.source", reqArgs)
+	if err != nil {
+		var zero string
+		return zero, err
+	}
+	return decodeAs[string](result)
+}
+
+// Target gets the Target property
+func (s *containerMountAnnotation) Target() (string, error) {
+	if s.err != nil { var zero string; return zero, s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ContainerMountAnnotation.target", reqArgs)
+	if err != nil {
+		var zero string
+		return zero, err
+	}
+	return decodeAs[string](result)
+}
+
+// Type gets the Type property
+func (s *containerMountAnnotation) Type() (ContainerMountType, error) {
+	if s.err != nil { var zero ContainerMountType; return zero, s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ContainerMountAnnotation.type", reqArgs)
+	if err != nil {
+		var zero ContainerMountType
+		return zero, err
+	}
+	return decodeAs[ContainerMountType](result)
+}
+
 // ContainerPortReference is the public interface for handle type ContainerPortReference.
 type ContainerPortReference interface {
 	handleReference
+	Resource() Resource
+	ValueExpression() (string, error)
 	Err() error
 }
 
@@ -4637,6 +5164,38 @@ type containerPortReference struct {
 // newContainerPortReferenceFromHandle wraps an existing handle as ContainerPortReference.
 func newContainerPortReferenceFromHandle(h *handle, c *client) ContainerPortReference {
 	return &containerPortReference{resourceBuilderBase: newResourceBuilderBase(h, c)}
+}
+
+// Resource gets the Resource property
+func (s *containerPortReference) Resource() Resource {
+	if s.err != nil { return nil }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ContainerPortReference.resource", reqArgs)
+	if err != nil { s.setErr(err); return nil }
+	typed, ok := result.(Resource)
+	if !ok {
+		s.setErr(fmt.Errorf("aspire: Aspire.Hosting.ApplicationModel/ContainerPortReference.resource returned unexpected type %T", result))
+		return nil
+	}
+	return typed
+}
+
+// ValueExpression gets the ValueExpression property
+func (s *containerPortReference) ValueExpression() (string, error) {
+	if s.err != nil { var zero string; return zero, s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ContainerPortReference.valueExpression", reqArgs)
+	if err != nil {
+		var zero string
+		return zero, err
+	}
+	return decodeAs[string](result)
 }
 
 // ContainerRegistryResource is the public interface for handle type ContainerRegistryResource.
@@ -4679,6 +5238,8 @@ type ContainerRegistryResource interface {
 	WithParentRelationship(parent Resource) ContainerRegistryResource
 	WithPipelineConfiguration(callback func(obj PipelineConfigurationContext)) ContainerRegistryResource
 	WithPipelineStepFactory(stepName string, callback func(arg PipelineStepContext), options ...*WithPipelineStepFactoryOptions) ContainerRegistryResource
+	WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) ContainerRegistryResource
+	WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) ContainerRegistryResource
 	WithRelationship(resourceBuilder Resource, type_ string) ContainerRegistryResource
 	WithRequiredCommand(command string, options ...*WithRequiredCommandOptions) ContainerRegistryResource
 	WithStatus(status TestResourceStatus) ContainerRegistryResource
@@ -5287,6 +5848,47 @@ func (s *containerRegistryResource) WithPipelineStepFactory(stepName string, cal
 	return s
 }
 
+// WithProcessCommand adds a process resource command
+func (s *containerRegistryResource) WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) ContainerRegistryResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if options != nil { reqArgs["options"] = serializeValue(options) }
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithProcessCommandFactory adds a process resource command via callback
+func (s *containerRegistryResource) WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) ContainerRegistryResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if createProcessSpec != nil {
+		cb := createProcessSpec
+		shim := func(args ...any) any {
+			return cb(callbackArg[ExecuteCommandContext](args, 0))
+		}
+		reqArgs["createProcessSpec"] = s.client.registerCallback(shim)
+	}
+	if len(options) > 0 {
+		merged := &WithProcessCommandFactoryOptions{}
+		for _, opt := range options {
+			if opt != nil { merged = deepUpdate(merged, opt) }
+		}
+		for k, v := range merged.ToMap() { reqArgs[k] = v }
+	}
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommandFactory", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
 // WithRelationship adds a relationship to another resource
 func (s *containerRegistryResource) WithRelationship(resourceBuilder Resource, type_ string) ContainerRegistryResource {
 	if s.err != nil { return s }
@@ -5388,8 +5990,11 @@ func (s *containerRegistryResource) WithUrlForEndpoint(endpointName string, call
 	if callback != nil {
 		cb := callback
 		shim := func(args ...any) any {
-			cb(callbackArg[*ResourceUrlAnnotation](args, 0))
-			return nil
+			arg0 := callbackArg[*ResourceUrlAnnotation](args, 0)
+			cb(arg0)
+			return map[string]any{
+				"p0": serializeValue(arg0),
+			}
 		}
 		reqArgs["callback"] = s.client.registerCallback(shim)
 	}
@@ -5464,6 +6069,7 @@ type ContainerResource interface {
 	WithCertificateTrustScope(scope CertificateTrustScope) ContainerResource
 	WithChildRelationship(child Resource) ContainerResource
 	WithCommand(name string, displayName string, executeCommand func(arg ExecuteCommandContext) *ExecuteCommandResult, options ...*WithCommandOptions) ContainerResource
+	WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) ContainerResource
 	WithConfig(config *TestConfigDto) ContainerResource
 	WithContainerCertificatePaths(options ...*WithContainerCertificatePathsOptions) ContainerResource
 	WithContainerName(name string) ContainerResource
@@ -5521,6 +6127,8 @@ type ContainerResource interface {
 	WithParentRelationship(parent Resource) ContainerResource
 	WithPipelineConfiguration(callback func(obj PipelineConfigurationContext)) ContainerResource
 	WithPipelineStepFactory(stepName string, callback func(arg PipelineStepContext), options ...*WithPipelineStepFactoryOptions) ContainerResource
+	WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) ContainerResource
+	WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) ContainerResource
 	WithReference(source any, options ...*WithReferenceOptions) ContainerResource
 	WithReferenceEnvironment(options *ReferenceEnvironmentInjectionOptions) ContainerResource
 	WithRelationship(resourceBuilder Resource, type_ string) ContainerResource
@@ -5997,6 +6605,19 @@ func (s *containerResource) WithCommand(name string, displayName string, execute
 		for k, v := range merged.ToMap() { reqArgs[k] = v }
 	}
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithComputeEnvironment configures the compute environment for the compute resource
+func (s *containerResource) WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) ContainerResource {
+	if s.err != nil { return s }
+	if computeEnvironmentResource != nil { if err := computeEnvironmentResource.Err(); err != nil { s.setErr(err); return s } }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["computeEnvironmentResource"] = serializeValue(computeEnvironmentResource)
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withComputeEnvironment", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
 
@@ -6923,6 +7544,47 @@ func (s *containerResource) WithPipelineStepFactory(stepName string, callback fu
 	return s
 }
 
+// WithProcessCommand adds a process resource command
+func (s *containerResource) WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) ContainerResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if options != nil { reqArgs["options"] = serializeValue(options) }
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithProcessCommandFactory adds a process resource command via callback
+func (s *containerResource) WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) ContainerResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if createProcessSpec != nil {
+		cb := createProcessSpec
+		shim := func(args ...any) any {
+			return cb(callbackArg[ExecuteCommandContext](args, 0))
+		}
+		reqArgs["createProcessSpec"] = s.client.registerCallback(shim)
+	}
+	if len(options) > 0 {
+		merged := &WithProcessCommandFactoryOptions{}
+		for _, opt := range options {
+			if opt != nil { merged = deepUpdate(merged, opt) }
+		}
+		for k, v := range merged.ToMap() { reqArgs[k] = v }
+	}
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommandFactory", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
 // WithReference adds a reference to another resource
 // Allowed types for parameter source: Resource, EndpointReference, string.
 func (s *containerResource) WithReference(source any, options ...*WithReferenceOptions) ContainerResource {
@@ -7086,8 +7748,11 @@ func (s *containerResource) WithUrlForEndpoint(endpointName string, callback fun
 	if callback != nil {
 		cb := callback
 		shim := func(args ...any) any {
-			cb(callbackArg[*ResourceUrlAnnotation](args, 0))
-			return nil
+			arg0 := callbackArg[*ResourceUrlAnnotation](args, 0)
+			cb(arg0)
+			return map[string]any{
+				"p0": serializeValue(arg0),
+			}
 		}
 		reqArgs["callback"] = s.client.registerCallback(shim)
 	}
@@ -7228,7 +7893,9 @@ type DistributedApplicationBuilder interface {
 	ExecutionContext() DistributedApplicationExecutionContext
 	GetConfiguration() Configuration
 	Pipeline() DistributedApplicationPipeline
+	SubscribeAfterPublish(callback func(arg AfterPublishEvent)) DistributedApplicationEventSubscription
 	SubscribeAfterResourcesCreated(callback func(arg AfterResourcesCreatedEvent)) DistributedApplicationEventSubscription
+	SubscribeBeforePublish(callback func(arg BeforePublishEvent)) DistributedApplicationEventSubscription
 	SubscribeBeforeStart(callback func(arg BeforeStartEvent)) DistributedApplicationEventSubscription
 	TryAddEventingSubscriber(subscribe func(arg EventingSubscriberRegistrationContext)) error
 	UserSecretsManager() UserSecretsManager
@@ -7785,6 +8452,33 @@ func (s *distributedApplicationBuilder) Pipeline() DistributedApplicationPipelin
 	return &distributedApplicationPipeline{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
 }
 
+// SubscribeAfterPublish subscribes to the AfterPublish event
+func (s *distributedApplicationBuilder) SubscribeAfterPublish(callback func(arg AfterPublishEvent)) DistributedApplicationEventSubscription {
+	if s.err != nil { return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(s.err, s.client)} }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	if callback != nil {
+		cb := callback
+		shim := func(args ...any) any {
+			cb(callbackArg[AfterPublishEvent](args, 0))
+			return nil
+		}
+		reqArgs["callback"] = s.client.registerCallback(shim)
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting/subscribeAfterPublish", reqArgs)
+	if err != nil {
+		return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	href, ok := result.(handleReference)
+	if !ok {
+		err := fmt.Errorf("aspire: Aspire.Hosting/subscribeAfterPublish returned unexpected type %T", result)
+		return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	return &distributedApplicationEventSubscription{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
+}
+
 // SubscribeAfterResourcesCreated subscribes to the AfterResourcesCreated event
 func (s *distributedApplicationBuilder) SubscribeAfterResourcesCreated(callback func(arg AfterResourcesCreatedEvent)) DistributedApplicationEventSubscription {
 	if s.err != nil { return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(s.err, s.client)} }
@@ -7807,6 +8501,33 @@ func (s *distributedApplicationBuilder) SubscribeAfterResourcesCreated(callback 
 	href, ok := result.(handleReference)
 	if !ok {
 		err := fmt.Errorf("aspire: Aspire.Hosting/subscribeAfterResourcesCreated returned unexpected type %T", result)
+		return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	return &distributedApplicationEventSubscription{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
+}
+
+// SubscribeBeforePublish subscribes to the BeforePublish event
+func (s *distributedApplicationBuilder) SubscribeBeforePublish(callback func(arg BeforePublishEvent)) DistributedApplicationEventSubscription {
+	if s.err != nil { return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(s.err, s.client)} }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	if callback != nil {
+		cb := callback
+		shim := func(args ...any) any {
+			cb(callbackArg[BeforePublishEvent](args, 0))
+			return nil
+		}
+		reqArgs["callback"] = s.client.registerCallback(shim)
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting/subscribeBeforePublish", reqArgs)
+	if err != nil {
+		return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	href, ok := result.(handleReference)
+	if !ok {
+		err := fmt.Errorf("aspire: Aspire.Hosting/subscribeBeforePublish returned unexpected type %T", result)
 		return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
 	}
 	return &distributedApplicationEventSubscription{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
@@ -8628,6 +9349,7 @@ type DotnetToolResource interface {
 	WithCertificateTrustScope(scope CertificateTrustScope) DotnetToolResource
 	WithChildRelationship(child Resource) DotnetToolResource
 	WithCommand(name string, displayName string, executeCommand func(arg ExecuteCommandContext) *ExecuteCommandResult, options ...*WithCommandOptions) DotnetToolResource
+	WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) DotnetToolResource
 	WithConfig(config *TestConfigDto) DotnetToolResource
 	WithContainerRegistry(registry Resource) DotnetToolResource
 	WithCorrelationId(correlationId string) DotnetToolResource
@@ -8672,6 +9394,8 @@ type DotnetToolResource interface {
 	WithParentRelationship(parent Resource) DotnetToolResource
 	WithPipelineConfiguration(callback func(obj PipelineConfigurationContext)) DotnetToolResource
 	WithPipelineStepFactory(stepName string, callback func(arg PipelineStepContext), options ...*WithPipelineStepFactoryOptions) DotnetToolResource
+	WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) DotnetToolResource
+	WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) DotnetToolResource
 	WithReference(source any, options ...*WithReferenceOptions) DotnetToolResource
 	WithReferenceEnvironment(options *ReferenceEnvironmentInjectionOptions) DotnetToolResource
 	WithRelationship(resourceBuilder Resource, type_ string) DotnetToolResource
@@ -9097,6 +9821,19 @@ func (s *dotnetToolResource) WithCommand(name string, displayName string, execut
 		for k, v := range merged.ToMap() { reqArgs[k] = v }
 	}
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithComputeEnvironment configures the compute environment for the compute resource
+func (s *dotnetToolResource) WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) DotnetToolResource {
+	if s.err != nil { return s }
+	if computeEnvironmentResource != nil { if err := computeEnvironmentResource.Err(); err != nil { s.setErr(err); return s } }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["computeEnvironmentResource"] = serializeValue(computeEnvironmentResource)
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withComputeEnvironment", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
 
@@ -9832,6 +10569,47 @@ func (s *dotnetToolResource) WithPipelineStepFactory(stepName string, callback f
 	return s
 }
 
+// WithProcessCommand adds a process resource command
+func (s *dotnetToolResource) WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) DotnetToolResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if options != nil { reqArgs["options"] = serializeValue(options) }
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithProcessCommandFactory adds a process resource command via callback
+func (s *dotnetToolResource) WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) DotnetToolResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if createProcessSpec != nil {
+		cb := createProcessSpec
+		shim := func(args ...any) any {
+			return cb(callbackArg[ExecuteCommandContext](args, 0))
+		}
+		reqArgs["createProcessSpec"] = s.client.registerCallback(shim)
+	}
+	if len(options) > 0 {
+		merged := &WithProcessCommandFactoryOptions{}
+		for _, opt := range options {
+			if opt != nil { merged = deepUpdate(merged, opt) }
+		}
+		for k, v := range merged.ToMap() { reqArgs[k] = v }
+	}
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommandFactory", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
 // WithReference adds a reference to another resource
 // Allowed types for parameter source: Resource, EndpointReference, string.
 func (s *dotnetToolResource) WithReference(source any, options ...*WithReferenceOptions) DotnetToolResource {
@@ -10064,8 +10842,11 @@ func (s *dotnetToolResource) WithUrlForEndpoint(endpointName string, callback fu
 	if callback != nil {
 		cb := callback
 		shim := func(args ...any) any {
-			cb(callbackArg[*ResourceUrlAnnotation](args, 0))
-			return nil
+			arg0 := callbackArg[*ResourceUrlAnnotation](args, 0)
+			cb(arg0)
+			return map[string]any{
+				"p0": serializeValue(arg0),
+			}
 		}
 		reqArgs["callback"] = s.client.registerCallback(shim)
 	}
@@ -10151,7 +10932,6 @@ type EndpointReference interface {
 	Property(property EndpointProperty) EndpointReferenceExpression
 	Resource() ResourceWithEndpoints
 	Scheme() (string, error)
-	SetErrorMessage(value string) EndpointReference
 	TargetPort() (float64, error)
 	TlsEnabled() (bool, error)
 	Url() (string, error)
@@ -10417,18 +11197,6 @@ func (s *endpointReference) Scheme() (string, error) {
 		return zero, err
 	}
 	return decodeAs[string](result)
-}
-
-// SetErrorMessage sets the ErrorMessage property
-func (s *endpointReference) SetErrorMessage(value string) EndpointReference {
-	if s.err != nil { return s }
-	ctx := context.Background()
-	reqArgs := map[string]any{
-		"context": s.handle.ToJSON(),
-	}
-	reqArgs["value"] = serializeValue(value)
-	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/EndpointReference.setErrorMessage", reqArgs); err != nil { s.setErr(err) }
-	return s
 }
 
 // TargetPort gets the TargetPort property
@@ -11002,7 +11770,9 @@ type EventingSubscriberRegistrationContext interface {
 	handleReference
 	CancellationToken() (*CancellationToken, error)
 	ExecutionContext() DistributedApplicationExecutionContext
+	OnAfterPublish(callback func(arg AfterPublishEvent)) DistributedApplicationEventSubscription
 	OnAfterResourcesCreated(callback func(arg AfterResourcesCreatedEvent)) DistributedApplicationEventSubscription
+	OnBeforePublish(callback func(arg BeforePublishEvent)) DistributedApplicationEventSubscription
 	OnBeforeStart(callback func(arg BeforeStartEvent)) DistributedApplicationEventSubscription
 	Err() error
 }
@@ -11051,6 +11821,33 @@ func (s *eventingSubscriberRegistrationContext) ExecutionContext() DistributedAp
 	return &distributedApplicationExecutionContext{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
 }
 
+// OnAfterPublish subscribes an eventing subscriber to the AfterPublish event
+func (s *eventingSubscriberRegistrationContext) OnAfterPublish(callback func(arg AfterPublishEvent)) DistributedApplicationEventSubscription {
+	if s.err != nil { return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(s.err, s.client)} }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	if callback != nil {
+		cb := callback
+		shim := func(args ...any) any {
+			cb(callbackArg[AfterPublishEvent](args, 0))
+			return nil
+		}
+		reqArgs["callback"] = s.client.registerCallback(shim)
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting/eventingSubscriberOnAfterPublish", reqArgs)
+	if err != nil {
+		return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	href, ok := result.(handleReference)
+	if !ok {
+		err := fmt.Errorf("aspire: Aspire.Hosting/eventingSubscriberOnAfterPublish returned unexpected type %T", result)
+		return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	return &distributedApplicationEventSubscription{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
+}
+
 // OnAfterResourcesCreated subscribes an eventing subscriber to the AfterResourcesCreated event
 func (s *eventingSubscriberRegistrationContext) OnAfterResourcesCreated(callback func(arg AfterResourcesCreatedEvent)) DistributedApplicationEventSubscription {
 	if s.err != nil { return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(s.err, s.client)} }
@@ -11073,6 +11870,33 @@ func (s *eventingSubscriberRegistrationContext) OnAfterResourcesCreated(callback
 	href, ok := result.(handleReference)
 	if !ok {
 		err := fmt.Errorf("aspire: Aspire.Hosting/eventingSubscriberOnAfterResourcesCreated returned unexpected type %T", result)
+		return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	return &distributedApplicationEventSubscription{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
+}
+
+// OnBeforePublish subscribes an eventing subscriber to the BeforePublish event
+func (s *eventingSubscriberRegistrationContext) OnBeforePublish(callback func(arg BeforePublishEvent)) DistributedApplicationEventSubscription {
+	if s.err != nil { return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(s.err, s.client)} }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	if callback != nil {
+		cb := callback
+		shim := func(args ...any) any {
+			cb(callbackArg[BeforePublishEvent](args, 0))
+			return nil
+		}
+		reqArgs["callback"] = s.client.registerCallback(shim)
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting/eventingSubscriberOnBeforePublish", reqArgs)
+	if err != nil {
+		return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	href, ok := result.(handleReference)
+	if !ok {
+		err := fmt.Errorf("aspire: Aspire.Hosting/eventingSubscriberOnBeforePublish returned unexpected type %T", result)
 		return &distributedApplicationEventSubscription{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
 	}
 	return &distributedApplicationEventSubscription{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
@@ -11131,6 +11955,7 @@ type ExecutableResource interface {
 	WithCertificateTrustScope(scope CertificateTrustScope) ExecutableResource
 	WithChildRelationship(child Resource) ExecutableResource
 	WithCommand(name string, displayName string, executeCommand func(arg ExecuteCommandContext) *ExecuteCommandResult, options ...*WithCommandOptions) ExecutableResource
+	WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) ExecutableResource
 	WithConfig(config *TestConfigDto) ExecutableResource
 	WithContainerRegistry(registry Resource) ExecutableResource
 	WithCorrelationId(correlationId string) ExecutableResource
@@ -11175,6 +12000,8 @@ type ExecutableResource interface {
 	WithParentRelationship(parent Resource) ExecutableResource
 	WithPipelineConfiguration(callback func(obj PipelineConfigurationContext)) ExecutableResource
 	WithPipelineStepFactory(stepName string, callback func(arg PipelineStepContext), options ...*WithPipelineStepFactoryOptions) ExecutableResource
+	WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) ExecutableResource
+	WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) ExecutableResource
 	WithReference(source any, options ...*WithReferenceOptions) ExecutableResource
 	WithReferenceEnvironment(options *ReferenceEnvironmentInjectionOptions) ExecutableResource
 	WithRelationship(resourceBuilder Resource, type_ string) ExecutableResource
@@ -11594,6 +12421,19 @@ func (s *executableResource) WithCommand(name string, displayName string, execut
 		for k, v := range merged.ToMap() { reqArgs[k] = v }
 	}
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithComputeEnvironment configures the compute environment for the compute resource
+func (s *executableResource) WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) ExecutableResource {
+	if s.err != nil { return s }
+	if computeEnvironmentResource != nil { if err := computeEnvironmentResource.Err(); err != nil { s.setErr(err); return s } }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["computeEnvironmentResource"] = serializeValue(computeEnvironmentResource)
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withComputeEnvironment", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
 
@@ -12329,6 +13169,47 @@ func (s *executableResource) WithPipelineStepFactory(stepName string, callback f
 	return s
 }
 
+// WithProcessCommand adds a process resource command
+func (s *executableResource) WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) ExecutableResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if options != nil { reqArgs["options"] = serializeValue(options) }
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithProcessCommandFactory adds a process resource command via callback
+func (s *executableResource) WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) ExecutableResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if createProcessSpec != nil {
+		cb := createProcessSpec
+		shim := func(args ...any) any {
+			return cb(callbackArg[ExecuteCommandContext](args, 0))
+		}
+		reqArgs["createProcessSpec"] = s.client.registerCallback(shim)
+	}
+	if len(options) > 0 {
+		merged := &WithProcessCommandFactoryOptions{}
+		for _, opt := range options {
+			if opt != nil { merged = deepUpdate(merged, opt) }
+		}
+		for k, v := range merged.ToMap() { reqArgs[k] = v }
+	}
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommandFactory", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
 // WithReference adds a reference to another resource
 // Allowed types for parameter source: Resource, EndpointReference, string.
 func (s *executableResource) WithReference(source any, options ...*WithReferenceOptions) ExecutableResource {
@@ -12492,8 +13373,11 @@ func (s *executableResource) WithUrlForEndpoint(endpointName string, callback fu
 	if callback != nil {
 		cb := callback
 		shim := func(args ...any) any {
-			cb(callbackArg[*ResourceUrlAnnotation](args, 0))
-			return nil
+			arg0 := callbackArg[*ResourceUrlAnnotation](args, 0)
+			cb(arg0)
+			return map[string]any{
+				"p0": serializeValue(arg0),
+			}
 		}
 		reqArgs["callback"] = s.client.registerCallback(shim)
 	}
@@ -12564,14 +13448,11 @@ func (s *executableResource) WithoutHttpsCertificate() ExecutableResource {
 // ExecuteCommandContext is the public interface for handle type ExecuteCommandContext.
 type ExecuteCommandContext interface {
 	handleReference
+	Arguments() InteractionInputCollection
 	CancellationToken() (*CancellationToken, error)
 	Logger() Logger
 	ResourceName() (string, error)
 	ServiceProvider() ServiceProvider
-	SetCancellationToken(options ...*SetCancellationTokenOptions) ExecuteCommandContext
-	SetLogger(value Logger) ExecuteCommandContext
-	SetResourceName(value string) ExecuteCommandContext
-	SetServiceProvider(value ServiceProvider) ExecuteCommandContext
 	Err() error
 }
 
@@ -12583,6 +13464,25 @@ type executeCommandContext struct {
 // newExecuteCommandContextFromHandle wraps an existing handle as ExecuteCommandContext.
 func newExecuteCommandContextFromHandle(h *handle, c *client) ExecuteCommandContext {
 	return &executeCommandContext{resourceBuilderBase: newResourceBuilderBase(h, c)}
+}
+
+// Arguments gets the Arguments property
+func (s *executeCommandContext) Arguments() InteractionInputCollection {
+	if s.err != nil { return &interactionInputCollection{resourceBuilderBase: newErroredResourceBuilder(s.err, s.client)} }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ExecuteCommandContext.arguments", reqArgs)
+	if err != nil {
+		return &interactionInputCollection{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	href, ok := result.(handleReference)
+	if !ok {
+		err := fmt.Errorf("aspire: Aspire.Hosting.ApplicationModel/ExecuteCommandContext.arguments returned unexpected type %T", result)
+		return &interactionInputCollection{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	return &interactionInputCollection{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
 }
 
 // CancellationToken gets the CancellationToken property
@@ -12651,68 +13551,6 @@ func (s *executeCommandContext) ServiceProvider() ServiceProvider {
 		return &serviceProvider{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
 	}
 	return &serviceProvider{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
-}
-
-// SetCancellationToken sets the CancellationToken property
-func (s *executeCommandContext) SetCancellationToken(options ...*SetCancellationTokenOptions) ExecuteCommandContext {
-	if s.err != nil { return s }
-	ctx := context.Background()
-	reqArgs := map[string]any{
-		"context": s.handle.ToJSON(),
-	}
-	if len(options) > 0 {
-		merged := &SetCancellationTokenOptions{}
-		for _, opt := range options {
-			if opt != nil { merged = deepUpdate(merged, opt) }
-		}
-		for k, v := range merged.ToMap() { reqArgs[k] = v }
-		if merged.Value != nil {
-			ctx = merged.Value.Context()
-			if id := s.client.registerCancellation(merged.Value); id != "" {
-				reqArgs["value"] = id
-			}
-		}
-	}
-	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ExecuteCommandContext.setCancellationToken", reqArgs); err != nil { s.setErr(err) }
-	return s
-}
-
-// SetLogger sets the Logger property
-func (s *executeCommandContext) SetLogger(value Logger) ExecuteCommandContext {
-	if s.err != nil { return s }
-	if value != nil { if err := value.Err(); err != nil { s.setErr(err); return s } }
-	ctx := context.Background()
-	reqArgs := map[string]any{
-		"context": s.handle.ToJSON(),
-	}
-	reqArgs["value"] = serializeValue(value)
-	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ExecuteCommandContext.setLogger", reqArgs); err != nil { s.setErr(err) }
-	return s
-}
-
-// SetResourceName sets the ResourceName property
-func (s *executeCommandContext) SetResourceName(value string) ExecuteCommandContext {
-	if s.err != nil { return s }
-	ctx := context.Background()
-	reqArgs := map[string]any{
-		"context": s.handle.ToJSON(),
-	}
-	reqArgs["value"] = serializeValue(value)
-	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ExecuteCommandContext.setResourceName", reqArgs); err != nil { s.setErr(err) }
-	return s
-}
-
-// SetServiceProvider sets the ServiceProvider property
-func (s *executeCommandContext) SetServiceProvider(value ServiceProvider) ExecuteCommandContext {
-	if s.err != nil { return s }
-	if value != nil { if err := value.Err(); err != nil { s.setErr(err); return s } }
-	ctx := context.Background()
-	reqArgs := map[string]any{
-		"context": s.handle.ToJSON(),
-	}
-	reqArgs["value"] = serializeValue(value)
-	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/ExecuteCommandContext.setServiceProvider", reqArgs); err != nil { s.setErr(err) }
-	return s
 }
 
 // ExecutionConfigurationBuilder is the public interface for handle type ExecutionConfigurationBuilder.
@@ -12917,6 +13755,8 @@ type ExternalServiceResource interface {
 	WithParentRelationship(parent Resource) ExternalServiceResource
 	WithPipelineConfiguration(callback func(obj PipelineConfigurationContext)) ExternalServiceResource
 	WithPipelineStepFactory(stepName string, callback func(arg PipelineStepContext), options ...*WithPipelineStepFactoryOptions) ExternalServiceResource
+	WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) ExternalServiceResource
+	WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) ExternalServiceResource
 	WithRelationship(resourceBuilder Resource, type_ string) ExternalServiceResource
 	WithRequiredCommand(command string, options ...*WithRequiredCommandOptions) ExternalServiceResource
 	WithStatus(status TestResourceStatus) ExternalServiceResource
@@ -13543,6 +14383,47 @@ func (s *externalServiceResource) WithPipelineStepFactory(stepName string, callb
 	return s
 }
 
+// WithProcessCommand adds a process resource command
+func (s *externalServiceResource) WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) ExternalServiceResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if options != nil { reqArgs["options"] = serializeValue(options) }
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithProcessCommandFactory adds a process resource command via callback
+func (s *externalServiceResource) WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) ExternalServiceResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if createProcessSpec != nil {
+		cb := createProcessSpec
+		shim := func(args ...any) any {
+			return cb(callbackArg[ExecuteCommandContext](args, 0))
+		}
+		reqArgs["createProcessSpec"] = s.client.registerCallback(shim)
+	}
+	if len(options) > 0 {
+		merged := &WithProcessCommandFactoryOptions{}
+		for _, opt := range options {
+			if opt != nil { merged = deepUpdate(merged, opt) }
+		}
+		for k, v := range merged.ToMap() { reqArgs[k] = v }
+	}
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommandFactory", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
 // WithRelationship adds a relationship to another resource
 func (s *externalServiceResource) WithRelationship(resourceBuilder Resource, type_ string) ExternalServiceResource {
 	if s.err != nil { return s }
@@ -13644,8 +14525,11 @@ func (s *externalServiceResource) WithUrlForEndpoint(endpointName string, callba
 	if callback != nil {
 		cb := callback
 		shim := func(args ...any) any {
-			cb(callbackArg[*ResourceUrlAnnotation](args, 0))
-			return nil
+			arg0 := callbackArg[*ResourceUrlAnnotation](args, 0)
+			cb(arg0)
+			return map[string]any{
+				"p0": serializeValue(arg0),
+			}
 		}
 		reqArgs["callback"] = s.client.registerCallback(shim)
 	}
@@ -13693,10 +14577,16 @@ func (s *externalServiceResource) WithValidator(validator func(arg TestResourceC
 // HostEnvironment is the public interface for handle type HostEnvironment.
 type HostEnvironment interface {
 	handleReference
+	ApplicationName() (string, error)
+	ContentRootPath() (string, error)
+	EnvironmentName() (string, error)
 	IsDevelopment() (bool, error)
 	IsEnvironment(environmentName string) (bool, error)
 	IsProduction() (bool, error)
 	IsStaging() (bool, error)
+	SetApplicationName(value string) HostEnvironment
+	SetContentRootPath(value string) HostEnvironment
+	SetEnvironmentName(value string) HostEnvironment
 	Err() error
 }
 
@@ -13708,6 +14598,51 @@ type hostEnvironment struct {
 // newHostEnvironmentFromHandle wraps an existing handle as HostEnvironment.
 func newHostEnvironmentFromHandle(h *handle, c *client) HostEnvironment {
 	return &hostEnvironment{resourceBuilderBase: newResourceBuilderBase(h, c)}
+}
+
+// ApplicationName gets the ApplicationName property
+func (s *hostEnvironment) ApplicationName() (string, error) {
+	if s.err != nil { var zero string; return zero, s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Microsoft.Extensions.Hosting/IHostEnvironment.applicationName", reqArgs)
+	if err != nil {
+		var zero string
+		return zero, err
+	}
+	return decodeAs[string](result)
+}
+
+// ContentRootPath gets the ContentRootPath property
+func (s *hostEnvironment) ContentRootPath() (string, error) {
+	if s.err != nil { var zero string; return zero, s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Microsoft.Extensions.Hosting/IHostEnvironment.contentRootPath", reqArgs)
+	if err != nil {
+		var zero string
+		return zero, err
+	}
+	return decodeAs[string](result)
+}
+
+// EnvironmentName gets the EnvironmentName property
+func (s *hostEnvironment) EnvironmentName() (string, error) {
+	if s.err != nil { var zero string; return zero, s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Microsoft.Extensions.Hosting/IHostEnvironment.environmentName", reqArgs)
+	if err != nil {
+		var zero string
+		return zero, err
+	}
+	return decodeAs[string](result)
 }
 
 // IsDevelopment checks if running in Development environment
@@ -13769,6 +14704,42 @@ func (s *hostEnvironment) IsStaging() (bool, error) {
 		return zero, err
 	}
 	return decodeAs[bool](result)
+}
+
+// SetApplicationName sets the ApplicationName property
+func (s *hostEnvironment) SetApplicationName(value string) HostEnvironment {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	reqArgs["value"] = serializeValue(value)
+	if _, err := s.client.invokeCapability(ctx, "Microsoft.Extensions.Hosting/IHostEnvironment.setApplicationName", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// SetContentRootPath sets the ContentRootPath property
+func (s *hostEnvironment) SetContentRootPath(value string) HostEnvironment {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	reqArgs["value"] = serializeValue(value)
+	if _, err := s.client.invokeCapability(ctx, "Microsoft.Extensions.Hosting/IHostEnvironment.setContentRootPath", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// SetEnvironmentName sets the EnvironmentName property
+func (s *hostEnvironment) SetEnvironmentName(value string) HostEnvironment {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	reqArgs["value"] = serializeValue(value)
+	if _, err := s.client.invokeCapability(ctx, "Microsoft.Extensions.Hosting/IHostEnvironment.setEnvironmentName", reqArgs); err != nil { s.setErr(err) }
+	return s
 }
 
 // IComputeResource is the public interface for handle type IComputeResource.
@@ -13915,6 +14886,104 @@ func (s *initializeResourceEvent) Services() ServiceProvider {
 		return &serviceProvider{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
 	}
 	return &serviceProvider{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
+}
+
+// InputsDialogValidationContext is the public interface for handle type InputsDialogValidationContext.
+type InputsDialogValidationContext interface {
+	handleReference
+	AddValidationError(inputName string, errorMessage string) error
+	CancellationToken() (*CancellationToken, error)
+	Inputs() InteractionInputCollection
+	Err() error
+}
+
+// inputsDialogValidationContext is the unexported impl of InputsDialogValidationContext.
+type inputsDialogValidationContext struct {
+	*resourceBuilderBase
+}
+
+// newInputsDialogValidationContextFromHandle wraps an existing handle as InputsDialogValidationContext.
+func newInputsDialogValidationContextFromHandle(h *handle, c *client) InputsDialogValidationContext {
+	return &inputsDialogValidationContext{resourceBuilderBase: newResourceBuilderBase(h, c)}
+}
+
+// AddValidationError invokes the AddValidationError method
+func (s *inputsDialogValidationContext) AddValidationError(inputName string, errorMessage string) error {
+	if s.err != nil { return s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	reqArgs["inputName"] = serializeValue(inputName)
+	reqArgs["errorMessage"] = serializeValue(errorMessage)
+	_, err := s.client.invokeCapability(ctx, "Aspire.Hosting/InputsDialogValidationContext.addValidationError", reqArgs)
+	return err
+}
+
+// CancellationToken gets the CancellationToken property
+func (s *inputsDialogValidationContext) CancellationToken() (*CancellationToken, error) {
+	if s.err != nil { var zero *CancellationToken; return zero, s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting/InputsDialogValidationContext.cancellationToken", reqArgs)
+	if err != nil {
+		var zero *CancellationToken
+		return zero, err
+	}
+	return decodeAs[*CancellationToken](result)
+}
+
+// Inputs gets the Inputs property
+func (s *inputsDialogValidationContext) Inputs() InteractionInputCollection {
+	if s.err != nil { return &interactionInputCollection{resourceBuilderBase: newErroredResourceBuilder(s.err, s.client)} }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting/InputsDialogValidationContext.inputs", reqArgs)
+	if err != nil {
+		return &interactionInputCollection{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	href, ok := result.(handleReference)
+	if !ok {
+		err := fmt.Errorf("aspire: Aspire.Hosting/InputsDialogValidationContext.inputs returned unexpected type %T", result)
+		return &interactionInputCollection{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
+	}
+	return &interactionInputCollection{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
+}
+
+// InteractionInputCollection is the public interface for handle type InteractionInputCollection.
+type InteractionInputCollection interface {
+	handleReference
+	ToArray() ([]*InteractionInput, error)
+	Err() error
+}
+
+// interactionInputCollection is the unexported impl of InteractionInputCollection.
+type interactionInputCollection struct {
+	*resourceBuilderBase
+}
+
+// newInteractionInputCollectionFromHandle wraps an existing handle as InteractionInputCollection.
+func newInteractionInputCollectionFromHandle(h *handle, c *client) InteractionInputCollection {
+	return &interactionInputCollection{resourceBuilderBase: newResourceBuilderBase(h, c)}
+}
+
+// ToArray invokes the ToArray method
+func (s *interactionInputCollection) ToArray() ([]*InteractionInput, error) {
+	if s.err != nil { var zero []*InteractionInput; return zero, s.err }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"context": s.handle.ToJSON(),
+	}
+	result, err := s.client.invokeCapability(ctx, "Aspire.Hosting/InteractionInputCollection.toArray", reqArgs)
+	if err != nil {
+		var zero []*InteractionInput
+		return zero, err
+	}
+	return decodeAs[[]*InteractionInput](result)
 }
 
 // LogFacade is the public interface for handle type LogFacade.
@@ -14145,6 +15214,8 @@ type ParameterResource interface {
 	WithParentRelationship(parent Resource) ParameterResource
 	WithPipelineConfiguration(callback func(obj PipelineConfigurationContext)) ParameterResource
 	WithPipelineStepFactory(stepName string, callback func(arg PipelineStepContext), options ...*WithPipelineStepFactoryOptions) ParameterResource
+	WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) ParameterResource
+	WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) ParameterResource
 	WithRelationship(resourceBuilder Resource, type_ string) ParameterResource
 	WithRequiredCommand(command string, options ...*WithRequiredCommandOptions) ParameterResource
 	WithStatus(status TestResourceStatus) ParameterResource
@@ -14772,6 +15843,47 @@ func (s *parameterResource) WithPipelineStepFactory(stepName string, callback fu
 	return s
 }
 
+// WithProcessCommand adds a process resource command
+func (s *parameterResource) WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) ParameterResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if options != nil { reqArgs["options"] = serializeValue(options) }
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithProcessCommandFactory adds a process resource command via callback
+func (s *parameterResource) WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) ParameterResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if createProcessSpec != nil {
+		cb := createProcessSpec
+		shim := func(args ...any) any {
+			return cb(callbackArg[ExecuteCommandContext](args, 0))
+		}
+		reqArgs["createProcessSpec"] = s.client.registerCallback(shim)
+	}
+	if len(options) > 0 {
+		merged := &WithProcessCommandFactoryOptions{}
+		for _, opt := range options {
+			if opt != nil { merged = deepUpdate(merged, opt) }
+		}
+		for k, v := range merged.ToMap() { reqArgs[k] = v }
+	}
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommandFactory", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
 // WithRelationship adds a relationship to another resource
 func (s *parameterResource) WithRelationship(resourceBuilder Resource, type_ string) ParameterResource {
 	if s.err != nil { return s }
@@ -14873,8 +15985,11 @@ func (s *parameterResource) WithUrlForEndpoint(endpointName string, callback fun
 	if callback != nil {
 		cb := callback
 		shim := func(args ...any) any {
-			cb(callbackArg[*ResourceUrlAnnotation](args, 0))
-			return nil
+			arg0 := callbackArg[*ResourceUrlAnnotation](args, 0)
+			cb(arg0)
+			return map[string]any{
+				"p0": serializeValue(arg0),
+			}
 		}
 		reqArgs["callback"] = s.client.registerCallback(shim)
 	}
@@ -15295,8 +16410,6 @@ type PipelineStepContext interface {
 	PipelineContext() PipelineContext
 	ReportingStep() ReportingStep
 	Services() ServiceProvider
-	SetPipelineContext(value PipelineContext) PipelineStepContext
-	SetReportingStep(value ReportingStep) PipelineStepContext
 	Summary() PipelineSummary
 	Err() error
 }
@@ -15440,32 +16553,6 @@ func (s *pipelineStepContext) Services() ServiceProvider {
 	return &serviceProvider{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
 }
 
-// SetPipelineContext sets the PipelineContext property
-func (s *pipelineStepContext) SetPipelineContext(value PipelineContext) PipelineStepContext {
-	if s.err != nil { return s }
-	if value != nil { if err := value.Err(); err != nil { s.setErr(err); return s } }
-	ctx := context.Background()
-	reqArgs := map[string]any{
-		"context": s.handle.ToJSON(),
-	}
-	reqArgs["value"] = serializeValue(value)
-	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.Pipelines/PipelineStepContext.setPipelineContext", reqArgs); err != nil { s.setErr(err) }
-	return s
-}
-
-// SetReportingStep sets the ReportingStep property
-func (s *pipelineStepContext) SetReportingStep(value ReportingStep) PipelineStepContext {
-	if s.err != nil { return s }
-	if value != nil { if err := value.Err(); err != nil { s.setErr(err); return s } }
-	ctx := context.Background()
-	reqArgs := map[string]any{
-		"context": s.handle.ToJSON(),
-	}
-	reqArgs["value"] = serializeValue(value)
-	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.Pipelines/PipelineStepContext.setReportingStep", reqArgs); err != nil { s.setErr(err) }
-	return s
-}
-
 // Summary gets the Summary property
 func (s *pipelineStepContext) Summary() PipelineSummary {
 	if s.err != nil { return &pipelineSummary{resourceBuilderBase: newErroredResourceBuilder(s.err, s.client)} }
@@ -15490,8 +16577,6 @@ type PipelineStepFactoryContext interface {
 	handleReference
 	PipelineContext() PipelineContext
 	Resource() Resource
-	SetPipelineContext(value PipelineContext) PipelineStepFactoryContext
-	SetResource(value Resource) PipelineStepFactoryContext
 	Err() error
 }
 
@@ -15539,32 +16624,6 @@ func (s *pipelineStepFactoryContext) Resource() Resource {
 		return nil
 	}
 	return typed
-}
-
-// SetPipelineContext sets the PipelineContext property
-func (s *pipelineStepFactoryContext) SetPipelineContext(value PipelineContext) PipelineStepFactoryContext {
-	if s.err != nil { return s }
-	if value != nil { if err := value.Err(); err != nil { s.setErr(err); return s } }
-	ctx := context.Background()
-	reqArgs := map[string]any{
-		"context": s.handle.ToJSON(),
-	}
-	reqArgs["value"] = serializeValue(value)
-	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.Pipelines/PipelineStepFactoryContext.setPipelineContext", reqArgs); err != nil { s.setErr(err) }
-	return s
-}
-
-// SetResource sets the Resource property
-func (s *pipelineStepFactoryContext) SetResource(value Resource) PipelineStepFactoryContext {
-	if s.err != nil { return s }
-	if value != nil { if err := value.Err(); err != nil { s.setErr(err); return s } }
-	ctx := context.Background()
-	reqArgs := map[string]any{
-		"context": s.handle.ToJSON(),
-	}
-	reqArgs["value"] = serializeValue(value)
-	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.Pipelines/PipelineStepFactoryContext.setResource", reqArgs); err != nil { s.setErr(err) }
-	return s
 }
 
 // PipelineSummary is the public interface for handle type PipelineSummary.
@@ -15639,6 +16698,7 @@ type ProjectResource interface {
 	WithCertificateTrustScope(scope CertificateTrustScope) ProjectResource
 	WithChildRelationship(child Resource) ProjectResource
 	WithCommand(name string, displayName string, executeCommand func(arg ExecuteCommandContext) *ExecuteCommandResult, options ...*WithCommandOptions) ProjectResource
+	WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) ProjectResource
 	WithConfig(config *TestConfigDto) ProjectResource
 	WithContainerRegistry(registry Resource) ProjectResource
 	WithCorrelationId(correlationId string) ProjectResource
@@ -15682,6 +16742,8 @@ type ProjectResource interface {
 	WithParentRelationship(parent Resource) ProjectResource
 	WithPipelineConfiguration(callback func(obj PipelineConfigurationContext)) ProjectResource
 	WithPipelineStepFactory(stepName string, callback func(arg PipelineStepContext), options ...*WithPipelineStepFactoryOptions) ProjectResource
+	WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) ProjectResource
+	WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) ProjectResource
 	WithReference(source any, options ...*WithReferenceOptions) ProjectResource
 	WithReferenceEnvironment(options *ReferenceEnvironmentInjectionOptions) ProjectResource
 	WithRelationship(resourceBuilder Resource, type_ string) ProjectResource
@@ -16133,6 +17195,19 @@ func (s *projectResource) WithCommand(name string, displayName string, executeCo
 		for k, v := range merged.ToMap() { reqArgs[k] = v }
 	}
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithComputeEnvironment configures the compute environment for the compute resource
+func (s *projectResource) WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) ProjectResource {
+	if s.err != nil { return s }
+	if computeEnvironmentResource != nil { if err := computeEnvironmentResource.Err(); err != nil { s.setErr(err); return s } }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["computeEnvironmentResource"] = serializeValue(computeEnvironmentResource)
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withComputeEnvironment", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
 
@@ -16856,6 +17931,47 @@ func (s *projectResource) WithPipelineStepFactory(stepName string, callback func
 	return s
 }
 
+// WithProcessCommand adds a process resource command
+func (s *projectResource) WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) ProjectResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if options != nil { reqArgs["options"] = serializeValue(options) }
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithProcessCommandFactory adds a process resource command via callback
+func (s *projectResource) WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) ProjectResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if createProcessSpec != nil {
+		cb := createProcessSpec
+		shim := func(args ...any) any {
+			return cb(callbackArg[ExecuteCommandContext](args, 0))
+		}
+		reqArgs["createProcessSpec"] = s.client.registerCallback(shim)
+	}
+	if len(options) > 0 {
+		merged := &WithProcessCommandFactoryOptions{}
+		for _, opt := range options {
+			if opt != nil { merged = deepUpdate(merged, opt) }
+		}
+		for k, v := range merged.ToMap() { reqArgs[k] = v }
+	}
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommandFactory", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
 // WithReference adds a reference to another resource
 // Allowed types for parameter source: Resource, EndpointReference, string.
 func (s *projectResource) WithReference(source any, options ...*WithReferenceOptions) ProjectResource {
@@ -17031,8 +18147,11 @@ func (s *projectResource) WithUrlForEndpoint(endpointName string, callback func(
 	if callback != nil {
 		cb := callback
 		shim := func(args ...any) any {
-			cb(callbackArg[*ResourceUrlAnnotation](args, 0))
-			return nil
+			arg0 := callbackArg[*ResourceUrlAnnotation](args, 0)
+			cb(arg0)
+			return map[string]any{
+				"p0": serializeValue(arg0),
+			}
 		}
 		reqArgs["callback"] = s.client.registerCallback(shim)
 	}
@@ -18490,6 +19609,7 @@ type TestDatabaseResource interface {
 	WithCertificateTrustScope(scope CertificateTrustScope) TestDatabaseResource
 	WithChildRelationship(child Resource) TestDatabaseResource
 	WithCommand(name string, displayName string, executeCommand func(arg ExecuteCommandContext) *ExecuteCommandResult, options ...*WithCommandOptions) TestDatabaseResource
+	WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) TestDatabaseResource
 	WithConfig(config *TestConfigDto) TestDatabaseResource
 	WithContainerCertificatePaths(options ...*WithContainerCertificatePathsOptions) TestDatabaseResource
 	WithContainerName(name string) TestDatabaseResource
@@ -18547,6 +19667,8 @@ type TestDatabaseResource interface {
 	WithParentRelationship(parent Resource) TestDatabaseResource
 	WithPipelineConfiguration(callback func(obj PipelineConfigurationContext)) TestDatabaseResource
 	WithPipelineStepFactory(stepName string, callback func(arg PipelineStepContext), options ...*WithPipelineStepFactoryOptions) TestDatabaseResource
+	WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) TestDatabaseResource
+	WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) TestDatabaseResource
 	WithReference(source any, options ...*WithReferenceOptions) TestDatabaseResource
 	WithReferenceEnvironment(options *ReferenceEnvironmentInjectionOptions) TestDatabaseResource
 	WithRelationship(resourceBuilder Resource, type_ string) TestDatabaseResource
@@ -19023,6 +20145,19 @@ func (s *testDatabaseResource) WithCommand(name string, displayName string, exec
 		for k, v := range merged.ToMap() { reqArgs[k] = v }
 	}
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithComputeEnvironment configures the compute environment for the compute resource
+func (s *testDatabaseResource) WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) TestDatabaseResource {
+	if s.err != nil { return s }
+	if computeEnvironmentResource != nil { if err := computeEnvironmentResource.Err(); err != nil { s.setErr(err); return s } }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["computeEnvironmentResource"] = serializeValue(computeEnvironmentResource)
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withComputeEnvironment", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
 
@@ -19949,6 +21084,47 @@ func (s *testDatabaseResource) WithPipelineStepFactory(stepName string, callback
 	return s
 }
 
+// WithProcessCommand adds a process resource command
+func (s *testDatabaseResource) WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) TestDatabaseResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if options != nil { reqArgs["options"] = serializeValue(options) }
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithProcessCommandFactory adds a process resource command via callback
+func (s *testDatabaseResource) WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) TestDatabaseResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if createProcessSpec != nil {
+		cb := createProcessSpec
+		shim := func(args ...any) any {
+			return cb(callbackArg[ExecuteCommandContext](args, 0))
+		}
+		reqArgs["createProcessSpec"] = s.client.registerCallback(shim)
+	}
+	if len(options) > 0 {
+		merged := &WithProcessCommandFactoryOptions{}
+		for _, opt := range options {
+			if opt != nil { merged = deepUpdate(merged, opt) }
+		}
+		for k, v := range merged.ToMap() { reqArgs[k] = v }
+	}
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommandFactory", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
 // WithReference adds a reference to another resource
 // Allowed types for parameter source: Resource, EndpointReference, string.
 func (s *testDatabaseResource) WithReference(source any, options ...*WithReferenceOptions) TestDatabaseResource {
@@ -20112,8 +21288,11 @@ func (s *testDatabaseResource) WithUrlForEndpoint(endpointName string, callback 
 	if callback != nil {
 		cb := callback
 		shim := func(args ...any) any {
-			cb(callbackArg[*ResourceUrlAnnotation](args, 0))
-			return nil
+			arg0 := callbackArg[*ResourceUrlAnnotation](args, 0)
+			cb(arg0)
+			return map[string]any{
+				"p0": serializeValue(arg0),
+			}
 		}
 		reqArgs["callback"] = s.client.registerCallback(shim)
 	}
@@ -20389,6 +21568,7 @@ type TestRedisResource interface {
 	WithCertificateTrustScope(scope CertificateTrustScope) TestRedisResource
 	WithChildRelationship(child Resource) TestRedisResource
 	WithCommand(name string, displayName string, executeCommand func(arg ExecuteCommandContext) *ExecuteCommandResult, options ...*WithCommandOptions) TestRedisResource
+	WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) TestRedisResource
 	WithConfig(config *TestConfigDto) TestRedisResource
 	WithConnectionProperty(name string, value any) TestRedisResource
 	WithConnectionString(connectionString *ReferenceExpression) TestRedisResource
@@ -20452,6 +21632,8 @@ type TestRedisResource interface {
 	WithPersistence(options ...*WithPersistenceOptions) TestRedisResource
 	WithPipelineConfiguration(callback func(obj PipelineConfigurationContext)) TestRedisResource
 	WithPipelineStepFactory(stepName string, callback func(arg PipelineStepContext), options ...*WithPipelineStepFactoryOptions) TestRedisResource
+	WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) TestRedisResource
+	WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) TestRedisResource
 	WithRedisSpecific(option string) TestRedisResource
 	WithReference(source any, options ...*WithReferenceOptions) TestRedisResource
 	WithReferenceEnvironment(options *ReferenceEnvironmentInjectionOptions) TestRedisResource
@@ -21085,6 +22267,19 @@ func (s *testRedisResource) WithCommand(name string, displayName string, execute
 		for k, v := range merged.ToMap() { reqArgs[k] = v }
 	}
 	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithComputeEnvironment configures the compute environment for the compute resource
+func (s *testRedisResource) WithComputeEnvironment(computeEnvironmentResource ComputeEnvironmentResource) TestRedisResource {
+	if s.err != nil { return s }
+	if computeEnvironmentResource != nil { if err := computeEnvironmentResource.Err(); err != nil { s.setErr(err); return s } }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["computeEnvironmentResource"] = serializeValue(computeEnvironmentResource)
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withComputeEnvironment", reqArgs); err != nil { s.setErr(err) }
 	return s
 }
 
@@ -22111,6 +23306,47 @@ func (s *testRedisResource) WithPipelineStepFactory(stepName string, callback fu
 	return s
 }
 
+// WithProcessCommand adds a process resource command
+func (s *testRedisResource) WithProcessCommand(commandName string, displayName string, options *ProcessCommandExportOptions) TestRedisResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if options != nil { reqArgs["options"] = serializeValue(options) }
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommand", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
+// WithProcessCommandFactory adds a process resource command via callback
+func (s *testRedisResource) WithProcessCommandFactory(commandName string, displayName string, createProcessSpec func(arg ExecuteCommandContext) *ProcessCommandSpecExportData, options ...*WithProcessCommandFactoryOptions) TestRedisResource {
+	if s.err != nil { return s }
+	ctx := context.Background()
+	reqArgs := map[string]any{
+		"builder": s.handle.ToJSON(),
+	}
+	reqArgs["commandName"] = serializeValue(commandName)
+	reqArgs["displayName"] = serializeValue(displayName)
+	if createProcessSpec != nil {
+		cb := createProcessSpec
+		shim := func(args ...any) any {
+			return cb(callbackArg[ExecuteCommandContext](args, 0))
+		}
+		reqArgs["createProcessSpec"] = s.client.registerCallback(shim)
+	}
+	if len(options) > 0 {
+		merged := &WithProcessCommandFactoryOptions{}
+		for _, opt := range options {
+			if opt != nil { merged = deepUpdate(merged, opt) }
+		}
+		for k, v := range merged.ToMap() { reqArgs[k] = v }
+	}
+	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting/withProcessCommandFactory", reqArgs); err != nil { s.setErr(err) }
+	return s
+}
+
 // WithRedisSpecific redis-specific configuration
 func (s *testRedisResource) WithRedisSpecific(option string) TestRedisResource {
 	if s.err != nil { return s }
@@ -22286,8 +23522,11 @@ func (s *testRedisResource) WithUrlForEndpoint(endpointName string, callback fun
 	if callback != nil {
 		cb := callback
 		shim := func(args ...any) any {
-			cb(callbackArg[*ResourceUrlAnnotation](args, 0))
-			return nil
+			arg0 := callbackArg[*ResourceUrlAnnotation](args, 0)
+			cb(arg0)
+			return map[string]any{
+				"p0": serializeValue(arg0),
+			}
 		}
 		reqArgs["callback"] = s.client.registerCallback(shim)
 	}
@@ -22485,7 +23724,6 @@ func (s *testResourceContext) Value() (float64, error) {
 type UpdateCommandStateContext interface {
 	handleReference
 	ServiceProvider() ServiceProvider
-	SetServiceProvider(value ServiceProvider) UpdateCommandStateContext
 	Err() error
 }
 
@@ -22516,19 +23754,6 @@ func (s *updateCommandStateContext) ServiceProvider() ServiceProvider {
 		return &serviceProvider{resourceBuilderBase: newErroredResourceBuilder(err, s.client)}
 	}
 	return &serviceProvider{resourceBuilderBase: newResourceBuilderBase(href.getHandle(), s.client)}
-}
-
-// SetServiceProvider sets the ServiceProvider property
-func (s *updateCommandStateContext) SetServiceProvider(value ServiceProvider) UpdateCommandStateContext {
-	if s.err != nil { return s }
-	if value != nil { if err := value.Err(); err != nil { s.setErr(err); return s } }
-	ctx := context.Background()
-	reqArgs := map[string]any{
-		"context": s.handle.ToJSON(),
-	}
-	reqArgs["value"] = serializeValue(value)
-	if _, err := s.client.invokeCapability(ctx, "Aspire.Hosting.ApplicationModel/UpdateCommandStateContext.setServiceProvider", reqArgs); err != nil { s.setErr(err) }
-	return s
 }
 
 // UserSecretsManager is the public interface for handle type UserSecretsManager.
@@ -23126,6 +24351,18 @@ func (o *WithCommandOptions) ToMap() map[string]any {
 	return m
 }
 
+// WithProcessCommandFactoryOptions carries optional parameters for WithProcessCommandFactory.
+type WithProcessCommandFactoryOptions struct {
+	Options *ProcessCommandResultExportOptions `json:"options,omitempty"`
+}
+
+func (o *WithProcessCommandFactoryOptions) ToMap() map[string]any {
+	m := map[string]any{}
+	if o == nil { return m }
+	if o.Options != nil { m["options"] = serializeValue(o.Options) }
+	return m
+}
+
 // WithHttpCommandOptions carries optional parameters for WithHttpCommand.
 type WithHttpCommandOptions struct {
 	Options *HttpCommandExportOptions `json:"options,omitempty"`
@@ -23655,6 +24892,9 @@ func registerWrappers(c *client) {
 	c.registerHandleWrapper("Aspire.Hosting/Aspire.Hosting.ApplicationModel.ReferenceExpression", func(h *handle, c *client) any {
 		return newHandleBackedReferenceExpression(h, c)
 	})
+	c.registerHandleWrapper("Aspire.Hosting/Aspire.Hosting.Publishing.AfterPublishEvent", func(h *handle, c *client) any {
+		return newAfterPublishEventFromHandle(h, c)
+	})
 	c.registerHandleWrapper("Aspire.Hosting/Aspire.Hosting.ApplicationModel.AfterResourcesCreatedEvent", func(h *handle, c *client) any {
 		return newAfterResourcesCreatedEventFromHandle(h, c)
 	})
@@ -23663,6 +24903,9 @@ func registerWrappers(c *client) {
 	})
 	c.registerHandleWrapper("Aspire.Hosting.CodeGeneration.Go.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestVaultResource", func(h *handle, c *client) any {
 		return newAspire_Hosting_CodeGeneration_Go_TestsTestVaultResourceFromHandle(h, c)
+	})
+	c.registerHandleWrapper("Aspire.Hosting/Aspire.Hosting.Publishing.BeforePublishEvent", func(h *handle, c *client) any {
+		return newBeforePublishEventFromHandle(h, c)
 	})
 	c.registerHandleWrapper("Aspire.Hosting/Aspire.Hosting.ApplicationModel.BeforeResourceStartedEvent", func(h *handle, c *client) any {
 		return newBeforeResourceStartedEventFromHandle(h, c)
@@ -23681,6 +24924,9 @@ func registerWrappers(c *client) {
 	})
 	c.registerHandleWrapper("Microsoft.Extensions.Configuration.Abstractions/Microsoft.Extensions.Configuration.IConfiguration", func(h *handle, c *client) any {
 		return newConfigurationFromHandle(h, c)
+	})
+	c.registerHandleWrapper("Microsoft.Extensions.Configuration.Abstractions/Microsoft.Extensions.Configuration.IConfigurationSection", func(h *handle, c *client) any {
+		return newConfigurationSectionFromHandle(h, c)
 	})
 	c.registerHandleWrapper("Aspire.Hosting/Aspire.Hosting.ApplicationModel.ConnectionStringAvailableEvent", func(h *handle, c *client) any {
 		return newConnectionStringAvailableEventFromHandle(h, c)
@@ -23789,6 +25035,12 @@ func registerWrappers(c *client) {
 	})
 	c.registerHandleWrapper("Aspire.Hosting/Aspire.Hosting.ApplicationModel.InitializeResourceEvent", func(h *handle, c *client) any {
 		return newInitializeResourceEventFromHandle(h, c)
+	})
+	c.registerHandleWrapper("Aspire.Hosting/Aspire.Hosting.InputsDialogValidationContext", func(h *handle, c *client) any {
+		return newInputsDialogValidationContextFromHandle(h, c)
+	})
+	c.registerHandleWrapper("Aspire.Hosting/Aspire.Hosting.InteractionInputCollection", func(h *handle, c *client) any {
+		return newInteractionInputCollectionFromHandle(h, c)
 	})
 	c.registerHandleWrapper("Aspire.Hosting/Aspire.Hosting.ApplicationModel.LogFacade", func(h *handle, c *client) any {
 		return newLogFacadeFromHandle(h, c)
@@ -23930,8 +25182,14 @@ func CreateBuilder(options ...*CreateBuilderOptions) (DistributedApplicationBuil
 		for k, v := range merged.ToMap() { resolved[k] = v }
 	}
 	if _, ok := resolved["Args"]; !ok { resolved["Args"] = os.Args[1:] }
-	if _, ok := resolved["ProjectDirectory"]; !ok {
+	if projectDirectory, ok := resolved["ProjectDirectory"].(string); !ok || projectDirectory == "" {
 		if pwd, err := os.Getwd(); err == nil { resolved["ProjectDirectory"] = pwd }
+	}
+	if appHostFilePath, ok := resolved["AppHostFilePath"].(string); !ok || appHostFilePath == "" {
+		if appHostFilePath := os.Getenv("ASPIRE_APPHOST_FILEPATH"); appHostFilePath != "" { resolved["AppHostFilePath"] = appHostFilePath }
+	}
+	if dashboardApplicationName, ok := resolved["DashboardApplicationName"].(string); ok && dashboardApplicationName == "" {
+		delete(resolved, "DashboardApplicationName")
 	}
 
 	result, err := c.invokeCapability(context.Background(), "Aspire.Hosting/createBuilder", map[string]any{"argsOrOptions": resolved})

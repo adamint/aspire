@@ -30,6 +30,9 @@ internal sealed class AppHostDisplayInfo
     public string? DashboardUrl { get; init; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? LogFilePath { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<ResourceJson>? Resources { get; set; }
 }
 
@@ -40,6 +43,7 @@ internal sealed class AppHostDisplayInfo
 [JsonSerializable(typeof(ResourceRelationshipJson))]
 [JsonSerializable(typeof(ResourceHealthReportJson))]
 [JsonSerializable(typeof(ResourceCommandJson))]
+[JsonSerializable(typeof(ResourceCommandArgumentJson[]))]
 [JsonSerializable(typeof(Dictionary<string, string?>))]
 [JsonSerializable(typeof(Dictionary<string, ResourceHealthReportJson>))]
 [JsonSerializable(typeof(Dictionary<string, ResourceCommandJson>))]
@@ -94,7 +98,7 @@ internal sealed class PsCommand : BaseCommand
         Options.Add(s_resourcesOption);
     }
 
-    protected override async Task<int> ExecuteAsync(ParseResult parseResult, CancellationToken cancellationToken)
+    protected override async Task<CommandResult> ExecuteAsync(ParseResult parseResult, CancellationToken cancellationToken)
     {
         using var activity = Telemetry.StartDiagnosticActivity(Name);
 
@@ -122,7 +126,7 @@ internal sealed class PsCommand : BaseCommand
             {
                 _interactionService.DisplayMessage(KnownEmojis.Information, SharedCommandStrings.AppHostNotRunning);
             }
-            return ExitCodeConstants.Success;
+            return CommandResult.Success();
         }
 
         // Order: in-scope first, then out-of-scope
@@ -144,7 +148,7 @@ internal sealed class PsCommand : BaseCommand
             DisplayTable(appHostInfos);
         }
 
-        return ExitCodeConstants.Success;
+        return CommandResult.Success();
     }
 
     private async Task<List<AppHostDisplayInfo>> GatherAppHostInfosAsync(List<IAppHostAuxiliaryBackchannel> connections, bool includeResources, CancellationToken cancellationToken)
@@ -163,6 +167,7 @@ internal sealed class PsCommand : BaseCommand
             var appHostPath = info.AppHostPath;
             var appHostPid = info.ProcessId;
             var cliPid = info.CliProcessId;
+            var cliLogFilePath = info.CliLogFilePath;
 
             try
             {
@@ -174,6 +179,7 @@ internal sealed class PsCommand : BaseCommand
                         sdkVersion = GetSdkVersion(v2Info.AspireHostVersion);
                         appHostPath = string.IsNullOrWhiteSpace(v2Info.AppHostPath) ? appHostPath : v2Info.AppHostPath;
                         cliPid = v2Info.CliProcessId ?? cliPid;
+                        cliLogFilePath = v2Info.CliLogFilePath ?? cliLogFilePath;
 
                         if (int.TryParse(v2Info.Pid, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedPid))
                         {
@@ -220,6 +226,7 @@ internal sealed class PsCommand : BaseCommand
                 SdkVersion = sdkVersion,
                 CliPid = cliPid,
                 DashboardUrl = dashboardUrl,
+                LogFilePath = cliLogFilePath,
                 Resources = resources
             });
         }
@@ -247,11 +254,20 @@ internal sealed class PsCommand : BaseCommand
 
         var shortPaths = FileSystemHelper.ShortenPaths(appHosts.Select(a => a.AppHostPath).ToList());
 
+        // Only show the CLI Log column when at least one app host has a log file path.
+        var includeCliLog = appHosts.Any(a => !string.IsNullOrEmpty(a.LogFilePath));
+
         var table = new Table();
         table.AddBoldColumn(PsCommandStrings.HeaderPath);
         table.AddBoldColumn(PsCommandStrings.HeaderSdk);
         table.AddBoldColumn(PsCommandStrings.HeaderPid);
         table.AddBoldColumn(PsCommandStrings.HeaderCliPid);
+
+        if (includeCliLog)
+        {
+            table.AddBoldColumn(PsCommandStrings.HeaderCliLog);
+        }
+
         table.AddBoldColumn(PsCommandStrings.HeaderDashboard);
 
         foreach (var appHost in appHosts)
@@ -263,7 +279,7 @@ internal sealed class PsCommand : BaseCommand
             {
                 if (Uri.TryCreate(appHost.DashboardUrl, UriKind.Absolute, out _))
                 {
-                    dashboard = $"[link={Markup.Escape(appHost.DashboardUrl)}]{Markup.Escape(appHost.DashboardUrl)}[/]";
+                    dashboard = MarkupHelpers.SafeLink(_interactionService, appHost.DashboardUrl);
                 }
                 else
                 {
@@ -271,12 +287,28 @@ internal sealed class PsCommand : BaseCommand
                 }
             }
 
-            table.AddRow(
+            var columns = new List<string>
+            {
                 Markup.Escape(shortPath),
                 Markup.Escape(appHost.SdkVersion ?? "-"),
                 appHost.AppHostPid.ToString(CultureInfo.InvariantCulture),
                 cliPid,
-                dashboard);
+            };
+
+            if (includeCliLog)
+            {
+                var logDisplay = "-";
+                if (!string.IsNullOrEmpty(appHost.LogFilePath))
+                {
+                    logDisplay = MarkupHelpers.SafeFileLink(_interactionService, appHost.LogFilePath, Path.GetFileName(appHost.LogFilePath));
+                }
+
+                columns.Add(logDisplay);
+            }
+
+            columns.Add(dashboard);
+
+            table.AddRow(columns.ToArray());
         }
 
         _interactionService.DisplayRenderable(table);

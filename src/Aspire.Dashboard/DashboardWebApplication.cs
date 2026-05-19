@@ -4,7 +4,6 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Net.Sockets;
-using System.Reflection;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using Aspire.Dashboard.Api;
@@ -13,6 +12,7 @@ using Aspire.Dashboard.Authentication.Connection;
 using Aspire.Dashboard.Authentication.OpenIdConnect;
 using Aspire.Dashboard.Authentication.OtlpApiKey;
 using Aspire.Dashboard.Components;
+using Aspire.Shared;
 using Aspire.Dashboard.Components.Pages;
 using Aspire.Dashboard.Configuration;
 using Aspire.Dashboard.Model;
@@ -132,6 +132,15 @@ public sealed class DashboardWebApplication : IAsyncDisposable
         AppContext.SetData("Microsoft.AspNetCore.Components.Web.Virtualization.Virtualize.MaxItemCount", 10_000);
 
         var builder = options is not null ? WebApplication.CreateBuilder(options) : WebApplication.CreateBuilder();
+
+        // WebApplication.CreateBuilder already enables static web assets in the Development environment.
+        // The dashboard also needs them in other environments when running from source (e.g. to serve
+        // _content/ files from NuGet packages like FluentUI). The call is a no-op when published
+        // because the static web assets manifest doesn't exist.
+        if (!builder.Environment.IsDevelopment())
+        {
+            builder.WebHost.UseStaticWebAssets();
+        }
 
         preConfigureBuilder?.Invoke(builder);
 
@@ -542,11 +551,11 @@ public sealed class DashboardWebApplication : IAsyncDisposable
 
     private static void WriteVersion(ILogger<DashboardWebApplication> logger)
     {
-        if (typeof(DashboardWebApplication).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion is string informationalVersion)
+        if (AssemblyVersionHelper.GetInformationalVersion(typeof(DashboardWebApplication).Assembly) is { Length: > 0 } informationalVersion)
         {
             // Write version at info level so it's written to the console by default. Help us debug user issues.
             // Display version and commit like 8.0.0-preview.2.23619.3+17dd83f67c6822954ec9a918ef2d048a78ad4697
-            logger.LogInformation("Aspire version: {Version}", informationalVersion);
+            logger.LogInformation("Aspire dashboard version: {Version}", informationalVersion);
         }
     }
 

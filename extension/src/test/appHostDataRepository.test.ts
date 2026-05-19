@@ -11,11 +11,26 @@ class TestChildProcess extends EventEmitter {
     stdout = new PassThrough();
     stderr = new PassThrough();
     killed = false;
+    exitCode: number | null = null;
+    signalCode: NodeJS.Signals | null = null;
+    killSignals: Array<NodeJS.Signals | number | undefined> = [];
 
-    kill(): boolean {
+    constructor(private readonly _closeOnKill = true) {
+        super();
+    }
+
+    kill(signal?: NodeJS.Signals | number): boolean {
         this.killed = true;
-        this.emit('close', null);
+        this.killSignals.push(signal);
+        if (this._closeOnKill) {
+            this.exitCode = 0;
+            this.emit('close', null);
+        }
         return true;
+    }
+
+    markExited(exitCode = 0): void {
+        this.exitCode = exitCode;
     }
 }
 
@@ -179,6 +194,125 @@ suite('AppHostDataRepository', () => {
         assert.strictEqual(repository.workspaceResources.length, 1);
 
         repository.dispose();
+    });
+
+    test('workspace ps success does not clear describe error', async () => {
+        let getAppHostsLineCallback: ((line: string) => void) | undefined;
+        const getAppHostsProcess = new TestChildProcess();
+        const describeProcess = new TestChildProcess();
+        const psProcess = new TestChildProcess();
+        spawnStub.onFirstCall().callsFake((_terminalProvider, _command, _args, options) => {
+            getAppHostsLineCallback = options?.lineCallback;
+            return getAppHostsProcess;
+        });
+        spawnStub.onSecondCall().returns(describeProcess);
+        spawnStub.onThirdCall().returns(psProcess);
+        const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').value([{
+            uri: vscode.Uri.file('/workspace'),
+            name: 'workspace',
+            index: 0,
+        }]);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            repository.activate();
+            repository.setPanelVisible(true);
+            await waitForMicrotasks();
+            assert.ok(getAppHostsLineCallback);
+
+            getAppHostsLineCallback(JSON.stringify({
+                selected_project_file: '/workspace/apps/Store/AppHost.csproj',
+                all_project_file_candidates: [
+                    '/workspace/apps/Store/AppHost.csproj',
+                ],
+            }));
+            await waitForMicrotasks();
+
+            const describeErrorCallback = spawnStub.secondCall.args[3].errorCallback;
+            describeErrorCallback(new Error('describe failed'));
+            assert.ok(repository.errorMessage?.includes('describe failed'), repository.errorMessage);
+
+            const psOptions = spawnStub.thirdCall.args[3];
+            psOptions.stdoutCallback(JSON.stringify([{
+                appHostPath: '/workspace/apps/Store/AppHost.csproj',
+                appHostPid: 1234,
+                cliPid: null,
+                dashboardUrl: null,
+                resources: null,
+            }]));
+            psOptions.exitCallback(0);
+
+            assert.ok(repository.errorMessage?.includes('describe failed'), repository.errorMessage);
+        } finally {
+            repository.dispose();
+            workspaceFoldersStub.restore();
+        }
+    });
+
+    test('workspace ps success clears previous ps error', async () => {
+        let getAppHostsLineCallback: ((line: string) => void) | undefined;
+        const getAppHostsProcess = new TestChildProcess();
+        const describeProcess = new TestChildProcess();
+        const psResourcesProcess = new TestChildProcess();
+        const psFallbackProcess = new TestChildProcess();
+        const replacementDescribeProcess = new TestChildProcess();
+        const psSuccessProcess = new TestChildProcess();
+        spawnStub.onFirstCall().callsFake((_terminalProvider, _command, _args, options) => {
+            getAppHostsLineCallback = options?.lineCallback;
+            return getAppHostsProcess;
+        });
+        spawnStub.onSecondCall().returns(describeProcess);
+        spawnStub.onThirdCall().returns(psResourcesProcess);
+        spawnStub.onCall(3).returns(psFallbackProcess);
+        spawnStub.onCall(4).returns(replacementDescribeProcess);
+        spawnStub.onCall(5).returns(psSuccessProcess);
+        const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').value([{
+            uri: vscode.Uri.file('/workspace'),
+            name: 'workspace',
+            index: 0,
+        }]);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            repository.activate();
+            repository.setPanelVisible(true);
+            await waitForMicrotasks();
+            assert.ok(getAppHostsLineCallback);
+
+            getAppHostsLineCallback(JSON.stringify({
+                selected_project_file: '/workspace/apps/Store/AppHost.csproj',
+                all_project_file_candidates: [
+                    '/workspace/apps/Store/AppHost.csproj',
+                ],
+            }));
+            await waitForMicrotasks();
+
+            const psResourcesOptions = spawnStub.thirdCall.args[3];
+            psResourcesOptions.stderrCallback('resources unavailable');
+            psResourcesOptions.exitCallback(1);
+            await waitForMicrotasks();
+
+            const psFallbackOptions = spawnStub.getCall(3).args[3];
+            psFallbackOptions.stderrCallback('ps failed');
+            psFallbackOptions.exitCallback(1);
+            assert.ok(repository.errorMessage?.includes('ps failed'), repository.errorMessage);
+
+            repository.setPanelVisible(false);
+            repository.setPanelVisible(true);
+            await waitForMicrotasks();
+            await waitForMicrotasks();
+
+            const psSuccessCall = spawnStub.getCalls().slice(4).find(call => call.args[2][0] === 'ps');
+            assert.ok(psSuccessCall);
+            const psSuccessOptions = psSuccessCall.args[3];
+            psSuccessOptions.stdoutCallback('[]');
+            psSuccessOptions.exitCallback(0);
+
+            assert.strictEqual(repository.errorMessage, undefined);
+        } finally {
+            repository.dispose();
+            workspaceFoldersStub.restore();
+        }
     });
 
     test('visible panel switches to global polling when workspace has multiple AppHosts and none is selected', async () => {
@@ -366,6 +500,65 @@ suite('AppHostDataRepository', () => {
         repository.dispose();
     });
 
+    test('visible workspace panel tracks running AppHost with no resources from ps', async () => {
+        const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').value([{
+            uri: vscode.Uri.file('/workspace'),
+            name: 'workspace',
+            index: 0,
+        }]);
+        let getAppHostsLineCallback: ((line: string) => void) | undefined;
+        let psArgs: string[] | undefined;
+        let psOptions: any;
+        spawnStub.callsFake((_terminalProvider, _command, args, options) => {
+            if (args[0] === 'extension') {
+                getAppHostsLineCallback = options.lineCallback;
+            }
+            if (args[0] === 'ps') {
+                psArgs = args;
+                psOptions = options;
+            }
+            return new TestChildProcess();
+        });
+
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            repository.activate();
+            repository.setPanelVisible(true);
+            await waitForMicrotasks();
+
+            assert.ok(getAppHostsLineCallback);
+            getAppHostsLineCallback(JSON.stringify({
+                selected_project_file: '/workspace/apphost/apphost.cs',
+                all_project_file_candidates: ['/workspace/apphost/apphost.cs'],
+            }));
+            await waitForMicrotasks();
+
+            assert.ok(psOptions);
+            assert.deepStrictEqual(psArgs, ['ps', '--format', 'json', '--resources']);
+            psOptions.stdoutCallback(JSON.stringify([{
+                appHostPath: '/workspace/apphost/apphost.cs',
+                appHostPid: 125881,
+                cliPid: 125738,
+                dashboardUrl: 'https://localhost:17193/login?t=061212',
+                resources: [],
+            }]));
+            psOptions.exitCallback(0);
+
+            assert.strictEqual(repository.workspaceResources.length, 0);
+            assert.strictEqual(repository.workspaceAppHost?.appHostPid, 125881);
+            assert.strictEqual(repository.workspaceAppHost?.cliPid, 125738);
+            assert.strictEqual(repository.workspaceAppHost?.dashboardUrl, 'https://localhost:17193/login?t=061212');
+
+            repository.setPanelVisible(false);
+
+            assert.strictEqual(repository.workspaceAppHost, undefined);
+        } finally {
+            repository.dispose();
+            workspaceFoldersStub.restore();
+        }
+    });
+
     test('late close from stopped describe watch does not orphan replacement watch', async () => {
         const firstChildProcess = new TestChildProcess();
         const secondChildProcess = new TestChildProcess();
@@ -390,6 +583,198 @@ suite('AppHostDataRepository', () => {
         assert.strictEqual(repository.workspaceResources.length, 0);
         assert.strictEqual(firstChildProcess.killed, true);
         assert.strictEqual(secondChildProcess.killed, true);
+
+        repository.dispose();
+    });
+
+    test('stubborn describe watch is force killed', async () => {
+        const clock = sinon.useFakeTimers();
+        const childProcess = new TestChildProcess(false);
+        spawnStub.returns(childProcess);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            repository.activate();
+            repository.setPanelVisible(true);
+            await waitForMicrotasks();
+
+            repository.setPanelVisible(false);
+            clock.tick(5000);
+
+            assert.deepStrictEqual(childProcess.killSignals, [undefined, 'SIGKILL']);
+        } finally {
+            repository.dispose();
+            clock.restore();
+        }
+    });
+
+    test('already-exited describe watch is not terminated again', async () => {
+        const childProcess = new TestChildProcess();
+        childProcess.markExited();
+        spawnStub.returns(childProcess);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        repository.setPanelVisible(true);
+        await waitForMicrotasks();
+
+        repository.setPanelVisible(false);
+
+        assert.strictEqual(childProcess.killed, false);
+        assert.strictEqual(childProcess.listenerCount('close'), 0);
+        assert.strictEqual(childProcess.listenerCount('exit'), 0);
+
+        repository.dispose();
+    });
+});
+
+suite('AppHostDataRepository global polling', () => {
+    let terminalProvider: AspireTerminalProvider;
+    let subscriptions: vscode.Disposable[];
+    let getCliPathStub: sinon.SinonStub;
+    let spawnStub: sinon.SinonStub;
+
+    setup(() => {
+        subscriptions = [];
+        terminalProvider = new AspireTerminalProvider(subscriptions);
+        getCliPathStub = sinon.stub(terminalProvider, 'getAspireCliExecutablePath').resolves('aspire');
+        spawnStub = sinon.stub(cliModule, 'spawnCliProcess');
+        spawnStub.callsFake(() => new TestChildProcess());
+    });
+
+    teardown(() => {
+        spawnStub.restore();
+        getCliPathStub.restore();
+        subscriptions.forEach(subscription => subscription.dispose());
+    });
+
+    test('hiding global panel kills in-flight ps process', async () => {
+        const childProcess = new TestChildProcess();
+        spawnStub.returns(childProcess);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        repository.setViewMode('global');
+        repository.setPanelVisible(true);
+        await waitForMicrotasks();
+
+        assert.deepStrictEqual(spawnStub.firstCall.args[2], ['ps', '--format', 'json', '--resources']);
+
+        repository.setPanelVisible(false);
+
+        assert.strictEqual(childProcess.killed, true);
+
+        repository.dispose();
+    });
+
+    test('hiding global panel before cli path resolves prevents ps from starting', async () => {
+        const cliPath = createDeferred<string>();
+        getCliPathStub.returns(cliPath.promise);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        repository.setViewMode('global');
+        repository.setPanelVisible(true);
+        repository.setPanelVisible(false);
+        cliPath.resolve('aspire');
+        await waitForMicrotasks();
+
+        assert.strictEqual(spawnStub.called, false);
+
+        repository.setPanelVisible(true);
+        await waitForMicrotasks();
+
+        assert.strictEqual(spawnStub.calledOnce, true);
+
+        repository.dispose();
+    });
+
+    test('cli path failure does not disable resources polling', async () => {
+        const clock = sinon.useFakeTimers();
+        getCliPathStub.onFirstCall().rejects(new Error('CLI path unavailable'));
+        getCliPathStub.onSecondCall().resolves('aspire');
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            repository.activate();
+            repository.setViewMode('global');
+            repository.setPanelVisible(true);
+            await waitForMicrotasks();
+
+            assert.strictEqual(spawnStub.called, false);
+
+            clock.tick(30000);
+            await waitForMicrotasks();
+
+            assert.strictEqual(spawnStub.calledOnce, true);
+            assert.deepStrictEqual(spawnStub.firstCall.args[2], ['ps', '--format', 'json', '--resources']);
+        } finally {
+            repository.dispose();
+            clock.restore();
+        }
+    });
+
+    test('stopped ps does not start fallback after resources failure', async () => {
+        const childProcess = new TestChildProcess();
+        spawnStub.returns(childProcess);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        repository.setViewMode('global');
+        repository.setPanelVisible(true);
+        await waitForMicrotasks();
+        const exitCallback = spawnStub.firstCall.args[3].exitCallback;
+
+        repository.setPanelVisible(false);
+        exitCallback(1);
+        await waitForMicrotasks();
+
+        assert.strictEqual(spawnStub.calledOnce, true);
+
+        repository.dispose();
+    });
+
+    test('dispose kills in-flight ps fallback process', async () => {
+        const firstChildProcess = new TestChildProcess();
+        const fallbackChildProcess = new TestChildProcess();
+        spawnStub.onFirstCall().returns(firstChildProcess);
+        spawnStub.onSecondCall().returns(fallbackChildProcess);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        repository.setViewMode('global');
+        repository.setPanelVisible(true);
+        await waitForMicrotasks();
+        const exitCallback = spawnStub.firstCall.args[3].exitCallback;
+
+        exitCallback(1);
+        await waitForMicrotasks();
+
+        assert.strictEqual(spawnStub.calledTwice, true);
+
+        repository.dispose();
+
+        assert.strictEqual(fallbackChildProcess.killed, true);
+    });
+
+    test('synchronously completed ps process is not tracked for later termination', async () => {
+        let childProcess: TestChildProcess | undefined;
+        spawnStub.callsFake((_terminalProvider, _cliPath, _args, options) => {
+            childProcess = new TestChildProcess();
+            options.exitCallback(0);
+            return childProcess;
+        });
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        repository.setViewMode('global');
+        repository.setPanelVisible(true);
+        await waitForMicrotasks();
+
+        repository.setPanelVisible(false);
+
+        assert.ok(childProcess);
+        assert.strictEqual(childProcess.killed, false);
 
         repository.dispose();
     });

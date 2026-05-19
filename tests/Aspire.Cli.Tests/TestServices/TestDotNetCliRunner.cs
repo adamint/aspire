@@ -50,7 +50,7 @@ internal sealed class TestDotNetCliRunner : IDotNetCliRunner
     {
         return RestoreAsyncCallback != null
             ? Task.FromResult(RestoreAsyncCallback(projectFilePath, options, cancellationToken))
-            : throw new NotImplementedException();
+            : Task.FromResult(0); // If not overridden, just return success.
     }
 
     public Task<(int ExitCode, bool IsAspireHost, string? AspireHostingVersion)> GetAppHostInformationAsync(FileInfo projectFile, ProcessInvocationOptions options, CancellationToken cancellationToken)
@@ -82,7 +82,7 @@ internal sealed class TestDotNetCliRunner : IDotNetCliRunner
     {
         return GetProjectItemsAndPropertiesAsyncCallback != null
             ? Task.FromResult(GetProjectItemsAndPropertiesAsyncCallback(projectFile, items, properties, options, cancellationToken))
-            : throw new NotImplementedException();
+            : Task.FromResult<(int, JsonDocument?)>((0, JsonDocument.Parse("""{"Properties":{},"Items":{}}""")));
     }
 
     public Task<(int ExitCode, string? TemplateVersion)> InstallTemplateAsync(string packageName, string version, FileInfo? nugetConfigFile, string? nugetSource, bool force, ProcessInvocationOptions options, CancellationToken cancellationToken)
