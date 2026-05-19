@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.CommandLine;
+using System.Globalization;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
@@ -86,6 +87,23 @@ internal sealed class StartCommand : BaseCommand
             }
 
             debugSessionArgs.AddRange(globalArgs);
+
+            if (captureProfile)
+            {
+                debugSessionArgs.Add("--capture-profile");
+
+                if (parseResult.GetValue(RootCommand.CaptureProfileOutputOption) is { } captureProfileOutput)
+                {
+                    debugSessionArgs.Add("--capture-profile-output");
+                    debugSessionArgs.Add(captureProfileOutput.FullName);
+                }
+
+                if (parseResult.GetResult(RootCommand.CaptureProfileDelayOption) is { Implicit: false })
+                {
+                    debugSessionArgs.Add("--capture-profile-delay");
+                    debugSessionArgs.Add(parseResult.GetValue(RootCommand.CaptureProfileDelayOption).ToString(CultureInfo.InvariantCulture));
+                }
+            }
 
             if (additionalArgs.Count > 0)
             {

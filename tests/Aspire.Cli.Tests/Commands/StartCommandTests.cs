@@ -251,7 +251,8 @@ public class StartCommandTests(ITestOutputHelper outputHelper)
         using var provider = services.BuildServiceProvider();
         var command = provider.GetRequiredService<RootCommand>();
 
-        var result = command.Parse($"start --apphost {appHostFile.FullName} --isolated --no-build --debug --log-level Debug --wait-for-debugger -- --custom-arg value");
+        var captureProfileOutputPath = Path.Combine(workspace.WorkspaceRoot.FullName, "profile.zip");
+        var result = command.Parse($"start --apphost {appHostFile.FullName} --isolated --no-build --debug --log-level Debug --wait-for-debugger --capture-profile --capture-profile-output {captureProfileOutputPath} --capture-profile-delay 1 -- --custom-arg value");
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
         Assert.Equal(CliExitCodes.Success, exitCode);
@@ -261,7 +262,7 @@ public class StartCommandTests(ITestOutputHelper outputHelper)
         Assert.NotNull(options);
         Assert.Equal("run", options.Command);
         Assert.NotNull(options.Args);
-        Assert.Equal(["--isolated", "--no-build", "--debug", "--log-level", "Debug", "--wait-for-debugger", "--", "--custom-arg", "value"], options.Args);
+        Assert.Equal(["--isolated", "--no-build", "--debug", "--log-level", "Debug", "--wait-for-debugger", "--capture-profile", "--capture-profile-output", captureProfileOutputPath, "--capture-profile-delay", "1", "--", "--custom-arg", "value"], options.Args);
     }
 
     [Fact]
