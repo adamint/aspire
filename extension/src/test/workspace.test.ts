@@ -108,7 +108,7 @@ suite('utils/workspace tests', () => {
             {
                 relativePath: 'samples/Store/AppHost.csproj',
                 path: '/workspace/samples/Store/AppHost.csproj',
-                language: 'typescript',
+                language: 'typescript/nodejs',
                 status: 'possibly-unbuildable',
             },
         ]));

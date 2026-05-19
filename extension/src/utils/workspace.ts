@@ -238,6 +238,7 @@ export function formatAppHostLanguage(language: string): string | undefined {
         case 'csharp':
             return 'C#';
         case 'typescript':
+        case 'typescript/nodejs':
             return 'TypeScript';
         default:
             return language.charAt(0).toUpperCase() + language.slice(1);
