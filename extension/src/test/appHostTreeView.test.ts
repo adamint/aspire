@@ -50,7 +50,7 @@ function makeTerminalProvider(): AspireTerminalProvider {
     } as unknown as AspireTerminalProvider;
 }
 
-function makeTreeProvider(appHosts: readonly AppHostDisplayInfo[], viewMode: ViewMode = 'global'): AspireAppHostTreeProvider {
+function makeTreeProvider(appHosts: readonly AppHostDisplayInfo[], viewMode: ViewMode = 'global', workspaceAppHostDescription?: string): AspireAppHostTreeProvider {
     const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
     const repository = {
         viewMode,
@@ -58,6 +58,22 @@ function makeTreeProvider(appHosts: readonly AppHostDisplayInfo[], viewMode: Vie
         workspaceResources: [],
         workspaceAppHostPath: undefined,
         workspaceAppHostName: undefined,
+        workspaceAppHostDescription,
+        onDidChangeData,
+    } as unknown as AppHostDataRepository;
+
+    return new AspireAppHostTreeProvider(repository, makeTerminalProvider());
+}
+
+function makeWorkspaceTreeProvider(workspaceAppHostDescription: string): AspireAppHostTreeProvider {
+    const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+    const repository = {
+        viewMode: 'workspace',
+        appHosts: [],
+        workspaceResources: [makeResource()],
+        workspaceAppHostPath: '/workspace/apps/Store/AppHost.csproj',
+        workspaceAppHostName: 'AppHost.csproj',
+        workspaceAppHostDescription,
         onDidChangeData,
     } as unknown as AppHostDataRepository;
 
@@ -232,6 +248,22 @@ suite('AspireAppHostTreeProvider', () => {
         const [item] = provider.getChildren();
 
         assert.strictEqual(item.label, 'Store/AppHost.cs');
+    });
+
+    test('workspace AppHost tooltip explains aspire ls selection metadata', () => {
+        const provider = makeWorkspaceTreeProvider('Workspace view selected because aspire ls found one buildable C# AppHost.');
+
+        const [item] = provider.getChildren();
+
+        assert.strictEqual(item.tooltip, 'Workspace view selected because aspire ls found one buildable C# AppHost.');
+    });
+
+    test('global AppHost tooltip explains aspire ls selection metadata', () => {
+        const provider = makeTreeProvider([makeAppHost({ appHostPath: '/workspace/AppHost.csproj' })], 'global', 'Global view selected because aspire ls found 2 buildable AppHosts.');
+
+        const [item] = provider.getChildren();
+
+        assert.strictEqual(item.tooltip, 'Global view selected because aspire ls found 2 buildable AppHosts.\n/workspace/AppHost.csproj');
     });
 
     test('dashboard quick pick labels add enough parent folders to disambiguate duplicate filenames', async () => {

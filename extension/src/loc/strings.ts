@@ -76,6 +76,11 @@ export const resourceCommandMaxLength = (length: number) => vscode.l10n.t('Value
 export const selectDashboardPlaceholder = vscode.l10n.t('Select a dashboard to open');
 export const workspaceAppHostLabel = vscode.l10n.t('Workspace AppHost');
 export const resourceCountDescription = (count: number) => vscode.l10n.t('({0} resources)', count);
+export const appHostCandidateDescription = (language: string, status: string) => vscode.l10n.t('{0} · {1}', language, status);
+export const workspaceViewSelectedSingleAppHost = (language?: string) => language
+    ? vscode.l10n.t('Workspace view selected because aspire ls found one buildable {0} AppHost.', language)
+    : vscode.l10n.t('Workspace view selected because aspire ls found one buildable AppHost.');
+export const globalViewSelectedMultipleAppHosts = (count: number) => vscode.l10n.t('Global view selected because aspire ls found {0} buildable AppHosts.', count);
 export const tooltipType = (type: string) => vscode.l10n.t('Type: {0}', type);
 export const tooltipState = (state: string) => vscode.l10n.t('State: {0}', state);
 export const tooltipHealth = (health: string) => vscode.l10n.t('Health: {0}', health);

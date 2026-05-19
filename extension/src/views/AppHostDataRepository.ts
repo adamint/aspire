@@ -4,8 +4,8 @@ import { ChildProcessWithoutNullStreams } from 'child_process';
 import { spawnCliProcess } from '../debugger/languages/cli';
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { appHostDescribeMayNotBeSupported, aspireCliDescribeNotSupported, aspireDescribeMinimumVersion, errorFetchingAppHosts } from '../loc/strings';
-import { AppHostCandidate, findAppHostsWithAspireLs, isBuildableAppHostCandidate } from '../utils/workspace';
+import { appHostDescribeMayNotBeSupported, aspireCliDescribeNotSupported, aspireDescribeMinimumVersion, errorFetchingAppHosts, globalViewSelectedMultipleAppHosts, workspaceViewSelectedSingleAppHost } from '../loc/strings';
+import { AppHostCandidate, findAppHostsWithAspireLs, formatAppHostLanguage, isBuildableAppHostCandidate } from '../utils/workspace';
 
 export interface ResourceUrlJson {
     name: string | null;
@@ -125,6 +125,7 @@ export class AppHostDataRepository {
     // ── Workspace app host (from aspire ls) ──
     private _workspaceAppHostName: string | undefined;
     private _workspaceAppHostPath: string | undefined;
+    private _workspaceAppHostDescription: string | undefined;
     private _getAppHostsProcess: ChildProcessWithoutNullStreams | undefined;
 
     // ── Error state ──
@@ -172,6 +173,10 @@ export class AppHostDataRepository {
 
     get workspaceAppHostPath(): string | undefined {
         return this._workspaceAppHostPath;
+    }
+
+    get workspaceAppHostDescription(): string | undefined {
+        return this._workspaceAppHostDescription;
     }
 
     get errorMessage(): string | undefined {
@@ -331,9 +336,9 @@ export class AppHostDataRepository {
             if (selectedAppHostPath) {
                 this._setWorkspaceAppHostPath(selectedAppHostPath, buildableAppHostCandidates);
             } else {
-                this._workspaceAppHostPath = undefined;
-                this._workspaceAppHostName = undefined;
+                this._clearWorkspaceAppHostDiscovery();
             }
+            this._workspaceAppHostDescription = globalViewSelectedMultipleAppHosts(buildableAppHostCandidates.length);
             extensionLogOutputChannel.info(`Workspace contains ${buildableAppHostCandidates.length} buildable AppHosts; switching to global view`);
             this.setViewMode('global');
             return;
@@ -344,6 +349,7 @@ export class AppHostDataRepository {
             : buildableAppHostCandidates[0];
         if (selectedAppHostCandidate) {
             this._setWorkspaceAppHostPath(selectedAppHostCandidate.path, buildableAppHostCandidates);
+            this._workspaceAppHostDescription = workspaceViewSelectedSingleAppHost(formatAppHostLanguage(selectedAppHostCandidate.language));
             extensionLogOutputChannel.info(`Workspace apphost resolved: ${selectedAppHostCandidate.path} (${selectedAppHostCandidate.language}, ${selectedAppHostCandidate.status})`);
             this._syncPolling();
             this._onDidChangeData.fire();
@@ -358,6 +364,12 @@ export class AppHostDataRepository {
         const appHostLabels = shortenPaths(appHostCandidatePaths);
         const candidateIndex = appHostCandidatePaths.findIndex(candidatePath => isMatchingAppHostPath(candidatePath, appHostPath));
         this._workspaceAppHostName = candidateIndex >= 0 ? appHostLabels[candidateIndex] : shortenPath(appHostPath);
+    }
+
+    private _clearWorkspaceAppHostDiscovery(): void {
+        this._workspaceAppHostPath = undefined;
+        this._workspaceAppHostName = undefined;
+        this._workspaceAppHostDescription = undefined;
     }
 
     // ── Workspace mode: describe --follow ──
