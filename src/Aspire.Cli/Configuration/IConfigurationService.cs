@@ -25,9 +25,9 @@ internal interface IConfigurationService
     /// from the project's directory tree instead of the caller's cwd.
     /// </summary>
     /// <remarks>
-    /// Throws <see cref="System.InvalidOperationException"/> if a settings file is found
-    /// but cannot be parsed as JSON, matching the behavior of startup-time settings load.
+    /// Throws <see cref="System.InvalidOperationException"/> if any settings file encountered
+    /// during the walk cannot be parsed as JSON, matching the behavior of startup-time settings load.
     /// </remarks>
-    Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, CancellationToken cancellationToken = default, bool continueSearchWhenKeyMissing = false);
+    Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default);
     string GetSettingsFilePath(bool isGlobal);
 }

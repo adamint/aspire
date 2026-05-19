@@ -195,7 +195,7 @@ internal sealed class UpdateCommand : BaseCommand
             if (string.IsNullOrWhiteSpace(channelName))
             {
                 var configLookupDirectory = projectFile.Directory ?? ExecutionContext.WorkingDirectory;
-                channelName = await _configurationService.GetConfigurationFromDirectoryAsync("channel", configLookupDirectory, cancellationToken);
+                channelName = await _configurationService.GetConfigurationFromDirectoryAsync("channel", configLookupDirectory, cancellationToken: cancellationToken);
                 channelFromConfig = !string.IsNullOrWhiteSpace(channelName);
             }
 
