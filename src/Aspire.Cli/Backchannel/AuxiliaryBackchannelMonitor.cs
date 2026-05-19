@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using Aspire.Cli.Commands;
 using Aspire.Cli.Telemetry;
 using Aspire.Cli.Utils;
@@ -35,6 +36,7 @@ internal sealed class AuxiliaryBackchannelMonitor(
     private readonly HashSet<string> _knownSocketFiles = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _scanLock = new(1, 1);
     private readonly TimeProvider _timeProvider = timeProvider;
+    private event Action? ConnectionsChanged;
 
     /// <summary>
     /// Gets all active AppHost connections, flattened from all hashes.
@@ -49,6 +51,67 @@ internal sealed class AuxiliaryBackchannelMonitor(
     /// <returns>All connections for the given hash, or empty if none.</returns>
     public IEnumerable<IAppHostAuxiliaryBackchannel> GetConnectionsByHash(string hash) =>
         _connectionsByHash.TryGetValue(hash, out var connections) ? connections.Values : [];
+
+    public async IAsyncEnumerable<IReadOnlyList<IAppHostAuxiliaryBackchannel>> WatchConnectionsAsync([EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        var connectionChanges = Channel.CreateUnbounded<bool>(new UnboundedChannelOptions
+        {
+            SingleReader = true
+        });
+        void QueueConnectionChange() => connectionChanges.Writer.TryWrite(true);
+
+        ConnectionsChanged += QueueConnectionChange;
+
+        try
+        {
+            if (!Directory.Exists(_backchannelsDirectory))
+            {
+                Directory.CreateDirectory(_backchannelsDirectory);
+            }
+
+            await ProcessDirectoryChangesAsync(cancellationToken).ConfigureAwait(false);
+            yield return Connections.ToList();
+
+            using var fileProvider = new PhysicalFileProvider(_backchannelsDirectory);
+            fileProvider.UsePollingFileWatcher = true;
+            fileProvider.UseActivePolling = true;
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await foreach (var _ in WatchForChangesAsync(fileProvider, cancellationToken).ConfigureAwait(false))
+                    {
+                        await ProcessDirectoryChangesAsync(cancellationToken).ConfigureAwait(false);
+                        QueueConnectionChange();
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    // Expected when the follow command stops.
+                }
+                finally
+                {
+                    connectionChanges.Writer.TryComplete();
+                }
+            }, CancellationToken.None);
+
+            await foreach (var _ in connectionChanges.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                yield return Connections.ToList();
+            }
+        }
+        finally
+        {
+            ConnectionsChanged -= QueueConnectionChange;
+            connectionChanges.Writer.TryComplete();
+        }
+    }
+
+    private void NotifyConnectionsChanged()
+    {
+        ConnectionsChanged?.Invoke();
+    }
 
     /// <summary>
     /// Gets or sets the path to the selected AppHost. When set, this AppHost will be used for MCP operations.
@@ -427,6 +490,8 @@ internal sealed class AuxiliaryBackchannelMonitor(
                     {
                         _connectionsByHash.TryRemove(hash, out _);
                     }
+
+                      NotifyConnectionsChanged();
                 }
             };
 

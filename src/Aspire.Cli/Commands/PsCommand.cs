@@ -5,6 +5,7 @@ using System.CommandLine;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Channels;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
@@ -51,6 +52,7 @@ internal sealed class AppHostDisplayInfo
 internal sealed partial class PsCommandJsonContext : JsonSerializerContext
 {
     private static PsCommandJsonContext? s_relaxedEscaping;
+    private static PsCommandJsonContext? s_compactRelaxedEscaping;
 
     /// <summary>
     /// Gets a context with relaxed JSON escaping for non-ASCII character support.
@@ -58,6 +60,16 @@ internal sealed partial class PsCommandJsonContext : JsonSerializerContext
     public static PsCommandJsonContext RelaxedEscaping => s_relaxedEscaping ??= new(new JsonSerializerOptions
     {
         WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    });
+
+    /// <summary>
+    /// Gets a compact context with relaxed JSON escaping for newline-delimited streaming output.
+    /// </summary>
+    public static PsCommandJsonContext CompactRelaxedEscaping => s_compactRelaxedEscaping ??= new(new JsonSerializerOptions
+    {
+        WriteIndented = false,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     });
@@ -80,6 +92,11 @@ internal sealed class PsCommand : BaseCommand
         Description = PsCommandStrings.ResourcesOptionDescription
     };
 
+    private static readonly Option<bool> s_followOption = new("--follow", "-f")
+    {
+        Description = PsCommandStrings.FollowOptionDescription
+    };
+
     public PsCommand(
         IInteractionService interactionService,
         IAuxiliaryBackchannelMonitor backchannelMonitor,
@@ -96,6 +113,7 @@ internal sealed class PsCommand : BaseCommand
 
         Options.Add(s_formatOption);
         Options.Add(s_resourcesOption);
+        Options.Add(s_followOption);
     }
 
     protected override async Task<CommandResult> ExecuteAsync(ParseResult parseResult, CancellationToken cancellationToken)
@@ -104,6 +122,11 @@ internal sealed class PsCommand : BaseCommand
 
         var format = parseResult.GetValue(s_formatOption);
         var includeResources = parseResult.GetValue(s_resourcesOption);
+
+        if (parseResult.GetValue(s_followOption))
+        {
+            return await ExecuteFollowAsync(format, includeResources, cancellationToken).ConfigureAwait(false);
+        }
 
         // Scan for running AppHosts (same as ListAppHostsTool)
         // Skip status display for JSON output to avoid contaminating stdout
@@ -149,6 +172,138 @@ internal sealed class PsCommand : BaseCommand
         }
 
         return CommandResult.Success();
+    }
+
+    private async Task<CommandResult> ExecuteFollowAsync(OutputFormat format, bool includeResources, CancellationToken cancellationToken)
+    {
+        if (format != OutputFormat.Json)
+        {
+            return CommandResult.Failure(CliExitCodes.InvalidCommand, PsCommandStrings.FollowRequiresJson);
+        }
+
+        var updates = Channel.CreateUnbounded<IReadOnlyList<IAppHostAuxiliaryBackchannel>?>(new UnboundedChannelOptions
+        {
+            SingleReader = true
+        });
+        var currentConnections = new List<IAppHostAuxiliaryBackchannel>();
+        CancellationTokenSource? resourceWatchCts = null;
+        var lastJson = string.Empty;
+        var resourceUpdateQueued = 0;
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await foreach (var connections in _backchannelMonitor.WatchConnectionsAsync(cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
+                {
+                    await updates.Writer.WriteAsync(connections, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Expected when the caller stops following.
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Failed while watching AppHost connections for ps --follow.");
+            }
+            finally
+            {
+                updates.Writer.TryComplete();
+            }
+        }, CancellationToken.None);
+
+        try
+        {
+            await foreach (var connections in updates.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                if (connections is not null)
+                {
+                    currentConnections = OrderConnections(connections);
+                    RestartResourceWatchers();
+                }
+                else
+                {
+                    Interlocked.Exchange(ref resourceUpdateQueued, 0);
+                }
+
+                await WriteSnapshotAsync().ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return CommandResult.Success();
+        }
+        finally
+        {
+            if (resourceWatchCts is not null)
+            {
+                await resourceWatchCts.CancelAsync().ConfigureAwait(false);
+                resourceWatchCts.Dispose();
+            }
+        }
+
+        return CommandResult.Success();
+
+        void RestartResourceWatchers()
+        {
+            if (resourceWatchCts is not null)
+            {
+                resourceWatchCts.Cancel();
+                resourceWatchCts.Dispose();
+                resourceWatchCts = null;
+            }
+
+            if (!includeResources || format != OutputFormat.Json)
+            {
+                return;
+            }
+
+            resourceWatchCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var resourceCancellationToken = resourceWatchCts.Token;
+            foreach (var connection in currentConnections)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await foreach (var _ in connection.WatchResourceSnapshotsAsync(includeHidden: true, resourceCancellationToken).WithCancellation(resourceCancellationToken).ConfigureAwait(false))
+                        {
+                              if (Interlocked.Exchange(ref resourceUpdateQueued, 1) == 0)
+                              {
+                                  await updates.Writer.WriteAsync(null, resourceCancellationToken).ConfigureAwait(false);
+                              }
+                        }
+                    }
+                    catch (OperationCanceledException) when (resourceCancellationToken.IsCancellationRequested)
+                    {
+                        // Expected when the connection list changes or the command stops.
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "Failed while watching resource snapshots for {AppHostPath}.", connection.AppHostInfo?.AppHostPath);
+                    }
+                }, CancellationToken.None);
+            }
+        }
+
+        async Task WriteSnapshotAsync()
+        {
+            var appHostInfos = await GatherAppHostInfosAsync(currentConnections, includeResources, cancellationToken).ConfigureAwait(false);
+            var json = JsonSerializer.Serialize(appHostInfos, PsCommandJsonContext.CompactRelaxedEscaping.ListAppHostDisplayInfo);
+            if (!string.Equals(json, lastJson, StringComparison.Ordinal))
+            {
+                lastJson = json;
+                _interactionService.DisplayRawText(json, ConsoleOutput.Standard);
+            }
+        }
+    }
+
+    private static List<IAppHostAuxiliaryBackchannel> OrderConnections(IEnumerable<IAppHostAuxiliaryBackchannel> connections)
+    {
+        return connections
+            .OrderByDescending(c => c.IsInScope)
+            .ToList();
     }
 
     private async Task<List<AppHostDisplayInfo>> GatherAppHostInfosAsync(List<IAppHostAuxiliaryBackchannel> connections, bool includeResources, CancellationToken cancellationToken)
