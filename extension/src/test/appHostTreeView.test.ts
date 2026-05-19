@@ -279,7 +279,10 @@ suite('AppHostDataRepository', () => {
             index: 0,
         }]);
         sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, options) => {
-            lineCallback = options?.lineCallback;
+            lineCallback = line => {
+                options?.stdoutCallback?.(line);
+                options?.exitCallback?.(0);
+            };
             return { kill: () => { } } as any;
         });
         const repository = new AppHostDataRepository(makeTerminalProvider());
@@ -295,6 +298,9 @@ suite('AppHostDataRepository', () => {
                     '/workspace/samples/Store/AppHost.csproj',
                 ],
             }));
+            await flushPromises();
+            await new Promise(resolve => setTimeout(resolve, 0));
+            await flushPromises();
 
             assert.strictEqual(repository.workspaceAppHostName, 'apps/Store/AppHost.csproj');
         } finally {

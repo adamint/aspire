@@ -34,11 +34,19 @@ class TestChildProcess extends EventEmitter {
     }
 }
 
+function createLsLineCallback(options: any): (line: string) => void {
+    return line => {
+        options?.stdoutCallback?.(line);
+        options?.exitCallback?.(0);
+    };
+}
+
 suite('AppHostDataRepository', () => {
     let terminalProvider: AspireTerminalProvider;
     let subscriptions: vscode.Disposable[];
     let getCliPathStub: sinon.SinonStub;
     let spawnStub: sinon.SinonStub;
+    let defaultWorkspaceFoldersStub: sinon.SinonStub;
 
     setup(() => {
         subscriptions = [];
@@ -46,13 +54,23 @@ suite('AppHostDataRepository', () => {
         getCliPathStub = sinon.stub(terminalProvider, 'getAspireCliExecutablePath').resolves('aspire');
         spawnStub = sinon.stub(cliModule, 'spawnCliProcess');
         spawnStub.callsFake(() => new TestChildProcess());
+        defaultWorkspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').value(undefined);
     });
 
     teardown(() => {
         spawnStub.restore();
         getCliPathStub.restore();
+        if (defaultWorkspaceFoldersStub.restore) {
+            defaultWorkspaceFoldersStub.restore();
+        }
         subscriptions.forEach(subscription => subscription.dispose());
     });
+
+    function stubWorkspaceFolders(workspaceFolders: readonly vscode.WorkspaceFolder[]): sinon.SinonStub {
+        defaultWorkspaceFoldersStub.restore();
+        defaultWorkspaceFoldersStub = { restore: () => { } } as sinon.SinonStub;
+        return sinon.stub(vscode.workspace, 'workspaceFolders').value(workspaceFolders);
+    }
 
     test('activate does not start describe watch while panel is hidden', async () => {
         const repository = new AppHostDataRepository(terminalProvider);
@@ -101,14 +119,14 @@ suite('AppHostDataRepository', () => {
         repository.dispose();
     });
 
-    test('describe watch reports minimum AppHost version when workspace AppHost returns no data', async () => {
+    test('describe watch does not report compatibility error when workspace AppHost returns no data successfully', async () => {
         let getAppHostsLineCallback: ((line: string) => void) | undefined;
         spawnStub.onFirstCall().callsFake((_terminalProvider, _command, _args, options) => {
-            getAppHostsLineCallback = options?.lineCallback;
+            getAppHostsLineCallback = createLsLineCallback(options);
             return new TestChildProcess();
         });
         spawnStub.onSecondCall().returns(new TestChildProcess());
-        const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').value([{
+        const workspaceFoldersStub = stubWorkspaceFolders([{
             uri: vscode.Uri.file('/workspace'),
             name: 'workspace',
             index: 0,
@@ -118,7 +136,7 @@ suite('AppHostDataRepository', () => {
         try {
             repository.activate();
             repository.setPanelVisible(true);
-            await waitForMicrotasks();
+            await waitForAppHostDiscovery();
             assert.ok(getAppHostsLineCallback);
 
             getAppHostsLineCallback(JSON.stringify({
@@ -127,13 +145,13 @@ suite('AppHostDataRepository', () => {
                     '/workspace/apps/Store/AppHost.csproj',
                 ],
             }));
-            await waitForMicrotasks();
+            await waitForAppHostDiscovery();
 
             const exitCallback = spawnStub.secondCall.args[3].exitCallback;
             exitCallback(0);
 
-            assert.strictEqual(repository.hasError, true);
-            assert.ok(repository.errorMessage?.includes('Aspire.Hosting 13.2.0'), repository.errorMessage);
+            assert.strictEqual(repository.hasError, false);
+            assert.strictEqual(repository.errorMessage, undefined);
         } finally {
             repository.dispose();
             workspaceFoldersStub.restore();
@@ -143,11 +161,11 @@ suite('AppHostDataRepository', () => {
     test('describe watch reports minimum AppHost version when workspace AppHost exits without unsupported command output', async () => {
         let getAppHostsLineCallback: ((line: string) => void) | undefined;
         spawnStub.onFirstCall().callsFake((_terminalProvider, _command, _args, options) => {
-            getAppHostsLineCallback = options?.lineCallback;
+            getAppHostsLineCallback = createLsLineCallback(options);
             return new TestChildProcess();
         });
         spawnStub.onSecondCall().returns(new TestChildProcess());
-        const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').value([{
+        const workspaceFoldersStub = stubWorkspaceFolders([{
             uri: vscode.Uri.file('/workspace'),
             name: 'workspace',
             index: 0,
@@ -157,7 +175,7 @@ suite('AppHostDataRepository', () => {
         try {
             repository.activate();
             repository.setPanelVisible(true);
-            await waitForMicrotasks();
+            await waitForAppHostDiscovery();
             assert.ok(getAppHostsLineCallback);
 
             getAppHostsLineCallback(JSON.stringify({
@@ -166,7 +184,7 @@ suite('AppHostDataRepository', () => {
                     '/workspace/apps/Store/AppHost.csproj',
                 ],
             }));
-            await waitForMicrotasks();
+            await waitForAppHostDiscovery();
 
             const exitCallback = spawnStub.secondCall.args[3].exitCallback;
             exitCallback(1);
@@ -202,12 +220,12 @@ suite('AppHostDataRepository', () => {
         const describeProcess = new TestChildProcess();
         const psProcess = new TestChildProcess();
         spawnStub.onFirstCall().callsFake((_terminalProvider, _command, _args, options) => {
-            getAppHostsLineCallback = options?.lineCallback;
+            getAppHostsLineCallback = createLsLineCallback(options);
             return getAppHostsProcess;
         });
         spawnStub.onSecondCall().returns(describeProcess);
         spawnStub.onThirdCall().returns(psProcess);
-        const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').value([{
+        const workspaceFoldersStub = stubWorkspaceFolders([{
             uri: vscode.Uri.file('/workspace'),
             name: 'workspace',
             index: 0,
@@ -217,7 +235,7 @@ suite('AppHostDataRepository', () => {
         try {
             repository.activate();
             repository.setPanelVisible(true);
-            await waitForMicrotasks();
+            await waitForAppHostDiscovery();
             assert.ok(getAppHostsLineCallback);
 
             getAppHostsLineCallback(JSON.stringify({
@@ -226,7 +244,7 @@ suite('AppHostDataRepository', () => {
                     '/workspace/apps/Store/AppHost.csproj',
                 ],
             }));
-            await waitForMicrotasks();
+            await waitForAppHostDiscovery();
 
             const describeErrorCallback = spawnStub.secondCall.args[3].errorCallback;
             describeErrorCallback(new Error('describe failed'));
@@ -258,7 +276,7 @@ suite('AppHostDataRepository', () => {
         const replacementDescribeProcess = new TestChildProcess();
         const psSuccessProcess = new TestChildProcess();
         spawnStub.onFirstCall().callsFake((_terminalProvider, _command, _args, options) => {
-            getAppHostsLineCallback = options?.lineCallback;
+            getAppHostsLineCallback = createLsLineCallback(options);
             return getAppHostsProcess;
         });
         spawnStub.onSecondCall().returns(describeProcess);
@@ -266,7 +284,7 @@ suite('AppHostDataRepository', () => {
         spawnStub.onCall(3).returns(psFallbackProcess);
         spawnStub.onCall(4).returns(replacementDescribeProcess);
         spawnStub.onCall(5).returns(psSuccessProcess);
-        const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').value([{
+        const workspaceFoldersStub = stubWorkspaceFolders([{
             uri: vscode.Uri.file('/workspace'),
             name: 'workspace',
             index: 0,
@@ -276,7 +294,7 @@ suite('AppHostDataRepository', () => {
         try {
             repository.activate();
             repository.setPanelVisible(true);
-            await waitForMicrotasks();
+            await waitForAppHostDiscovery();
             assert.ok(getAppHostsLineCallback);
 
             getAppHostsLineCallback(JSON.stringify({
@@ -285,12 +303,12 @@ suite('AppHostDataRepository', () => {
                     '/workspace/apps/Store/AppHost.csproj',
                 ],
             }));
-            await waitForMicrotasks();
+            await waitForAppHostDiscovery();
 
             const psResourcesOptions = spawnStub.thirdCall.args[3];
             psResourcesOptions.stderrCallback('resources unavailable');
             psResourcesOptions.exitCallback(1);
-            await waitForMicrotasks();
+            await waitForAppHostDiscovery();
 
             const psFallbackOptions = spawnStub.getCall(3).args[3];
             psFallbackOptions.stderrCallback('ps failed');
@@ -299,8 +317,8 @@ suite('AppHostDataRepository', () => {
 
             repository.setPanelVisible(false);
             repository.setPanelVisible(true);
-            await waitForMicrotasks();
-            await waitForMicrotasks();
+            await waitForAppHostDiscovery();
+            await waitForAppHostDiscovery();
 
             const psSuccessCall = spawnStub.getCalls().slice(4).find(call => call.args[2][0] === 'ps');
             assert.ok(psSuccessCall);
@@ -321,12 +339,12 @@ suite('AppHostDataRepository', () => {
         const describeProcess = new TestChildProcess();
         const psProcess = new TestChildProcess();
         spawnStub.onFirstCall().callsFake((_terminalProvider, _command, _args, options) => {
-            getAppHostsLineCallback = options?.lineCallback;
+            getAppHostsLineCallback = createLsLineCallback(options);
             return getAppHostsProcess;
         });
         spawnStub.onSecondCall().returns(describeProcess);
         spawnStub.onThirdCall().returns(psProcess);
-        const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').value([{
+        const workspaceFoldersStub = stubWorkspaceFolders([{
             uri: vscode.Uri.file('/workspace'),
             name: 'workspace',
             index: 0,
@@ -336,7 +354,7 @@ suite('AppHostDataRepository', () => {
         try {
             repository.activate();
             repository.setPanelVisible(true);
-            await waitForMicrotasks();
+            await waitForAppHostDiscovery();
             assert.ok(getAppHostsLineCallback);
 
             getAppHostsLineCallback(JSON.stringify({
@@ -346,7 +364,7 @@ suite('AppHostDataRepository', () => {
                     '/workspace/samples/Store/AppHost.csproj',
                 ],
             }));
-            await waitForMicrotasks();
+            await waitForAppHostDiscovery();
 
             assert.strictEqual(repository.viewMode, 'global');
             assert.strictEqual(describeProcess.killed, true);
@@ -364,12 +382,12 @@ suite('AppHostDataRepository', () => {
         const describeProcess = new TestChildProcess();
         const psProcess = new TestChildProcess();
         spawnStub.onFirstCall().callsFake((_terminalProvider, _command, _args, options) => {
-            getAppHostsLineCallback = options?.lineCallback;
+            getAppHostsLineCallback = createLsLineCallback(options);
             return getAppHostsProcess;
         });
         spawnStub.onSecondCall().returns(describeProcess);
         spawnStub.onThirdCall().returns(psProcess);
-        const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').value([{
+        const workspaceFoldersStub = stubWorkspaceFolders([{
             uri: vscode.Uri.file('/workspace'),
             name: 'workspace',
             index: 0,
@@ -379,7 +397,7 @@ suite('AppHostDataRepository', () => {
         try {
             repository.activate();
             repository.setPanelVisible(true);
-            await waitForMicrotasks();
+            await waitForAppHostDiscovery();
             assert.ok(getAppHostsLineCallback);
 
             getAppHostsLineCallback(JSON.stringify({
@@ -406,10 +424,10 @@ suite('AppHostDataRepository', () => {
     test('single workspace AppHost candidate keeps workspace mode', async () => {
         let getAppHostsLineCallback: ((line: string) => void) | undefined;
         spawnStub.onFirstCall().callsFake((_terminalProvider, _command, _args, options) => {
-            getAppHostsLineCallback = options?.lineCallback;
+            getAppHostsLineCallback = createLsLineCallback(options);
             return new TestChildProcess();
         });
-        const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').value([{
+        const workspaceFoldersStub = stubWorkspaceFolders([{
             uri: vscode.Uri.file('/workspace'),
             name: 'workspace',
             index: 0,
@@ -426,6 +444,50 @@ suite('AppHostDataRepository', () => {
                     '/workspace/apps/Store/AppHost.csproj',
                 ],
             }));
+            await waitForAppHostDiscovery();
+
+            assert.strictEqual(repository.viewMode, 'workspace');
+            assert.strictEqual(repository.workspaceAppHostPath, '/workspace/apps/Store/AppHost.csproj');
+            assert.strictEqual(repository.workspaceAppHostName, 'AppHost.csproj');
+        } finally {
+            repository.dispose();
+            workspaceFoldersStub.restore();
+        }
+    });
+
+    test('possibly unbuildable AppHost candidates do not force global mode', async () => {
+        let getAppHostsLineCallback: ((line: string) => void) | undefined;
+        spawnStub.onFirstCall().callsFake((_terminalProvider, _command, _args, options) => {
+            getAppHostsLineCallback = createLsLineCallback(options);
+            return new TestChildProcess();
+        });
+        const workspaceFoldersStub = stubWorkspaceFolders([{
+            uri: vscode.Uri.file('/workspace'),
+            name: 'workspace',
+            index: 0,
+        }]);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            await waitForAppHostDiscovery();
+            assert.ok(getAppHostsLineCallback);
+            assert.deepStrictEqual(spawnStub.firstCall.args[2], ['ls', '--format', 'json']);
+
+            getAppHostsLineCallback(JSON.stringify([
+                {
+                    relativePath: 'apps/Store/AppHost.csproj',
+                    path: '/workspace/apps/Store/AppHost.csproj',
+                    language: 'csharp',
+                    status: 'buildable',
+                },
+                {
+                    relativePath: 'samples/Store/AppHost.csproj',
+                    path: '/workspace/samples/Store/AppHost.csproj',
+                    language: 'csharp',
+                    status: 'possibly-unbuildable',
+                },
+            ]));
+            await waitForAppHostDiscovery();
 
             assert.strictEqual(repository.viewMode, 'workspace');
             assert.strictEqual(repository.workspaceAppHostPath, '/workspace/apps/Store/AppHost.csproj');
@@ -501,7 +563,7 @@ suite('AppHostDataRepository', () => {
     });
 
     test('visible workspace panel tracks running AppHost with no resources from ps', async () => {
-        const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').value([{
+        const workspaceFoldersStub = stubWorkspaceFolders([{
             uri: vscode.Uri.file('/workspace'),
             name: 'workspace',
             index: 0,
@@ -510,8 +572,8 @@ suite('AppHostDataRepository', () => {
         let psArgs: string[] | undefined;
         let psOptions: any;
         spawnStub.callsFake((_terminalProvider, _command, args, options) => {
-            if (args[0] === 'extension') {
-                getAppHostsLineCallback = options.lineCallback;
+            if (args[0] === 'ls') {
+                getAppHostsLineCallback = createLsLineCallback(options);
             }
             if (args[0] === 'ps') {
                 psArgs = args;
@@ -867,6 +929,12 @@ suite('AppHostDataRepository AppHost-file gate', () => {
 async function waitForMicrotasks(): Promise<void> {
     await Promise.resolve();
     await Promise.resolve();
+}
+
+async function waitForAppHostDiscovery(): Promise<void> {
+    await waitForMicrotasks();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await waitForMicrotasks();
 }
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {

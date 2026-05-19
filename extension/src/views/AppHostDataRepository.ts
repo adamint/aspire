@@ -4,8 +4,8 @@ import { ChildProcessWithoutNullStreams } from 'child_process';
 import { spawnCliProcess } from '../debugger/languages/cli';
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { EnvironmentVariables } from '../utils/environment';
 import { appHostDescribeMayNotBeSupported, aspireCliDescribeNotSupported, aspireDescribeMinimumVersion, errorFetchingAppHosts } from '../loc/strings';
+import { AppHostCandidate, findAppHostsWithAspireLs, isBuildableAppHostCandidate } from '../utils/workspace';
 
 export interface ResourceUrlJson {
     name: string | null;
@@ -122,7 +122,7 @@ export class AppHostDataRepository {
     private _supportsResources = true;
     private _fetchInProgress = false;
 
-    // ── Workspace app host (from aspire extension get-apphosts) ──
+    // ── Workspace app host (from aspire ls) ──
     private _workspaceAppHostName: string | undefined;
     private _workspaceAppHostPath: string | undefined;
     private _getAppHostsProcess: ChildProcessWithoutNullStreams | undefined;
@@ -245,7 +245,7 @@ export class AppHostDataRepository {
         if (this._getAppHostsProcess) {
             const getAppHostsProcess = this._getAppHostsProcess;
             this._getAppHostsProcess = undefined;
-            this._terminateProcess(getAppHostsProcess, 'aspire extension get-apphosts');
+            this._terminateProcess(getAppHostsProcess, 'aspire ls');
         }
         this._configChangeDisposable.dispose();
         this._onDidChangeData.dispose();
@@ -290,7 +290,7 @@ export class AppHostDataRepository {
         }
     }
 
-    // ── Workspace app host (from aspire extension get-apphosts) ──
+    // ── Workspace app host (from aspire ls) ──
 
     private _fetchWorkspaceAppHost(): void {
         const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -299,74 +299,65 @@ export class AppHostDataRepository {
         }
         const rootFolder = workspaceFolders[0];
 
-        extensionLogOutputChannel.info('Fetching workspace apphost via: aspire extension get-apphosts');
+        extensionLogOutputChannel.info('Fetching workspace apphost via: aspire ls');
 
         this._terminalProvider.getAspireCliExecutablePath().then(cliPath => {
             if (this._disposed) {
                 return;
             }
 
-            const args = ['extension', 'get-apphosts'];
-            if (process.env[EnvironmentVariables.ASPIRE_CLI_STOP_ON_ENTRY] === 'true') {
-                args.push('--cli-wait-for-debugger');
-            }
+            const discovery = findAppHostsWithAspireLs(this._terminalProvider, cliPath, rootFolder);
+            this._getAppHostsProcess = discovery.process;
+            discovery.result.then(result => {
+                if (this._disposed) {
+                    return;
+                }
 
-            this._getAppHostsProcess = spawnCliProcess(this._terminalProvider, cliPath, args, {
-                noExtensionVariables: true,
-                workingDirectory: rootFolder.uri.fsPath,
-                lineCallback: (line) => {
-                    try {
-                        const parsed = JSON.parse(line);
-                        if (parsed && (typeof parsed.selected_project_file === 'string' || parsed.selected_project_file === null) && Array.isArray(parsed.all_project_file_candidates)) {
-                            const appHostCandidates = parsed.all_project_file_candidates.filter((candidate: unknown): candidate is string => typeof candidate === 'string');
-                            if (appHostCandidates.length > 1) {
-                                const selectedAppHostPath = typeof parsed.selected_project_file === 'string'
-                                    ? parsed.selected_project_file
-                                    : undefined;
-                                if (selectedAppHostPath) {
-                                    this._workspaceAppHostPath = selectedAppHostPath;
-                                    const appHostLabels = shortenPaths(appHostCandidates);
-                                    const candidateIndex = appHostCandidates.indexOf(selectedAppHostPath);
-                                    this._workspaceAppHostName = candidateIndex >= 0 ? appHostLabels[candidateIndex] : shortenPath(selectedAppHostPath);
-                                } else {
-                                    this._workspaceAppHostPath = undefined;
-                                    this._workspaceAppHostName = undefined;
-                                }
-                                extensionLogOutputChannel.info(`Workspace contains ${appHostCandidates.length} AppHosts; switching to global view`);
-                                this.setViewMode('global');
-                                return;
-                            }
-
-                            const appHostPath = parsed.selected_project_file
-                                ?? (appHostCandidates.length === 1 ? appHostCandidates[0] : null);
-                            if (appHostPath) {
-                                this._workspaceAppHostPath = appHostPath;
-                                const appHostLabels = shortenPaths(appHostCandidates);
-                                const candidateIndex = appHostCandidates.indexOf(appHostPath);
-                                this._workspaceAppHostName = candidateIndex >= 0 ? appHostLabels[candidateIndex] : shortenPath(appHostPath);
-                                extensionLogOutputChannel.info(`Workspace apphost resolved: ${appHostPath}`);
-                                this._syncPolling();
-                                this._onDidChangeData.fire();
-                            }
-                        }
-                    } catch {
-                        // Not a JSON line we care about
-                    }
-                },
-                exitCallback: (code) => {
-                    this._getAppHostsProcess = undefined;
-                    if (code !== 0) {
-                        extensionLogOutputChannel.warn(`aspire extension get-apphosts exited with code ${code}`);
-                    }
-                },
-                errorCallback: (error) => {
-                    this._getAppHostsProcess = undefined;
-                    extensionLogOutputChannel.warn(`aspire extension get-apphosts error: ${error.message}`);
-                },
+                this._getAppHostsProcess = undefined;
+                this._handleWorkspaceAppHostCandidates(result.app_host_candidates, result.selected_project_file);
+            }).catch(error => {
+                this._getAppHostsProcess = undefined;
+                extensionLogOutputChannel.warn(`aspire ls error: ${error}`);
             });
         }).catch(error => {
             extensionLogOutputChannel.warn(`Failed to fetch workspace apphost: ${error}`);
         });
+    }
+
+    private _handleWorkspaceAppHostCandidates(appHostCandidates: readonly AppHostCandidate[], selectedAppHostPath: string | null): void {
+        const buildableAppHostCandidates = appHostCandidates.filter(isBuildableAppHostCandidate);
+
+        if (buildableAppHostCandidates.length > 1) {
+            if (selectedAppHostPath) {
+                this._setWorkspaceAppHostPath(selectedAppHostPath, buildableAppHostCandidates);
+            } else {
+                this._workspaceAppHostPath = undefined;
+                this._workspaceAppHostName = undefined;
+            }
+            extensionLogOutputChannel.info(`Workspace contains ${buildableAppHostCandidates.length} buildable AppHosts; switching to global view`);
+            this.setViewMode('global');
+            return;
+        }
+
+        const selectedAppHostCandidate = selectedAppHostPath
+            ? buildableAppHostCandidates.find(candidate => isMatchingAppHostPath(candidate.path, selectedAppHostPath))
+            : buildableAppHostCandidates[0];
+        if (selectedAppHostCandidate) {
+            this._setWorkspaceAppHostPath(selectedAppHostCandidate.path, buildableAppHostCandidates);
+            extensionLogOutputChannel.info(`Workspace apphost resolved: ${selectedAppHostCandidate.path} (${selectedAppHostCandidate.language}, ${selectedAppHostCandidate.status})`);
+            this._syncPolling();
+            this._onDidChangeData.fire();
+        } else if (appHostCandidates.length > 0) {
+            extensionLogOutputChannel.info(`aspire ls found ${appHostCandidates.length} AppHost candidates, but none are buildable`);
+        }
+    }
+
+    private _setWorkspaceAppHostPath(appHostPath: string, appHostCandidates: readonly AppHostCandidate[]): void {
+        this._workspaceAppHostPath = appHostPath;
+        const appHostCandidatePaths = appHostCandidates.map(candidate => candidate.path);
+        const appHostLabels = shortenPaths(appHostCandidatePaths);
+        const candidateIndex = appHostCandidatePaths.findIndex(candidatePath => isMatchingAppHostPath(candidatePath, appHostPath));
+        this._workspaceAppHostName = candidateIndex >= 0 ? appHostLabels[candidateIndex] : shortenPath(appHostPath);
     }
 
     // ── Workspace mode: describe --follow ──
@@ -431,7 +422,7 @@ export class AppHostDataRepository {
                     if (!this._describeReceivedData) {
                         extensionLogOutputChannel.warn(`aspire describe --follow exited (code ${code}) without producing data; not auto-restarting.`);
                         this._workspaceResources.clear();
-                        this._setDescribeError(this._getDescribeNoDataError(describeNonJsonLines, describeStderr));
+                        this._setDescribeError(this._getDescribeNoDataError(code, describeNonJsonLines, describeStderr));
                         this._updateWorkspaceContext({ clearLoading: true });
                         return;
                     }
@@ -546,12 +537,12 @@ export class AppHostDataRepository {
         return false;
     }
 
-    private _getDescribeNoDataError(nonJsonLines: readonly string[], stderr: string): string | undefined {
+    private _getDescribeNoDataError(exitCode: number | null, nonJsonLines: readonly string[], stderr: string): string | undefined {
         if (isDescribeUnsupportedOutput(nonJsonLines, stderr)) {
             return aspireCliDescribeNotSupported(aspireDescribeMinimumVersion);
         }
 
-        if (this._workspaceAppHostPath) {
+        if (exitCode !== 0 && this._workspaceAppHostPath) {
             return appHostDescribeMayNotBeSupported(aspireDescribeMinimumVersion);
         }
 
