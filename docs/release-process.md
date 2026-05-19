@@ -101,7 +101,6 @@ Before starting a release:
    | `SkipGitHubTasks` | Set `true` to skip dispatching the GH workflow | `false` |
    | `SkipReleaseAssets` | Set `true` to skip uploading aspire-cli-* assets to the GitHub release | `false` |
    | `PublishVSCodeExtension` | Set `true` to publish the signed `aspire-vscode-extension` artifact to the Visual Studio Marketplace | `false` |
-   | `PublishVSCodeExtensionAsPreRelease` | Set `true` when publishing the extension as a Marketplace pre-release | `false` |
    | `GitHubTasksWorkflowRef` | Ref to load `release-github-tasks.yml` from when dispatching. Only affects the workflow source — the release branch/commit are passed via inputs. Override only when testing pipeline changes on a topic branch. | `main` |
 
 5. Click "Run" and monitor the pipeline. The final stage (`GitHubTasks`)
@@ -117,6 +116,7 @@ To publish only the VS Code extension after merging an extension release PR, run
 | Parameter | Value |
 |-----------|-------|
 | `ReleaseVersion` | `auto` |
+| `IsPrerelease` | `false` for stable, `true` for pre-release |
 | `DryRun` | `false` |
 | `SkipNuGetPublish` | `true` |
 | `SkipChannelPromotion` | `true` |
@@ -125,9 +125,8 @@ To publish only the VS Code extension after merging an extension release PR, run
 | `SkipGitHubTasks` | `true` |
 | `SkipReleaseAssets` | `true` |
 | `PublishVSCodeExtension` | `true` |
-| `PublishVSCodeExtensionAsPreRelease` | `false` for stable, `true` for pre-release |
 
-For a full Aspire release that should also publish the extension, keep the normal NuGet/channel/GitHub task settings and set `PublishVSCodeExtension` to `true`. For a pre-release extension, the selected source build must also have been queued with `Package VS Code Extension as Pre-Release=true`.
+For a full Aspire release that should also publish the extension, keep the normal NuGet/channel/GitHub task settings and set `PublishVSCodeExtension` to `true`. `IsPrerelease` also controls whether extension publishing passes `--pre-release` to `vsce`; for a pre-release extension, the selected source build must also have been queued with `Package VS Code Extension as Pre-Release=true`.
 
 `commit_sha` and `release_branch` for the GitHub workflow are derived
 automatically from the source build resource — no need to copy them by hand.

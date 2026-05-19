@@ -83,11 +83,6 @@ parameters:
     type: boolean
     default: false
 
-  - name: PublishVSCodeExtensionAsPreRelease
-    displayName: '[Advanced] Publish VS Code Extension as Pre-Release'
-    type: boolean
-    default: false
-
   # Ref used when invoking `workflow_dispatch` against release-github-tasks.yml.
   # GitHub loads the workflow file *from this ref*, so it controls which version
   # of the workflow runs. The branch/commit being released is passed separately
@@ -797,7 +792,7 @@ extends:
                   $publisher = 'microsoft-aspire'
                   $artifactPath = "$(Pipeline.Workspace)/vscode/aspire-vscode-extension"
                   $dryRun = [System.Convert]::ToBoolean("${{ parameters.DryRun }}")
-                  $preRelease = [System.Convert]::ToBoolean("${{ parameters.PublishVSCodeExtensionAsPreRelease }}")
+                  $preRelease = [System.Convert]::ToBoolean("${{ parameters.IsPrerelease }}")
 
                   if ([string]::IsNullOrWhiteSpace($env:VSCE_PAT)) {
                     Write-Error "VscePublishToken is empty. Update or rotate the VscePublishToken secret in the Aspire-Release-Secrets variable group before publishing the VS Code extension."
