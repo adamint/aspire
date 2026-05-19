@@ -1,12 +1,11 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { getParserForDocument } from './parsers/AppHostResourceParser';
 // Import parsers to trigger self-registration
 import './parsers/csharpAppHostParser';
 import './parsers/jsTsAppHostParser';
 import { AspireAppHostTreeProvider } from '../views/AspireAppHostTreeProvider';
 import { AppHostDataRepository, ResourceJson, AppHostDisplayInfo, ResourceCommandJson } from '../views/AppHostDataRepository';
-import { findResourceState, findWorkspaceResourceState } from './resourceStateUtils';
+import { findResourceState, findWorkspaceResourceState, matchesAppHostPathOrDirectory } from './resourceStateUtils';
 import { ResourceState, HealthStatus, StateStyle, ResourceType } from './resourceConstants';
 import {
     codeLensDebugPipelineStep,
@@ -190,20 +189,15 @@ export class AspireCodeLensProvider implements vscode.CodeLensProvider {
         workspaceResources: readonly ResourceJson[],
     ): string | undefined {
         const docPath = document.uri.fsPath;
-        const docDir = path.dirname(docPath);
         const match = this._dataRepository.appHosts.find(host => {
             const hostPath = host.appHostPath;
-            if (!hostPath) {
-                return false;
-            }
-            return hostPath === docPath || path.dirname(hostPath) === docDir;
+            return matchesAppHostPathOrDirectory(docPath, hostPath);
         });
         if (match) {
             return match.appHostPath;
         }
         if (workspaceAppHostPath && (workspaceResources.length > 0 || this._dataRepository.workspaceAppHost !== undefined)) {
-            const workspaceAppHostDir = path.dirname(workspaceAppHostPath);
-            if (workspaceAppHostPath === docPath || workspaceAppHostDir === docDir) {
+            if (matchesAppHostPathOrDirectory(docPath, workspaceAppHostPath)) {
                 return workspaceAppHostPath;
             }
         }
@@ -219,8 +213,7 @@ export class AspireCodeLensProvider implements vscode.CodeLensProvider {
             return false;
         }
 
-        const docPath = document.uri.fsPath;
-        return appHostPath === docPath || path.dirname(appHostPath) === path.dirname(docPath);
+        return matchesAppHostPathOrDirectory(document.uri.fsPath, appHostPath);
     }
 
     private _addStateLenses(

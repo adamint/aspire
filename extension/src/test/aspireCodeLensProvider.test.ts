@@ -185,6 +185,28 @@ suite('AspireCodeLensProvider builder lens', () => {
         harness.dispose();
     });
 
+    test('emits builder lenses when Windows AppHost path casing differs from document path', () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const docPath = p('repo', 'AppHost', 'AppHost.cs');
+        const hostPath = p('repo', 'apphost', 'apphost.csproj');
+        const harness = createHarness({ appHosts: [makeAppHost(hostPath)] });
+
+        try {
+            const doc = createMockDocument(APP_HOST_DOC, docPath);
+            const lenses = harness.provider.provideCodeLenses(doc, cancellationToken) as vscode.CodeLens[];
+            const builderLenses = lenses.filter(l =>
+                l.command?.command === 'aspire-vscode.codeLensOpenDashboard' ||
+                l.command?.command === 'aspire-vscode.codeLensViewAppHostLogs'
+            );
+
+            assert.strictEqual(builderLenses.length, 2);
+            assert.deepStrictEqual(builderLenses[0].command?.arguments, [hostPath]);
+        } finally {
+            harness.dispose();
+            platformStub.restore();
+        }
+    });
+
     test('does not emit builder lenses when no AppHost is running', () => {
         const harness = createHarness({});
 

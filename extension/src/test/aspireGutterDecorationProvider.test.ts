@@ -144,4 +144,27 @@ suite('AspireGutterDecorationProvider', () => {
 
         provider.dispose();
     });
+
+    test('emits resource decorations when Windows AppHost path casing differs from document path', () => {
+        const platformStub = sandbox.stub(process, 'platform').value('win32');
+        const runningHostPath = p('repo', 'apphost', 'apphost.csproj');
+        const document = createMockDocument(APP_HOST_DOC, p('repo', 'AppHost', 'AppHost.cs'));
+        const runningAppHost = makeAppHost(runningHostPath, [makeResource('cache')]);
+        const decorationCalls: vscode.DecorationOptions[][] = [];
+        const editor = {
+            document,
+            setDecorations: (_type: vscode.TextEditorDecorationType, options: readonly vscode.DecorationOptions[]) => {
+                decorationCalls.push([...options]);
+            },
+        } as unknown as vscode.TextEditor;
+
+        sandbox.stub(vscode.window, 'visibleTextEditors').value([editor]);
+
+        const provider = new AspireGutterDecorationProvider(makeTreeProvider({ appHosts: [runningAppHost] }));
+
+        assert.strictEqual(decorationCalls.flat().length, 1);
+
+        provider.dispose();
+        platformStub.restore();
+    });
 });

@@ -1,12 +1,11 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { getParserForDocument } from './parsers/AppHostResourceParser';
 // Trigger parser self-registration
 import './parsers/csharpAppHostParser';
 import './parsers/jsTsAppHostParser';
 import { AspireAppHostTreeProvider } from '../views/AspireAppHostTreeProvider';
 import { AppHostDisplayInfo } from '../views/AppHostDataRepository';
-import { findResourceState, findWorkspaceResourceState } from './resourceStateUtils';
+import { findResourceState, findWorkspaceResourceState, matchesAppHostPathOrDirectory } from './resourceStateUtils';
 import { ResourceState, StateStyle, HealthStatus } from './resourceConstants';
 
 type GutterCategory = 'running' | 'warning' | 'error' | 'starting' | 'stopped' | 'completed';
@@ -217,8 +216,7 @@ export class AspireGutterDecorationProvider implements vscode.Disposable {
             return false;
         }
 
-        const docPath = document.uri.fsPath;
-        return appHostPath === docPath || path.dirname(appHostPath) === path.dirname(docPath);
+        return matchesAppHostPathOrDirectory(document.uri.fsPath, appHostPath);
     }
 
     private _clearDecorations(editor: vscode.TextEditor): void {
