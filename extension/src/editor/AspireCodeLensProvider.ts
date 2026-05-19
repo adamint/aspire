@@ -253,7 +253,7 @@ export class AspireCodeLensProvider implements vscode.CodeLensProvider {
             title: stateLabel,
             command: 'aspire-vscode.codeLensRevealResource',
             tooltip: tooltipText,
-            arguments: [resource.displayName ?? resource.name],
+            arguments: [resource.displayName ?? resource.name, appHost.appHostPath],
         }));
 
         // Action lenses based on available commands

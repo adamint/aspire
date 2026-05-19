@@ -256,6 +256,25 @@ suite('AspireCodeLensProvider builder lens', () => {
         harness.dispose();
     });
 
+    test('resource reveal lens includes the matching AppHost path', () => {
+        const firstHostPath = p('repo', 'FirstAppHost', 'AppHost.csproj');
+        const secondHostPath = p('repo', 'SecondAppHost', 'AppHost.csproj');
+        const secondDocPath = p('repo', 'SecondAppHost', 'AppHost.cs');
+        const harness = createHarness({
+            appHosts: [
+                { ...makeAppHost(firstHostPath), resources: [makeResource('cache', { name: 'cache-a' })] },
+                { ...makeAppHost(secondHostPath), resources: [makeResource('cache', { name: 'cache-b' })] },
+            ],
+        });
+
+        const doc = createMockDocument(APP_HOST_DOC, secondDocPath);
+        const lenses = harness.provider.provideCodeLenses(doc, cancellationToken) as vscode.CodeLens[];
+        const revealLens = lenses.find(lens => lens.command?.command === 'aspire-vscode.codeLensRevealResource');
+
+        assert.deepStrictEqual(revealLens?.command?.arguments, ['cache', secondHostPath]);
+        harness.dispose();
+    });
+
     test('emits builder lenses for AppHost file with no Add* calls when host is running', () => {
         const docPath = p('repo', 'AppHost', 'AppHost.cs');
         const hostPath = p('repo', 'AppHost', 'AppHost.csproj');

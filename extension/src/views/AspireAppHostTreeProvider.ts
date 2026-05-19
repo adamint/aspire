@@ -373,8 +373,13 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         this._treeView = treeView;
     }
 
-    findResourceElement(resourceName: string): TreeElement | undefined {
+    findResourceElement(resourceName: string, appHostPath?: string): TreeElement | undefined {
         const allChildren = this.getChildren();
+        if (appHostPath) {
+            const appHostElement = this.findAppHostElement(appHostPath);
+            return appHostElement ? this._findResourceInTree([appHostElement], resourceName) : undefined;
+        }
+
         return this._findResourceInTree(allChildren, resourceName);
     }
 
@@ -738,7 +743,8 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         // aspire logs accepts the resource display name, not the internal name
         const resourceName = element.resource.displayName ?? element.resource.name;
         if (this._repository.viewMode === 'workspace') {
-            const appHostFlag = this._repository.workspaceAppHostPath ? ` --apphost "${this._repository.workspaceAppHostPath}"` : '';
+            const appHostPath = this._getAppHostPathForResource(element);
+            const appHostFlag = appHostPath ? ` --apphost "${appHostPath}"` : '';
             this._terminalProvider.sendAspireCommandToAspireTerminal(`logs "${resourceName}"${appHostFlag}`);
             return;
         }
@@ -805,7 +811,8 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
 
     private _runResourceCommand(element: ResourceItem, command: string, additionalArgs?: string[], redactAdditionalArgs = false): void {
         if (this._repository.viewMode === 'workspace') {
-            const appHostFlag = this._repository.workspaceAppHostPath ? ` --apphost "${this._repository.workspaceAppHostPath}"` : '';
+            const appHostPath = this._getAppHostPathForResource(element);
+            const appHostFlag = appHostPath ? ` --apphost "${appHostPath}"` : '';
             this._terminalProvider.sendAspireCommandToAspireTerminal(`resource "${element.resource.name}" ${command}${appHostFlag}`, true, additionalArgs, { redactAdditionalArgs });
             return;
         }
@@ -819,6 +826,10 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
 
     private _findAppHostForResource(element: ResourceItem): AppHostDisplayInfo | undefined {
         return this._repository.appHosts.find(a => a.appHostPid === element.appHostPid);
+    }
+
+    private _getAppHostPathForResource(element: ResourceItem): string | undefined {
+        return this._findAppHostForResource(element)?.appHostPath ?? this._repository.workspaceAppHostPath;
     }
 }
 

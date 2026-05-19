@@ -613,6 +613,21 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         provider.dispose();
     });
 
+    test('findResourceElement can scope duplicate resource names to an AppHost path', () => {
+        const firstHostPath = '/repo/apps/Store/AppHost.csproj';
+        const secondHostPath = '/repo/samples/Store/AppHost.csproj';
+        const provider = makeTreeProvider([
+            makeAppHost({ appHostPath: firstHostPath, appHostPid: 1234, resources: [makeResource({ name: 'cache-a', displayName: 'cache' })] }),
+            makeAppHost({ appHostPath: secondHostPath, appHostPid: 5678, resources: [makeResource({ name: 'cache-b', displayName: 'cache' })] }),
+        ]);
+
+        const result = provider.findResourceElement('cache', secondHostPath) as any;
+
+        assert.ok(result, 'Expected to find resource in the scoped AppHost');
+        assert.strictEqual(result.resource.name, 'cache-b');
+        provider.dispose();
+    });
+
     test('matches WorkspaceResourcesItem by exact path (workspace mode)', () => {
         const hostPath = '/repo/AppHost/AppHost.csproj';
         const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
@@ -724,6 +739,47 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         assert.deepStrictEqual(appHostItems.map(item => item.label), [
             'apps/Store/AppHost.csproj',
             'samples/Store/AppHost.csproj',
+        ]);
+        provider.dispose();
+    });
+
+    test('workspace resource commands use the AppHost that owns the resource', () => {
+        const commands: string[] = [];
+        const selectedHostPath = '/repo/apps/Store/AppHost.csproj';
+        const otherHostPath = '/repo/samples/Store/AppHost.csproj';
+        const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+        const repository = {
+            viewMode: 'workspace' as ViewMode,
+            appHosts: [
+                makeAppHost({ appHostPath: selectedHostPath, appHostPid: 1234, resources: [makeResource({ name: 'cache-a', displayName: 'cache' })] }),
+                makeAppHost({ appHostPath: otherHostPath, appHostPid: 5678, resources: [makeResource({ name: 'cache-b', displayName: 'cache' })] }),
+            ],
+            workspaceResources: [],
+            workspaceAppHost: makeAppHost({ appHostPath: selectedHostPath, appHostPid: 1234, resources: [] }),
+            workspaceAppHostPath: selectedHostPath,
+            hasMultipleWorkspaceAppHosts: true,
+            workspaceAppHostName: 'apps/Store/AppHost.csproj',
+            workspaceAppHostDescription: 'Workspace view selected because aspire ls found 2 buildable AppHosts.',
+            onDidChangeData,
+        } as unknown as AppHostDataRepository;
+        const terminalProvider = {
+            getAspireCliExecutablePath: async () => 'aspire',
+            createEnvironment: () => ({}),
+            sendAspireCommandToAspireTerminal: (command: string) => commands.push(command),
+        } as unknown as AspireTerminalProvider;
+        const provider = new AspireAppHostTreeProvider(repository, terminalProvider);
+
+        const otherAppHostItem = provider.getChildren()[1];
+        const resourcesGroup = provider.getChildren(otherAppHostItem).find(child => child.label === 'Resources');
+        assert.ok(resourcesGroup, 'Expected resources group for second AppHost');
+        const resourceItem = provider.getChildren(resourcesGroup)[0];
+
+        provider.viewResourceLogs(resourceItem as any);
+        provider.restartResource(resourceItem as any);
+
+        assert.deepStrictEqual(commands, [
+            `logs "cache" --apphost "${otherHostPath}"`,
+            `resource "cache-b" restart --apphost "${otherHostPath}"`,
         ]);
         provider.dispose();
     });

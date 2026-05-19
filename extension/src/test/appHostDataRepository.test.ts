@@ -622,6 +622,77 @@ suite('AppHostDataRepository', () => {
         }
     });
 
+    test('multi-AppHost workspace ps snapshot clears no running AppHosts context', async () => {
+        const workspaceFoldersStub = stubWorkspaceFolders([{
+            uri: vscode.Uri.file('/workspace'),
+            name: 'workspace',
+            index: 0,
+        }]);
+        const executeCommandStub = sinon.stub(vscode.commands, 'executeCommand').resolves(undefined);
+        let getAppHostsLineCallback: ((line: string) => void) | undefined;
+        let psOptions: any;
+        spawnStub.callsFake((_terminalProvider, _command, args, options) => {
+            if (args[0] === 'ls') {
+                getAppHostsLineCallback = createLsLineCallback(options);
+            }
+            if (args[0] === 'ps') {
+                psOptions = options;
+            }
+            return new TestChildProcess();
+        });
+
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            repository.activate();
+            repository.setPanelVisible(true);
+            await waitForMicrotasks();
+
+            assert.ok(getAppHostsLineCallback);
+            getAppHostsLineCallback(JSON.stringify({
+                selected_project_file: null,
+                all_project_file_candidates: [
+                    '/workspace/apps/Store/AppHost.csproj',
+                    '/workspace/samples/Store/AppHost.csproj',
+                ],
+                app_host_candidates: [
+                    {
+                        relativePath: 'apps/Store/AppHost.csproj',
+                        path: '/workspace/apps/Store/AppHost.csproj',
+                        language: 'csharp',
+                        status: 'buildable',
+                    },
+                    {
+                        relativePath: 'samples/Store/AppHost.csproj',
+                        path: '/workspace/samples/Store/AppHost.csproj',
+                        language: 'csharp',
+                        status: 'buildable',
+                    },
+                ],
+            }));
+            await waitForMicrotasks();
+
+            assert.ok(psOptions);
+            psOptions.lineCallback(JSON.stringify([
+                {
+                    appHostPath: '/workspace/apps/Store/AppHost.csproj',
+                    appHostPid: 125881,
+                    cliPid: 125738,
+                    dashboardUrl: 'https://localhost:17193/login?t=061212',
+                    resources: [],
+                },
+            ]));
+
+            const noRunningContextCalls = executeCommandStub.getCalls().filter(call =>
+                call.args[0] === 'setContext' && call.args[1] === 'aspire.noRunningAppHosts');
+            assert.strictEqual(noRunningContextCalls.at(-1)?.args[2], false);
+        } finally {
+            repository.dispose();
+            executeCommandStub.restore();
+            workspaceFoldersStub.restore();
+        }
+    });
+
     test('late close from stopped describe watch does not orphan replacement watch', async () => {
         const firstChildProcess = new TestChildProcess();
         const secondChildProcess = new TestChildProcess();
