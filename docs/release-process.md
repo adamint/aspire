@@ -37,6 +37,7 @@ Before starting a release:
    - The build will be selected from a dropdown when running the release pipeline
    - The build should have a `BAR ID - NNNNNN` tag (auto-extracted by the pipeline)
    - If publishing the VS Code extension, the build must include the `aspire-vscode-extension` artifact with exactly one `.vsix`, matching `.manifest`, and matching `.signature.p7s`
+   - If publishing the VS Code extension as a Marketplace pre-release, queue the signed source build with `Package VS Code Extension as Pre-Release=true` so the produced VSIX is marked as pre-release before signing
 
 2. **Release Branch**: Ensure the release branch exists (e.g., `release/9.2`)
 
@@ -126,7 +127,7 @@ To publish only the VS Code extension after merging an extension release PR, run
 | `PublishVSCodeExtension` | `true` |
 | `PublishVSCodeExtensionAsPreRelease` | `false` for stable, `true` for pre-release |
 
-For a full Aspire release that should also publish the extension, keep the normal NuGet/channel/GitHub task settings and set `PublishVSCodeExtension` to `true`.
+For a full Aspire release that should also publish the extension, keep the normal NuGet/channel/GitHub task settings and set `PublishVSCodeExtension` to `true`. For a pre-release extension, the selected source build must also have been queued with `Package VS Code Extension as Pre-Release=true`.
 
 `commit_sha` and `release_branch` for the GitHub workflow are derived
 automatically from the source build resource — no need to copy them by hand.

@@ -19,7 +19,7 @@ The signing happens in distinct phases during the internal CI build.
 
 ### 1. Build and Package
 
-The main build step (`./build.sh -restore -build -pack -sign -publish`) builds the VS Code extension via `extension/Extension.proj`. This project runs `vsce package` to create the `.vsix` file and `vsce generate-manifest` to create a manifest file that contains a hash of the VSIX contents.
+The main build step (`./build.sh -restore -build -pack -sign -publish`) builds the VS Code extension via `extension/Extension.proj`. This project runs `vsce package` to create the `.vsix` file and `vsce generate-manifest` to create a manifest file that contains a hash of the VSIX contents. Queue the main CI build with `Package VS Code Extension as Pre-Release=true` when the signed VSIX artifact should be marked as a Marketplace pre-release package.
 
 > **Note:** The manifest is generated from the VSIX *before* any signing occurs. The VSIX is not be modified after this point, or else the hash won't match and signature verification will fail.
 

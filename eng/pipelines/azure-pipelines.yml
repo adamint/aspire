@@ -1,3 +1,9 @@
+parameters:
+  - name: packageVSCodeExtensionAsPreRelease
+    displayName: 'Package VS Code Extension as Pre-Release'
+    type: boolean
+    default: false
+
 trigger:
   batch: true
   branches:
@@ -309,6 +315,7 @@ extends:
                   repoLogPath: $(Build.Arcade.LogsPath)
                   repoTestResultsPath: $(Build.Arcade.TestResultsPath)
                   isWindows: true
+                  packageVSCodeExtensionAsPreRelease: ${{ parameters.packageVSCodeExtensionAsPreRelease }}
 
               # Extract the Aspire version from a generated nupkg filename so downstream
               # stages can use it. Aspire.Hosting.AppHost has no RID in its filename and
