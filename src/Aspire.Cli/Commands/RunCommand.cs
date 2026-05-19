@@ -87,7 +87,6 @@ internal sealed class RunCommand : BaseCommand
     {
         Description = RunCommandStrings.NoBuildArgumentDescription
     };
-    private readonly Option<bool>? _startDebugSessionOption;
 
     public RunCommand(
         IDotNetCliRunner runner,
@@ -126,15 +125,6 @@ internal sealed class RunCommand : BaseCommand
         Options.Add(s_noBuildOption);
         AppHostLauncher.AddLaunchOptions(this);
 
-        if (ExtensionHelper.IsExtensionHost(InteractionService, out _, out _))
-        {
-            _startDebugSessionOption = new Option<bool>("--start-debug-session")
-            {
-                Description = RunCommandStrings.StartDebugSessionArgumentDescription
-            };
-            Options.Add(_startDebugSessionOption);
-        }
-
         TreatUnmatchedTokensAsErrors = false;
     }
 
@@ -152,8 +142,7 @@ internal sealed class RunCommand : BaseCommand
         var startDebugSession = false;
         if (isExtensionHost)
         {
-            Debug.Assert(_startDebugSessionOption is not null);
-            startDebugSession = parseResult.GetValue(_startDebugSessionOption);
+            startDebugSession = parseResult.GetValue(RootCommand.StartDebugSessionOption);
         }
 
         // Validate that --format is only used with --detach
@@ -191,7 +180,7 @@ internal sealed class RunCommand : BaseCommand
             && ExtensionHelper.IsExtensionHost(InteractionService, out var extensionInteractionService, out _)
             && string.IsNullOrEmpty(_configuration[KnownConfigNames.ExtensionDebugSessionId]))
         {
-            extensionInteractionService.DisplayConsolePlainText(RunCommandStrings.StartingDebugSessionInExtension);
+            extensionInteractionService.DisplayConsolePlainText(string.Format(CultureInfo.CurrentCulture, startDebugSession ? RunCommandStrings.StartingDebugSessionInExtension : RunCommandStrings.StartingRunSessionInExtension, "run"));
             await extensionInteractionService.StartDebugSessionAsync(ExecutionContext.WorkingDirectory.FullName, passedAppHostProjectFile?.FullName, startDebugSession, new DebugSessionOptions { Command = "run" });
             return CommandResult.Success();
         }

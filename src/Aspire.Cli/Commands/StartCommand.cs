@@ -75,6 +75,7 @@ internal sealed class StartCommand : BaseCommand
             && ExtensionHelper.IsExtensionHost(InteractionService, out var extensionInteractionService, out _)
             && string.IsNullOrEmpty(_configuration[KnownConfigNames.ExtensionDebugSessionId]))
         {
+            var startDebugSession = parseResult.GetValue(RootCommand.StartDebugSessionOption);
             var debugSessionArgs = new List<string>();
             if (isolated)
             {
@@ -111,11 +112,11 @@ internal sealed class StartCommand : BaseCommand
                 debugSessionArgs.AddRange(additionalArgs);
             }
 
-            extensionInteractionService.DisplayConsolePlainText(RunCommandStrings.StartingDebugSessionInExtension);
+            extensionInteractionService.DisplayConsolePlainText(string.Format(CultureInfo.CurrentCulture, startDebugSession ? RunCommandStrings.StartingDebugSessionInExtension : RunCommandStrings.StartingRunSessionInExtension, "start"));
             await extensionInteractionService.StartDebugSessionAsync(
                 ExecutionContext.WorkingDirectory.FullName,
                 passedAppHostProjectFile?.FullName,
-                debug: false,
+                debug: startDebugSession,
                 new DebugSessionOptions
                 {
                     Command = "run",
