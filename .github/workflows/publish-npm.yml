@@ -67,6 +67,11 @@ on:
         required: false
         type: boolean
         default: true
+      propagation_timeout_seconds:
+        description: 'Maximum seconds to wait for RID packages to appear on npm (default: 900 = 15 minutes)'
+        required: false
+        type: number
+        default: 900
 
 # Limit to one npm publish at a time
 concurrency:
@@ -125,6 +130,7 @@ jobs:
           echo "Only RID: ${{ inputs.only_rid }}"
           echo "Skip Meta: ${{ inputs.skip_meta }}"
           echo "Dry Run: ${{ inputs.dry_run }}"
+          echo "Propagation Timeout: ${{ inputs.propagation_timeout_seconds }} seconds"
           echo "========================================="
           
           if [ "${{ inputs.dry_run }}" == "true" ]; then
@@ -166,6 +172,17 @@ jobs:
             exit 1
           fi
           echo "✓ PR number is valid: $PR_NUMBER"
+
+      - name: Validate propagation_timeout_seconds
+        run: |
+          TIMEOUT="${{ inputs.propagation_timeout_seconds }}"
+          # Check if it's a positive integer
+          if [[ ! "$TIMEOUT" =~ ^[0-9]+$ ]] || [ "$TIMEOUT" -le 0 ]; then
+            echo "❌ Invalid propagation_timeout_seconds: $TIMEOUT"
+            echo "Expected a positive integer (seconds)"
+            exit 1
+          fi
+          echo "✓ Propagation timeout is valid: $TIMEOUT seconds"
 
       - name: Compute effective tag and selected RIDs
         id: compute
@@ -225,16 +242,17 @@ jobs:
         run: |
           echo "Verifying all required npm tarballs are present..."
           SELECTED_RIDS='${{ needs.validate.outputs.selected_rids }}'
+          VERSION="${{ inputs.release_version }}"
           MISSING_PACKAGES=0
           
           # Check for each RID package
           while read -r RID; do
-            # Look for RID-specific tarball in the staging area
-            # Artifact structure: npm-staging/<rid>/artifacts/packages/.../Shipping/microsoft-aspire-cli-<rid>-*.tgz
-            RID_TARBALL=$(find "npm-staging/$RID" -name "microsoft-aspire-cli-$RID-*.tgz" -type f | head -1)
+            # Look for exact version tarball: microsoft-aspire-cli-<rid>-<version>.tgz
+            # Artifact structure: npm-staging/<rid>/artifacts/packages/.../Shipping/microsoft-aspire-cli-<rid>-<version>.tgz
+            RID_TARBALL=$(find "npm-staging/$RID" -name "microsoft-aspire-cli-$RID-$VERSION.tgz" -type f | head -1)
             
             if [ -z "$RID_TARBALL" ]; then
-              echo "❌ Missing RID package tarball for: $RID"
+              echo "❌ Missing expected RID package tarball: microsoft-aspire-cli-$RID-$VERSION.tgz"
               MISSING_PACKAGES=$((MISSING_PACKAGES + 1))
             else
               echo "✓ Found RID package: $(basename "$RID_TARBALL")"
@@ -243,11 +261,11 @@ jobs:
           
           # Check for meta package (should be in any RID artifact, we use win-x64 as canonical)
           if [[ "${{ inputs.skip_meta }}" != "true" ]]; then
-            # The meta package tarball should be in the canonical RID artifact (win-x64 if available)
-            META_TARBALL=$(find npm-staging -name "microsoft-aspire-cli-[0-9]*.tgz" -type f | grep -v -- "-win-\|-linux-\|-osx-" | head -1)
+            # Look for exact version tarball: microsoft-aspire-cli-<version>.tgz (no RID suffix)
+            META_TARBALL=$(find npm-staging -name "microsoft-aspire-cli-$VERSION.tgz" -type f | head -1)
             
             if [ -z "$META_TARBALL" ]; then
-              echo "❌ Missing meta package tarball"
+              echo "❌ Missing expected meta package tarball: microsoft-aspire-cli-$VERSION.tgz"
               MISSING_PACKAGES=$((MISSING_PACKAGES + 1))
             else
               echo "✓ Found meta package: $(basename "$META_TARBALL")"
@@ -300,14 +318,15 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN || '' }}
         run: |
           RID="${{ matrix.rid }}"
+          VERSION="${{ inputs.release_version }}"
           EFFECTIVE_TAG="${{ needs.validate.outputs.effective_tag }}"
           DRY_RUN="${{ inputs.dry_run }}"
           
-          # Find the RID-specific tarball
-          RID_TARBALL=$(find npm-staging -name "microsoft-aspire-cli-$RID-*.tgz" -type f | head -1)
+          # Find the exact version tarball: microsoft-aspire-cli-<rid>-<version>.tgz
+          RID_TARBALL=$(find npm-staging -name "microsoft-aspire-cli-$RID-$VERSION.tgz" -type f | head -1)
           
           if [ -z "$RID_TARBALL" ]; then
-            echo "❌ ERROR: RID package tarball not found for $RID"
+            echo "❌ ERROR: Expected RID package tarball not found: microsoft-aspire-cli-$RID-$VERSION.tgz"
             exit 1
           fi
           
@@ -322,7 +341,7 @@ jobs:
           else
             # Real publish with provenance
             npm publish "$RID_TARBALL" --provenance --access public --tag "$EFFECTIVE_TAG"
-            echo "✓ Published @microsoft/aspire-cli-$RID@${{ inputs.release_version }} with tag $EFFECTIVE_TAG"
+            echo "✓ Published @microsoft/aspire-cli-$RID@$VERSION with tag $EFFECTIVE_TAG"
           fi
 
   wait-for-packages:
@@ -340,12 +359,16 @@ jobs:
         run: |
           SELECTED_RIDS='${{ needs.validate.outputs.selected_rids }}'
           VERSION="${{ inputs.release_version }}"
-          MAX_ATTEMPTS=30
+          TIMEOUT_SECONDS="${{ inputs.propagation_timeout_seconds }}"
           SLEEP_SECONDS=10
+          
+          # Compute max attempts from timeout, rounding up to honor at least the requested duration
+          MAX_ATTEMPTS=$(( (TIMEOUT_SECONDS + SLEEP_SECONDS - 1) / SLEEP_SECONDS ))
           
           echo "Waiting for RID packages to appear on npm registry..."
           echo "Version: $VERSION"
-          echo "Max wait time: $((MAX_ATTEMPTS * SLEEP_SECONDS)) seconds"
+          echo "Timeout: $TIMEOUT_SECONDS seconds"
+          echo "Max attempts: $MAX_ATTEMPTS (checking every $SLEEP_SECONDS seconds)"
           echo ""
           
           # Parse JSON array of RIDs into bash array
@@ -387,7 +410,7 @@ jobs:
           
           if [ "$ALL_VISIBLE" != "true" ]; then
             echo ""
-            echo "❌ ERROR: Timeout waiting for RID packages to appear on npm after $((MAX_ATTEMPTS * SLEEP_SECONDS)) seconds"
+            echo "❌ ERROR: Timeout waiting for RID packages to appear on npm after $TIMEOUT_SECONDS seconds"
             echo "Some packages may still be propagating. Check npm registry manually before publishing meta package."
             exit 1
           fi
@@ -417,14 +440,15 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN || '' }}
         run: |
+          VERSION="${{ inputs.release_version }}"
           EFFECTIVE_TAG="${{ needs.validate.outputs.effective_tag }}"
           DRY_RUN="${{ inputs.dry_run }}"
           
-          # Find the meta package tarball (no RID suffix in the name)
-          META_TARBALL=$(find npm-staging -name "microsoft-aspire-cli-[0-9]*.tgz" -type f | grep -v -- "-win-\|-linux-\|-osx-" | head -1)
+          # Find the exact version tarball: microsoft-aspire-cli-<version>.tgz (no RID suffix)
+          META_TARBALL=$(find npm-staging -name "microsoft-aspire-cli-$VERSION.tgz" -type f | head -1)
           
           if [ -z "$META_TARBALL" ]; then
-            echo "❌ ERROR: Meta package tarball not found"
+            echo "❌ ERROR: Expected meta package tarball not found: microsoft-aspire-cli-$VERSION.tgz"
             exit 1
           fi
           
@@ -439,7 +463,7 @@ jobs:
           else
             # Real publish with provenance
             npm publish "$META_TARBALL" --provenance --access public --tag "$EFFECTIVE_TAG"
-            echo "✓ Published @microsoft/aspire-cli@${{ inputs.release_version }} with tag $EFFECTIVE_TAG"
+            echo "✓ Published @microsoft/aspire-cli@$VERSION with tag $EFFECTIVE_TAG"
           fi
 
   summary:
@@ -460,6 +484,7 @@ jobs:
           - **Selected RIDs**: ${{ needs.validate.outputs.selected_rids }}
           - **Skip Meta**: ${{ inputs.skip_meta }}
           - **Dry Run**: ${{ inputs.dry_run }}
+          - **Propagation Timeout**: ${{ inputs.propagation_timeout_seconds }} seconds
           
           ## Job Status
           - **Authorization**: ${{ needs.authorize.result }}
