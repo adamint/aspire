@@ -756,6 +756,34 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         provider.dispose();
     });
 
+    test('workspace mode uses describe resources for selected AppHost when ps has empty resources', () => {
+        const selectedHostPath = '/repo/apps/Store/AppHost.csproj';
+        const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+        const repository = {
+            viewMode: 'workspace' as ViewMode,
+            appHosts: [
+                makeAppHost({ appHostPath: selectedHostPath, appHostPid: 1234, resources: [] }),
+                makeAppHost({ appHostPath: '/repo/samples/Store/AppHost.csproj', appHostPid: 5678, resources: [] }),
+            ],
+            workspaceResources: [makeResource({ name: 'api', displayName: 'api' })],
+            workspaceAppHost: makeAppHost({ appHostPath: selectedHostPath, appHostPid: 1234, resources: [] }),
+            workspaceAppHostPath: selectedHostPath,
+            hasMultipleWorkspaceAppHosts: true,
+            workspaceAppHostName: 'AppHost.csproj',
+            workspaceAppHostDescription: 'Workspace view selected because aspire ls found 2 buildable AppHosts.',
+            onDidChangeData,
+        } as unknown as AppHostDataRepository;
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider());
+
+        const [selectedAppHostItem] = provider.getChildren();
+        const selectedChildren = provider.getChildren(selectedAppHostItem);
+        const resourcesGroup = selectedChildren.find(child => child.label === 'Resources');
+
+        assert.ok(resourcesGroup, 'Expected selected AppHost to use describe resources when ps resources are empty');
+        assert.deepStrictEqual(provider.getChildren(resourcesGroup).map(child => child.label), ['api']);
+        provider.dispose();
+    });
+
     test('workspace mode does not render ps resources before describe resources arrive', () => {
         const hostPath = '/repo/AppHost/AppHost.csproj';
         const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });

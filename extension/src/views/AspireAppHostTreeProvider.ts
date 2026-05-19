@@ -49,6 +49,10 @@ function isSamePath(left: string, right: string): boolean {
     return path.resolve(left) === path.resolve(right);
 }
 
+function hasNoResources(resources: readonly ResourceJson[] | null | undefined): boolean {
+    return resources === undefined || resources === null || resources.length === 0;
+}
+
 function appHostIcon(path?: string): vscode.ThemeIcon {
     const icon = path?.endsWith('.csproj') ? 'server-process' : 'file-code';
     return new vscode.ThemeIcon(icon, new vscode.ThemeColor('aspire.brandPurple'));
@@ -470,7 +474,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             if (this._repository.hasMultipleWorkspaceAppHosts && this._repository.appHosts.length > 0) {
                 const appHosts = this._repository.appHosts.map(appHost => {
                     const selectedAppHostPath = workspaceAppHost?.appHostPath ?? this._repository.workspaceAppHostPath;
-                    if (workspaceResources.length > 0 && selectedAppHostPath && isSamePath(appHost.appHostPath, selectedAppHostPath) && (appHost.resources === undefined || appHost.resources === null)) {
+                    if (workspaceResources.length > 0 && selectedAppHostPath && isSamePath(appHost.appHostPath, selectedAppHostPath) && hasNoResources(appHost.resources)) {
                         return { ...appHost, resources: workspaceResources };
                     }
 
@@ -524,9 +528,14 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         }
 
         if (element instanceof ResourceItem) {
-            const allResources = element.appHostPid !== null
-                ? this._repository.appHosts.find(a => a.appHostPid === element.appHostPid)?.resources ?? []
-                : [...this._repository.workspaceResources];
+            const appHost = element.appHostPid !== null
+                ? this._repository.appHosts.find(a => a.appHostPid === element.appHostPid)
+                : undefined;
+            const workspaceResources = [...this._repository.workspaceResources];
+            const selectedAppHostPath = this._repository.workspaceAppHost?.appHostPath ?? this._repository.workspaceAppHostPath;
+            const allResources = appHost && workspaceResources.length > 0 && selectedAppHostPath && isSamePath(appHost.appHostPath, selectedAppHostPath) && hasNoResources(appHost.resources)
+                ? workspaceResources
+                : appHost?.resources ?? workspaceResources;
             return this._getResourceChildren(element, allResources);
         }
 
