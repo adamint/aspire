@@ -238,7 +238,7 @@ suite('InteractionService endpoints', () => {
 			const updateArgs = updateWorkspaceFoldersStub.getCall(0).args;
 			assert.strictEqual(updateArgs[0], 1, 'Should add after existing workspace folders');
 			assert.strictEqual(updateArgs[1], 0, 'Should not remove existing workspace folders');
-			assert.strictEqual(updateArgs[2].uri.fsPath, projectPath, 'Should add the new project folder');
+			assertPathEqual(updateArgs[2].uri.fsPath, projectPath, 'Should add the new project folder');
 			assert.strictEqual(executeCommandStub.callCount, 0, 'Should not replace the workspace with vscode.openFolder');
 		}
 		finally {
@@ -268,7 +268,7 @@ suite('InteractionService endpoints', () => {
 			assert.strictEqual(executeCommandStub.callCount, 1, 'Should open the new project folder');
 			const executeArgs = executeCommandStub.getCall(0).args;
 			assert.strictEqual(executeArgs[0], 'vscode.openFolder');
-			assert.strictEqual(executeArgs[1].fsPath, projectPath);
+			assertPathEqual(executeArgs[1].fsPath, projectPath);
 			assert.deepStrictEqual(executeArgs[2], { forceNewWindow: false });
 		}
 		finally {
@@ -388,6 +388,16 @@ type RpcServerTestInfo = {
 	rpcClient: ICliRpcClient;
 	interactionService: IInteractionService;
 };
+
+function assertPathEqual(actual: string, expected: string, message?: string) {
+	assert.strictEqual(normalizePathForComparison(actual), normalizePathForComparison(expected), message);
+}
+
+function normalizePathForComparison(value: string) {
+	const normalized = path.normalize(value);
+
+	return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
 
 class TestCliRpcClient implements ICliRpcClient {
     debugSessionId: string | null;
