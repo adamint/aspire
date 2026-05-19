@@ -228,7 +228,7 @@ jobs:
           MISSING_PACKAGES=0
           
           # Check for each RID package
-          echo "$SELECTED_RIDS" | jq -r '.[]' | while read -r RID; do
+          while read -r RID; do
             # Look for RID-specific tarball in the staging area
             # Artifact structure: npm-staging/<rid>/artifacts/packages/.../Shipping/microsoft-aspire-cli-<rid>-*.tgz
             RID_TARBALL=$(find "npm-staging/$RID" -name "microsoft-aspire-cli-$RID-*.tgz" -type f | head -1)
@@ -239,7 +239,7 @@ jobs:
             else
               echo "✓ Found RID package: $(basename "$RID_TARBALL")"
             fi
-          done
+          done < <(echo "$SELECTED_RIDS" | jq -r '.[]')
           
           # Check for meta package (should be in any RID artifact, we use win-x64 as canonical)
           if [[ "${{ inputs.skip_meta }}" != "true" ]]; then
