@@ -1,4 +1,7 @@
 import * as assert from 'assert';
+import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import * as sinon from 'sinon';
 
@@ -204,6 +207,74 @@ suite('InteractionService endpoints', () => {
 		testInfo.interactionService.displayEmptyLine();
 		assert.ok(stub.calledWith('\n'));
 		stub.restore();
+	});
+
+	test("openEditor adds folder to existing workspace", async () => {
+		const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'aspire-open-editor-'));
+		const workspacePath = path.join(tempRoot, 'workspace');
+		const projectPath = path.join(tempRoot, 'MyFirstApp');
+		await fs.mkdir(workspacePath);
+		await fs.mkdir(projectPath);
+
+		const sandbox = sinon.createSandbox();
+
+		try {
+			const testInfo = await createTestRpcServer();
+			const workspaceFolder = {
+				uri: vscode.Uri.file(workspacePath),
+				name: 'workspace',
+				index: 0
+			} as vscode.WorkspaceFolder;
+
+			sandbox.stub(vscode.workspace, 'workspaceFolders').value([workspaceFolder]);
+			sandbox.stub(vscode.workspace, 'getWorkspaceFolder').callsFake((uri: vscode.Uri) =>
+				uri.fsPath === workspaceFolder.uri.fsPath ? workspaceFolder : undefined);
+			const updateWorkspaceFoldersStub = sandbox.stub(vscode.workspace, 'updateWorkspaceFolders').returns(true);
+			const executeCommandStub = sandbox.stub(vscode.commands, 'executeCommand').resolves();
+
+			await testInfo.interactionService.openEditor(projectPath);
+
+			assert.strictEqual(updateWorkspaceFoldersStub.callCount, 1, 'Should update workspace folders once');
+			const updateArgs = updateWorkspaceFoldersStub.getCall(0).args;
+			assert.strictEqual(updateArgs[0], 1, 'Should add after existing workspace folders');
+			assert.strictEqual(updateArgs[1], 0, 'Should not remove existing workspace folders');
+			assert.strictEqual(updateArgs[2].uri.fsPath, projectPath, 'Should add the new project folder');
+			assert.strictEqual(executeCommandStub.callCount, 0, 'Should not replace the workspace with vscode.openFolder');
+		}
+		finally {
+			sandbox.restore();
+			await fs.rm(tempRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("openEditor opens folder when there is no workspace", async () => {
+		const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'aspire-open-editor-'));
+		const projectPath = path.join(tempRoot, 'MyFirstApp');
+		await fs.mkdir(projectPath);
+
+		const sandbox = sinon.createSandbox();
+
+		try {
+			const testInfo = await createTestRpcServer();
+
+			sandbox.stub(vscode.workspace, 'workspaceFolders').value(undefined);
+			sandbox.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+			const updateWorkspaceFoldersStub = sandbox.stub(vscode.workspace, 'updateWorkspaceFolders').returns(true);
+			const executeCommandStub = sandbox.stub(vscode.commands, 'executeCommand').resolves();
+
+			await testInfo.interactionService.openEditor(projectPath);
+
+			assert.strictEqual(updateWorkspaceFoldersStub.callCount, 0, 'Should not update workspace folders when no workspace exists');
+			assert.strictEqual(executeCommandStub.callCount, 1, 'Should open the new project folder');
+			const executeArgs = executeCommandStub.getCall(0).args;
+			assert.strictEqual(executeArgs[0], 'vscode.openFolder');
+			assert.strictEqual(executeArgs[1].fsPath, projectPath);
+			assert.deepStrictEqual(executeArgs[2], { forceNewWindow: false });
+		}
+		finally {
+			sandbox.restore();
+			await fs.rm(tempRoot, { recursive: true, force: true });
+		}
 	});
 
 	test("displayDashboardUrls writes URLs to output channel and shows info message when autoLaunch is notification", async () => {
