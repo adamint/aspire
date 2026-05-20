@@ -840,7 +840,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         provider.dispose();
     });
 
-    test('workspace mode does not render ps resources before describe resources arrive', () => {
+    test('workspace mode renders ps resources before describe resources arrive', () => {
         const hostPath = '/repo/AppHost/AppHost.csproj';
         const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
         const repository = {
@@ -867,8 +867,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         const appHostChildren = provider.getChildren(appHostItem);
 
         assert.ok(appHostItem, 'Expected a workspace AppHost item');
-        assert.strictEqual(appHostChildren.length, 3);
-        assert.ok(!appHostChildren.some(child => child.label === 'api'));
+        assert.ok(appHostChildren.some(child => child.label === 'api'));
         provider.dispose();
     });
 

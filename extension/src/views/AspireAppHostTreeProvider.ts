@@ -491,9 +491,12 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             if (workspaceResources.length === 0 && !workspaceAppHost) {
                 return [];
             }
-            const rawDashboardUrl = workspaceAppHost?.dashboardUrl ?? workspaceResources.find(r => r.dashboardUrl)?.dashboardUrl ?? null;
+            const resources = workspaceResources.length > 0
+                ? workspaceResources
+                : [...workspaceAppHost?.resources ?? []];
+            const rawDashboardUrl = workspaceAppHost?.dashboardUrl ?? resources.find(r => r.dashboardUrl)?.dashboardUrl ?? null;
             const dashboardUrl = rawDashboardUrl ? stripResourceSuffix(rawDashboardUrl) : null;
-            return [new WorkspaceResourcesItem(workspaceResources, dashboardUrl, workspaceAppHost?.appHostPath ?? this._repository.workspaceAppHostPath, workspaceAppHost, this._repository.workspaceAppHostName, this._repository.workspaceAppHostDescription)];
+            return [new WorkspaceResourcesItem(resources, dashboardUrl, workspaceAppHost?.appHostPath ?? this._repository.workspaceAppHostPath, workspaceAppHost, this._repository.workspaceAppHostName, this._repository.workspaceAppHostDescription)];
         }
 
         if (element instanceof AppHostItem || element instanceof ResourcesGroupItem) {
