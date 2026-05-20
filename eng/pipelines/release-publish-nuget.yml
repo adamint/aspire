@@ -78,10 +78,10 @@ parameters:
     type: boolean
     default: false
 
-  - name: PublishVSCodeExtension
-    displayName: '[Advanced] Publish VS Code Extension to Marketplace'
+  - name: SkipVSCodeExtensionPublish
+    displayName: '[Advanced] Skip VS Code Extension Publishing'
     type: boolean
-    default: false
+    default: true
 
   # Ref used when invoking `workflow_dispatch` against release-github-tasks.yml.
   # GitHub loads the workflow file *from this ref*, so it controls which version
@@ -166,7 +166,7 @@ extends:
                     displayName: 'Publish Homebrew Cask'
                     targetPath: '$(Pipeline.Workspace)/installers/homebrew-cask-stable'
                     artifactName: 'homebrew-cask-stable'
-                - ${{ if eq(parameters.PublishVSCodeExtension, true) }}:
+                - ${{ if eq(parameters.SkipVSCodeExtensionPublish, false) }}:
                   - output: pipelineArtifact
                     displayName: 'Publish VS Code Extension with SBOM'
                     targetPath: '$(Pipeline.Workspace)/vscode/aspire-vscode-extension'
@@ -180,7 +180,7 @@ extends:
                   Write-Host "Source Build Name: $(resources.pipeline.aspire-build.runName)"
                   Write-Host "This stage downloads artifacts and re-publishes them so 1ES PT can generate SBOM."
                   Write-Host "Installer-only mode: ${{ and(eq(parameters.SkipNuGetPublish, true), eq(parameters.SkipChannelPromotion, true)) }}"
-                  Write-Host "Publish VS Code Extension: ${{ parameters.PublishVSCodeExtension }}"
+                  Write-Host "Skip VS Code Extension Publishing: ${{ parameters.SkipVSCodeExtensionPublish }}"
                   Write-Host "==============================="
                 displayName: 'Log Stage Info'
 
@@ -294,7 +294,7 @@ extends:
                   displayName: 'Download Homebrew Cask from Source Build'
                   artifact: homebrew-cask-stable
 
-              - ${{ if eq(parameters.PublishVSCodeExtension, true) }}:
+              - ${{ if eq(parameters.SkipVSCodeExtensionPublish, false) }}:
                 - download: aspire-build
                   displayName: 'Download VS Code Extension from Source Build'
                   artifact: aspire-vscode-extension
@@ -373,7 +373,7 @@ extends:
                   Write-Host "✓ Installer artifacts prepared"
                 displayName: 'Prepare Installer Artifacts'
 
-              - ${{ if eq(parameters.PublishVSCodeExtension, true) }}:
+              - ${{ if eq(parameters.SkipVSCodeExtensionPublish, false) }}:
                 - pwsh: |
                     $ErrorActionPreference = 'Stop'
 
@@ -742,15 +742,15 @@ extends:
                   } else {
                     Write-Host " (uploaded after GitHub Tasks job)"
                   }
-                  Write-Host "║ VS Code Ext:    ${{ parameters.PublishVSCodeExtension }}" -NoNewline
-                  if ("${{ parameters.PublishVSCodeExtension }}" -eq "true") {
+                  Write-Host "║ VS Code Ext:    ${{ parameters.SkipVSCodeExtensionPublish }}" -NoNewline
+                  if ("${{ parameters.SkipVSCodeExtensionPublish }}" -eq "true") {
+                    Write-Host " (SKIPPED)"
+                  } else {
                     if ("${{ parameters.DryRun }}" -eq "true") {
                       Write-Host " (validated in dry-run)"
                     } else {
                       Write-Host " (published by sibling release job)"
                     }
-                  } else {
-                    Write-Host " (SKIPPED)"
                   }
                   Write-Host "╚═══════════════════════════════════════════════════════════════╝"
                   Write-Host ""
@@ -764,7 +764,7 @@ extends:
             condition: |
               and(
                 in(dependencies.ReleaseJob.result, 'Succeeded', 'SucceededWithIssues'),
-                eq('${{ parameters.PublishVSCodeExtension }}', 'true')
+                eq('${{ parameters.SkipVSCodeExtensionPublish }}', 'false')
               )
             timeoutInMinutes: 30
             pool:
