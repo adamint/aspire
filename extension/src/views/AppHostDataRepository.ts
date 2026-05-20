@@ -859,6 +859,10 @@ export class AppHostDataRepository {
         const changed = JSON.stringify(workspaceAppHosts) !== JSON.stringify(this._appHosts)
             || JSON.stringify(workspaceAppHost) !== JSON.stringify(this._workspaceAppHost);
 
+        if (workspaceAppHostPath && !workspaceAppHost && (this._workspaceAppHost || this._workspaceResources.size > 0)) {
+            this._stopDescribeWatch({ clearWorkspaceResources: true });
+        }
+
         this._appHosts = workspaceAppHosts;
         this._workspaceAppHost = workspaceAppHost;
 
