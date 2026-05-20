@@ -73,6 +73,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          ref: main
           fetch-depth: 0  # Full history for diff generation
           persist-credentials: false
 
@@ -279,8 +280,7 @@ jobs:
           COMMITS=$(git log --format='%h%x09%s' --no-merges "${FROM_SHA}..${TO_SHA}" -- extension/ 2>/dev/null || echo "")
 
           if [ -z "$COMMITS" ]; then
-            echo "⚠️ No extension-specific commits found in range. Using all commits."
-            COMMITS=$(git log --format='%h%x09%s' --no-merges --max-count=100 "${FROM_SHA}..${TO_SHA}" 2>/dev/null || echo "")
+            echo "⚠️ No extension-specific commits found in range. Fallback release notes will use the maintenance entry."
           fi
 
           # Exclude generated/dependency files from the AI input so the model focuses
@@ -440,7 +440,7 @@ jobs:
             done < "$WORK_DIR/commits.txt"
 
             if [ -n "$FALLBACK_BULLETS" ]; then
-              AI_NOTES="### Changes${FALLBACK_BULLETS}"
+              AI_NOTES="### Changes (auto-generated from commits)${FALLBACK_BULLETS}"
             else
               AI_NOTES="### Maintenance"$'\n'"- No user-facing extension changes were detected."
             fi

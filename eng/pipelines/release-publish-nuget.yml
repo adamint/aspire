@@ -760,7 +760,12 @@ extends:
           # ===== VS CODE EXTENSION PUBLISHING =====
           - job: VSCodeExtensionJob
             displayName: 'Publish VS Code Extension to Marketplace'
-            condition: eq('${{ parameters.PublishVSCodeExtension }}', 'true')
+            dependsOn: ReleaseJob
+            condition: |
+              and(
+                in(dependencies.ReleaseJob.result, 'Succeeded', 'SucceededWithIssues'),
+                eq('${{ parameters.PublishVSCodeExtension }}', 'true')
+              )
             timeoutInMinutes: 30
             pool:
               name: NetCore1ESPool-Internal
