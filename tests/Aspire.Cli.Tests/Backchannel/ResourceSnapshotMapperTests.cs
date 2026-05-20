@@ -1,12 +1,34 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text.Json;
+
 using Aspire.Cli.Backchannel;
+using Aspire.Dashboard.Model;
 
 namespace Aspire.Cli.Tests.Backchannel;
 
 public class ResourceSnapshotMapperTests
 {
+    [Fact]
+    public void ResourceSnapshotDeserialization_WithNumericPropertyValue_ConvertsPropertyToString()
+    {
+        var json = """
+            {
+                "Name": "service",
+                "ResourceType": "Executable",
+                "Properties": {
+                    "executable.pid": 12345
+                }
+            }
+            """;
+
+        var snapshot = JsonSerializer.Deserialize(json, BackchannelJsonSerializerContext.Default.ResourceSnapshot);
+
+        Assert.NotNull(snapshot);
+        Assert.Equal("12345", snapshot.Properties[KnownProperties.Executable.Pid]);
+    }
+
     [Fact]
     public void MapToResourceJson_WithPopulatedProperties_MapsCorrectly()
     {

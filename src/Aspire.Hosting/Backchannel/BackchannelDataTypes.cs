@@ -1080,6 +1080,7 @@ internal sealed class ResourceSnapshot
     /// Gets additional properties as key-value pairs.
     /// This allows for extensibility without changing the schema.
     /// </summary>
+    [JsonConverter(typeof(ResourceSnapshotPropertiesConverter))]
     public Dictionary<string, string?> Properties { get; init; } = [];
 
     /// <summary>
@@ -1429,4 +1430,66 @@ internal sealed class ResourceLogBatch
     /// Gets the log lines in this batch.
     /// </summary>
     public required ResourceLogLine[] Lines { get; init; }
+}
+
+/// <summary>
+/// Converts resource snapshot properties while accepting legacy non-string JSON values.
+/// </summary>
+internal sealed class ResourceSnapshotPropertiesConverter : JsonConverter<Dictionary<string, string?>>
+{
+    public override Dictionary<string, string?> Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType is JsonTokenType.Null)
+        {
+            return [];
+        }
+
+        if (reader.TokenType is not JsonTokenType.StartObject)
+        {
+            throw new JsonException($"Expected {JsonTokenType.StartObject} token but found {reader.TokenType}.");
+        }
+
+        var properties = new Dictionary<string, string?>();
+        while (reader.Read())
+        {
+            if (reader.TokenType is JsonTokenType.EndObject)
+            {
+                return properties;
+            }
+
+            if (reader.TokenType is not JsonTokenType.PropertyName)
+            {
+                throw new JsonException($"Expected {JsonTokenType.PropertyName} token but found {reader.TokenType}.");
+            }
+
+            var propertyName = reader.GetString() ?? throw new JsonException("Expected a property name.");
+            if (!reader.Read())
+            {
+                throw new JsonException("Expected a property value.");
+            }
+
+            // Older AppHosts can send primitive JSON values for resource properties even though
+            // the current contract normalizes them to strings. Preserve the CLI-facing string
+            // shape so one non-string property does not make the whole resource snapshot fail.
+            properties[propertyName] = reader.TokenType switch
+            {
+                JsonTokenType.Null => null,
+                JsonTokenType.String => reader.GetString(),
+                _ => JsonElement.ParseValue(ref reader).ToString()
+            };
+        }
+
+        throw new JsonException("Expected end of resource properties object.");
+    }
+
+    public override void Write(Utf8JsonWriter writer, Dictionary<string, string?> value, JsonSerializerOptions options)
+    {
+        writer.WriteStartObject();
+        foreach (var property in value)
+        {
+            writer.WriteString(property.Key, property.Value);
+        }
+
+        writer.WriteEndObject();
+    }
 }
