@@ -4,6 +4,7 @@
 using System.CommandLine;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Threading.Channels;
 using Aspire.Cli.Backchannel;
@@ -45,6 +46,8 @@ internal sealed class AppHostDisplayInfo
 [JsonSerializable(typeof(ResourceHealthReportJson))]
 [JsonSerializable(typeof(ResourceCommandJson))]
 [JsonSerializable(typeof(ResourceCommandArgumentJson[]))]
+[JsonSerializable(typeof(JsonNode))]
+[JsonSerializable(typeof(Dictionary<string, JsonNode?>))]
 [JsonSerializable(typeof(Dictionary<string, string?>))]
 [JsonSerializable(typeof(Dictionary<string, ResourceHealthReportJson>))]
 [JsonSerializable(typeof(Dictionary<string, ResourceCommandJson>))]
@@ -92,6 +95,11 @@ internal sealed class PsCommand : BaseCommand
         Description = PsCommandStrings.ResourcesOptionDescription
     };
 
+    private static readonly Option<bool> s_includeHiddenOption = new("--include-hidden")
+    {
+        Description = SharedCommandStrings.IncludeHiddenOptionDescription
+    };
+
     private static readonly Option<bool> s_followOption = new("--follow", "-f")
     {
         Description = PsCommandStrings.FollowOptionDescription
@@ -113,6 +121,7 @@ internal sealed class PsCommand : BaseCommand
 
         Options.Add(s_formatOption);
         Options.Add(s_resourcesOption);
+        Options.Add(s_includeHiddenOption);
         Options.Add(s_followOption);
     }
 
@@ -122,10 +131,11 @@ internal sealed class PsCommand : BaseCommand
 
         var format = parseResult.GetValue(s_formatOption);
         var includeResources = parseResult.GetValue(s_resourcesOption);
+        var includeHidden = parseResult.GetValue(s_includeHiddenOption);
 
         if (parseResult.GetValue(s_followOption))
         {
-            return await ExecuteFollowAsync(format, includeResources, cancellationToken).ConfigureAwait(false);
+            return await ExecuteFollowAsync(format, includeResources, includeHidden, cancellationToken).ConfigureAwait(false);
         }
 
         // Scan for running AppHosts (same as ListAppHostsTool)
@@ -158,7 +168,7 @@ internal sealed class PsCommand : BaseCommand
             .ToList();
 
         // Gather info for each AppHost
-        var appHostInfos = await GatherAppHostInfosAsync(orderedConnections, includeResources && format == OutputFormat.Json, cancellationToken).ConfigureAwait(false);
+        var appHostInfos = await GatherAppHostInfosAsync(orderedConnections, includeResources && format == OutputFormat.Json, includeHidden, cancellationToken).ConfigureAwait(false);
 
         if (format == OutputFormat.Json)
         {
@@ -174,7 +184,7 @@ internal sealed class PsCommand : BaseCommand
         return CommandResult.Success();
     }
 
-    private async Task<CommandResult> ExecuteFollowAsync(OutputFormat format, bool includeResources, CancellationToken cancellationToken)
+    private async Task<CommandResult> ExecuteFollowAsync(OutputFormat format, bool includeResources, bool includeHidden, CancellationToken cancellationToken)
     {
         if (format != OutputFormat.Json)
         {
@@ -267,12 +277,12 @@ internal sealed class PsCommand : BaseCommand
                 {
                     try
                     {
-                        await foreach (var _ in connection.WatchResourceSnapshotsAsync(includeHidden: true, resourceCancellationToken).WithCancellation(resourceCancellationToken).ConfigureAwait(false))
+                        await foreach (var _ in connection.WatchResourceSnapshotsAsync(includeHidden, resourceCancellationToken).WithCancellation(resourceCancellationToken).ConfigureAwait(false))
                         {
-                              if (Interlocked.Exchange(ref resourceUpdateQueued, 1) == 0)
-                              {
-                                  await updates.Writer.WriteAsync(null, resourceCancellationToken).ConfigureAwait(false);
-                              }
+                            if (Interlocked.Exchange(ref resourceUpdateQueued, 1) == 0)
+                            {
+                                await updates.Writer.WriteAsync(null, resourceCancellationToken).ConfigureAwait(false);
+                            }
                         }
                     }
                     catch (OperationCanceledException) when (resourceCancellationToken.IsCancellationRequested)
@@ -289,7 +299,7 @@ internal sealed class PsCommand : BaseCommand
 
         async Task WriteSnapshotAsync()
         {
-            var appHostInfos = await GatherAppHostInfosAsync(currentConnections, includeResources, cancellationToken).ConfigureAwait(false);
+            var appHostInfos = await GatherAppHostInfosAsync(currentConnections, includeResources, includeHidden, cancellationToken).ConfigureAwait(false);
             var json = JsonSerializer.Serialize(appHostInfos, PsCommandJsonContext.CompactRelaxedEscaping.ListAppHostDisplayInfo);
             if (!string.Equals(json, lastJson, StringComparison.Ordinal))
             {
@@ -306,7 +316,7 @@ internal sealed class PsCommand : BaseCommand
             .ToList();
     }
 
-    private async Task<List<AppHostDisplayInfo>> GatherAppHostInfosAsync(List<IAppHostAuxiliaryBackchannel> connections, bool includeResources, CancellationToken cancellationToken)
+    private async Task<List<AppHostDisplayInfo>> GatherAppHostInfosAsync(List<IAppHostAuxiliaryBackchannel> connections, bool includeResources, bool includeHidden, CancellationToken cancellationToken)
     {
         var appHostInfos = new List<AppHostDisplayInfo>();
 
@@ -365,7 +375,7 @@ internal sealed class PsCommand : BaseCommand
             {
                 try
                 {
-                    var snapshots = await connection.GetResourceSnapshotsAsync(includeHidden: true, cancellationToken).ConfigureAwait(false);
+                    var snapshots = await connection.GetResourceSnapshotsAsync(includeHidden, cancellationToken).ConfigureAwait(false);
                     resources = ResourceSnapshotMapper.MapToResourceJsonList(snapshots, dashboardUrl, includeEnvironmentVariableValues: false);
                 }
                 catch (Exception ex)

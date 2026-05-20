@@ -484,20 +484,20 @@ internal sealed class AuxiliaryBackchannelMonitor(
                     connectionsForHash.TryRemove(socketPath, out var conn))
                 {
                     _ = Task.Run(async () => await DisconnectAsync(conn).ConfigureAwait(false));
-                    
+
                     // Clean up empty hash entries
                     if (connectionsForHash.IsEmpty)
                     {
                         _connectionsByHash.TryRemove(hash, out _);
                     }
 
-                      NotifyConnectionsChanged();
+                    NotifyConnectionsChanged();
                 }
             };
 
             // Get or create the inner dictionary for this hash
             var connectionsDict = _connectionsByHash.GetOrAdd(hash, _ => new ConcurrentDictionary<string, AppHostAuxiliaryBackchannel>());
-            
+
             if (connectionsDict.TryAdd(socketPath, connection))
             {
                 logger.LogInformation(
@@ -515,6 +515,8 @@ internal sealed class AuxiliaryBackchannelMonitor(
                     connection.AppHostInfo?.CliProcessId?.ToString(CultureInfo.InvariantCulture) ?? "N/A",
                     connection.IsInScope,
                     connection.SupportsV2);
+
+                NotifyConnectionsChanged();
             }
             else
             {
