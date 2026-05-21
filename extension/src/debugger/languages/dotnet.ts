@@ -229,10 +229,58 @@ async function shouldLaunchProjectWithDotNetRun(outputPath: string): Promise<boo
     }
 }
 
-function createDotNetRunArguments(projectPath: string, args: string[] | undefined): string[] {
+function parseLaunchProfileArguments(commandLineArgs: string | undefined): string[] | undefined {
+    if (!commandLineArgs) {
+        return undefined;
+    }
+
+    // launchSettings.json stores application arguments as a command-line string, for example:
+    //   --path "value with spaces" --flag
+    // The debug adapter accepts args as an array, so split on whitespace while preserving
+    // quoted values as a single argument. Backslashes are preserved so Windows paths are not
+    // corrupted before they reach the launched process.
+    const parsedArgs: string[] = [];
+    let currentArg = '';
+    let quote: '"' | "'" | undefined;
+    let hasCurrentArg = false;
+
+    for (const char of commandLineArgs) {
+        if (quote) {
+            if (char === quote) {
+                quote = undefined;
+            } else {
+                currentArg += char;
+            }
+
+            hasCurrentArg = true;
+        } else if (char === '"' || char === "'") {
+            quote = char;
+            hasCurrentArg = true;
+        } else if (/\s/.test(char)) {
+            if (hasCurrentArg) {
+                parsedArgs.push(currentArg);
+                currentArg = '';
+                hasCurrentArg = false;
+            }
+        } else {
+            currentArg += char;
+            hasCurrentArg = true;
+        }
+    }
+
+    if (hasCurrentArg) {
+        parsedArgs.push(currentArg);
+    }
+
+    return parsedArgs;
+}
+
+function createDotNetRunArguments(projectPath: string, baseProfileArgs: string | undefined, runSessionArgs: string[] | undefined): string[] {
     const dotnetRunArgs = ['run', '--project', projectPath, '--no-launch-profile'];
-    if (args && args.length > 0) {
-        dotnetRunArgs.push('--', ...args);
+    const appArgs = runSessionArgs !== undefined ? runSessionArgs : parseLaunchProfileArguments(baseProfileArgs);
+
+    if (appArgs && appArgs.length > 0) {
+        dotnetRunArgs.push('--', ...appArgs);
     }
 
     return dotnetRunArgs;
@@ -333,7 +381,7 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 if (await shouldLaunchProjectWithDotNetRun(outputPath)) {
                     extensionLogOutputChannel.warn(`Project output ${outputPath} is not directly runnable; launching ${projectPath} with dotnet run without debugger attach.`);
                     debugConfiguration.program = 'dotnet';
-                    debugConfiguration.args = createDotNetRunArguments(projectPath, args);
+                    debugConfiguration.args = createDotNetRunArguments(projectPath, baseProfile?.commandLineArgs, args);
                     debugConfiguration.noDebug = true;
                 } else {
                     debugConfiguration.program = outputPath;
