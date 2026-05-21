@@ -18,6 +18,23 @@
 			},
 			"label": "npm: watch extension",
       "path": "extension",
+			"dependsOn": [
+				"yarn: install extension"
+			],
+			"dependsOrder": "sequence"
+		},
+		{
+			"label": "yarn: install extension",
+			"type": "shell",
+			"command": "npx --yes --package yarn@1.22.22 yarn install --frozen-lockfile --non-interactive",
+			"options": {
+				"cwd": "${workspaceFolder}/extension"
+			},
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "silent",
+				"group": "watchers"
+			}
 		},
 		{
 			"type": "npm",
