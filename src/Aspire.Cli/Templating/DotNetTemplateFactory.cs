@@ -596,43 +596,23 @@ internal class DotNetTemplateFactory(
     private async Task<string?> GetOutputPathAsync(TemplateInputs inputs, Func<CliExecutionContext, string, string> pathDeriver, string projectName, ParseResult parseResult, CancellationToken cancellationToken)
     {
         var isExtensionHost = ExtensionHelper.IsExtensionHost(interactionService, out _, out _);
-        var createProjectNameSubdirectory = await OutputPathHelper.ShouldCreateProjectNameSubdirectoryAsync(
+        var createProjectNameSubdirectory = await OutputPathHelper.PromptExtensionCreateProjectNameSubdirectoryAsync(
             interactionService,
             isExtensionHost,
             inputs.Output is not null,
             projectName,
             cancellationToken);
 
-        var outputPath = await OutputPathHelper.ResolveOutputPathAsync(
+        var outputPathResolver = OutputPathHelper.CreateProjectNameSubdirectoryOutputPathResolver(createProjectNameSubdirectory, projectName);
+        return await OutputPathHelper.ResolveOutputPathAsync(
             inputs.Output,
             executionContext.WorkingDirectory.FullName,
             async () =>
             {
                 var defaultPath = pathDeriver(executionContext, projectName);
-                var validator = createProjectNameSubdirectory
-                    ? OutputPathHelper.CreateExtensionOutputPathValidator(executionContext.WorkingDirectory.FullName, projectName)
-                    : OutputPathHelper.CreateOutputPathValidator(executionContext.WorkingDirectory.FullName);
-                return await prompter.PromptForOutputPath(defaultPath, parseResult, validator, cancellationToken);
+                var validator = OutputPathHelper.CreateOutputPathValidator(executionContext.WorkingDirectory.FullName);
+                return await prompter.PromptForOutputPath(defaultPath, parseResult, validator, cancellationToken, outputPathResolver);
             },
             interactionService);
-
-        if (outputPath is null)
-        {
-            return null;
-        }
-
-        if (createProjectNameSubdirectory)
-        {
-            var extensionOutputPath = OutputPathHelper.ResolveExtensionOutputPath(outputPath, projectName, executionContext.WorkingDirectory.FullName, inputs.Output is not null);
-            if (extensionOutputPath.ErrorMessage is not null)
-            {
-                interactionService.DisplayError(extensionOutputPath.ErrorMessage);
-                return null;
-            }
-
-            outputPath = extensionOutputPath.OutputPath;
-        }
-
-        return outputPath;
     }
 }

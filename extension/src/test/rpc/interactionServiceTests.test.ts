@@ -277,6 +277,42 @@ suite('InteractionService endpoints', () => {
 		}
 	});
 
+	test("openEditor shows warning when folder cannot be added to existing workspace", async () => {
+		const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'aspire-open-editor-'));
+		const workspacePath = path.join(tempRoot, 'workspace');
+		const projectPath = path.join(tempRoot, 'MyFirstApp');
+		await fs.mkdir(workspacePath);
+		await fs.mkdir(projectPath);
+
+		const sandbox = sinon.createSandbox();
+
+		try {
+			const testInfo = await createTestRpcServer();
+			const workspaceFolder = {
+				uri: vscode.Uri.file(workspacePath),
+				name: 'workspace',
+				index: 0
+			} as vscode.WorkspaceFolder;
+
+			sandbox.stub(vscode.workspace, 'workspaceFolders').value([workspaceFolder]);
+			sandbox.stub(vscode.workspace, 'getWorkspaceFolder').callsFake((uri: vscode.Uri) =>
+				uri.fsPath === workspaceFolder.uri.fsPath ? workspaceFolder : undefined);
+			sandbox.stub(vscode.workspace, 'updateWorkspaceFolders').returns(false);
+			const executeCommandStub = sandbox.stub(vscode.commands, 'executeCommand').resolves();
+			const showWarningMessageStub = sandbox.stub(vscode.window, 'showWarningMessage').resolves(undefined);
+
+			await testInfo.interactionService.openEditor(projectPath);
+
+			assert.strictEqual(executeCommandStub.callCount, 0, 'Should not replace the workspace with vscode.openFolder');
+			assert.strictEqual(showWarningMessageStub.callCount, 1, 'Should warn when the project folder was not added');
+			assert.ok(showWarningMessageStub.getCall(0).args[0].includes(projectPath), 'Warning should include the project folder path');
+		}
+		finally {
+			sandbox.restore();
+			await fs.rm(tempRoot, { recursive: true, force: true });
+		}
+	});
+
 	test("displayDashboardUrls writes URLs to output channel and shows info message when autoLaunch is notification", async () => {
 		const stub = sinon.stub(extensionLogOutputChannel, 'info');
 		const showInformationMessageStub = sinon.stub(vscode.window, 'showInformationMessage').resolves();

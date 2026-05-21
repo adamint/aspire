@@ -37,17 +37,25 @@ internal sealed class TestNewCommandPrompter(IInteractionService interactionServ
         };
     }
 
-    public override Task<string> PromptForOutputPath(string path, ParseResult parseResult, Func<string, ValidationResult>? validator = null, CancellationToken cancellationToken = default)
+    public override Task<string> PromptForOutputPath(string path, ParseResult parseResult, Func<string, ValidationResult>? validator = null, CancellationToken cancellationToken = default, Func<string, string>? outputPathResolver = null)
     {
-        return PromptForOutputPathWithValidatorCallback switch
+        var resolvedValidator = validator;
+        if (validator is not null && outputPathResolver is not null)
         {
-            { } callback => Task.FromResult(callback(path, validator)),
+            resolvedValidator = candidatePath => validator(outputPathResolver(candidatePath));
+        }
+
+        var outputPath = PromptForOutputPathWithValidatorCallback switch
+        {
+            { } callback => callback(path, resolvedValidator),
             _ => PromptForOutputPathCallback switch
             {
-                { } callback => Task.FromResult(callback(path)),
-                _ => Task.FromResult(path) // If no callback is provided just accept the default.
+                { } callback => callback(path),
+                _ => path // If no callback is provided just accept the default.
             }
         };
+
+        return Task.FromResult(outputPathResolver?.Invoke(outputPath) ?? outputPath);
     }
 
     public override Task<(NuGetPackage Package, PackageChannel Channel)> PromptForTemplatesVersionAsync(IEnumerable<(NuGetPackage Package, PackageChannel Channel)> candidatePackages, CancellationToken cancellationToken)

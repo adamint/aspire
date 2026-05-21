@@ -85,33 +85,7 @@ internal static class OutputPathHelper
         };
     }
 
-    /// <summary>
-    /// Creates a validator for extension folder picker selections after applying the project directory adjustment.
-    /// </summary>
-    internal static Func<string, ValidationResult> CreateExtensionOutputPathValidator(string workingDirectory, string projectName)
-    {
-        return path =>
-        {
-            string? validationResult;
-            if (!CanCreateProjectNameSubdirectory(projectName))
-            {
-                validationResult = ValidateOutputPath(path, workingDirectory, isExplicitOutput: false);
-            }
-            else
-            {
-                validationResult = ResolveExtensionOutputPath(path, projectName, workingDirectory, isExplicitOutput: false).ErrorMessage;
-            }
-
-            if (validationResult is not null)
-            {
-                return ValidationResult.Error(validationResult);
-            }
-
-            return ValidationResult.Success();
-        };
-    }
-
-    internal static async Task<bool> ShouldCreateProjectNameSubdirectoryAsync(
+    internal static async Task<bool> PromptExtensionCreateProjectNameSubdirectoryAsync(
         IInteractionService interactionService,
         bool isExtensionHost,
         bool isExplicitOutput,
@@ -133,6 +107,16 @@ internal static class OutputPathHelper
             cancellationToken: cancellationToken);
 
         return string.Equals(selectedChoice, subdirectoryChoice, StringComparison.Ordinal);
+    }
+
+    internal static Func<string, string>? CreateProjectNameSubdirectoryOutputPathResolver(bool createProjectNameSubdirectory, string projectName)
+    {
+        if (!createProjectNameSubdirectory || !CanCreateProjectNameSubdirectory(projectName))
+        {
+            return null;
+        }
+
+        return outputPath => AppendProjectNameSubdirectory(outputPath, projectName);
     }
 
     /// <summary>
@@ -157,23 +141,12 @@ internal static class OutputPathHelper
         return null;
     }
 
-    /// <summary>
-    /// Adjusts an extension-selected parent folder to point at the project-specific output directory.
-    /// </summary>
-    internal static (string OutputPath, string? ErrorMessage) ResolveExtensionOutputPath(string outputPath, string projectName, string workingDirectory, bool isExplicitOutput)
+    private static string AppendProjectNameSubdirectory(string outputPath, string projectName)
     {
-        if (!CanCreateProjectNameSubdirectory(projectName))
-        {
-            return (outputPath, null);
-        }
-
         var normalizedOutputPath = Path.TrimEndingDirectorySeparator(outputPath);
-        var adjustedOutputPath = string.Equals(Path.GetFileName(normalizedOutputPath), projectName, StringComparison.OrdinalIgnoreCase)
+        return string.Equals(Path.GetFileName(normalizedOutputPath), projectName, StringComparison.OrdinalIgnoreCase)
             ? normalizedOutputPath
             : Path.Combine(normalizedOutputPath, projectName);
-
-        var validationError = ValidateOutputPath(adjustedOutputPath, workingDirectory, isExplicitOutput);
-        return (adjustedOutputPath, validationError);
     }
 
     private static bool CanCreateProjectNameSubdirectory(string projectName) =>
