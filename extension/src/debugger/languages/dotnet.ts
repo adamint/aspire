@@ -229,58 +229,26 @@ async function shouldLaunchProjectWithDotNetRun(outputPath: string): Promise<boo
     }
 }
 
-function parseLaunchProfileArguments(commandLineArgs: string | undefined): string[] | undefined {
-    if (!commandLineArgs) {
-        return undefined;
-    }
-
-    // launchSettings.json stores application arguments as a command-line string, for example:
-    //   --path "value with spaces" --flag
-    // The debug adapter accepts args as an array, so split on whitespace while preserving
-    // quoted values as a single argument. Backslashes are preserved so Windows paths are not
-    // corrupted before they reach the launched process.
-    const parsedArgs: string[] = [];
-    let currentArg = '';
-    let quote: '"' | "'" | undefined;
-    let hasCurrentArg = false;
-
-    for (const char of commandLineArgs) {
-        if (quote) {
-            if (char === quote) {
-                quote = undefined;
-            } else {
-                currentArg += char;
-            }
-
-            hasCurrentArg = true;
-        } else if (char === '"' || char === "'") {
-            quote = char;
-            hasCurrentArg = true;
-        } else if (/\s/.test(char)) {
-            if (hasCurrentArg) {
-                parsedArgs.push(currentArg);
-                currentArg = '';
-                hasCurrentArg = false;
-            }
-        } else {
-            currentArg += char;
-            hasCurrentArg = true;
-        }
-    }
-
-    if (hasCurrentArg) {
-        parsedArgs.push(currentArg);
-    }
-
-    return parsedArgs;
+function quoteCommandLineArgument(argument: string): string {
+    return `"${argument.replace(/"/g, '\\"')}"`;
 }
 
-function createDotNetRunArguments(projectPath: string, baseProfileArgs: string | undefined, runSessionArgs: string[] | undefined): string[] {
+function createDotNetRunArguments(projectPath: string, baseProfileArgs: string | undefined, runSessionArgs: string[] | undefined): string[] | string {
     const dotnetRunArgs = ['run', '--project', projectPath, '--no-launch-profile'];
-    const appArgs = runSessionArgs !== undefined ? runSessionArgs : parseLaunchProfileArguments(baseProfileArgs);
+    if (runSessionArgs !== undefined) {
+        if (runSessionArgs.length > 0) {
+            dotnetRunArgs.push('--', ...runSessionArgs);
+        }
 
-    if (appArgs && appArgs.length > 0) {
-        dotnetRunArgs.push('--', ...appArgs);
+        return dotnetRunArgs;
+    }
+
+    if (baseProfileArgs) {
+        // launchSettings.json stores application arguments as a command-line string, for example:
+        //   --path "value with spaces" --flag
+        // Preserve that string instead of reparsing it here so debugger command-line parsing
+        // handles escaping consistently with normal project launches.
+        return `run --project ${quoteCommandLineArgument(projectPath)} --no-launch-profile -- ${baseProfileArgs}`;
     }
 
     return dotnetRunArgs;

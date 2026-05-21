@@ -315,7 +315,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         }
     });
 
-    test('uses launch profile arguments for dotnet CLI fallback when run session arguments are absent', async () => {
+    test('preserves launch profile argument string for dotnet CLI fallback when run session arguments are absent', async () => {
         const fs = require('fs');
         const path = require('path');
 
@@ -339,7 +339,7 @@ suite('Dotnet Debugger Extension Tests', () => {
             fs.writeFileSync(path.join(propertiesDir, 'launchSettings.json'), JSON.stringify({
                 profiles: {
                     Development: {
-                        commandLineArgs: '--arg "value with spaces" --flag'
+                        commandLineArgs: '--arg "value with spaces" --message "say \\"hi\\"" --path "C:\\Temp\\file.txt"'
                     }
                 }
             }));
@@ -363,7 +363,7 @@ suite('Dotnet Debugger Extension Tests', () => {
 
             await extension.createDebugSessionConfigurationCallback!(launchConfig, undefined, [], { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession }, debugConfig);
 
-            assert.deepStrictEqual(debugConfig.args, ['run', '--project', projectPath, '--no-launch-profile', '--', '--arg', 'value with spaces', '--flag']);
+            assert.strictEqual(debugConfig.args, `run --project "${projectPath}" --no-launch-profile -- --arg "value with spaces" --message "say \\"hi\\"" --path "C:\\Temp\\file.txt"`);
         } finally {
             fs.rmSync(tempRoot, { recursive: true, force: true });
         }
