@@ -200,7 +200,7 @@ function createErrorWithStreamedDebugConsoleOutput(message: string): Error {
     return error;
 }
 
-async function shouldLaunchProjectWithDotNetDebugger(outputPath: string): Promise<boolean> {
+async function shouldLaunchProjectWithDotNetRun(outputPath: string): Promise<boolean> {
     if (path.extname(outputPath).toLowerCase() !== '.dll') {
         return false;
     }
@@ -229,14 +229,13 @@ async function shouldLaunchProjectWithDotNetDebugger(outputPath: string): Promis
     }
 }
 
-function configureDotNetProjectLaunch(debugConfiguration: AspireResourceExtendedDebugConfiguration, projectPath: string): void {
-    debugConfiguration.type = 'dotnet';
-    debugConfiguration.projectPath = projectPath;
+function createDotNetRunArguments(projectPath: string, args: string[] | undefined): string[] {
+    const dotnetRunArgs = ['run', '--project', projectPath, '--no-launch-profile'];
+    if (args && args.length > 0) {
+        dotnetRunArgs.push('--', ...args);
+    }
 
-    delete debugConfiguration.program;
-    delete debugConfiguration.args;
-    delete debugConfiguration.executablePath;
-    delete debugConfiguration.cwd;
+    return dotnetRunArgs;
 }
 
 export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSession: AspireDebugSession) => IDotNetService): ResourceDebuggerExtension {
@@ -331,9 +330,11 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                     await dotNetService.buildDotNetProject(projectPath);
                 }
 
-                if (await shouldLaunchProjectWithDotNetDebugger(outputPath)) {
-                    extensionLogOutputChannel.warn(`Project output ${outputPath} is not directly runnable; launching ${projectPath} with the dotnet project debugger.`);
-                    configureDotNetProjectLaunch(debugConfiguration, projectPath);
+                if (await shouldLaunchProjectWithDotNetRun(outputPath)) {
+                    extensionLogOutputChannel.warn(`Project output ${outputPath} is not directly runnable; launching ${projectPath} with dotnet run without debugger attach.`);
+                    debugConfiguration.program = 'dotnet';
+                    debugConfiguration.args = createDotNetRunArguments(projectPath, args);
+                    debugConfiguration.noDebug = true;
                 } else {
                     debugConfiguration.program = outputPath;
                 }
