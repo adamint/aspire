@@ -497,7 +497,7 @@
       <source xml:lang="en">The Aspire CLI creates, runs, and manages your applications. Install it using the commands in the panel, then verify your installation.&#10;&#10;[Verify installation](command:aspire-vscode.verifyCliInstalled)</source>
     </trans-unit>
     <trans-unit id="views.runningAppHosts.errorWelcome">
-      <source xml:lang="en">The Aspire CLI is not installed or does not support this feature. Install or update the Aspire CLI and restart VS Code to get started.&#10;[Update Aspire CLI](command:aspire-vscode.updateSelf)&#10;[Refresh](command:aspire-vscode.refreshRunningAppHosts)</source>
+      <source xml:lang="en">The Aspire CLI is unavailable to the extension or does not support this feature. Install or update the Aspire CLI, then refresh this view to get started.&#10;[Update Aspire CLI](command:aspire-vscode.installCliDaily)&#10;[Refresh](command:aspire-vscode.refreshRunningAppHosts)</source>
     </trans-unit>
     <trans-unit id="walkthrough.getStarted.dashboard.description">
       <source xml:lang="en">The Aspire Dashboard shows your resources, endpoints, logs, traces, and metrics — all in one place.&#10;&#10;[Open dashboard](command:aspire-vscode.openDashboard)</source>

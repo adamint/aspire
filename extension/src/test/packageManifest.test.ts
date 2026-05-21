@@ -34,9 +34,16 @@ type ExtensionManifest = {
     };
 };
 
+type PackageNls = Record<string, string>;
+
 function readManifest(): ExtensionManifest {
     const manifestPath = path.resolve(__dirname, '../../package.json');
     return JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as ExtensionManifest;
+}
+
+function readPackageNls(): PackageNls {
+    const packageNlsPath = path.resolve(__dirname, '../../package.nls.json');
+    return JSON.parse(fs.readFileSync(packageNlsPath, 'utf8')) as PackageNls;
 }
 
 function assertContains(whenClause: string | undefined, fragment: string): void {
@@ -94,5 +101,14 @@ suite('extension/package.json', () => {
         assert.strictEqual(argsProperty.type, 'array');
         assert.strictEqual(argsProperty.items?.type, 'string');
         assert.strictEqual(argsProperty.description, '%extension.debug.args%');
+    });
+
+    test('running apphosts error welcome updates CLI with installer command that does not depend on current CLI support', () => {
+        const packageNls = readPackageNls();
+        const errorWelcome = packageNls['views.runningAppHosts.errorWelcome'];
+
+        assert.ok(!errorWelcome.includes('not installed'), `Error welcome should not report the CLI as not installed when it may only be unavailable to VS Code or too old: ${errorWelcome}`);
+        assert.ok(errorWelcome.includes('(command:aspire-vscode.installCliDaily)'), `Expected error welcome to link to the daily installer command: ${errorWelcome}`);
+        assert.ok(!errorWelcome.includes('(command:aspire-vscode.updateSelf)'), `Error welcome must not use updateSelf because old CLIs may not support self update: ${errorWelcome}`);
     });
 });

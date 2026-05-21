@@ -40,6 +40,16 @@ import { ResourceCommandJson } from './views/AppHostDataRepository';
 
 let aspireExtensionContext = new AspireExtensionContext();
 
+const cliCheckExcludedCommands = new Set([
+  'aspire-vscode.settings',
+  'aspire-vscode.configureLaunchJson',
+  'aspire-vscode.updateSelf',
+]);
+
+export function commandRequiresCliAvailability(commandName: string): boolean {
+  return !cliCheckExcludedCommands.has(commandName);
+}
+
 export async function activate(context: vscode.ExtensionContext) {
   const gitCommitSha = readGitCommitSha(context);
   extensionLogOutputChannel.info(`Activating Aspire extension (commit: ${gitCommitSha})`);
@@ -252,9 +262,7 @@ async function tryExecuteCommand(commandName: string, terminalProvider: AspireTe
   try {
     sendTelemetryEvent(`${commandName}.invoked`);
 
-    const cliCheckExcludedCommands: string[] = ["aspire-vscode.settings", "aspire-vscode.configureLaunchJson"];
-
-    if (!cliCheckExcludedCommands.includes(commandName)) {
+    if (commandRequiresCliAvailability(commandName)) {
       const result = await checkCliAvailableOrRedirect();
       if (!result.available) {
         return;
