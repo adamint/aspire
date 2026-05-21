@@ -268,7 +268,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(dotNetService.buildDotNetProjectStub.notCalled, true);
     });
 
-    test('falls back to dotnet run when project runtimeconfig has no runnable framework', async () => {
+    test('uses dotnet debugger when project runtimeconfig has no runnable framework', async () => {
         const fs = require('fs');
         const path = require('path');
 
@@ -306,9 +306,11 @@ suite('Dotnet Debugger Extension Tests', () => {
 
             await extension.createDebugSessionConfigurationCallback!(launchConfig, ['--message', 'hello world'], [], { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession }, debugConfig);
 
-            assert.strictEqual(debugConfig.program, 'dotnet');
-            assert.deepStrictEqual(debugConfig.args, ['run', '--project', projectPath, '--no-launch-profile', '--', '--message', 'hello world']);
-            assert.strictEqual(debugConfig.noDebug, true);
+            assert.strictEqual(debugConfig.type, 'dotnet');
+            assert.strictEqual(debugConfig.projectPath, projectPath);
+            assert.strictEqual(debugConfig.program, undefined);
+            assert.strictEqual(debugConfig.args, undefined);
+            assert.notStrictEqual(debugConfig.noDebug, true);
         } finally {
             fs.rmSync(tempRoot, { recursive: true, force: true });
         }
