@@ -541,6 +541,11 @@ internal sealed class DashboardEventHandlers(IConfiguration configuration,
 
         PopulateDashboardUrls(context);
 
+        if (configuration.GetBool(KnownConfigNames.AllowUnsecuredTransport) == true)
+        {
+            context.EnvironmentVariables[KnownConfigNames.AllowUnsecuredTransport] = "true";
+        }
+
         if (options.OtlpHttpEndpointUrl != null)
         {
             // Use explicitly defined allowed origins if configured.

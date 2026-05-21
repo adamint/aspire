@@ -189,6 +189,33 @@ public class DashboardEventHandlersTests(ITestOutputHelper testOutputHelper)
         Assert.Equal("true", envVars.Single(e => e.Key == "ASPIRE_DASHBOARD_PURPLE_MONKEY_DISHWASHER").Value);
     }
 
+    [Fact]
+    public async Task ConfigureEnvironmentVariables_AllowUnsecuredTransport_CopiedToDashboard()
+    {
+        var resourceLoggerService = new ResourceLoggerService();
+        var resourceNotificationService = ResourceNotificationServiceTestHelpers.Create();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [KnownConfigNames.AllowUnsecuredTransport] = "true"
+            })
+            .Build();
+        var dashboardOptions = Options.Create(new DashboardOptions
+        {
+            DashboardPath = "test.dll",
+            DashboardUrl = "http://localhost:8080",
+            OtlpGrpcEndpointUrl = "http://localhost:4317",
+        });
+        var hook = CreateHook(resourceLoggerService, resourceNotificationService, configuration, dashboardOptions: dashboardOptions);
+
+        var envVars = new Dictionary<string, object>();
+        var dashboardResource = new ExecutableResource("aspire-dashboard", "dashboard.exe", ".");
+
+        await hook.ConfigureEnvironmentVariables(new EnvironmentCallbackContext(new DistributedApplicationExecutionContext(DistributedApplicationOperation.Run), environmentVariables: envVars, resource: dashboardResource));
+
+        Assert.Equal("true", envVars.Single(e => e.Key == KnownConfigNames.AllowUnsecuredTransport).Value);
+    }
+
     [Theory]
     [InlineData("https://localhost:17131", "localhost", 9999, "https")]
     [InlineData("https://aspire-dashboard.dev.localhost:17131", "aspire-dashboard.dev.localhost", 9999, "https")]

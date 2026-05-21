@@ -63,6 +63,7 @@ public sealed class DashboardWebApplication : IAsyncDisposable
     public const int ExitCodeAddressInUse = DashboardExitCodes.AddressInUse;
 
     private const string DashboardAuthCookieName = ".Aspire.Dashboard.Auth";
+    private const string DashboardUnsecuredTransportAuthCookieName = ".Aspire.Dashboard.Auth.UnsecuredTransport";
     private const string DashboardAntiForgeryCookieName = ".Aspire.Dashboard.Antiforgery";
     private readonly WebApplication _app;
     private readonly ILogger<DashboardWebApplication> _logger;
@@ -838,6 +839,7 @@ public sealed class DashboardWebApplication : IAsyncDisposable
                 });
                 break;
             case FrontendAuthMode.BrowserToken:
+                var useUnsecuredTransportCookie = ShouldUseUnsecuredTransportBrowserTokenCookie(builder.Configuration, dashboardOptions);
                 authentication.AddPolicyScheme(FrontendAuthenticationDefaults.AuthenticationSchemeBrowserToken, displayName: FrontendAuthenticationDefaults.AuthenticationSchemeBrowserToken, o =>
                 {
                     o.ForwardDefault = CookieAuthenticationDefaults.AuthenticationScheme;
@@ -856,7 +858,19 @@ public sealed class DashboardWebApplication : IAsyncDisposable
                         claimsIdentity.AddClaim(new Claim(FrontendAuthorizationDefaults.BrowserTokenClaimName, bool.TrueString));
                         return Task.CompletedTask;
                     };
-                    options.Cookie.Name = DashboardAuthCookieName;
+                    if (useUnsecuredTransportCookie)
+                    {
+                        // ASPIRE_ALLOW_UNSECURED_TRANSPORT explicitly permits dashboard browser access over HTTP.
+                        // Safari keeps a Secure HTTPS cookie with the same name and can ignore the HTTP sign-in
+                        // cookie, causing a login loop. Use a separate non-Secure cookie only for this explicit
+                        // mixed HTTP/HTTPS mode so normal HTTPS browser-token cookies stay Secure.
+                        options.Cookie.Name = DashboardUnsecuredTransportAuthCookieName;
+                        options.Cookie.SecurePolicy = CookieSecurePolicy.None;
+                    }
+                    else
+                    {
+                        options.Cookie.Name = DashboardAuthCookieName;
+                    }
                 });
                 break;
             case FrontendAuthMode.Unsecured:
@@ -916,6 +930,12 @@ public sealed class DashboardWebApplication : IAsyncDisposable
                 _ => CookieAuthenticationDefaults.AuthenticationScheme
             };
         }
+    }
+
+    private static bool ShouldUseUnsecuredTransportBrowserTokenCookie(IConfiguration configuration, DashboardOptions dashboardOptions)
+    {
+        return configuration.GetBool(KnownConfigNames.AllowUnsecuredTransport) == true
+            && dashboardOptions.Frontend.GetEndpointAddresses().Any(address => string.Equals(address.Scheme, "http", StringComparison.Ordinal));
     }
 
     internal static Action<OpenIdConnectOptions> GetOidcClaimActionConfigure(ClaimAction action)
