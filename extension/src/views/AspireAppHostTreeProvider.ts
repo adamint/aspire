@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
-import { ResourceState, HealthStatus, StateStyle } from '../editor/resourceConstants';
+import { ResourceState, HealthStatus, ResourceType, StateStyle } from '../editor/resourceConstants';
 import {
     pidDescription,
     dashboardLabel,
@@ -22,6 +22,7 @@ import {
     appHostSourceOpenFailed,
     healthChecksLabel,
     healthCheckDescription,
+    parameterValueMissing,
     resourceDescriptionHealth,
     resourceDescriptionExitCode,
 } from '../loc/strings';
@@ -32,10 +33,18 @@ import {
     ResourceJson,
     ViewMode,
     shortenPaths,
+    ResourceCommandInputType,
+    ResourceCommandJson,
 } from './AppHostDataRepository';
 import { collectResourceCommandArguments, hasSecretResourceCommandArguments } from './ResourceCommandArguments';
 
 type TreeElement = AppHostItem | PidItem | EndpointUrlItem | ResourcesGroupItem | ResourceItem | WorkspaceResourcesItem | HealthChecksGroupItem | HealthCheckItem;
+
+const setParameterCommandName = 'set-parameter';
+const deleteParameterCommandName = 'delete-parameter';
+const parameterValuePropertyName = 'Value';
+const maxParameterValueDisplayLength = 80;
+const maskedParameterValue = '●●●●●●●●';
 
 function sortResources(resources: ResourceJson[]): ResourceJson[] {
     return [...resources].sort((a, b) => {
@@ -196,6 +205,8 @@ export function getResourceIcon(resource: ResourceJson): vscode.ThemeIcon {
     const state = resource.state;
     const health = resource.healthStatus;
     switch (state) {
+        case ResourceState.ValueMissing:
+            return new vscode.ThemeIcon('warning', new vscode.ThemeColor('list.warningForeground'));
         case ResourceState.Running:
         case ResourceState.Active:
             if (resource.stateStyle === StateStyle.Error) {
@@ -269,7 +280,11 @@ export function buildResourceDescription(resource: ResourceJson): string {
     const parts: string[] = [resource.resourceType];
     const state = resource.state;
     if (state) {
-        parts.push(state);
+        parts.push(getResourceStateDescription(state));
+    }
+    const parameterValue = getParameterValueDescription(resource);
+    if (parameterValue) {
+        parts.push(parameterValue);
     }
     const reports = resource.healthReports;
     const exitCode = resource.exitCode;
@@ -284,12 +299,52 @@ export function buildResourceDescription(resource: ResourceJson): string {
     return parts.join(' · ');
 }
 
+function getResourceStateDescription(state: string): string {
+    return state === ResourceState.ValueMissing ? parameterValueMissing : state;
+}
+
+function getParameterValueDescription(resource: ResourceJson): string | undefined {
+    if (resource.resourceType !== ResourceType.Parameter || resource.state === ResourceState.ValueMissing) {
+        return undefined;
+    }
+
+    if (!Object.prototype.hasOwnProperty.call(resource.properties ?? {}, parameterValuePropertyName)) {
+        return undefined;
+    }
+
+    if (isSecretParameter(resource)) {
+        return maskedParameterValue;
+    }
+
+    const value = resource.properties?.[parameterValuePropertyName];
+    if (typeof value !== 'string' || value.length === 0) {
+        return undefined;
+    }
+
+    return truncateParameterValue(value);
+}
+
+function isSecretParameter(resource: ResourceJson): boolean {
+    const setParameterCommand = resource.commands?.[setParameterCommandName];
+    return setParameterCommand?.argumentInputs?.some(input =>
+        input.name === parameterValuePropertyName &&
+        input.inputType === ResourceCommandInputType.SecretText) ?? false;
+}
+
+function truncateParameterValue(value: string): string {
+    if (value.length <= maxParameterValueDisplayLength) {
+        return value;
+    }
+
+    return `${value.slice(0, maxParameterValueDisplayLength - 1)}…`;
+}
+
 function buildResourceTooltip(resource: ResourceJson): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
     md.appendMarkdown(`**${resource.displayName ?? resource.name}**\n\n`);
     md.appendMarkdown(`${tooltipType(resource.resourceType)}\n\n`);
     if (resource.state) {
-        md.appendMarkdown(`${tooltipState(resource.state)}\n\n`);
+        md.appendMarkdown(`${tooltipState(getResourceStateDescription(resource.state))}\n\n`);
     }
     if (resource.healthStatus) {
         md.appendMarkdown(`${tooltipHealth(resource.healthStatus)}\n\n`);
