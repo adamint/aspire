@@ -100,7 +100,7 @@ Before starting a release:
    | `SkipHomebrewPublish` | Set `true` if re-running after Homebrew success | `true` |
    | `SkipGitHubTasks` | Set `true` to skip dispatching the GH workflow | `false` |
    | `SkipReleaseAssets` | Set `true` to skip uploading aspire-cli-* assets to the GitHub release | `false` |
-   | `PublishVSCodeExtension` | Set `true` to publish the signed `aspire-vscode-extension` artifact to the Visual Studio Marketplace | `false` |
+   | `SkipVSCodeExtensionPublish` | Set `false` to publish the signed `aspire-vscode-extension` artifact to the Visual Studio Marketplace | `true` |
    | `GitHubTasksWorkflowRef` | Ref to load `release-github-tasks.yml` from when dispatching. Only affects the workflow source — the release branch/commit are passed via inputs. Override only when testing pipeline changes on a topic branch. | `main` |
 
 5. Click "Run" and monitor the pipeline. The final stage (`GitHubTasks`)
@@ -124,9 +124,9 @@ To publish only the VS Code extension after merging an extension release PR, run
 | `SkipHomebrewPublish` | `true` |
 | `SkipGitHubTasks` | `true` |
 | `SkipReleaseAssets` | `true` |
-| `PublishVSCodeExtension` | `true` |
+| `SkipVSCodeExtensionPublish` | `false` |
 
-For a full Aspire release that should also publish the extension, keep the normal NuGet/channel/GitHub task settings and set `PublishVSCodeExtension` to `true`. `IsPrerelease` also controls whether extension publishing passes `--pre-release` to `vsce`; for a pre-release extension, the selected source build must also have been queued with `Package VS Code Extension as Pre-Release=true`.
+For a full Aspire release that should also publish the extension, keep the normal NuGet/channel/GitHub task settings and set `SkipVSCodeExtensionPublish` to `false`. `IsPrerelease` also controls whether extension publishing passes `--pre-release` to `vsce`; for a pre-release extension, the selected source build must also have been queued with `Package VS Code Extension as Pre-Release=true`.
 
 `commit_sha` and `release_branch` for the GitHub workflow are derived
 automatically from the source build resource — no need to copy them by hand.
@@ -137,7 +137,7 @@ automatically from the source build resource — no need to copy them by hand.
 
 ### Step 2: Prepare a VS Code extension release PR
 
-Run this step only when releasing the VS Code extension independently of the normal Aspire release train, or when the extension changelog/version bump needs to be prepared before setting `PublishVSCodeExtension=true` in the AzDO release pipeline.
+Run this step only when releasing the VS Code extension independently of the normal Aspire release train, or when the extension changelog/version bump needs to be prepared before setting `SkipVSCodeExtensionPublish=false` in the AzDO release pipeline.
 
 1. Navigate to Actions → "Extension Release".
 2. Click "Run workflow".
