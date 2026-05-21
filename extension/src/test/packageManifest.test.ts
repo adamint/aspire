@@ -7,6 +7,12 @@ type ManifestMenuItem = {
     when?: string;
 };
 
+type CommandContribution = {
+    command?: string;
+    title?: string;
+    category?: string;
+};
+
 type DebuggerProperty = {
     type?: string | string[];
     description?: string;
@@ -26,8 +32,10 @@ type DebuggerContribution = {
 
 type ExtensionManifest = {
     contributes: {
+        commands?: CommandContribution[];
         viewsWelcome?: Array<{ view?: string; contents?: string; when?: string }>;
         menus?: {
+            commandPalette?: ManifestMenuItem[];
             'view/title'?: ManifestMenuItem[];
         };
         debuggers?: DebuggerContribution[];
@@ -37,6 +45,11 @@ type ExtensionManifest = {
 function readManifest(): ExtensionManifest {
     const manifestPath = path.resolve(__dirname, '../../package.json');
     return JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as ExtensionManifest;
+}
+
+function readPackageNls(): Record<string, string> {
+    const packageNlsPath = path.resolve(__dirname, '../../package.nls.json');
+    return JSON.parse(fs.readFileSync(packageNlsPath, 'utf8')) as Record<string, string>;
 }
 
 function assertContains(whenClause: string | undefined, fragment: string): void {
@@ -94,5 +107,25 @@ suite('extension/package.json', () => {
         assert.strictEqual(argsProperty.type, 'array');
         assert.strictEqual(argsProperty.items?.type, 'string');
         assert.strictEqual(argsProperty.description, '%extension.debug.args%');
+    });
+
+    test('open dashboard to the side command is contributed and localized', () => {
+        const manifest = readManifest();
+        const packageNls = readPackageNls();
+
+        const command = manifest.contributes.commands?.find(c => c.command === 'aspire-vscode.openDashboardToSide');
+        assert.ok(command, 'Expected the side-by-side dashboard command to be contributed');
+        assert.strictEqual(command.title, '%command.openDashboardToSide%');
+        assert.strictEqual(command.category, 'Aspire');
+        assert.strictEqual(packageNls['command.openDashboardToSide'], 'Open Aspire Dashboard to the Side');
+    });
+
+    test('open dashboard to the side command palette item is visible when AppHosts are running', () => {
+        const manifest = readManifest();
+        const commandPalette = manifest.contributes.menus?.commandPalette ?? [];
+
+        const command = commandPalette.find(c => c.command === 'aspire-vscode.openDashboardToSide');
+        assert.ok(command, 'Expected the side-by-side dashboard command in the command palette');
+        assert.strictEqual(command.when, '!aspire.noRunningAppHosts');
     });
 });

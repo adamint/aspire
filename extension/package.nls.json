@@ -139,6 +139,7 @@
   "views.runningAppHosts.errorWelcome": "The Aspire CLI is not installed or does not support this feature. Install or update the Aspire CLI and restart VS Code to get started.\n[Update Aspire CLI](command:aspire-vscode.updateSelf)\n[Refresh](command:aspire-vscode.refreshRunningAppHosts)",
   "command.refreshRunningAppHosts": "Refresh running AppHosts",
   "command.openDashboard": "Open Aspire Dashboard",
+  "command.openDashboardToSide": "Open Aspire Dashboard to the Side",
   "command.openAppHostSource": "Open AppHost source",
   "command.stopAppHost": "Stop",
   "command.stopResource": "Stop",

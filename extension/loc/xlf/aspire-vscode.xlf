@@ -358,6 +358,9 @@
     <trans-unit id="command.openDashboard">
       <source xml:lang="en">Open Aspire Dashboard</source>
     </trans-unit>
+    <trans-unit id="command.openDashboardToSide">
+      <source xml:lang="en">Open Aspire Dashboard to the Side</source>
+    </trans-unit>
     <trans-unit id="command.openTerminal">
       <source xml:lang="en">Open Aspire terminal</source>
     </trans-unit>

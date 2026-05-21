@@ -273,6 +273,11 @@
         "icon": "$(globe)"
       },
       {
+        "command": "aspire-vscode.openDashboardToSide",
+        "title": "%command.openDashboardToSide%",
+        "category": "Aspire"
+      },
+      {
         "command": "aspire-vscode.openAppHostSource",
         "title": "%command.openAppHostSource%",
         "category": "Aspire",
@@ -468,6 +473,10 @@
         },
         {
           "command": "aspire-vscode.openDashboard",
+          "when": "!aspire.noRunningAppHosts"
+        },
+        {
+          "command": "aspire-vscode.openDashboardToSide",
           "when": "!aspire.noRunningAppHosts"
         },
         {
