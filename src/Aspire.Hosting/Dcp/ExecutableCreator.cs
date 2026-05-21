@@ -178,18 +178,9 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
                         // We want this annotation even if we are not using IDE execution; see ToSnapshot() for details.
                         exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, CreateProjectLaunchConfiguration(project, projectMetadata));
                     }
-                    else
-                    {
-                        // Non-project launch types (e.g. azure-functions) have their launch configuration
-                        // applied later in CreateExecutableAsync() after endpoints are allocated,
-                        // unless the IDE didn't send DEBUG_SESSION_INFO (handled by the fallback branch below).
-                        //
-                        // DCP falls back to ExecutionType.Process with the same executable spec when
-                        // a specialized IDE launcher fails. Keep the process-shaped dotnet arguments
-                        // available for that fallback path; specialized launchers are responsible for
-                        // using only the app host arguments they need.
-                        projectArgs.AddRange(BuildProjectArguments(projectMetadata));
-                    }
+                    // Non-project launch types (e.g. azure-functions) have their launch configuration
+                    // applied later in CreateExecutableAsync() after endpoints are allocated,
+                    // unless the IDE didn't send DEBUG_SESSION_INFO (handled by the fallback branch below).
                 }
                 else if (ShouldFallBackToIdeExecution(isInDebugSession, supportsDebuggingAnnotation))
                 {
@@ -212,7 +203,43 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
                     var projectLaunchConfiguration = new ProjectLaunchConfiguration();
                     projectLaunchConfiguration.ProjectPath = projectMetadata.ProjectPath;
 
-                    projectArgs.AddRange(BuildProjectArguments(projectMetadata));
+                    // `dotnet watch` does not work with file-based apps yet, so we have to use `dotnet run` in that case
+                    if (_configuration.GetBool("DOTNET_WATCH") is not true || projectMetadata.IsFileBasedApp)
+                    {
+                        projectArgs.Add("run");
+                        projectArgs.Add(projectMetadata.IsFileBasedApp ? "--file" : "--project");
+                        projectArgs.Add(projectMetadata.ProjectPath);
+                        if (projectMetadata.IsFileBasedApp)
+                        {
+                            projectArgs.Add("--no-cache");
+                        }
+                        if (projectMetadata.SuppressBuild)
+                        {
+                            projectArgs.Add("--no-build");
+                        }
+                    }
+                    else
+                    {
+                        projectArgs.AddRange([
+                            "watch",
+                            "--non-interactive",
+                            "--no-hot-reload",
+                            "--project",
+                            projectMetadata.ProjectPath
+                        ]);
+                    }
+
+                    if (!string.IsNullOrEmpty(_distributedApplicationOptions.Configuration))
+                    {
+                        projectArgs.AddRange(new[] { "--configuration", _distributedApplicationOptions.Configuration });
+                    }
+
+                    // We pretty much always want to suppress the normal launch profile handling
+                    // because the settings from the profile will override the ambient environment settings, which is not what we want
+                    // (the ambient environment settings for service processes come from the application model
+                    // and should be HIGHER priority than the launch profile settings).
+                    // This means we need to apply the launch profile settings manually inside CreateExecutableAsync().
+                    projectArgs.Add("--no-launch-profile");
 
                     // We want this annotation even if we are not using IDE execution; see ToSnapshot() for details.
                     exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, projectLaunchConfiguration);
@@ -225,51 +252,6 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
                 _appResources.Add(exeAppResource);
             }
         }
-    }
-
-    private List<string> BuildProjectArguments(IProjectMetadata projectMetadata)
-    {
-        var projectArgs = new List<string>();
-
-        // `dotnet watch` does not work with file-based apps yet, so we have to use `dotnet run` in that case.
-        if (_configuration.GetBool("DOTNET_WATCH") is not true || projectMetadata.IsFileBasedApp)
-        {
-            projectArgs.Add("run");
-            projectArgs.Add(projectMetadata.IsFileBasedApp ? "--file" : "--project");
-            projectArgs.Add(projectMetadata.ProjectPath);
-            if (projectMetadata.IsFileBasedApp)
-            {
-                projectArgs.Add("--no-cache");
-            }
-            if (projectMetadata.SuppressBuild)
-            {
-                projectArgs.Add("--no-build");
-            }
-        }
-        else
-        {
-            projectArgs.AddRange([
-                "watch",
-                "--non-interactive",
-                "--no-hot-reload",
-                "--project",
-                projectMetadata.ProjectPath
-            ]);
-        }
-
-        if (!string.IsNullOrEmpty(_distributedApplicationOptions.Configuration))
-        {
-            projectArgs.AddRange(["--configuration", _distributedApplicationOptions.Configuration]);
-        }
-
-        // We pretty much always want to suppress the normal launch profile handling
-        // because the settings from the profile will override the ambient environment settings, which is not what we want
-        // (the ambient environment settings for service processes come from the application model
-        // and should be HIGHER priority than the launch profile settings).
-        // This means we need to apply the launch profile settings manually inside CreateExecutableAsync().
-        projectArgs.Add("--no-launch-profile");
-
-        return projectArgs;
     }
 
     private void PreparePlainExecutables()
