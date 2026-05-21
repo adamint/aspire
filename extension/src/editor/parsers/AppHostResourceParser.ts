@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 
+export type ParserResult<T> = T | Promise<T>;
+
 /**
  * Represents a single resource definition found in an AppHost file.
  */
@@ -24,10 +26,10 @@ export interface AppHostResourceParser {
     getSupportedExtensions(): string[];
 
     /** Returns true if the given document is an AppHost file for this language. */
-    isAppHostFile(document: vscode.TextDocument): boolean;
+    isAppHostFile(document: vscode.TextDocument): ParserResult<boolean>;
 
     /** Parse resource definitions from the document. */
-    parseResources(document: vscode.TextDocument): ParsedResource[];
+    parseResources(document: vscode.TextDocument): ParserResult<ParsedResource[]>;
 
     /**
      * Locates the line containing the builder construction statement
@@ -35,7 +37,7 @@ export interface AppHostResourceParser {
      * `const builder = createBuilder();` for TS/JS).
      * Returns the 0-based line of the start of the statement, or `undefined` if not found.
      */
-    findBuilderStatementLine?(document: vscode.TextDocument): number | undefined;
+    findBuilderStatementLine?(document: vscode.TextDocument): ParserResult<number | undefined>;
 }
 
 const _parsers: AppHostResourceParser[] = [];
@@ -44,9 +46,15 @@ export function registerParser(parser: AppHostResourceParser): void {
     _parsers.push(parser);
 }
 
-export function getParserForDocument(document: vscode.TextDocument): AppHostResourceParser | undefined {
+export async function getParserForDocument(document: vscode.TextDocument): Promise<AppHostResourceParser | undefined> {
     const ext = getFileExtension(document.uri.fsPath);
-    return _parsers.find(p => p.getSupportedExtensions().includes(ext) && p.isAppHostFile(document));
+    for (const parser of _parsers) {
+        if (parser.getSupportedExtensions().includes(ext) && await parser.isAppHostFile(document)) {
+            return parser;
+        }
+    }
+
+    return undefined;
 }
 
 export function getAllParsers(): readonly AppHostResourceParser[] {

@@ -128,7 +128,7 @@ export class AspireGutterDecorationProvider implements vscode.Disposable {
             this._debounceTimer = undefined;
             for (const editor of vscode.window.visibleTextEditors) {
                 if (editor.document === document) {
-                    this._applyDecorations(editor);
+                    void this._applyDecorations(editor);
                 }
             }
         }, 250);
@@ -136,17 +136,17 @@ export class AspireGutterDecorationProvider implements vscode.Disposable {
 
     private _updateAllVisibleEditors(): void {
         for (const editor of vscode.window.visibleTextEditors) {
-            this._applyDecorations(editor);
+            void this._applyDecorations(editor);
         }
     }
 
-    private _applyDecorations(editor: vscode.TextEditor): void {
+    private async _applyDecorations(editor: vscode.TextEditor): Promise<void> {
         if (!vscode.workspace.getConfiguration('aspire').get<boolean>('enableGutterDecorations', true)) {
             this._clearDecorations(editor);
             return;
         }
 
-        const parser = getParserForDocument(editor.document);
+        const parser = await getParserForDocument(editor.document);
         if (!parser) {
             this._clearDecorations(editor);
             return;
@@ -159,7 +159,7 @@ export class AspireGutterDecorationProvider implements vscode.Disposable {
             return;
         }
 
-        const resources = parser.parseResources(editor.document);
+        const resources = await parser.parseResources(editor.document);
         if (resources.length === 0) {
             this._clearDecorations(editor);
             return;
