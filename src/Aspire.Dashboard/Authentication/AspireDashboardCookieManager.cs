@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 
 namespace Aspire.Dashboard.Authentication;
 
-internal sealed class BrowserTokenCookieManager(string httpCookieName) : ICookieManager
+internal sealed class AspireDashboardCookieManager(string httpCookieName) : ICookieManager
 {
     private readonly ChunkingCookieManager _inner = new();
 
@@ -31,7 +31,7 @@ internal sealed class BrowserTokenCookieManager(string httpCookieName) : ICookie
 
     private string GetCookieName(HttpContext context, string key)
     {
-        // Keep HTTP browser-token cookies separate from HTTPS cookies so browser-specific localhost cookie behavior
+        // Keep HTTP dashboard auth cookies separate from HTTPS cookies so browser-specific localhost cookie behavior
         // can't cause a stale HTTPS cookie to shadow a fresh HTTP sign-in.
         return context.Request.IsHttps ? key : httpCookieName;
     }

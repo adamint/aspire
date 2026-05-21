@@ -197,8 +197,18 @@ public class FrontendBrowserTokenAuthTests
 
         Assert.Equal(HttpStatusCode.Redirect, signoutResponse.StatusCode);
         var deletedCookies = signoutResponse.Headers.GetValues("Set-Cookie").ToList();
-        Assert.Contains(deletedCookies, c => c.StartsWith(".Aspire.Dashboard.Auth=", StringComparison.Ordinal) && c.Contains("expires=Thu, 01 Jan 1970", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(deletedCookies, c => c.StartsWith(".Aspire.Dashboard.Auth.Http=", StringComparison.Ordinal) && c.Contains("expires=Thu, 01 Jan 1970", StringComparison.OrdinalIgnoreCase));
+        Assert.Collection(
+            deletedCookies,
+            c =>
+            {
+                Assert.StartsWith(".Aspire.Dashboard.Auth=", c, StringComparison.Ordinal);
+                Assert.Contains("expires=Thu, 01 Jan 1970", c, StringComparison.OrdinalIgnoreCase);
+            },
+            c =>
+            {
+                Assert.StartsWith(".Aspire.Dashboard.Auth.Http=", c, StringComparison.Ordinal);
+                Assert.Contains("expires=Thu, 01 Jan 1970", c, StringComparison.OrdinalIgnoreCase);
+            });
     }
 
     [Fact]

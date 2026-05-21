@@ -800,6 +800,7 @@ public sealed class DashboardWebApplication : IAsyncDisposable
                 authentication.AddCookie(options =>
                 {
                     options.Cookie.Name = DashboardAuthCookieName;
+                    options.CookieManager = new AspireDashboardCookieManager(DashboardHttpAuthCookieName);
                 });
 
                 authentication.AddOpenIdConnect(options =>
@@ -859,7 +860,7 @@ public sealed class DashboardWebApplication : IAsyncDisposable
                         return Task.CompletedTask;
                     };
                     options.Cookie.Name = DashboardAuthCookieName;
-                    options.CookieManager = new BrowserTokenCookieManager(DashboardHttpAuthCookieName);
+                    options.CookieManager = new AspireDashboardCookieManager(DashboardHttpAuthCookieName);
                 });
                 break;
             case FrontendAuthMode.Unsecured:
