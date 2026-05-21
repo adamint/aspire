@@ -6,7 +6,7 @@ import { AspireResourceExtendedDebugConfiguration, AspireResourceDebugSession, E
 import { extensionLogOutputChannel } from "../utils/logging";
 import AspireDcpServer, { generateDcpIdPrefix } from "../dcp/AspireDcpServer";
 import { spawnCliProcess } from "./languages/cli";
-import { disconnectingFromSession, launchingWithAppHost, launchingWithDirectory, processExceptionOccurred, processExitedWithCode, aspireDashboard, appHostSessionTerminated } from "../loc/strings";
+import { disconnectingFromSession, launchingWithAppHost, launchingWithDirectory, processExceptionOccurred, processExitedWithCode, appHostSessionTerminated } from "../loc/strings";
 import { projectDebuggerExtension } from "./languages/dotnet";
 import { AnsiColors } from "../utils/AspireTerminalProvider";
 import { applyTextStyle } from "../utils/strings";
@@ -17,10 +17,10 @@ import { createDebugSessionConfiguration } from "./debuggerExtensions";
 import { AspireTerminalProvider } from "../utils/AspireTerminalProvider";
 import { ICliRpcClient } from "../server/rpcClient";
 import path from "path";
-import os from "os";
 import { EnvironmentVariables } from "../utils/environment";
+import { openDashboardInBrowser, type DashboardBrowserType } from "./dashboardBrowser";
 
-export type DashboardBrowserType = 'openExternalBrowser' | 'integratedBrowser' | 'debugChrome' | 'debugEdge' | 'debugFirefox';
+export type { DashboardBrowserType } from "./dashboardBrowser";
 
 export class AspireDebugSession implements vscode.DebugAdapter {
   private readonly _onDidSendMessage = new EventEmitter<any>();
@@ -72,14 +72,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       });
     }
     else if (message.command === 'launch') {
-      this.sendEvent({
-        type: 'response',
-        request_seq: message.seq,
-        seq: this._messageSeq++,
-        success: true,
-        command: 'launch',
-        body: {}
-      });
+      this.sendResponse(message);
 
       const appHostPath = this._session.configuration.program as string;
       const command = this.configuration.command ?? 'run';
@@ -145,15 +138,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       });
     }
     else if (message.command) {
-      // Respond to all other requests with a generic success
-      this.sendEvent({
-        type: 'response',
-        request_seq: message.seq,
-        seq: this._messageSeq++,
-        success: true,
-        command: message.command,
-        body: {}
-      });
+      this.sendResponse(message, createResponseBodyForRequest(message.command));
     }
 
     function isDirectory(pathToCheck: string): boolean {
@@ -431,76 +416,12 @@ export class AspireDebugSession implements vscode.DebugAdapter {
    * For debugChrome/debugEdge/debugFirefox, launches as a child debug session that auto-closes with the Aspire debug session.
    */
   async openDashboard(url: string, browserType: DashboardBrowserType): Promise<void> {
-    extensionLogOutputChannel.info(`Opening dashboard in browser: ${browserType}, URL: ${url}`);
-
-    switch (browserType) {
-      case 'debugChrome':
-        await this.launchDebugBrowser(url, 'pwa-chrome');
-        break;
-
-      case 'debugEdge':
-        await this.launchDebugBrowser(url, 'pwa-msedge');
-        break;
-
-      case 'debugFirefox':
-        await this.launchDebugBrowser(url, 'firefox');
-        break;
-
-      case 'integratedBrowser':
-        await vscode.commands.executeCommand('simpleBrowser.show', url);
-        break;
-
-      case 'openExternalBrowser':
-      default:
-        // Use VS Code's default external browser handling
-        await vscode.env.openExternal(vscode.Uri.parse(url));
-        break;
-    }
-  }
-
-  /**
-   * Launches a browser as a child debug session.
-   * The browser will automatically close when the parent Aspire debug session ends.
-   */
-  private async launchDebugBrowser(url: string, debugType: 'pwa-chrome' | 'pwa-msedge' | 'firefox'): Promise<void> {
-    const debugConfig: vscode.DebugConfiguration = {
-      type: debugType,
-      name: aspireDashboard,
-      request: 'launch',
-      url: url,
-    };
-
-    // Add type-specific options
-    if (debugType === 'pwa-chrome' || debugType === 'pwa-msedge') {
-      // Don't pause on entry for Chrome/Edge
-      debugConfig.pauseForSourceMap = false;
-    }
-    else if (debugType === 'firefox') {
-      // Firefox debugger requires webRoot; resolve to actual workspace path
-      debugConfig.webRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.tmpdir();
-      debugConfig.pathMappings = [];
-    }
-
-    // Register listener before starting so we don't miss the event
-    const disposable = vscode.debug.onDidStartDebugSession((session) => {
-      if (session.configuration.name === aspireDashboard && session.type === debugType) {
+    await openDashboardInBrowser(url, browserType, {
+      parentSession: this._session,
+      onDidStartDebugBrowser: (session) => {
         this._dashboardDebugSession = session;
-        disposable.dispose();
       }
     });
-
-    // Start as a child debug session - it will close when parent closes
-    const didStart = await vscode.debug.startDebugging(
-      undefined,
-      debugConfig,
-      this._session
-    );
-
-    if (!didStart) {
-      disposable.dispose();
-      extensionLogOutputChannel.warn(`Failed to start debug browser (${debugType}), falling back to default browser`);
-      await vscode.env.openExternal(vscode.Uri.parse(url));
-    }
   }
 
   dispose(): void {
@@ -584,6 +505,47 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
   notifyAppHostStartupCompleted() {
     extensionLogOutputChannel.info(`AppHost startup completed and dashboard is running.`);
+  }
+}
+
+function createResponseBodyForRequest(command: string): object {
+  // The Aspire parent debug adapter only orchestrates child sessions, but VS Code can still
+  // issue normal DAP requests to it. Return protocol-shaped empty bodies so VS Code doesn't
+  // receive successful responses with missing arrays such as `variables`.
+  switch (command) {
+    case 'breakpointLocations':
+    case 'setBreakpoints':
+      return { breakpoints: [] };
+
+    case 'completions':
+      return { targets: [] };
+
+    case 'evaluate':
+      return { result: '', variablesReference: 0 };
+
+    case 'loadedSources':
+      return { sources: [] };
+
+    case 'modules':
+      return { modules: [], totalModules: 0 };
+
+    case 'scopes':
+      return { scopes: [] };
+
+    case 'source':
+      return { content: '' };
+
+    case 'stackTrace':
+      return { stackFrames: [], totalFrames: 0 };
+
+    case 'threads':
+      return { threads: [] };
+
+    case 'variables':
+      return { variables: [] };
+
+    default:
+      return {};
   }
 }
 
