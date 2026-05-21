@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { AppHostResourceParser, ParsedResource, registerParser } from './AppHostResourceParser';
-import { findStatementStartLine, findFirstMatchOutsideComments } from './parserUtils';
+import { findStatementStartLine, findFirstMatchOutsideComments, findMatchesOutsideCommentsAndStrings } from './parserUtils';
 
 /**
  * C# AppHost resource parser.
@@ -26,9 +26,8 @@ class CSharpAppHostParser implements AppHostResourceParser {
 
         // Match .AddXyz("name") or .AddXyz<...>("name") patterns
         const addPattern = /\.(Add\w+)(?:<[^>]*>)?\s*\(\s*"([^"]+)"/g;
-        let match: RegExpExecArray | null;
 
-        while ((match = addPattern.exec(text)) !== null) {
+        for (const match of findMatchesOutsideCommentsAndStrings(text, addPattern)) {
             const methodName = match[1];
             const resourceName = match[2];
             const matchStart = match.index;

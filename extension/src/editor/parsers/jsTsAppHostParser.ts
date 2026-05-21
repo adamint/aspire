@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { AppHostResourceParser, ParsedResource, registerParser } from './AppHostResourceParser';
-import { findStatementStartLine, findFirstMatchOutsideComments } from './parserUtils';
+import { findStatementStartLine, findFirstMatchOutsideComments, findMatchesOutsideCommentsAndStrings } from './parserUtils';
 
 /**
  * JavaScript / TypeScript AppHost resource parser.
@@ -26,9 +26,8 @@ class JsTsAppHostParser implements AppHostResourceParser {
         // Match .addXyz("name") or .addXyz('name') patterns
         // \s* matches whitespace including newlines, supporting multi-line calls
         const pattern = /\.(add\w+)\s*\(\s*(['"])([^'"]+)\2/gi;
-        let match: RegExpExecArray | null;
 
-        while ((match = pattern.exec(text)) !== null) {
+        for (const match of findMatchesOutsideCommentsAndStrings(text, pattern)) {
             const methodName = match[1];
             const resourceName = match[3];
 

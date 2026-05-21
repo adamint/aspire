@@ -446,7 +446,7 @@ suite('CSharpAppHostParser', () => {
         assert.strictEqual(resources.length, 0, 'C# parser should only match PascalCase Add* methods');
     });
 
-    test('matches Add* calls in commented-out code (known regex limitation)', () => {
+    test('does not match Add* calls in commented-out C# code', () => {
         const parser = getCSharpParser();
         const doc = createMockDocument(
             [
@@ -457,9 +457,8 @@ suite('CSharpAppHostParser', () => {
             '/test/AppHost.cs'
         );
         const resources = parser.parseResources(doc);
-        // Regex-based parser cannot distinguish comments from code — all three match
-        assert.strictEqual(resources.length, 3);
-        assert.strictEqual(resources[2].name, 'real-cache');
+        assert.strictEqual(resources.length, 1);
+        assert.strictEqual(resources[0].name, 'real-cache');
     });
 
     test('does not match string interpolation expressions', () => {
@@ -1297,7 +1296,7 @@ suite('JsTsAppHostParser', () => {
         assert.strictEqual(resources.length, 0);
     });
 
-    test('matches add* calls in commented-out code (known regex limitation)', () => {
+    test('does not match add* calls in commented-out JS/TS code', () => {
         const parser = getJsTsParser();
         const doc = createMockDocument(
             [
@@ -1308,9 +1307,8 @@ suite('JsTsAppHostParser', () => {
             '/test/apphost.ts'
         );
         const resources = parser.parseResources(doc);
-        // Regex-based parser cannot distinguish comments from code — all three match
-        assert.strictEqual(resources.length, 3);
-        assert.strictEqual(resources[2].name, 'real-cache');
+        assert.strictEqual(resources.length, 1);
+        assert.strictEqual(resources[0].name, 'real-cache');
     });
 
     test('does not match template literal arguments', () => {

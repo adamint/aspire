@@ -337,6 +337,156 @@ suite('AspireCodeLensProvider resource lens anchoring', () => {
         );
     }
 
+    function getStateLenses(lenses: vscode.CodeLens[]): vscode.CodeLens[] {
+        return lenses.filter(l => l.command?.command === 'aspire-vscode.codeLensRevealResource');
+    }
+
+    test('does not emit resource state lenses for line-commented C# resource calls', () => {
+        const docPath = p('repo', 'AppHost', 'AppHost.cs');
+        const hostPath = p('repo', 'AppHost', 'AppHost.csproj');
+        const content = [
+            'var builder = DistributedApplication.CreateBuilder(args);',
+            'builder.AddContainer("active", "nginx");',
+            '// builder.AddContainer("active", "nginx");',
+            '    //builder.AddContainer("line-commented", "nginx");',
+        ].join('\n');
+
+        const harness = createHarness({
+            workspaceAppHostPath: hostPath,
+            workspaceResources: [
+                makeResource('active'),
+                makeResource('line-commented'),
+            ],
+        });
+
+        const doc = createMockDocument(content, docPath);
+        const lenses = harness.provider.provideCodeLenses(doc, cancellationToken) as vscode.CodeLens[];
+        const stateLenses = getStateLenses(lenses);
+
+        assert.strictEqual(stateLenses.length, 1);
+        assert.strictEqual(stateLenses[0].range.start.line, 1);
+        harness.dispose();
+    });
+
+    test('does not emit resource state lenses for block-commented C# resource calls', () => {
+        const docPath = p('repo', 'AppHost', 'AppHost.cs');
+        const hostPath = p('repo', 'AppHost', 'AppHost.csproj');
+        const content = [
+            'var builder = DistributedApplication.CreateBuilder(args);',
+            '/*',
+            'builder.AddContainer("block-commented", "nginx");',
+            'nested-looking block opener /* does not make this active',
+            'builder.AddContainer("also-block-commented", "nginx");',
+            '*/',
+            'builder.AddContainer("active", "nginx");',
+        ].join('\n');
+
+        const harness = createHarness({
+            workspaceAppHostPath: hostPath,
+            workspaceResources: [
+                makeResource('active'),
+                makeResource('block-commented'),
+                makeResource('also-block-commented'),
+            ],
+        });
+
+        const doc = createMockDocument(content, docPath);
+        const lenses = harness.provider.provideCodeLenses(doc, cancellationToken) as vscode.CodeLens[];
+        const stateLenses = getStateLenses(lenses);
+
+        assert.strictEqual(stateLenses.length, 1);
+        assert.strictEqual(stateLenses[0].range.start.line, 6);
+        harness.dispose();
+    });
+
+    test('does not emit resource state lenses for C# resource calls in trailing comments', () => {
+        const docPath = p('repo', 'AppHost', 'AppHost.cs');
+        const hostPath = p('repo', 'AppHost', 'AppHost.csproj');
+        const content = [
+            'var builder = DistributedApplication.CreateBuilder(args);',
+            'builder.AddContainer("active", "nginx"); // builder.AddContainer("trailing-commented", "nginx");',
+        ].join('\n');
+
+        const harness = createHarness({
+            workspaceAppHostPath: hostPath,
+            workspaceResources: [
+                makeResource('active'),
+                makeResource('trailing-commented'),
+            ],
+        });
+
+        const doc = createMockDocument(content, docPath);
+        const lenses = harness.provider.provideCodeLenses(doc, cancellationToken) as vscode.CodeLens[];
+        const stateLenses = getStateLenses(lenses);
+
+        assert.strictEqual(stateLenses.length, 1);
+        assert.strictEqual(stateLenses[0].range.start.line, 1);
+        harness.dispose();
+    });
+
+    test('does not emit resource state lenses for C# resource calls inside strings', () => {
+        const docPath = p('repo', 'AppHost', 'AppHost.cs');
+        const hostPath = p('repo', 'AppHost', 'AppHost.csproj');
+        const content = [
+            'var builder = DistributedApplication.CreateBuilder(args);',
+            'var escaped = "builder.AddContainer(\\"escaped\\", \\"nginx\\")";',
+            'var verbatim = @"builder.AddContainer(""verbatim"", ""nginx"")";',
+            'var interpolatedVerbatim = $@"builder.AddContainer(""interpolated-verbatim"", ""nginx"")";',
+            'var raw = """',
+            'builder.AddContainer("raw", "nginx");',
+            '""";',
+            'var interpolatedRaw = $"""',
+            'builder.AddContainer("interpolated-raw", "nginx");',
+            '""";',
+            'builder.AddContainer("active", "nginx");',
+        ].join('\n');
+
+        const harness = createHarness({
+            workspaceAppHostPath: hostPath,
+            workspaceResources: [
+                makeResource('active'),
+                makeResource('escaped'),
+                makeResource('verbatim'),
+                makeResource('interpolated-verbatim'),
+                makeResource('raw'),
+                makeResource('interpolated-raw'),
+            ],
+        });
+
+        const doc = createMockDocument(content, docPath);
+        const lenses = harness.provider.provideCodeLenses(doc, cancellationToken) as vscode.CodeLens[];
+        const stateLenses = getStateLenses(lenses);
+
+        assert.strictEqual(stateLenses.length, 1);
+        assert.strictEqual(stateLenses[0].range.start.line, 10);
+        harness.dispose();
+    });
+
+    test('still emits resource state lenses for active C# resource calls with whitespace', () => {
+        const docPath = p('repo', 'AppHost', 'AppHost.cs');
+        const hostPath = p('repo', 'AppHost', 'AppHost.csproj');
+        const content = [
+            'var builder = DistributedApplication.CreateBuilder(args);',
+            'var active = builder',
+            '    .AddContainer(',
+            '        "active",',
+            '        "nginx");',
+        ].join('\n');
+
+        const harness = createHarness({
+            workspaceAppHostPath: hostPath,
+            workspaceResources: [makeResource('active')],
+        });
+
+        const doc = createMockDocument(content, docPath);
+        const lenses = harness.provider.provideCodeLenses(doc, cancellationToken) as vscode.CodeLens[];
+        const stateLenses = getStateLenses(lenses);
+
+        assert.strictEqual(stateLenses.length, 1);
+        assert.strictEqual(stateLenses[0].range.start.line, 1);
+        harness.dispose();
+    });
+
     test('single-resource fluent chain anchors lens at the statement-start line, not the .add* call line', () => {
         const docPath = p('repo', 'AppHost', 'apphost.ts');
         const hostPath = p('repo', 'AppHost', 'apphost.ts');
