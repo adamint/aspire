@@ -154,7 +154,7 @@ namespace Aspire.Dashboard.Resources {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to Waiting for dependencies: {0}..
+        ///   Looks up a localized string similar to Waiting for dependencies: {0}.
         /// </summary>
         public static string StateColumnResourceWaitingFor {
             get {

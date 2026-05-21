@@ -132,6 +132,12 @@ public class ResourceStateViewModelTests
     }
 
     [Fact]
+    public void WaitingForDependenciesFormatDoesNotAppendTrailingPeriod()
+    {
+        Assert.Equal("Waiting for dependencies: {0}", Columns.StateColumnResourceWaitingFor);
+    }
+
+    [Fact]
     public void WaitingResourceTooltipUsesDisplayNamesForNonReplicaDependencies()
     {
         var dependency = ModelTestHelpers.CreateResource(
@@ -184,5 +190,53 @@ public class ResourceStateViewModelTests
         var tooltip = ResourceStateViewModel.GetResourceStateTooltip(resource, localizer, [resource, firstDependency, secondDependency]);
 
         Assert.Equal($"Localized:{nameof(Columns.StateColumnResourceWaitingFor)}:messaging-abcxyz", tooltip);
+    }
+
+    [Fact]
+    public void TryGetResolvedWaitingForDependenciesDoesNotMaterializeAllResources()
+    {
+        var dependency = ModelTestHelpers.CreateResource(
+            resourceName: "messaging-abcxyz",
+            displayName: "messaging");
+
+        var resource = ModelTestHelpers.CreateResource(
+            state: KnownResourceState.Waiting,
+            properties: new Dictionary<string, ResourcePropertyViewModel>
+            {
+                [KnownProperties.Resource.WaitingFor] = new(
+                    KnownProperties.Resource.WaitingFor,
+                    Value.ForList(Value.ForString("messaging-abcxyz")),
+                    isValueSensitive: false,
+                    knownProperty: null,
+                    priority: 0)
+            });
+
+        var resources = new CopyToThrowingResourceCollection(resource, dependency);
+
+        var result = resource.TryGetResolvedWaitingForDependencies(resources, out var dependencies);
+
+        Assert.True(result);
+        Assert.Equal(["messaging"], dependencies);
+    }
+
+    private sealed class CopyToThrowingResourceCollection(params ResourceViewModel[] resources) : ICollection<ResourceViewModel>, IReadOnlyCollection<ResourceViewModel>
+    {
+        public int Count => resources.Length;
+
+        public bool IsReadOnly => true;
+
+        public void Add(ResourceViewModel item) => throw new NotSupportedException();
+
+        public void Clear() => throw new NotSupportedException();
+
+        public bool Contains(ResourceViewModel item) => resources.Contains(item);
+
+        public void CopyTo(ResourceViewModel[] array, int arrayIndex) => throw new InvalidOperationException("The resources collection should not be copied.");
+
+        public IEnumerator<ResourceViewModel> GetEnumerator() => resources.AsEnumerable().GetEnumerator();
+
+        public bool Remove(ResourceViewModel item) => throw new NotSupportedException();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }
