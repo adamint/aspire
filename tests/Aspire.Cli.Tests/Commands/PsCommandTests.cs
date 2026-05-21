@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Aspire.Cli.Backchannel;
 using Aspire.Cli.Commands;
+using Aspire.Cli.Interaction;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
 using Microsoft.AspNetCore.InternalTesting;
@@ -477,6 +478,42 @@ public class PsCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task PsCommand_JsonFormat_DoesNotShowScanningStatus()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var interactionService = new TestInteractionService();
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        monitor.AddConnection("hash1", "socket.hash1", new TestAppHostAuxiliaryBackchannel
+        {
+            IsInScope = true,
+            AppHostInfo = new AppHostInformation
+            {
+                AppHostPath = Path.Combine(workspace.WorkspaceRoot.FullName, "App1", "App1.AppHost.csproj"),
+                ProcessId = 1234
+            }
+        });
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.InteractionServiceFactory = _ => interactionService;
+            options.AuxiliaryBackchannelMonitorFactory = _ => monitor;
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("ps --format json --resources");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Empty(interactionService.ShownStatuses);
+        var (json, consoleOverride) = Assert.Single(interactionService.DisplayedRawText);
+        Assert.Equal(ConsoleOutput.Standard, consoleOverride);
+        var document = JsonDocument.Parse(json);
+        Assert.Equal(JsonValueKind.Array, document.RootElement.ValueKind);
+    }
+
+    [Fact]
     public async Task PsCommand_ResourcesOption_IncludesResourcesInJsonOutput()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
@@ -775,6 +812,153 @@ public class PsCommandTests(ITestOutputHelper outputHelper)
             };
             yield return snapshots[0];
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    [Fact]
+    public async Task PsCommand_FollowJsonFormat_ReturnsSuccessWhenOutputCloses()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        var interactionService = new TestInteractionService
+        {
+            DisplayRawTextCallback = _ => throw new IOException("Broken pipe")
+        };
+        monitor.AddConnection("hash1", "socket.hash1", new TestAppHostAuxiliaryBackchannel
+        {
+            IsInScope = true,
+            AppHostInfo = new AppHostInformation
+            {
+                AppHostPath = Path.Combine(workspace.WorkspaceRoot.FullName, "App1", "App1.AppHost.csproj"),
+                ProcessId = 1234,
+                CliProcessId = 5678
+            }
+        });
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.InteractionServiceFactory = _ => interactionService;
+            options.AuxiliaryBackchannelMonitorFactory = _ => monitor;
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("ps --format json --follow");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Single(interactionService.DisplayedRawText);
+    }
+
+    [Fact]
+    public async Task PsCommand_FollowJsonFormat_StopsWhenRedirectedOutputClosesWhileIdle()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var outputStatus = new TestStandardOutputStatus
+        {
+            IsOutputRedirected = true
+        };
+        var textWriter = new TestOutputTextWriter(outputHelper, _ => outputStatus.IsOutputClosed = true);
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        monitor.AddConnection("hash1", "socket.hash1", new TestAppHostAuxiliaryBackchannel
+        {
+            IsInScope = true,
+            AppHostInfo = new AppHostInformation
+            {
+                AppHostPath = Path.Combine(workspace.WorkspaceRoot.FullName, "App1", "App1.AppHost.csproj"),
+                ProcessId = 1234,
+                CliProcessId = 5678
+            }
+        });
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.OutputTextWriter = textWriter;
+            options.AuxiliaryBackchannelMonitorFactory = _ => monitor;
+            options.StandardOutputStatusFactory = _ => outputStatus;
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("ps --format json --follow");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Single(textWriter.Logs);
+    }
+
+    [Fact]
+    public async Task PsCommand_FollowJsonFormat_WaitsForResourceWatchersBeforeReturning()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        using var cancellationTokenSource = new CancellationTokenSource();
+        var watcherCleanupStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowWatcherCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var textWriter = new TestOutputTextWriter(outputHelper, _ => cancellationTokenSource.Cancel());
+        var monitor = new TestAuxiliaryBackchannelMonitor();
+        monitor.AddConnection("hash1", "socket.hash1", new TestAppHostAuxiliaryBackchannel
+        {
+            IsInScope = true,
+            AppHostInfo = new AppHostInformation
+            {
+                AppHostPath = Path.Combine(workspace.WorkspaceRoot.FullName, "App1", "App1.AppHost.csproj"),
+                ProcessId = 1234,
+                CliProcessId = 5678
+            },
+            ResourceSnapshots =
+            [
+                new ResourceSnapshot
+                {
+                    Name = "apiservice",
+                    DisplayName = "apiservice",
+                    ResourceType = "Project",
+                    State = "Running"
+                }
+            ],
+            WatchResourceSnapshotsHandler = WatchResourceSnapshotsAsync
+        });
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.OutputTextWriter = textWriter;
+            options.AuxiliaryBackchannelMonitorFactory = _ => monitor;
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("ps --format json --resources --follow");
+
+        var invokeTask = result.InvokeAsync(cancellationToken: cancellationTokenSource.Token);
+
+        await watcherCleanupStarted.Task.DefaultTimeout();
+        try
+        {
+            Assert.False(invokeTask.IsCompleted, "The command returned before its resource watcher task completed cleanup.");
+        }
+        finally
+        {
+            allowWatcherCleanup.TrySetResult();
+        }
+
+        var exitCode = await invokeTask.DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+
+        async IAsyncEnumerable<ResourceSnapshot> WatchResourceSnapshotsAsync(bool includeHidden, [EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                watcherCleanupStarted.TrySetResult();
+                await allowWatcherCleanup.Task.ConfigureAwait(false);
+            }
+
+            yield break;
         }
     }
 
@@ -1147,6 +1331,15 @@ public class PsCommandTests(ITestOutputHelper outputHelper)
         var output = string.Join(Environment.NewLine, textWriter.Logs);
         // "Logs" should not appear as a column header when no app host has a log path
         Assert.DoesNotContain("Logs", output, StringComparison.Ordinal);
+    }
+
+    private sealed class TestStandardOutputStatus : IStandardOutputStatus
+    {
+        public bool IsOutputRedirected { get; set; }
+
+        public bool IsOutputClosed { get; set; }
+
+        bool IStandardOutputStatus.IsOutputClosed() => IsOutputClosed;
     }
 
     private sealed class TestAppHostBackchannelServer : IDisposable

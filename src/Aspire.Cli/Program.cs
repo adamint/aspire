@@ -358,6 +358,7 @@ public class Program
             return new CliHostEnvironment(configuration, nonInteractive);
         });
         builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton<IStandardOutputStatus, StandardOutputStatus>();
         AddInteractionServices(builder);
         builder.Services.AddSingleton<IAppHostCandidateFinder, AppHostCandidateFinder>();
         builder.Services.AddSingleton<IProjectLocator, ProjectLocator>();

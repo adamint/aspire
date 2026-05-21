@@ -629,6 +629,11 @@ export class AppHostDataRepository {
     }
 
     private _startPsIntervalPolling(fetchImmediately = true): void {
+        if (this._pollingInterval) {
+            clearInterval(this._pollingInterval);
+            this._pollingInterval = undefined;
+        }
+
         const intervalMs = this._getPollingIntervalMs();
         if (fetchImmediately) {
             this._fetchAppHosts();
@@ -686,6 +691,7 @@ export class AppHostDataRepository {
 
         let psProcess: ChildProcessWithoutNullStreams | undefined;
         let psProcessCompletedSynchronously = false;
+        let callbackInvoked = false;
         const removePsProcess = () => {
             if (psProcess) {
                 this._psProcesses.delete(psProcess);
@@ -711,6 +717,10 @@ export class AppHostDataRepository {
             },
             exitCallback: (code) => {
                 removePsProcess();
+                if (callbackInvoked) {
+                    return;
+                }
+                callbackInvoked = true;
                 if (!this._isCurrentPsFetch(fetchVersion)) {
                     return;
                 }
@@ -726,6 +736,10 @@ export class AppHostDataRepository {
             },
             errorCallback: (error) => {
                 removePsProcess();
+                if (callbackInvoked) {
+                    return;
+                }
+                callbackInvoked = true;
                 if (!this._isCurrentPsFetch(fetchVersion)) {
                     return;
                 }
@@ -866,8 +880,8 @@ export class AppHostDataRepository {
         this._appHosts = workspaceAppHosts;
         this._workspaceAppHost = workspaceAppHost;
 
-        if (changed) {
-            this._updateWorkspaceContext();
+        if (changed || this._loadingWorkspace) {
+            this._updateWorkspaceContext({ clearLoading: true });
         }
     }
 

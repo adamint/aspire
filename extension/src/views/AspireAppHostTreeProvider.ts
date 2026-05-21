@@ -46,7 +46,13 @@ function sortResources(resources: ResourceJson[]): ResourceJson[] {
 }
 
 function isSamePath(left: string, right: string): boolean {
-    return path.resolve(left) === path.resolve(right);
+    const resolvedLeft = path.resolve(left);
+    const resolvedRight = path.resolve(right);
+    return getComparisonKey(resolvedLeft) === getComparisonKey(resolvedRight);
+}
+
+function getComparisonKey(value: string): string {
+    return process.platform === 'win32' ? value.toLowerCase() : value;
 }
 
 function hasNoResources(resources: readonly ResourceJson[] | null | undefined): boolean {
@@ -170,7 +176,7 @@ function getParentResourceName(resource: ResourceJson): string | null {
 }
 
 class ResourceItem extends vscode.TreeItem {
-    constructor(public readonly resource: ResourceJson, public readonly appHostPid: number | null, hasChildren: boolean) {
+    constructor(public readonly resource: ResourceJson, public readonly appHostPid: number | null, hasChildren: boolean, public readonly allResources?: readonly ResourceJson[]) {
         const label = resource.displayName ?? resource.name;
         const hasUrls = resource.urls && resource.urls.filter(u => !u.isInternal).length > 0;
         const hasHealthReports = resource.healthReports && Object.keys(resource.healthReports).length > 0;
@@ -403,7 +409,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
                 if (!hostPath) {
                     continue;
                 }
-                if (hostPath === appHostPath || path.dirname(hostPath) === targetDir) {
+                if (isSamePath(hostPath, appHostPath) || isSamePath(path.dirname(hostPath), targetDir)) {
                     return element;
                 }
             } else if (element instanceof WorkspaceResourcesItem) {
@@ -411,7 +417,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
                 if (!hostPath) {
                     continue;
                 }
-                if (hostPath === appHostPath || path.dirname(hostPath) === targetDir) {
+                if (isSamePath(hostPath, appHostPath) || isSamePath(path.dirname(hostPath), targetDir)) {
                     return element;
                 }
             }
@@ -530,7 +536,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             const topLevel = element.resources.filter(r => !getParentResourceName(r));
             for (const resource of sortResources(topLevel)) {
                 const hasChildren = element.resources.some(r => getParentResourceName(r) === resource.name);
-                items.push(new ResourceItem(resource, null, hasChildren));
+                items.push(new ResourceItem(resource, null, hasChildren, element.resources));
             }
             return items;
         }
@@ -541,9 +547,9 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
                 : undefined;
             const workspaceResources = [...this._repository.workspaceResources];
             const selectedAppHostPath = this._repository.workspaceAppHost?.appHostPath ?? this._repository.workspaceAppHostPath;
-            const allResources = appHost && workspaceResources.length > 0 && selectedAppHostPath && isSamePath(appHost.appHostPath, selectedAppHostPath) && hasNoResources(appHost.resources)
+            const allResources = element.allResources ?? (appHost && workspaceResources.length > 0 && selectedAppHostPath && isSamePath(appHost.appHostPath, selectedAppHostPath) && hasNoResources(appHost.resources)
                 ? workspaceResources
-                : appHost?.resources ?? workspaceResources;
+                : appHost?.resources ?? workspaceResources);
             return this._getResourceChildren(element, allResources);
         }
 
@@ -596,7 +602,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             const topLevel = element.resources.filter(r => !getParentResourceName(r));
             return sortResources(topLevel).map(r => {
                 const hasChildren = element.resources.some(c => getParentResourceName(c) === r.name);
-                return new ResourceItem(r, element.appHostPid, hasChildren);
+                return new ResourceItem(r, element.appHostPid, hasChildren, element.resources);
             });
         }
 
@@ -619,7 +625,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         const children = allResources.filter(r => getParentResourceName(r) === element.resource.name);
         for (const child of sortResources(children)) {
             const hasChildren = allResources.some(r => getParentResourceName(r) === child.name);
-            items.push(new ResourceItem(child, element.appHostPid, hasChildren));
+            items.push(new ResourceItem(child, element.appHostPid, hasChildren, allResources));
         }
 
         const urls = element.resource.urls?.filter(u => !u.isInternal) ?? [];

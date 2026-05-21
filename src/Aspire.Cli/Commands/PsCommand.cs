@@ -3,6 +3,7 @@
 
 using System.CommandLine;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -78,12 +79,13 @@ internal sealed partial class PsCommandJsonContext : JsonSerializerContext
     });
 }
 
-internal sealed class PsCommand : BaseCommand
+internal sealed partial class PsCommand : BaseCommand
 {
     internal override HelpGroup HelpGroup => HelpGroup.AppCommands;
 
     private readonly IInteractionService _interactionService;
     private readonly IAuxiliaryBackchannelMonitor _backchannelMonitor;
+    private readonly IStandardOutputStatus _standardOutputStatus;
     private readonly ILogger<PsCommand> _logger;
     private static readonly Option<OutputFormat> s_formatOption = new("--format")
     {
@@ -108,6 +110,7 @@ internal sealed class PsCommand : BaseCommand
     public PsCommand(
         IInteractionService interactionService,
         IAuxiliaryBackchannelMonitor backchannelMonitor,
+        IStandardOutputStatus standardOutputStatus,
         IFeatures features,
         ICliUpdateNotifier updateNotifier,
         CliExecutionContext executionContext,
@@ -117,6 +120,7 @@ internal sealed class PsCommand : BaseCommand
     {
         _interactionService = interactionService;
         _backchannelMonitor = backchannelMonitor;
+        _standardOutputStatus = standardOutputStatus;
         _logger = logger;
 
         Options.Add(s_formatOption);
@@ -138,15 +142,13 @@ internal sealed class PsCommand : BaseCommand
             return await ExecuteFollowAsync(format, includeResources, includeHidden, cancellationToken).ConfigureAwait(false);
         }
 
-        // Scan for running AppHosts (same as ListAppHostsTool)
-        // Skip status display for JSON output to avoid contaminating stdout
-        var connections = await _interactionService.ShowStatusAsync(
-            SharedCommandStrings.ScanningForRunningAppHosts,
-            async () =>
-            {
-                await _backchannelMonitor.ScanAsync(cancellationToken).ConfigureAwait(false);
-                return _backchannelMonitor.Connections.ToList();
-            });
+        // Scan for running AppHosts (same as ListAppHostsTool). JSON output must not go
+        // through status rendering because non-interactive status text shares stdout.
+        var connections = format == OutputFormat.Json
+            ? await ScanForConnectionsAsync(cancellationToken).ConfigureAwait(false)
+            : await _interactionService.ShowStatusAsync(
+                SharedCommandStrings.ScanningForRunningAppHosts,
+                async () => await ScanForConnectionsAsync(cancellationToken).ConfigureAwait(false));
 
         if (connections.Count == 0)
         {
@@ -184,6 +186,13 @@ internal sealed class PsCommand : BaseCommand
         return CommandResult.Success();
     }
 
+    private async Task<List<IAppHostAuxiliaryBackchannel>> ScanForConnectionsAsync(CancellationToken cancellationToken)
+    {
+        await _backchannelMonitor.ScanAsync(cancellationToken).ConfigureAwait(false);
+
+        return _backchannelMonitor.Connections.ToList();
+    }
+
     private async Task<CommandResult> ExecuteFollowAsync(OutputFormat format, bool includeResources, bool includeHidden, CancellationToken cancellationToken)
     {
         if (format != OutputFormat.Json)
@@ -191,12 +200,16 @@ internal sealed class PsCommand : BaseCommand
             return CommandResult.Failure(CliExitCodes.InvalidCommand, PsCommandStrings.FollowRequiresJson);
         }
 
+        using var followCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var followCancellationToken = followCancellationTokenSource.Token;
+        var outputClosedWatcherTask = WatchForClosedOutputAsync(followCancellationTokenSource, _standardOutputStatus, followCancellationToken);
         var updates = Channel.CreateUnbounded<IReadOnlyList<IAppHostAuxiliaryBackchannel>?>(new UnboundedChannelOptions
         {
             SingleReader = true
         });
         var currentConnections = new List<IAppHostAuxiliaryBackchannel>();
         CancellationTokenSource? resourceWatchCts = null;
+        List<Task> resourceWatchTasks = [];
         var lastJson = string.Empty;
         var resourceUpdateQueued = 0;
 
@@ -204,12 +217,12 @@ internal sealed class PsCommand : BaseCommand
         {
             try
             {
-                await foreach (var connections in _backchannelMonitor.WatchConnectionsAsync(cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
+                await foreach (var connections in _backchannelMonitor.WatchConnectionsAsync(followCancellationToken).WithCancellation(followCancellationToken).ConfigureAwait(false))
                 {
-                    await updates.Writer.WriteAsync(connections, cancellationToken).ConfigureAwait(false);
+                    await updates.Writer.WriteAsync(connections, followCancellationToken).ConfigureAwait(false);
                 }
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (followCancellationToken.IsCancellationRequested)
             {
                 // Expected when the caller stops following.
             }
@@ -225,12 +238,12 @@ internal sealed class PsCommand : BaseCommand
 
         try
         {
-            await foreach (var connections in updates.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            await foreach (var connections in updates.Reader.ReadAllAsync(followCancellationToken).ConfigureAwait(false))
             {
                 if (connections is not null)
                 {
                     currentConnections = OrderConnections(connections);
-                    RestartResourceWatchers();
+                    await RestartResourceWatchersAsync().ConfigureAwait(false);
                 }
                 else
                 {
@@ -240,28 +253,38 @@ internal sealed class PsCommand : BaseCommand
                 await WriteSnapshotAsync().ConfigureAwait(false);
             }
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (followCancellationToken.IsCancellationRequested)
         {
+            return CommandResult.Success();
+        }
+        catch (IOException ex)
+        {
+            _logger.LogDebug(ex, "Stopping ps --follow because the output stream is no longer writable.");
             return CommandResult.Success();
         }
         finally
         {
+            await followCancellationTokenSource.CancelAsync().ConfigureAwait(false);
+            await outputClosedWatcherTask.ConfigureAwait(false);
             if (resourceWatchCts is not null)
             {
                 await resourceWatchCts.CancelAsync().ConfigureAwait(false);
+                await Task.WhenAll(resourceWatchTasks).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
                 resourceWatchCts.Dispose();
             }
         }
 
         return CommandResult.Success();
 
-        void RestartResourceWatchers()
+        async Task RestartResourceWatchersAsync()
         {
             if (resourceWatchCts is not null)
             {
-                resourceWatchCts.Cancel();
+                await resourceWatchCts.CancelAsync().ConfigureAwait(false);
+                await Task.WhenAll(resourceWatchTasks).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
                 resourceWatchCts.Dispose();
                 resourceWatchCts = null;
+                resourceWatchTasks = [];
             }
 
             if (!includeResources || format != OutputFormat.Json)
@@ -269,11 +292,11 @@ internal sealed class PsCommand : BaseCommand
                 return;
             }
 
-            resourceWatchCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            resourceWatchCts = CancellationTokenSource.CreateLinkedTokenSource(followCancellationToken);
             var resourceCancellationToken = resourceWatchCts.Token;
             foreach (var connection in currentConnections)
             {
-                _ = Task.Run(async () =>
+                resourceWatchTasks.Add(Task.Run(async () =>
                 {
                     try
                     {
@@ -293,13 +316,13 @@ internal sealed class PsCommand : BaseCommand
                     {
                         _logger.LogDebug(ex, "Failed while watching resource snapshots for {AppHostPath}.", connection.AppHostInfo?.AppHostPath);
                     }
-                }, CancellationToken.None);
+                }, CancellationToken.None));
             }
         }
 
         async Task WriteSnapshotAsync()
         {
-            var appHostInfos = await GatherAppHostInfosAsync(currentConnections, includeResources, includeHidden, cancellationToken).ConfigureAwait(false);
+            var appHostInfos = await GatherAppHostInfosAsync(currentConnections, includeResources, includeHidden, followCancellationToken).ConfigureAwait(false);
             var json = JsonSerializer.Serialize(appHostInfos, PsCommandJsonContext.CompactRelaxedEscaping.ListAppHostDisplayInfo);
             if (!string.Equals(json, lastJson, StringComparison.Ordinal))
             {
@@ -309,6 +332,122 @@ internal sealed class PsCommand : BaseCommand
         }
     }
 
+    private static Task WatchForClosedOutputAsync(CancellationTokenSource cancellationTokenSource, IStandardOutputStatus standardOutputStatus, CancellationToken cancellationToken)
+    {
+        if (!standardOutputStatus.IsOutputRedirected)
+        {
+            return Task.CompletedTask;
+        }
+
+        return Task.Run(async () =>
+        {
+            try
+            {
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    // A follow command may write a valid first snapshot into a pipe and then have
+                    // no more changes to write. Poll stdout so consumers such as `head -n 1` do
+                    // not leave the process alive indefinitely after closing their read end.
+                    if (standardOutputStatus.IsOutputClosed())
+                    {
+                        await cancellationTokenSource.CancelAsync().ConfigureAwait(false);
+                        return;
+                    }
+
+                    await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Expected when the command exits normally.
+            }
+        }, CancellationToken.None);
+    }
+}
+
+internal interface IStandardOutputStatus
+{
+    bool IsOutputRedirected { get; }
+
+    bool IsOutputClosed();
+}
+
+internal sealed partial class StandardOutputStatus : IStandardOutputStatus
+{
+    public bool IsOutputRedirected => System.Console.IsOutputRedirected;
+
+    public bool IsOutputClosed()
+    {
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && IsUnixStandardOutputClosed())
+        {
+            return true;
+        }
+
+        try
+        {
+            System.Console.Out.Flush();
+            return false;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+        catch (ObjectDisposedException)
+        {
+            return true;
+        }
+    }
+
+    private static bool IsUnixStandardOutputClosed()
+    {
+        var fileDescriptors = new[]
+        {
+            new PollFileDescriptor
+            {
+                FileDescriptor = 1,
+                Events = PollOut
+            }
+        };
+
+        try
+        {
+            var result = RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+                ? PollLibSystem(fileDescriptors, 1, 0)
+                : PollLibc(fileDescriptors, 1, 0);
+            return result > 0 && (fileDescriptors[0].ReturnedEvents & (PollError | PollHangUp | PollInvalid)) != 0;
+        }
+        catch (DllNotFoundException)
+        {
+            return false;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    private const short PollOut = 0x0004;
+    private const short PollError = 0x0008;
+    private const short PollHangUp = 0x0010;
+    private const short PollInvalid = 0x0020;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PollFileDescriptor
+    {
+        public int FileDescriptor;
+        public short Events;
+        public short ReturnedEvents;
+    }
+
+    [LibraryImport("libc", EntryPoint = "poll", SetLastError = true)]
+    private static partial int PollLibc([In, Out] PollFileDescriptor[] fileDescriptors, nuint count, int timeoutMilliseconds);
+
+    [LibraryImport("libSystem", EntryPoint = "poll", SetLastError = true)]
+    private static partial int PollLibSystem([In, Out] PollFileDescriptor[] fileDescriptors, nuint count, int timeoutMilliseconds);
+}
+
+internal sealed partial class PsCommand
+{
     private static List<IAppHostAuxiliaryBackchannel> OrderConnections(IEnumerable<IAppHostAuxiliaryBackchannel> connections)
     {
         return connections

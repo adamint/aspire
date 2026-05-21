@@ -604,6 +604,22 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         provider.dispose();
     });
 
+    test('matches an AppHostItem when Windows path casing differs', () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const hostPath = '/repo/apphost/apphost.csproj';
+        const docPath = '/repo/AppHost/AppHost.cs';
+        const provider = makeTreeProvider([makeAppHost({ appHostPath: hostPath })]);
+
+        try {
+            const result = provider.findAppHostElement(docPath);
+
+            assert.ok(result, 'Expected to find an AppHostItem via case-insensitive Windows path match');
+        } finally {
+            provider.dispose();
+            platformStub.restore();
+        }
+    });
+
     test('returns undefined when AppHost lives in a different directory', () => {
         const provider = makeTreeProvider([makeAppHost({ appHostPath: '/elsewhere/Other.csproj' })]);
 
@@ -867,7 +883,9 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         const appHostChildren = provider.getChildren(appHostItem);
 
         assert.ok(appHostItem, 'Expected a workspace AppHost item');
-        assert.ok(appHostChildren.some(child => child.label === 'api'));
+        const apiItem = appHostChildren.find(child => child.label === 'api');
+        assert.ok(apiItem);
+        assert.ok(provider.getChildren(apiItem).some(child => child.label === 'api-child'));
         provider.dispose();
     });
 

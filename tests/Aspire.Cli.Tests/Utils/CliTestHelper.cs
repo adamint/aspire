@@ -108,6 +108,7 @@ internal static class CliTestHelper
         services.AddSingleton(options.ExtensionRpcTargetFactory);
         services.AddTransient(options.ExtensionBackchannelFactory);
         services.AddSingleton(options.InteractionServiceFactory);
+        services.AddSingleton(options.StandardOutputStatusFactory);
         services.AddSingleton(options.CertificateToolRunnerFactory);
         services.AddSingleton(options.CertificateServiceFactory);
         services.AddSingleton(options.NewCommandPrompterFactory);
@@ -435,6 +436,8 @@ internal sealed class CliServiceCollectionTestOptions
         var loggerFactory = serviceProvider.GetRequiredService<ILoggerFactory>();
         return new ConsoleInteractionService(consoleEnvironment, executionContext, hostEnvironment, loggerFactory);
     };
+
+    public Func<IServiceProvider, IStandardOutputStatus> StandardOutputStatusFactory { get; set; } = _ => new StandardOutputStatus();
 
     public Func<IServiceProvider, ICertificateToolRunner> CertificateToolRunnerFactory { get; set; } = (IServiceProvider _) =>
     {
