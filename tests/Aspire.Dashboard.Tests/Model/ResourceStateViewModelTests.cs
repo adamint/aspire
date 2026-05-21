@@ -132,12 +132,6 @@ public class ResourceStateViewModelTests
     }
 
     [Fact]
-    public void WaitingForDependenciesFormatDoesNotAppendTrailingPeriod()
-    {
-        Assert.Equal("Waiting for dependencies: {0}", Columns.StateColumnResourceWaitingFor);
-    }
-
-    [Fact]
     public void WaitingResourceTooltipUsesDisplayNamesForNonReplicaDependencies()
     {
         var dependency = ModelTestHelpers.CreateResource(

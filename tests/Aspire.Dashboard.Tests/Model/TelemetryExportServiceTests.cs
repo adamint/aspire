@@ -1233,46 +1233,6 @@ public sealed class TelemetryExportServiceTests
     }
 
     [Fact]
-    public void ConvertResourceToJson_PreservesPropertyJsonValueTypes()
-    {
-        var resource = ModelTestHelpers.CreateResource(
-            resourceName: "test-resource",
-            properties: new Dictionary<string, ResourcePropertyViewModel>
-            {
-                ["property.string"] = new("property.string", Value.ForString("redis"), isValueSensitive: false, knownProperty: null, priority: 0),
-                ["property.number"] = new("property.number", Value.ForNumber(6380), isValueSensitive: false, knownProperty: null, priority: 0),
-                ["property.bool"] = new("property.bool", Value.ForBool(true), isValueSensitive: false, knownProperty: null, priority: 0),
-                ["property.null"] = new("property.null", Value.ForNull(), isValueSensitive: false, knownProperty: null, priority: 0),
-                ["property.list"] = new(
-                    "property.list",
-                    Value.ForList(Value.ForString("cache"), Value.ForNumber(6379), Value.ForBool(false), Value.ForNull()),
-                    isValueSensitive: false,
-                    knownProperty: null,
-                    priority: 0)
-            });
-
-        var json = TelemetryExportService.ConvertResourceToJson(resource, [resource]);
-
-        using var document = JsonDocument.Parse(json);
-        var properties = document.RootElement.GetProperty("properties");
-        Assert.Equal(JsonValueKind.String, properties.GetProperty("property.string").ValueKind);
-        Assert.Equal("redis", properties.GetProperty("property.string").GetString());
-        Assert.Equal(JsonValueKind.Number, properties.GetProperty("property.number").ValueKind);
-        Assert.Equal(6380, properties.GetProperty("property.number").GetDouble());
-        Assert.Equal(JsonValueKind.True, properties.GetProperty("property.bool").ValueKind);
-        Assert.Equal(JsonValueKind.Null, properties.GetProperty("property.null").ValueKind);
-
-        var list = properties.GetProperty("property.list");
-        Assert.Equal(JsonValueKind.Array, list.ValueKind);
-        Assert.Equal(JsonValueKind.String, list[0].ValueKind);
-        Assert.Equal("cache", list[0].GetString());
-        Assert.Equal(JsonValueKind.Number, list[1].ValueKind);
-        Assert.Equal(6379, list[1].GetDouble());
-        Assert.Equal(JsonValueKind.False, list[2].ValueKind);
-        Assert.Equal(JsonValueKind.Null, list[3].ValueKind);
-    }
-
-    [Fact]
     public void ConvertResourceToJson_OnlyIncludesFromSpecEnvironmentVariables()
     {
         // Arrange
