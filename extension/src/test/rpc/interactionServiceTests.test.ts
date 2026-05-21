@@ -238,28 +238,223 @@ suite('InteractionService endpoints', () => {
 	test("displayDashboardUrls writes URLs but does not show info message when autoLaunch is launch", async () => {
 		const stub = sinon.stub(extensionLogOutputChannel, 'info');
 		const showInformationMessageStub = sinon.stub(vscode.window, 'showInformationMessage').resolves();
+		const openExternalStub = sinon.stub(vscode.env, 'openExternal').resolves(true);
+		const executeCommandStub = sinon.stub(vscode.commands, 'executeCommand').resolves(undefined);
 		const getConfigurationStub = sinon.stub(vscode.workspace, 'getConfiguration').returns({
 			get: (key: string, defaultValue?: any) => key === 'enableAspireDashboardAutoLaunch' ? 'launch' : defaultValue
 		} as any);
 		const testInfo = await createTestRpcServer();
 
-		const baseUrl = 'http://localhost';
-		const codespacesUrl = 'http://codespaces';
+		try {
+			const baseUrl = 'http://localhost';
+			const codespacesUrl = 'http://codespaces';
 
-		await testInfo.interactionService.displayDashboardUrls({
-			BaseUrlWithLoginToken: baseUrl,
-			CodespacesUrlWithLoginToken: codespacesUrl
-		});
+			await testInfo.interactionService.displayDashboardUrls({
+				BaseUrlWithLoginToken: baseUrl,
+				CodespacesUrlWithLoginToken: codespacesUrl
+			});
 
-		const outputLines = stub.getCalls().map(call => call.args[0]);
+			const outputLines = stub.getCalls().map(call => call.args[0]);
 
-		// No need to wait since no setTimeout should be called when autoLaunch is enabled
-		assert.ok(outputLines.some(line => line.includes(baseUrl)), 'Output should contain base URL');
-		assert.ok(outputLines.some(line => line.includes(codespacesUrl)), 'Output should contain codespaces URL');
-		assert.equal(showInformationMessageStub.callCount, 0, 'Should not show info message when autoLaunch is launch');
-		stub.restore();
-		showInformationMessageStub.restore();
-		getConfigurationStub.restore();
+			// No need to wait since no setTimeout should be called when autoLaunch is enabled
+			assert.ok(outputLines.some(line => line.includes(baseUrl)), 'Output should contain base URL');
+			assert.ok(outputLines.some(line => line.includes(codespacesUrl)), 'Output should contain codespaces URL');
+			assert.strictEqual(openExternalStub.callCount, 1, 'Should open the dashboard when autoLaunch is launch');
+			assert.strictEqual(openExternalStub.getCall(0).args[0].toString(true), vscode.Uri.parse(codespacesUrl).toString(true), 'Should prefer Codespaces URL when available');
+			assert.ok(executeCommandStub.calledWith('aspire-vscode.refreshRunningAppHosts'), 'Should refresh running AppHosts');
+			assert.equal(showInformationMessageStub.callCount, 0, 'Should not show info message when autoLaunch is launch');
+		}
+		finally {
+			stub.restore();
+			showInformationMessageStub.restore();
+			openExternalStub.restore();
+			executeCommandStub.restore();
+			getConfigurationStub.restore();
+		}
+	});
+
+	test("displayDashboardUrls opens dashboard through the Aspire debug session when one exists", async () => {
+		const stub = sinon.stub(extensionLogOutputChannel, 'info');
+		const showInformationMessageStub = sinon.stub(vscode.window, 'showInformationMessage').resolves();
+		const openExternalStub = sinon.stub(vscode.env, 'openExternal').resolves(true);
+		const executeCommandStub = sinon.stub(vscode.commands, 'executeCommand').resolves(undefined);
+		const getConfigurationStub = sinon.stub(vscode.workspace, 'getConfiguration').returns({
+			get: (key: string, defaultValue?: any) => {
+				if (key === 'enableAspireDashboardAutoLaunch') {
+					return 'launch';
+				}
+				if (key === 'dashboardBrowser') {
+					return 'debugEdge';
+				}
+				return defaultValue;
+			}
+		} as any);
+		const mockDebugSession = {
+			sendMessage: sinon.stub(),
+			openDashboard: sinon.stub().resolves()
+		} as unknown as AspireDebugSession;
+		const testInfo = await createTestRpcServer(null, () => mockDebugSession);
+
+		try {
+			const baseUrl = 'http://localhost:15000/login?t=abc';
+			const codespacesUrl = 'http://codespaces/login?t=abc';
+
+			await testInfo.interactionService.displayDashboardUrls({
+				BaseUrlWithLoginToken: baseUrl,
+				CodespacesUrlWithLoginToken: codespacesUrl
+			});
+
+			assert.strictEqual((mockDebugSession.openDashboard as sinon.SinonStub).callCount, 1, 'Should ask the Aspire debug session to open the dashboard');
+			assert.deepStrictEqual((mockDebugSession.openDashboard as sinon.SinonStub).getCall(0).args, [codespacesUrl, 'debugEdge']);
+			assert.strictEqual(openExternalStub.callCount, 0, 'Should not bypass the Aspire debug session');
+			assert.ok(executeCommandStub.calledWith('aspire-vscode.refreshRunningAppHosts'), 'Should refresh running AppHosts');
+			assert.equal(showInformationMessageStub.callCount, 0, 'Should not show info message when autoLaunch is launch');
+		}
+		finally {
+			stub.restore();
+			showInformationMessageStub.restore();
+			openExternalStub.restore();
+			executeCommandStub.restore();
+			getConfigurationStub.restore();
+		}
+	});
+
+	test("displayDashboardUrls opens external browser when autoLaunch is launch without Aspire debug session", async () => {
+		const stub = sinon.stub(extensionLogOutputChannel, 'info');
+		const showInformationMessageStub = sinon.stub(vscode.window, 'showInformationMessage').resolves();
+		const asExternalUriStub = sinon.stub(vscode.env, 'asExternalUri').rejects(new Error('openExternal resolves external URIs'));
+		const openExternalStub = sinon.stub(vscode.env, 'openExternal').resolves(true);
+		const executeCommandStub = sinon.stub(vscode.commands, 'executeCommand').resolves(undefined);
+		const getConfigurationStub = sinon.stub(vscode.workspace, 'getConfiguration').returns({
+			get: (key: string, defaultValue?: any) => {
+				if (key === 'enableAspireDashboardAutoLaunch') {
+					return 'launch';
+				}
+				if (key === 'dashboardBrowser') {
+					return 'openExternalBrowser';
+				}
+				return defaultValue;
+			}
+		} as any);
+		const testInfo = await createTestRpcServer(null, () => null);
+
+		try {
+			const baseUrl = 'http://localhost:15000/login?t=abc';
+
+			await testInfo.interactionService.displayDashboardUrls({
+				BaseUrlWithLoginToken: baseUrl,
+				CodespacesUrlWithLoginToken: null
+			});
+
+			assert.strictEqual(openExternalStub.callCount, 1, 'Should open external browser without an Aspire debug session');
+			assert.strictEqual(openExternalStub.getCall(0).args[0].toString(true), baseUrl);
+			assert.strictEqual(asExternalUriStub.callCount, 0, 'openExternal resolves remote dashboard URLs itself');
+			assert.ok(executeCommandStub.calledWith('aspire-vscode.refreshRunningAppHosts'), 'Should refresh running AppHosts');
+			assert.equal(showInformationMessageStub.callCount, 0, 'Should not show info message when autoLaunch is launch');
+		}
+		finally {
+			stub.restore();
+			showInformationMessageStub.restore();
+			asExternalUriStub.restore();
+			openExternalStub.restore();
+			executeCommandStub.restore();
+			getConfigurationStub.restore();
+		}
+	});
+
+	test("displayDashboardUrls opens integrated browser when autoLaunch is launch without Aspire debug session", async () => {
+		const stub = sinon.stub(extensionLogOutputChannel, 'info');
+		const showInformationMessageStub = sinon.stub(vscode.window, 'showInformationMessage').resolves();
+		const externalUrl = vscode.Uri.parse('http://127.0.0.1:55001/login?t=abc');
+		const asExternalUriStub = sinon.stub(vscode.env, 'asExternalUri').resolves(externalUrl);
+		const executeCommandStub = sinon.stub(vscode.commands, 'executeCommand').resolves(undefined);
+		const getConfigurationStub = sinon.stub(vscode.workspace, 'getConfiguration').returns({
+			get: (key: string, defaultValue?: any) => {
+				if (key === 'enableAspireDashboardAutoLaunch') {
+					return 'launch';
+				}
+				if (key === 'dashboardBrowser') {
+					return 'integratedBrowser';
+				}
+				return defaultValue;
+			}
+		} as any);
+		const testInfo = await createTestRpcServer(null, () => null);
+
+		try {
+			const baseUrl = 'http://localhost:15000/login?t=abc';
+
+			await testInfo.interactionService.displayDashboardUrls({
+				BaseUrlWithLoginToken: baseUrl,
+				CodespacesUrlWithLoginToken: null
+			});
+
+			assert.strictEqual(asExternalUriStub.callCount, 1, 'Should resolve remote dashboard URL before opening');
+			assert.strictEqual(asExternalUriStub.getCall(0).args[0].toString(true), baseUrl);
+			assert.ok(executeCommandStub.calledWith('simpleBrowser.show', externalUrl.toString(true)), 'Should open integrated browser without an Aspire debug session');
+			assert.equal(showInformationMessageStub.callCount, 0, 'Should not show info message when autoLaunch is launch');
+		}
+		finally {
+			stub.restore();
+			showInformationMessageStub.restore();
+			asExternalUriStub.restore();
+			executeCommandStub.restore();
+			getConfigurationStub.restore();
+		}
+	});
+
+	test("displayDashboardUrls opens debug browser when autoLaunch is launch without Aspire debug session", async () => {
+		const stub = sinon.stub(extensionLogOutputChannel, 'info');
+		const showInformationMessageStub = sinon.stub(vscode.window, 'showInformationMessage').resolves();
+		const externalUrl = vscode.Uri.parse('http://127.0.0.1:55002/login?t=abc');
+		const asExternalUriStub = sinon.stub(vscode.env, 'asExternalUri').resolves(externalUrl);
+		const executeCommandStub = sinon.stub(vscode.commands, 'executeCommand').resolves(undefined);
+		const startDebuggingStub = sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+		const onDidStartDebugSessionStub = sinon.stub(vscode.debug, 'onDidStartDebugSession').returns({ dispose: () => { } });
+		const getConfigurationStub = sinon.stub(vscode.workspace, 'getConfiguration').returns({
+			get: (key: string, defaultValue?: any) => {
+				if (key === 'enableAspireDashboardAutoLaunch') {
+					return 'launch';
+				}
+				if (key === 'dashboardBrowser') {
+					return 'debugEdge';
+				}
+				return defaultValue;
+			}
+		} as any);
+		const testInfo = await createTestRpcServer(null, () => null);
+
+		try {
+			const baseUrl = 'http://localhost:15000/login?t=abc';
+
+			await testInfo.interactionService.displayDashboardUrls({
+				BaseUrlWithLoginToken: baseUrl,
+				CodespacesUrlWithLoginToken: null
+			});
+
+			assert.strictEqual(asExternalUriStub.callCount, 1, 'Should resolve remote dashboard URL before debugging browser');
+			assert.strictEqual(asExternalUriStub.getCall(0).args[0].toString(true), baseUrl);
+			assert.ok(executeCommandStub.calledWith('aspire-vscode.refreshRunningAppHosts'), 'Should refresh running AppHosts');
+			assert.strictEqual(startDebuggingStub.callCount, 1, 'Should start debug browser without an Aspire debug session');
+			assert.strictEqual(startDebuggingStub.getCall(0).args[2], undefined, 'Debug browser should not require an Aspire parent session');
+			assert.deepStrictEqual(startDebuggingStub.getCall(0).args[1], {
+				type: 'pwa-msedge',
+				name: 'Aspire Dashboard',
+				request: 'launch',
+				url: externalUrl.toString(true),
+				pauseForSourceMap: false
+			});
+			assert.equal(showInformationMessageStub.callCount, 0, 'Should not show info message when autoLaunch is launch');
+		}
+		finally {
+			stub.restore();
+			showInformationMessageStub.restore();
+			asExternalUriStub.restore();
+			executeCommandStub.restore();
+			startDebuggingStub.restore();
+			onDidStartDebugSessionStub.restore();
+			getConfigurationStub.restore();
+		}
 	});
 
 	test("displayLines endpoint", async () => {

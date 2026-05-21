@@ -9,7 +9,8 @@ import { applyTextStyle, formatText } from '../utils/strings';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { AspireExtendedDebugConfiguration, EnvVar } from '../dcp/types';
 import { AnsiColors, AspireTerminal } from '../utils/AspireTerminalProvider';
-import { AspireDebugSession, DashboardBrowserType } from '../debugger/AspireDebugSession';
+import { AspireDebugSession } from '../debugger/AspireDebugSession';
+import { openDashboardInBrowser, type DashboardBrowserType } from '../debugger/dashboardBrowser';
 import { isDirectory } from '../utils/io';
 
 export interface IInteractionService {
@@ -361,9 +362,12 @@ export class InteractionService implements IInteractionService {
             // Open the dashboard URL in the configured browser. Prefer codespaces URL if available.
             const urlToOpen = codespacesUrl || baseUrl;
             const debugSession = this._getAspireDebugSession();
+            const browserType = aspireConfig.get<DashboardBrowserType>('dashboardBrowser', 'openExternalBrowser');
             if (debugSession) {
-                const browserType = aspireConfig.get<DashboardBrowserType>('dashboardBrowser', 'openExternalBrowser');
                 await debugSession.openDashboard(urlToOpen, browserType);
+            }
+            else {
+                await openDashboardInBrowser(urlToOpen, browserType);
             }
             return;
         }

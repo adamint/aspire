@@ -47,10 +47,106 @@ class TestDotNetService {
 suite('Dotnet Debugger Extension Tests', () => {
     teardown(() => sinon.restore());
 
+    function createParentDebugSession(): vscode.DebugSession {
+        return {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.ts'
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub()
+        } as unknown as vscode.DebugSession;
+    }
+
     function createDebuggerExtension(outputPath: string, rejectBuild: Error | null, hasDevKit: boolean, doesOutputFileExist: boolean): { dotNetService: TestDotNetService, extension: ResourceDebuggerExtension, doesFileExistStub: sinon.SinonStub } {
         const fakeDotNetService = new TestDotNetService(outputPath, rejectBuild, hasDevKit);
         return { dotNetService: fakeDotNetService, extension: createProjectDebuggerExtension(() => fakeDotNetService), doesFileExistStub: sinon.stub(io, 'doesFileExist').resolves(doesOutputFileExist) };
     }
+
+    test('opens debug dashboard as a child of the Aspire debug session with a client-accessible URL', async () => {
+        const parentDebugSession = createParentDebugSession();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        const baseUrl = 'http://localhost:15000/login?t=abc';
+        const externalUrl = vscode.Uri.parse('http://127.0.0.1:55002/login?t=abc');
+        const dashboardDebugSession = {
+            id: 'dashboard-session',
+            type: 'pwa-msedge',
+            name: 'Aspire Dashboard',
+            workspaceFolder: undefined,
+            configuration: {
+                name: 'Aspire Dashboard'
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub()
+        } as unknown as vscode.DebugSession;
+        let startListener: ((session: vscode.DebugSession) => void) | undefined;
+        const listenerDisposable = { dispose: sinon.stub() };
+
+        const asExternalUriStub = sinon.stub(vscode.env, 'asExternalUri').resolves(externalUrl);
+        const onDidStartDebugSessionStub = sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake((listener) => {
+            startListener = listener;
+            return listenerDisposable;
+        });
+        const startDebuggingStub = sinon.stub(vscode.debug, 'startDebugging').callsFake(async () => {
+            startListener?.(dashboardDebugSession);
+            return true;
+        });
+
+        await aspireDebugSession.openDashboard(baseUrl, 'debugEdge');
+
+        assert.strictEqual(asExternalUriStub.callCount, 1);
+        assert.strictEqual(asExternalUriStub.getCall(0).args[0].toString(true), baseUrl);
+        assert.strictEqual(onDidStartDebugSessionStub.callCount, 1);
+        assert.strictEqual(startDebuggingStub.callCount, 1);
+        assert.strictEqual(startDebuggingStub.getCall(0).args[2], parentDebugSession);
+        assert.deepStrictEqual(startDebuggingStub.getCall(0).args[1], {
+            type: 'pwa-msedge',
+            name: 'Aspire Dashboard',
+            request: 'launch',
+            url: externalUrl.toString(true),
+            pauseForSourceMap: false
+        });
+        assert.strictEqual(listenerDisposable.dispose.callCount, 1);
+    });
+
+    test('returns protocol-shaped empty bodies for Aspire parent debug adapter collection requests', () => {
+        const aspireDebugSession = new AspireDebugSession(createParentDebugSession(), {} as any, {} as any, {} as any, () => { });
+        const messages: any[] = [];
+        const outputSubscription = aspireDebugSession.onDidSendMessage(message => messages.push(message));
+
+        const requests = [
+            { command: 'variables', expectedBody: { variables: [] } },
+            { command: 'scopes', expectedBody: { scopes: [] } },
+            { command: 'stackTrace', expectedBody: { stackFrames: [], totalFrames: 0 } },
+            { command: 'threads', expectedBody: { threads: [] } }
+        ];
+
+        for (const [index, request] of requests.entries()) {
+            aspireDebugSession.handleMessage({
+                type: 'request',
+                seq: index + 1,
+                command: request.command
+            });
+        }
+
+        const responses = messages.filter(message => message.type === 'response');
+        assert.strictEqual(responses.length, requests.length);
+
+        for (const [index, request] of requests.entries()) {
+            assert.strictEqual(responses[index].request_seq, index + 1);
+            assert.strictEqual(responses[index].command, request.command);
+            assert.strictEqual(responses[index].success, true);
+            assert.deepStrictEqual(responses[index].body, request.expectedBody);
+        }
+
+        outputSubscription.dispose();
+    });
 
     test('failed AppHost start writes error to debug console', async () => {
         const parentDebugSession = {
