@@ -258,6 +258,77 @@ suite('AspireAppHostTreeProvider', () => {
             'samples/Store/AppHost.csproj',
         ]);
     });
+
+    test('open dashboard continues to use the external browser flow', async () => {
+        const provider = makeTreeProvider([
+            makeAppHost({
+                dashboardUrl: 'http://localhost:1001',
+            }),
+        ]);
+        const openExternalStub = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+        const executeCommandStub = sandbox.stub(vscode.commands, 'executeCommand').resolves(undefined);
+
+        await provider.openDashboard();
+
+        sinon.assert.calledOnce(openExternalStub);
+        assert.strictEqual(openExternalStub.getCall(0).args[0].toString(true), 'http://localhost:1001/');
+        sinon.assert.notCalled(executeCommandStub);
+        provider.dispose();
+    });
+
+    test('open dashboard to the side uses the integrated browser beside the active editor when available', async () => {
+        const provider = makeTreeProvider([
+            makeAppHost({
+                dashboardUrl: 'http://localhost:1001',
+            }),
+        ]);
+        const openExternalStub = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+        sandbox.stub(vscode.commands, 'getCommands').resolves(['workbench.action.browser.open']);
+        const executeCommandStub = sandbox.stub(vscode.commands, 'executeCommand').resolves(undefined);
+
+        await provider.openDashboardToSide();
+
+        sinon.assert.calledOnce(executeCommandStub);
+        assert.strictEqual(executeCommandStub.getCall(0).args[0], 'workbench.action.browser.open');
+        assert.deepStrictEqual(executeCommandStub.getCall(0).args[1], { url: 'http://localhost:1001', openToSide: true });
+        assert.strictEqual(executeCommandStub.getCall(0).args.length, 2);
+        sinon.assert.notCalled(openExternalStub);
+        provider.dispose();
+    });
+
+    test('open dashboard to the side falls back to simple browser placement options', async () => {
+        const provider = makeTreeProvider([
+            makeAppHost({
+                dashboardUrl: 'http://localhost:1001',
+            }),
+        ]);
+        const openExternalStub = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+        sandbox.stub(vscode.commands, 'getCommands').resolves([]);
+        const executeCommandStub = sandbox.stub(vscode.commands, 'executeCommand').resolves(undefined);
+
+        await provider.openDashboardToSide();
+
+        sinon.assert.calledOnce(executeCommandStub);
+        assert.strictEqual(executeCommandStub.getCall(0).args[0], 'simpleBrowser.api.open');
+        assert.strictEqual((executeCommandStub.getCall(0).args[1] as vscode.Uri).toString(true), 'http://localhost:1001/');
+        assert.deepStrictEqual(executeCommandStub.getCall(0).args[2], { viewColumn: vscode.ViewColumn.Beside });
+        sinon.assert.notCalled(openExternalStub);
+        provider.dispose();
+    });
+
+    test('open dashboard to the side does nothing when no dashboard is available', async () => {
+        const provider = makeTreeProvider([]);
+        const openExternalStub = sandbox.stub(vscode.env, 'openExternal').resolves(true);
+        const getCommandsStub = sandbox.stub(vscode.commands, 'getCommands').resolves(['workbench.action.browser.open']);
+        const executeCommandStub = sandbox.stub(vscode.commands, 'executeCommand').resolves(undefined);
+
+        await provider.openDashboardToSide();
+
+        sinon.assert.notCalled(openExternalStub);
+        sinon.assert.notCalled(getCommandsStub);
+        sinon.assert.notCalled(executeCommandStub);
+        provider.dispose();
+    });
 });
 
 suite('AppHostDataRepository', () => {

@@ -616,6 +616,28 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     }
 
     async openDashboard(element?: TreeElement): Promise<void> {
+        const url = await this._resolveDashboardUrl(element);
+        if (url) {
+            await vscode.env.openExternal(vscode.Uri.parse(url));
+        }
+    }
+
+    async openDashboardToSide(element?: TreeElement): Promise<void> {
+        const url = await this._resolveDashboardUrl(element);
+        if (url) {
+            const commands = await vscode.commands.getCommands(true);
+            if (commands.includes('workbench.action.browser.open')) {
+                // Newer VS Code builds route Simple Browser through the integrated browser,
+                // which ignores Simple Browser placement options. Use the native side hint when available.
+                await vscode.commands.executeCommand('workbench.action.browser.open', { url, openToSide: true });
+                return;
+            }
+
+            await vscode.commands.executeCommand('simpleBrowser.api.open', vscode.Uri.parse(url), { viewColumn: vscode.ViewColumn.Beside });
+        }
+    }
+
+    private async _resolveDashboardUrl(element?: TreeElement): Promise<string | null> {
         let url: string | null = null;
 
         if (element instanceof AppHostItem) {
@@ -646,16 +668,14 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
                         placeHolder: selectDashboardPlaceholder,
                     });
                     if (!selected) {
-                        return;
+                        return null;
                     }
                     url = selected.dashboardUrl;
                 }
             }
         }
 
-        if (url) {
-            vscode.env.openExternal(vscode.Uri.parse(url));
-        }
+        return url;
     }
 
     stopAppHost(element: AppHostItem): void {
