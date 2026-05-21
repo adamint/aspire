@@ -3646,6 +3646,47 @@ public class DcpExecutorTests
     }
 
     [Fact]
+    public async Task Project_NonProjectLaunchConfig_ExtensionMode_PopulatesProcessFallbackArgs()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+
+        var projectBuilder = builder.AddProject<TestProject>("proj", launchProfileName: null);
+        var annotationToRemove = projectBuilder.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().FirstOrDefault();
+        if (annotationToRemove is not null)
+        {
+            projectBuilder.Resource.Annotations.Remove(annotationToRemove);
+        }
+        projectBuilder.WithDebugSupport(mode => new ExecutableLaunchConfiguration("azure-functions") { Mode = mode }, "azure-functions")
+            .WithArgs(context =>
+            {
+                context.Args.Add("--port");
+                context.Args.Add("61310");
+            });
+
+        var configDict = new Dictionary<string, string?>
+        {
+            [DcpExecutor.DebugSessionPortVar] = "12345",
+            [KnownConfigNames.DebugSessionInfo] = JsonSerializer.Serialize(new RunSessionInfo { ProtocolsSupported = ["coreclr"], SupportedLaunchConfigurations = ["azure-functions"] }),
+            [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234",
+            [KnownConfigNames.DebugSessionRunMode] = "Debug"
+        };
+
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        var exe = Assert.Single(kubernetesService.CreatedResources.OfType<Executable>(), e => e.AppModelResourceName == "proj");
+        Assert.Equal(ExecutionType.IDE, exe.Spec.ExecutionType);
+        Assert.Equal([ExecutionType.Process], exe.Spec.FallbackExecutionTypes);
+        Assert.Equal(["run", "--project", "TestProject", "--configuration", "Debug", "--no-launch-profile", "--port", "61310"], exe.Spec.Args);
+    }
+
+    [Fact]
     public async Task Project_NonProjectLaunchConfig_AnnotatorThrows_FallsBackToProcess()
     {
         // Arrange: A ProjectResource with a non-"project" launch config where the annotator throws

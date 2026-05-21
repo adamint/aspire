@@ -7,6 +7,7 @@ import { ResourceDebuggerExtension } from '../debuggerExtensions';
 import { registerRunCleanup } from '../runCleanupRegistry';
 
 const AF_EXTENSION_ID = 'ms-azuretools.vscode-azurefunctions';
+const dotnetIsolatedDebugArgs = ['--dotnet-isolated-debug', '--enable-json-output'];
 
 /**
  * Result from the Azure Functions extension's startFuncProcess API.
@@ -81,6 +82,36 @@ async function getAzureFunctionsApi(): Promise<AzureFunctionsApi> {
     return provider.getApi('~1.10.0');
 }
 
+function getAspireResourceArguments(args: string[]): string[] {
+    const noLaunchProfileIndex = args.indexOf('--no-launch-profile');
+    if ((args[0] === 'run' || args[0] === 'watch') && noLaunchProfileIndex >= 0) {
+        // DCP uses the same executable spec for specialized IDE launchers and the
+        // process fallback. The fallback args are shaped like:
+        //   dotnet run --project <path> --no-launch-profile --port 7071
+        //   dotnet watch --non-interactive --no-hot-reload --project <path> --no-launch-profile --port 7071
+        // The Azure Functions extension API prepends "func host start" itself,
+        // so only the resource arguments after the dotnet launch command belong here.
+        return args.slice(noLaunchProfileIndex + 1);
+    }
+
+    return args;
+}
+
+function getFuncHostArguments(args: string[] | undefined): string[] {
+    const resourceArgs = getAspireResourceArguments(args ?? []);
+    const remainingArgs = resourceArgs.filter(arg => !dotnetIsolatedDebugArgs.includes(arg));
+
+    // Azure Functions .NET isolated debug tasks include these flags before user
+    // host arguments:
+    //   func host start --dotnet-isolated-debug --enable-json-output --port 7071
+    // The Azure Functions extension API prepends "func host start" itself, but it
+    // expects callers to provide the .NET isolated debug flags. Without them the
+    // worker PID cannot be discovered reliably, causing DCP to fall back to the
+    // raw executable command where only Aspire's host args (for example --port)
+    // are present.
+    return [...dotnetIsolatedDebugArgs, ...remainingArgs];
+}
+
 export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
     resourceType: 'azure-functions',
     debugAdapter: 'coreclr',
@@ -135,7 +166,7 @@ export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
         extensionLogOutputChannel.info(`Got Azure Functions API (version ${api.apiVersion}), calling startFuncProcess`);
 
         const executionsBefore = new Set(vscode.tasks.taskExecutions);
-        const result = await api.startFuncProcess(projectDir, args ?? [], dcpEnv);
+        const result = await api.startFuncProcess(projectDir, getFuncHostArguments(args), dcpEnv);
 
         // Find the new task execution that was created by startFuncProcess.
         // Filter by task name containing "func" to reduce the chance of capturing

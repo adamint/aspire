@@ -6,6 +6,7 @@ import * as util from 'util';
 import * as path from 'path';
 import * as readline from 'readline';
 import * as os from 'os';
+import * as fs from 'fs';
 import { doesFileExist } from '../../utils/io';
 import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, isProjectLaunchConfiguration, ProjectLaunchConfiguration } from '../../dcp/types';
 import { ResourceDebuggerExtension } from '../debuggerExtensions';
@@ -199,6 +200,44 @@ function createErrorWithStreamedDebugConsoleOutput(message: string): Error {
     return error;
 }
 
+async function shouldLaunchProjectWithDotNetRun(outputPath: string): Promise<boolean> {
+    if (path.extname(outputPath).toLowerCase() !== '.dll') {
+        return false;
+    }
+
+    const runtimeConfigPath = outputPath.slice(0, -path.extname(outputPath).length) + '.runtimeconfig.json';
+    try {
+        const runtimeConfig = JSON.parse(await fs.promises.readFile(runtimeConfigPath, 'utf8'));
+        const runtimeOptions = runtimeConfig?.runtimeOptions;
+
+        // Blazor WebAssembly build output has a runtimeconfig.json without a
+        // framework/frameworks entry, for example:
+        //   { "runtimeOptions": { "tfm": "net10.0" } }
+        // Launching that DLL directly makes the dotnet host treat it as a
+        // self-contained app and fail before Aspire can observe the resource.
+        return runtimeOptions !== undefined
+            && runtimeOptions !== null
+            && runtimeOptions.framework === undefined
+            && runtimeOptions.frameworks === undefined;
+    } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+            return false;
+        }
+
+        extensionLogOutputChannel.warn(`Failed to inspect runtimeconfig for ${outputPath}: ${err}`);
+        return false;
+    }
+}
+
+function createDotNetRunArguments(projectPath: string, args: string[] | undefined): string[] {
+    const dotnetRunArgs = ['run', '--project', projectPath, '--no-launch-profile'];
+    if (args && args.length > 0) {
+        dotnetRunArgs.push('--', ...args);
+    }
+
+    return dotnetRunArgs;
+}
+
 export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSession: AspireDebugSession) => IDotNetService): ResourceDebuggerExtension {
     return {
         resourceType: 'project',
@@ -291,7 +330,14 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                     await dotNetService.buildDotNetProject(projectPath);
                 }
 
-                debugConfiguration.program = outputPath;
+                if (await shouldLaunchProjectWithDotNetRun(outputPath)) {
+                    extensionLogOutputChannel.warn(`Project output ${outputPath} is not directly runnable; launching ${projectPath} with dotnet run without debugger attach.`);
+                    debugConfiguration.program = 'dotnet';
+                    debugConfiguration.args = createDotNetRunArguments(projectPath, args);
+                    debugConfiguration.noDebug = true;
+                } else {
+                    debugConfiguration.program = outputPath;
+                }
                 debugConfiguration.env = Object.fromEntries(mergeEnvironmentVariables(
                     baseProfile?.environmentVariables,
                     debugConfiguration.env,
