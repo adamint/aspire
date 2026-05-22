@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { extensionLogOutputChannel } from '../../utils/logging';
-import { noCsharpBuildTask, buildFailedWithExitCode, noOutputFromMsbuild, failedToGetTargetPath, invalidLaunchConfiguration, buildFailedForProjectWithError, processExitedWithCode, lookingForDevkitBuildTask, csharpDevKitNotInstalled } from '../../loc/strings';
+import { noCsharpBuildTask, buildFailedWithExitCode, noOutputFromMsbuild, failedToGetTargetPath, invalidLaunchConfiguration, buildFailedForProjectWithError, processExitedWithCode, lookingForDevkitBuildTask, csharpDevKitNotInstalled, failedToInspectRuntimeConfig, dotNetRunFallbackDisablesDebugger } from '../../loc/strings';
 import { ChildProcessWithoutNullStreams, execFile, spawn } from 'child_process';
 import * as util from 'util';
 import * as path from 'path';
@@ -224,8 +224,7 @@ async function shouldLaunchProjectWithDotNetRun(outputPath: string): Promise<boo
             return false;
         }
 
-        extensionLogOutputChannel.warn(`Failed to inspect runtimeconfig for ${outputPath}: ${err}`);
-        return false;
+        throw new Error(failedToInspectRuntimeConfig(outputPath, String(err)));
     }
 }
 
@@ -347,9 +346,16 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 }
 
                 if (await shouldLaunchProjectWithDotNetRun(outputPath)) {
-                    extensionLogOutputChannel.warn(`Project output ${outputPath} is not directly runnable; launching ${projectPath} with dotnet run without debugger attach.`);
+                    const fallbackMessage = dotNetRunFallbackDisablesDebugger(outputPath, projectPath);
+                    extensionLogOutputChannel.warn(fallbackMessage);
+                    if (launchOptions.debug) {
+                        vscode.window.showInformationMessage(fallbackMessage);
+                    }
+
                     debugConfiguration.program = 'dotnet';
                     debugConfiguration.args = createDotNetRunArguments(projectPath, baseProfile?.commandLineArgs, args);
+                    debugConfiguration.cwd = path.dirname(projectPath);
+                    debugConfiguration.executablePath = undefined;
                     debugConfiguration.noDebug = true;
                 } else {
                     debugConfiguration.program = outputPath;
