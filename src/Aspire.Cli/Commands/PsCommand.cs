@@ -3,7 +3,6 @@
 
 using System.CommandLine;
 using System.Globalization;
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -24,10 +23,12 @@ namespace Aspire.Cli.Commands;
 /// Represents information about a running AppHost for JSON serialization.
 /// Aligned with AppHostListInfo from ListAppHostsTool.
 /// </summary>
+// `aspire ps --format json` uses this shape; keep docs/specs/cli-output-formats.md in sync when changing it.
 internal sealed class AppHostDisplayInfo
 {
     public required string AppHostPath { get; init; }
     public required int AppHostPid { get; init; }
+    public string Status { get; init; } = AppHostDisplayStatus.Running;
     public string? SdkVersion { get; init; }
     public int? CliPid { get; init; }
     public string? DashboardUrl { get; init; }
@@ -39,7 +40,14 @@ internal sealed class AppHostDisplayInfo
     public List<ResourceJson>? Resources { get; set; }
 }
 
+internal static class AppHostDisplayStatus
+{
+    public const string Running = "running";
+    public const string Stopped = "stopped";
+}
+
 [JsonSerializable(typeof(List<AppHostDisplayInfo>))]
+[JsonSerializable(typeof(AppHostDisplayInfo))]
 [JsonSerializable(typeof(ResourceJson))]
 [JsonSerializable(typeof(ResourceUrlJson))]
 [JsonSerializable(typeof(ResourceVolumeJson))]
@@ -82,10 +90,8 @@ internal sealed partial class PsCommandJsonContext : JsonSerializerContext
 internal sealed partial class PsCommand : BaseCommand
 {
     internal override HelpGroup HelpGroup => HelpGroup.AppCommands;
-
     private readonly IInteractionService _interactionService;
     private readonly IAuxiliaryBackchannelMonitor _backchannelMonitor;
-    private readonly IStandardOutputStatus _standardOutputStatus;
     private readonly ILogger<PsCommand> _logger;
     private static readonly Option<OutputFormat> s_formatOption = new("--format")
     {
@@ -110,7 +116,6 @@ internal sealed partial class PsCommand : BaseCommand
     public PsCommand(
         IInteractionService interactionService,
         IAuxiliaryBackchannelMonitor backchannelMonitor,
-        IStandardOutputStatus standardOutputStatus,
         IFeatures features,
         ICliUpdateNotifier updateNotifier,
         CliExecutionContext executionContext,
@@ -120,7 +125,6 @@ internal sealed partial class PsCommand : BaseCommand
     {
         _interactionService = interactionService;
         _backchannelMonitor = backchannelMonitor;
-        _standardOutputStatus = standardOutputStatus;
         _logger = logger;
 
         Options.Add(s_formatOption);
@@ -193,25 +197,30 @@ internal sealed partial class PsCommand : BaseCommand
         return _backchannelMonitor.Connections.ToList();
     }
 
+    private abstract record PsFollowUpdate;
+
+    private sealed record ConnectionsUpdate(IReadOnlyList<IAppHostAuxiliaryBackchannel> Connections) : PsFollowUpdate;
+
+    private sealed record ResourceUpdate(IAppHostAuxiliaryBackchannel Connection) : PsFollowUpdate;
+
     private async Task<CommandResult> ExecuteFollowAsync(OutputFormat format, bool includeResources, bool includeHidden, CancellationToken cancellationToken)
     {
         if (format != OutputFormat.Json)
         {
             return CommandResult.Failure(CliExitCodes.InvalidCommand, PsCommandStrings.FollowRequiresJson);
         }
-
         using var followCancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var followCancellationToken = followCancellationTokenSource.Token;
-        var outputClosedWatcherTask = WatchForClosedOutputAsync(followCancellationTokenSource, _standardOutputStatus, followCancellationToken);
-        var updates = Channel.CreateUnbounded<IReadOnlyList<IAppHostAuxiliaryBackchannel>?>(new UnboundedChannelOptions
+        var updates = Channel.CreateUnbounded<PsFollowUpdate>(new UnboundedChannelOptions
         {
             SingleReader = true
         });
         var currentConnections = new List<IAppHostAuxiliaryBackchannel>();
+        var appHostKeyComparer = GetAppHostKeyComparer();
+        var activeAppHosts = new Dictionary<string, AppHostDisplayInfo>(appHostKeyComparer);
+        var lastJsonByAppHost = new Dictionary<string, string>(appHostKeyComparer);
         CancellationTokenSource? resourceWatchCts = null;
         List<Task> resourceWatchTasks = [];
-        var lastJson = string.Empty;
-        var resourceUpdateQueued = 0;
 
         _ = Task.Run(async () =>
         {
@@ -219,7 +228,7 @@ internal sealed partial class PsCommand : BaseCommand
             {
                 await foreach (var connections in _backchannelMonitor.WatchConnectionsAsync(followCancellationToken).WithCancellation(followCancellationToken).ConfigureAwait(false))
                 {
-                    await updates.Writer.WriteAsync(connections, followCancellationToken).ConfigureAwait(false);
+                    await updates.Writer.WriteAsync(new ConnectionsUpdate(connections), followCancellationToken).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) when (followCancellationToken.IsCancellationRequested)
@@ -238,19 +247,57 @@ internal sealed partial class PsCommand : BaseCommand
 
         try
         {
-            await foreach (var connections in updates.Reader.ReadAllAsync(followCancellationToken).ConfigureAwait(false))
+            await foreach (var update in updates.Reader.ReadAllAsync(followCancellationToken).ConfigureAwait(false))
             {
-                if (connections is not null)
+                if (update is ConnectionsUpdate connectionsUpdate)
                 {
-                    currentConnections = OrderConnections(connections);
+                    currentConnections = OrderConnections(connectionsUpdate.Connections);
                     await RestartResourceWatchersAsync().ConfigureAwait(false);
-                }
-                else
-                {
-                    Interlocked.Exchange(ref resourceUpdateQueued, 0);
-                }
 
-                await WriteSnapshotAsync().ConfigureAwait(false);
+                    var currentAppHosts = await GatherAppHostInfosAsync(currentConnections, includeResources, includeHidden, followCancellationToken).ConfigureAwait(false);
+                    var nextActiveAppHosts = new Dictionary<string, AppHostDisplayInfo>(appHostKeyComparer);
+
+                    foreach (var appHost in currentAppHosts)
+                    {
+                        nextActiveAppHosts[GetAppHostKey(appHost)] = appHost;
+                        if (!await TryWriteAppHostInfoAsync(appHost).ConfigureAwait(false))
+                        {
+                            return CommandResult.Success();
+                        }
+                    }
+
+                    foreach (var (key, appHost) in activeAppHosts)
+                    {
+                        if (!nextActiveAppHosts.ContainsKey(key) &&
+                            !await TryWriteAppHostInfoAsync(CopyWithStatus(appHost, AppHostDisplayStatus.Stopped)).ConfigureAwait(false))
+                        {
+                            return CommandResult.Success();
+                        }
+                    }
+
+                    activeAppHosts = nextActiveAppHosts;
+                }
+                else if (update is ResourceUpdate resourceUpdate)
+                {
+                    var appHostInfos = await GatherAppHostInfosAsync([resourceUpdate.Connection], includeResources, includeHidden, followCancellationToken).ConfigureAwait(false);
+                    var appHost = appHostInfos.SingleOrDefault();
+                    if (appHost is null)
+                    {
+                        continue;
+                    }
+
+                    var key = GetAppHostKey(appHost);
+                    if (!activeAppHosts.ContainsKey(key))
+                    {
+                        continue;
+                    }
+
+                    activeAppHosts[key] = appHost;
+                    if (!await TryWriteAppHostInfoAsync(appHost).ConfigureAwait(false))
+                    {
+                        return CommandResult.Success();
+                    }
+                }
             }
         }
         catch (OperationCanceledException) when (followCancellationToken.IsCancellationRequested)
@@ -265,7 +312,6 @@ internal sealed partial class PsCommand : BaseCommand
         finally
         {
             await followCancellationTokenSource.CancelAsync().ConfigureAwait(false);
-            await outputClosedWatcherTask.ConfigureAwait(false);
             if (resourceWatchCts is not null)
             {
                 await resourceWatchCts.CancelAsync().ConfigureAwait(false);
@@ -302,10 +348,7 @@ internal sealed partial class PsCommand : BaseCommand
                     {
                         await foreach (var _ in connection.WatchResourceSnapshotsAsync(includeHidden, resourceCancellationToken).WithCancellation(resourceCancellationToken).ConfigureAwait(false))
                         {
-                            if (Interlocked.Exchange(ref resourceUpdateQueued, 1) == 0)
-                            {
-                                await updates.Writer.WriteAsync(null, resourceCancellationToken).ConfigureAwait(false);
-                            }
+                            await updates.Writer.WriteAsync(new ResourceUpdate(connection), resourceCancellationToken).ConfigureAwait(false);
                         }
                     }
                     catch (OperationCanceledException) when (resourceCancellationToken.IsCancellationRequested)
@@ -320,134 +363,62 @@ internal sealed partial class PsCommand : BaseCommand
             }
         }
 
-        async Task WriteSnapshotAsync()
+        async Task<bool> TryWriteAppHostInfoAsync(AppHostDisplayInfo appHost)
         {
-            var appHostInfos = await GatherAppHostInfosAsync(currentConnections, includeResources, includeHidden, followCancellationToken).ConfigureAwait(false);
-            var json = JsonSerializer.Serialize(appHostInfos, PsCommandJsonContext.CompactRelaxedEscaping.ListAppHostDisplayInfo);
-            if (!string.Equals(json, lastJson, StringComparison.Ordinal))
+            var key = GetAppHostKey(appHost);
+            var json = JsonSerializer.Serialize(appHost, PsCommandJsonContext.CompactRelaxedEscaping.AppHostDisplayInfo);
+            if (lastJsonByAppHost.TryGetValue(key, out var lastJson) &&
+                string.Equals(json, lastJson, StringComparison.Ordinal))
             {
-                lastJson = json;
-                _interactionService.DisplayRawText(json, ConsoleOutput.Standard);
+                return true;
             }
-        }
-    }
 
-    private static Task WatchForClosedOutputAsync(CancellationTokenSource cancellationTokenSource, IStandardOutputStatus standardOutputStatus, CancellationToken cancellationToken)
-    {
-        if (!standardOutputStatus.IsOutputRedirected)
-        {
-            return Task.CompletedTask;
-        }
+            lastJsonByAppHost[key] = json;
 
-        return Task.Run(async () =>
-        {
             try
             {
-                while (!cancellationToken.IsCancellationRequested)
-                {
-                    // A follow command may write a valid first snapshot into a pipe and then have
-                    // no more changes to write. Poll stdout so consumers such as `head -n 1` do
-                    // not leave the process alive indefinitely after closing their read end.
-                    if (standardOutputStatus.IsOutputClosed())
-                    {
-                        await cancellationTokenSource.CancelAsync().ConfigureAwait(false);
-                        return;
-                    }
-
-                    await Task.Delay(250, cancellationToken).ConfigureAwait(false);
-                }
+                _interactionService.DisplayRawText(json, ConsoleOutput.Standard);
+                return true;
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException)
             {
-                // Expected when the command exits normally.
+                _logger.LogDebug(ex, "Stopping ps --follow because the output stream is no longer writable.");
+                await followCancellationTokenSource.CancelAsync().ConfigureAwait(false);
+                return false;
             }
-        }, CancellationToken.None);
-    }
-}
-
-internal interface IStandardOutputStatus
-{
-    bool IsOutputRedirected { get; }
-
-    bool IsOutputClosed();
-}
-
-internal sealed partial class StandardOutputStatus : IStandardOutputStatus
-{
-    public bool IsOutputRedirected => System.Console.IsOutputRedirected;
-
-    public bool IsOutputClosed()
-    {
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && IsUnixStandardOutputClosed())
-        {
-            return true;
-        }
-
-        try
-        {
-            System.Console.Out.Flush();
-            return false;
-        }
-        catch (IOException)
-        {
-            return true;
-        }
-        catch (ObjectDisposedException)
-        {
-            return true;
         }
     }
-
-    private static bool IsUnixStandardOutputClosed()
-    {
-        var fileDescriptors = new[]
-        {
-            new PollFileDescriptor
-            {
-                FileDescriptor = 1,
-                Events = PollOut
-            }
-        };
-
-        try
-        {
-            var result = RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
-                ? PollLibSystem(fileDescriptors, 1, 0)
-                : PollLibc(fileDescriptors, 1, 0);
-            return result > 0 && (fileDescriptors[0].ReturnedEvents & (PollError | PollHangUp | PollInvalid)) != 0;
-        }
-        catch (DllNotFoundException)
-        {
-            return false;
-        }
-        catch (EntryPointNotFoundException)
-        {
-            return false;
-        }
-    }
-
-    private const short PollOut = 0x0004;
-    private const short PollError = 0x0008;
-    private const short PollHangUp = 0x0010;
-    private const short PollInvalid = 0x0020;
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct PollFileDescriptor
-    {
-        public int FileDescriptor;
-        public short Events;
-        public short ReturnedEvents;
-    }
-
-    [LibraryImport("libc", EntryPoint = "poll", SetLastError = true)]
-    private static partial int PollLibc([In, Out] PollFileDescriptor[] fileDescriptors, nuint count, int timeoutMilliseconds);
-
-    [LibraryImport("libSystem", EntryPoint = "poll", SetLastError = true)]
-    private static partial int PollLibSystem([In, Out] PollFileDescriptor[] fileDescriptors, nuint count, int timeoutMilliseconds);
 }
 
 internal sealed partial class PsCommand
 {
+    private static string GetAppHostKey(AppHostDisplayInfo appHost)
+    {
+        return string.Concat(appHost.AppHostPath, "\0", appHost.AppHostPid.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private static StringComparer GetAppHostKeyComparer()
+    {
+        return OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+    }
+
+    private static AppHostDisplayInfo CopyWithStatus(AppHostDisplayInfo appHost, string status)
+    {
+        return new AppHostDisplayInfo
+        {
+            AppHostPath = appHost.AppHostPath,
+            AppHostPid = appHost.AppHostPid,
+            Status = status,
+            SdkVersion = appHost.SdkVersion,
+            CliPid = appHost.CliPid,
+            DashboardUrl = appHost.DashboardUrl,
+            LogFilePath = appHost.LogFilePath,
+            Resources = appHost.Resources
+        };
+    }
+
     private static List<IAppHostAuxiliaryBackchannel> OrderConnections(IEnumerable<IAppHostAuxiliaryBackchannel> connections)
     {
         return connections
@@ -527,6 +498,7 @@ internal sealed partial class PsCommand
             {
                 AppHostPath = appHostPath ?? PsCommandStrings.UnknownPath,
                 AppHostPid = appHostPid,
+                Status = AppHostDisplayStatus.Running,
                 SdkVersion = sdkVersion,
                 CliPid = cliPid,
                 DashboardUrl = dashboardUrl,
@@ -563,6 +535,7 @@ internal sealed partial class PsCommand
 
         var table = new Table();
         table.AddBoldColumn(PsCommandStrings.HeaderPath);
+        table.AddBoldColumn(SharedCommandStrings.HeaderStatus);
         table.AddBoldColumn(PsCommandStrings.HeaderSdk);
         table.AddBoldColumn(PsCommandStrings.HeaderPid);
         table.AddBoldColumn(PsCommandStrings.HeaderCliPid);
@@ -594,6 +567,7 @@ internal sealed partial class PsCommand
             var columns = new List<string>
             {
                 Markup.Escape(shortPath),
+                Markup.Escape(appHost.Status),
                 Markup.Escape(appHost.SdkVersion ?? "-"),
                 appHost.AppHostPid.ToString(CultureInfo.InvariantCulture),
                 cliPid,

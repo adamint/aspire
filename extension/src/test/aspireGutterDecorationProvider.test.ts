@@ -4,6 +4,7 @@ import * as assert from 'assert';
 import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
+import waitForExpect from 'wait-for-expect';
 import { AspireGutterDecorationProvider } from '../editor/AspireGutterDecorationProvider';
 import { AspireAppHostTreeProvider } from '../views/AspireAppHostTreeProvider';
 import { AppHostDisplayInfo, ResourceJson } from '../views/AppHostDataRepository';
@@ -145,7 +146,7 @@ suite('AspireGutterDecorationProvider', () => {
         provider.dispose();
     });
 
-    test('emits resource decorations when Windows AppHost path casing differs from document path', () => {
+    test('emits resource decorations when Windows AppHost path casing differs from document path', async () => {
         const platformStub = sandbox.stub(process, 'platform').value('win32');
         const runningHostPath = p('repo', 'apphost', 'apphost.csproj');
         const document = createMockDocument(APP_HOST_DOC, p('repo', 'AppHost', 'AppHost.cs'));
@@ -162,7 +163,9 @@ suite('AspireGutterDecorationProvider', () => {
 
         const provider = new AspireGutterDecorationProvider(makeTreeProvider({ appHosts: [runningAppHost] }));
 
-        assert.strictEqual(decorationCalls.flat().length, 1);
+        await waitForExpect(() => {
+            assert.strictEqual(decorationCalls.flat().length, 1);
+        });
 
         provider.dispose();
         platformStub.restore();

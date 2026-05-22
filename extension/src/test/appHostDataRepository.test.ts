@@ -1010,7 +1010,7 @@ suite('AppHostDataRepository global polling', () => {
         repository.dispose();
     });
 
-    test('global panel starts ps follow and updates from streamed snapshots', async () => {
+    test('global panel starts ps follow and updates from streamed AppHost deltas', async () => {
         const childProcess = new TestChildProcess();
         spawnStub.returns(childProcess);
         const repository = new AppHostDataRepository(terminalProvider);
@@ -1023,31 +1023,53 @@ suite('AppHostDataRepository global polling', () => {
         assert.deepStrictEqual(spawnStub.firstCall.args[2], ['ps', '--follow', '--format', 'json', '--resources']);
 
         const lineCallback = spawnStub.firstCall.args[3].lineCallback;
-        lineCallback(JSON.stringify([
-            {
-                appHostPath: '/workspace/AppHost.csproj',
-                appHostPid: 1234,
-                resources: [
-                    { name: 'api', resourceType: 'Project', state: 'Running' }
-                ]
-            }
-        ]));
+        lineCallback(JSON.stringify({
+            appHostPath: '/workspace/AppHost.csproj',
+            appHostPid: 1234,
+            status: 'running',
+            resources: [
+                { name: 'api', resourceType: 'Project', state: 'Running' }
+            ]
+        }));
 
         assert.strictEqual(repository.appHosts.length, 1);
         assert.strictEqual(repository.appHosts[0].appHostPath, '/workspace/AppHost.csproj');
         assert.strictEqual(repository.appHosts[0].resources?.[0].name, 'api');
 
-        lineCallback(JSON.stringify([
-            {
-                appHostPath: '/workspace/OtherAppHost.csproj',
-                appHostPid: 5678,
-                resources: []
-            }
-        ]));
+        lineCallback(JSON.stringify({
+            appHostPath: '/workspace/OtherAppHost.csproj',
+            appHostPid: 5678,
+            status: 'running',
+            resources: []
+        }));
 
-        assert.strictEqual(repository.appHosts.length, 1);
+        assert.strictEqual(repository.appHosts.length, 2);
+        assert.strictEqual(repository.appHosts[1].appHostPath, '/workspace/OtherAppHost.csproj');
+        assert.deepStrictEqual(repository.appHosts[1].resources, []);
+
+        lineCallback(JSON.stringify({
+            appHostPath: '/workspace/AppHost.csproj',
+            appHostPid: 9999,
+            status: 'running',
+            resources: []
+        }));
+
+        assert.strictEqual(repository.appHosts.length, 3);
+        assert.strictEqual(repository.appHosts[2].appHostPath, '/workspace/AppHost.csproj');
+        assert.strictEqual(repository.appHosts[2].appHostPid, 9999);
+
+        lineCallback(JSON.stringify({
+            appHostPath: '/workspace/AppHost.csproj',
+            appHostPid: 1234,
+            status: 'stopped',
+            resources: [
+                { name: 'api', resourceType: 'Project', state: 'Running' }
+            ]
+        }));
+
+        assert.strictEqual(repository.appHosts.length, 2);
         assert.strictEqual(repository.appHosts[0].appHostPath, '/workspace/OtherAppHost.csproj');
-        assert.deepStrictEqual(repository.appHosts[0].resources, []);
+        assert.strictEqual(repository.appHosts[1].appHostPid, 9999);
 
         repository.dispose();
     });

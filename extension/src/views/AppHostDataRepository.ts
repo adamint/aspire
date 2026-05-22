@@ -75,6 +75,7 @@ export interface ResourceJson {
 export interface AppHostDisplayInfo {
     appHostPath: string;
     appHostPid: number;
+    status?: string;
     cliPid: number | null;
     dashboardUrl: string | null;
     resources: ResourceJson[] | null | undefined;
@@ -752,6 +753,12 @@ export class AppHostDataRepository {
         if (!psProcessCompletedSynchronously) {
             this._psProcesses.add(psProcess);
         }
+
+        if (this._viewMode === 'global' && this._loadingGlobal) {
+            this._loadingGlobal = false;
+            this._updateLoadingContext();
+            vscode.commands.executeCommand('setContext', 'aspire.noRunningAppHosts', this._appHosts.length === 0);
+        }
     }
 
     private _fetchAppHosts(): void {
@@ -839,14 +846,18 @@ export class AppHostDataRepository {
 
     private _handlePsOutput(stdout: string): void {
         try {
-            const parsed: AppHostDisplayInfo[] = JSON.parse(stdout);
+            const parsed: AppHostDisplayInfo[] | AppHostDisplayInfo = JSON.parse(stdout);
+            const appHosts = Array.isArray(parsed)
+                ? parsed
+                : this._applyPsDelta(parsed);
+
             if (this._viewMode === 'workspace') {
-                this._handleWorkspacePsOutput(parsed);
+                this._handleWorkspacePsOutput(appHosts);
                 return;
             }
 
-            const changed = JSON.stringify(parsed) !== JSON.stringify(this._appHosts);
-            this._appHosts = parsed;
+            const changed = JSON.stringify(appHosts) !== JSON.stringify(this._appHosts);
+            this._appHosts = appHosts;
 
             if (this._loadingGlobal) {
                 this._loadingGlobal = false;
@@ -854,12 +865,23 @@ export class AppHostDataRepository {
             }
 
             if (changed) {
-                vscode.commands.executeCommand('setContext', 'aspire.noRunningAppHosts', parsed.length === 0);
+                vscode.commands.executeCommand('setContext', 'aspire.noRunningAppHosts', appHosts.length === 0);
                 this._onDidChangeData.fire();
             }
         } catch (e) {
             extensionLogOutputChannel.warn(`Failed to parse aspire ps output: ${e}`);
         }
+    }
+
+    private _applyPsDelta(appHost: AppHostDisplayInfo): AppHostDisplayInfo[] {
+        if (appHost.status?.toLowerCase() === 'stopped') {
+            return this._appHosts.filter(current => !isMatchingAppHostInstance(current, appHost));
+        }
+
+        return [
+            ...this._appHosts.filter(current => !isMatchingAppHostInstance(current, appHost)),
+            appHost,
+        ];
     }
 
     private _handleWorkspacePsOutput(appHosts: readonly AppHostDisplayInfo[]): void {
@@ -1134,4 +1156,17 @@ function isMatchingAppHostPath(left: string | undefined, right: string | undefin
     // can report the AppHost source file. Match by directory as a fallback to
     // mirror the CodeLens AppHost resolution strategy.
     return getComparisonKey(path.dirname(normalizedLeft)) === getComparisonKey(path.dirname(normalizedRight));
+}
+
+function isSameAppHostPath(left: string | undefined, right: string | undefined): boolean {
+    if (!left || !right) {
+        return false;
+    }
+
+    return getComparisonKey(path.normalize(left)) === getComparisonKey(path.normalize(right));
+}
+
+function isMatchingAppHostInstance(left: AppHostDisplayInfo, right: AppHostDisplayInfo): boolean {
+    return left.appHostPid === right.appHostPid
+        && isSameAppHostPath(left.appHostPath, right.appHostPath);
 }

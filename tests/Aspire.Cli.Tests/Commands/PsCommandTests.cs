@@ -721,9 +721,10 @@ public class PsCommandTests(ITestOutputHelper outputHelper)
 
         Assert.Equal(CliExitCodes.Success, exitCode);
         var outputLine = Assert.Single(outputLines);
-        var appHosts = JsonSerializer.Deserialize(outputLine, PsCommandJsonContext.RelaxedEscaping.ListAppHostDisplayInfo);
-        Assert.NotNull(appHosts);
-        var resources = Assert.Single(appHosts).Resources;
+        var appHost = JsonSerializer.Deserialize(outputLine, PsCommandJsonContext.RelaxedEscaping.AppHostDisplayInfo);
+        Assert.NotNull(appHost);
+        Assert.Equal(AppHostDisplayStatus.Running, appHost.Status);
+        var resources = appHost.Resources;
         Assert.NotNull(resources);
         Assert.Equal(expectedResourceCount, resources.Count);
         Assert.Contains(resources, resource => resource.Name == "apiservice");
@@ -731,7 +732,7 @@ public class PsCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task PsCommand_FollowJsonFormat_StreamsFullSnapshotsForResourceUpdates()
+    public async Task PsCommand_FollowJsonFormat_StreamsChangedAppHostForResourceUpdates()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         using var cancellationTokenSource = new CancellationTokenSource();
@@ -791,12 +792,14 @@ public class PsCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(CliExitCodes.Success, exitCode);
         Assert.Equal(2, outputLines.Count);
 
-        var initialSnapshot = JsonSerializer.Deserialize(outputLines[0], PsCommandJsonContext.RelaxedEscaping.ListAppHostDisplayInfo);
-        var updatedSnapshot = JsonSerializer.Deserialize(outputLines[1], PsCommandJsonContext.RelaxedEscaping.ListAppHostDisplayInfo);
-        Assert.NotNull(initialSnapshot);
-        Assert.NotNull(updatedSnapshot);
-        Assert.Equal("Starting", Assert.Single(Assert.Single(initialSnapshot).Resources!).State);
-        Assert.Equal("Running", Assert.Single(Assert.Single(updatedSnapshot).Resources!).State);
+        var initialAppHost = JsonSerializer.Deserialize(outputLines[0], PsCommandJsonContext.RelaxedEscaping.AppHostDisplayInfo);
+        var updatedAppHost = JsonSerializer.Deserialize(outputLines[1], PsCommandJsonContext.RelaxedEscaping.AppHostDisplayInfo);
+        Assert.NotNull(initialAppHost);
+        Assert.NotNull(updatedAppHost);
+        Assert.Equal(AppHostDisplayStatus.Running, initialAppHost.Status);
+        Assert.Equal(AppHostDisplayStatus.Running, updatedAppHost.Status);
+        Assert.Equal("Starting", Assert.Single(initialAppHost.Resources!).State);
+        Assert.Equal("Running", Assert.Single(updatedAppHost.Resources!).State);
 
         async IAsyncEnumerable<ResourceSnapshot> WatchResourceSnapshotsAsync(bool includeHidden, [EnumeratorCancellation] CancellationToken cancellationToken)
         {
@@ -849,44 +852,6 @@ public class PsCommandTests(ITestOutputHelper outputHelper)
 
         Assert.Equal(CliExitCodes.Success, exitCode);
         Assert.Single(interactionService.DisplayedRawText);
-    }
-
-    [Fact]
-    public async Task PsCommand_FollowJsonFormat_StopsWhenRedirectedOutputClosesWhileIdle()
-    {
-        using var workspace = TemporaryWorkspace.Create(outputHelper);
-        var outputStatus = new TestStandardOutputStatus
-        {
-            IsOutputRedirected = true
-        };
-        var textWriter = new TestOutputTextWriter(outputHelper, _ => outputStatus.IsOutputClosed = true);
-        var monitor = new TestAuxiliaryBackchannelMonitor();
-        monitor.AddConnection("hash1", "socket.hash1", new TestAppHostAuxiliaryBackchannel
-        {
-            IsInScope = true,
-            AppHostInfo = new AppHostInformation
-            {
-                AppHostPath = Path.Combine(workspace.WorkspaceRoot.FullName, "App1", "App1.AppHost.csproj"),
-                ProcessId = 1234,
-                CliProcessId = 5678
-            }
-        });
-
-        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
-        {
-            options.OutputTextWriter = textWriter;
-            options.AuxiliaryBackchannelMonitorFactory = _ => monitor;
-            options.StandardOutputStatusFactory = _ => outputStatus;
-        });
-        using var provider = services.BuildServiceProvider();
-
-        var command = provider.GetRequiredService<RootCommand>();
-        var result = command.Parse("ps --format json --follow");
-
-        var exitCode = await result.InvokeAsync().DefaultTimeout();
-
-        Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.Single(textWriter.Logs);
     }
 
     [Fact]
@@ -979,7 +944,7 @@ public class PsCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task PsCommand_FollowJsonFormat_StreamsFullSnapshotWhenConnectionIsRemoved()
+    public async Task PsCommand_FollowJsonFormat_StreamsStoppedAppHostWhenConnectionIsRemoved()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
         using var cancellationTokenSource = new CancellationTokenSource();
@@ -1026,12 +991,14 @@ public class PsCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(CliExitCodes.Success, exitCode);
         Assert.Equal(2, outputLines.Count);
 
-        var initialSnapshot = JsonSerializer.Deserialize(outputLines[0], PsCommandJsonContext.RelaxedEscaping.ListAppHostDisplayInfo);
-        var updatedSnapshot = JsonSerializer.Deserialize(outputLines[1], PsCommandJsonContext.RelaxedEscaping.ListAppHostDisplayInfo);
-        Assert.NotNull(initialSnapshot);
-        Assert.NotNull(updatedSnapshot);
-        Assert.Single(initialSnapshot);
-        Assert.Empty(updatedSnapshot);
+        var initialAppHost = JsonSerializer.Deserialize(outputLines[0], PsCommandJsonContext.RelaxedEscaping.AppHostDisplayInfo);
+        var stoppedAppHost = JsonSerializer.Deserialize(outputLines[1], PsCommandJsonContext.RelaxedEscaping.AppHostDisplayInfo);
+        Assert.NotNull(initialAppHost);
+        Assert.NotNull(stoppedAppHost);
+        Assert.Equal(AppHostDisplayStatus.Running, initialAppHost.Status);
+        Assert.Equal(AppHostDisplayStatus.Stopped, stoppedAppHost.Status);
+        Assert.Equal(initialAppHost.AppHostPath, stoppedAppHost.AppHostPath);
+        Assert.Equal(initialAppHost.AppHostPid, stoppedAppHost.AppHostPid);
     }
 
     [Fact]
@@ -1331,15 +1298,6 @@ public class PsCommandTests(ITestOutputHelper outputHelper)
         var output = string.Join(Environment.NewLine, textWriter.Logs);
         // "Logs" should not appear as a column header when no app host has a log path
         Assert.DoesNotContain("Logs", output, StringComparison.Ordinal);
-    }
-
-    private sealed class TestStandardOutputStatus : IStandardOutputStatus
-    {
-        public bool IsOutputRedirected { get; set; }
-
-        public bool IsOutputClosed { get; set; }
-
-        bool IStandardOutputStatus.IsOutputClosed() => IsOutputClosed;
     }
 
     private sealed class TestAppHostBackchannelServer : IDisposable
