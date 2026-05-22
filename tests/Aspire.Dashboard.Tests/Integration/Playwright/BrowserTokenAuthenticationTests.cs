@@ -1,8 +1,6 @@
 ﻿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Net;
-using System.Net.Sockets;
 using Aspire.TestUtilities;
 using Aspire.Dashboard.Configuration;
 using Aspire.Dashboard.Resources;
@@ -30,16 +28,9 @@ public class BrowserTokenAuthenticationTests : PlaywrightTestsBase<BrowserTokenA
     {
         public BrowserTokenDashboardServerWithHttpAndHttpsFixture()
         {
-            Configuration[DashboardConfigNames.DashboardFrontendUrlName.ConfigKey] = $"https://localhost:{GetAvailablePort()};http://localhost:{GetAvailablePort()}";
+            Configuration[DashboardConfigNames.DashboardFrontendUrlName.ConfigKey] = "https://localhost:0;http://localhost:0";
             Configuration[DashboardConfigNames.DashboardFrontendAuthModeName.ConfigKey] = nameof(FrontendAuthMode.BrowserToken);
             Configuration[DashboardConfigNames.DashboardFrontendBrowserTokenName.ConfigKey] = "VALID_TOKEN";
-        }
-
-        private static int GetAvailablePort()
-        {
-            using var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            return ((IPEndPoint)listener.LocalEndpoint).Port;
         }
     }
 
