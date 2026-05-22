@@ -45,18 +45,6 @@ internal class ValidateDashboardOptions : IValidateOptions<DashboardOptions>
 {
     public ValidateOptionsResult Validate(string? name, DashboardOptions options)
     {
-        var builder = new ValidateOptionsResultBuilder();
-
-        if (string.IsNullOrEmpty(options.DashboardUrl))
-        {
-            builder.AddError($"Failed to configure dashboard resource because {KnownConfigNames.AspNetCoreUrls} environment variable was not set.");
-        }
-
-        if (string.IsNullOrEmpty(options.OtlpGrpcEndpointUrl) && string.IsNullOrEmpty(options.OtlpHttpEndpointUrl))
-        {
-            builder.AddError($"Failed to configure dashboard resource because {KnownConfigNames.DashboardOtlpGrpcEndpointUrl} and {KnownConfigNames.DashboardOtlpHttpEndpointUrl} environment variables are not set. At least one OTLP endpoint must be provided.");
-        }
-
-        return builder.Build();
+        return ValidateOptionsResult.Success;
     }
 }

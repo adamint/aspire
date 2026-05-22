@@ -358,21 +358,21 @@ internal sealed class DashboardEventHandlers(IConfiguration configuration,
             dashboardResource.Annotations.Remove(endpointAnnotation);
         }
 
-        // Add the dashboard endpoints as non-proxied
+        // Add the dashboard endpoints.
         var options = dashboardOptions.Value;
 
-        var dashboardUrls = options.DashboardUrl;
-        var otlpGrpcEndpointUrl = options.OtlpGrpcEndpointUrl;
-        var otlpHttpEndpointUrl = options.OtlpHttpEndpointUrl;
+        var dashboardUrls = NormalizeConfiguredUrl(options.DashboardUrl);
+        var otlpGrpcEndpointUrl = NormalizeConfiguredUrl(options.OtlpGrpcEndpointUrl);
+        var otlpHttpEndpointUrl = NormalizeConfiguredUrl(options.OtlpHttpEndpointUrl);
 
         eventing.Subscribe<ResourceReadyEvent>(dashboardResource, async (@event, cancellationToken) =>
         {
             var browserToken = options.DashboardToken;
 
-            // Get the actual allocated URL from the dashboard resource endpoint
             string? dashboardUrl = null;
+            var resourceWithEndpoints = @event.Resource as IResourceWithEndpoints;
 
-            if (@event.Resource is IResourceWithEndpoints resourceWithEndpoints)
+            if (resourceWithEndpoints is not null)
             {
                 // Try HTTPS first, then HTTP
                 var httpsEndpoint = resourceWithEndpoints.GetEndpoint("https");
@@ -400,35 +400,86 @@ internal sealed class DashboardEventHandlers(IConfiguration configuration,
 
             distributedApplicationLogger.LogInformation("Now listening on: {DashboardUrl}", dashboardUrl.TrimEnd('/'));
 
-            LoggingHelpers.WriteDashboardSummary(distributedApplicationLogger, dashboardUrl, otlpGrpcEndpointUrl, otlpHttpEndpointUrl, browserToken, isContainer: false);
+            LoggingHelpers.WriteDashboardSummary(
+                distributedApplicationLogger,
+                dashboardUrl,
+                otlpGrpcEndpointUrl,
+                otlpHttpEndpointUrl,
+                browserToken,
+                isContainer: false);
         });
 
-        foreach (var d in dashboardUrls?.Split(';', StringSplitOptions.RemoveEmptyEntries) ?? [])
+        if (string.IsNullOrWhiteSpace(dashboardUrls))
         {
-            var address = BindingAddress.Parse(d);
-
-            dashboardResource.Annotations.Add(new EndpointAnnotation(ProtocolType.Tcp, uriScheme: address.Scheme, port: address.Port, isProxied: true)
+            dashboardResource.Annotations.Add(CreateEndpoint("https"));
+            dashboardResource.Annotations.Add(CreateEndpoint("http"));
+        }
+        else
+        {
+            foreach (var d in dashboardUrls.Split(';', StringSplitOptions.RemoveEmptyEntries))
             {
-                TargetHost = address.Host
-            });
+                var address = BindingAddress.Parse(d);
+
+                dashboardResource.Annotations.Add(CreateEndpoint(address.Scheme, port: address.Port, targetHost: address.Host));
+            }
         }
 
-        if (otlpGrpcEndpointUrl != null)
+        if (otlpGrpcEndpointUrl is null && otlpHttpEndpointUrl is null)
         {
-            var address = BindingAddress.Parse(otlpGrpcEndpointUrl);
-            dashboardResource.Annotations.Add(new EndpointAnnotation(ProtocolType.Tcp, name: KnownEndpointNames.OtlpGrpcEndpointName, uriScheme: address.Scheme, port: address.Port, isProxied: true, transport: "http2")
+            dashboardResource.Annotations.Add(CreateEndpoint(KnownEndpointNames.OtlpGrpcEndpointName, uriScheme: GetDefaultOtlpScheme(dashboardUrls), transport: "http2"));
+        }
+        else
+        {
+            if (otlpGrpcEndpointUrl != null)
             {
-                TargetHost = address.Host
-            });
+                var address = BindingAddress.Parse(otlpGrpcEndpointUrl);
+                dashboardResource.Annotations.Add(CreateEndpoint(KnownEndpointNames.OtlpGrpcEndpointName, address.Scheme, port: address.Port, targetHost: address.Host, transport: "http2"));
+            }
+
+            if (otlpHttpEndpointUrl != null)
+            {
+                var address = BindingAddress.Parse(otlpHttpEndpointUrl);
+                dashboardResource.Annotations.Add(CreateEndpoint(KnownEndpointNames.OtlpHttpEndpointName, address.Scheme, port: address.Port, targetHost: address.Host));
+            }
+
         }
 
-        if (otlpHttpEndpointUrl != null)
+        static EndpointAnnotation CreateEndpoint(
+            string name,
+            string? uriScheme = null,
+            int? port = null,
+            string targetHost = "localhost",
+            string? transport = null)
         {
-            var address = BindingAddress.Parse(otlpHttpEndpointUrl);
-            dashboardResource.Annotations.Add(new EndpointAnnotation(ProtocolType.Tcp, name: KnownEndpointNames.OtlpHttpEndpointName, uriScheme: address.Scheme, port: address.Port, isProxied: true)
+            return new EndpointAnnotation(ProtocolType.Tcp, name: name, uriScheme: uriScheme ?? name, port: port, isProxied: true, transport: transport)
             {
-                TargetHost = address.Host
-            });
+                TargetHost = targetHost
+            };
+        }
+
+        static string? NormalizeConfiguredUrl(string? url) =>
+            string.IsNullOrWhiteSpace(url) ? null : url;
+
+        static string GetDefaultOtlpScheme(string? dashboardUrls)
+        {
+            if (string.IsNullOrWhiteSpace(dashboardUrls))
+            {
+                return "https";
+            }
+
+            var hasHttp = false;
+            foreach (var d in dashboardUrls.Split(';', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var address = BindingAddress.Parse(d);
+                if (address.Scheme == "https")
+                {
+                    return "https";
+                }
+
+                hasHttp |= address.Scheme == "http";
+            }
+
+            return hasHttp ? "http" : "https";
         }
 
         // Determine whether any HTTPS endpoints are configured
@@ -527,11 +578,6 @@ internal sealed class DashboardEventHandlers(IConfiguration configuration,
         }
 
         var options = dashboardOptions.Value;
-
-        // Options should have been validated these should not be null
-
-        Debug.Assert(options.DashboardUrl is not null, "DashboardUrl should not be null");
-        Debug.Assert(options.OtlpGrpcEndpointUrl is not null || options.OtlpHttpEndpointUrl is not null, "OtlpGrpcEndpointUrl and OtlpHttpEndpointUrl should not both be null");
 
         var environment = options.AspNetCoreEnvironment;
         var browserToken = options.DashboardToken;

@@ -82,6 +82,152 @@ public class DashboardResourceTests(ITestOutputHelper testOutputHelper)
         );
     }
 
+    [Fact]
+    public async Task DashboardWithMissingEndpointConfigurationUsesDynamicDefaults()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(
+            options => options.DisableDashboard = false,
+            testOutputHelper: testOutputHelper);
+
+        builder.Services.AddSingleton<IDashboardEndpointProvider, MockDashboardEndpointProvider>();
+
+        builder.Configuration.Sources.Clear();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>());
+
+        using var app = builder.Build();
+
+        await app.ExecuteBeforeStartHooksAsync(default).DefaultTimeout();
+
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var dashboard = Assert.Single(model.Resources);
+
+        var endpoints = dashboard.Annotations.OfType<EndpointAnnotation>().ToDictionary(e => e.Name);
+        Assert.Null(endpoints["https"].Port);
+        Assert.Null(endpoints["http"].Port);
+        Assert.Null(endpoints[KnownEndpointNames.OtlpGrpcEndpointName].Port);
+        Assert.False(endpoints.ContainsKey(KnownEndpointNames.OtlpHttpEndpointName));
+
+        SetDashboardAllocatedEndpoints(dashboard, otlpGrpcPort: 5001, otlpHttpPort: 5002, httpPort: 5003, httpsPort: 5005);
+
+        var config = await EnvironmentVariableEvaluator.GetEnvironmentVariablesAsync(dashboard, DistributedApplicationOperation.Run, app.Services).DefaultTimeout();
+
+        Assert.Equal("https://localhost:5005;http://localhost:5003", config.Single(e => e.Key == KnownConfigNames.AspNetCoreUrls).Value);
+        Assert.Equal("https://localhost:5001", config.Single(e => e.Key == KnownConfigNames.DashboardOtlpGrpcEndpointUrl).Value);
+        Assert.Equal("http://localhost:5000", config.Single(e => e.Key == KnownConfigNames.ResourceServiceEndpointUrl).Value);
+
+        var configuration = app.Services.GetRequiredService<IConfiguration>();
+        Assert.Null(configuration[KnownConfigNames.AspNetCoreUrls]);
+        Assert.Null(configuration[KnownConfigNames.DashboardOtlpGrpcEndpointUrl]);
+        Assert.Null(configuration[KnownConfigNames.ResourceServiceEndpointUrl]);
+    }
+
+    [Fact]
+    public async Task DashboardWithEmptyEndpointConfigurationUsesDynamicDefaults()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(
+            options => options.DisableDashboard = false,
+            testOutputHelper: testOutputHelper);
+
+        builder.Services.AddSingleton<IDashboardEndpointProvider, MockDashboardEndpointProvider>();
+
+        builder.Configuration.Sources.Clear();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [KnownConfigNames.AspNetCoreUrls] = string.Empty,
+            [KnownConfigNames.DashboardOtlpGrpcEndpointUrl] = string.Empty,
+            [KnownConfigNames.DashboardOtlpHttpEndpointUrl] = string.Empty,
+            [KnownConfigNames.ResourceServiceEndpointUrl] = string.Empty
+        });
+
+        using var app = builder.Build();
+
+        await app.ExecuteBeforeStartHooksAsync(default).DefaultTimeout();
+
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var dashboard = Assert.Single(model.Resources);
+
+        var endpoints = dashboard.Annotations.OfType<EndpointAnnotation>().ToDictionary(e => e.Name);
+        Assert.Null(endpoints["https"].Port);
+        Assert.Null(endpoints["http"].Port);
+        Assert.Null(endpoints[KnownEndpointNames.OtlpGrpcEndpointName].Port);
+        Assert.False(endpoints.ContainsKey(KnownEndpointNames.OtlpHttpEndpointName));
+
+        SetDashboardAllocatedEndpoints(dashboard, otlpGrpcPort: 5001, otlpHttpPort: 5002, httpPort: 5003, httpsPort: 5005);
+
+        var config = await EnvironmentVariableEvaluator.GetEnvironmentVariablesAsync(dashboard, DistributedApplicationOperation.Run, app.Services).DefaultTimeout();
+
+        Assert.Equal("https://localhost:5005;http://localhost:5003", config.Single(e => e.Key == KnownConfigNames.AspNetCoreUrls).Value);
+        Assert.Equal("https://localhost:5001", config.Single(e => e.Key == KnownConfigNames.DashboardOtlpGrpcEndpointUrl).Value);
+        Assert.Equal("http://localhost:5000", config.Single(e => e.Key == KnownConfigNames.ResourceServiceEndpointUrl).Value);
+    }
+
+    [Fact]
+    public async Task DashboardWithPartialEndpointConfigurationDefaultsMissingOtlpEndpoint()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(
+            options => options.DisableDashboard = false,
+            testOutputHelper: testOutputHelper);
+
+        builder.Services.AddSingleton<IDashboardEndpointProvider, MockDashboardEndpointProvider>();
+
+        builder.Configuration.Sources.Clear();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [KnownConfigNames.AspNetCoreUrls] = "https://localhost:17123"
+        });
+
+        using var app = builder.Build();
+
+        await app.ExecuteBeforeStartHooksAsync(default).DefaultTimeout();
+
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var dashboard = Assert.Single(model.Resources);
+
+        var endpoints = dashboard.Annotations.OfType<EndpointAnnotation>().ToDictionary(e => e.Name);
+        Assert.Equal(17123, endpoints["https"].Port);
+        Assert.Null(endpoints[KnownEndpointNames.OtlpGrpcEndpointName].Port);
+
+        SetDashboardAllocatedEndpoints(dashboard, otlpGrpcPort: 5001, otlpHttpPort: 5002, httpPort: 5003, httpsPort: 5005);
+
+        var config = await EnvironmentVariableEvaluator.GetEnvironmentVariablesAsync(dashboard, DistributedApplicationOperation.Run, app.Services).DefaultTimeout();
+
+        Assert.Equal("https://localhost:5005", config.Single(e => e.Key == KnownConfigNames.AspNetCoreUrls).Value);
+        Assert.Equal("https://localhost:5001", config.Single(e => e.Key == KnownConfigNames.DashboardOtlpGrpcEndpointUrl).Value);
+    }
+
+    [Fact]
+    public async Task DashboardWithHttpOnlyEndpointConfigurationDefaultsMissingOtlpEndpointToHttp()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(
+            options => options.DisableDashboard = false,
+            testOutputHelper: testOutputHelper);
+
+        builder.Services.AddSingleton<IDashboardEndpointProvider, MockDashboardEndpointProvider>();
+
+        builder.Configuration.Sources.Clear();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [KnownConfigNames.AspNetCoreUrls] = "http://localhost:15123",
+            [KnownConfigNames.AllowUnsecuredTransport] = "true"
+        });
+
+        using var app = builder.Build();
+
+        await app.ExecuteBeforeStartHooksAsync(default).DefaultTimeout();
+
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var dashboard = Assert.Single(model.Resources);
+
+        var endpoints = dashboard.Annotations.OfType<EndpointAnnotation>().ToDictionary(e => e.Name);
+        Assert.Equal("http", endpoints[KnownEndpointNames.OtlpGrpcEndpointName].UriScheme);
+
+        SetDashboardAllocatedEndpoints(dashboard, otlpGrpcPort: 5001, otlpHttpPort: 5002, httpPort: 5003, httpsPort: 5005);
+
+        var config = await EnvironmentVariableEvaluator.GetEnvironmentVariablesAsync(dashboard, DistributedApplicationOperation.Run, app.Services).DefaultTimeout();
+
+        Assert.Equal("http://localhost:5001", config.Single(e => e.Key == KnownConfigNames.DashboardOtlpGrpcEndpointUrl).Value);
+    }
+
     [Theory]
     [InlineData(KnownConfigNames.DashboardOtlpGrpcEndpointUrl)]
     [InlineData(KnownConfigNames.Legacy.DashboardOtlpGrpcEndpointUrl)]
