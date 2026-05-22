@@ -477,7 +477,9 @@ suite('AppHostDataRepository', () => {
                     status: 'buildable',
                 },
             ]));
-            await waitForAppHostDiscovery();
+            await waitForCondition(
+                () => repository?.workspaceAppHostPath === configuredAppHostPath && spawnStub.callCount >= 2 && psOptions !== undefined,
+                'configured AppHost discovery did not finish');
 
             assert.strictEqual(repository.viewMode, 'workspace');
             assert.strictEqual(repository.workspaceAppHostPath, configuredAppHostPath);
@@ -1281,6 +1283,18 @@ async function waitForAppHostDiscovery(): Promise<void> {
     await waitForMicrotasks();
     await new Promise(resolve => setTimeout(resolve, 0));
     await waitForMicrotasks();
+}
+
+async function waitForCondition(condition: () => boolean, message: string): Promise<void> {
+    for (let i = 0; i < 20; i++) {
+        if (condition()) {
+            return;
+        }
+
+        await waitForAppHostDiscovery();
+    }
+
+    assert.ok(condition(), message);
 }
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
