@@ -1,4 +1,7 @@
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { EventEmitter } from 'events';
@@ -419,6 +422,80 @@ suite('AppHostDataRepository', () => {
         } finally {
             repository.dispose();
             workspaceFoldersStub.restore();
+        }
+    });
+
+    test('configured AppHost outside aspire ls candidates remains selected in workspace view', async () => {
+        const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-extension-workspace-'));
+        const configuredAppHostPath = path.join(path.dirname(workspaceRoot), 'external', 'AppHost.csproj');
+        const discoveredAppHostPath = path.join(workspaceRoot, 'apps', 'Store', 'AppHost.csproj');
+        const secondDiscoveredAppHostPath = path.join(workspaceRoot, 'samples', 'Store', 'AppHost.csproj');
+        let workspaceFoldersStub: sinon.SinonStub | undefined;
+        let repository: AppHostDataRepository | undefined;
+
+        try {
+            fs.writeFileSync(path.join(workspaceRoot, 'aspire.config.json'), JSON.stringify({
+                appHost: {
+                    path: configuredAppHostPath,
+                },
+            }));
+
+            let getAppHostsLineCallback: ((line: string) => void) | undefined;
+            let psOptions: any;
+            spawnStub.callsFake((_terminalProvider, _command, args, options) => {
+                if (args[0] === 'ls') {
+                    getAppHostsLineCallback = createLsLineCallback(options);
+                }
+                if (args[0] === 'ps') {
+                    psOptions = options;
+                }
+                return new TestChildProcess();
+            });
+            workspaceFoldersStub = stubWorkspaceFolders([{
+                uri: vscode.Uri.file(workspaceRoot),
+                name: 'workspace',
+                index: 0,
+            }]);
+            repository = new AppHostDataRepository(terminalProvider);
+
+            repository.activate();
+            repository.setPanelVisible(true);
+            await waitForAppHostDiscovery();
+            assert.ok(getAppHostsLineCallback);
+
+            getAppHostsLineCallback(JSON.stringify([
+                {
+                    relativePath: 'apps/Store/AppHost.csproj',
+                    path: discoveredAppHostPath,
+                    language: 'csharp',
+                    status: 'buildable',
+                },
+                {
+                    relativePath: 'samples/Store/AppHost.csproj',
+                    path: secondDiscoveredAppHostPath,
+                    language: 'csharp',
+                    status: 'buildable',
+                },
+            ]));
+            await waitForAppHostDiscovery();
+
+            assert.strictEqual(repository.viewMode, 'workspace');
+            assert.strictEqual(repository.workspaceAppHostPath, configuredAppHostPath);
+            assert.deepStrictEqual(spawnStub.secondCall.args[2], ['describe', '--follow', '--format', 'json', '--apphost', configuredAppHostPath]);
+
+            assert.ok(psOptions);
+            psOptions.lineCallback(JSON.stringify([
+                {
+                    appHostPath: configuredAppHostPath,
+                    appHostPid: 125881,
+                    resources: [],
+                },
+            ]));
+            assert.strictEqual(repository.workspaceAppHost?.appHostPath, configuredAppHostPath);
+        } finally {
+            repository?.dispose();
+            workspaceFoldersStub?.restore();
+            fs.rmSync(workspaceRoot, { recursive: true, force: true });
         }
     });
 

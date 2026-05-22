@@ -207,8 +207,11 @@ async function getConfiguredAppHostPathFromWorkspaceRoot(rootFolder: vscode.Work
     return null;
 }
 
-function createAppHostProjectSearchResult(appHostCandidates: AppHostCandidate[], selectedProjectFile: string | null): AppHostProjectSearchResult {
-    const buildableCandidates = appHostCandidates.filter(isBuildableAppHostCandidate);
+function createAppHostProjectSearchResult(appHostCandidates: AppHostCandidate[], selectedProjectFile: string | null, rootFolder: vscode.WorkspaceFolder): AppHostProjectSearchResult {
+    const effectiveAppHostCandidates = selectedProjectFile && !appHostCandidates.some(candidate => isSamePath(candidate.path, selectedProjectFile))
+        ? [...appHostCandidates, createConfiguredAppHostCandidate(selectedProjectFile, rootFolder)]
+        : appHostCandidates;
+    const buildableCandidates = effectiveAppHostCandidates.filter(isBuildableAppHostCandidate);
     const allProjectFileCandidates = buildableCandidates.map(candidate => candidate.path);
     const selectedCandidate = selectedProjectFile && buildableCandidates.some(candidate => isSamePath(candidate.path, selectedProjectFile))
         ? selectedProjectFile
@@ -217,7 +220,16 @@ function createAppHostProjectSearchResult(appHostCandidates: AppHostCandidate[],
     return {
         selected_project_file: selectedCandidate,
         all_project_file_candidates: allProjectFileCandidates,
-        app_host_candidates: appHostCandidates,
+        app_host_candidates: effectiveAppHostCandidates,
+    };
+}
+
+function createConfiguredAppHostCandidate(appHostPath: string, rootFolder: vscode.WorkspaceFolder): AppHostCandidate {
+    return {
+        relativePath: path.relative(rootFolder.uri.fsPath, appHostPath),
+        path: appHostPath,
+        language: '',
+        status: 'buildable',
     };
 }
 
@@ -300,15 +312,13 @@ export function findAppHostsWithAspireLs(terminalProvider: AspireTerminalProvide
 
                 try {
                     const parsed = parseAppHostCandidates(stdout);
-                    const needsConfiguredSelection = parsed.isAspireLsOutput
-                        && parsed.candidates.filter(isBuildableAppHostCandidate).length > 1;
-                    const selectedProjectFile = needsConfiguredSelection
+                    const selectedProjectFile = parsed.isAspireLsOutput
                         ? await configuredAppHostPathPromise
                         : null;
                     const effectiveSelectedProjectFile = selectedProjectFile ?? parsed.selectedProjectFile;
                     extensionLogOutputChannel.info(`Found ${parsed.candidates.length} AppHost candidates with aspire ls`);
                     settled = true;
-                    resolve(createAppHostProjectSearchResult(parsed.candidates, effectiveSelectedProjectFile));
+                    resolve(createAppHostProjectSearchResult(parsed.candidates, effectiveSelectedProjectFile, rootFolder));
                 } catch (error) {
                     settled = true;
                     reject(error);
