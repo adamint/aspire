@@ -73,10 +73,8 @@ internal sealed class AuxiliaryBackchannelMonitor(
 
         try
         {
-            if (!Directory.Exists(_backchannelsDirectory))
-            {
-                Directory.CreateDirectory(_backchannelsDirectory);
-            }
+            Directory.CreateDirectory(_backchannelsDirectory);
+            Directory.CreateDirectory(_legacyBackchannelsDirectory);
 
             await ProcessDirectoryChangesAsync(cancellationToken).ConfigureAwait(false);
             yield return Connections.ToList();
@@ -84,16 +82,17 @@ internal sealed class AuxiliaryBackchannelMonitor(
             using var fileProvider = new PhysicalFileProvider(_backchannelsDirectory);
             fileProvider.UsePollingFileWatcher = true;
             fileProvider.UseActivePolling = true;
+            using var legacyFileProvider = new PhysicalFileProvider(_legacyBackchannelsDirectory);
+            legacyFileProvider.UsePollingFileWatcher = true;
+            legacyFileProvider.UseActivePolling = true;
 
             _ = Task.Run(async () =>
             {
                 try
                 {
-                    await foreach (var _ in WatchForChangesAsync(fileProvider, cancellationToken).ConfigureAwait(false))
-                    {
-                        await ProcessDirectoryChangesAsync(cancellationToken).ConfigureAwait(false);
-                        QueueConnectionChange();
-                    }
+                    await Task.WhenAll(
+                        WatchConnectionChangesAsync(fileProvider, CompactSocketWatchPattern, cancellationToken),
+                        WatchConnectionChangesAsync(legacyFileProvider, LegacySocketWatchPattern, cancellationToken)).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -114,6 +113,15 @@ internal sealed class AuxiliaryBackchannelMonitor(
         {
             ConnectionsChanged -= QueueConnectionChange;
             connectionChanges.Writer.TryComplete();
+        }
+
+        async Task WatchConnectionChangesAsync(IFileProvider fileProvider, string watchPattern, CancellationToken cancellationToken)
+        {
+            await foreach (var _ in WatchForChangesAsync(fileProvider, watchPattern, cancellationToken).ConfigureAwait(false))
+            {
+                await ProcessDirectoryChangesAsync(cancellationToken).ConfigureAwait(false);
+                QueueConnectionChange();
+            }
         }
     }
 
