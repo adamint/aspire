@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { defaultConfigurationName } from '../loc/strings';
+import { resolveAppHostLaunchPath } from '../utils/appHostLaunchPath';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
 
 export class AspireDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
@@ -40,6 +41,14 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
 
         if (!config.program) {
             config.program = folder?.uri.fsPath || '${workspaceFolder}';
+        }
+
+        return config;
+    }
+
+    async resolveDebugConfigurationWithSubstitutedVariables(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration, token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration | null | undefined> {
+        if (typeof config.program === 'string') {
+            config.program = await resolveAppHostLaunchPath(config.program);
         }
 
         return config;

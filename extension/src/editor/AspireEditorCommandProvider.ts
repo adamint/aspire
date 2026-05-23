@@ -4,6 +4,7 @@ import { noAppHostInWorkspace } from '../loc/strings';
 import { getResourceDebuggerExtensions } from '../debugger/debuggerExtensions';
 import { AspireCommandType } from '../dcp/types';
 import { aspireConfigFileName, getAppHostPathFromConfig, readJsonFile } from '../utils/cliTypes';
+import { resolveAppHostLaunchPath } from '../utils/appHostLaunchPath';
 
 export class AspireEditorCommandProvider implements vscode.Disposable {
     private _workspaceAppHostPath: string | null = null;
@@ -204,7 +205,7 @@ export class AspireEditorCommandProvider implements vscode.Disposable {
      */
     public async getAppHostPath(): Promise<string | null> {
         if (vscode.window.activeTextEditor && await this.isAppHostFile(vscode.window.activeTextEditor.document.uri.fsPath)) {
-            return vscode.window.activeTextEditor.document.uri.fsPath;
+            return await resolveAppHostLaunchPath(vscode.window.activeTextEditor.document.uri.fsPath);
         }
 
         return this._workspaceAppHostPath;
