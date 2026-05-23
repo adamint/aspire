@@ -150,12 +150,13 @@ suite('AppHostDataRepository', () => {
             name: 'workspace',
             index: 0,
         }]);
-        let getAppHostsLineCallback: ((line: string) => void) | undefined;
+        const findFilesStub = sinon.stub(vscode.workspace, 'findFiles').resolves([]);
+        let lsOptions: any;
         let psArgs: string[] | undefined;
         let psOptions: any;
         spawnStub.callsFake((_terminalProvider, _command, args, options) => {
-            if (args[0] === 'extension') {
-                getAppHostsLineCallback = options.lineCallback;
+            if (args[0] === 'ls') {
+                lsOptions = options;
             }
             if (args[0] === 'ps') {
                 psArgs = args;
@@ -171,12 +172,17 @@ suite('AppHostDataRepository', () => {
             repository.setPanelVisible(true);
             await waitForMicrotasks();
 
-            assert.ok(getAppHostsLineCallback);
-            getAppHostsLineCallback(JSON.stringify({
-                selected_project_file: '/workspace/apphost/apphost.cs',
-                all_project_file_candidates: ['/workspace/apphost/apphost.cs'],
-            }));
+            assert.ok(lsOptions);
+            lsOptions.stdoutCallback(JSON.stringify([{
+                path: '/workspace/apphost/apphost.cs',
+                language: 'C#',
+                status: 'buildable',
+            }]));
+            lsOptions.exitCallback(0);
             await waitForMicrotasks();
+            await waitForMicrotasks();
+            await waitForMicrotasks();
+            await waitForTimers();
 
             assert.ok(psOptions);
             assert.deepStrictEqual(psArgs, ['ps', '--format', 'json', '--resources']);
@@ -199,6 +205,7 @@ suite('AppHostDataRepository', () => {
             assert.strictEqual(repository.workspaceAppHost, undefined);
         } finally {
             repository.dispose();
+            findFilesStub.restore();
             workspaceFoldersStub.restore();
         }
     });
@@ -511,6 +518,10 @@ suite('AppHostDataRepository AppHost-file gate', () => {
 async function waitForMicrotasks(): Promise<void> {
     await Promise.resolve();
     await Promise.resolve();
+}
+
+async function waitForTimers(): Promise<void> {
+    await new Promise(resolve => setTimeout(resolve, 0));
 }
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {

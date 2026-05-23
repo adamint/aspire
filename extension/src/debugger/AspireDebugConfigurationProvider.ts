@@ -1,23 +1,38 @@
 import * as vscode from 'vscode';
 import { defaultConfigurationName } from '../loc/strings';
-import { resolveAppHostLaunchPath } from '../utils/appHostLaunchPath';
+import { AppHostDiscoveryService, getDebugTargetForCandidate } from '../utils/appHostDiscovery';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
 
 export class AspireDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
+    constructor(private readonly _appHostDiscoveryService: AppHostDiscoveryService) {
+    }
+
     async provideDebugConfigurations(folder: vscode.WorkspaceFolder | undefined, token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration[]> {
         if (folder === undefined) {
             return [];
         }
 
-        const configurations: vscode.DebugConfiguration[] = [];
-        configurations.push({
+        const activeEditor = vscode.window.activeTextEditor;
+        if (!activeEditor) {
+            return [];
+        }
+
+        const activeEditorFolder = vscode.workspace.getWorkspaceFolder(activeEditor.document.uri);
+        if (activeEditorFolder?.uri.toString() !== folder.uri.toString()) {
+            return [];
+        }
+
+        const candidate = await this._appHostDiscoveryService.tryFindCandidateForEditorFile(activeEditor.document.uri.fsPath, folder);
+        if (!candidate) {
+            return [];
+        }
+
+        return [{
             type: 'aspire',
             request: 'launch',
             name: defaultConfigurationName,
-            program: '${workspaceFolder}'
-        });
-
-        return configurations;
+            program: getDebugTargetForCandidate(candidate)
+        }];
     }
 
     async resolveDebugConfiguration(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration, token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration | null | undefined> {
@@ -48,7 +63,7 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
 
     async resolveDebugConfigurationWithSubstitutedVariables(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration, token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration | null | undefined> {
         if (typeof config.program === 'string') {
-            config.program = await resolveAppHostLaunchPath(config.program);
+            config.program = await this._appHostDiscoveryService.resolveDebugTarget(config.program, folder);
         }
 
         return config;

@@ -1,4 +1,6 @@
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
@@ -66,6 +68,16 @@ function makeTreeProvider(appHosts: readonly AppHostDisplayInfo[], viewMode: Vie
 
 async function flushPromises(): Promise<void> {
     await new Promise(resolve => setImmediate(resolve));
+}
+
+async function waitForCondition(condition: () => boolean): Promise<void> {
+    for (let i = 0; i < 50; i++) {
+        if (condition()) {
+            return;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 10));
+    }
 }
 
 suite('shortenPath', () => {
@@ -272,33 +284,61 @@ suite('AppHostDataRepository', () => {
     });
 
     test('workspace apphost name uses all candidates to disambiguate duplicate filenames', async () => {
-        let lineCallback: ((line: string) => void) | undefined;
+        let lsOptions: any;
+        let legacyGetAppHostsOptions: any;
+        const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-apphost-tree-view-'));
+        const configPath = path.join(tempDir, 'aspire.config.json');
+        const selectedAppHostPath = path.join(tempDir, 'apps', 'Store', 'AppHost.csproj');
+        const otherAppHostPath = path.join(tempDir, 'samples', 'Store', 'AppHost.csproj');
+        fs.mkdirSync(path.dirname(configPath), { recursive: true });
+        fs.writeFileSync(configPath, JSON.stringify({
+            appHost: {
+                path: path.join('apps', 'Store', 'AppHost.csproj'),
+            },
+        }));
         sandbox.stub(vscode.workspace, 'workspaceFolders').value([{
-            uri: vscode.Uri.file('/workspace'),
+            uri: vscode.Uri.file(tempDir),
             name: 'workspace',
             index: 0,
         }]);
-        sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, options) => {
-            lineCallback = options?.lineCallback;
+        sandbox.stub(vscode.workspace, 'findFiles').callsFake(async (include) => {
+            const pattern = typeof include === 'string' ? include : include.pattern;
+            return pattern.includes('aspire.config.json') ? [vscode.Uri.file(configPath)] : [];
+        });
+        sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, args = [], options) => {
+            if (args[0] === 'ls') {
+                lsOptions = options;
+            }
+            else if (args[0] === 'extension' && args[1] === 'get-apphosts') {
+                legacyGetAppHostsOptions = options;
+            }
             return { kill: () => { } } as any;
         });
         const repository = new AppHostDataRepository(makeTerminalProvider());
 
         try {
             await flushPromises();
-            assert.ok(lineCallback);
+            assert.ok(lsOptions);
 
-            lineCallback(JSON.stringify({
-                selected_project_file: '/workspace/apps/Store/AppHost.csproj',
+            lsOptions.stderrCallback('unknown command');
+            lsOptions.exitCallback(1);
+            await flushPromises();
+
+            assert.ok(legacyGetAppHostsOptions);
+            legacyGetAppHostsOptions.stdoutCallback(JSON.stringify({
+                selected_project_file: otherAppHostPath,
                 all_project_file_candidates: [
-                    '/workspace/apps/Store/AppHost.csproj',
-                    '/workspace/samples/Store/AppHost.csproj',
+                    selectedAppHostPath,
+                    otherAppHostPath,
                 ],
             }));
+            legacyGetAppHostsOptions.exitCallback(0);
+            await waitForCondition(() => repository.workspaceAppHostName !== undefined);
 
             assert.strictEqual(repository.workspaceAppHostName, 'apps/Store/AppHost.csproj');
         } finally {
             repository.dispose();
+            fs.rmSync(tempDir, { recursive: true, force: true });
         }
     });
 });

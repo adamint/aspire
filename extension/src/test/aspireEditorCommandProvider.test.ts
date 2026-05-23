@@ -7,6 +7,7 @@ import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { AspireEditorCommandProvider } from '../editor/AspireEditorCommandProvider';
+import { AppHostDiscoveryService } from '../utils/appHostDiscovery';
 
 function createEditor(filePath: string): vscode.TextEditor {
     return {
@@ -66,7 +67,7 @@ suite('AspireEditorCommandProvider', () => {
         fs.writeFileSync(projectPath, '<Project Sdk="Microsoft.NET.Sdk" />');
         activeEditor = createEditor(programPath);
 
-        const provider = new AspireEditorCommandProvider();
+        const provider = new AspireEditorCommandProvider(createAppHostDiscoveryService(projectPath));
         try {
             assert.strictEqual(await provider.getAppHostPath(), projectPath);
         }
@@ -80,7 +81,7 @@ suite('AspireEditorCommandProvider', () => {
         fs.writeFileSync(appHostPath, '#:sdk Aspire.AppHost.Sdk\nvar builder = DistributedApplication.CreateBuilder(args);');
         activeEditor = createEditor(appHostPath);
 
-        const provider = new AspireEditorCommandProvider();
+        const provider = new AspireEditorCommandProvider(createAppHostDiscoveryService(appHostPath));
         try {
             assert.strictEqual(await provider.getAppHostPath(), appHostPath);
         }
@@ -89,3 +90,13 @@ suite('AspireEditorCommandProvider', () => {
         }
     });
 });
+
+function createAppHostDiscoveryService(resolvedPath: string): AppHostDiscoveryService {
+    return {
+        tryFindCandidateForEditorFile: async () => ({
+            path: resolvedPath,
+            language: 'C#',
+            status: 'buildable',
+        }),
+    } as unknown as AppHostDiscoveryService;
+}

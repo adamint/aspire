@@ -1,0 +1,360 @@
+import * as path from 'path';
+import * as vscode from 'vscode';
+import { spawnCliProcess } from '../debugger/languages/cli';
+import { AspireTerminalProvider } from './AspireTerminalProvider';
+import { aspireConfigFileName, getAppHostPathFromConfig, readJsonFile } from './cliTypes';
+import { EnvironmentVariables } from './environment';
+import { extensionLogOutputChannel } from './logging';
+
+// Mirrors the `aspire ls --format json` candidate shape documented in
+// docs/specs/cli-output-formats.md. Older CLI fallback results are adapted into
+// this shape so extension code can keep using the modern discovery contract.
+export interface CandidateAppHostDisplayInfo {
+    path: string;
+    language: string | null;
+    status: string | null;
+}
+
+interface LegacyAppHostProjectSearchResult {
+    selected_project_file: string | null;
+    all_project_file_candidates: string[];
+}
+
+const discoveryExcludePattern = '{**/artifacts/**,**/[Bb]in/**,**/[Oo]bj/**,**/node_modules/**,**/.git/**,**/.vs/**,**/.vscode-test/**,**/.idea/**,**/.aspire/modules/**}';
+
+export class AppHostDiscoveryService implements vscode.Disposable {
+    private readonly _cache = new Map<string, Promise<CandidateAppHostDisplayInfo[]>>();
+    private readonly _watchers = new Map<string, vscode.Disposable[]>();
+
+    constructor(private readonly _terminalProvider: AspireTerminalProvider) {
+    }
+
+    async discover(workspaceFolder: vscode.WorkspaceFolder, forceRefresh = false): Promise<CandidateAppHostDisplayInfo[]> {
+        const key = path.resolve(workspaceFolder.uri.fsPath);
+        if (forceRefresh) {
+            this._cache.delete(key);
+        }
+
+        this._ensureWatchers(workspaceFolder, key);
+
+        let resultPromise = this._cache.get(key);
+        if (!resultPromise) {
+            resultPromise = this._discoverCore(workspaceFolder).catch(error => {
+                this._cache.delete(key);
+                throw error;
+            });
+            this._cache.set(key, resultPromise);
+        }
+
+        return resultPromise;
+    }
+
+    async resolveDebugTarget(filePath: string, workspaceFolder?: vscode.WorkspaceFolder): Promise<string> {
+        return await this.tryResolveDebugTarget(filePath, workspaceFolder) ?? filePath;
+    }
+
+    async tryResolveDebugTarget(filePath: string, workspaceFolder?: vscode.WorkspaceFolder): Promise<string | undefined> {
+        const candidate = await this.tryFindCandidateForEditorFile(filePath, workspaceFolder);
+        return candidate ? getDebugTargetForCandidate(candidate) : undefined;
+    }
+
+    async tryFindCandidateForEditorFile(filePath: string, workspaceFolder?: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo | undefined> {
+        const folder = workspaceFolder ?? vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath));
+        if (!folder) {
+            return undefined;
+        }
+
+        let result = await this.discover(folder);
+        let candidate = findCandidateForEditorFile(filePath, result);
+        if (candidate === undefined) {
+            result = await this.discover(folder, true);
+            candidate = findCandidateForEditorFile(filePath, result);
+        }
+
+        return candidate;
+    }
+
+    dispose(): void {
+        for (const disposables of this._watchers.values()) {
+            disposables.forEach(disposable => disposable.dispose());
+        }
+        this._watchers.clear();
+        this._cache.clear();
+    }
+
+    private async _discoverCore(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
+        try {
+            const appHosts = await this._discoverWithLs(workspaceFolder);
+            extensionLogOutputChannel.info(`Discovered ${appHosts.length} AppHost candidate(s) via aspire ls`);
+            return appHosts;
+        }
+        catch (error) {
+            extensionLogOutputChannel.warn(`aspire ls discovery failed, falling back to aspire extension get-apphosts: ${error}`);
+            const appHosts = await this._discoverWithLegacyGetAppHosts(workspaceFolder);
+            extensionLogOutputChannel.info(`Discovered ${appHosts.length} AppHost candidate(s) via aspire extension get-apphosts`);
+            return appHosts;
+        }
+    }
+
+    private async _discoverWithLs(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
+        const cliPath = await this._terminalProvider.getAspireCliExecutablePath();
+        const args = ['ls', '--format', 'json'];
+        if (process.env[EnvironmentVariables.ASPIRE_CLI_STOP_ON_ENTRY] === 'true') {
+            args.push('--cli-wait-for-debugger');
+        }
+
+        const output = await runCliForStdout(this._terminalProvider, cliPath, args, workspaceFolder.uri.fsPath);
+        const parsed = JSON.parse(output.trim() || '[]');
+        if (!Array.isArray(parsed)) {
+            throw new Error('aspire ls did not return a JSON array.');
+        }
+
+        const appHosts = parsed
+            .filter(isLsCandidate)
+            .map(candidate => ({
+                path: candidate.path,
+                language: candidate.language,
+                status: candidate.status,
+            }));
+
+        if (appHosts.length !== parsed.length) {
+            throw new Error('aspire ls returned an unexpected candidate shape.');
+        }
+
+        return appHosts;
+    }
+
+    private async _discoverWithLegacyGetAppHosts(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
+        const cliPath = await this._terminalProvider.getAspireCliExecutablePath();
+        const args = ['extension', 'get-apphosts'];
+        if (process.env[EnvironmentVariables.ASPIRE_CLI_STOP_ON_ENTRY] === 'true') {
+            args.push('--cli-wait-for-debugger');
+        }
+
+        const output = await runCliForStdout(this._terminalProvider, cliPath, args, workspaceFolder.uri.fsPath);
+        const parsed = parseLegacyGetAppHostsOutput(output);
+        // Adapt the older extension-only output into the `aspire ls` candidate shape.
+        // Keep this compatibility translation isolated here so the rest of the extension
+        // can code against the modern discovery model.
+        return parsed.all_project_file_candidates.filter(candidate => typeof candidate === 'string').map(candidatePath => ({
+            path: candidatePath,
+            language: null,
+            status: null,
+        }));
+    }
+
+    private _ensureWatchers(workspaceFolder: vscode.WorkspaceFolder, key: string): void {
+        if (this._watchers.has(key)) {
+            return;
+        }
+
+        const invalidate = () => this._cache.delete(key);
+        const patterns = [
+            '**/*.csproj',
+            '**/*.fsproj',
+            '**/*.vbproj',
+            '**/apphost.cs',
+            '**/apphost.ts',
+            '**/apphost.js',
+            '**/apphost.mts',
+            '**/apphost.mjs',
+            `**/${aspireConfigFileName}`,
+            '**/.aspire/settings.json',
+        ];
+
+        const watchers = patterns.map(pattern => {
+            const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(workspaceFolder, pattern));
+            watcher.onDidCreate(invalidate);
+            watcher.onDidChange(invalidate);
+            watcher.onDidDelete(invalidate);
+            return watcher;
+        });
+        this._watchers.set(key, watchers);
+    }
+}
+
+export function findCandidateForEditorFile(filePath: string, candidates: readonly CandidateAppHostDisplayInfo[]): CandidateAppHostDisplayInfo | undefined {
+    const matchingCandidate = candidates.find(candidate => isSamePath(candidate.path, filePath));
+    if (matchingCandidate) {
+        return matchingCandidate;
+    }
+
+    if (path.extname(filePath).toLowerCase() !== '.cs') {
+        return undefined;
+    }
+
+    // IMPORTANT: `aspire ls` is still the source of truth for what is a valid AppHost.
+    // This block does not discover AppHosts by reading C# source files or by deciding
+    // that a project "looks like" an AppHost. It only handles the editor affordance gap
+    // in the current CLI shape:
+    //
+    //   aspire ls --format json
+    //   [
+    //     { "path": "/repo/AppHost/AppHost.csproj", "language": "C#", "status": "buildable" }
+    //   ]
+    //
+    // For SDK-style .NET AppHosts the launch target is the `.csproj`, but users usually
+    // have `Program.cs` or another C# source file open when they invoke Run/Debug from
+    // the editor or debug picker. Until the CLI returns source identity/project membership
+    // in the candidate payload, treat C# files under a candidate `.csproj` directory as
+    // editor aliases for that candidate. Pick the deepest candidate directory so nested
+    // AppHost candidates prefer their own project over an outer candidate. Keep this
+    // heuristic bounded to C# project candidates from `aspire ls` and remove it when the
+    // CLI can report the canonical source file or owning project for each candidate.
+    const projectCandidate = candidates
+        .filter(candidate => isCSharpProjectCandidate(candidate) && isCSharpSourceFileForProjectCandidate(filePath, candidate.path))
+        .sort((left, right) => path.dirname(right.path).length - path.dirname(left.path).length)[0];
+    return projectCandidate;
+}
+
+export function getDebugTargetForCandidate(candidate: CandidateAppHostDisplayInfo): string {
+    return candidate.path;
+}
+
+export async function selectWorkspaceAppHostPath(workspaceFolder: vscode.WorkspaceFolder, candidates: readonly CandidateAppHostDisplayInfo[]): Promise<string | undefined> {
+    const configuredPaths = await findConfiguredAppHostPaths(workspaceFolder);
+    for (const configuredPath of configuredPaths) {
+        const candidate = candidates.find(candidate => isSamePath(candidate.path, configuredPath));
+        if (candidate) {
+            return candidate.path;
+        }
+    }
+
+    return candidates.length === 1 ? candidates[0].path : undefined;
+}
+
+export async function findConfiguredAppHostPaths(workspaceFolder: vscode.WorkspaceFolder): Promise<string[]> {
+    const [newConfigFiles, legacySettingsFiles] = await Promise.all([
+        vscode.workspace.findFiles(new vscode.RelativePattern(workspaceFolder, `**/${aspireConfigFileName}`), discoveryExcludePattern),
+        vscode.workspace.findFiles(new vscode.RelativePattern(workspaceFolder, '**/.aspire/settings.json'), discoveryExcludePattern),
+    ]);
+
+    const newConfigDirs = new Set(newConfigFiles.map(uri => path.dirname(uri.fsPath)));
+    const filteredLegacyFiles = legacySettingsFiles.filter(legacyUri => {
+        const projectRoot = path.dirname(path.dirname(legacyUri.fsPath));
+        return !newConfigDirs.has(projectRoot);
+    });
+
+    const configuredPaths: string[] = [];
+    for (const uri of [...newConfigFiles, ...filteredLegacyFiles]) {
+        try {
+            const json = await readJsonFile(uri);
+            const appHostPath = getAppHostPathFromConfig(json);
+            if (appHostPath) {
+                configuredPaths.push(path.isAbsolute(appHostPath) ? appHostPath : path.join(path.dirname(uri.fsPath), appHostPath));
+            }
+        }
+        catch {
+        }
+    }
+
+    return configuredPaths;
+}
+
+function runCliForStdout(terminalProvider: AspireTerminalProvider, cliPath: string, args: string[], workingDirectory: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        let stdout = '';
+        let stderr = '';
+        let settled = false;
+
+        spawnCliProcess(terminalProvider, cliPath, args, {
+            noExtensionVariables: true,
+            workingDirectory,
+            stdoutCallback: data => { stdout += data; },
+            stderrCallback: data => { stderr += data; },
+            exitCallback: code => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                if (code === 0) {
+                    resolve(stdout);
+                }
+                else {
+                    reject(new Error(stderr || `exit code ${code ?? 1}`));
+                }
+            },
+            errorCallback: error => {
+                if (settled) {
+                    return;
+                }
+                settled = true;
+                reject(error);
+            },
+        });
+    });
+}
+
+function parseLegacyGetAppHostsOutput(output: string): LegacyAppHostProjectSearchResult {
+    // `aspire extension get-apphosts` prints a single JSON object:
+    //   {"selected_project_file":"/repo/AppHost/AppHost.csproj","all_project_file_candidates":["/repo/AppHost/AppHost.csproj"]}
+    // Older builds can include log lines, so scan for the first line with the expected shape.
+    for (const line of output.split(/\r?\n/)) {
+        try {
+            const parsed = JSON.parse(line);
+            if (isLegacyAppHostProjectSearchResult(parsed)) {
+                return parsed;
+            }
+        }
+        catch {
+        }
+    }
+
+    const parsed = JSON.parse(output.trim());
+    if (isLegacyAppHostProjectSearchResult(parsed)) {
+        return parsed;
+    }
+
+    throw new Error('aspire extension get-apphosts returned an unexpected output shape.');
+}
+
+function isLsCandidate(obj: unknown): obj is CandidateAppHostDisplayInfo {
+    return !!obj
+        && typeof obj === 'object'
+        && typeof (obj as CandidateAppHostDisplayInfo).path === 'string'
+        && typeof (obj as CandidateAppHostDisplayInfo).language === 'string'
+        && typeof (obj as CandidateAppHostDisplayInfo).status === 'string';
+}
+
+function isLegacyAppHostProjectSearchResult(obj: unknown): obj is LegacyAppHostProjectSearchResult {
+    return !!obj
+        && typeof obj === 'object'
+        && (typeof (obj as LegacyAppHostProjectSearchResult).selected_project_file === 'string' || (obj as LegacyAppHostProjectSearchResult).selected_project_file === null)
+        && Array.isArray((obj as LegacyAppHostProjectSearchResult).all_project_file_candidates);
+}
+
+function isCSharpProjectCandidate(candidate: CandidateAppHostDisplayInfo): boolean {
+    // Only `.csproj` candidates can own nearby C# source files for the editor alias
+    // heuristic above. Modern `aspire ls` candidates include `language: "C#"`;
+    // legacy `aspire extension get-apphosts` fallback candidates do not have a
+    // language, so `null` is treated as C# here to preserve old CLI support while
+    // keeping the compatibility gap local to candidate adaptation/matching.
+    return path.extname(candidate.path).toLowerCase() === '.csproj'
+        && (candidate.language === null || candidate.language === 'C#');
+}
+
+function isCSharpSourceFileForProjectCandidate(filePath: string, projectPath: string): boolean {
+    const projectDirectory = path.dirname(path.resolve(projectPath));
+    const sourcePath = path.resolve(filePath);
+    const comparison = process.platform === 'win32' || process.platform === 'darwin'
+        ? 'case-insensitive'
+        : 'case-sensitive';
+    const normalizedProjectDirectory = comparison === 'case-insensitive' ? projectDirectory.toLowerCase() : projectDirectory;
+    const normalizedSourcePath = comparison === 'case-insensitive' ? sourcePath.toLowerCase() : sourcePath;
+    const relativePath = path.relative(normalizedProjectDirectory, normalizedSourcePath);
+    return relativePath !== ''
+        && !relativePath.startsWith('..')
+        && !path.isAbsolute(relativePath)
+        && !relativePath.split(path.sep).some(segment => segment.toLowerCase() === 'bin' || segment.toLowerCase() === 'obj');
+}
+
+function isSamePath(left: string, right: string): boolean {
+    const comparison = process.platform === 'win32' || process.platform === 'darwin'
+        ? 'case-insensitive'
+        : 'case-sensitive';
+    const resolvedLeft = path.resolve(left);
+    const resolvedRight = path.resolve(right);
+    return comparison === 'case-insensitive'
+        ? resolvedLeft.toLowerCase() === resolvedRight.toLowerCase()
+        : resolvedLeft === resolvedRight;
+}
