@@ -14,7 +14,7 @@ function createEditor(filePath: string): vscode.TextEditor {
         document: {
             uri: vscode.Uri.file(filePath),
             fileName: filePath,
-            languageId: 'csharp'
+            languageId: filePath.endsWith('.ts') ? 'typescript' : 'csharp'
         } as vscode.TextDocument
     } as vscode.TextEditor;
 }
@@ -90,6 +90,20 @@ suite('AspireEditorCommandProvider', () => {
         }
     });
 
+    test('returns source file when active editor is TypeScript apphost.ts', async () => {
+        const appHostPath = path.join(tempDir, 'apphost.ts');
+        fs.writeFileSync(appHostPath, 'import { createBuilder } from "./.aspire/modules/aspire";');
+        activeEditor = createEditor(appHostPath);
+
+        const provider = new AspireEditorCommandProvider(createAppHostDiscoveryService(appHostPath, 'typescript/nodejs'));
+        try {
+            assert.strictEqual(await provider.getAppHostPath(), appHostPath);
+        }
+        finally {
+            provider.dispose();
+        }
+    });
+
     test('clears AppHost contexts when discovery fails while processing document', async () => {
         const programPath = path.join(tempDir, 'Program.cs');
         fs.writeFileSync(programPath, 'var builder = DistributedApplication.CreateBuilder(args);');
@@ -122,17 +136,17 @@ suite('AspireEditorCommandProvider', () => {
     });
 });
 
-function createAppHostDiscoveryService(resolvedPath: string): AppHostDiscoveryService {
+function createAppHostDiscoveryService(resolvedPath: string, language = 'csharp'): AppHostDiscoveryService {
     return {
         onDidChangeCandidates: () => ({ dispose: () => { } }),
         tryFindCandidateForEditorFile: async () => ({
             path: resolvedPath,
-            language: 'csharp',
+            language: language,
             status: 'buildable',
         }),
         discover: async () => [{
             path: resolvedPath,
-            language: 'csharp',
+            language: language,
             status: 'buildable',
         }],
     } as unknown as AppHostDiscoveryService;

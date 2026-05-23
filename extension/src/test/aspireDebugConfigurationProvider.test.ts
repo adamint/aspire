@@ -58,6 +58,21 @@ suite('AspireDebugConfigurationProvider', () => {
         assert.strictEqual(config?.program, appHostPath);
     });
 
+    test('leaves launch config TypeScript apphost.ts unchanged', async () => {
+        const appHostPath = path.join(tempDir, 'apphost.ts');
+        fs.writeFileSync(appHostPath, 'import { createBuilder } from "./.aspire/modules/aspire";');
+
+        const provider = new AspireDebugConfigurationProvider(createAppHostDiscoveryService(appHostPath, appHostPath, 'typescript/nodejs'));
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: appHostPath
+        });
+
+        assert.strictEqual(config?.program, appHostPath);
+    });
+
     test('leaves launch config non-AppHost C# source file unchanged', async () => {
         const appDirectory = path.join(tempDir, 'App');
         fs.mkdirSync(appDirectory);
@@ -119,12 +134,12 @@ function createWorkspaceFolder(folderPath: string): vscode.WorkspaceFolder {
     };
 }
 
-function createAppHostDiscoveryService(resolvedPath: string, candidatePath: string | null = resolvedPath): AppHostDiscoveryService {
+function createAppHostDiscoveryService(resolvedPath: string, candidatePath: string | null = resolvedPath, language = 'csharp'): AppHostDiscoveryService {
     return {
         resolveDebugTarget: async () => resolvedPath,
         tryFindCandidateForEditorFile: async () => candidatePath ? {
             path: candidatePath,
-            language: 'csharp',
+            language: language,
             status: 'buildable',
         } : undefined,
     } as unknown as AppHostDiscoveryService;

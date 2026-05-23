@@ -36,6 +36,19 @@ suite('AppHost discovery', () => {
         assert.strictEqual(candidate ? getDebugTargetForCandidate(candidate) : undefined, appHostPath);
     });
 
+    test('keeps TypeScript AppHost candidate as source file', () => {
+        const appHostPath = buildPath('workspace', 'AppHost', 'apphost.ts');
+
+        const candidate = findCandidateForEditorFile(appHostPath, [{
+            path: appHostPath,
+            language: 'typescript/nodejs',
+            status: 'buildable',
+        }]);
+
+        assert.strictEqual(candidate?.path, appHostPath);
+        assert.strictEqual(candidate ? getDebugTargetForCandidate(candidate) : undefined, appHostPath);
+    });
+
     test('returns undefined when no discovered candidate contains C# source file', () => {
         const programPath = buildPath('workspace', 'Web', 'Program.cs');
 
@@ -53,7 +66,7 @@ suite('AppHost discovery', () => {
 
         const candidate = findCandidateForEditorFile(programPath, [{
             path: buildPath('workspace', 'AppHost', 'apphost.ts'),
-            language: 'TypeScript',
+            language: 'typescript/nodejs',
             status: 'buildable',
         }]);
 
