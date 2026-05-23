@@ -175,7 +175,7 @@ suite('AppHostDataRepository', () => {
             assert.ok(lsOptions);
             lsOptions.stdoutCallback(JSON.stringify([{
                 path: '/workspace/apphost/apphost.cs',
-                language: 'C#',
+                language: 'csharp',
                 status: 'buildable',
             }]));
             lsOptions.exitCallback(0);

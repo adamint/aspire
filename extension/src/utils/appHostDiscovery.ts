@@ -190,7 +190,7 @@ export function findCandidateForEditorFile(filePath: string, candidates: readonl
     //
     //   aspire ls --format json
     //   [
-    //     { "path": "/repo/AppHost/AppHost.csproj", "language": "C#", "status": "buildable" }
+    //     { "path": "/repo/AppHost/AppHost.csproj", "language": "csharp", "status": "buildable" }
     //   ]
     //
     // For SDK-style .NET AppHosts the launch target is the `.csproj`, but users usually
@@ -325,12 +325,13 @@ function isLegacyAppHostProjectSearchResult(obj: unknown): obj is LegacyAppHostP
 
 function isCSharpProjectCandidate(candidate: CandidateAppHostDisplayInfo): boolean {
     // Only `.csproj` candidates can own nearby C# source files for the editor alias
-    // heuristic above. Modern `aspire ls` candidates include `language: "C#"`;
-    // legacy `aspire extension get-apphosts` fallback candidates do not have a
-    // language, so `null` is treated as C# here to preserve old CLI support while
-    // keeping the compatibility gap local to candidate adaptation/matching.
+    // heuristic above. Modern `aspire ls` candidates include the CLI language id
+    // (`language: "csharp"`); legacy `aspire extension get-apphosts` fallback
+    // candidates do not have a language, so `null` is treated as C# here to
+    // preserve old CLI support while keeping the compatibility gap local to
+    // candidate adaptation/matching.
     return path.extname(candidate.path).toLowerCase() === '.csproj'
-        && (candidate.language === null || candidate.language === 'C#');
+        && (candidate.language === null || candidate.language.toLowerCase() === 'csharp');
 }
 
 function isCSharpSourceFileForProjectCandidate(filePath: string, projectPath: string): boolean {

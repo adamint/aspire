@@ -96,7 +96,7 @@ function createAppHostDiscoveryService(resolvedPath: string): AppHostDiscoverySe
         onDidChangeCandidates: () => ({ dispose: () => { } }),
         tryFindCandidateForEditorFile: async () => ({
             path: resolvedPath,
-            language: 'C#',
+            language: 'csharp',
             status: 'buildable',
         }),
     } as unknown as AppHostDiscoveryService;

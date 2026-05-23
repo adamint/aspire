@@ -124,7 +124,7 @@ function createAppHostDiscoveryService(resolvedPath: string, candidatePath: stri
         resolveDebugTarget: async () => resolvedPath,
         tryFindCandidateForEditorFile: async () => candidatePath ? {
             path: candidatePath,
-            language: 'C#',
+            language: 'csharp',
             status: 'buildable',
         } : undefined,
     } as unknown as AppHostDiscoveryService;

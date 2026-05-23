@@ -15,7 +15,7 @@ suite('AppHost discovery', () => {
 
         const candidate = findCandidateForEditorFile(programPath, [{
             path: appHostProjectPath,
-            language: 'C#',
+            language: 'csharp',
             status: 'buildable',
         }]);
 
@@ -28,7 +28,7 @@ suite('AppHost discovery', () => {
 
         const candidate = findCandidateForEditorFile(appHostPath, [{
             path: appHostPath,
-            language: 'C#',
+            language: 'csharp',
             status: 'buildable',
         }]);
 
@@ -41,7 +41,7 @@ suite('AppHost discovery', () => {
 
         const candidate = findCandidateForEditorFile(programPath, [{
             path: buildPath('workspace', 'AppHost', 'AppHost.csproj'),
-            language: 'C#',
+            language: 'csharp',
             status: 'buildable',
         }]);
 
@@ -65,7 +65,7 @@ suite('AppHost discovery', () => {
 
         const candidate = findCandidateForEditorFile(helperPath, [{
             path: buildPath('workspace', 'AppHost', 'AppHost.csproj'),
-            language: 'C#',
+            language: 'csharp',
             status: 'buildable',
         }]);
 
@@ -77,7 +77,7 @@ suite('AppHost discovery', () => {
 
         const candidate = findCandidateForEditorFile(generatedPath, [{
             path: buildPath('workspace', 'AppHost', 'AppHost.csproj'),
-            language: 'C#',
+            language: 'csharp',
             status: 'buildable',
         }]);
 
@@ -100,7 +100,7 @@ suite('AppHost discovery', () => {
             const spawnStub = sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, options) => {
                 options?.stdoutCallback?.(JSON.stringify([{
                     path: buildPath('workspace', 'AppHost', 'AppHost.csproj'),
-                    language: 'C#',
+                    language: 'csharp',
                     status: 'buildable',
                 }]));
                 options?.exitCallback?.(0);
