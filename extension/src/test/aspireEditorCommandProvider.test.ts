@@ -89,6 +89,37 @@ suite('AspireEditorCommandProvider', () => {
             provider.dispose();
         }
     });
+
+    test('clears AppHost contexts when discovery fails while processing document', async () => {
+        const programPath = path.join(tempDir, 'Program.cs');
+        fs.writeFileSync(programPath, 'var builder = DistributedApplication.CreateBuilder(args);');
+        activeEditor = createEditor(programPath);
+
+        const provider = new AspireEditorCommandProvider(createFailingAppHostDiscoveryService());
+        try {
+            await provider.processDocument(activeEditor.document);
+
+            assert.ok(executeCommandStub.calledWith('setContext', 'aspire.fileIsAppHost', false));
+            assert.ok(executeCommandStub.calledWith('setContext', 'aspire.workspaceHasAppHost', false));
+        }
+        finally {
+            provider.dispose();
+        }
+    });
+
+    test('returns null when discovery fails while resolving AppHost path', async () => {
+        const programPath = path.join(tempDir, 'Program.cs');
+        fs.writeFileSync(programPath, 'var builder = DistributedApplication.CreateBuilder(args);');
+        activeEditor = createEditor(programPath);
+
+        const provider = new AspireEditorCommandProvider(createFailingAppHostDiscoveryService());
+        try {
+            assert.strictEqual(await provider.getAppHostPath(), null);
+        }
+        finally {
+            provider.dispose();
+        }
+    });
 });
 
 function createAppHostDiscoveryService(resolvedPath: string): AppHostDiscoveryService {
@@ -99,5 +130,22 @@ function createAppHostDiscoveryService(resolvedPath: string): AppHostDiscoverySe
             language: 'csharp',
             status: 'buildable',
         }),
+        discover: async () => [{
+            path: resolvedPath,
+            language: 'csharp',
+            status: 'buildable',
+        }],
+    } as unknown as AppHostDiscoveryService;
+}
+
+function createFailingAppHostDiscoveryService(): AppHostDiscoveryService {
+    return {
+        onDidChangeCandidates: () => ({ dispose: () => { } }),
+        tryFindCandidateForEditorFile: async () => {
+            throw new Error('discovery failed');
+        },
+        discover: async () => {
+            throw new Error('discovery failed');
+        },
     } as unknown as AppHostDiscoveryService;
 }

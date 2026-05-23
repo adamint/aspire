@@ -4,6 +4,8 @@ import { noAppHostInWorkspace } from '../loc/strings';
 import { getResourceDebuggerExtensions } from '../debugger/debuggerExtensions';
 import { AspireCommandType } from '../dcp/types';
 import { AppHostDiscoveryService, getDebugTargetForCandidate, selectWorkspaceAppHostPath } from '../utils/appHostDiscovery';
+import type { CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
+import { extensionLogOutputChannel } from '../utils/logging';
 
 export class AspireEditorCommandProvider implements vscode.Disposable {
     private _disposables: vscode.Disposable[] = [];
@@ -53,7 +55,7 @@ export class AspireEditorCommandProvider implements vscode.Disposable {
         const isSupportedFile = getResourceDebuggerExtensions().some(extension => extension.getSupportedFileTypes().includes(fileExtension));
 
         vscode.commands.executeCommand('setContext', 'aspire.editorSupportsRunDebug', isSupportedFile);
-        vscode.commands.executeCommand('setContext', 'aspire.fileIsAppHost', await this._appHostDiscoveryService.tryFindCandidateForEditorFile(document.uri.fsPath) !== undefined);
+        vscode.commands.executeCommand('setContext', 'aspire.fileIsAppHost', await this.tryFindCandidateForEditorFile(document.uri.fsPath) !== undefined);
         await this.updateWorkspaceAppHostContext();
     }
 
@@ -66,8 +68,7 @@ export class AspireEditorCommandProvider implements vscode.Disposable {
             return;
         }
 
-        const appHosts = await this._appHostDiscoveryService.discover(workspaceFolder);
-        const appHostPath = await selectWorkspaceAppHostPath(workspaceFolder, appHosts);
+        const appHostPath = await this.trySelectWorkspaceAppHostPath(workspaceFolder);
         vscode.commands.executeCommand('setContext', 'aspire.workspaceHasAppHost', appHostPath !== undefined);
     }
 
@@ -76,7 +77,7 @@ export class AspireEditorCommandProvider implements vscode.Disposable {
      */
     public async getAppHostPath(): Promise<string | null> {
         if (vscode.window.activeTextEditor) {
-            const candidate = await this._appHostDiscoveryService.tryFindCandidateForEditorFile(vscode.window.activeTextEditor.document.uri.fsPath);
+            const candidate = await this.tryFindCandidateForEditorFile(vscode.window.activeTextEditor.document.uri.fsPath);
             if (candidate) {
                 return getDebugTargetForCandidate(candidate);
             }
@@ -89,8 +90,28 @@ export class AspireEditorCommandProvider implements vscode.Disposable {
             return null;
         }
 
-        const appHosts = await this._appHostDiscoveryService.discover(workspaceFolder);
-        return await selectWorkspaceAppHostPath(workspaceFolder, appHosts) ?? null;
+        return await this.trySelectWorkspaceAppHostPath(workspaceFolder) ?? null;
+    }
+
+    private async tryFindCandidateForEditorFile(filePath: string): Promise<CandidateAppHostDisplayInfo | undefined> {
+        try {
+            return await this._appHostDiscoveryService.tryFindCandidateForEditorFile(filePath);
+        }
+        catch (error) {
+            extensionLogOutputChannel.warn(`Failed to discover AppHost for editor file ${filePath}: ${error}`);
+            return undefined;
+        }
+    }
+
+    private async trySelectWorkspaceAppHostPath(workspaceFolder: vscode.WorkspaceFolder): Promise<string | undefined> {
+        try {
+            const appHosts = await this._appHostDiscoveryService.discover(workspaceFolder);
+            return await selectWorkspaceAppHostPath(workspaceFolder, appHosts);
+        }
+        catch (error) {
+            extensionLogOutputChannel.warn(`Failed to discover AppHost candidates for workspace ${workspaceFolder.uri.fsPath}: ${error}`);
+            return undefined;
+        }
     }
 
     public async tryExecuteRunAppHost(noDebug: boolean): Promise<void> {
