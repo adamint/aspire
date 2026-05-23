@@ -23,8 +23,10 @@ interface LegacyAppHostProjectSearchResult {
 const discoveryExcludePattern = '{**/artifacts/**,**/[Bb]in/**,**/[Oo]bj/**,**/node_modules/**,**/.git/**,**/.vs/**,**/.vscode-test/**,**/.idea/**,**/.aspire/modules/**}';
 
 export class AppHostDiscoveryService implements vscode.Disposable {
+    private readonly _onDidChangeCandidates = new vscode.EventEmitter<vscode.WorkspaceFolder>();
     private readonly _cache = new Map<string, Promise<CandidateAppHostDisplayInfo[]>>();
     private readonly _watchers = new Map<string, vscode.Disposable[]>();
+    readonly onDidChangeCandidates = this._onDidChangeCandidates.event;
 
     constructor(private readonly _terminalProvider: AspireTerminalProvider) {
     }
@@ -64,14 +66,8 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             return undefined;
         }
 
-        let result = await this.discover(folder);
-        let candidate = findCandidateForEditorFile(filePath, result);
-        if (candidate === undefined) {
-            result = await this.discover(folder, true);
-            candidate = findCandidateForEditorFile(filePath, result);
-        }
-
-        return candidate;
+        const result = await this.discover(folder);
+        return findCandidateForEditorFile(filePath, result);
     }
 
     dispose(): void {
@@ -80,6 +76,7 @@ export class AppHostDiscoveryService implements vscode.Disposable {
         }
         this._watchers.clear();
         this._cache.clear();
+        this._onDidChangeCandidates.dispose();
     }
 
     private async _discoverCore(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
@@ -148,7 +145,10 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             return;
         }
 
-        const invalidate = () => this._cache.delete(key);
+        const invalidate = () => {
+            this._cache.delete(key);
+            this._onDidChangeCandidates.fire(workspaceFolder);
+        };
         const patterns = [
             '**/*.csproj',
             '**/*.fsproj',

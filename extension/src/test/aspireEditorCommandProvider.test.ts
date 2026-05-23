@@ -93,6 +93,7 @@ suite('AspireEditorCommandProvider', () => {
 
 function createAppHostDiscoveryService(resolvedPath: string): AppHostDiscoveryService {
     return {
+        onDidChangeCandidates: () => ({ dispose: () => { } }),
         tryFindCandidateForEditorFile: async () => ({
             path: resolvedPath,
             language: 'C#',

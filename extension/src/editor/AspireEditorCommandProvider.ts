@@ -13,6 +13,10 @@ export class AspireEditorCommandProvider implements vscode.Disposable {
             void this.updateWorkspaceAppHostContext();
         }));
 
+        this._disposables.push(this._appHostDiscoveryService.onDidChangeCandidates(workspaceFolder => {
+            void this.processActiveDocumentForWorkspace(workspaceFolder);
+        }));
+
         this._disposables.push(vscode.window.onDidChangeActiveTextEditor(async (editor) => {
             if (editor) {
                 await this.processDocument(editor.document);
@@ -27,6 +31,19 @@ export class AspireEditorCommandProvider implements vscode.Disposable {
     private async initializeActiveDocument(): Promise<void> {
         const activeDocument = vscode.window.activeTextEditor?.document;
         if (activeDocument) {
+            await this.processDocument(activeDocument);
+        }
+    }
+
+    private async processActiveDocumentForWorkspace(workspaceFolder: vscode.WorkspaceFolder): Promise<void> {
+        const activeDocument = vscode.window.activeTextEditor?.document;
+        if (!activeDocument) {
+            await this.updateWorkspaceAppHostContext();
+            return;
+        }
+
+        const activeWorkspaceFolder = vscode.workspace.getWorkspaceFolder(activeDocument.uri);
+        if (activeWorkspaceFolder?.uri.toString() === workspaceFolder.uri.toString()) {
             await this.processDocument(activeDocument);
         }
     }

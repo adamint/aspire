@@ -134,6 +134,7 @@ export class AppHostDataRepository {
     private _loadingGlobal = true;
 
     private readonly _configChangeDisposable: vscode.Disposable;
+    private readonly _appHostDiscoveryChangeDisposable: vscode.Disposable;
     private readonly _appHostDiscoveryService: AppHostDiscoveryService;
     private readonly _ownsAppHostDiscoveryService: boolean;
     private _disposed = false;
@@ -141,6 +142,12 @@ export class AppHostDataRepository {
     constructor(private readonly _terminalProvider: AspireTerminalProvider, appHostDiscoveryService?: AppHostDiscoveryService) {
         this._appHostDiscoveryService = appHostDiscoveryService ?? new AppHostDiscoveryService(_terminalProvider);
         this._ownsAppHostDiscoveryService = appHostDiscoveryService === undefined;
+        this._appHostDiscoveryChangeDisposable = this._appHostDiscoveryService.onDidChangeCandidates(workspaceFolder => {
+            const rootFolder = vscode.workspace.workspaceFolders?.[0];
+            if (rootFolder?.uri.toString() === workspaceFolder.uri.toString()) {
+                this._fetchWorkspaceAppHost();
+            }
+        });
         this._fetchWorkspaceAppHost();
         this._configChangeDisposable = vscode.workspace.onDidChangeConfiguration(e => {
             if (e.affectsConfiguration('aspire.globalAppHostsPollingInterval') && this._shouldPoll) {
@@ -244,6 +251,7 @@ export class AppHostDataRepository {
         this._stopPolling();
         this._stopDescribeWatch();
         this._configChangeDisposable.dispose();
+        this._appHostDiscoveryChangeDisposable.dispose();
         this._onDidChangeData.dispose();
         if (this._ownsAppHostDiscoveryService) {
             this._appHostDiscoveryService.dispose();
@@ -294,6 +302,7 @@ export class AppHostDataRepository {
     private _fetchWorkspaceAppHost(): void {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
+            this._setWorkspaceAppHostPath(undefined, []);
             return;
         }
         const rootFolder = workspaceFolders[0];
@@ -307,20 +316,37 @@ export class AppHostDataRepository {
 
             const appHostPath = await selectWorkspaceAppHostPath(rootFolder, appHosts);
             if (!appHostPath) {
+                this._setWorkspaceAppHostPath(undefined, appHosts.map(candidate => candidate.path));
                 return;
             }
 
-            this._workspaceAppHostPath = appHostPath;
             const appHostCandidates = appHosts.map(candidate => candidate.path);
-            const appHostLabels = shortenPaths(appHostCandidates);
-            const candidateIndex = appHostCandidates.findIndex(candidate => isMatchingAppHostPath(candidate, appHostPath));
-            this._workspaceAppHostName = candidateIndex >= 0 ? appHostLabels[candidateIndex] : shortenPath(appHostPath);
+            this._setWorkspaceAppHostPath(appHostPath, appHostCandidates);
             extensionLogOutputChannel.info(`Workspace apphost resolved: ${appHostPath}`);
-            this._syncPolling();
-            this._onDidChangeData.fire();
         }).catch(error => {
             extensionLogOutputChannel.warn(`Failed to fetch workspace apphost: ${error}`);
         });
+    }
+
+    private _setWorkspaceAppHostPath(appHostPath: string | undefined, appHostCandidates: readonly string[]): void {
+        const previousAppHostPath = this._workspaceAppHostPath;
+        const previousAppHostName = this._workspaceAppHostName;
+
+        this._workspaceAppHostPath = appHostPath;
+        if (appHostPath) {
+            const appHostLabels = shortenPaths(appHostCandidates);
+            const candidateIndex = appHostCandidates.findIndex(candidate => isMatchingAppHostPath(candidate, appHostPath));
+            this._workspaceAppHostName = candidateIndex >= 0 ? appHostLabels[candidateIndex] : shortenPath(appHostPath);
+        }
+        else {
+            this._workspaceAppHostName = undefined;
+            this._clearWorkspaceAppHost();
+        }
+
+        this._syncPolling();
+        if (previousAppHostPath !== this._workspaceAppHostPath || previousAppHostName !== this._workspaceAppHostName) {
+            this._onDidChangeData.fire();
+        }
     }
 
     // ── Workspace mode: describe --follow ──
