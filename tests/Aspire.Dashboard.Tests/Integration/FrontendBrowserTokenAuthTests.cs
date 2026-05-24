@@ -76,6 +76,80 @@ public class FrontendBrowserTokenAuthTests
     }
 
     [Fact]
+    public async Task Get_LoginPage_ValidToken_MixedHttpHttpsWithUnsecuredTransport_HttpEndpointAcceptsHttpsLoginCookie()
+    {
+        var apiKey = "TestKey123!";
+        await using var app = IntegrationTestHelpers.CreateDashboardWebApplication(_testOutputHelper, config =>
+        {
+            config[DashboardConfigNames.DashboardFrontendUrlName.ConfigKey] = "https://127.0.0.1:0;http://127.0.0.1:0";
+            config[KnownConfigNames.AllowUnsecuredTransport] = "true";
+            config[DashboardConfigNames.DashboardFrontendAuthModeName.ConfigKey] = FrontendAuthMode.BrowserToken.ToString();
+            config[DashboardConfigNames.DashboardFrontendBrowserTokenName.ConfigKey] = apiKey;
+        });
+        await app.StartAsync().DefaultTimeout();
+
+        var httpsEndpoint = GetFrontendEndpoint(app, "https");
+        var httpEndpoint = GetFrontendEndpoint(app, "http");
+        using var client = CreateCookieClient();
+
+        var loginResponse = await client.GetAsync(httpsEndpoint + DashboardUrls.LoginUrl(token: apiKey)).DefaultTimeout();
+        Assert.Equal(HttpStatusCode.Redirect, loginResponse.StatusCode);
+
+        var response = await client.GetAsync(httpEndpoint + DashboardUrls.StructuredLogsUrl()).DefaultTimeout();
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("http")]
+    [InlineData("https")]
+    public async Task Get_LoginPage_ValidToken_UnsecuredTransport_IssuesInsecureCookieForConfiguredFrontendEndpoints(string scheme)
+    {
+        var apiKey = "TestKey123!";
+        await using var app = IntegrationTestHelpers.CreateDashboardWebApplication(_testOutputHelper, config =>
+        {
+            config[DashboardConfigNames.DashboardFrontendUrlName.ConfigKey] = "https://127.0.0.1:0;http://127.0.0.1:0";
+            config[KnownConfigNames.AllowUnsecuredTransport] = "true";
+            config[DashboardConfigNames.DashboardFrontendAuthModeName.ConfigKey] = FrontendAuthMode.BrowserToken.ToString();
+            config[DashboardConfigNames.DashboardFrontendBrowserTokenName.ConfigKey] = apiKey;
+        });
+        await app.StartAsync().DefaultTimeout();
+
+        var endpoint = GetFrontendEndpoint(app, scheme);
+        using var client = CreateCookieClient();
+
+        var response = await client.GetAsync(endpoint + DashboardUrls.LoginUrl(token: apiKey)).DefaultTimeout();
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        var setCookie = GetAuthCookie(response);
+        Assert.StartsWith(".Aspire.Dashboard.Auth.UnsecuredTransport=", setCookie, StringComparison.Ordinal);
+        Assert.DoesNotContain("; secure", setCookie, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Get_LoginPage_ValidToken_HttpsEndpointWithoutUnsecuredTransport_IssuesSecureCookie()
+    {
+        var apiKey = "TestKey123!";
+        await using var app = IntegrationTestHelpers.CreateDashboardWebApplication(_testOutputHelper, config =>
+        {
+            config[DashboardConfigNames.DashboardFrontendUrlName.ConfigKey] = "https://127.0.0.1:0";
+            config[DashboardConfigNames.DashboardFrontendAuthModeName.ConfigKey] = FrontendAuthMode.BrowserToken.ToString();
+            config[DashboardConfigNames.DashboardFrontendBrowserTokenName.ConfigKey] = apiKey;
+        });
+        await app.StartAsync().DefaultTimeout();
+
+        var endpoint = GetFrontendEndpoint(app, "https");
+        using var client = CreateCookieClient();
+
+        var response = await client.GetAsync(endpoint + DashboardUrls.LoginUrl(token: apiKey)).DefaultTimeout();
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        var setCookie = GetAuthCookie(response);
+        Assert.StartsWith(".Aspire.Dashboard.Auth=", setCookie, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Aspire.Dashboard.Auth.UnsecuredTransport=", setCookie, StringComparison.Ordinal);
+        Assert.Contains("; secure", setCookie, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Get_LoginPage_ValidToken_OtlpHttpConnection_Denied()
     {
         // Arrange
@@ -268,5 +342,32 @@ public class FrontendBrowserTokenAuthTests
         var summaryLog = l.Single(w => ((string?)LogTestHelpers.GetValue(w, "{OriginalFormat}"))?.StartsWith("Aspire Dashboard") == true);
         var containerMessage = "URLs may need changes depending on how network access to the container is configured.";
         Assert.Contains(containerMessage, summaryLog.Message);
+    }
+
+    private static string GetFrontendEndpoint(DashboardWebApplication app, string scheme)
+    {
+        return app.FrontendEndPointsAccessor
+            .Select(a => a())
+            .Single(e => string.Equals(e.BindingAddress.Scheme, scheme, StringComparison.OrdinalIgnoreCase))
+            .GetResolvedAddress();
+    }
+
+    private static HttpClient CreateCookieClient()
+    {
+        return new HttpClient(new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+            CookieContainer = new CookieContainer(),
+            SslOptions =
+            {
+                RemoteCertificateValidationCallback = (_, _, _, _) => true
+            }
+        });
+    }
+
+    private static string GetAuthCookie(HttpResponseMessage response)
+    {
+        Assert.True(response.Headers.TryGetValues("Set-Cookie", out var values));
+        return Assert.Single(values, value => value.StartsWith(".Aspire.Dashboard.Auth", StringComparison.Ordinal));
     }
 }
