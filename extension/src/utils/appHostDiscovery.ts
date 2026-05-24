@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
+import type { ChildProcessWithoutNullStreams } from 'child_process';
 import { spawnCliProcess } from '../debugger/languages/cli';
 import { AspireTerminalProvider } from './AspireTerminalProvider';
 import { aspireConfigFileName, getAppHostPathFromConfig, readJsonFile } from './cliTypes';
@@ -23,15 +24,22 @@ interface LegacyAppHostProjectSearchResult {
 const discoveryExcludePattern = '{**/artifacts/**,**/[Bb]in/**,**/[Oo]bj/**,**/node_modules/**,**/.git/**,**/.vs/**,**/.vscode-test/**,**/.idea/**,**/.aspire/modules/**}';
 
 export class AppHostDiscoveryService implements vscode.Disposable {
+    private static readonly _cliDiscoveryTimeoutMs = 30_000;
+
     private readonly _onDidChangeCandidates = new vscode.EventEmitter<vscode.WorkspaceFolder>();
     private readonly _cache = new Map<string, Promise<CandidateAppHostDisplayInfo[]>>();
     private readonly _watchers = new Map<string, vscode.Disposable[]>();
+    private readonly _activeCliProcesses = new Set<ChildProcessWithoutNullStreams>();
+    private readonly _cancelActiveCliProcesses = new Set<(error: Error) => void>();
+    private _disposed = false;
     readonly onDidChangeCandidates = this._onDidChangeCandidates.event;
 
     constructor(private readonly _terminalProvider: AspireTerminalProvider) {
     }
 
     async discover(workspaceFolder: vscode.WorkspaceFolder, forceRefresh = false): Promise<CandidateAppHostDisplayInfo[]> {
+        this._throwIfDisposed();
+
         const key = path.resolve(workspaceFolder.uri.fsPath);
         if (forceRefresh) {
             this._cache.delete(key);
@@ -71,11 +79,21 @@ export class AppHostDiscoveryService implements vscode.Disposable {
     }
 
     dispose(): void {
+        if (this._disposed) {
+            return;
+        }
+
+        this._disposed = true;
         for (const disposables of this._watchers.values()) {
             disposables.forEach(disposable => disposable.dispose());
         }
         this._watchers.clear();
         this._cache.clear();
+        for (const cancel of [...this._cancelActiveCliProcesses]) {
+            cancel(new Error('AppHost discovery service was disposed.'));
+        }
+        this._cancelActiveCliProcesses.clear();
+        this._activeCliProcesses.clear();
         this._onDidChangeCandidates.dispose();
     }
 
@@ -86,6 +104,7 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             return appHosts;
         }
         catch (error) {
+            this._throwIfDisposed();
             extensionLogOutputChannel.warn(`aspire ls discovery failed, falling back to aspire extension get-apphosts: ${error}`);
             const appHosts = await this._discoverWithLegacyGetAppHosts(workspaceFolder);
             extensionLogOutputChannel.info(`Discovered ${appHosts.length} AppHost candidate(s) via aspire extension get-apphosts`);
@@ -94,13 +113,15 @@ export class AppHostDiscoveryService implements vscode.Disposable {
     }
 
     private async _discoverWithLs(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
+        this._throwIfDisposed();
+
         const cliPath = await this._terminalProvider.getAspireCliExecutablePath();
         const args = ['ls', '--format', 'json'];
         if (process.env[EnvironmentVariables.ASPIRE_CLI_STOP_ON_ENTRY] === 'true') {
             args.push('--cli-wait-for-debugger');
         }
 
-        const output = await runCliForStdout(this._terminalProvider, cliPath, args, workspaceFolder.uri.fsPath);
+        const output = await this._runCliForStdout(cliPath, args, workspaceFolder.uri.fsPath);
         const parsed = JSON.parse(output.trim() || '[]');
         if (!Array.isArray(parsed)) {
             throw new Error('aspire ls did not return a JSON array.');
@@ -122,13 +143,15 @@ export class AppHostDiscoveryService implements vscode.Disposable {
     }
 
     private async _discoverWithLegacyGetAppHosts(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
+        this._throwIfDisposed();
+
         const cliPath = await this._terminalProvider.getAspireCliExecutablePath();
         const args = ['extension', 'get-apphosts'];
         if (process.env[EnvironmentVariables.ASPIRE_CLI_STOP_ON_ENTRY] === 'true') {
             args.push('--cli-wait-for-debugger');
         }
 
-        const output = await runCliForStdout(this._terminalProvider, cliPath, args, workspaceFolder.uri.fsPath);
+        const output = await this._runCliForStdout(cliPath, args, workspaceFolder.uri.fsPath);
         const parsed = parseLegacyGetAppHostsOutput(output);
         // Adapt the older extension-only output into the `aspire ls` candidate shape.
         // Keep this compatibility translation isolated here so the rest of the extension
@@ -145,7 +168,11 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             return;
         }
 
-        const invalidate = () => {
+        const invalidate = (uri: vscode.Uri) => {
+            if (isExcludedDiscoveryUri(workspaceFolder, uri)) {
+                return;
+            }
+
             this._cache.delete(key);
             this._onDidChangeCandidates.fire(workspaceFolder);
         };
@@ -164,12 +191,99 @@ export class AppHostDiscoveryService implements vscode.Disposable {
 
         const watchers = patterns.map(pattern => {
             const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(workspaceFolder, pattern));
-            watcher.onDidCreate(invalidate);
-            watcher.onDidChange(invalidate);
-            watcher.onDidDelete(invalidate);
+            watcher.onDidCreate(uri => invalidate(uri));
+            watcher.onDidChange(uri => invalidate(uri));
+            watcher.onDidDelete(uri => invalidate(uri));
             return watcher;
         });
         this._watchers.set(key, watchers);
+    }
+
+    private _throwIfDisposed(): void {
+        if (this._disposed) {
+            throw new Error('AppHost discovery service has been disposed.');
+        }
+    }
+
+    private _runCliForStdout(cliPath: string, args: string[], workingDirectory: string): Promise<string> {
+        return new Promise((resolve, reject) => {
+            this._throwIfDisposed();
+
+            let stdout = '';
+            let stderr = '';
+            let settled = false;
+            let childProcess: ChildProcessWithoutNullStreams | undefined;
+            let timeout: ReturnType<typeof setTimeout> | undefined;
+            const cancel = (error: Error) => {
+                if (childProcess && !childProcess.killed) {
+                    try {
+                        if (!childProcess.kill()) {
+                            extensionLogOutputChannel.warn(`Failed to stop AppHost discovery command: aspire ${args.join(' ')}`);
+                        }
+                    }
+                    catch (killError) {
+                        extensionLogOutputChannel.warn(`Failed to stop AppHost discovery command: ${killError}`);
+                    }
+                }
+
+                settle(() => reject(error));
+            };
+            const cleanup = () => {
+                if (timeout) {
+                    clearTimeout(timeout);
+                    timeout = undefined;
+                }
+                if (childProcess) {
+                    this._activeCliProcesses.delete(childProcess);
+                }
+                this._cancelActiveCliProcesses.delete(cancel);
+            };
+            const settle = (complete: () => void) => {
+                if (settled) {
+                    return;
+                }
+
+                settled = true;
+                cleanup();
+                complete();
+            };
+
+            this._cancelActiveCliProcesses.add(cancel);
+            try {
+                childProcess = spawnCliProcess(this._terminalProvider, cliPath, args, {
+                    noExtensionVariables: true,
+                    workingDirectory,
+                    stdoutCallback: data => { stdout += data; },
+                    stderrCallback: data => { stderr += data; },
+                    exitCallback: code => {
+                        settle(() => {
+                            if (code === 0) {
+                                resolve(stdout);
+                            }
+                            else {
+                                reject(new Error(stderr || `exit code ${code ?? 1}`));
+                            }
+                        });
+                    },
+                    errorCallback: error => {
+                        settle(() => reject(error));
+                    },
+                });
+            }
+            catch (error) {
+                settle(() => reject(error instanceof Error ? error : new Error(String(error))));
+                return;
+            }
+
+            if (settled) {
+                return;
+            }
+
+            this._activeCliProcesses.add(childProcess);
+            timeout = setTimeout(() => {
+                cancel(new Error(`aspire ${args.join(' ')} timed out after ${AppHostDiscoveryService._cliDiscoveryTimeoutMs / 1000} seconds.`));
+            }, AppHostDiscoveryService._cliDiscoveryTimeoutMs);
+        });
     }
 }
 
@@ -251,37 +365,24 @@ export async function findConfiguredAppHostPaths(workspaceFolder: vscode.Workspa
     return configuredPaths;
 }
 
-function runCliForStdout(terminalProvider: AspireTerminalProvider, cliPath: string, args: string[], workingDirectory: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-        let stdout = '';
-        let stderr = '';
-        let settled = false;
+function isExcludedDiscoveryUri(workspaceFolder: vscode.WorkspaceFolder, uri: vscode.Uri): boolean {
+    const relativePath = path.relative(workspaceFolder.uri.fsPath, uri.fsPath);
+    if (relativePath === '' || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+        return true;
+    }
 
-        spawnCliProcess(terminalProvider, cliPath, args, {
-            noExtensionVariables: true,
-            workingDirectory,
-            stdoutCallback: data => { stdout += data; },
-            stderrCallback: data => { stderr += data; },
-            exitCallback: code => {
-                if (settled) {
-                    return;
-                }
-                settled = true;
-                if (code === 0) {
-                    resolve(stdout);
-                }
-                else {
-                    reject(new Error(stderr || `exit code ${code ?? 1}`));
-                }
-            },
-            errorCallback: error => {
-                if (settled) {
-                    return;
-                }
-                settled = true;
-                reject(error);
-            },
-        });
+    const segments = relativePath.split(/[\\/]+/);
+    return segments.some((segment, index) => {
+        const lowerSegment = segment.toLowerCase();
+        return lowerSegment === 'artifacts'
+            || lowerSegment === 'bin'
+            || lowerSegment === 'obj'
+            || lowerSegment === 'node_modules'
+            || lowerSegment === '.git'
+            || lowerSegment === '.vs'
+            || lowerSegment === '.vscode-test'
+            || lowerSegment === '.idea'
+            || (lowerSegment === '.aspire' && segments[index + 1]?.toLowerCase() === 'modules');
     });
 }
 

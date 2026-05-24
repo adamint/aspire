@@ -164,6 +164,108 @@ suite('AppHost discovery', () => {
                 service.dispose();
             }
         });
+
+        test('ignores watched files in excluded directories', async () => {
+            const watcherCallbacks = stubFileSystemWatchers(sandbox);
+            const spawnStub = sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, options) => {
+                options?.stdoutCallback?.('[]');
+                options?.exitCallback?.(0);
+                return { kill: () => { } } as any;
+            });
+            const service = new AppHostDiscoveryService(makeTerminalProvider());
+            const workspaceFolder = makeWorkspaceFolder(buildPath('workspace'));
+            let changeCount = 0;
+            const subscription = service.onDidChangeCandidates(() => {
+                changeCount++;
+            });
+
+            try {
+                await service.discover(workspaceFolder);
+                assert.strictEqual(spawnStub.callCount, 1);
+
+                watcherCallbacks[0](vscode.Uri.file(buildPath('workspace', 'AppHost', 'bin', 'Debug', 'Generated.csproj')));
+                assert.strictEqual(changeCount, 0);
+
+                await service.discover(workspaceFolder);
+                assert.strictEqual(spawnStub.callCount, 1);
+            }
+            finally {
+                subscription.dispose();
+                service.dispose();
+            }
+        });
+
+        test('kills in-flight CLI process when disposed', async () => {
+            stubFileSystemWatchers(sandbox);
+            const childProcess = {
+                killed: false,
+                kill: sandbox.stub().callsFake(() => {
+                    childProcess.killed = true;
+                    return true;
+                }),
+            };
+            const spawnStub = sandbox.stub(cliModule, 'spawnCliProcess').returns(childProcess as any);
+            const service = new AppHostDiscoveryService(makeTerminalProvider());
+            const workspaceFolder = makeWorkspaceFolder(buildPath('workspace'));
+
+            const discovery = service.discover(workspaceFolder);
+            await waitForMicrotasks();
+
+            service.dispose();
+
+            await assert.rejects(discovery, /disposed/);
+            assert.strictEqual(spawnStub.callCount, 1);
+            assert.strictEqual(childProcess.kill.callCount, 1);
+            assert.strictEqual(childProcess.killed, true);
+        });
+
+        test('times out hung CLI process and allows retry', async () => {
+            stubFileSystemWatchers(sandbox);
+            const clock = sandbox.useFakeTimers();
+            const killedArgs: string[][] = [];
+            let hangCli = true;
+            const spawnStub = sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, args = [], options) => {
+                const childProcess = {
+                    killed: false,
+                    kill: sandbox.stub().callsFake(() => {
+                        childProcess.killed = true;
+                        killedArgs.push(args);
+                        return true;
+                    }),
+                };
+                if (!hangCli) {
+                    options?.stdoutCallback?.('[]');
+                    options?.exitCallback?.(0);
+                }
+                return childProcess as any;
+            });
+            const service = new AppHostDiscoveryService(makeTerminalProvider());
+            const workspaceFolder = makeWorkspaceFolder(buildPath('workspace'));
+
+            try {
+                const discovery = service.discover(workspaceFolder);
+                await waitForMicrotasks();
+
+                await clock.tickAsync(30_000);
+                await waitForMicrotasks();
+                await clock.tickAsync(30_000);
+
+                await assert.rejects(discovery, /timed out after 30 seconds/);
+                assert.deepStrictEqual(killedArgs, [
+                    ['ls', '--format', 'json'],
+                    ['extension', 'get-apphosts'],
+                ]);
+
+                hangCli = false;
+                const retryResult = await service.discover(workspaceFolder);
+                assert.deepStrictEqual(retryResult, []);
+                assert.strictEqual(spawnStub.callCount, 3);
+            }
+            finally {
+                service.dispose();
+                clock.restore();
+            }
+        });
     });
 });
 
@@ -186,19 +288,24 @@ function makeTerminalProvider(): AspireTerminalProvider {
     } as unknown as AspireTerminalProvider;
 }
 
-function stubFileSystemWatchers(sandbox: sinon.SinonSandbox): Array<() => void> {
-    const callbacks: Array<() => void> = [];
+async function waitForMicrotasks(): Promise<void> {
+    await Promise.resolve();
+    await Promise.resolve();
+}
+
+function stubFileSystemWatchers(sandbox: sinon.SinonSandbox): Array<(uri?: vscode.Uri) => void> {
+    const callbacks: Array<(uri?: vscode.Uri) => void> = [];
     sandbox.stub(vscode.workspace, 'createFileSystemWatcher').callsFake(() => ({
         onDidCreate: callback => {
-            callbacks.push(() => callback(vscode.Uri.file(buildPath('workspace', 'AppHost', 'AppHost.csproj'))));
+            callbacks.push(uri => callback(uri ?? vscode.Uri.file(buildPath('workspace', 'AppHost', 'AppHost.csproj'))));
             return { dispose: () => { } };
         },
         onDidChange: callback => {
-            callbacks.push(() => callback(vscode.Uri.file(buildPath('workspace', 'AppHost', 'AppHost.csproj'))));
+            callbacks.push(uri => callback(uri ?? vscode.Uri.file(buildPath('workspace', 'AppHost', 'AppHost.csproj'))));
             return { dispose: () => { } };
         },
         onDidDelete: callback => {
-            callbacks.push(() => callback(vscode.Uri.file(buildPath('workspace', 'AppHost', 'AppHost.csproj'))));
+            callbacks.push(uri => callback(uri ?? vscode.Uri.file(buildPath('workspace', 'AppHost', 'AppHost.csproj'))));
             return { dispose: () => { } };
         },
         dispose: () => { },
