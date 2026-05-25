@@ -107,12 +107,12 @@ suite('utils/workspace tests', () => {
             detail: item.detail,
         })), [
             {
-                label: 'apps/Store/AppHost.csproj',
+                label: path.join('apps', 'Store', 'AppHost.csproj'),
                 description: 'C# · buildable',
                 detail: '/workspace/apps/Store/AppHost.csproj',
             },
             {
-                label: 'samples/Store/AppHost.csproj',
+                label: path.join('samples', 'Store', 'AppHost.csproj'),
                 description: 'TypeScript · possibly-unbuildable',
                 detail: '/workspace/samples/Store/AppHost.csproj',
             },
