@@ -83,13 +83,26 @@ export interface AppHostDisplayInfo {
 
 export type ViewMode = 'workspace' | 'global';
 
+interface GlobalDescribeStream {
+    appHostPath: string;
+    process: ChildProcessWithoutNullStreams | undefined;
+    resources: Map<string, ResourceJson>;
+    restartTimer: ReturnType<typeof setTimeout> | undefined;
+    restartDelay: number;
+    version: number;
+}
+
 /**
  * Central data repository for app host and resource information.
  *
- * Owns two independent data sources:
+ * Owns three independent data sources:
  *  - `aspire describe --follow` (workspace mode) — streams resource updates
  *    via NDJSON for the selected workspace AppHost.  Only active while the
  *    tree-view panel is visible **and** workspace mode is selected.
+ *  - `aspire describe --follow --apphost <path>` (global mode fan-out) — one
+ *    stream per AppHost discovered by `ps`, merged into `appHost.resources`
+ *    so the global multi-AppHost tree can show nested resources. `ps` itself
+ *    only emits AppHost-level data.
  *  - `aspire ps` polling — periodically fetches running app hosts. In global
  *    mode this backs the full tree; in workspace mode it confirms whether the
  *    selected workspace AppHost is running when the resource stream is empty.
@@ -122,6 +135,13 @@ export class AppHostDataRepository {
     private _psFetchVersion = 0;
     private _supportsPsFollow = true;
     private _fetchInProgress = false;
+
+    // ── Global mode per-AppHost describe streams ──
+    // In global mode `ps` only returns AppHost-level data, so to populate
+    // `appHost.resources` for the multi-AppHost tree we fan out one
+    // `aspire describe --follow --apphost <path>` per discovered AppHost and
+    // merge the streams. Keyed by appHostPath.
+    private _globalDescribeStreams = new Map<string, GlobalDescribeStream>();
 
     // ── Workspace app host (from aspire ls) ──
     // The singular fields track a selected/default workspace AppHost. The candidate
@@ -258,6 +278,7 @@ export class AppHostDataRepository {
         this._disposed = true;
         this._stopPolling();
         this._stopDescribeWatch();
+        this._stopAllGlobalDescribes();
         if (this._getAppHostsProcess) {
             const getAppHostsProcess = this._getAppHostsProcess;
             this._getAppHostsProcess = undefined;
@@ -312,6 +333,12 @@ export class AppHostDataRepository {
         } else {
             this._stopPolling();
         }
+
+        // Global describe fan-out is only active while in global mode with the
+        // panel/editor showing. _reconcileGlobalDescribes handles both starting
+        // streams (when there are AppHosts to follow) and tearing them down
+        // (when we leave global mode or hide the panel).
+        this._reconcileGlobalDescribes();
     }
 
     // ── Workspace app host (from aspire ls) ──
@@ -603,6 +630,165 @@ export class AppHostDataRepository {
         return undefined;
     }
 
+    // ── Global mode: per-AppHost describe fan-out ──
+    // `ps` is AppHost-level only, so to keep the global multi-AppHost tree
+    // populated with resources we spin up one `aspire describe --follow --apphost <path>`
+    // per AppHost in `_appHosts` and merge the streams into appHost.resources.
+
+    private _reconcileGlobalDescribes(): void {
+        if (this._disposed || this._viewMode !== 'global' || !this._dataActive) {
+            this._stopAllGlobalDescribes();
+            return;
+        }
+
+        const currentPaths = new Set(this._appHosts.map(a => a.appHostPath));
+        for (const path of Array.from(this._globalDescribeStreams.keys())) {
+            if (!currentPaths.has(path)) {
+                this._stopGlobalDescribe(path);
+            }
+        }
+        for (const appHost of this._appHosts) {
+            if (!this._globalDescribeStreams.has(appHost.appHostPath)) {
+                this._startGlobalDescribe(appHost.appHostPath);
+            }
+        }
+        this._attachGlobalResourcesToAppHosts();
+    }
+
+    private _attachGlobalResourcesToAppHosts(): void {
+        for (const appHost of this._appHosts) {
+            const stream = this._globalDescribeStreams.get(appHost.appHostPath);
+            appHost.resources = stream ? Array.from(stream.resources.values()) : null;
+        }
+    }
+
+    private _startGlobalDescribe(appHostPath: string): void {
+        const stream: GlobalDescribeStream = {
+            appHostPath,
+            process: undefined,
+            resources: new Map(),
+            restartTimer: undefined,
+            restartDelay: 5000,
+            version: 0,
+        };
+        this._globalDescribeStreams.set(appHostPath, stream);
+        const startVersion = ++stream.version;
+
+        this._terminalProvider.getAspireCliExecutablePath().then(cliPath => {
+            // Bail if we were stopped, replaced, or torn down while resolving the cli path.
+            if (this._disposed || this._globalDescribeStreams.get(appHostPath) !== stream || startVersion !== stream.version) {
+                return;
+            }
+
+            const args = ['describe', '--follow', '--format', 'json', '--apphost', appHostPath];
+            extensionLogOutputChannel.info(`Starting aspire describe --follow for AppHost ${appHostPath}`);
+
+            const childProcess = spawnCliProcess(this._terminalProvider, cliPath, args, {
+                noExtensionVariables: true,
+                lineCallback: (line) => {
+                    if (this._globalDescribeStreams.get(appHostPath) !== stream || stream.process !== childProcess) {
+                        return;
+                    }
+                    this._handleGlobalDescribeLine(stream, line);
+                },
+                stderrCallback: () => {
+                    // Per-AppHost describe errors should not pollute the global error banner.
+                },
+                exitCallback: (code) => {
+                    if (this._globalDescribeStreams.get(appHostPath) !== stream || stream.process !== childProcess) {
+                        return;
+                    }
+                    extensionLogOutputChannel.info(`aspire describe --follow for ${appHostPath} exited with code ${code}`);
+                    stream.process = undefined;
+                    if (this._disposed) {
+                        return;
+                    }
+
+                    // AppHost is no longer running — drop the stream entirely; the
+                    // next ps reconcile will recreate it if the AppHost comes back.
+                    if (!this._appHosts.some(a => a.appHostPath === appHostPath)) {
+                        this._globalDescribeStreams.delete(appHostPath);
+                        return;
+                    }
+
+                    stream.resources.clear();
+                    this._attachGlobalResourcesToAppHosts();
+                    this._onDidChangeData.fire();
+
+                    const delay = stream.restartDelay;
+                    stream.restartDelay = Math.min(stream.restartDelay * 2, this._getPollingIntervalMs());
+                    stream.restartTimer = setTimeout(() => {
+                        stream.restartTimer = undefined;
+                        if (this._disposed) {
+                            return;
+                        }
+                        if (this._globalDescribeStreams.get(appHostPath) !== stream) {
+                            return;
+                        }
+                        if (!this._appHosts.some(a => a.appHostPath === appHostPath)) {
+                            this._globalDescribeStreams.delete(appHostPath);
+                            return;
+                        }
+                        this._globalDescribeStreams.delete(appHostPath);
+                        this._startGlobalDescribe(appHostPath);
+                    }, delay);
+                },
+                errorCallback: (error) => {
+                    if (this._globalDescribeStreams.get(appHostPath) !== stream || stream.process !== childProcess) {
+                        return;
+                    }
+                    extensionLogOutputChannel.warn(`aspire describe --follow for ${appHostPath} error: ${error.message}`);
+                    stream.process = undefined;
+                }
+            });
+            stream.process = childProcess;
+        }).catch(error => {
+            extensionLogOutputChannel.warn(`Failed to start describe for ${appHostPath}: ${error}`);
+        });
+    }
+
+    private _handleGlobalDescribeLine(stream: GlobalDescribeStream, line: string): void {
+        const trimmed = line.trim();
+        if (!trimmed) {
+            return;
+        }
+        try {
+            const resource: ResourceJson = JSON.parse(trimmed);
+            if (resource.name) {
+                stream.resources.set(resource.name, resource);
+                stream.restartDelay = 5000;
+                this._attachGlobalResourcesToAppHosts();
+                this._onDidChangeData.fire();
+            }
+        } catch (e) {
+            extensionLogOutputChannel.warn(`Failed to parse describe NDJSON line for ${stream.appHostPath}: ${e}`);
+        }
+    }
+
+    private _stopGlobalDescribe(appHostPath: string): void {
+        const stream = this._globalDescribeStreams.get(appHostPath);
+        if (!stream) {
+            return;
+        }
+        this._globalDescribeStreams.delete(appHostPath);
+        stream.version++;
+        if (stream.restartTimer) {
+            clearTimeout(stream.restartTimer);
+            stream.restartTimer = undefined;
+        }
+        if (stream.process) {
+            const childProcess = stream.process;
+            stream.process = undefined;
+            this._terminateProcess(childProcess, `aspire describe --follow (${appHostPath})`);
+        }
+    }
+
+    private _stopAllGlobalDescribes(): void {
+        for (const path of Array.from(this._globalDescribeStreams.keys())) {
+            this._stopGlobalDescribe(path);
+        }
+    }
+
     private _updateWorkspaceContext(options?: { clearLoading?: boolean }): void {
         const hasWorkspaceAppHost = this._workspaceAppHost !== undefined;
         const hasResources = this._workspaceResources.size > 0;
@@ -836,6 +1022,7 @@ export class AppHostDataRepository {
 
             const changed = JSON.stringify(appHosts) !== JSON.stringify(this._appHosts);
             this._appHosts = appHosts;
+            this._reconcileGlobalDescribes();
 
             if (this._loadingGlobal) {
                 this._loadingGlobal = false;

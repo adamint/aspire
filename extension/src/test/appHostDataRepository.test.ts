@@ -1017,50 +1017,56 @@ suite('AppHostDataRepository global polling', () => {
 
         assert.deepStrictEqual(spawnStub.firstCall.args[2], ['ps', '--follow', '--format', 'json']);
 
-        const lineCallback = spawnStub.firstCall.args[3].lineCallback;
-        lineCallback(JSON.stringify({
+        const psLineCallback = spawnStub.firstCall.args[3].lineCallback;
+        psLineCallback(JSON.stringify({
             appHostPath: '/workspace/AppHost.csproj',
             appHostPid: 1234,
             status: 'running',
-            resources: [
-                { name: 'api', resourceType: 'Project', state: 'Running' }
-            ]
         }));
+        await waitForMicrotasks();
 
         assert.strictEqual(repository.appHosts.length, 1);
         assert.strictEqual(repository.appHosts[0].appHostPath, '/workspace/AppHost.csproj');
+
+        // The repository should now have spawned `aspire describe --follow --apphost <path>`
+        // for the discovered AppHost so the global tree can show resources.
+        const describeCall = spawnStub.getCalls().find(call =>
+            Array.isArray(call.args[2]) && call.args[2][0] === 'describe' && call.args[2].includes('/workspace/AppHost.csproj'));
+        assert.ok(describeCall, 'expected aspire describe --follow to spawn for the discovered AppHost');
+        assert.deepStrictEqual(describeCall.args[2], ['describe', '--follow', '--format', 'json', '--apphost', '/workspace/AppHost.csproj']);
+
+        const describeLineCallback = describeCall.args[3].lineCallback;
+        describeLineCallback(JSON.stringify({ name: 'api', resourceType: 'Project', state: 'Running' }));
         assert.strictEqual(repository.appHosts[0].resources?.[0].name, 'api');
 
-        lineCallback(JSON.stringify({
+        psLineCallback(JSON.stringify({
             appHostPath: '/workspace/OtherAppHost.csproj',
             appHostPid: 5678,
             status: 'running',
-            resources: []
         }));
+        await waitForMicrotasks();
 
         assert.strictEqual(repository.appHosts.length, 2);
         assert.strictEqual(repository.appHosts[1].appHostPath, '/workspace/OtherAppHost.csproj');
         assert.deepStrictEqual(repository.appHosts[1].resources, []);
 
-        lineCallback(JSON.stringify({
+        psLineCallback(JSON.stringify({
             appHostPath: '/workspace/AppHost.csproj',
             appHostPid: 9999,
             status: 'running',
-            resources: []
         }));
+        await waitForMicrotasks();
 
         assert.strictEqual(repository.appHosts.length, 3);
         assert.strictEqual(repository.appHosts[2].appHostPath, '/workspace/AppHost.csproj');
         assert.strictEqual(repository.appHosts[2].appHostPid, 9999);
 
-        lineCallback(JSON.stringify({
+        psLineCallback(JSON.stringify({
             appHostPath: '/workspace/AppHost.csproj',
             appHostPid: 1234,
             status: 'stopped',
-            resources: [
-                { name: 'api', resourceType: 'Project', state: 'Running' }
-            ]
         }));
+        await waitForMicrotasks();
 
         assert.strictEqual(repository.appHosts.length, 2);
         assert.strictEqual(repository.appHosts[0].appHostPath, '/workspace/OtherAppHost.csproj');
@@ -1202,6 +1208,99 @@ suite('AppHostDataRepository global polling', () => {
 
         assert.ok(childProcess);
         assert.strictEqual(childProcess.killed, false);
+
+        repository.dispose();
+    });
+
+    test('global mode spawns describe per AppHost and tears down on AppHost removal', async () => {
+        const spawned: { args: string[]; process: TestChildProcess; options: any }[] = [];
+        spawnStub.callsFake((_terminalProvider, _cliPath, args, options) => {
+            const process = new TestChildProcess();
+            spawned.push({ args, process, options });
+            return process;
+        });
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        repository.setViewMode('global');
+        repository.setPanelVisible(true);
+        await waitForMicrotasks();
+
+        const psCall = spawned.find(call => call.args[0] === 'ps');
+        assert.ok(psCall);
+
+        psCall.options.lineCallback(JSON.stringify({
+            appHostPath: '/workspace/AppHost.csproj',
+            appHostPid: 1234,
+            status: 'running',
+        }));
+        psCall.options.lineCallback(JSON.stringify({
+            appHostPath: '/workspace/OtherAppHost.csproj',
+            appHostPid: 5678,
+            status: 'running',
+        }));
+        await waitForMicrotasks();
+
+        const describeCalls = spawned.filter(call => call.args[0] === 'describe');
+        assert.strictEqual(describeCalls.length, 2);
+        const paths = describeCalls.map(call => call.args[call.args.indexOf('--apphost') + 1]).sort();
+        assert.deepStrictEqual(paths, ['/workspace/AppHost.csproj', '/workspace/OtherAppHost.csproj']);
+
+        const firstDescribe = describeCalls.find(call => call.args.includes('/workspace/AppHost.csproj'))!;
+        firstDescribe.options.lineCallback(JSON.stringify({ name: 'api', resourceType: 'Project', state: 'Running' }));
+        firstDescribe.options.lineCallback(JSON.stringify({ name: 'db', resourceType: 'Container', state: 'Running' }));
+
+        const first = repository.appHosts.find(a => a.appHostPath === '/workspace/AppHost.csproj');
+        assert.ok(first);
+        assert.strictEqual(first.resources?.length, 2);
+        assert.deepStrictEqual(first.resources?.map(r => r.name).sort(), ['api', 'db']);
+
+        // Stop the first AppHost — its describe stream should be torn down.
+        psCall.options.lineCallback(JSON.stringify({
+            appHostPath: '/workspace/AppHost.csproj',
+            appHostPid: 1234,
+            status: 'stopped',
+        }));
+        await waitForMicrotasks();
+
+        assert.strictEqual(firstDescribe.process.killed, true);
+        assert.strictEqual(repository.appHosts.length, 1);
+        assert.strictEqual(repository.appHosts[0].appHostPath, '/workspace/OtherAppHost.csproj');
+
+        repository.dispose();
+    });
+
+    test('global describe streams are stopped when switching to workspace mode', async () => {
+        const spawned: { args: string[]; process: TestChildProcess; options: any }[] = [];
+        spawnStub.callsFake((_terminalProvider, _cliPath, args, options) => {
+            const process = new TestChildProcess();
+            spawned.push({ args, process, options });
+            return process;
+        });
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        repository.activate();
+        repository.setViewMode('global');
+        repository.setPanelVisible(true);
+        await waitForMicrotasks();
+
+        const psCall = spawned.find(call => call.args[0] === 'ps');
+        assert.ok(psCall);
+        psCall.options.lineCallback(JSON.stringify({
+            appHostPath: '/workspace/AppHost.csproj',
+            appHostPid: 1234,
+            status: 'running',
+        }));
+        await waitForMicrotasks();
+
+        const describeCall = spawned.find(call => call.args[0] === 'describe');
+        assert.ok(describeCall);
+        assert.strictEqual(describeCall.process.killed, false);
+
+        repository.setViewMode('workspace');
+        await waitForMicrotasks();
+
+        assert.strictEqual(describeCall.process.killed, true);
 
         repository.dispose();
     });
