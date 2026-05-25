@@ -88,7 +88,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const verifyCliInstalledRegistration = vscode.commands.registerCommand('aspire-vscode.verifyCliInstalled', verifyCliInstalledCommand);
 
   // Aspire panel - running app hosts tree view
-  const dataRepository = new AppHostDataRepository(terminalProvider);
+  const dataRepository = new AppHostDataRepository(terminalProvider, appHostDiscoveryService);
   const appHostTreeProvider = new AspireAppHostTreeProvider(dataRepository, terminalProvider, context.globalState);
   const appHostTreeView = vscode.window.createTreeView('aspire-vscode.runningAppHosts', {
     treeDataProvider: appHostTreeProvider,
@@ -212,7 +212,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const getEnableSettingsFileCreationPromptOnStartup = () => vscode.workspace.getConfiguration('aspire').get<boolean>('enableSettingsFileCreationPromptOnStartup', true);
   const setEnableSettingsFileCreationPromptOnStartup = async (value: boolean) => await vscode.workspace.getConfiguration('aspire').update('enableSettingsFileCreationPromptOnStartup', value, vscode.ConfigurationTarget.Workspace);
   const appHostDisposablePromise = checkForExistingAppHostPathInWorkspace(
-    terminalProvider,
+    appHostDiscoveryService,
     getEnableSettingsFileCreationPromptOnStartup,
     setEnableSettingsFileCreationPromptOnStartup
   );
