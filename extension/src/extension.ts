@@ -88,7 +88,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const verifyCliInstalledRegistration = vscode.commands.registerCommand('aspire-vscode.verifyCliInstalled', verifyCliInstalledCommand);
 
   // Aspire panel - running app hosts tree view
-  const dataRepository = new AppHostDataRepository(terminalProvider, appHostDiscoveryService);
+  const dataRepository = new AppHostDataRepository(terminalProvider);
   const appHostTreeProvider = new AspireAppHostTreeProvider(dataRepository, terminalProvider, context.globalState);
   const appHostTreeView = vscode.window.createTreeView('aspire-vscode.runningAppHosts', {
     treeDataProvider: appHostTreeProvider,
@@ -160,8 +160,8 @@ export async function activate(context: vscode.ExtensionContext) {
     command += ' --follow';
     terminalProvider.sendAspireCommandToAspireTerminal(command);
   });
-  const codeLensRevealResourceRegistration = vscode.commands.registerCommand('aspire-vscode.codeLensRevealResource', (resourceName: string) => {
-    const element = appHostTreeProvider.findResourceElement(resourceName);
+  const codeLensRevealResourceRegistration = vscode.commands.registerCommand('aspire-vscode.codeLensRevealResource', (resourceName: string, appHostPath?: string) => {
+    const element = appHostTreeProvider.findResourceElement(resourceName, appHostPath);
     if (element) {
       appHostTreeView.reveal(element, { select: true, focus: true });
     }
@@ -212,7 +212,7 @@ export async function activate(context: vscode.ExtensionContext) {
   const getEnableSettingsFileCreationPromptOnStartup = () => vscode.workspace.getConfiguration('aspire').get<boolean>('enableSettingsFileCreationPromptOnStartup', true);
   const setEnableSettingsFileCreationPromptOnStartup = async (value: boolean) => await vscode.workspace.getConfiguration('aspire').update('enableSettingsFileCreationPromptOnStartup', value, vscode.ConfigurationTarget.Workspace);
   const appHostDisposablePromise = checkForExistingAppHostPathInWorkspace(
-    appHostDiscoveryService,
+    terminalProvider,
     getEnableSettingsFileCreationPromptOnStartup,
     setEnableSettingsFileCreationPromptOnStartup
   );
