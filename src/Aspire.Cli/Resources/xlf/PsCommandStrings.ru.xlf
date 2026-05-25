@@ -17,11 +17,6 @@
         <target state="new">The --follow option only supports JSON output. Use --format json.</target>
         <note />
       </trans-unit>
-      <trans-unit id="HeaderCliLog">
-        <source>Logs</source>
-        <target state="new">Logs</target>
-        <note />
-      </trans-unit>
       <trans-unit id="HeaderCliPid">
         <source>CLI PID</source>
         <target state="translated">PID CLI</target>
