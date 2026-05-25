@@ -120,7 +120,6 @@ export class AppHostDataRepository {
     private _pollingInterval: ReturnType<typeof setInterval> | undefined;
     private _psProcesses = new Set<ChildProcessWithoutNullStreams>();
     private _psFetchVersion = 0;
-    private _supportsResources = true;
     private _supportsPsFollow = true;
     private _fetchInProgress = false;
 
@@ -702,9 +701,6 @@ export class AppHostDataRepository {
         };
 
         const args = ['ps', '--follow', '--format', 'json'];
-        if (this._supportsResources) {
-            args.push('--resources');
-        }
 
         psProcess = spawnCliProcess(this._terminalProvider, cliPath, args, {
             noExtensionVariables: true,
@@ -769,34 +765,16 @@ export class AppHostDataRepository {
         const fetchVersion = ++this._psFetchVersion;
 
         const args = ['ps', '--format', 'json'];
-        if (this._supportsResources) {
-            args.push('--resources');
-        }
         this._runPsCommand(args, fetchVersion, (code, stdout, stderr) => {
             if (code === 0) {
                 this._setPsError(undefined);
                 this._handlePsOutput(stdout);
-                this._fetchInProgress = false;
-            } else if (this._supportsResources) {
-                this._supportsResources = false;
-                extensionLogOutputChannel.info('aspire ps --resources failed, falling back to aspire ps without --resources');
-                this._runPsCommand(['ps', '--format', 'json'], fetchVersion, (retryCode, retryStdout, retryStderr) => {
-                    if (retryCode === 0) {
-                        this._setPsError(undefined);
-                        this._handlePsOutput(retryStdout);
-                    } else {
-                        this._loadingGlobal = false;
-                        this._updateLoadingContext();
-                        this._setPsError(errorFetchingAppHosts(retryStderr || `exit code ${retryCode}`));
-                    }
-                    this._fetchInProgress = false;
-                });
             } else {
                 this._loadingGlobal = false;
                 this._updateLoadingContext();
                 this._setPsError(errorFetchingAppHosts(stderr || `exit code ${code}`));
-                this._fetchInProgress = false;
             }
+            this._fetchInProgress = false;
         });
     }
 

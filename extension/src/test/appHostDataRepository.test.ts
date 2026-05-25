@@ -271,7 +271,7 @@ suite('AppHostDataRepository', () => {
         let getAppHostsLineCallback: ((line: string) => void) | undefined;
         const getAppHostsProcess = new TestChildProcess();
         const describeProcess = new TestChildProcess();
-        const psResourcesProcess = new TestChildProcess();
+        const psFollowProcess = new TestChildProcess();
         const psFallbackProcess = new TestChildProcess();
         const replacementDescribeProcess = new TestChildProcess();
         const psSuccessProcess = new TestChildProcess();
@@ -280,7 +280,7 @@ suite('AppHostDataRepository', () => {
             return getAppHostsProcess;
         });
         spawnStub.onSecondCall().returns(describeProcess);
-        spawnStub.onThirdCall().returns(psResourcesProcess);
+        spawnStub.onThirdCall().returns(psFollowProcess);
         spawnStub.onCall(3).returns(psFallbackProcess);
         spawnStub.onCall(4).returns(replacementDescribeProcess);
         spawnStub.onCall(5).returns(psSuccessProcess);
@@ -309,12 +309,7 @@ suite('AppHostDataRepository', () => {
             psFollowOptions.exitCallback(1);
             await waitForAppHostDiscovery();
 
-            const psResourcesOptions = spawnStub.getCall(3).args[3];
-            psResourcesOptions.stderrCallback('resources unavailable');
-            psResourcesOptions.exitCallback(1);
-            await waitForAppHostDiscovery();
-
-            const psFallbackOptions = spawnStub.getCall(4).args[3];
+            const psFallbackOptions = spawnStub.getCall(3).args[3];
             psFallbackOptions.stderrCallback('ps failed');
             psFallbackOptions.exitCallback(1);
             assert.ok(repository.errorMessage?.includes('ps failed'), repository.errorMessage);
@@ -372,7 +367,7 @@ suite('AppHostDataRepository', () => {
 
             assert.strictEqual(repository.viewMode, 'workspace');
             assert.strictEqual(spawnStub.callCount, 2);
-            assert.deepStrictEqual(spawnStub.secondCall.args[2], ['ps', '--follow', '--format', 'json', '--resources']);
+            assert.deepStrictEqual(spawnStub.secondCall.args[2], ['ps', '--follow', '--format', 'json']);
         } finally {
             repository.dispose();
             workspaceFoldersStub.restore();
@@ -418,7 +413,7 @@ suite('AppHostDataRepository', () => {
             assert.strictEqual(describeProcess.killed, false);
             assert.strictEqual(spawnStub.callCount, 3);
             assert.deepStrictEqual(spawnStub.secondCall.args[2], ['describe', '--follow', '--format', 'json', '--apphost', '/workspace/apps/Store/AppHost.csproj']);
-            assert.deepStrictEqual(spawnStub.thirdCall.args[2], ['ps', '--follow', '--format', 'json', '--resources']);
+            assert.deepStrictEqual(spawnStub.thirdCall.args[2], ['ps', '--follow', '--format', 'json']);
         } finally {
             repository.dispose();
             workspaceFoldersStub.restore();
@@ -678,7 +673,7 @@ suite('AppHostDataRepository', () => {
             await waitForMicrotasks();
 
             assert.ok(psOptions);
-            assert.deepStrictEqual(psArgs, ['ps', '--follow', '--format', 'json', '--resources']);
+            assert.deepStrictEqual(psArgs, ['ps', '--follow', '--format', 'json']);
             psOptions.lineCallback(JSON.stringify([{
                 appHostPath: '/workspace/apphost/apphost.cs',
                 appHostPid: 125881,
@@ -1001,7 +996,7 @@ suite('AppHostDataRepository global polling', () => {
         repository.setPanelVisible(true);
         await waitForMicrotasks();
 
-        assert.deepStrictEqual(spawnStub.firstCall.args[2], ['ps', '--follow', '--format', 'json', '--resources']);
+        assert.deepStrictEqual(spawnStub.firstCall.args[2], ['ps', '--follow', '--format', 'json']);
 
         repository.setPanelVisible(false);
 
@@ -1020,7 +1015,7 @@ suite('AppHostDataRepository global polling', () => {
         repository.setPanelVisible(true);
         await waitForMicrotasks();
 
-        assert.deepStrictEqual(spawnStub.firstCall.args[2], ['ps', '--follow', '--format', 'json', '--resources']);
+        assert.deepStrictEqual(spawnStub.firstCall.args[2], ['ps', '--follow', '--format', 'json']);
 
         const lineCallback = spawnStub.firstCall.args[3].lineCallback;
         lineCallback(JSON.stringify({
@@ -1096,7 +1091,7 @@ suite('AppHostDataRepository global polling', () => {
         repository.dispose();
     });
 
-    test('cli path failure does not disable resources polling', async () => {
+    test('cli path failure does not disable ps polling', async () => {
         const clock = sinon.useFakeTimers();
         getCliPathStub.onFirstCall().rejects(new Error('CLI path unavailable'));
         getCliPathStub.onSecondCall().resolves('aspire');
@@ -1114,7 +1109,7 @@ suite('AppHostDataRepository global polling', () => {
             await waitForMicrotasks();
 
             assert.strictEqual(spawnStub.calledOnce, true);
-            assert.deepStrictEqual(spawnStub.firstCall.args[2], ['ps', '--format', 'json', '--resources']);
+            assert.deepStrictEqual(spawnStub.firstCall.args[2], ['ps', '--format', 'json']);
         } finally {
             repository.dispose();
             clock.restore();
@@ -1146,7 +1141,7 @@ suite('AppHostDataRepository global polling', () => {
         }
     });
 
-    test('stopped ps does not start fallback after resources failure', async () => {
+    test('stopped ps does not start fallback after exit', async () => {
         const childProcess = new TestChildProcess();
         spawnStub.returns(childProcess);
         const repository = new AppHostDataRepository(terminalProvider);
