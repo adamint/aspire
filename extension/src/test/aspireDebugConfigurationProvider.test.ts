@@ -116,6 +116,31 @@ suite('AspireDebugConfigurationProvider', () => {
         assert.deepStrictEqual(configs, []);
     });
 
+    test('does not provide dynamic launch config when discovery fails', async () => {
+        const folder = createWorkspaceFolder(tempDir);
+        const programPath = path.join(tempDir, 'AppHost', 'Program.cs');
+        const provider = new AspireDebugConfigurationProvider(createFailingAppHostDiscoveryService());
+        setActiveEditor(programPath, folder);
+
+        const configs = await provider.provideDebugConfigurations(folder);
+
+        assert.deepStrictEqual(configs, []);
+    });
+
+    test('leaves launch config program unchanged when debug target resolution fails', async () => {
+        const programPath = path.join(tempDir, 'AppHost', 'Program.cs');
+        const provider = new AspireDebugConfigurationProvider(createFailingAppHostDiscoveryService());
+
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: programPath
+        });
+
+        assert.strictEqual(config?.program, programPath);
+    });
+
     function setActiveEditor(filePath: string, folder: vscode.WorkspaceFolder): void {
         sandbox.stub(vscode.window, 'activeTextEditor').value({
             document: {
@@ -142,5 +167,16 @@ function createAppHostDiscoveryService(resolvedPath: string, candidatePath: stri
             language: language,
             status: 'buildable',
         } : undefined,
+    } as unknown as AppHostDiscoveryService;
+}
+
+function createFailingAppHostDiscoveryService(): AppHostDiscoveryService {
+    return {
+        resolveDebugTarget: async () => {
+            throw new Error('discovery failed');
+        },
+        tryFindCandidateForEditorFile: async () => {
+            throw new Error('discovery failed');
+        },
     } as unknown as AppHostDiscoveryService;
 }

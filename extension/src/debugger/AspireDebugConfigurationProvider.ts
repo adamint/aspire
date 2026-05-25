@@ -1,7 +1,9 @@
 import * as vscode from 'vscode';
 import { defaultConfigurationName } from '../loc/strings';
 import { AppHostDiscoveryService, getDebugTargetForCandidate } from '../utils/appHostDiscovery';
+import type { CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
+import { extensionLogOutputChannel } from '../utils/logging';
 
 export class AspireDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
     constructor(private readonly _appHostDiscoveryService: AppHostDiscoveryService) {
@@ -22,7 +24,7 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
             return [];
         }
 
-        const candidate = await this._appHostDiscoveryService.tryFindCandidateForEditorFile(activeEditor.document.uri.fsPath, folder);
+        const candidate = await this.tryFindCandidateForEditorFile(activeEditor.document.uri.fsPath, folder);
         if (!candidate) {
             return [];
         }
@@ -63,9 +65,29 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
 
     async resolveDebugConfigurationWithSubstitutedVariables(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration, token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration | null | undefined> {
         if (typeof config.program === 'string') {
-            config.program = await this._appHostDiscoveryService.resolveDebugTarget(config.program, folder);
+            config.program = await this.resolveDebugTarget(config.program, folder);
         }
 
         return config;
+    }
+
+    private async tryFindCandidateForEditorFile(filePath: string, folder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo | undefined> {
+        try {
+            return await this._appHostDiscoveryService.tryFindCandidateForEditorFile(filePath, folder);
+        }
+        catch (error) {
+            extensionLogOutputChannel.warn(`Failed to discover AppHost for debug configuration file ${filePath}: ${error}`);
+            return undefined;
+        }
+    }
+
+    private async resolveDebugTarget(filePath: string, folder: vscode.WorkspaceFolder | undefined): Promise<string> {
+        try {
+            return await this._appHostDiscoveryService.resolveDebugTarget(filePath, folder);
+        }
+        catch (error) {
+            extensionLogOutputChannel.warn(`Failed to resolve AppHost debug target ${filePath}: ${error}`);
+            return filePath;
+        }
     }
 }

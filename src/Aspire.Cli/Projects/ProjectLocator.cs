@@ -434,11 +434,55 @@ internal sealed class ProjectLocator(
                 logger.LogDebug("Stopping AppHost discovery early after finding multiple valid AppHost projects.");
             }
 
+            await AddSettingsAppHostCandidateAsync().ConfigureAwait(false);
+
             // This sort is done here to make results deterministic since we get all the app
             // host information in parallel and the order may vary.
             appHostProjects.Sort((x, y) => string.Compare(x.AppHostFile.FullName, y.AppHostFile.FullName, StringComparison.Ordinal));
 
             return (appHostProjects, unbuildableSuspectedAppHostProjects, hasUnsupportedProjects);
+
+            async Task AddSettingsAppHostCandidateAsync()
+            {
+                var settingsAppHost = await GetAppHostFromSettingsAsync(searchDirectory, searchParentDirectories: true, cancellationToken).ConfigureAwait(false);
+                if (settingsAppHost is null)
+                {
+                    return;
+                }
+
+                var pathComparison = OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal;
+                if (appHostProjects.Any(candidate => string.Equals(candidate.AppHostFile.FullName, settingsAppHost.FullName, pathComparison))
+                    || unbuildableSuspectedAppHostProjects.Any(candidate => string.Equals(candidate.AppHostFile.FullName, settingsAppHost.FullName, pathComparison)))
+                {
+                    return;
+                }
+
+                var handler = projectFactory.TryGetProject(settingsAppHost);
+                if (handler is null)
+                {
+                    return;
+                }
+
+                var validationResult = await handler.ValidateAppHostAsync(settingsAppHost, cancellationToken).ConfigureAwait(false);
+                if (validationResult.IsValid)
+                {
+                    var appHostProject = new AppHostProjectCandidate(settingsAppHost, handler.LanguageId);
+                    appHostProjects.Add(appHostProject);
+                    await ReportCandidateFoundAsync(appHostProject, cancellationToken).ConfigureAwait(false);
+                }
+                else if (validationResult.IsPossiblyUnbuildable)
+                {
+                    var appHostProject = new AppHostProjectCandidate(settingsAppHost, handler.LanguageId, AppHostProjectCandidateStatus.PossiblyUnbuildable);
+                    unbuildableSuspectedAppHostProjects.Add(appHostProject);
+                    await ReportCandidateFoundAsync(appHostProject, cancellationToken).ConfigureAwait(false);
+                }
+                else if (validationResult.IsUnsupported)
+                {
+                    hasUnsupportedProjects = true;
+                }
+            }
         }
 
         if (displayProgress)
