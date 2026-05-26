@@ -561,7 +561,13 @@ suite('AppHostDataRepository', () => {
                     status: 'possibly-unbuildable',
                 },
             ]));
-            await waitForAppHostDiscovery();
+            // aspire ls exit handler awaits getConfiguredAppHostPathFromWorkspaceRoot, which
+            // probes for aspire.config.json / .aspire/settings.json via vscode workspace fs.
+            // That probe can take more than one macrotask on Windows, so poll for completion
+            // instead of relying on a single setTimeout(0) tick.
+            await waitForCondition(
+                () => repository.workspaceAppHostPath !== undefined,
+                'expected workspace AppHost path to be set after aspire ls discovery');
 
             assert.strictEqual(repository.viewMode, 'workspace');
             assert.strictEqual(repository.workspaceAppHostPath, '/workspace/apps/Store/AppHost.csproj');
