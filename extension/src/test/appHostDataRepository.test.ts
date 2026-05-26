@@ -257,7 +257,6 @@ suite('AppHostDataRepository', () => {
                 appHostPid: 1234,
                 cliPid: null,
                 dashboardUrl: null,
-                resources: null,
             }]));
 
             assert.ok(repository.errorMessage?.includes('describe failed'), repository.errorMessage);
@@ -485,7 +484,6 @@ suite('AppHostDataRepository', () => {
                 {
                     appHostPath: configuredAppHostPath,
                     appHostPid: 125881,
-                    resources: [],
                 },
             ]));
             assert.strictEqual(repository.workspaceAppHost?.appHostPath, configuredAppHostPath);
@@ -679,7 +677,6 @@ suite('AppHostDataRepository', () => {
                 appHostPid: 125881,
                 cliPid: 125738,
                 dashboardUrl: 'https://localhost:17193/login?t=061212',
-                resources: [],
             }]));
 
             assert.strictEqual(repository.workspaceResources.length, 0);
@@ -753,7 +750,6 @@ suite('AppHostDataRepository', () => {
                     appHostPid: 125881,
                     cliPid: 125738,
                     dashboardUrl: 'https://localhost:17193/login?t=061212',
-                    resources: [],
                 },
             ]));
 
@@ -879,7 +875,6 @@ suite('AppHostDataRepository', () => {
                 {
                     appHostPath: '/workspace/labs/ops/apphost.cs',
                     appHostPid: 125881,
-                    resources: [],
                 },
             ]));
 
