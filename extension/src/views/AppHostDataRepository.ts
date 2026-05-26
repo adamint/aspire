@@ -739,6 +739,14 @@ export class AppHostDataRepository {
                     }
                     extensionLogOutputChannel.warn(`aspire describe --follow for ${appHostPath} error: ${error.message}`);
                     stream.process = undefined;
+                    // Node's `spawn` can fire `error` (e.g., ENOENT when the CLI binary is missing)
+                    // without a subsequent `exit`, which would normally drive the restart loop.
+                    // Drop the dead entry so the next ps reconcile recreates it instead of leaving
+                    // a zombie that blocks reconcile from re-starting the stream.
+                    this._globalDescribeStreams.delete(appHostPath);
+                    stream.resources.clear();
+                    this._attachGlobalResourcesToAppHosts();
+                    this._onDidChangeData.fire();
                 }
             });
             stream.process = childProcess;
