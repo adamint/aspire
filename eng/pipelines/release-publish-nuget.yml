@@ -749,7 +749,7 @@ extends:
                     if ("${{ parameters.DryRun }}" -eq "true") {
                       Write-Host " (validated in dry-run)"
                     } else {
-                      Write-Host " (published by sibling release job)"
+                      Write-Host " (publish runs after this job)"
                     }
                   }
                   Write-Host "╚═══════════════════════════════════════════════════════════════╝"
@@ -830,6 +830,46 @@ extends:
                     Write-Error "$baseName.signature.p7s does not appear to be signed. First byte: $firstByte (expected 0x30 for PKCS#7)."
                     exit 1
                   }
+
+                  Add-Type -AssemblyName System.IO.Compression.ZipFile
+                  $archive = [System.IO.Compression.ZipFile]::OpenRead($vsix.FullName)
+                  try {
+                    $vsixManifestEntry = $archive.GetEntry("extension.vsixmanifest")
+                    if ($null -eq $vsixManifestEntry) {
+                      Write-Error "VSIX package '$($vsix.FullName)' does not contain extension.vsixmanifest."
+                      exit 1
+                    }
+
+                    $reader = [System.IO.StreamReader]::new($vsixManifestEntry.Open())
+                    try {
+                      [xml]$vsixManifest = $reader.ReadToEnd()
+                    } finally {
+                      $reader.Dispose()
+                    }
+                  } finally {
+                    $archive.Dispose()
+                  }
+
+                  $manifestPreRelease = $false
+                  $preReleaseNode = $vsixManifest.SelectSingleNode("//*[local-name()='Property' and @Id='Microsoft.VisualStudio.Code.PreRelease']")
+                  if ($null -ne $preReleaseNode) {
+                    $preReleaseValue = $preReleaseNode.GetAttribute("Value").Trim().ToLowerInvariant()
+                    if ($preReleaseValue -eq "true") {
+                      $manifestPreRelease = $true
+                    } elseif ($preReleaseValue -eq "false") {
+                      $manifestPreRelease = $false
+                    } else {
+                      Write-Error "VSIX extension.vsixmanifest has invalid Microsoft.VisualStudio.Code.PreRelease value '$($preReleaseNode.GetAttribute("Value"))'. Expected 'true' or 'false'."
+                      exit 1
+                    }
+                  }
+
+                  if ($manifestPreRelease -ne $preRelease) {
+                    Write-Error "VSIX pre-release manifest flag is '$manifestPreRelease', but release pipeline IsPrerelease is '$preRelease'. Queue the source build with 'Package VS Code Extension as Pre-Release=$preRelease' or rerun this pipeline with IsPrerelease=$manifestPreRelease."
+                    exit 1
+                  }
+
+                  Write-Host "VSIX pre-release manifest flag matches IsPrerelease: $preRelease"
 
                   Write-Host "Verifying VS Code extension signature for $($vsix.Name)..."
                   vsce verify-signature --packagePath $vsix.FullName --manifestPath $manifestPath --signaturePath $signaturePath
