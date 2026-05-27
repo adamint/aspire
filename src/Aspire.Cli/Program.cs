@@ -219,8 +219,6 @@ public class Program
         var isMcpStartCommand = args?.Length >= 2 &&
             ((args[0] == "mcp" && args[1] == "start") || (args[0] == "agent" && args[1] == "mcp"));
 
-        var extensionEndpoint = Environment.GetEnvironmentVariable(KnownConfigNames.ExtensionEndpoint);
-
         // Create file logger provider from pre-computed path info
         var fileLoggerProvider = new FileLoggerProvider(loggingOptions.LogFilePath, errorWriter);
 
@@ -253,8 +251,12 @@ public class Program
                 builder.AddFilter<FileLoggerProvider>("Aspire.Cli.Certificates.NativeCertificateToolRunner", LogLevel.Information);
             }
 
-            // Configure console logging based on --verbosity or --debug
-            if (consoleLogLevel is not null && !isMcpStartCommand && extensionEndpoint is null)
+            // Configure console logging based on --verbosity or --debug.
+            // When the CLI is hosted by the VS Code extension, stderr is captured line-by-line
+            // and surfaced in the Debug Console, so debug logs still need to flow to stderr there;
+            // suppressing them only because an extension endpoint is present meant that
+            // `--debug` produced no visible output under F5, even though it works in a terminal.
+            if (consoleLogLevel is not null && !isMcpStartCommand)
             {
                 // Use custom Spectre Console logger for clean debug output to stderr
                 builder.AddProvider(new SpectreConsoleLoggerProvider(Console.Error, logBufferContext));
@@ -464,6 +466,7 @@ public class Program
         builder.Services.AddSingleton<Aspire.Cli.Npm.INpmRunner, Aspire.Cli.Npm.NpmRunner>();
         builder.Services.AddHttpClient<Aspire.Cli.Npm.INpmProvenanceChecker, Aspire.Cli.Npm.SigstoreNpmProvenanceChecker>();
         builder.Services.AddHttpClient<IGitHubArtifactAttestationVerifier, GitHubArtifactAttestationVerifier>();
+        builder.Services.AddSingleton<IEmbeddedAspireSkillsBundleProvider, EmbeddedAspireSkillsBundleProvider>();
         builder.Services.AddSingleton<IAspireSkillsInstaller, AspireSkillsInstaller>();
         builder.Services.AddSingleton<Aspire.Cli.Agents.Playwright.IPlaywrightCliRunner, Aspire.Cli.Agents.Playwright.PlaywrightCliRunner>();
         builder.Services.AddSingleton<Aspire.Cli.Agents.Playwright.PlaywrightCliInstaller>();
