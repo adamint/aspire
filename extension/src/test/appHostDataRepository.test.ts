@@ -566,8 +566,8 @@ suite('AppHostDataRepository', () => {
             // That probe can take more than one macrotask on Windows, so poll for completion
             // instead of relying on a single setTimeout(0) tick.
             await waitForCondition(
-                () => repository.workspaceAppHostPath !== undefined,
-                'expected workspace AppHost path to be set after aspire ls discovery');
+                () => repository.workspaceAppHostPath === '/workspace/apps/Store/AppHost.csproj',
+                'buildable AppHost discovery did not finish');
 
             assert.strictEqual(repository.viewMode, 'workspace');
             assert.strictEqual(repository.workspaceAppHostPath, '/workspace/apps/Store/AppHost.csproj');
