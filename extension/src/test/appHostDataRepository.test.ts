@@ -494,6 +494,81 @@ suite('AppHostDataRepository', () => {
         }
     });
 
+    test('multi-AppHost workspace does not retarget describe when multiple candidate AppHosts are running', async () => {
+        const workspaceFoldersStub = stubWorkspaceFolders([{
+            uri: vscode.Uri.file('/workspace'),
+            name: 'workspace',
+            index: 0,
+        }]);
+        let getAppHostsLineCallback: ((line: string) => void) | undefined;
+        const describeProcesses: TestChildProcess[] = [];
+        const describeCalls: { args: string[]; options: any }[] = [];
+        let psOptions: any;
+        spawnStub.callsFake((_terminalProvider, _command, args, options) => {
+            if (args[0] === 'ls') {
+                getAppHostsLineCallback = createLsLineCallback(options);
+            }
+            if (args[0] === 'describe') {
+                describeCalls.push({ args, options });
+                const process = new TestChildProcess();
+                describeProcesses.push(process);
+                return process;
+            }
+            if (args[0] === 'ps') {
+                psOptions = options;
+            }
+            return new TestChildProcess();
+        });
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            repository.activate();
+            repository.setPanelVisible(true);
+            await waitForAppHostDiscovery();
+            assert.ok(getAppHostsLineCallback);
+
+            getAppHostsLineCallback(JSON.stringify({
+                selected_project_file: '/workspace/apps/Store/AppHost.csproj',
+                all_project_file_candidates: [
+                    '/workspace/apps/Store/AppHost.csproj',
+                    '/workspace/samples/Store/AppHost.csproj',
+                    '/workspace/tools/Admin/AppHost.csproj',
+                ],
+            }));
+            await waitForAppHostDiscovery();
+
+            assert.strictEqual(describeCalls.length, 1);
+            assert.deepStrictEqual(describeCalls[0].args, ['describe', '--follow', '--format', 'json', '--apphost', '/workspace/apps/Store/AppHost.csproj']);
+            describeProcesses[0].emit('close', 0);
+            await waitForMicrotasks();
+            assert.ok(psOptions);
+
+            psOptions.lineCallback(JSON.stringify([
+                {
+                    appHostPath: '/workspace/samples/Store/AppHost.csproj',
+                    appHostPid: 125881,
+                    cliPid: 125738,
+                    dashboardUrl: 'https://localhost:17193/login?t=061212',
+                },
+                {
+                    appHostPath: '/workspace/tools/Admin/AppHost.csproj',
+                    appHostPid: 125882,
+                    cliPid: 125739,
+                    dashboardUrl: 'https://localhost:17194/login?t=061213',
+                },
+            ]));
+            await waitForMicrotasks();
+
+            assert.strictEqual(repository.workspaceAppHostPath, '/workspace/apps/Store/AppHost.csproj');
+            assert.strictEqual(repository.workspaceAppHostName, 'apps/Store/AppHost.csproj');
+            assert.strictEqual(repository.workspaceAppHost, undefined);
+            assert.strictEqual(describeCalls.length, 1);
+        } finally {
+            repository.dispose();
+            workspaceFoldersStub.restore();
+        }
+    });
+
     test('configured AppHost outside aspire ls candidates remains selected in workspace view', async () => {
         const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-extension-workspace-'));
         const configuredAppHostPath = path.join(path.dirname(workspaceRoot), 'external', 'AppHost.csproj');
