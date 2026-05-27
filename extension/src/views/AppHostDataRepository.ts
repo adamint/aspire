@@ -426,6 +426,13 @@ export class AppHostDataRepository {
         this._workspaceAppHostName = candidateIndex >= 0 ? appHostLabels[candidateIndex] : shortenPath(appHostPath);
     }
 
+    private _setWorkspaceAppHostPathFromCurrentCandidates(appHostPath: string): void {
+        this._workspaceAppHostPath = appHostPath;
+        const appHostLabels = shortenPaths(this._workspaceAppHostCandidatePaths);
+        const candidateIndex = this._workspaceAppHostCandidatePaths.findIndex(candidatePath => isMatchingAppHostPath(candidatePath, appHostPath));
+        this._workspaceAppHostName = candidateIndex >= 0 ? appHostLabels[candidateIndex] : shortenPath(appHostPath);
+    }
+
     private _setWorkspaceAppHostCandidatePaths(appHostCandidates: readonly AppHostCandidate[]): void {
         this._workspaceAppHostCandidatePaths = appHostCandidates.map(candidate => candidate.path);
     }
@@ -1070,14 +1077,29 @@ export class AppHostDataRepository {
     }
 
     private _handleWorkspacePsOutput(appHosts: readonly AppHostDisplayInfo[]): void {
-        const workspaceAppHostPath = this._workspaceAppHostPath;
+        let workspaceAppHostPath = this._workspaceAppHostPath;
         const workspaceAppHosts = this._workspaceAppHostCandidatePaths.length > 0
             ? appHosts.filter(appHost => this._workspaceAppHostCandidatePaths.some(candidatePath => isMatchingAppHostPath(appHost.appHostPath, candidatePath)))
             : [];
-        const workspaceAppHost = workspaceAppHostPath
+        let workspaceAppHost = workspaceAppHostPath
             ? workspaceAppHosts.find(appHost => isMatchingAppHostPath(appHost.appHostPath, workspaceAppHostPath))
             : undefined;
-        const workspaceAppHostStarted = workspaceAppHost !== undefined && this._workspaceAppHost === undefined;
+        let workspaceAppHostPathChanged = false;
+
+        if (!workspaceAppHost && workspaceAppHosts.length === 1) {
+            workspaceAppHost = workspaceAppHosts[0];
+            workspaceAppHostPathChanged = !isMatchingAppHostPath(workspaceAppHostPath, workspaceAppHost.appHostPath);
+            if (workspaceAppHostPathChanged) {
+                extensionLogOutputChannel.info(`Retargeting workspace AppHost describe to running AppHost ${workspaceAppHost.appHostPath}`);
+                this._stopDescribeWatch({ clearWorkspaceResources: true });
+                this._setWorkspaceAppHostPathFromCurrentCandidates(workspaceAppHost.appHostPath);
+                workspaceAppHostPath = this._workspaceAppHostPath;
+                this._setDescribeError(undefined);
+                this._describeRestartDelay = 5000;
+            }
+        }
+
+        const workspaceAppHostStarted = workspaceAppHost !== undefined && (this._workspaceAppHost === undefined || workspaceAppHostPathChanged);
         const changed = JSON.stringify(workspaceAppHosts) !== JSON.stringify(this._appHosts)
             || JSON.stringify(workspaceAppHost) !== JSON.stringify(this._workspaceAppHost);
 
