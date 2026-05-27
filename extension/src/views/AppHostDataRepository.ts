@@ -515,6 +515,7 @@ export class AppHostDataRepository {
                     // once more with backoff in case the apphost is restarting; if that
                     // attempt also produces no data we'll fall into the branch above.
                     this._workspaceResources.clear();
+                    this._clearStoppedWorkspaceAppHost();
                     this._setDescribeError(undefined);
                     this._updateWorkspaceContext();
 
@@ -596,6 +597,14 @@ export class AppHostDataRepository {
         } else {
             this._onDidChangeData.fire();
         }
+    }
+
+    private _clearStoppedWorkspaceAppHost(): void {
+        const appHostPath = this._workspaceAppHost?.appHostPath ?? this._workspaceAppHostPath;
+        this._workspaceAppHost = undefined;
+        this._appHosts = appHostPath
+            ? this._appHosts.filter(appHost => !isMatchingAppHostPath(appHost.appHostPath, appHostPath))
+            : [];
     }
 
     private _handleDescribeLine(line: string): boolean {
@@ -1068,6 +1077,7 @@ export class AppHostDataRepository {
         const workspaceAppHost = workspaceAppHostPath
             ? workspaceAppHosts.find(appHost => isMatchingAppHostPath(appHost.appHostPath, workspaceAppHostPath))
             : undefined;
+        const workspaceAppHostStarted = workspaceAppHost !== undefined && this._workspaceAppHost === undefined;
         const changed = JSON.stringify(workspaceAppHosts) !== JSON.stringify(this._appHosts)
             || JSON.stringify(workspaceAppHost) !== JSON.stringify(this._workspaceAppHost);
 
@@ -1077,6 +1087,14 @@ export class AppHostDataRepository {
 
         this._appHosts = workspaceAppHosts;
         this._workspaceAppHost = workspaceAppHost;
+
+        if (workspaceAppHostStarted
+            && this._shouldWatchWorkspace
+            && !this._describeProcess
+            && !this._describeStartPending
+            && !this._describeRestartTimer) {
+            this._startDescribeWatch();
+        }
 
         if (changed || this._loadingWorkspace) {
             this._updateWorkspaceContext({ clearLoading: true });
