@@ -1,0 +1,235 @@
+parameters:
+  - name: npmPackagesDir
+    type: string
+    default: ''
+  - name: expectedVersion
+    type: string
+    default: ''
+  - name: rid
+    type: string
+    default: 'linux-x64'
+  # When true, the install test is allowed to run against just-built tarballs
+  # without contacting the npm registry. PR builds set this to true; release
+  # validation builds also set this to true. The variable exists so future
+  # registry-resolution probes can be gated on it.
+  - name: skipRegistryResolution
+    type: boolean
+    default: true
+
+steps:
+  - bash: |
+      set -euo pipefail
+      packagesDir='${{ parameters.npmPackagesDir }}'
+      expectedVersion='${{ parameters.expectedVersion }}'
+      rid='${{ parameters.rid }}'
+
+      if [ -z "$packagesDir" ] || [ ! -d "$packagesDir" ]; then
+        echo "##[error]npmPackagesDir parameter is required and must point to a directory containing the just-built microsoft-aspire-cli*.tgz files."
+        exit 1
+      fi
+
+      if [ -z "$expectedVersion" ]; then
+        echo "##[error]expectedVersion parameter is required."
+        exit 1
+      fi
+
+      if [ -z "$rid" ]; then
+        echo "##[error]rid parameter is required."
+        exit 1
+      fi
+
+      echo "##vso[task.setvariable variable=NpmPackagesDir]$packagesDir"
+      echo "##vso[task.setvariable variable=NpmExpectedVersion]$expectedVersion"
+      echo "##vso[task.setvariable variable=NpmTestRid]$rid"
+    displayName: 🟣Resolve npm install-test inputs
+
+  - bash: |
+      set -euo pipefail
+      packagesDir="$(NpmPackagesDir)"
+      expectedVersion="$(NpmExpectedVersion)"
+      rid="$(NpmTestRid)"
+
+      # Filename layout produced by eng/scripts/pack-cli-npm-package.ps1:
+      #   microsoft-aspire-cli-<version>.tgz                  (pointer package)
+      #   microsoft-aspire-cli-<rid>-<version>.tgz            (RID package)
+      # The pointer filename never embeds a RID, so distinguish them on that.
+      shopt -s globstar nullglob
+      mapfile -t allPackages < <(find "$packagesDir" -type f -name "microsoft-aspire-cli*.tgz" | sort -u)
+
+      if [ ${#allPackages[@]} -eq 0 ]; then
+        echo "##[error]No microsoft-aspire-cli*.tgz files found under $packagesDir"
+        exit 1
+      fi
+
+      pointer=""
+      ridTarball=""
+      ridFilename="microsoft-aspire-cli-${rid}-${expectedVersion}.tgz"
+      pointerFilename="microsoft-aspire-cli-${expectedVersion}.tgz"
+
+      for pkg in "${allPackages[@]}"; do
+        base="$(basename "$pkg")"
+        if [ "$base" = "$pointerFilename" ]; then
+          pointer="$pkg"
+        elif [ "$base" = "$ridFilename" ]; then
+          ridTarball="$pkg"
+        fi
+      done
+
+      if [ -z "$pointer" ]; then
+        echo "##[error]Pointer package $pointerFilename was not found under $packagesDir"
+        echo "Discovered files:"
+        printf '  %s\n' "${allPackages[@]}"
+        exit 1
+      fi
+
+      if [ -z "$ridTarball" ]; then
+        echo "##[error]RID package $ridFilename was not found under $packagesDir"
+        echo "Discovered files:"
+        printf '  %s\n' "${allPackages[@]}"
+        exit 1
+      fi
+
+      echo "Pointer package: $pointer"
+      echo "RID package:     $ridTarball"
+      echo "##vso[task.setvariable variable=NpmPointerTarball]$pointer"
+      echo "##vso[task.setvariable variable=NpmRidTarball]$ridTarball"
+    displayName: 🟣Locate pointer and RID tarballs
+
+  - bash: |
+      set -euo pipefail
+      pointer="$(NpmPointerTarball)"
+      ridTarball="$(NpmRidTarball)"
+      expectedVersion="$(NpmExpectedVersion)"
+      rid="$(NpmTestRid)"
+
+      # Use a scratch npm prefix so the test never mutates the agent's
+      # global node_modules and so cleanup is a single rm -rf.
+      prefix="$(Build.StagingDirectory)/npm-validate-prefix"
+      cache="$(Build.StagingDirectory)/npm-validate-cache"
+      aspireCache="$(Build.StagingDirectory)/npm-validate-aspire-cache"
+      rm -rf "$prefix" "$cache" "$aspireCache"
+      mkdir -p "$prefix" "$cache" "$aspireCache"
+
+      export NPM_CONFIG_PREFIX="$prefix"
+      export NPM_CONFIG_CACHE="$cache"
+      export ASPIRE_NPM_CACHE_DIR="$aspireCache"
+      # Prefer the freshly-built launcher's PATH; do not poison existing aspire binaries.
+      export PATH="$prefix/bin:$PATH"
+
+      if command -v aspire >/dev/null 2>&1; then
+        echo "##[error]aspire is already on PATH before install ($(command -v aspire)) — test environment is not clean"
+        exit 1
+      fi
+
+      # Install the RID package first so it lands as a top-level sibling of the
+      # pointer package. Then install the pointer with --omit=optional so npm
+      # does not try to fetch the matching RID dep from the registry (the
+      # just-built version does not yet exist in the public registry during
+      # this validation step).
+      echo "Installing RID package..."
+      npm install -g --foreground-scripts=false --no-audit --no-fund --loglevel=warn "$ridTarball"
+
+      echo "Installing pointer package..."
+      npm install -g --foreground-scripts=false --no-audit --no-fund --loglevel=warn --omit=optional "$pointer"
+
+      echo ""
+      echo "Verifying aspire CLI is available on PATH..."
+      if ! command -v aspire >/dev/null 2>&1; then
+        echo "##[error]aspire command not found in PATH after npm install"
+        ls -la "$prefix/bin" || true
+        exit 1
+      fi
+      echo "  Path: $(command -v aspire)"
+
+      # Capture the launcher's reported version. The CLI is set to skip its first-run
+      # update check in CI via DOTNET_CLI_TELEMETRY_OPTOUT and friends; here we just
+      # need a clean --version line.
+      actualVersion="$(aspire --version 2>&1 | tail -n 1 | tr -d '[:space:]')"
+      echo "  Reported version: $actualVersion"
+      if [ "$actualVersion" != "$expectedVersion" ]; then
+        echo "##[error]aspire --version reported '$actualVersion' but expected '$expectedVersion'"
+        exit 1
+      fi
+
+      # The launcher copies the native binary into $ASPIRE_NPM_CACHE_DIR/<version>/<rid>/bin/aspire.
+      cachedBinary="$aspireCache/$expectedVersion/$rid/bin/aspire"
+      if [ ! -f "$cachedBinary" ]; then
+        echo "##[error]Expected cached binary at $cachedBinary was not created by the launcher"
+        find "$aspireCache" -maxdepth 6 -type f || true
+        exit 1
+      fi
+      if [ ! -x "$cachedBinary" ]; then
+        echo "##[error]Cached binary at $cachedBinary is not executable"
+        ls -la "$cachedBinary"
+        exit 1
+      fi
+      echo "  Launcher cache layout verified at $cachedBinary"
+
+      echo ""
+      echo "Uninstalling pointer and RID packages..."
+      npm uninstall -g --loglevel=warn '@microsoft/aspire-cli' "@microsoft/aspire-cli-${rid}"
+
+      if command -v aspire >/dev/null 2>&1; then
+        echo "##[error]aspire command still on PATH after uninstall ($(command -v aspire))"
+        exit 1
+      fi
+      echo "  Confirmed: aspire is no longer in PATH"
+
+      # Surface every status to the summary step via task variables.
+      echo "##vso[task.setvariable variable=NpmCheckInstall]passed"
+      echo "##vso[task.setvariable variable=NpmCheckVersion]passed"
+      echo "##vso[task.setvariable variable=NpmCheckLauncher]passed"
+      echo "##vso[task.setvariable variable=NpmCheckUninstall]passed"
+    displayName: 🟣Install, verify, and uninstall @microsoft/aspire-cli
+
+  - bash: |
+      set -euo pipefail
+      outputDir="$(Build.StagingDirectory)/npm-validation-summary"
+      mkdir -p "$outputDir"
+      outputPath="$outputDir/validation-summary.json"
+      rid="$(NpmTestRid)"
+      expectedVersion="$(NpmExpectedVersion)"
+      skipRegistry='${{ parameters.skipRegistryResolution }}'
+
+      # Lowercase booleans so the JSON is valid.
+      skipRegistry="$(printf '%s' "$skipRegistry" | tr '[:upper:]' '[:lower:]')"
+
+      cat > "$outputPath" <<EOF
+      {
+        "schemaVersion": 1,
+        "validatedByPreparePipeline": true,
+        "rid": "$rid",
+        "expectedVersion": "$expectedVersion",
+        "skipRegistryResolution": $skipRegistry,
+        "checks": {
+          "install": {
+            "status": "$(NpmCheckInstall)",
+            "details": "npm install -g <rid>.tgz && npm install -g --omit=optional <pointer>.tgz"
+          },
+          "version": {
+            "status": "$(NpmCheckVersion)",
+            "details": "aspire --version output matched the build version"
+          },
+          "launcher": {
+            "status": "$(NpmCheckLauncher)",
+            "details": "Launcher cached native binary at ASPIRE_NPM_CACHE_DIR/<version>/<rid>/bin/aspire"
+          },
+          "uninstall": {
+            "status": "$(NpmCheckUninstall)",
+            "details": "npm uninstall -g @microsoft/aspire-cli @microsoft/aspire-cli-$rid"
+          }
+        }
+      }
+      EOF
+
+      echo "Wrote npm validation summary to $outputPath"
+      cat "$outputPath"
+    displayName: 🟣Write npm validation summary
+    condition: always()
+
+  - task: 1ES.PublishBuildArtifacts@1
+    displayName: 🟣Publish npm validation summary
+    condition: always()
+    inputs:
+      PathtoPublish: '$(Build.StagingDirectory)/npm-validation-summary'
+      ArtifactName: npm-validation-summary

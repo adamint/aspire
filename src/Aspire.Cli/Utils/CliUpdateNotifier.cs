@@ -50,7 +50,9 @@ internal class CliUpdateNotifier(
 
         if (newerVersion is not null)
         {
-            var updateCommand = DotNetToolDetection.GetDotNetToolUpdateCommand() ?? "aspire update";
+            var updateCommand = DotNetToolDetection.GetDotNetToolUpdateCommand()
+                ?? NpmInstallDetection.GetNpmUpdateCommand()
+                ?? "aspire update";
 
             interactionService.DisplayVersionUpdateNotification(newerVersion.ToString(), updateCommand);
         }

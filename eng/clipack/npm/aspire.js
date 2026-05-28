@@ -119,7 +119,21 @@ function needsCopy(sourcePath, targetPath) {
   try {
     const source = fs.statSync(sourcePath);
     const target = fs.statSync(targetPath);
-    return source.size !== target.size;
+
+    // Size mismatch always means stale cache. Even when the size matches, the
+    // cached binary is only trusted if its mtime is at or after the source's
+    // mtime. This catches the case where a same-version reinstall replaces the
+    // source binary but the cache was left from a prior install with identical
+    // content size (e.g., partial overwrite, corruption, or a swapped build).
+    if (source.size !== target.size) {
+      return true;
+    }
+
+    if (target.mtimeMs < source.mtimeMs) {
+      return true;
+    }
+
+    return false;
   } catch {
     return true;
   }
@@ -134,8 +148,10 @@ function main() {
     stdio: 'inherit',
     env: {
       ...process.env,
-      // Future CLI-side update detection can use these values to distinguish
-      // npm installs from dotnet tool installs.
+      // Surface the install context to the CLI so `aspire update --self` and
+      // update notifications can route through `npm install -g` instead of
+      // overwriting npm-owned files with the GitHub-binary downloader. See
+      // Aspire.Cli.Utils.NpmInstallDetection.
       ASPIRE_NPM_PACKAGE: packageJson.name,
       ASPIRE_NPM_PACKAGE_VERSION: packageJson.version,
       ASPIRE_NPM_PACKAGE_RID: rid

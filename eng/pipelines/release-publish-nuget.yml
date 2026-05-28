@@ -139,6 +139,10 @@ extends:
                   targetPath: '$(Pipeline.Workspace)/npm/pointer-package'
                   artifactName: 'NpmPointerPackageArtifacts'
                 - output: pipelineArtifact
+                  displayName: 'Publish npm Validation Summary'
+                  targetPath: '$(Pipeline.Workspace)/npm/validation-summary'
+                  artifactName: 'NpmValidationSummary'
+                - output: pipelineArtifact
                   displayName: 'Publish WinGet Manifests'
                   targetPath: '$(Pipeline.Workspace)/installers/winget-manifests-stable'
                   artifactName: 'winget-manifests-stable'
@@ -170,6 +174,10 @@ extends:
                   displayName: 'Download npm packages from Source Build'
                   artifact: BlobArtifacts
                   patterns: '**/microsoft-aspire-cli*.tgz'
+
+                - download: aspire-build
+                  displayName: 'Download npm validation summary from Source Build'
+                  artifact: npm-validation-summary
 
               - download: aspire-build
                 displayName: 'Download WinGet Manifests from Source Build'
@@ -234,15 +242,20 @@ extends:
 
                     Write-Host "Preparing npm packages from $sourcePath"
                     if (!(Test-Path $sourcePath)) {
-                      Write-Error @"
-                    BlobArtifacts was not downloaded from the source build at '$sourcePath'.
-                    npm CLI packages ship as flat blobs in BlobArtifacts (configured via eng/Publishing.props).
-                    Possible causes:
-                      1. The source build (azure-pipelines.yml) ran before the npm CLI package work landed.
-                         Re-run the release pipeline with SkipNpmPublish=true, or rebuild from a newer commit.
-                      2. The source build failed to produce or publish the BlobArtifacts pipeline artifact.
-                      3. The wrong source build was selected.
-                    "@
+                      # Avoid PowerShell here-strings inside YAML block scalars: the
+                      # PowerShell parser requires the closing "@ at column 0, while
+                      # YAML requires every line to be at or above the block indent.
+                      # Composing the message from an array keeps both grammars happy.
+                      $errorLines = @(
+                        "BlobArtifacts was not downloaded from the source build at '$sourcePath'.",
+                        "npm CLI packages ship as flat blobs in BlobArtifacts (configured via eng/Publishing.props).",
+                        "Possible causes:",
+                        "  1. The source build (azure-pipelines.yml) ran before the npm CLI package work landed.",
+                        "     Re-run the release pipeline with SkipNpmPublish=true, or rebuild from a newer commit.",
+                        "  2. The source build failed to produce or publish the BlobArtifacts pipeline artifact.",
+                        "  3. The wrong source build was selected."
+                      )
+                      Write-Error ($errorLines -join [Environment]::NewLine)
                       exit 1
                     }
 
@@ -311,6 +324,17 @@ extends:
                     }
                     Copy-Item $pointerPackages[0].FullName -Destination $pointerTargetPath -Force
 
+                    # Copy the install-test validation summary into its own output folder.
+                    # Stage 2 re-validates this summary before submitting to ESRP/MicroBuild.
+                    $summarySource = "$(Pipeline.Workspace)/aspire-build/npm-validation-summary/validation-summary.json"
+                    $summaryTarget = "$(Pipeline.Workspace)/npm/validation-summary"
+                    New-Item -ItemType Directory -Path $summaryTarget -Force | Out-Null
+                    if (!(Test-Path $summarySource)) {
+                      Write-Error "npm validation summary was not downloaded from the source build at '$summarySource'. The source build's npm install-test job must have failed or did not run."
+                      exit 1
+                    }
+                    Copy-Item $summarySource -Destination (Join-Path $summaryTarget 'validation-summary.json') -Force
+
                     Write-Host "Prepared $($ridPackages.Count) RID npm package(s) and pointer package version $($versions[0])."
                   displayName: 'Prepare npm Artifacts for Publishing'
 
@@ -318,6 +342,7 @@ extends:
                 - powershell: |
                     New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/rid-packages" -Force | Out-Null
                     New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/pointer-package" -Force | Out-Null
+                    New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/validation-summary" -Force | Out-Null
                     Write-Host "Created empty npm artifact placeholders because SkipNpmPublish=true."
                   displayName: 'Prepare Empty npm Artifact Placeholders'
 
@@ -382,6 +407,9 @@ extends:
                 - input: pipelineArtifact
                   artifactName: NpmPointerPackageArtifacts
                   targetPath: '$(Pipeline.Workspace)/npm/pointer-package'
+                - input: pipelineArtifact
+                  artifactName: NpmValidationSummary
+                  targetPath: '$(Pipeline.Workspace)/npm/validation-summary'
             steps:
               # ===== VALIDATION =====
               # Note: No checkout - releaseJob doesn't allow it. All scripts are inlined.
@@ -555,6 +583,45 @@ extends:
 
               # ===== PUBLISH TO npm =====
               - ${{ if eq(parameters.SkipNpmPublish, false) }}:
+                - powershell: |
+                    $ErrorActionPreference = 'Stop'
+                    $summaryPath = "$(Pipeline.Workspace)/npm/validation-summary/validation-summary.json"
+
+                    if (!(Test-Path $summaryPath)) {
+                      Write-Error "npm validation summary not found: $summaryPath. Refusing to publish without verified prepare-stage validation."
+                      exit 1
+                    }
+
+                    try {
+                      $summary = Get-Content -Raw $summaryPath | ConvertFrom-Json
+                    }
+                    catch {
+                      Write-Error "npm validation summary is invalid JSON: $summaryPath"
+                      throw
+                    }
+
+                    if (-not $summary.validatedByPreparePipeline) {
+                      Write-Error "npm validation summary does not indicate successful prepare-stage validation."
+                      exit 1
+                    }
+
+                    $requiredChecks = @('install', 'version', 'launcher', 'uninstall')
+                    foreach ($checkName in $requiredChecks) {
+                      $check = $summary.checks.$checkName
+                      if ($null -eq $check) {
+                        Write-Error "npm validation summary is missing required check '$checkName'."
+                        exit 1
+                      }
+
+                      if ("$($check.status)" -ne 'passed') {
+                        Write-Error "npm validation check '$checkName' did not pass (status='$($check.status)')."
+                        exit 1
+                      }
+                    }
+
+                    Write-Host "npm validation summary verified ($($summary.rid), version $($summary.expectedVersion))."
+                  displayName: 'Validate npm Prepare-Stage Summary'
+
                 - powershell: |
                     $ridPackagesPath = "$(Pipeline.Workspace)/npm/rid-packages"
                     $pointerPackagePath = "$(Pipeline.Workspace)/npm/pointer-package"

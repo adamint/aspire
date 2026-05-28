@@ -1,16 +1,16 @@
-# Aspire CLI npm package POC
+# Aspire CLI npm package
 
 ## Summary
 
-The Aspire CLI npm package POC distributes the native Aspire CLI through npm using the same native binary archives that feed the dotnet tool packages. The npm package shape follows the native-package convention used by tools such as esbuild and @vscode/ripgrep: a small top-level package exposes the command, while platform-specific packages carry the native payload.
+The Aspire CLI is distributed through npm using the same signed native binary archives that feed the dotnet tool packages. The npm package shape follows the native-package convention used by tools such as esbuild and `@vscode/ripgrep`: a small top-level package exposes the command, while platform-specific packages carry the native payload.
 
-The POC package name is `@microsoft/aspire-cli`. It is intentionally a POC and does not yet include CLI-side npm self-update behavior.
+The published package is `@microsoft/aspire-cli`. It supports global installation (`npm install -g @microsoft/aspire-cli`) on Windows, macOS, and Linux (glibc and musl). The CLI detects npm installs at runtime and routes `aspire update --self` and update notifications through the npm package manager rather than the GitHub-binary downloader.
 
 ## Research and prior art
 
 This design follows the native npm package pattern used by established packages rather than introducing a custom installer.
 
-- npm's package metadata defines the primitives this POC uses: `bin` exposes a command on PATH, `optionalDependencies` allow platform-specific packages to be skipped when they do not apply, `files` limits packed content, and `os`/`cpu` select packages by `process.platform` and `process.arch`. See the npm package.json documentation for [`bin`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#bin), [`optionalDependencies`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#optionaldependencies), [`files`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#files), [`os`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#os), and [`cpu`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#cpu).
+- npm's package metadata defines the primitives this package uses: `bin` exposes a command on PATH, `optionalDependencies` allow platform-specific packages to be skipped when they do not apply, `files` limits packed content, and `os`/`cpu` select packages by `process.platform` and `process.arch`. See the npm package.json documentation for [`bin`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#bin), [`optionalDependencies`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#optionaldependencies), [`files`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#files), [`os`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#os), and [`cpu`](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#cpu).
 - [esbuild](https://github.com/evanw/esbuild/blob/main/npm/esbuild/package.json) uses a top-level package with a `bin` entry and platform-specific packages such as [`@esbuild/linux-x64`](https://github.com/evanw/esbuild/blob/main/npm/@esbuild/linux-x64/package.json) listed as optional dependencies. Its platform resolver maps the current Node platform to an optional package and resolves the binary through Node package resolution rather than hardcoded `node_modules` paths.
 - [@vscode/ripgrep](https://github.com/microsoft/vscode-ripgrep/blob/main/packages/ripgrep/package.json) uses the same top-level package plus optional platform package shape for an external CLI binary. A platform package such as [`@vscode/ripgrep-linux-x64`](https://github.com/microsoft/vscode-ripgrep/blob/main/packages/ripgrep-linux-x64/package.json) contains a `bin/` payload and declares `os`/`cpu` metadata.
 - Rollup, SWC, and sharp show the modern `libc` split for Linux native packages. Examples include [`@rollup/rollup-linux-x64-gnu`](https://github.com/rollup/rollup/blob/master/npm/linux-x64-gnu/package.json), [`@swc/core-linux-x64-gnu`](https://github.com/swc-project/swc/blob/main/packages/core/scripts/npm/linux-x64-gnu/package.json), and [`@img/sharp-linux-x64`](https://github.com/lovell/sharp/blob/main/npm/linux-x64/package.json). Their runtime loaders also distinguish glibc from musl before selecting a native package.
@@ -25,12 +25,14 @@ The Aspire-specific adaptation is the writable cache. Unlike most native npm CLI
 - Use a top-level npm package with a JavaScript `bin` launcher and RID-specific optional native packages.
 - Avoid running the self-extracting native binary directly from `node_modules` or package-manager stores.
 - Verify generated npm packages against the native archive before staging them.
+- Validate the published packages with a real `npm install -g` test in CI before allowing the release pipeline to submit them.
 - Publish through the Azure DevOps release pipeline using Microsoft's ESRP-backed MicroBuild publishing flow.
+- Detect npm installs at runtime so `aspire update --self` and update notifications use `npm install -g @microsoft/aspire-cli@latest` instead of the GitHub-binary downloader.
 
 ## Non-goals
 
-- Implementing `aspire update --self` for npm installs.
 - Replacing the dotnet tool package flow.
+- Emitting a Sigstore provenance attestation (`npm publish --provenance`). The ESRP-backed publish path does not currently issue Sigstore attestations from a public OIDC publisher. Integrity is anchored at the signed native binary and the ESRP-tracked submission identity instead. See "Product and security tradeoffs" below.
 
 ## Package layout
 
@@ -119,13 +121,15 @@ The cache root can be overridden with `ASPIRE_NPM_CACHE_DIR` for tests and diagn
 
 The copy step is required because the native Aspire CLI self-extracts its embedded bundle relative to the process path on first run. Running the binary directly from `node_modules` could make the extraction target a package directory, pnpm store, Yarn unplugged location, global npm cache, or other read-only package-manager path. Copying to the Aspire cache makes first-run extraction land under an Aspire-owned writable layout.
 
-The launcher sets these environment variables for future CLI-side npm install detection:
+The launcher sets these environment variables so the CLI can detect that it was launched from an npm install (see `Aspire.Cli.Utils.NpmInstallDetection`) and route `aspire update --self` and update notifications through `npm` instead of the GitHub-binary downloader:
 
 ```text
 ASPIRE_NPM_PACKAGE
 ASPIRE_NPM_PACKAGE_VERSION
 ASPIRE_NPM_PACKAGE_RID
 ```
+
+The launcher's cache-freshness check compares both file size and `mtime`. A cached binary is reused only when its size matches the source and its `mtime` is greater than or equal to the source binary's `mtime`. Any other state (different size, older `mtime`, or unreadable cache target) triggers an atomic re-copy through a temp file.
 
 ## Build integration
 
@@ -153,41 +157,49 @@ ASPIRE_NPM_PACKAGE_RID
 5. Comparing the RID tarball binary byte-for-byte with the archive binary.
 6. Verifying pointer package metadata, `bin/aspire.js`, `aspire-package-map.json`, and optional dependency version alignment.
 
+`eng/pipelines/templates/prepare-npm-cli-packages.yml` runs after the byte-for-byte verification and performs a real end-to-end installation test:
+
+1. Installs the just-built pointer and matching RID tarball into a scratch npm prefix (`npm install -g`).
+2. Invokes the installed `aspire --version` and asserts the version matches the build version.
+3. Confirms the launcher's runtime cache landed under the expected `~/.aspire/npm/<version>/<rid>/bin` layout.
+4. Emits `validation-summary.json` listing each check's status. The release pipeline refuses to submit the npm packages to ESRP without a successful summary, mirroring the brew cask flow.
+
 `eng\scripts\stage-native-cli-tool-packages.ps1` stages npm `.tgz` artifacts alongside existing native CLI nupkgs. Official CI invokes the script with `-RequireNpmPackages`, so source builds fail before release if the npm tarballs are missing. The default remains warning-only for local or older nupkg-only flows that call the script directly.
 
 Only one pointer package is staged. The default canonical pointer source is `native_archives_win_x64`, matching the existing native CLI package staging convention. All RID-specific packages are staged.
 
 ## Pipeline integration
 
-The native archive workflows verify npm tarballs after the existing nupkg verification.
+The native archive workflows verify npm tarballs after the existing nupkg verification and then run the end-to-end install test above.
 
-Azure Pipelines installs Node.js before native package build because `npm pack` runs during packaging, verifies the npm packages, downloads `microsoft-aspire-cli*.tgz` in the staging job, and stages them with the native CLI packages. The source build then publishes the npm `.tgz` files as shipping flat blob artifacts so the release pipeline can consume them without treating npm tarballs as NuGet-like BAR package assets.
+Azure Pipelines installs Node.js before native package build because `npm pack` runs during packaging, verifies the npm packages, downloads `microsoft-aspire-cli*.tgz` in the staging job, and stages them with the native CLI packages. The source build then publishes the npm `.tgz` files as shipping flat blob artifacts so the release pipeline can consume them without treating npm tarballs as NuGet-like BAR package assets. The install-test job also publishes a `validation-summary.json` artifact (`NpmValidationSummary`) the release pipeline requires before publishing.
 
 ## Publishing
 
 The npm packages are published from `eng/pipelines/release-publish-nuget.yml`, not from GitHub Actions. The release pipeline extends the MicroBuild publish-enabled 1ES template and submits packages through `MicroBuild.Publish.yml@MicroBuildTemplate` with `intent: PackageDistribution`, `contentType: npm`, and `contentSource: Folder`.
 
-The release pipeline prepares two npm artifact folders:
+The release pipeline prepares two npm artifact folders and one validation artifact:
 
 1. `NpmRidPackageArtifacts` contains the seven RID packages.
 2. `NpmPointerPackageArtifacts` contains the top-level `@microsoft/aspire-cli` pointer package.
+3. `NpmValidationSummary` contains the `validation-summary.json` emitted by the source-build install test. The release pipeline reads this summary and refuses to invoke `MicroBuild.Publish` unless every required check passed.
 
-The split is intentional. The release job submits RID packages first, waits for the ESRP submission to complete, waits an additional npm registry propagation delay, and then submits the pointer package. Publishing the pointer package last avoids optional dependency resolution races when a user installs the top-level package immediately after release.
+The package split is intentional. The release job submits RID packages first, waits for the ESRP submission to complete, waits an additional npm registry propagation delay, and then submits the pointer package. Publishing the pointer package last avoids optional dependency resolution races when a user installs the top-level package immediately after release.
 
-Before publishing, the release pipeline validates that exactly one pointer tarball and exactly one tarball for each supported RID are present, and that all tarballs have one version. Non-dry-run npm publishing requires release managers to provide `NpmPublishOwners` and `NpmPublishApprovers`, which are passed to ESRP. Re-runs can use `SkipNpmRidPublish` if the RID packages published but the pointer package did not, and `SkipNpmPublish` after npm publishing has completed.
+Before publishing, the release pipeline validates that exactly one pointer tarball and exactly one tarball for each supported RID are present, that all tarballs have one version, and that the `NpmValidationSummary` artifact reports `validatedByPreparePipeline: true` with every required check `passed`. Non-dry-run npm publishing also requires release managers to provide `NpmPublishOwners` and `NpmPublishApprovers`, which are passed to ESRP. Re-runs can use `SkipNpmRidPublish` if the RID packages published but the pointer package did not, and `SkipNpmPublish` after npm publishing has completed.
 
 MicroBuild's npm publish template documentation does not currently expose an npm `dist-tag` parameter. Initial publishing therefore relies on the registry's default tag behavior; preview or side-channel tagging needs ESRP/MicroBuild support before it can be enabled safely.
 
 ## Product and security tradeoffs
 
-- **No GitHub npm publishing token**: Publishing is centralized through ESRP/MicroBuild and the Microsoft npm maintainer identity instead of storing an npm token in GitHub or using a repository-local GitHub Actions publisher.
-- **Signed payload, unsigned tarball container**: The npm tarball is created from the native CLI archive produced by the signed CI flow, and verification compares the RID tarball binary byte-for-byte with that archive. The `.tgz` container itself is not separately signed; integrity comes from CI verification, SBOM-covered release artifacts, ESRP submission, and npm registry package integrity.
-- **Writable cache**: Copying the native binary to `~/.aspire/npm/<version>/<rid>/bin` avoids self-extraction into package-manager stores, but it means the launcher owns cache creation and freshness checks.
-- **Update behavior**: npm updates are package-manager driven (`npm update`, reinstalling the global package, or changing the requested version). `aspire update --self` remains out of scope for npm installs until the CLI has explicit npm install detection and guidance.
+- **No GitHub npm publishing token**: Publishing is centralized through ESRP/MicroBuild and the Microsoft1ES npm maintainer identity instead of storing an npm token in GitHub or using a repository-local GitHub Actions publisher.
+- **Signed payload, unsigned tarball container**: The npm tarball is created from the native CLI archive produced by the signed CI flow, and verification compares the RID tarball binary byte-for-byte with that archive. The `.tgz` container itself is not separately signed; integrity comes from CI verification, the `NpmValidationSummary` install test, SBOM-covered release artifacts, ESRP submission, and npm registry package integrity.
+- **No Sigstore `npm publish --provenance` attestation**: ESRP's npm publish path is not currently configured to emit Sigstore provenance attestations from a public OIDC publisher. Integrity is anchored at the signed native binary, the Microsoft1ES npm maintainer identity, and the ESRP submission audit trail. When ESRP gains support for npm provenance attestations, the release pipeline should opt in and this tradeoff should be revisited.
+- **Writable cache**: Copying the native binary to `~/.aspire/npm/<version>/<rid>/bin` avoids self-extraction into package-manager stores, but it means the launcher owns cache creation and freshness checks. The launcher uses size + `mtime` comparison so a stale cache from an earlier same-version install does not silently shadow a re-downloaded binary.
+- **Update behavior**: npm updates remain package-manager driven (`npm install -g @microsoft/aspire-cli@latest`). The CLI detects npm installs via the launcher's environment variables and prints the npm-specific update command instead of attempting to overwrite the npm-owned binary with the GitHub-binary downloader.
 - **Linux libc split**: Separate glibc and musl packages avoid shipping one Linux binary that is wrong for Alpine-style environments, at the cost of one additional optional dependency package.
 
 ## Open follow-ups
 
-- Decide whether the launcher should use stronger cache freshness than file-size comparison.
-- Implement CLI-side npm install detection and self-update guidance.
-- Add end-to-end installation tests against a real npm install layout.
+- Add Sigstore provenance once ESRP/MicroBuild's npm publish path supports it.
+- Add `npm install --no-optional` guidance and a clearer error message in the launcher when no RID package is installed.

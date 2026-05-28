@@ -498,3 +498,33 @@ extends:
                 artifactVersion: $(aspireArtifactVersion)
                 archiveRoot: $(Pipeline.Workspace)/native-archives
                 skipUrlValidation: ${{ ne(variables['_PackagesPublished'], 'true') }}
+
+          - job: NpmInstall
+            displayName: npm install validation
+            timeoutInMinutes: 30
+            pool:
+              name: NetCore1ESPool-Internal
+              image: 1es-ubuntu-2204
+              os: linux
+            steps:
+            - checkout: self
+              fetchDepth: 1
+            # Download the just-built npm tarballs the build stage published as
+            # blob artifacts via stage-native-cli-tool-packages.ps1. Filter to
+            # avoid pulling unrelated blob assets.
+            - task: DownloadPipelineArtifact@2
+              displayName: 🟣Download npm packages from build
+              inputs:
+                artifact: BlobArtifacts
+                itemPattern: '**/microsoft-aspire-cli*.tgz'
+                targetPath: '$(Pipeline.Workspace)/npm-packages'
+            - task: NodeTool@0
+              displayName: 🟣Install Node.js
+              inputs:
+                versionSpec: '20.x'
+            - template: /eng/pipelines/templates/prepare-npm-cli-packages.yml@self
+              parameters:
+                npmPackagesDir: $(Pipeline.Workspace)/npm-packages
+                expectedVersion: $(aspireVersion)
+                rid: linux-x64
+                skipRegistryResolution: true
