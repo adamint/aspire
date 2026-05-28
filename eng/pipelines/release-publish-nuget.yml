@@ -613,8 +613,20 @@ extends:
                         exit 1
                       }
 
-                      if ("$($check.status)" -ne 'passed') {
-                        Write-Error "npm validation check '$checkName' did not pass (status='$($check.status)')."
+                      $status = "$($check.status)"
+
+                      # AzDO does not error on referencing an unset task.setvariable; the
+                      # variable expansion produces the literal '$(VarName)' token. The
+                      # prepare template initializes every NpmCheck* var to 'failed' to
+                      # prevent this, but defend against schema drift by rejecting any
+                      # status that still looks like an unexpanded variable.
+                      if ($status -like '$(*)') {
+                        Write-Error "npm validation check '$checkName' has unexpanded status token '$status'. This indicates the prepare-stage script aborted before recording a real result."
+                        exit 1
+                      }
+
+                      if ($status -ne 'passed') {
+                        Write-Error "npm validation check '$checkName' did not pass (status='$status')."
                         exit 1
                       }
                     }
