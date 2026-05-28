@@ -136,6 +136,11 @@ export class AppHostDataRepository {
 
     // ── Running AppHost state (ps polling) ──
     private _appHosts: AppHostDisplayInfo[] = [];
+    // Cached JSON serialization of `_appHosts` after the most recent reconcile so
+    // _handlePsOutput can detect real changes. We can't compare raw `ps` output to
+    // `_appHosts` directly because the in-memory state has merged resources, while
+    // `ps` no longer emits them (#17479) — see _handlePsOutput for the rationale.
+    private _appHostsSnapshot = '[]';
     private _workspaceAppHost: AppHostDisplayInfo | undefined;
     private _pollingInterval: ReturnType<typeof setInterval> | undefined;
     private _psProcesses = new Set<ChildProcessWithoutNullStreams>();
@@ -711,8 +716,11 @@ export class AppHostDataRepository {
                     }
                     this._handleGlobalDescribeLine(stream, line);
                 },
-                stderrCallback: () => {
-                    // Per-AppHost describe errors should not pollute the global error banner.
+                stderrCallback: (data) => {
+                    // Per-AppHost describe errors should not pollute the global error banner,
+                    // but they MUST be logged so users can diagnose missing resources for
+                    // non-selected AppHosts (e.g., CLI too old to support `describe --apphost`).
+                    extensionLogOutputChannel.warn(`aspire describe --follow stderr for ${appHostPath}: ${data}`);
                 },
                 exitCallback: (code) => {
                     if (this._globalDescribeStreams.get(appHostPath) !== stream || stream.process !== childProcess) {
@@ -772,6 +780,14 @@ export class AppHostDataRepository {
             stream.process = childProcess;
         }).catch(error => {
             extensionLogOutputChannel.warn(`Failed to start describe for ${appHostPath}: ${error}`);
+            // Same hazard as errorCallback above: getAspireCliExecutablePath() can reject
+            // (CLI missing, permission denied, etc.) without ever firing the spawn error/exit
+            // callbacks that would normally clean up. Drop the dead entry so the next
+            // reconcile recreates it instead of leaving a zombie that blocks reconcile
+            // from re-starting the stream.
+            if (this._globalDescribeStreams.get(appHostPath) === stream) {
+                this._globalDescribeStreams.delete(appHostPath);
+            }
         });
     }
 
@@ -1048,9 +1064,18 @@ export class AppHostDataRepository {
                 return;
             }
 
-            const changed = JSON.stringify(appHosts) !== JSON.stringify(this._appHosts);
+            // Compare against the previous post-reconcile snapshot rather than the
+            // raw ps payload. `appHosts` here lacks the `resources` field (ps no longer
+            // emits it after #17479), while `this._appHosts` was mutated by the prior
+            // _attachGlobalResourcesToAppHosts call to include resources — a direct
+            // JSON.stringify compare would always report `changed` once any stream
+            // produced resources, triggering spurious _onDidChangeData.fire() calls.
+            const previousSnapshot = this._appHostsSnapshot;
             this._appHosts = appHosts;
             this._reconcileGlobalDescribes();
+            const nextSnapshot = JSON.stringify(this._appHosts);
+            const changed = nextSnapshot !== previousSnapshot;
+            this._appHostsSnapshot = nextSnapshot;
 
             if (this._loadingGlobal) {
                 this._loadingGlobal = false;

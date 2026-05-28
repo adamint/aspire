@@ -539,8 +539,6 @@ suite('AppHostDataRepository', () => {
 
             assert.strictEqual(describeCalls.length, 1);
             assert.deepStrictEqual(describeCalls[0].args, ['describe', '--follow', '--format', 'json', '--apphost', '/workspace/apps/Store/AppHost.csproj']);
-            describeProcesses[0].emit('close', 0);
-            await waitForMicrotasks();
             assert.ok(psOptions);
 
             psOptions.lineCallback(JSON.stringify([
@@ -615,8 +613,6 @@ suite('AppHostDataRepository', () => {
             }));
             await waitForAppHostDiscovery();
             assert.strictEqual(describeCalls.length, 1);
-            describeProcesses[0].emit('close', 0);
-            await waitForMicrotasks();
             assert.ok(psOptions);
 
             // Simulate both AppHosts running
