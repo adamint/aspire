@@ -172,7 +172,7 @@ jobs:
           - task: NodeTool@0
             displayName: 🟣Install node.js
             inputs:
-              versionSpec: '20.x'
+              versionSpec: '22.x'
 
           - script: >-
               $(Build.SourcesDirectory)/$(dotnetScript)

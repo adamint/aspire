@@ -552,7 +552,7 @@ extends:
             - task: NodeTool@0
               displayName: 🟣Install Node.js
               inputs:
-                versionSpec: '20.x'
+                versionSpec: '22.x'
             - template: /eng/pipelines/templates/prepare-npm-cli-packages.yml@self
               parameters:
                 npmPackagesDir: $(Pipeline.Workspace)/npm-packages
@@ -583,7 +583,7 @@ extends:
             - task: NodeTool@0
               displayName: 🟣Install Node.js
               inputs:
-                versionSpec: '20.x'
+                versionSpec: '22.x'
             - template: /eng/pipelines/templates/prepare-npm-cli-packages.yml@self
               parameters:
                 npmPackagesDir: $(Pipeline.Workspace)/npm-packages
@@ -625,7 +625,7 @@ extends:
             - task: NodeTool@0
               displayName: 🟣Install Node.js
               inputs:
-                versionSpec: '20.x'
+                versionSpec: '22.x'
             - template: /eng/pipelines/templates/prepare-npm-cli-packages.yml@self
               parameters:
                 npmPackagesDir: $(Pipeline.Workspace)/npm-packages
