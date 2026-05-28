@@ -274,6 +274,7 @@ export class AppHostDataRepository {
 
     refresh(): void {
         this._stopDescribeWatch();
+        this._stopAllGlobalDescribes();
         this._workspaceResources.clear();
         this._clearErrors();
         this._updateWorkspaceContext();
@@ -1110,6 +1111,14 @@ export class AppHostDataRepository {
         this._appHosts = workspaceAppHosts;
         this._workspaceAppHost = workspaceAppHost;
 
+        // When multiple workspace AppHost candidates exist, start per-AppHost describe
+        // streams for running AppHosts that are NOT the selected one (the workspace
+        // describe stream already handles the selected AppHost). This ensures every
+        // running AppHost displayed in the multi-AppHost workspace tree has resources.
+        if (this._workspaceAppHostCandidatePaths.length > 1) {
+            this._reconcileWorkspaceDescribes(workspaceAppHosts);
+        }
+
         if (workspaceAppHostStarted
             && this._shouldWatchWorkspace
             && !this._describeProcess
@@ -1121,6 +1130,43 @@ export class AppHostDataRepository {
         if (changed || this._loadingWorkspace) {
             this._updateWorkspaceContext({ clearLoading: true });
         }
+    }
+
+    /**
+     * In multi-candidate workspace mode, start/stop per-AppHost describe streams for
+     * running workspace AppHosts that are NOT the currently selected one. The workspace
+     * describe stream (via `_startDescribeWatch`) handles the selected AppHost; this
+     * method fans out global describe streams for the remaining running AppHosts so that
+     * each one displayed in the workspace tree has its resources populated.
+     */
+    private _reconcileWorkspaceDescribes(workspaceAppHosts: readonly AppHostDisplayInfo[]): void {
+        const selectedPath = this._workspaceAppHostPath;
+
+        // Determine which non-selected workspace AppHosts need a describe stream.
+        const desiredPaths = new Set(
+            workspaceAppHosts
+                .filter(a => !selectedPath || !isMatchingAppHostPath(a.appHostPath, selectedPath))
+                .map(a => a.appHostPath)
+        );
+
+        // Stop streams for AppHosts that are no longer running (or became selected).
+        for (const path of Array.from(this._globalDescribeStreams.keys())) {
+            if (!desiredPaths.has(path)) {
+                this._stopGlobalDescribe(path);
+            }
+        }
+
+        // Start streams for newly running non-selected AppHosts.
+        for (const appHost of workspaceAppHosts) {
+            if (selectedPath && isMatchingAppHostPath(appHost.appHostPath, selectedPath)) {
+                continue;
+            }
+            if (!this._globalDescribeStreams.has(appHost.appHostPath)) {
+                this._startGlobalDescribe(appHost.appHostPath);
+            }
+        }
+
+        this._attachGlobalResourcesToAppHosts();
     }
 
     private async _runPsCommand(args: string[], fetchVersion: number, callback: (code: number, stdout: string, stderr: string) => void): Promise<void> {
