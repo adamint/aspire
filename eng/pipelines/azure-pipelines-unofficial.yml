@@ -228,6 +228,10 @@ extends:
                     npm install -g --force --registry "$env:NPM_REGISTRY" "corepack@$CorepackVersion"
                     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+                    $npmGlobalBin = (npm prefix --global).Trim()
+                    $env:PATH = "$npmGlobalBin$([IO.Path]::PathSeparator)$env:PATH"
+                    Write-Host "##vso[task.prependpath]$npmGlobalBin"
+
                     # Verify the version actually on PATH matches our pin. On
                     # Windows the Node.js installer registers a `corepack.cmd`
                     # under %ProgramFiles%\nodejs which may shadow the

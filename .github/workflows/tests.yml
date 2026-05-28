@@ -334,6 +334,10 @@ jobs:
           npm install --global --force --registry "$env:NPM_REGISTRY" "corepack@$CorepackVersion"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+          $npmGlobalBin = (npm prefix --global).Trim()
+          $env:PATH = "$npmGlobalBin$([IO.Path]::PathSeparator)$env:PATH"
+          $npmGlobalBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
           $installed = (corepack --version).Trim()
           if ($installed -ne $CorepackVersion) {
             Write-Error "corepack version mismatch: expected $CorepackVersion, got '$installed'. The bundled Corepack on PATH may be taking precedence over the npm-global install."
