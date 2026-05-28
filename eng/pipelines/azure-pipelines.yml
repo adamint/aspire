@@ -299,13 +299,21 @@ extends:
                   script: Write-Host "##vso[task.setvariable variable=NPM_CONFIG_USERCONFIG]$(Build.SourcesDirectory)\.npmrc"
 
               - task: PowerShell@2
-                displayName: 🟣Install yarn
+                displayName: 🟣Install Corepack
                 inputs:
                   targetType: 'inline'
                   script: |
-                    npm install -g yarn@1.22.22
-                    yarn --version
-                  workingDirectory: '$(Build.SourcesDirectory)'
+                    # Install the pinned Corepack shim. Keep this version in
+                    # sync with COREPACK_VERSION in extension/build.sh and
+                    # $CorepackVersion in extension/build.ps1. The Yarn release
+                    # itself is pinned in extension/package.json via the
+                    # `packageManager` field, which `corepack prepare --activate`
+                    # reads from the current working directory.
+                    npm install -g corepack@0.34.7
+                    corepack enable
+                    corepack prepare --activate
+                    corepack yarn --version
+                  workingDirectory: '$(Build.SourcesDirectory)\extension'
 
               - task: PowerShell@2
                 displayName: 🟣Install vsce
