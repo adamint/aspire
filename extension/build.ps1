@@ -65,15 +65,9 @@ Set-Location $PSScriptRoot
 Write-Host ""
 Write-Host "Installing pinned Corepack $CorepackVersion..."
 # Reinstall every time so we overwrite any older Corepack shim that Node.js
-# may have placed on PATH ahead of npm's global prefix.
-#
-# Force the public npm registry for this one install: the rest of the build
-# runs against the dnceng `dotnet-public-npm` mirror via .npmrc, but Corepack
-# itself is not always cached in that mirror, and OSS contributors without
-# dnceng auth would fail with HTTP 401 on a cache miss. Corepack is purely
-# build tooling (it never ships in the extension) so pulling it from npmjs.org
-# does not change what we publish.
-npm install --global --registry=https://registry.npmjs.org "corepack@$CorepackVersion"
+# may have placed on PATH ahead of npm's global prefix. npm uses the registry
+# configured in extension/.npmrc (the dnceng dotnet-public-npm mirror).
+npm install --global "corepack@$CorepackVersion"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "npm install -g corepack@$CorepackVersion failed with exit code $LASTEXITCODE"
