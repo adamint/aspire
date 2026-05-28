@@ -221,7 +221,36 @@ extends:
                     # `packageManager` field, which `corepack prepare --activate`
                     # reads from the current working directory.
                     $CorepackVersion = '0.34.7'
-                    npm install -g "corepack@$CorepackVersion"
+
+                    # npmAuthenticate writes credentials for npm into .npmrc.
+                    # Corepack ignores .npmrc auth, so copy those credentials
+                    # into Corepack's environment variables before preparing Yarn.
+                    $npmrcPath = $env:NPM_CONFIG_USERCONFIG
+                    if (-not $npmrcPath) {
+                      $npmrcPath = '$(Build.SourcesDirectory)\.npmrc'
+                    }
+
+                    if (Test-Path -LiteralPath $npmrcPath) {
+                      $npmrc = Get-Content -LiteralPath $npmrcPath
+                      $authToken = $npmrc | ForEach-Object {
+                        if ($_ -match '^\s*(?://.*?:)?_authToken\s*=\s*(.+?)\s*$') { $Matches[1] }
+                      } | Select-Object -First 1
+                      $username = $npmrc | ForEach-Object {
+                        if ($_ -match '^\s*(?://.*?:)?username\s*=\s*(.+?)\s*$') { $Matches[1] }
+                      } | Select-Object -First 1
+                      $encodedPassword = $npmrc | ForEach-Object {
+                        if ($_ -match '^\s*(?://.*?:)?_password\s*=\s*(.+?)\s*$') { $Matches[1] }
+                      } | Select-Object -First 1
+
+                      if ($authToken) {
+                        $env:COREPACK_NPM_TOKEN = $authToken
+                      } elseif ($username -and $encodedPassword) {
+                        $env:COREPACK_NPM_USERNAME = $username
+                        $env:COREPACK_NPM_PASSWORD = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedPassword))
+                      }
+                    }
+
+                    npm install -g --registry "$env:COREPACK_NPM_REGISTRY" "corepack@$CorepackVersion"
                     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
                     # Verify the version actually on PATH matches our pin. On

@@ -15,8 +15,8 @@ $CorepackVersion = "0.34.7"
 # Point Corepack at the dnceng internal npm mirror unless the caller already
 # set a registry. Corepack does NOT read .npmrc, so we have to feed it through
 # its own env var. See https://github.com/nodejs/corepack#environment-variables.
-# Override locally with `$env:COREPACK_NPM_REGISTRY = '<url>'; ./build.ps1` or
-# remove the env var to use the public npm registry.
+# Override locally with `$env:COREPACK_NPM_REGISTRY = '<url>'; ./build.ps1`. To
+# bypass the internal mirror, set it to `https://registry.npmjs.org/`.
 if (-not $env:COREPACK_NPM_REGISTRY) {
     $env:COREPACK_NPM_REGISTRY = "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/"
 }
@@ -65,9 +65,9 @@ Set-Location $PSScriptRoot
 Write-Host ""
 Write-Host "Installing pinned Corepack $CorepackVersion..."
 # Reinstall every time so we overwrite any older Corepack shim that Node.js
-# may have placed on PATH ahead of npm's global prefix. npm uses the registry
-# configured in extension/.npmrc (the dnceng dotnet-public-npm mirror).
-npm install --global "corepack@$CorepackVersion"
+# may have placed on PATH ahead of npm's global prefix. npm global installs do
+# not use the project .npmrc, so pass the registry explicitly.
+npm install --global --registry "$env:COREPACK_NPM_REGISTRY" "corepack@$CorepackVersion"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "npm install -g corepack@$CorepackVersion failed with exit code $LASTEXITCODE"

@@ -4,9 +4,9 @@
 
 - Node.js (LTS version) — `npm` must be on the PATH (it ships with Node.js). The
   build scripts (`build.sh` / `build.ps1`) install a pinned [Corepack](https://github.com/nodejs/corepack)
-  via `npm install -g corepack@<version>` and use it to provision the Yarn release
-  pinned by the `packageManager` field in `extension/package.json`. You do **not**
-  need to install Yarn yourself.
+  via `npm install -g corepack@<version>` from the configured registry and use it
+  to provision the Yarn release pinned by the `packageManager` field in
+  `extension/package.json`. You do **not** need to install Yarn yourself.
 - Visual Studio Code (latest) or Visual Studio Code Insiders
 - [Aspire CLI](https://aspire.dev/get-started/install-cli/) must be installed and available in the PATH
 
@@ -43,7 +43,7 @@ The build rejects public npm registry URLs in `yarn.lock`; ensure regenerated en
 
 Edit the `"packageManager": "yarn@x.y.z"` field in `extension/package.json`. Corepack picks the new version up automatically the next time `build.sh` / `build.ps1` runs (`corepack prepare --activate` reads `packageManager`). No further changes required in `build.sh`, `build.ps1`, or `extension/Extension.proj` — they all call `corepack yarn …` without an explicit version.
 
-> **Heads up about the internal npm mirror.** The repo's `.npmrc` routes all package downloads through the dnceng `dotnet-public-npm` Azure Artifacts feed, which is a pull-through cache of npmjs.org. The first time anyone (locally or in CI) asks the feed for a version that has never been requested, the feed has to fetch it from npmjs.org — and anonymous pull-through fetches fail with HTTP 401. Subsequent anonymous reads work fine. If you bump the pinned Yarn or Corepack version, either ensure CI has run once with credentials, or pre-seed the feed by running an authenticated `npm install` against the `dotnet-public-npm` registry yourself.
+> **Heads up about the internal npm mirror.** The repo's `.npmrc` and the build scripts' `COREPACK_NPM_REGISTRY` default route package downloads through the dnceng `dotnet-public-npm` Azure Artifacts feed, which is a pull-through cache of npmjs.org. The first time anyone asks the feed for a version that has never been requested, the feed has to fetch it from npmjs.org — and anonymous pull-through fetches fail with HTTP 401. Subsequent anonymous reads work fine. If you bump the pinned Yarn or Corepack version, pre-seed the feed with credentials: use authenticated `npm install --global --registry https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/ corepack@<version>` for Corepack, and run `corepack prepare --activate` with `COREPACK_NPM_TOKEN` or `COREPACK_NPM_USERNAME` / `COREPACK_NPM_PASSWORD` set for Yarn. To bypass the internal mirror locally, set `COREPACK_NPM_REGISTRY=https://registry.npmjs.org/` before running `build.sh` or `build.ps1`.
 
 ## Troubleshooting
 

@@ -312,6 +312,9 @@ jobs:
   extension_tests_win:
     name: Run VS Code extension tests (Windows)
     runs-on: windows-latest
+    env:
+      COREPACK_NPM_REGISTRY: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
     defaults:
       run:
         working-directory: ./extension
@@ -322,17 +325,36 @@ jobs:
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: '20.x'
+      - name: Install Corepack
+        run: |
+          $CorepackVersion = '0.34.7'
+          npm install --global --registry "$env:COREPACK_NPM_REGISTRY" "corepack@$CorepackVersion"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $installed = (corepack --version).Trim()
+          if ($installed -ne $CorepackVersion) {
+            Write-Error "corepack version mismatch: expected $CorepackVersion, got '$installed'. The bundled Corepack on PATH may be taking precedence over the npm-global install."
+            exit 1
+          }
+
+          corepack enable
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          corepack prepare --activate
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          corepack yarn --version
       - name: Validate lockfile registries
         run: node -e "const fs = require('fs'); const lock = fs.readFileSync('yarn.lock', 'utf8'); if (/registry\\.(?:npmjs\\.org|yarnpkg\\.com)/.test(lock)) { throw new Error('extension/yarn.lock contains public npm registry URLs. Regenerate it using the internal dotnet-public-npm feed before restoring.'); }"
       - name: Install dependencies
-        run: yarn install --frozen-lockfile --non-interactive
+        run: corepack yarn install --frozen-lockfile --non-interactive
       - name: Run tests
-        run: yarn test
+        run: corepack yarn test
       - name: Override extension version for PR builds
         if: ${{ inputs.extensionVersionOverride != '' }}
-        run: yarn version --new-version "${{ inputs.extensionVersionOverride }}" --no-git-tag-version
+        run: corepack yarn version --new-version "${{ inputs.extensionVersionOverride }}" --no-git-tag-version
       - name: Package VSIX
-        run: yarn run vsce package --pre-release -o out/aspire-extension.vsix
+        run: corepack yarn run vsce package --pre-release -o out/aspire-extension.vsix
       - name: Upload VSIX
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
