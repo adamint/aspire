@@ -316,8 +316,16 @@ extends:
                   patterns: '**/microsoft-aspire-cli*.tgz'
 
                 - download: aspire-build
-                  displayName: 'Download npm validation summary from Source Build'
-                  artifact: npm-validation-summary
+                  displayName: 'Download npm validation summary from Source Build (win-x64)'
+                  artifact: npm-validation-summary-win-x64
+
+                - download: aspire-build
+                  displayName: 'Download npm validation summary from Source Build (linux-x64)'
+                  artifact: npm-validation-summary-linux-x64
+
+                - download: aspire-build
+                  displayName: 'Download npm validation summary from Source Build (macOS)'
+                  artifact: npm-validation-summary-osx
 
               - ${{ if eq(parameters.SkipWinGetPublish, false) }}:
                 - download: aspire-build
@@ -461,16 +469,29 @@ extends:
                     }
                     Copy-Item $pointerPackages[0].FullName -Destination $pointerTargetPath -Force
 
-                    # Copy the install-test validation summary into its own output folder.
-                    # Stage 2 re-validates this summary before submitting to ESRP/MicroBuild.
-                    $summarySource = "$(Pipeline.Workspace)/aspire-build/npm-validation-summary/validation-summary.json"
                     $summaryTarget = "$(Pipeline.Workspace)/npm/validation-summary"
                     New-Item -ItemType Directory -Path $summaryTarget -Force | Out-Null
-                    if (!(Test-Path $summarySource)) {
-                      Write-Error "npm validation summary was not downloaded from the source build at '$summarySource'. The source build's npm install-test job must have failed or did not run."
-                      exit 1
+
+                    # Copy each install-test validation summary into its own folder.
+                    # Stage 2 re-validates every summary before submitting to ESRP/MicroBuild.
+                    $validationSummaries = @(
+                      @{ Name = 'win-x64'; Artifact = 'npm-validation-summary-win-x64' },
+                      @{ Name = 'linux-x64'; Artifact = 'npm-validation-summary-linux-x64' },
+                      @{ Name = 'osx'; Artifact = 'npm-validation-summary-osx' }
+                    )
+
+                    foreach ($validationSummary in $validationSummaries) {
+                      $summarySource = "$(Pipeline.Workspace)/aspire-build/$($validationSummary.Artifact)/validation-summary.json"
+                      $summaryOutputDirectory = Join-Path $summaryTarget $validationSummary.Name
+                      New-Item -ItemType Directory -Path $summaryOutputDirectory -Force | Out-Null
+
+                      if (!(Test-Path $summarySource)) {
+                        Write-Error "npm validation summary was not downloaded from the source build at '$summarySource'. The source build's npm install-test job for '$($validationSummary.Name)' must have failed or did not run."
+                        exit 1
+                      }
+
+                      Copy-Item $summarySource -Destination (Join-Path $summaryOutputDirectory 'validation-summary.json') -Force
                     }
-                    Copy-Item $summarySource -Destination (Join-Path $summaryTarget 'validation-summary.json') -Force
 
                     Write-Host "Prepared $($ridPackages.Count) RID npm package(s) and pointer package version $($versions[0])."
                   displayName: 'Prepare npm Artifacts for Publishing'
@@ -480,6 +501,9 @@ extends:
                     New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/rid-packages" -Force | Out-Null
                     New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/pointer-package" -Force | Out-Null
                     New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/validation-summary" -Force | Out-Null
+                    New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/validation-summary/win-x64" -Force | Out-Null
+                    New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/validation-summary/linux-x64" -Force | Out-Null
+                    New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/validation-summary/osx" -Force | Out-Null
                     Write-Host "Created empty npm artifact placeholders because SkipNpmPublish=true."
                   displayName: 'Prepare Empty npm Artifact Placeholders'
 
@@ -566,6 +590,7 @@ extends:
                   Write-Host "Source Build Name: $(resources.pipeline.aspire-build.runName)"
                   Write-Host "Source Build URI: $(resources.pipeline.aspire-build.runURI)"
                   Write-Host "GA Channel: ${{ parameters.GaChannelName }}"
+                  Write-Host "Is Prerelease: ${{ parameters.IsPrerelease }}"
                   Write-Host "Dry Run: ${{ parameters.DryRun }}"
                   Write-Host "Skip NuGet Publish: ${{ parameters.SkipNuGetPublish }}"
                   Write-Host "Skip npm Publish: ${{ parameters.SkipNpmPublish }}"
@@ -740,54 +765,88 @@ extends:
               - ${{ if eq(parameters.SkipNpmPublish, false) }}:
                 - powershell: |
                     $ErrorActionPreference = 'Stop'
-                    $summaryPath = "$(Pipeline.Workspace)/npm/validation-summary/validation-summary.json"
-
-                    if (!(Test-Path $summaryPath)) {
-                      Write-Error "npm validation summary not found: $summaryPath. Refusing to publish without verified prepare-stage validation."
-                      exit 1
-                    }
-
-                    try {
-                      $summary = Get-Content -Raw $summaryPath | ConvertFrom-Json
-                    }
-                    catch {
-                      Write-Error "npm validation summary is invalid JSON: $summaryPath"
-                      throw
-                    }
-
-                    if (-not $summary.validatedByPreparePipeline) {
-                      Write-Error "npm validation summary does not indicate successful prepare-stage validation."
-                      exit 1
-                    }
-
+                    $validationRoot = "$(Pipeline.Workspace)/npm/validation-summary"
+                    # The source build validates the macOS package on the build pool's native architecture.
+                    # Accept either RID here while still requiring a macOS install test to have run.
+                    $validationSummaries = @(
+                      @{ Name = 'win-x64'; ExpectedRids = @('win-x64') },
+                      @{ Name = 'linux-x64'; ExpectedRids = @('linux-x64') },
+                      @{ Name = 'osx'; ExpectedRids = @('osx-x64', 'osx-arm64') }
+                    )
                     $requiredChecks = @('install', 'version', 'launcher', 'uninstall')
-                    foreach ($checkName in $requiredChecks) {
-                      $check = $summary.checks.$checkName
-                      if ($null -eq $check) {
-                        Write-Error "npm validation summary is missing required check '$checkName'."
+                    $validatedRids = [System.Collections.Generic.List[string]]::new()
+                    $expectedVersion = $null
+
+                    foreach ($validationSummary in $validationSummaries) {
+                      $summaryPath = Join-Path $validationRoot "$($validationSummary.Name)/validation-summary.json"
+
+                      if (!(Test-Path $summaryPath)) {
+                        Write-Error "npm validation summary not found: $summaryPath. Refusing to publish without verified prepare-stage validation for '$($validationSummary.Name)'."
                         exit 1
                       }
 
-                      $status = "$($check.status)"
+                      try {
+                        $summary = Get-Content -Raw $summaryPath | ConvertFrom-Json
+                      }
+                      catch {
+                        Write-Error "npm validation summary is invalid JSON: $summaryPath"
+                        throw
+                      }
 
-                      # AzDO does not error on referencing an unset task.setvariable; the
-                      # variable expansion produces the literal '$(VarName)' token. The
-                      # prepare template initializes every NpmCheck* var to 'failed' to
-                      # prevent this, but defend against schema drift by rejecting any
-                      # status that still looks like an unexpanded variable.
-                      if ($status -like '$(*)') {
-                        Write-Error "npm validation check '$checkName' has unexpanded status token '$status'. This indicates the prepare-stage script aborted before recording a real result."
+                      if (-not $summary.validatedByPreparePipeline) {
+                        Write-Error "npm validation summary '$summaryPath' does not indicate successful prepare-stage validation."
                         exit 1
                       }
 
-                      if ($status -ne 'passed') {
-                        Write-Error "npm validation check '$checkName' did not pass (status='$status')."
+                      $summaryRid = "$($summary.rid)"
+                      if ($validationSummary.ExpectedRids -notcontains $summaryRid) {
+                        Write-Error "npm validation summary '$summaryPath' reported RID '$summaryRid', expected one of: $($validationSummary.ExpectedRids -join ', ')."
                         exit 1
                       }
+
+                      $summaryVersion = "$($summary.expectedVersion)"
+                      if ([string]::IsNullOrWhiteSpace($summaryVersion)) {
+                        Write-Error "npm validation summary '$summaryPath' did not report an expectedVersion."
+                        exit 1
+                      }
+
+                      if ($null -eq $expectedVersion) {
+                        $expectedVersion = $summaryVersion
+                      } elseif ($summaryVersion -ne $expectedVersion) {
+                        Write-Error "npm validation summaries disagree on expectedVersion. '$summaryPath' reported '$summaryVersion', but earlier summaries reported '$expectedVersion'."
+                        exit 1
+                      }
+
+                      foreach ($checkName in $requiredChecks) {
+                        $check = $summary.checks.$checkName
+                        if ($null -eq $check) {
+                          Write-Error "npm validation summary '$summaryPath' is missing required check '$checkName'."
+                          exit 1
+                        }
+
+                        $status = "$($check.status)"
+
+                        # AzDO does not error on referencing an unset task.setvariable; the
+                        # variable expansion produces the literal '$(VarName)' token. The
+                        # prepare template initializes every NpmCheck* var to 'failed' to
+                        # prevent this, but defend against schema drift by rejecting any
+                        # status that still looks like an unexpanded variable.
+                        if ($status -like '$(*)') {
+                          Write-Error "npm validation check '$checkName' in '$summaryPath' has unexpanded status token '$status'. This indicates the prepare-stage script aborted before recording a real result."
+                          exit 1
+                        }
+
+                        if ($status -ne 'passed') {
+                          Write-Error "npm validation check '$checkName' in '$summaryPath' did not pass (status='$status')."
+                          exit 1
+                        }
+                      }
+
+                      $validatedRids.Add($summaryRid)
                     }
 
-                    Write-Host "npm validation summary verified ($($summary.rid), version $($summary.expectedVersion))."
-                  displayName: 'Validate npm Prepare-Stage Summary'
+                    Write-Host "npm validation summaries verified ($($validatedRids -join ', '), version $expectedVersion)."
+                  displayName: 'Validate npm Prepare-Stage Summaries'
 
                 - powershell: |
                     $ridPackagesPath = "$(Pipeline.Workspace)/npm/rid-packages"
@@ -841,7 +900,13 @@ extends:
                     Write-Host "=== DRY RUN - No npm packages were actually published ==="
                   displayName: 'Dry Run - List npm Packages (No Publish)'
 
-              - ${{ if and(eq(parameters.DryRun, false), eq(parameters.SkipNpmPublish, false)) }}:
+              - ${{ if and(eq(parameters.DryRun, false), eq(parameters.SkipNpmPublish, false), eq(parameters.IsPrerelease, true)) }}:
+                - powershell: |
+                    Write-Error "npm publishing is blocked for prerelease runs because the MicroBuild npm publish template does not yet expose a dist-tag parameter. Set SkipNpmPublish=true or run with DryRun=true until prereleases can publish under a non-latest tag."
+                    exit 1
+                  displayName: 'Block npm Publish for Prerelease'
+
+              - ${{ if and(eq(parameters.DryRun, false), eq(parameters.SkipNpmPublish, false), eq(parameters.IsPrerelease, false)) }}:
                 - powershell: |
                     $owners = "${{ parameters.NpmPublishOwners }}"
                     $approvers = "${{ parameters.NpmPublishApprovers }}"
@@ -981,6 +1046,7 @@ extends:
                     Write-Host "║ BAR Build ID:   $(BarBuildId)"
                   }
                   Write-Host "║ GA Channel:     ${{ parameters.GaChannelName }}"
+                  Write-Host "║ Prerelease:     ${{ parameters.IsPrerelease }}"
                   Write-Host "║ Dry Run:        ${{ parameters.DryRun }}"
                   Write-Host "╠═══════════════════════════════════════════════════════════════╣"
                   Write-Host "║ NuGet Publish:  ${{ parameters.SkipNuGetPublish }}" -NoNewline
@@ -994,6 +1060,8 @@ extends:
                     Write-Host " (SKIPPED)"
                   } elseif ("${{ parameters.DryRun }}" -eq "true") {
                     Write-Host " (DRY RUN)"
+                  } elseif ("${{ parameters.IsPrerelease }}" -eq "true") {
+                    Write-Host " (BLOCKED - prerelease requires non-latest npm dist-tag support)"
                   } else {
                     Write-Host " (EXECUTED)"
                   }

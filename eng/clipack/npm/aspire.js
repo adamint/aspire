@@ -95,8 +95,8 @@ function ensureCachedBinary(sourcePath, binaryName, version, rid) {
     return targetPath;
   }
 
-  // Copy through a temp file so concurrent first runs never observe a partial
-  // executable at the final path.
+  // Copy through a temp file and atomically rename it over the previous cache
+  // entry so concurrent first runs never observe a missing or partial executable.
   const tempPath = path.join(targetDirectory, `${binaryName}.${process.pid}.${Date.now()}.tmp`);
   fs.copyFileSync(sourcePath, tempPath);
 
@@ -104,8 +104,10 @@ function ensureCachedBinary(sourcePath, binaryName, version, rid) {
     fs.chmodSync(tempPath, 0o755);
   }
 
+  // Node's rename uses replace-existing semantics on all supported platforms.
+  // If the cached executable is still running on Windows, the rename fails and
+  // the previous cache entry remains usable instead of being deleted first.
   try {
-    fs.rmSync(targetPath, { force: true });
     fs.renameSync(tempPath, targetPath);
   } catch (error) {
     fs.rmSync(tempPath, { force: true });

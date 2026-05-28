@@ -45,7 +45,7 @@ Before starting a release:
    - Select this build from the `aspire-build` resource dropdown when running the release pipeline.
    - The build should have a `BAR ID - NNNNNN` tag, which the pipeline extracts automatically.
    - The build should also have a `release-version - X.Y.Z` tag, which the pipeline uses when `ReleaseVersion` is left as `auto`.
-   - The build must include native CLI NuGet packages and `microsoft-aspire-cli*.tgz` npm tarballs from the native archive jobs.
+   - The build must include native CLI NuGet packages, `microsoft-aspire-cli*.tgz` npm tarballs from the native archive jobs, and the Windows, Linux, and macOS npm install validation summaries.
 2. **Release branch**: Ensure the release branch exists, for example `release/9.2`.
 3. **Permissions and approvals**:
    - Access to run Azure DevOps pipelines with the publishing pool.
@@ -72,7 +72,7 @@ Before starting a release:
    | Parameter | Description | Example |
    |-----------|-------------|---------|
    | `ReleaseVersion` | Override for the version label (used as `v<version>` tag). Leave as `auto` to derive from the source build's `release-version - *` tag, which is the normal case. Only set this when re-shipping under a corrected tag. | `auto` |
-   | `IsPrerelease` | `true` for preview releases. | `false` |
+   | `IsPrerelease` | `true` for preview releases. Non-dry-run npm publishing is blocked for prereleases until the MicroBuild npm publish path supports non-`latest` dist-tags. | `false` |
    | `DryRun` | Set `true` to test without publishing, promoting, tagging, or creating PRs. | `false` |
    | `GaChannelName` | Target GA channel. | `Aspire 9.x GA` |
 
@@ -99,7 +99,7 @@ Before starting a release:
 5. Click **Run** and monitor the pipeline. The final stage (`GitHubTasks`) dispatches `release-github-tasks.yml`, waits for it to complete, uploads the `aspire-cli-*` archives from the source build's `BlobArtifacts` onto the newly-created GitHub release, and validates the Homebrew cask against that live release. The AzDO pipeline only succeeds if the enabled GitHub tasks, asset upload, and Homebrew validation succeed.
 6. Verify packages appear on NuGet.org and npm, and verify that the `aspire-cli-*` archives are attached to the GitHub release.
 
-The npm release path publishes the seven RID packages first, waits for ESRP completion, waits for the configured propagation delay, and then publishes the top-level `@microsoft/aspire-cli` pointer package. This avoids installing a pointer package whose optional RID dependencies are not visible yet.
+The npm release path validates Windows, Linux, and macOS install summaries, publishes the seven RID packages first, waits for ESRP completion, waits for the configured propagation delay, and then publishes the top-level `@microsoft/aspire-cli` pointer package. This avoids installing a pointer package whose optional RID dependencies are not visible yet. For prereleases, set `SkipNpmPublish=true` unless the npm publishing path has gained explicit non-`latest` dist-tag support.
 
 `commit_sha` and `release_branch` for the GitHub workflow are derived automatically from the source build resource, so there is no need to copy them by hand.
 

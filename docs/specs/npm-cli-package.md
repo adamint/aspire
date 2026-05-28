@@ -129,7 +129,7 @@ ASPIRE_NPM_PACKAGE_VERSION
 ASPIRE_NPM_PACKAGE_RID
 ```
 
-The launcher's cache-freshness check compares both file size and `mtime`. A cached binary is reused only when its size matches the source and its `mtime` is greater than or equal to the source binary's `mtime`. Any other state (different size, older `mtime`, or unreadable cache target) triggers an atomic re-copy through a temp file.
+The launcher's cache-freshness check compares both file size and `mtime`. A cached binary is reused only when its size matches the source and its `mtime` is greater than or equal to the source binary's `mtime`. Any other state (different size, older `mtime`, or unreadable cache target) copies the source through a temp file and atomically renames the temp file over the cache target.
 
 ## Build integration
 
@@ -157,12 +157,12 @@ The launcher's cache-freshness check compares both file size and `mtime`. A cach
 5. Comparing the RID tarball binary byte-for-byte with the archive binary.
 6. Verifying pointer package metadata, `bin/aspire.js`, `aspire-package-map.json`, and optional dependency version alignment.
 
-`eng/pipelines/templates/prepare-npm-cli-packages.yml` runs after the byte-for-byte verification and performs a real end-to-end installation test:
+`eng/pipelines/templates/prepare-npm-cli-packages.yml` runs after the byte-for-byte verification and performs real end-to-end installation tests on Windows, Linux, and the native macOS build-pool RID:
 
 1. Installs the just-built pointer and matching RID tarball into a scratch npm prefix (`npm install -g`).
 2. Invokes the installed `aspire --version` and asserts the version matches the build version.
 3. Confirms the launcher's runtime cache landed under the expected `~/.aspire/npm/<version>/<rid>/bin` layout.
-4. Emits `validation-summary.json` listing each check's status. The release pipeline refuses to submit the npm packages to ESRP without a successful summary, mirroring the brew cask flow.
+4. Emits a `validation-summary.json` for each platform listing each check's status. The release pipeline refuses to submit the npm packages to ESRP without successful Windows, Linux, and macOS summaries, mirroring the brew cask flow.
 
 `eng\scripts\stage-native-cli-tool-packages.ps1` stages npm `.tgz` artifacts alongside existing native CLI nupkgs. Official CI invokes the script with `-RequireNpmPackages`, so source builds fail before release if the npm tarballs are missing. The default remains warning-only for local or older nupkg-only flows that call the script directly.
 
@@ -172,7 +172,7 @@ Only one pointer package is staged. The default canonical pointer source is `nat
 
 The native archive workflows verify npm tarballs after the existing nupkg verification and then run the end-to-end install test above.
 
-Azure Pipelines installs Node.js before native package build because `npm pack` runs during packaging, verifies the npm packages, downloads `microsoft-aspire-cli*.tgz` in the staging job, and stages them with the native CLI packages. The source build then publishes the npm `.tgz` files as shipping flat blob artifacts so the release pipeline can consume them without treating npm tarballs as NuGet-like BAR package assets. The install-test job also publishes a `validation-summary.json` artifact (`NpmValidationSummary`) the release pipeline requires before publishing.
+Azure Pipelines installs Node.js before native package build because `npm pack` runs during packaging, verifies the npm packages, downloads `microsoft-aspire-cli*.tgz` in the staging job, and stages them with the native CLI packages. The source build then publishes the npm `.tgz` files as shipping flat blob artifacts so the release pipeline can consume them without treating npm tarballs as NuGet-like BAR package assets. The install-test jobs also publish platform-specific validation summary artifacts that the release pipeline aggregates into `NpmValidationSummary` and requires before publishing.
 
 ## Publishing
 
@@ -182,13 +182,13 @@ The release pipeline prepares two npm artifact folders and one validation artifa
 
 1. `NpmRidPackageArtifacts` contains the seven RID packages.
 2. `NpmPointerPackageArtifacts` contains the top-level `@microsoft/aspire-cli` pointer package.
-3. `NpmValidationSummary` contains the `validation-summary.json` emitted by the source-build install test. The release pipeline reads this summary and refuses to invoke `MicroBuild.Publish` unless every required check passed.
+3. `NpmValidationSummary` contains the platform `validation-summary.json` files emitted by the source-build install tests. The release pipeline reads these summaries and refuses to invoke `MicroBuild.Publish` unless every required check passed on Windows, Linux, and macOS.
 
 The package split is intentional. The release job submits RID packages first, waits for the ESRP submission to complete, waits an additional npm registry propagation delay, and then submits the pointer package. Publishing the pointer package last avoids optional dependency resolution races when a user installs the top-level package immediately after release.
 
-Before publishing, the release pipeline validates that exactly one pointer tarball and exactly one tarball for each supported RID are present, that all tarballs have one version, and that the `NpmValidationSummary` artifact reports `validatedByPreparePipeline: true` with every required check `passed`. Non-dry-run npm publishing also requires release managers to provide `NpmPublishOwners` and `NpmPublishApprovers`, which are passed to ESRP. Re-runs can use `SkipNpmRidPublish` if the RID packages published but the pointer package did not, and `SkipNpmPublish` after npm publishing has completed.
+Before publishing, the release pipeline validates that exactly one pointer tarball and exactly one tarball for each supported RID are present, that all tarballs have one version, and that the `NpmValidationSummary` artifact reports `validatedByPreparePipeline: true` with every required check `passed` for Windows, Linux, and macOS install validation. Non-dry-run npm publishing also requires release managers to provide `NpmPublishOwners` and `NpmPublishApprovers`, which are passed to ESRP. Re-runs can use `SkipNpmRidPublish` if the RID packages published but the pointer package did not, and `SkipNpmPublish` after npm publishing has completed.
 
-MicroBuild's npm publish template documentation does not currently expose an npm `dist-tag` parameter. Initial publishing therefore relies on the registry's default tag behavior; preview or side-channel tagging needs ESRP/MicroBuild support before it can be enabled safely.
+MicroBuild's npm publish template documentation does not currently expose an npm `dist-tag` parameter. Non-dry-run prerelease npm publishing is blocked until preview packages can be submitted under a non-`latest` tag; release managers can still use `DryRun=true` to inspect the npm publish set without submitting packages.
 
 ## Product and security tradeoffs
 

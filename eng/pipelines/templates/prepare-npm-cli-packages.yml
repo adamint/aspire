@@ -8,6 +8,9 @@ parameters:
   - name: rid
     type: string
     default: 'linux-x64'
+  - name: validationSummaryArtifactName
+    type: string
+    default: 'npm-validation-summary'
   # When true, the install test is allowed to run against just-built tarballs
   # without contacting the npm registry. PR builds set this to true; release
   # validation builds also set this to true. The variable exists so future
@@ -19,7 +22,16 @@ parameters:
 steps:
   - bash: |
       set -euo pipefail
-      packagesDir='${{ parameters.npmPackagesDir }}'
+      to_unix_path() {
+        local value="$1"
+        if command -v cygpath >/dev/null 2>&1 && [[ "$value" =~ ^[A-Za-z]:\\ ]]; then
+          cygpath -u "$value"
+        else
+          printf '%s\n' "$value"
+        fi
+      }
+
+      packagesDir="$(to_unix_path '${{ parameters.npmPackagesDir }}')"
       expectedVersion='${{ parameters.expectedVersion }}'
       rid='${{ parameters.rid }}'
 
@@ -115,9 +127,14 @@ steps:
 
       # Use a scratch npm prefix so the test never mutates the agent's
       # global node_modules and so cleanup is a single rm -rf.
-      prefix="$(Build.StagingDirectory)/npm-validate-prefix"
-      cache="$(Build.StagingDirectory)/npm-validate-cache"
-      aspireCache="$(Build.StagingDirectory)/npm-validate-aspire-cache"
+      stagingDirectory="$(Build.StagingDirectory)"
+      if command -v cygpath >/dev/null 2>&1 && [[ "$stagingDirectory" =~ ^[A-Za-z]:\\ ]]; then
+        stagingDirectory="$(cygpath -u "$stagingDirectory")"
+      fi
+
+      prefix="$stagingDirectory/npm-validate-prefix"
+      cache="$stagingDirectory/npm-validate-cache"
+      aspireCache="$stagingDirectory/npm-validate-aspire-cache"
       rm -rf "$prefix" "$cache" "$aspireCache"
       mkdir -p "$prefix" "$cache" "$aspireCache"
 
@@ -125,7 +142,8 @@ steps:
       export NPM_CONFIG_CACHE="$cache"
       export ASPIRE_NPM_CACHE_DIR="$aspireCache"
       # Prefer the freshly-built launcher's PATH; do not poison existing aspire binaries.
-      export PATH="$prefix/bin:$PATH"
+      # npm writes POSIX shims to <prefix>/bin and Windows shims to <prefix>.
+      export PATH="$prefix/bin:$prefix:$PATH"
 
       if command -v aspire >/dev/null 2>&1; then
         echo "##[error]aspire is already on PATH before install ($(command -v aspire)) — test environment is not clean"
@@ -167,8 +185,13 @@ steps:
         exit 1
       fi
 
-      # The launcher copies the native binary into $ASPIRE_NPM_CACHE_DIR/<version>/<rid>/bin/aspire.
-      cachedBinary="$aspireCache/$expectedVersion/$rid/bin/aspire"
+      # The launcher copies the native binary into $ASPIRE_NPM_CACHE_DIR/<version>/<rid>/bin/<binaryName>.
+      binaryName="aspire"
+      if [[ "$rid" == win-* ]]; then
+        binaryName="aspire.exe"
+      fi
+
+      cachedBinary="$aspireCache/$expectedVersion/$rid/bin/$binaryName"
       if [ ! -f "$cachedBinary" ]; then
         echo "##[error]Expected cached binary at $cachedBinary was not created by the launcher"
         find "$aspireCache" -maxdepth 6 -type f || true
@@ -200,7 +223,12 @@ steps:
 
   - bash: |
       set -euo pipefail
-      outputDir="$(Build.StagingDirectory)/npm-validation-summary"
+      stagingDirectory="$(Build.StagingDirectory)"
+      if command -v cygpath >/dev/null 2>&1 && [[ "$stagingDirectory" =~ ^[A-Za-z]:\\ ]]; then
+        stagingDirectory="$(cygpath -u "$stagingDirectory")"
+      fi
+
+      outputDir="$stagingDirectory/npm-validation-summary"
       mkdir -p "$outputDir"
       outputPath="$outputDir/validation-summary.json"
       rid="$(NpmTestRid)"
@@ -228,7 +256,7 @@ steps:
           },
           "launcher": {
             "status": "$(NpmCheckLauncher)",
-            "details": "Launcher cached native binary at ASPIRE_NPM_CACHE_DIR/<version>/<rid>/bin/aspire"
+            "details": "Launcher cached native binary at ASPIRE_NPM_CACHE_DIR/<version>/<rid>/bin/<binaryName>"
           },
           "uninstall": {
             "status": "$(NpmCheckUninstall)",
@@ -248,4 +276,4 @@ steps:
     condition: always()
     inputs:
       PathtoPublish: '$(Build.StagingDirectory)/npm-validation-summary'
-      ArtifactName: npm-validation-summary
+      ArtifactName: ${{ parameters.validationSummaryArtifactName }}
