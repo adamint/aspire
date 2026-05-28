@@ -311,7 +311,10 @@ extends:
                     # reads from the current working directory.
                     $CorepackVersion = '0.34.7'
 
-                    npm install -g --registry "$env:NPM_REGISTRY" "corepack@$CorepackVersion"
+                    # Hosted Windows images can already have yarn in npm's
+                    # global prefix. The npm Corepack package owns that shim too,
+                    # so force only in CI where the tool install is job-scoped.
+                    npm install -g --force --registry "$env:NPM_REGISTRY" "corepack@$CorepackVersion"
                     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
                     # Verify the version actually on PATH matches our pin. On

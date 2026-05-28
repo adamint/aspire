@@ -328,7 +328,10 @@ jobs:
       - name: Install Corepack
         run: |
           $CorepackVersion = '0.34.7'
-          npm install --global --registry "$env:NPM_REGISTRY" "corepack@$CorepackVersion"
+          # The hosted Windows image already has a yarn shim in npm's global
+          # prefix. The npm Corepack package owns that shim too, so force only
+          # in CI where the tool install is isolated to this ephemeral job.
+          npm install --global --force --registry "$env:NPM_REGISTRY" "corepack@$CorepackVersion"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $installed = (corepack --version).Trim()
