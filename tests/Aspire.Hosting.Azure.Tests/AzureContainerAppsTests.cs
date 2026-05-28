@@ -3,7 +3,6 @@
 
 #pragma warning disable ASPIREACADOMAINS001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 #pragma warning disable ASPIRECOMPUTE002 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
-#pragma warning disable ASPIREAZURE002 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 #pragma warning disable ASPIREDOCKERFILEBUILDER001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 #pragma warning disable ASPIREPIPELINES001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
 #pragma warning disable ASPIREACANAMING001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
@@ -1779,6 +1778,29 @@ public class AzureContainerAppsTests
             builder.AddExecutable("exe", "path/to/executable", ".")
                 .PublishAsDockerFile()
                 .PublishAsAzureContainerAppJob());
+    }
+
+    [Fact]
+    public async Task ValidateAzureContainerApps_DoesNotThrowInRunMode()
+    {
+        // Regression test for https://github.com/microsoft/aspire/issues/16940.
+        // In run mode, AddAzureContainerAppEnvironment does not add the env resource to the
+        // model. If a compute resource still ends up with an AzureContainerAppCustomizationAnnotation
+        // (e.g. via WithAnnotation), the validation step should not throw at 'aspire run' time —
+        // PublishAs* customizations are only meaningful at publish/deploy time.
+        var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
+
+        builder.AddAzureContainerAppEnvironment("env");
+
+        builder.AddContainer("api", "myimage")
+            .WithAnnotation(new AzureContainerAppCustomizationAnnotation((_, _) => { }));
+
+        builder.AddContainer("worker", "myimage")
+            .WithAnnotation(new AzureContainerAppJobCustomizationAnnotation((_, _) => { }));
+
+        using var app = builder.Build();
+
+        await ExecuteBeforeStartHooksAsync(app, default);
     }
 
     [Fact]

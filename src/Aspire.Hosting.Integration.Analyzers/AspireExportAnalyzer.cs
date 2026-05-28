@@ -13,12 +13,13 @@ using Microsoft.CodeAnalysis.Operations;
 namespace Aspire.Hosting.Analyzers;
 
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
-public partial class AspireExportAnalyzer : DiagnosticAnalyzer
+internal partial class AspireExportAnalyzer : DiagnosticAnalyzer
 {
     private const string RunSyncOnBackgroundThreadPropertyName = "RunSyncOnBackgroundThread";
     private const string ExposeMethodsPropertyName = "ExposeMethods";
     private const string ExposePropertiesPropertyName = "ExposeProperties";
     private const string MethodNamePropertyName = "MethodName";
+    private const string DescriptionPropertyName = "Description";
 
     // Matches: valid method name (camelCase identifier, may contain dots for namespacing)
     // Examples: addRedis, addContainer, Dictionary.set
@@ -56,12 +57,11 @@ public partial class AspireExportAnalyzer : DiagnosticAnalyzer
 
     private readonly struct GeneratedMethodNameExport : IEquatable<GeneratedMethodNameExport>
     {
-        public GeneratedMethodNameExport(string source, Location location, string effectiveExportId, bool canShareGeneratedName)
+        public GeneratedMethodNameExport(string source, Location location, string effectiveExportId)
         {
             Source = source;
             Location = location;
             EffectiveExportId = effectiveExportId;
-            CanShareGeneratedName = canShareGeneratedName;
         }
 
         public string Source { get; }
@@ -70,14 +70,11 @@ public partial class AspireExportAnalyzer : DiagnosticAnalyzer
 
         public string EffectiveExportId { get; }
 
-        public bool CanShareGeneratedName { get; }
-
         public bool Equals(GeneratedMethodNameExport other)
         {
             return Source == other.Source &&
                 Location.Equals(other.Location) &&
-                EffectiveExportId == other.EffectiveExportId &&
-                CanShareGeneratedName == other.CanShareGeneratedName;
+                EffectiveExportId == other.EffectiveExportId;
         }
 
         public override bool Equals(object? obj)
@@ -89,8 +86,7 @@ public partial class AspireExportAnalyzer : DiagnosticAnalyzer
         {
             return StringComparer.Ordinal.GetHashCode(Source) ^
                 Location.GetHashCode() ^
-                StringComparer.Ordinal.GetHashCode(EffectiveExportId) ^
-                CanShareGeneratedName.GetHashCode();
+                StringComparer.Ordinal.GetHashCode(EffectiveExportId);
         }
     }
 
@@ -159,8 +155,14 @@ public partial class AspireExportAnalyzer : DiagnosticAnalyzer
             SymbolKind.Method);
 
         context.RegisterSymbolAction(
-            c => AnalyzeNamedType(c, aspireExportAttribute, aspireExportIgnoreAttribute, capabilityIds, generatedMethodNames),
+            c => AnalyzeNamedType(c, wellKnownTypes, aspireExportAttribute, aspireExportIgnoreAttribute, capabilityIds, generatedMethodNames),
             SymbolKind.NamedType);
+
+        context.RegisterSymbolAction(
+            c => AnalyzeProperty(c, aspireExportAttribute),
+            SymbolKind.Property);
+
+        context.RegisterCompilationEndAction(c => ReportAssemblyExportDescriptions(c, aspireExportAttribute));
 
         // At the end of compilation, report duplicate export IDs
         context.RegisterCompilationEndAction(c => ReportDuplicateExports(c, exportsByKey));
@@ -260,6 +262,8 @@ public partial class AspireExportAnalyzer : DiagnosticAnalyzer
 
         var attributeSyntax = exportAttribute.ApplicationSyntaxReference?.GetSyntax(context.CancellationToken);
         var location = attributeSyntax?.GetLocation() ?? method.Locations.FirstOrDefault() ?? Location.None;
+        AnalyzeExportDescription(context, exportAttribute, location);
+
         var containingTypeExportAttribute = GetContainingTypeAspireExportAttribute(method.ContainingType, aspireExportAttribute);
 
         // Rule 1: Method must be static
@@ -307,8 +311,7 @@ public partial class AspireExportAnalyzer : DiagnosticAnalyzer
                 generatedTargetType,
                 effectiveExportId,
                 GetMethodDisplayString(method),
-                location,
-                canShareGeneratedName: true);
+                location);
         }
 
         // Rule 2b (ASPIREEXPORT011): Warn when explicit id matches the convention-derived name.
@@ -378,14 +381,80 @@ public partial class AspireExportAnalyzer : DiagnosticAnalyzer
 
     private static void AnalyzeNamedType(
         SymbolAnalysisContext context,
+        WellKnownTypes wellKnownTypes,
         INamedTypeSymbol aspireExportAttribute,
         INamedTypeSymbol? aspireExportIgnoreAttribute,
         ConcurrentDictionary<string, ConcurrentBag<CapabilityExport>> capabilityIds,
         ConcurrentDictionary<(string MethodName, string TargetType), ConcurrentBag<GeneratedMethodNameExport>> generatedMethodNames)
     {
         var type = (INamedTypeSymbol)context.Symbol;
+        AnalyzeDtoType(type, wellKnownTypes, aspireExportIgnoreAttribute, context);
+
         var typeExportAttribute = GetContainingTypeAspireExportAttribute(type, aspireExportAttribute);
+        if (typeExportAttribute is not null)
+        {
+            var location = GetAttributeLocation(typeExportAttribute, context.CancellationToken) ?? type.Locations.FirstOrDefault() ?? Location.None;
+            AnalyzeExportDescription(context, typeExportAttribute, location);
+        }
+
         AnalyzeContextType(type, typeExportAttribute, context.Compilation.Assembly.Identity.Name, aspireExportAttribute, aspireExportIgnoreAttribute, capabilityIds, generatedMethodNames, context.CancellationToken);
+    }
+
+    private static void AnalyzeProperty(SymbolAnalysisContext context, INamedTypeSymbol aspireExportAttribute)
+    {
+        var property = (IPropertySymbol)context.Symbol;
+        var propertyExportAttribute = GetAspireExportAttribute(property, aspireExportAttribute);
+        if (propertyExportAttribute is null)
+        {
+            return;
+        }
+
+        var location = GetAttributeLocation(propertyExportAttribute, context.CancellationToken) ?? property.Locations.FirstOrDefault() ?? Location.None;
+        AnalyzeExportDescription(context, propertyExportAttribute, location);
+    }
+
+    private static void AnalyzeDtoType(
+        INamedTypeSymbol type,
+        WellKnownTypes wellKnownTypes,
+        INamedTypeSymbol? aspireExportIgnoreAttribute,
+        SymbolAnalysisContext context)
+    {
+        if (!HasAspireDtoAttribute(type))
+        {
+            return;
+        }
+
+        foreach (var property in GetInstanceProperties(type))
+        {
+            if (IsMutableCollectionType(property.Type, wellKnownTypes) &&
+                property.SetMethod is null &&
+                !property.IsStatic &&
+                property.GetMethod?.DeclaredAccessibility == Accessibility.Public &&
+                !HasAspireExportIgnoreAttribute(property, aspireExportIgnoreAttribute))
+            {
+                context.ReportDiagnostic(Diagnostic.Create(
+                    Diagnostics.s_dtoMutableCollectionPropertyMustBeInitSettable,
+                    property.Locations.FirstOrDefault() ?? type.Locations.FirstOrDefault() ?? Location.None,
+                    $"{type.Name}.{property.Name}"));
+            }
+        }
+    }
+
+    private static void ReportAssemblyExportDescriptions(CompilationAnalysisContext context, INamedTypeSymbol aspireExportAttribute)
+    {
+        foreach (var attribute in context.Compilation.Assembly.GetAttributes())
+        {
+            if (!SymbolEqualityComparer.Default.Equals(attribute.AttributeClass, aspireExportAttribute))
+            {
+                continue;
+            }
+
+            var location = GetAttributeLocation(attribute, context.CancellationToken) ?? Location.None;
+            if (HasNamedArgument(attribute, DescriptionPropertyName))
+            {
+                context.ReportDiagnostic(Diagnostic.Create(Diagnostics.s_descriptionShouldUseXmlDocs, location));
+            }
+        }
     }
 
     private static void AnalyzeAssemblyExportedTypes(
@@ -488,11 +557,10 @@ public partial class AspireExportAnalyzer : DiagnosticAnalyzer
                     generatedTargetType,
                     getMethodName,
                     property.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
-                    location,
-                    canShareGeneratedName: false);
+                    location);
             }
 
-            if (property.SetMethod is not null)
+            if (property.SetMethod is { IsInitOnly: false })
             {
                 var setterMethodNameSuffix = methodNameOverride is { Length: > 0 }
                     ? char.ToUpperInvariant(methodNameOverride[0]) + methodNameOverride.Substring(1)
@@ -510,8 +578,7 @@ public partial class AspireExportAnalyzer : DiagnosticAnalyzer
                     generatedTargetType,
                     $"{typeId}.{setterMethodName}",
                     property.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
-                    location,
-                    canShareGeneratedName: false);
+                    location);
             }
         }
 
@@ -1330,9 +1397,7 @@ public partial class AspireExportAnalyzer : DiagnosticAnalyzer
                 .ToArray();
 
             if (exports.Length <= 1 ||
-                exports.Select(static e => e.EffectiveExportId).Distinct(StringComparer.Ordinal).Count() <= 1 ||
-                (exports.All(static e => e.CanShareGeneratedName) &&
-                 !exports.Any(e => string.Equals(e.EffectiveExportId, kvp.Key.MethodName, StringComparison.Ordinal))))
+                exports.Select(static e => e.EffectiveExportId).Distinct(StringComparer.Ordinal).Count() <= 1)
             {
                 continue;
             }
@@ -1366,11 +1431,10 @@ public partial class AspireExportAnalyzer : DiagnosticAnalyzer
         string targetType,
         string effectiveExportId,
         string source,
-        Location location,
-        bool canShareGeneratedName)
+        Location location)
     {
         var bag = generatedMethodNames.GetOrAdd((methodName, targetType), _ => []);
-        bag.Add(new GeneratedMethodNameExport(source, location, effectiveExportId, canShareGeneratedName));
+        bag.Add(new GeneratedMethodNameExport(source, location, effectiveExportId));
     }
 
     private static string? GetExportId(AttributeData attribute)
@@ -1460,6 +1524,27 @@ public partial class AspireExportAnalyzer : DiagnosticAnalyzer
         }
 
         return null;
+    }
+
+    private static void AnalyzeExportDescription(SymbolAnalysisContext context, AttributeData exportAttribute, Location location)
+    {
+        if (HasNamedArgument(exportAttribute, DescriptionPropertyName))
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Diagnostics.s_descriptionShouldUseXmlDocs, location));
+        }
+    }
+
+    private static bool HasNamedArgument(AttributeData exportAttribute, string argumentName)
+    {
+        foreach (var namedArgument in exportAttribute.NamedArguments)
+        {
+            if (namedArgument.Key == argumentName)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static AttributeData? GetAspireExportAttribute(ISymbol symbol, INamedTypeSymbol aspireExportAttribute)
@@ -1971,6 +2056,14 @@ public partial class AspireExportAnalyzer : DiagnosticAnalyzer
         }
 
         return false;
+    }
+
+    private static bool IsMutableCollectionType(ITypeSymbol type, WellKnownTypes wellKnownTypes)
+    {
+        return TryMatchGenericType(type, wellKnownTypes, WellKnownTypeData.WellKnownType.System_Collections_Generic_Dictionary_2) ||
+            TryMatchGenericType(type, wellKnownTypes, WellKnownTypeData.WellKnownType.System_Collections_Generic_IDictionary_2) ||
+            TryMatchGenericType(type, wellKnownTypes, WellKnownTypeData.WellKnownType.System_Collections_Generic_List_1) ||
+            TryMatchGenericType(type, wellKnownTypes, WellKnownTypeData.WellKnownType.System_Collections_Generic_IList_1);
     }
 
     private static bool IsResourceType(ITypeSymbol type, WellKnownTypes wellKnownTypes)
