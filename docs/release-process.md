@@ -4,245 +4,232 @@ This document describes the release process for microsoft/aspire, including both
 
 ## Overview
 
-The Aspire release process involves two main automation components:
+The Aspire release process uses two main automation components:
 
-1. **Azure DevOps Pipeline** (`eng/pipelines/release-publish-nuget.yml`)
-   - Publishes NuGet packages to NuGet.org
-   - Promotes the build to the GA channel via darc
-
-2. **GitHub Actions Workflow** (`.github/workflows/release-github-tasks.yml`)
-   - Creates Git tags
-   - Creates GitHub Releases
-   - Creates merge-back PRs
-   - Creates baseline version update PRs
+1. **Azure DevOps release pipeline** (`eng/pipelines/release-publish-nuget.yml`)
+   - Downloads signed artifacts from a selected official source build.
+   - Re-publishes NuGet, npm, WinGet, and Homebrew release inputs so 1ES can generate release SBOMs.
+   - Publishes NuGet packages to NuGet.org.
+   - Publishes Aspire CLI npm packages through ESRP/MicroBuild.
+   - Promotes the build to the GA channel via darc.
+   - Submits WinGet manifests and Homebrew cask PRs.
+2. **GitHub Actions workflow** (`.github/workflows/release-github-tasks.yml`)
+   - Creates Git tags.
+   - Creates GitHub Releases.
+   - Creates merge-back PRs.
+   - Creates baseline version update PRs.
 
 ## Prerequisites
 
 Before starting a release:
 
-1. **Signed Build**: Have a successful signed build from the official `dotnet-aspire` pipeline
-   - The build will be selected from a dropdown when running the release pipeline
-   - The build should have a `BAR ID - NNNNNN` tag (auto-extracted by the pipeline)
+1. **Signed build**: Have a successful signed build from the official `dotnet-aspire` pipeline.
+   - Select this build from the `aspire-build` resource dropdown when running the release pipeline.
+   - The build should have a `BAR ID - NNNNNN` tag, which the pipeline extracts automatically.
+   - The build must include native CLI NuGet packages and `microsoft-aspire-cli*.tgz` npm tarballs from the native archive jobs.
+2. **Release branch**: Ensure the release branch exists, for example `release/9.2`.
+3. **Permissions and approvals**:
+   - Access to run Azure DevOps pipelines with the publishing pool.
+   - Permission to use the NuGet.org service connection.
+   - Approval to use the DevDiv ESRP service connection for MicroBuild npm publishing.
+   - Valid ESRP owner and approver aliases for npm publishing.
+   - GitHub write access for creating tags, releases, and PRs.
 
-2. **Release Branch**: Ensure the release branch exists (e.g., `release/9.2`)
+## Step-by-step release process
 
-3. **Permissions**:
-   - Access to run Azure DevOps pipelines with the publishing pool
-   - GitHub write access for creating tags/releases/PRs
+### Step 1: Publish packages and promote the build (Azure DevOps)
 
-## Step-by-Step Release Process
-
-### Step 1: Publish NuGet Packages (Azure DevOps)
-
-1. Navigate to the Azure DevOps pipeline: `release-publish-nuget`
-2. Click "Run pipeline"
-3. Under **Resources**, select the source build from the `aspire-build` dropdown
-   - This shows recent builds from the `dotnet-aspire` pipeline
-   - Select the specific signed build you want to release
+1. Navigate to the Azure DevOps pipeline: `release-publish-nuget`.
+2. Click **Run pipeline**.
+3. Under **Resources**, select the source build from the `aspire-build` dropdown.
 4. Fill in the parameters:
 
    | Parameter | Description | Example |
    |-----------|-------------|---------|
    | `GaChannelName` | Target GA channel | `Aspire 9.x GA` |
-   | `DryRun` | Set `true` to test without publishing | `false` |
-   | `SkipNuGetPublish` | Set `true` if re-running after NuGet success | `false` |
-   | `SkipChannelPromotion` | Set `true` if re-running after darc success | `false` |
+   | `DryRun` | Set `true` to validate without publishing | `false` |
+   | `SkipNuGetPublish` | Set `true` if NuGet publishing already completed | `false` |
+   | `SkipNpmPublish` | Set `true` if npm publishing already completed | `false` |
+   | `SkipNpmRidPublish` | Set `true` if npm RID packages completed but the pointer package did not | `false` |
+   | `SkipChannelPromotion` | Set `true` if darc channel promotion already completed | `false` |
+   | `SkipWinGetPublish` | Set `true` if WinGet publishing already completed | `false` |
+   | `SkipHomebrewPublish` | Set `true` if Homebrew publishing already completed | `false` |
+   | `NpmPublishOwners` | Comma-separated ESRP owner aliases or emails | `alias@microsoft.com` |
+   | `NpmPublishApprovers` | Comma-separated ESRP approver aliases or emails | `approver@microsoft.com` |
+   | `NpmRegistryPropagationDelayMinutes` | Delay between npm RID package and pointer package submissions | `10` |
 
-5. Click "Run" and monitor the pipeline
-6. Verify packages appear on NuGet.org
+5. Click **Run** and monitor the pipeline.
+6. Verify packages appear on NuGet.org and npm.
 
-### Step 2: GitHub Tasks (GitHub Actions)
+The npm release path publishes the seven RID packages first, waits for ESRP completion, waits for the configured propagation delay, and then publishes the top-level `@microsoft/aspire-cli` pointer package. This avoids installing a pointer package whose optional RID dependencies are not visible yet.
 
-1. Navigate to Actions → "Release GitHub Tasks"
-2. Click "Run workflow"
+### Step 2: GitHub tasks (GitHub Actions)
+
+1. Navigate to Actions -> **Release GitHub Tasks**.
+2. Click **Run workflow**.
 3. Fill in the parameters:
 
    | Parameter | Description | Example |
    |-----------|-------------|---------|
    | `release_version` | The version being released | `13.2.0` |
-   | `commit_sha` | Full 40-char commit SHA from the build | `abc123...` |
+   | `commit_sha` | Full 40-character commit SHA from the build | `abc123...` |
    | `release_branch` | Release branch name | `release/9.2` |
    | `is_prerelease` | `true` for preview releases | `false` |
    | `dry_run` | `true` to validate without making changes | `false` |
-   | `skip_tagging` | Skip if tag already created | `false` |
+   | `skip_tagging` | Skip if tag already exists | `false` |
    | `skip_github_release` | Skip if release already exists | `false` |
-   | `skip_merge_pr` | Skip if PR already created | `false` |
-   | `skip_baseline_pr` | Skip if PR already created | `false` |
+   | `skip_merge_pr` | Skip if PR already exists | `false` |
+   | `skip_baseline_pr` | Skip if PR already exists | `false` |
 
-4. Click "Run workflow" and monitor progress
+4. Click **Run workflow** and monitor progress.
 
-> **Tip**: Use `dry_run: true` to test the workflow without creating any tags, releases, or PRs. This is useful for validating inputs and checking what actions would be taken.
+Use `dry_run: true` to test the workflow without creating tags, releases, or PRs.
 
-### Step 3: Post-Release Tasks (Manual)
+### Step 3: Post-release tasks (manual)
 
 After automation completes:
 
-1. **Review and merge PRs**:
-   - Merge-back PR: `$RELEASE_BRANCH` → `main`
-   - Baseline version PR: Updates `PackageValidationBaselineVersion`
+1. Review and merge PRs:
+   - Merge-back PR: `$RELEASE_BRANCH` -> `main`
+   - Baseline version PR: updates `PackageValidationBaselineVersion`
+2. Verify the release:
+   - Check the [GitHub Releases page](https://github.com/microsoft/aspire/releases).
+   - Verify packages on [NuGet.org](https://www.nuget.org/packages?q=owner%3Adotnet+aspire).
+   - Verify npm packages on the Microsoft npm profile.
+   - Test installation: `dotnet new install Aspire.ProjectTemplates::VERSION`.
+3. Communicate:
+   - Update any tracking issues.
+   - Notify stakeholders.
 
-2. **Verify the release**:
-   - Check the [GitHub Releases page](https://github.com/microsoft/aspire/releases)
-   - Verify packages on [NuGet.org](https://www.nuget.org/packages?q=owner%3Adotnet+aspire)
-   - Test installation: `dotnet new install Aspire.ProjectTemplates::VERSION`
+## Handling failures
 
-3. **Communicate**:
-   - Update any tracking issues
-   - Notify stakeholders
+Both automations are designed to be idempotent and safe to re-run.
 
-## Handling Failures
+### Azure DevOps pipeline failures
 
-Both automations are designed to be **idempotent** and safe to re-run.
-
-### Azure DevOps Pipeline Failures
-
-The pipeline runs as a single stage with all steps in sequence. If a step fails:
-
-| Step Failed | Resolution |
+| Step failed | Resolution |
 |-------------|------------|
-| Validate Parameters | Fix the input parameters and re-run |
-| Extract BAR Build ID | Check that the build has a `BAR ID - NNNNNN` tag |
-| List/Verify Packages | Check that the build artifacts are available |
-| Push Packages to NuGet.org | Check NuGet.org for partial success; the `1ES.PublishNuget@1` task handles duplicates via `allowPackageConflicts: true` |
-| Promote Build to Channel | Re-run with `SkipNuGetPublish: true` |
+| Validate Parameters | Fix the input parameters and re-run. |
+| Extract BAR Build ID | Check that the build has a `BAR ID - NNNNNN` tag. |
+| Prepare/List/Verify NuGet Packages | Check that the selected source build produced `PackageArtifacts`. |
+| Prepare/List npm Packages | Check that the selected source build produced all eight `microsoft-aspire-cli*.tgz` tarballs in `BlobArtifacts`. |
+| Push Packages to NuGet.org | Check NuGet.org for partial success, then re-run with already-completed steps skipped as needed. |
+| MicroBuild npm Publish | Check the ESRP release result. If RID packages published but the pointer package did not, re-run with `SkipNuGetPublish: true`, `SkipNpmRidPublish: true`, and `SkipChannelPromotion: true`; do not set `SkipNpmPublish` until the pointer package is published. |
+| Promote Build to Channel | Re-run with `SkipNuGetPublish: true` and `SkipNpmPublish: true`. |
+| WinGet/Homebrew publishing | Re-run with the corresponding skip flags for completed work. |
 
-### GitHub Actions Failures
+### GitHub Actions failures
 
-| Job Failed | Resolution |
+| Job failed | Resolution |
 |------------|------------|
-| validate | Fix the input parameters and re-run |
-| create-tag | If tag exists with wrong SHA, requires manual resolution |
-| create-release | Re-run with `skip_tagging: true` |
-| create-merge-pr | Re-run with `skip_tagging: true`, `skip_github_release: true` |
-| create-baseline-pr | Re-run with all prior skips set to `true` |
+| validate | Fix the input parameters and re-run. |
+| create-tag | If the tag exists with the wrong SHA, resolve it manually. |
+| create-release | Re-run with `skip_tagging: true`. |
+| create-merge-pr | Re-run with `skip_tagging: true` and `skip_github_release: true`. |
+| create-baseline-pr | Re-run with all prior skips set to `true`. |
 
 ## Configuration
 
-### 1ES Pipeline Compliance
+### 1ES and MicroBuild compliance
 
-The AzDO pipeline extends the 1ES Official Pipeline Templates (`v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates`) to be compliant with Microsoft organization requirements. This provides:
-- SDL (Security Development Lifecycle) compliance scanning
-- Proper pool configuration for internal pipelines
-- Component governance integration
-- **Secure NuGet publishing** via the `1ES.PublishNuget@1` task with managed service connections
+The Azure DevOps pipeline extends `azure-pipelines/1ES.Official.Publish.yml@MicroBuildTemplate`. This keeps the pipeline on the official 1ES publishing template while allowing the `MicroBuild.Publish.yml@MicroBuildTemplate` step to submit npm packages through ESRP.
 
-> **Note**: This pipeline does not use the MicroBuild template since we're not signing packages - packages are already signed during the main build pipeline. We only download and publish pre-signed artifacts.
+The source build creates, signs where platform signing applies, verifies, and stages the package artifacts. The release pipeline consumes those pre-built artifacts; it does not rebuild or re-pack the CLI.
 
-### Variable Groups (Azure DevOps)
+### Variable groups
 
-The pipeline uses the `Aspire-Release-Secrets` variable group. Note that NuGet publishing credentials are managed via a service connection, not a variable group secret.
+The pipeline uses:
 
-### Service Connections (Azure DevOps)
+| Variable group | Purpose |
+|----------------|---------|
+| `Aspire-Release-Secrets` | Release pipeline secrets. NuGet publishing uses a service connection rather than a variable-group API key. |
+| `Aspire-Secrets` | WinGet and Homebrew bot tokens. |
 
-| Connection Name | Purpose |
+### Service connections
+
+| Connection name | Purpose |
 |-----------------|---------|
-| `NuGet.org - microsoft/aspire` | NuGet service connection for publishing packages to NuGet.org |
-| `Darc: Maestro Production` | Used for darc channel promotion |
+| `NuGet.org - dotnet/aspire` | NuGet service connection for publishing packages to NuGet.org. |
+| `DevDivEsrpAzDoSrvConn` | ESRP service connection used by the MicroBuild publish template for npm publishing. |
+| `Darc: Maestro Production` | Used for darc channel promotion. |
 
-> **Note**: The `NuGet.org - microsoft/aspire` service connection must be configured in Azure DevOps Project Settings → Service connections with:
-> - **Type**: NuGet
-> - **Authentication**: ApiKey
-> - **Feed URL**: `https://api.nuget.org/v3/index.json`
-> - **ApiKey**: A scoped NuGet.org API key with push permissions for Aspire packages
-
-### Approved GitHub Actions
-
-The workflow uses only pre-approved actions:
-
-- `actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683` (v4)
-- `./.github/actions/create-pull-request` (local composite action)
+The release definition must be approved for the MicroBuild publishing template and must have permission to use `DevDivEsrpAzDoSrvConn`.
 
 ## Troubleshooting
 
-### "Could not find BAR ID tag"
+### Could not find BAR ID tag
 
 The pipeline expects the build to have a tag in format `BAR ID - NNNNNN`. This is normally added automatically by the Maestro publishing process. If missing:
 
-1. Check if the build completed its post-build steps
-2. Manually look up the BAR ID in Maestro and add the tag
-3. Contact the engineering team if the issue persists
+1. Check if the build completed its post-build steps.
+2. Manually look up the BAR ID in Maestro and add the tag.
+3. Contact the engineering team if the issue persists.
 
-### "Tag already exists but points to different commit"
+### npm tarballs are missing from release artifacts
+
+The official source build should fail staging if npm tarballs are missing. If the release pipeline cannot find them:
+
+1. Confirm the selected source build is from a branch that includes npm packaging.
+2. Check the native archive jobs for `verify-cli-npm-package.ps1` failures.
+3. Check `BlobArtifacts` for the eight `microsoft-aspire-cli*.tgz` files.
+
+### npm publish fails after RID packages published
+
+If ESRP published the RID packages but failed before publishing `@microsoft/aspire-cli`:
+
+1. Verify the RID packages are visible on npm.
+2. Re-run the release pipeline with completed non-npm steps skipped.
+3. Set `SkipNpmRidPublish: true` and keep `SkipNpmPublish: false` so only the pointer package is submitted.
+4. Set `SkipNpmPublish: true` only after the pointer package is visible.
+
+### Tag already exists but points to different commit
 
 This indicates a mismatch between the expected release commit and an existing tag. Resolution:
 
-1. Verify you're using the correct commit SHA
-2. If the existing tag is wrong, it must be manually deleted (requires admin)
-3. If the SHA is wrong, correct it and re-run
+1. Verify you're using the correct commit SHA.
+2. If the existing tag is wrong, it must be manually deleted by someone with the required permission.
+3. If the SHA is wrong, correct it and re-run.
 
 ### NuGet publish failures
 
-The `1ES.PublishNuget@1` task is configured with `allowPackageConflicts: true`, which means it will skip packages that already exist on NuGet.org. If publishing fails:
+If NuGet publishing fails:
 
-1. Check the pipeline logs for specific error messages
-2. Verify the service connection `NuGet.org - microsoft/aspire` is properly configured
-3. Ensure the API key in the service connection has push permissions for the package IDs
-4. Re-run the pipeline (it will skip already-published packages)
+1. Check the pipeline logs for specific error messages.
+2. Verify the service connection `NuGet.org - dotnet/aspire` is properly configured.
+3. Ensure the service connection has push permissions for the package IDs.
+4. Re-run the pipeline with skip flags for work that already completed.
 
-### PR creation fails
-
-The workflow checks for existing PRs before creating. If a PR exists with a different title:
-
-1. Close or merge the existing PR
-2. Re-run the workflow
-
-## Architecture Diagram
+## Architecture diagram
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         RELEASE PROCESS FLOW                            │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │                    Azure DevOps Pipeline                         │   │
-│  │                release-publish-nuget.yml                         │   │
-│  │          (1ES.Official.PipelineTemplate.yml)                     │   │
-│  │                                                                  │   │
-│  │  Resource: aspire-build (select from dropdown)                   │   │
-│  │  Input: GaChannelName                                            │   │
-│  │                                                                  │   │
-│  │  ┌─────────────┐   ┌──────────────┐   ┌──────────────────────┐   │   │
-│  │  │  Validate   │──▶│ Extract BAR  │──▶│  Download & Verify   │   │   │
-│  │  │   Inputs    │   │   Build ID   │   │     Packages         │   │   │
-│  │  └─────────────┘   └──────────────┘   └──────────────────────┘   │   │
-│  │                                                    │             │   │
-│  │                                                    ▼             │   │
-│  │                                       ┌──────────────────────┐   │   │
-│  │                                       │  1ES.PublishNuget@1  │   │   │
-│  │                                       │  (via svc connection)│   │   │
-│  │                                       └──────────────────────┘   │   │
-│  │                                                    │             │   │
-│  │                                                    ▼             │   │
-│  │                                       ┌──────────────────────┐   │   │
-│  │                                       │  Promote to Channel  │   │   │
-│  │                                       │     (via darc)       │   │   │
-│  │                                       └──────────────────────┘   │   │
-│  └──────────────────────────────────────────────────────────────────┘   │
-│                                    │                                    │
-│                                    ▼                                    │
-│  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │                    GitHub Actions Workflow                       │   │
-│  │              .github/workflows/release-github-tasks.yml          │   │
-│  │                                                                  │   │
-│  │  Input: release_version, commit_sha, release_branch              │   │
-│  │                                                                  │   │
-│  │  ┌─────────────┐   ┌──────────────┐   ┌──────────────────────┐   │   │
-│  │  │  Validate   │──▶│ Create Tag   │──▶│  Create GitHub       │   │   │
-│  │  │   Inputs    │   │  v{version}  │   │    Release           │   │   │
-│  │  └─────────────┘   └──────────────┘   └──────────────────────┘   │   │
-│  │                                                    │             │   │
-│  │                          ┌─────────────────────────┼─────────┐   │   │
-│  │                          ▼                         ▼         │   │   │
-│  │              ┌───────────────────────┐  ┌────────────────────┐   │   │
-│  │              │   Create Merge PR     │  │ Create Baseline PR │   │   │
-│  │              │ release/X.Y → main    │  │ Update version     │   │   │
-│  │              └───────────────────────┘  └────────────────────┘   │   │
-│  └──────────────────────────────────────────────────────────────────┘   │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+Official source build
+  -> Native archive jobs
+     -> signed native archives / native CLI packages
+     -> npm tarballs verified against the native archive
+  -> PackageArtifacts: NuGet packages
+  -> BlobArtifacts: microsoft-aspire-cli*.tgz
+
+Azure DevOps release-publish-nuget.yml
+  -> PrepareArtifacts
+     -> republish NuGet artifacts with SBOM
+     -> split npm RID and pointer artifacts with SBOM
+  -> ReleaseJob
+     -> verify NuGet signatures
+     -> publish NuGet through 1ES.PublishNuget@1
+     -> publish npm RID packages through MicroBuild.Publish
+     -> wait for npm propagation
+     -> publish npm pointer package through MicroBuild.Publish
+     -> promote BAR build to GA channel
+  -> WinGetJob / HomebrewJob
+
+GitHub release-github-tasks.yml
+  -> create tag
+  -> create GitHub release
+  -> create merge-back PR
+  -> create baseline version PR
 ```
 
-## Related Documentation
+## Related documentation
 
 - [Contributing Guide](contributing.md)
 - [Quarantined Tests](quarantined-tests.md)

@@ -80,7 +80,7 @@ public sealed class StageNativeCliToolPackagesTests : IDisposable
         CreateNativeArchiveNpmPackages(downloadRoot, "win-x64");
         CreateNativeArchiveNpmPackages(downloadRoot, "linux-x64");
 
-        var result = await RunScript(downloadRoot, shippingDir);
+        var result = await RunScript(downloadRoot, shippingDir, "-RequireNpmPackages");
 
         result.EnsureSuccessful();
 
@@ -96,6 +96,23 @@ public sealed class StageNativeCliToolPackagesTests : IDisposable
             ],
             stagedPackageNames);
         Assert.Contains("Skipping non-canonical Aspire CLI npm pointer package", result.Output);
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
+    public async Task FailsWhenRequiredNpmPackagesAreMissing()
+    {
+        var downloadRoot = CreateDownloadRoot();
+        var shippingDir = CreateShippingDir();
+
+        CreateNativeArchivePackages(downloadRoot, "win-x64");
+        CreateNativeArchivePackage(downloadRoot, "linux-x64", $"Aspire.Cli.linux-x64.{PackageVersion}.nupkg");
+
+        var result = await RunScript(downloadRoot, shippingDir, "-RequireNpmPackages");
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains("No Aspire CLI npm packages were found", result.Output);
+        Assert.Contains("native_archives_<rid>", result.Output);
     }
 
     [Fact]

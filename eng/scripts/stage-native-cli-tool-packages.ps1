@@ -7,7 +7,9 @@ param(
 
   [string]$CanonicalPointerArtifactName = 'native_archives_win_x64',
 
-  [string]$NpmPackageFilePrefix = 'microsoft-aspire-cli'
+  [string]$NpmPackageFilePrefix = 'microsoft-aspire-cli',
+
+  [switch]$RequireNpmPackages
 )
 
 $ErrorActionPreference = 'Stop'
@@ -89,8 +91,6 @@ function Get-ClassifiedNuGetPackages {
 }
 
 function Get-ClassifiedNpmPackages {
-  # Npm packages are additive to the native CLI nupkgs. If older builds only
-  # downloaded nupkgs, staging should continue and emit a warning below.
   $packages = @(Get-ChildItem -Path $DownloadRoot -Filter "$NpmPackageFilePrefix*.tgz" -File -Recurse |
     Sort-Object FullName)
   $escapedPrefix = [System.Text.RegularExpressions.Regex]::Escape($NpmPackageFilePrefix)
@@ -168,7 +168,12 @@ function Get-PackagesToStage {
 $nugetPackagesToStage = Get-PackagesToStage (Get-ClassifiedNuGetPackages) 'Aspire.Cli' 'Aspire.Cli' 'native CLI tool'
 $classifiedNpmPackages = @(Get-ClassifiedNpmPackages)
 $npmPackagesToStage = if ($classifiedNpmPackages.Count -eq 0) {
-  Write-Warning "No Aspire CLI npm packages were found under native_archives_<rid> artifacts in $DownloadRoot."
+  $message = "No Aspire CLI npm packages were found under native_archives_<rid> artifacts in $DownloadRoot."
+  if ($RequireNpmPackages) {
+    throw $message
+  }
+
+  Write-Warning $message
   @()
 } else {
   Get-PackagesToStage $classifiedNpmPackages 'Aspire CLI npm' 'Aspire CLI npm' 'Aspire CLI npm'

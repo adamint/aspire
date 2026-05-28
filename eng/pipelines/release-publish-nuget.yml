@@ -1,8 +1,8 @@
-# Release Pipeline: Publish NuGet Packages and Promote to GA Channel
+# Release Pipeline: Publish NuGet/npm Packages and Promote to GA Channel
 #
 # This pipeline automates the release process for microsoft/aspire:
 # 1. Downloads signed packages from a specified build
-# 2. Publishes packages to NuGet.org
+# 2. Publishes packages to NuGet.org and npm
 # 3. Promotes the build to the Aspire GA channel via darc
 # 4. Submits WinGet manifests and Homebrew cask PRs
 #
@@ -28,6 +28,16 @@ parameters:
     type: boolean
     default: false
 
+  - name: SkipNpmPublish
+    displayName: 'Skip npm Publishing (set true if already completed)'
+    type: boolean
+    default: false
+
+  - name: SkipNpmRidPublish
+    displayName: 'Skip npm RID Package Publishing (set true if RID packages already completed but pointer package did not)'
+    type: boolean
+    default: false
+
   - name: SkipChannelPromotion
     displayName: 'Skip Channel Promotion (set true if already completed)'
     type: boolean
@@ -43,6 +53,21 @@ parameters:
     type: boolean
     default: false
 
+  - name: NpmPublishOwners
+    displayName: 'npm ESRP owners (comma-separated Microsoft aliases or emails)'
+    type: string
+    default: ''
+
+  - name: NpmPublishApprovers
+    displayName: 'npm ESRP approvers (comma-separated Microsoft aliases or emails)'
+    type: string
+    default: ''
+
+  - name: NpmRegistryPropagationDelayMinutes
+    displayName: 'Minutes to wait between npm RID and pointer package submissions'
+    type: number
+    default: 10
+
 variables:
   - template: /eng/pipelines/common-variables.yml@self
   - template: /eng/common/templates-official/variables/pool-providers.yml@self
@@ -54,9 +79,9 @@ variables:
 
 resources:
   repositories:
-    - repository: 1ESPipelineTemplates
+    - repository: MicroBuildTemplate
       type: git
-      name: 1ESPipelineTemplates/1ESPipelineTemplates
+      name: 1ESPipelineTemplates/MicroBuildTemplate
       ref: refs/tags/release
   pipelines:
     - pipeline: aspire-build
@@ -65,7 +90,7 @@ resources:
       trigger: none          # Manual trigger only - no automatic releases
 
 extends:
-  template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  template: azure-pipelines/1ES.Official.Publish.yml@MicroBuildTemplate
   parameters:
     pool:
       name: NetCore1ESPool-Internal
@@ -106,6 +131,14 @@ extends:
                   targetPath: '$(Pipeline.Workspace)/packages/PackageArtifacts'
                   artifactName: 'PackageArtifacts'
                 - output: pipelineArtifact
+                  displayName: 'Publish npm RID Package Artifacts with SBOM'
+                  targetPath: '$(Pipeline.Workspace)/npm/rid-packages'
+                  artifactName: 'NpmRidPackageArtifacts'
+                - output: pipelineArtifact
+                  displayName: 'Publish npm Pointer Package Artifact with SBOM'
+                  targetPath: '$(Pipeline.Workspace)/npm/pointer-package'
+                  artifactName: 'NpmPointerPackageArtifacts'
+                - output: pipelineArtifact
                   displayName: 'Publish WinGet Manifests'
                   targetPath: '$(Pipeline.Workspace)/installers/winget-manifests-stable'
                   artifactName: 'winget-manifests-stable'
@@ -121,7 +154,7 @@ extends:
                   Write-Host "Source Build ID: $(resources.pipeline.aspire-build.runID)"
                   Write-Host "Source Build Name: $(resources.pipeline.aspire-build.runName)"
                   Write-Host "This stage downloads artifacts and re-publishes them so 1ES PT can generate SBOM."
-                  Write-Host "Installer-only mode: ${{ and(eq(parameters.SkipNuGetPublish, true), eq(parameters.SkipChannelPromotion, true)) }}"
+                  Write-Host "Installer-only mode: ${{ and(eq(parameters.SkipNuGetPublish, true), eq(parameters.SkipNpmPublish, true), eq(parameters.SkipChannelPromotion, true)) }}"
                   Write-Host "==============================="
                 displayName: 'Log Stage Info'
 
@@ -131,6 +164,12 @@ extends:
                   displayName: 'Download PackageArtifacts from Source Build'
                   artifact: PackageArtifacts
                   patterns: '**/*.nupkg'
+
+              - ${{ if eq(parameters.SkipNpmPublish, false) }}:
+                - download: aspire-build
+                  displayName: 'Download npm packages from Source Build'
+                  artifact: BlobArtifacts
+                  patterns: '**/microsoft-aspire-cli*.tgz'
 
               - download: aspire-build
                 displayName: 'Download WinGet Manifests from Source Build'
@@ -175,6 +214,113 @@ extends:
                     Write-Host "Installer-only run detected; created empty PackageArtifacts placeholder."
                   displayName: 'Prepare Empty PackageArtifacts Placeholder'
 
+              - ${{ if eq(parameters.SkipNpmPublish, false) }}:
+                - powershell: |
+                    $sourcePath = "$(Pipeline.Workspace)/aspire-build/BlobArtifacts"
+                    $ridTargetPath = "$(Pipeline.Workspace)/npm/rid-packages"
+                    $pointerTargetPath = "$(Pipeline.Workspace)/npm/pointer-package"
+                    $expectedRids = @(
+                      'win-x64',
+                      'win-arm64',
+                      'linux-x64',
+                      'linux-arm64',
+                      'linux-musl-x64',
+                      'osx-x64',
+                      'osx-arm64'
+                    )
+
+                    New-Item -ItemType Directory -Path $ridTargetPath -Force | Out-Null
+                    New-Item -ItemType Directory -Path $pointerTargetPath -Force | Out-Null
+
+                    Write-Host "Preparing npm packages from $sourcePath"
+                    if (!(Test-Path $sourcePath)) {
+                      Write-Error @"
+                    BlobArtifacts was not downloaded from the source build at '$sourcePath'.
+                    npm CLI packages ship as flat blobs in BlobArtifacts (configured via eng/Publishing.props).
+                    Possible causes:
+                      1. The source build (azure-pipelines.yml) ran before the npm CLI package work landed.
+                         Re-run the release pipeline with SkipNpmPublish=true, or rebuild from a newer commit.
+                      2. The source build failed to produce or publish the BlobArtifacts pipeline artifact.
+                      3. The wrong source build was selected.
+                    "@
+                      exit 1
+                    }
+
+                    $versionPattern = '\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z][0-9A-Za-z.-]*)?'
+                    $pointerPattern = "^microsoft-aspire-cli-($versionPattern)\.tgz$"
+                    $ridPattern = "^microsoft-aspire-cli-(?<Rid>.+?)-(?<Version>$versionPattern)\.tgz$"
+                    $packages = @(Get-ChildItem -Path $sourcePath -Filter "microsoft-aspire-cli*.tgz" -Recurse -File)
+                    $pointerPackages = @($packages | Where-Object { $_.Name -match $pointerPattern })
+                    $ridPackages = @($packages | Where-Object { $_.Name -match $ridPattern })
+                    $unexpectedPackages = @($packages | Where-Object { $_.Name -notmatch $pointerPattern -and $_.Name -notmatch $ridPattern })
+
+                    Write-Host "Found $($packages.Count) npm package(s)."
+                    foreach ($pkg in $packages) {
+                      Write-Host "  - $($pkg.Name)"
+                    }
+
+                    if ($unexpectedPackages.Count -gt 0) {
+                      Write-Error "Unexpected npm package filename(s): $($unexpectedPackages.Name -join ', ')"
+                      exit 1
+                    }
+
+                    if ($pointerPackages.Count -ne 1) {
+                      Write-Error "Expected exactly one Aspire CLI npm pointer package, but found $($pointerPackages.Count): $($pointerPackages.FullName -join ', ')"
+                      exit 1
+                    }
+
+                    $ridPackageDetails = @($ridPackages | ForEach-Object {
+                      if ($_.Name -match $ridPattern) {
+                        [pscustomobject]@{
+                          File = $_
+                          Rid = $Matches.Rid
+                          Version = $Matches.Version
+                        }
+                      }
+                    })
+
+                    $versions = @(
+                      if ($pointerPackages[0].Name -match $pointerPattern) {
+                        $Matches[1]
+                      }
+                      $ridPackageDetails | ForEach-Object { $_.Version }
+                    ) | Sort-Object -Unique
+
+                    if ($versions.Count -ne 1) {
+                      Write-Error "Expected one npm package version, but found: $($versions -join ', ')"
+                      exit 1
+                    }
+
+                    $duplicateRidGroups = @($ridPackageDetails | Group-Object Rid | Where-Object { $_.Count -gt 1 })
+                    if ($duplicateRidGroups.Count -gt 0) {
+                      $details = @($duplicateRidGroups | ForEach-Object { "$($_.Name): $($_.Group.File.Name -join ', ')" })
+                      Write-Error "Expected exactly one npm RID package per RID, but found duplicates: $($details -join '; ')"
+                      exit 1
+                    }
+
+                    $actualRids = @($ridPackageDetails | ForEach-Object { $_.Rid })
+                    $missingRids = @($expectedRids | Where-Object { $_ -notin $actualRids })
+                    $unexpectedRids = @($actualRids | Where-Object { $_ -notin $expectedRids })
+                    if ($missingRids.Count -gt 0 -or $unexpectedRids.Count -gt 0) {
+                      Write-Error "npm RID package set mismatch. Missing: $($missingRids -join ', '); Unexpected: $($unexpectedRids -join ', ')"
+                      exit 1
+                    }
+
+                    foreach ($pkg in $ridPackages) {
+                      Copy-Item $pkg.FullName -Destination $ridTargetPath -Force
+                    }
+                    Copy-Item $pointerPackages[0].FullName -Destination $pointerTargetPath -Force
+
+                    Write-Host "Prepared $($ridPackages.Count) RID npm package(s) and pointer package version $($versions[0])."
+                  displayName: 'Prepare npm Artifacts for Publishing'
+
+              - ${{ if eq(parameters.SkipNpmPublish, true) }}:
+                - powershell: |
+                    New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/rid-packages" -Force | Out-Null
+                    New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/pointer-package" -Force | Out-Null
+                    Write-Host "Created empty npm artifact placeholders because SkipNpmPublish=true."
+                  displayName: 'Prepare Empty npm Artifact Placeholders'
+
               # Copy installer artifacts to expected locations for output
               - powershell: |
                   $artifacts = @(
@@ -207,14 +353,14 @@ extends:
                 displayName: 'Prepare Installer Artifacts'
 
       # ===== STAGE 2: RELEASE =====
-      # This releaseJob consumes the artifacts with SBOM and publishes to NuGet.org
+      # This releaseJob consumes the artifacts with SBOM and publishes to NuGet.org/npm
       - stage: Release
-        displayName: 'Release to NuGet and Promote'
+        displayName: 'Release to NuGet/npm and Promote'
         dependsOn: PrepareArtifacts
         jobs:
           - job: ReleaseJob
             displayName: 'Validate, Publish, and Promote'
-            timeoutInMinutes: 120
+            timeoutInMinutes: 240
             pool:
               name: NetCore1ESPool-Internal
               image: windows.vs2026preview.scout.amd64
@@ -230,6 +376,12 @@ extends:
                 - input: pipelineArtifact
                   artifactName: PackageArtifacts
                   targetPath: '$(Pipeline.Workspace)/packages/PackageArtifacts'
+                - input: pipelineArtifact
+                  artifactName: NpmRidPackageArtifacts
+                  targetPath: '$(Pipeline.Workspace)/npm/rid-packages'
+                - input: pipelineArtifact
+                  artifactName: NpmPointerPackageArtifacts
+                  targetPath: '$(Pipeline.Workspace)/npm/pointer-package'
             steps:
               # ===== VALIDATION =====
               # Note: No checkout - releaseJob doesn't allow it. All scripts are inlined.
@@ -244,8 +396,10 @@ extends:
                   Write-Host "GA Channel: ${{ parameters.GaChannelName }}"
                   Write-Host "Dry Run: ${{ parameters.DryRun }}"
                   Write-Host "Skip NuGet Publish: ${{ parameters.SkipNuGetPublish }}"
+                  Write-Host "Skip npm Publish: ${{ parameters.SkipNpmPublish }}"
+                  Write-Host "Skip npm RID Publish: ${{ parameters.SkipNpmRidPublish }}"
                   Write-Host "Skip Channel Promotion: ${{ parameters.SkipChannelPromotion }}"
-                  Write-Host "Installer-only mode: ${{ and(eq(parameters.SkipNuGetPublish, true), eq(parameters.SkipChannelPromotion, true)) }}"
+                  Write-Host "Installer-only mode: ${{ and(eq(parameters.SkipNuGetPublish, true), eq(parameters.SkipNpmPublish, true), eq(parameters.SkipChannelPromotion, true)) }}"
                   Write-Host "==================================="
                 displayName: 'Validate Parameters'
 
@@ -399,6 +553,120 @@ extends:
                     Write-Host "=== Skipping NuGet Publishing (SkipNuGetPublish=true) ==="
                   displayName: 'Skip NuGet Publish (flagged)'
 
+              # ===== PUBLISH TO npm =====
+              - ${{ if eq(parameters.SkipNpmPublish, false) }}:
+                - powershell: |
+                    $ridPackagesPath = "$(Pipeline.Workspace)/npm/rid-packages"
+                    $pointerPackagePath = "$(Pipeline.Workspace)/npm/pointer-package"
+                    Write-Host "=== npm Package Inventory ==="
+
+                    $ridPackages = @(Get-ChildItem -Path $ridPackagesPath -Filter "*.tgz" -File)
+                    $pointerPackages = @(Get-ChildItem -Path $pointerPackagePath -Filter "*.tgz" -File)
+
+                    Write-Host "RID packages: $($ridPackages.Count)"
+                    foreach ($pkg in $ridPackages) {
+                      $sizeMB = [math]::Round($pkg.Length / 1MB, 2)
+                      Write-Host "  - $($pkg.Name) ($sizeMB MB)"
+                    }
+
+                    Write-Host "Pointer packages: $($pointerPackages.Count)"
+                    foreach ($pkg in $pointerPackages) {
+                      $sizeMB = [math]::Round($pkg.Length / 1MB, 2)
+                      Write-Host "  - $($pkg.Name) ($sizeMB MB)"
+                    }
+
+                    if ($ridPackages.Count -ne 7 -or $pointerPackages.Count -ne 1) {
+                      Write-Error "Expected 7 npm RID packages and 1 npm pointer package."
+                      exit 1
+                    }
+
+                    Write-Host "=============================="
+                  displayName: 'List npm Packages'
+
+              - ${{ if and(eq(parameters.DryRun, true), eq(parameters.SkipNpmPublish, false)) }}:
+                - powershell: |
+                    Write-Host "=== DRY RUN MODE ==="
+                    Write-Host "The following packages would be submitted to ESRP for npm publishing."
+                    Write-Host ""
+                    if ("${{ parameters.SkipNpmRidPublish }}" -eq "true") {
+                      Write-Host "RID package submission would be skipped because SkipNpmRidPublish=true."
+                    } else {
+                      Write-Host "RID packages would be submitted first:"
+                      Get-ChildItem -Path "$(Pipeline.Workspace)/npm/rid-packages" -Filter "*.tgz" -File | ForEach-Object {
+                        Write-Host "  - $($_.Name)"
+                      }
+                      Write-Host ""
+                      Write-Host "Then the pipeline would wait ${{ parameters.NpmRegistryPropagationDelayMinutes }} minute(s) for registry propagation."
+                    }
+                    Write-Host ""
+                    Write-Host "The pointer package would be submitted last:"
+                    Get-ChildItem -Path "$(Pipeline.Workspace)/npm/pointer-package" -Filter "*.tgz" -File | ForEach-Object {
+                      Write-Host "  - $($_.Name)"
+                    }
+                    Write-Host ""
+                    Write-Host "=== DRY RUN - No npm packages were actually published ==="
+                  displayName: 'Dry Run - List npm Packages (No Publish)'
+
+              - ${{ if and(eq(parameters.DryRun, false), eq(parameters.SkipNpmPublish, false)) }}:
+                - powershell: |
+                    $owners = "${{ parameters.NpmPublishOwners }}"
+                    $approvers = "${{ parameters.NpmPublishApprovers }}"
+
+                    if ([string]::IsNullOrWhiteSpace($owners)) {
+                      Write-Error "NpmPublishOwners must be set before publishing npm packages."
+                      exit 1
+                    }
+
+                    if ([string]::IsNullOrWhiteSpace($approvers)) {
+                      Write-Error "NpmPublishApprovers must be set before publishing npm packages."
+                      exit 1
+                    }
+
+                    Write-Host "npm ESRP owners and approvers were provided."
+                  displayName: 'Validate npm ESRP Parameters'
+
+                - ${{ if eq(parameters.SkipNpmRidPublish, false) }}:
+                  - template: MicroBuild.Publish.yml@MicroBuildTemplate
+                    parameters:
+                      intent: 'PackageDistribution'
+                      contentType: 'npm'
+                      contentSource: 'Folder'
+                      folderLocation: '$(Pipeline.Workspace)\npm\rid-packages'
+                      waitForReleaseCompletion: true
+                      owners: '${{ parameters.NpmPublishOwners }}'
+                      approvers: '${{ parameters.NpmPublishApprovers }}'
+
+                  - powershell: |
+                      $delayMinutes = [int]'${{ parameters.NpmRegistryPropagationDelayMinutes }}'
+                      if ($delayMinutes -le 0) {
+                        Write-Host "Skipping npm registry propagation delay because NpmRegistryPropagationDelayMinutes=$delayMinutes."
+                        exit 0
+                      }
+
+                      Write-Host "Waiting $delayMinutes minute(s) before publishing the pointer package so npm can observe the RID packages."
+                      Start-Sleep -Seconds ($delayMinutes * 60)
+                    displayName: 'Wait for npm RID Package Propagation'
+
+                - ${{ if eq(parameters.SkipNpmRidPublish, true) }}:
+                  - powershell: |
+                      Write-Host "Skipping npm RID package publish because SkipNpmRidPublish=true. The pointer package will still be submitted."
+                    displayName: 'Skip npm RID Publish (flagged)'
+
+                - template: MicroBuild.Publish.yml@MicroBuildTemplate
+                  parameters:
+                    intent: 'PackageDistribution'
+                    contentType: 'npm'
+                    contentSource: 'Folder'
+                    folderLocation: '$(Pipeline.Workspace)\npm\pointer-package'
+                    waitForReleaseCompletion: true
+                    owners: '${{ parameters.NpmPublishOwners }}'
+                    approvers: '${{ parameters.NpmPublishApprovers }}'
+
+              - ${{ if eq(parameters.SkipNpmPublish, true) }}:
+                - powershell: |
+                    Write-Host "=== Skipping npm Publishing (SkipNpmPublish=true) ==="
+                  displayName: 'Skip npm Publish (flagged)'
+
               # ===== PROMOTE TO CHANNEL =====
               - ${{ if eq(parameters.SkipChannelPromotion, false) }}:
                 - powershell: |
@@ -487,6 +755,15 @@ extends:
                   } else {
                     Write-Host " (EXECUTED)"
                   }
+                  Write-Host "║ npm Publish:    ${{ parameters.SkipNpmPublish }}" -NoNewline
+                  if ("${{ parameters.SkipNpmPublish }}" -eq "true") {
+                    Write-Host " (SKIPPED)"
+                  } elseif ("${{ parameters.DryRun }}" -eq "true") {
+                    Write-Host " (DRY RUN)"
+                  } else {
+                    Write-Host " (EXECUTED)"
+                  }
+                  Write-Host "║ npm RID Skip:   ${{ parameters.SkipNpmRidPublish }}"
                   Write-Host "║ Channel Promo:  ${{ parameters.SkipChannelPromotion }}" -NoNewline
                   if ("${{ parameters.SkipChannelPromotion }}" -eq "true") {
                     Write-Host " (SKIPPED)"

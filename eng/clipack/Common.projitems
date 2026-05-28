@@ -243,7 +243,14 @@
     <Message Importance="High"
              Text="Packing CLI npm packages for $(CliRuntime) from '$(_ExtractedNativeBinaryPath)' extracted from '$(_CliArchivePath)'." />
 
-    <Exec Command="pwsh -NoProfile -NonInteractive -File &quot;$(RepoRoot)eng\scripts\pack-cli-npm-package.ps1&quot; -Rid &quot;$(CliRuntime)&quot; -Version &quot;$(Version)&quot; -NativeBinaryPath &quot;$(_ExtractedNativeBinaryPath)&quot; -OutputPath &quot;$(_PackageOutputPathArg)&quot; -StagingRoot &quot;$(_CliNpmPackageStagingDirArg)&quot; -PackageName &quot;$(NpmCliPackageName)&quot;" />
+    <PropertyGroup>
+      <!-- Build the script path with MSBuild path helpers so it uses the correct separator
+           on every platform. The native CLI archives are built on Windows, Linux, and macOS,
+           and pwsh on non-Windows does not silently normalize mixed-separator paths. -->
+      <_PackCliNpmPackageScript>$([MSBuild]::NormalizePath($(RepoRoot), 'eng', 'scripts', 'pack-cli-npm-package.ps1'))</_PackCliNpmPackageScript>
+    </PropertyGroup>
+
+    <Exec Command="pwsh -NoProfile -NonInteractive -File &quot;$(_PackCliNpmPackageScript)&quot; -Rid &quot;$(CliRuntime)&quot; -Version &quot;$(Version)&quot; -NativeBinaryPath &quot;$(_ExtractedNativeBinaryPath)&quot; -OutputPath &quot;$(_PackageOutputPathArg)&quot; -StagingRoot &quot;$(_CliNpmPackageStagingDirArg)&quot; -PackageName &quot;$(NpmCliPackageName)&quot;" />
   </Target>
 
 </Project>

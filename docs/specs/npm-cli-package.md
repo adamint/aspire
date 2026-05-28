@@ -4,7 +4,7 @@
 
 The Aspire CLI npm package POC distributes the native Aspire CLI through npm using the same native binary archives that feed the dotnet tool packages. The npm package shape follows the native-package convention used by tools such as esbuild and @vscode/ripgrep: a small top-level package exposes the command, while platform-specific packages carry the native payload.
 
-The POC package name is `@microsoft/aspire-cli`. It is intentionally a POC and does not yet include npm publishing, provenance, registry authentication, or CLI-side npm self-update behavior.
+The POC package name is `@microsoft/aspire-cli`. It is intentionally a POC and does not yet include CLI-side npm self-update behavior.
 
 ## Research and prior art
 
@@ -25,6 +25,7 @@ The Aspire-specific adaptation is the writable cache. Unlike most native npm CLI
 - Use a top-level npm package with a JavaScript `bin` launcher and RID-specific optional native packages.
 - Avoid running the self-extracting native binary directly from `node_modules` or package-manager stores.
 - Verify generated npm packages against the native archive before staging them.
+- Publish through the Azure DevOps release pipeline using Microsoft's ESRP-backed MicroBuild publishing flow.
 
 ## Non-goals
 
@@ -152,7 +153,7 @@ ASPIRE_NPM_PACKAGE_RID
 5. Comparing the RID tarball binary byte-for-byte with the archive binary.
 6. Verifying pointer package metadata, `bin/aspire.js`, `aspire-package-map.json`, and optional dependency version alignment.
 
-`eng\scripts\stage-native-cli-tool-packages.ps1` stages npm `.tgz` artifacts alongside existing native CLI nupkgs. Npm packages are additive: if no npm packages are present, staging warns and continues so older nupkg-only flows remain valid.
+`eng\scripts\stage-native-cli-tool-packages.ps1` stages npm `.tgz` artifacts alongside existing native CLI nupkgs. Official CI invokes the script with `-RequireNpmPackages`, so source builds fail before release if the npm tarballs are missing. The default remains warning-only for local or older nupkg-only flows that call the script directly.
 
 Only one pointer package is staged. The default canonical pointer source is `native_archives_win_x64`, matching the existing native CLI package staging convention. All RID-specific packages are staged.
 
@@ -160,46 +161,30 @@ Only one pointer package is staged. The default canonical pointer source is `nat
 
 The native archive workflows verify npm tarballs after the existing nupkg verification.
 
-GitHub Actions uploads `microsoft-aspire-cli*.tgz` with the RID-specific package artifacts. Azure Pipelines installs Node.js before native package build because `npm pack` runs during packaging, verifies the npm packages, downloads `microsoft-aspire-cli*.tgz` in the staging job, and stages them with the native CLI packages.
+Azure Pipelines installs Node.js before native package build because `npm pack` runs during packaging, verifies the npm packages, downloads `microsoft-aspire-cli*.tgz` in the staging job, and stages them with the native CLI packages. The source build then publishes the npm `.tgz` files as shipping flat blob artifacts so the release pipeline can consume them without treating npm tarballs as NuGet-like BAR package assets.
 
 ## Publishing
 
-The npm packages are published using the manual GitHub Actions workflow `.github/workflows/publish-npm.yml`.
+The npm packages are published from `eng/pipelines/release-publish-nuget.yml`, not from GitHub Actions. The release pipeline extends the MicroBuild publish-enabled 1ES template and submits packages through `MicroBuild.Publish.yml@MicroBuildTemplate` with `intent: PackageDistribution`, `contentType: npm`, and `contentSource: Folder`.
 
-### Prerequisites
+The release pipeline prepares two npm artifact folders:
 
-Before publishing npm packages, the following external setup must be complete:
+1. `NpmRidPackageArtifacts` contains the seven RID packages.
+2. `NpmPointerPackageArtifacts` contains the top-level `@microsoft/aspire-cli` pointer package.
 
-1. **@microsoft scope reservation**: The `@microsoft` scope must be reserved and managed by Microsoft on the npm registry.
-2. **npm Trusted Publisher configuration**: The microsoft/aspire repository must be configured as a Trusted Publisher on npm to enable provenance via OIDC. This eliminates the need for long-lived NPM_TOKEN secrets.
-3. **Microsoft/1ES-managed publishing**: npm publishing should be managed through Microsoft's 1ES-approved processes and infrastructure.
+The split is intentional. The release job submits RID packages first, waits for the ESRP submission to complete, waits an additional npm registry propagation delay, and then submits the pointer package. Publishing the pointer package last avoids optional dependency resolution races when a user installs the top-level package immediately after release.
 
-The workflow includes a temporary fallback to `secrets.NPM_TOKEN` authentication, but Trusted Publisher OIDC is the recommended approach. The fallback will be removed once Trusted Publisher setup is complete.
+Before publishing, the release pipeline validates that exactly one pointer tarball and exactly one tarball for each supported RID are present, and that all tarballs have one version. Non-dry-run npm publishing requires release managers to provide `NpmPublishOwners` and `NpmPublishApprovers`, which are passed to ESRP. Re-runs can use `SkipNpmRidPublish` if the RID packages published but the pointer package did not, and `SkipNpmPublish` after npm publishing has completed.
 
-### Publishing workflow
+MicroBuild's npm publish template documentation does not currently expose an npm `dist-tag` parameter. Initial publishing therefore relies on the registry's default tag behavior; preview or side-channel tagging needs ESRP/MicroBuild support before it can be enabled safely.
 
-The publish workflow downloads staged npm tarballs from a completed native archive build and publishes them to npm with provenance:
+## Product and security tradeoffs
 
-```bash
-# Example: Publish packages from a build run
-gh workflow run publish-npm.yml \
-  --ref main \
-  --field release_version="9.2.0" \
-  --field run_id="12345678" \
-  --field dist_tag="latest" \
-  --field dry_run="false"
-```
-
-Key features:
-
-- **Dry run by default**: The workflow defaults to `dry_run: true` to validate packages before real publish.
-- **Platform-first ordering**: RID-specific packages are published before the meta package to avoid `optionalDependencies` validation races.
-- **Propagation wait**: The workflow polls npm until all RID packages for the target version are visible before publishing the meta package.
-- **Recovery options**: The `only_rid` and `skip_meta` inputs support publishing specific RID packages or skipping the meta package if recovery is needed.
-- **Provenance**: All publishes use `npm publish --provenance` when not in dry-run mode.
-- **Authorization**: Non-dry-run publishes require admin or maintain repository permissions.
-
-For full workflow documentation, see the workflow file header and inline comments.
+- **No GitHub npm publishing token**: Publishing is centralized through ESRP/MicroBuild and the Microsoft npm maintainer identity instead of storing an npm token in GitHub or using a repository-local GitHub Actions publisher.
+- **Signed payload, unsigned tarball container**: The npm tarball is created from the native CLI archive produced by the signed CI flow, and verification compares the RID tarball binary byte-for-byte with that archive. The `.tgz` container itself is not separately signed; integrity comes from CI verification, SBOM-covered release artifacts, ESRP submission, and npm registry package integrity.
+- **Writable cache**: Copying the native binary to `~/.aspire/npm/<version>/<rid>/bin` avoids self-extraction into package-manager stores, but it means the launcher owns cache creation and freshness checks.
+- **Update behavior**: npm updates are package-manager driven (`npm update`, reinstalling the global package, or changing the requested version). `aspire update --self` remains out of scope for npm installs until the CLI has explicit npm install detection and guidance.
+- **Linux libc split**: Separate glibc and musl packages avoid shipping one Linux binary that is wrong for Alpine-style environments, at the cost of one additional optional dependency package.
 
 ## Open follow-ups
 

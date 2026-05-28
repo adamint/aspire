@@ -184,7 +184,8 @@ extends:
                   $ErrorActionPreference = 'Stop'
                   & "$(Build.SourcesDirectory)/eng/scripts/stage-native-cli-tool-packages.ps1" `
                     -DownloadRoot "$(Build.SourcesDirectory)/artifacts/native-cli-packages/$(_BuildConfig)" `
-                    -ShippingDir "$(Build.SourcesDirectory)/artifacts/packages/$(_BuildConfig)/Shipping"
+                    -ShippingDir "$(Build.SourcesDirectory)/artifacts/packages/$(_BuildConfig)/Shipping" `
+                    -RequireNpmPackages
                 displayName: 🟣Stage Native CLI Packages
 
               - task: PowerShell@2
