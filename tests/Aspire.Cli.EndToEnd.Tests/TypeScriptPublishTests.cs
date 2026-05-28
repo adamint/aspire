@@ -26,11 +26,9 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
         using var workspace = TemporaryWorkspace.Create(output);
 
         using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, variant: CliE2ETestHelpers.DockerfileVariant.DotNet, mountDockerSocket: true, workspace: workspace);
-
-        var pendingRun = terminal.RunAsync(TestContext.Current.CancellationToken);
-
         var counter = new SequenceCounter();
         var auto = new Hex1bTerminalAutomator(terminal, defaultTimeout: TimeSpan.FromSeconds(500));
+        await using var terminalRun = CliE2ETestHelpers.StartRun(terminal, workspace, auto, counter, output, TestContext.Current.CancellationToken);
 
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
 
@@ -44,7 +42,7 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
         await auto.KeyAsync(Hex1bKey.DownArrow);
         await auto.WaitUntilTextAsync("> TypeScript (Node.js)", timeout: TimeSpan.FromSeconds(5));
         await auto.EnterAsync();
-        await auto.WaitUntilTextAsync("Created apphost.ts", timeout: TimeSpan.FromMinutes(2));
+        await auto.WaitUntilTextAsync("Created apphost.mts", timeout: TimeSpan.FromMinutes(2));
         await auto.DeclineAgentInitPromptAsync(counter);
 
         await auto.TypeAsync("aspire add Aspire.Hosting.Docker");
@@ -62,9 +60,9 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
         await auto.WaitUntilTextAsync("SDK code restored successfully", timeout: TimeSpan.FromMinutes(3));
         await auto.WaitForSuccessPromptAsync(counter);
 
-        var appHostPath = Path.Combine(workspace.WorkspaceRoot.FullName, "apphost.ts");
+        var appHostPath = Path.Combine(workspace.WorkspaceRoot.FullName, "apphost.mts");
         var newContent = """
-            import { createBuilder } from './.modules/aspire.js';
+            import { createBuilder } from './.aspire/modules/aspire.mjs';
 
             const builder = await createBuilder();
 
@@ -97,11 +95,6 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
         await auto.TypeAsync("grep -F \"postgres:\" artifacts/docker-compose.yaml");
         await auto.EnterAsync();
         await auto.WaitForSuccessPromptAsync(counter);
-
-        await auto.TypeAsync("exit");
-        await auto.EnterAsync();
-
-        await pendingRun;
     }
 
     [Fact]
@@ -115,11 +108,9 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
             ["Aspire.Hosting.CodeGeneration.TypeScript.", "Aspire.Hosting.JavaScript.", "Aspire.Hosting.Docker."]);
 
         using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, variant: CliE2ETestHelpers.DockerfileVariant.Polyglot, mountDockerSocket: true, workspace: workspace);
-
-        var pendingRun = terminal.RunAsync(TestContext.Current.CancellationToken);
-
         var counter = new SequenceCounter();
         var auto = new Hex1bTerminalAutomator(terminal, defaultTimeout: TimeSpan.FromSeconds(500));
+        await using var terminalRun = CliE2ETestHelpers.StartRun(terminal, workspace, auto, counter, output, TestContext.Current.CancellationToken);
 
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
 
@@ -127,7 +118,7 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
 
         await auto.TypeAsync("aspire init --language typescript --non-interactive");
         await auto.EnterAsync();
-        await auto.WaitUntilTextAsync("Created apphost.ts", timeout: TimeSpan.FromMinutes(2));
+        await auto.WaitUntilTextAsync("Created apphost.mts", timeout: TimeSpan.FromMinutes(2));
         await auto.WaitForSuccessPromptAsync(counter);
 
         if (localChannel is not null)
@@ -194,11 +185,6 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
             "COPY --from=build --chown=node:node /app/.next/static ./.next/static",
             "USER node",
             "ENTRYPOINT [\"node\",\"server.js\"]");
-
-        await auto.TypeAsync("exit");
-        await auto.EnterAsync();
-
-        await pendingRun;
     }
 
     [Fact]
@@ -216,11 +202,9 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
         using var workspace = TemporaryWorkspace.Create(output);
 
         using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, variant: CliE2ETestHelpers.DockerfileVariant.DotNet, mountDockerSocket: true, workspace: workspace);
-
-        var pendingRun = terminal.RunAsync(TestContext.Current.CancellationToken);
-
         var counter = new SequenceCounter();
         var auto = new Hex1bTerminalAutomator(terminal, defaultTimeout: TimeSpan.FromSeconds(500));
+        await using var terminalRun = CliE2ETestHelpers.StartRun(terminal, workspace, auto, counter, output, TestContext.Current.CancellationToken);
 
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
 
@@ -234,7 +218,7 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
         await auto.KeyAsync(Hex1bKey.DownArrow);
         await auto.WaitUntilTextAsync("> TypeScript (Node.js)", timeout: TimeSpan.FromSeconds(5));
         await auto.EnterAsync();
-        await auto.WaitUntilTextAsync("Created apphost.ts", timeout: TimeSpan.FromMinutes(2));
+        await auto.WaitUntilTextAsync("Created apphost.mts", timeout: TimeSpan.FromMinutes(2));
         await auto.DeclineAgentInitPromptAsync(counter);
 
         await auto.TypeAsync("aspire add Aspire.Hosting.Docker");
@@ -252,9 +236,9 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
         await auto.WaitUntilTextAsync("SDK code restored successfully", timeout: TimeSpan.FromMinutes(3));
         await auto.WaitForSuccessPromptAsync(counter);
 
-        var appHostPath = Path.Combine(workspace.WorkspaceRoot.FullName, "apphost.ts");
+        var appHostPath = Path.Combine(workspace.WorkspaceRoot.FullName, "apphost.mts");
         var newContent = """
-            import { createBuilder } from './.modules/aspire.js';
+            import { createBuilder } from './.aspire/modules/aspire.mjs';
 
             const builder = await createBuilder();
 
@@ -285,11 +269,6 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
 
         var dockerComposeContent = await File.ReadAllTextAsync(dockerComposePath);
         Assert.Contains("postgres:", dockerComposeContent);
-
-        await auto.TypeAsync("exit");
-        await auto.EnterAsync();
-
-        await pendingRun;
     }
 
     [Fact]
@@ -307,11 +286,9 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
         using var workspace = TemporaryWorkspace.Create(output);
 
         using var terminal = CliE2ETestHelpers.CreateDockerTestTerminal(repoRoot, strategy, output, variant: CliE2ETestHelpers.DockerfileVariant.Polyglot, workspace: workspace);
-
-        var pendingRun = terminal.RunAsync(TestContext.Current.CancellationToken);
-
         var counter = new SequenceCounter();
         var auto = new Hex1bTerminalAutomator(terminal, defaultTimeout: TimeSpan.FromSeconds(500));
+        await using var terminalRun = CliE2ETestHelpers.StartRun(terminal, workspace, auto, counter, output, TestContext.Current.CancellationToken);
 
         await auto.PrepareDockerEnvironmentAsync(counter, workspace);
 
@@ -321,7 +298,7 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
 
         await auto.TypeAsync("aspire init --language typescript --non-interactive");
         await auto.EnterAsync();
-        await auto.WaitUntilTextAsync("Created apphost.ts", timeout: TimeSpan.FromMinutes(2));
+        await auto.WaitUntilTextAsync("Created apphost.mts", timeout: TimeSpan.FromMinutes(2));
         await auto.WaitForSuccessPromptAsync(counter);
 
         await auto.TypeAsync("aspire add Aspire.Hosting.Docker");
@@ -334,9 +311,9 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
         await auto.WaitUntilTextAsync("SDK code restored successfully", timeout: TimeSpan.FromMinutes(3));
         await auto.WaitForSuccessPromptAsync(counter);
 
-        var appHostPath = Path.Combine(workspace.WorkspaceRoot.FullName, "apphost.ts");
+        var appHostPath = Path.Combine(workspace.WorkspaceRoot.FullName, "apphost.mts");
         var newContent = """
-            import { createBuilder } from './.modules/aspire.js';
+            import { createBuilder } from './.aspire/modules/aspire.mjs';
 
             const builder = await createBuilder();
 
@@ -371,18 +348,13 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
         var envFileContent = await File.ReadAllTextAsync(envFilePath);
         Assert.Contains("# Customized bind mount source", envFileContent);
         Assert.DoesNotContain("# Bind mount source for my-container:/container/data", envFileContent);
-
-        await auto.TypeAsync("exit");
-        await auto.EnterAsync();
-
-        await pendingRun;
     }
 
     private static void WriteJavaScriptPublishAppHost(TemporaryWorkspace workspace)
     {
-        var appHostPath = Path.Combine(workspace.WorkspaceRoot.FullName, "apphost.ts");
+        var appHostPath = Path.Combine(workspace.WorkspaceRoot.FullName, "apphost.mts");
         File.WriteAllText(appHostPath, """
-            import { createBuilder } from './.modules/aspire.js';
+            import { createBuilder } from './.aspire/modules/aspire.mjs';
 
             const builder = await createBuilder();
 
@@ -400,7 +372,7 @@ public sealed class TypeScriptPublishTests(ITestOutputHelper output)
                 .publishAsNodeServer('build/server.js', { outputPath: 'build' });
 
             await builder.addViteApp('npmscript', './npmscript')
-                .publishAsNpmScript({ startScriptName: 'start', runScriptArguments: '-- --port $PORT' });
+                .publishAsPackageScript({ scriptName: 'start', runScriptArguments: '-- --port $PORT' });
 
             await builder.addNextJsApp('nextjs', './nextjs');
 

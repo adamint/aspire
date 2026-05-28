@@ -160,7 +160,7 @@ public class TelemetrySpansCommandTests(ITestOutputHelper outputHelper)
 
         var handler = new MockHttpMessageHandler(request =>
         {
-            var url = request.RequestUri!.ToString();
+            var url = request.RequestUri!.AbsoluteUri;
             if (url.Contains("/api/telemetry/resources"))
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
@@ -231,7 +231,7 @@ public class TelemetrySpansCommandTests(ITestOutputHelper outputHelper)
 
         var handler = new MockHttpMessageHandler(request =>
         {
-            var url = request.RequestUri!.ToString();
+            var url = request.RequestUri!.AbsoluteUri;
             if (url.Contains("/api/telemetry/resources"))
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
@@ -269,7 +269,7 @@ public class TelemetrySpansCommandTests(ITestOutputHelper outputHelper)
 
         var handler = new MockHttpMessageHandler(request =>
         {
-            var url = request.RequestUri!.ToString();
+            var url = request.RequestUri!.AbsoluteUri;
             if (url.Contains("/api/telemetry/"))
             {
                 // All telemetry API endpoints return 404 when API is not enabled
@@ -347,7 +347,7 @@ public class TelemetrySpansCommandTests(ITestOutputHelper outputHelper)
 
         var handler = new MockHttpMessageHandler(request =>
         {
-            var url = request.RequestUri!.ToString();
+            var url = request.RequestUri!.AbsoluteUri;
             if (url.Contains("/api/telemetry/resources"))
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
@@ -416,7 +416,7 @@ public class TelemetrySpansCommandTests(ITestOutputHelper outputHelper)
 
         var handler = new MockHttpMessageHandler(request =>
         {
-            var url = request.RequestUri!.ToString();
+            var url = request.RequestUri!.AbsoluteUri;
             if (url.Contains("/api/telemetry/resources"))
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
@@ -451,7 +451,53 @@ public class TelemetrySpansCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
         Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.NotNull(capturedUrl);
-        Assert.Contains("search=", capturedUrl);
+        Assert.Equal("http://localhost:18888/api/telemetry/spans?search=GET%20%2Findex", capturedUrl);
+    }
+
+    [Fact]
+    public async Task TelemetrySpansCommand_WithDurationSearchFilter_PassesDurationFilterInSearchUrl()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var outputWriter = new TestOutputTextWriter(outputHelper);
+        string? capturedUrl = null;
+
+        var handler = new MockHttpMessageHandler(request =>
+        {
+            var url = request.RequestUri!.AbsoluteUri;
+            if (url.Contains("/api/telemetry/resources"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("[]", System.Text.Encoding.UTF8, "application/json")
+                };
+            }
+            if (url.Contains("/api/telemetry/spans"))
+            {
+                capturedUrl = url;
+                var json = BuildSpansJson(("frontend", null, "span001", "GET /index", s_testTime, s_testTime.AddMilliseconds(50), false));
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.OutputTextWriter = outputWriter;
+            options.DisableAnsi = true;
+        });
+        services.AddSingleton(handler);
+        services.Replace(ServiceDescriptor.Singleton<IHttpClientFactory>(new MockHttpClientFactory(handler)));
+
+        using var provider = services.BuildServiceProvider();
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse("otel spans --dashboard-url http://localhost:18888 --search \"duration:>=50.5\"");
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal("http://localhost:18888/api/telemetry/spans?search=duration%3A%3E%3D50.5", capturedUrl);
     }
 }

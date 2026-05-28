@@ -3,6 +3,8 @@
 
 using Aspire.Cli.Acquisition;
 using Aspire.Cli.Utils;
+using Aspire.Hosting.Backchannel;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aspire.Cli.Tests.Utils;
 
@@ -20,16 +22,18 @@ public class CliPathHelperTests(ITestOutputHelper outputHelper)
 
         if (OperatingSystem.IsWindows())
         {
-            Assert.Matches("^apphost\\.sock\\.[a-f0-9]{12}$", socketPath1);
-            Assert.Matches("^apphost\\.sock\\.[a-f0-9]{12}$", socketPath2);
+            Assert.Equal(Path.GetFileName(socketPath1), socketPath1);
+            Assert.Equal(Path.GetFileName(socketPath2), socketPath2);
+            Assert.Matches("^h[A-Za-z0-9_-]{8}$", socketPath1);
+            Assert.Matches("^h[A-Za-z0-9_-]{8}$", socketPath2);
         }
         else
         {
-            var expectedDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".aspire", "cli", "runtime", "sockets");
+            var expectedDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".aspire", "cli", "bch");
             Assert.Equal(expectedDirectory, Path.GetDirectoryName(socketPath1));
             Assert.Equal(expectedDirectory, Path.GetDirectoryName(socketPath2));
-            Assert.Matches("^apphost\\.sock\\.[a-f0-9]{12}$", Path.GetFileName(socketPath1));
-            Assert.Matches("^apphost\\.sock\\.[a-f0-9]{12}$", Path.GetFileName(socketPath2));
+            Assert.Matches("^h[A-Za-z0-9_-]{8}$", Path.GetFileName(socketPath1));
+            Assert.Matches("^h[A-Za-z0-9_-]{8}$", Path.GetFileName(socketPath2));
         }
     }
 
@@ -43,11 +47,11 @@ public class CliPathHelperTests(ITestOutputHelper outputHelper)
 
         Assert.NotEqual(socketPath1, socketPath2);
 
-        var expectedDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".aspire", "cli", "runtime", "sockets");
+        var expectedDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".aspire", "cli", "bch");
         Assert.Equal(expectedDirectory, Path.GetDirectoryName(socketPath1));
         Assert.Equal(expectedDirectory, Path.GetDirectoryName(socketPath2));
-        Assert.Matches("^apphost\\.sock\\.[a-f0-9]{12}$", Path.GetFileName(socketPath1));
-        Assert.Matches("^apphost\\.sock\\.[a-f0-9]{12}$", Path.GetFileName(socketPath2));
+        Assert.Matches("^h[A-Za-z0-9_-]{8}$", Path.GetFileName(socketPath1));
+        Assert.Matches("^h[A-Za-z0-9_-]{8}$", Path.GetFileName(socketPath2));
     }
 
     [Theory]
@@ -104,6 +108,25 @@ public class CliPathHelperTests(ITestOutputHelper outputHelper)
         var result = CliPathHelper.GetAspireHomeDirectory(binaryPath);
 
         Assert.Equal(installPrefix, result);
+    }
+
+    [Fact]
+    public void GetDefaultAspireHomeDirectory_UsesConfiguredAspireHome()
+    {
+        var result = CliPathHelper.GetDefaultAspireHomeDirectory("/custom/aspire-home", "/home/user");
+
+        Assert.Equal("/custom/aspire-home", result);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void GetDefaultAspireHomeDirectory_WithoutConfiguredAspireHome_UsesUserProfile(string? configuredAspireHome)
+    {
+        var result = CliPathHelper.GetDefaultAspireHomeDirectory(configuredAspireHome, "/home/user");
+
+        Assert.Equal(Path.Combine("/home/user", ".aspire"), result);
     }
 
     [Fact]
@@ -274,5 +297,92 @@ public class CliPathHelperTests(ITestOutputHelper outputHelper)
         File.WriteAllText(Path.Combine(binaryDir, InstallSidecarReader.SidecarFileName), $$"""{"source":"{{source}}"}""");
 
         return binaryPath;
+    }
+
+    [Fact]
+    public void CleanupStaleCliSockets_DeletesFilesOlderThanThreshold()
+    {
+        var tempRoot = Directory.CreateTempSubdirectory("aspire-cli-sockets-");
+        try
+        {
+            var staleFile = BackchannelConstants.ComputeCliSocketPath(tempRoot.FullName, "cli.sock");
+            Directory.CreateDirectory(Path.GetDirectoryName(staleFile)!);
+            File.WriteAllText(staleFile, string.Empty);
+            var freshFile = BackchannelConstants.ComputeCliSocketPath(tempRoot.FullName, "cli.sock");
+            File.WriteAllText(freshFile, string.Empty);
+
+            var fakeTime = new FakeTimeProvider(DateTimeOffset.UtcNow);
+            File.SetLastWriteTimeUtc(staleFile, fakeTime.GetUtcNow().UtcDateTime - TimeSpan.FromHours(48));
+            File.SetLastWriteTimeUtc(freshFile, fakeTime.GetUtcNow().UtcDateTime - TimeSpan.FromMinutes(5));
+
+            var socketDirectory = Path.GetDirectoryName(staleFile)!;
+            var deleted = CliPathHelper.CleanupStaleCliSockets(socketDirectory, TimeSpan.FromHours(24), fakeTime);
+
+            Assert.Equal(1, deleted);
+            Assert.False(File.Exists(staleFile));
+            Assert.True(File.Exists(freshFile));
+        }
+        finally
+        {
+            tempRoot.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CleanupStaleCliSockets_OnlyMatchesCliSockPrefix()
+    {
+        var tempRoot = Directory.CreateTempSubdirectory("aspire-cli-sockets-");
+        try
+        {
+            var matching = BackchannelConstants.ComputeCliSocketPath(tempRoot.FullName, "cli.sock");
+            Directory.CreateDirectory(Path.GetDirectoryName(matching)!);
+            File.WriteAllText(matching, string.Empty);
+            var unrelated = BackchannelConstants.ComputeCliSocketPath(tempRoot.FullName, "apphost.sock");
+            File.WriteAllText(unrelated, string.Empty);
+
+            var fakeTime = new FakeTimeProvider(DateTimeOffset.UtcNow);
+            File.SetLastWriteTimeUtc(matching, fakeTime.GetUtcNow().UtcDateTime - TimeSpan.FromHours(48));
+            File.SetLastWriteTimeUtc(unrelated, fakeTime.GetUtcNow().UtcDateTime - TimeSpan.FromHours(48));
+
+            var socketDirectory = Path.GetDirectoryName(matching)!;
+            var deleted = CliPathHelper.CleanupStaleCliSockets(socketDirectory, TimeSpan.FromHours(24), fakeTime);
+
+            Assert.Equal(1, deleted);
+            Assert.False(File.Exists(matching));
+            Assert.True(File.Exists(unrelated));
+        }
+        finally
+        {
+            tempRoot.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void CleanupStaleCliSockets_MissingDirectoryIsNoOp()
+    {
+        // Create-then-delete to guarantee a unique path we know doesn't exist on disk.
+        var probe = Directory.CreateTempSubdirectory("aspire-cli-sockets-missing-");
+        var missingDir = probe.FullName;
+        probe.Delete();
+
+        var deleted = CliPathHelper.CleanupStaleCliSockets(missingDir, TimeSpan.FromHours(24));
+
+        Assert.Equal(0, deleted);
+    }
+
+    [Fact]
+    public void CleanupStaleCliSockets_EmptyDirectoryReturnsZero()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("aspire-cli-sockets-");
+        try
+        {
+            var deleted = CliPathHelper.CleanupStaleCliSockets(tempDir.FullName, TimeSpan.FromHours(24));
+
+            Assert.Equal(0, deleted);
+        }
+        finally
+        {
+            tempDir.Delete(recursive: true);
+        }
     }
 }

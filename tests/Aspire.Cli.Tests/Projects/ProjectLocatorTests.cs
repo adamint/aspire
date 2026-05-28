@@ -442,7 +442,12 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         }));
 
         var executionContext = CreateExecutionContext(workingDirectory);
-        var projectLocator = CreateProjectLocator(executionContext);
+        var displayedSubtleMessages = new List<string>();
+        var interactionService = new TestInteractionService
+        {
+            DisplaySubtleMessageCallback = displayedSubtleMessages.Add
+        };
+        var projectLocator = CreateProjectLocator(executionContext, interactionService: interactionService);
 
         var result = await projectLocator.UseOrFindAppHostProjectFileAsync(
             projectFile: null,
@@ -452,6 +457,41 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
 
         Assert.Equal(settingsAppHostFile.FullName, result.SelectedProjectFile?.FullName);
         Assert.Contains(result.AllProjectFileCandidates, file => file.FullName == settingsAppHostFile.FullName);
+        Assert.Contains(Path.Join("..", "SettingsAppHost.csproj"), displayedSubtleMessages);
+    }
+
+    [Fact]
+    public async Task UseOrFindAppHostProjectFileTreatsSettingsAppHostWithoutProjectHandlerAsUnsupported()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var settingsAppHostFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "apphost.custom"));
+        await File.WriteAllTextAsync(settingsAppHostFile.FullName, "Not a supported apphost type");
+
+        var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(new
+        {
+            appHost = new
+            {
+                path = "apphost.custom"
+            }
+        }));
+
+        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var interactionService = new TestInteractionService();
+        var projectLocator = CreateProjectLocator(executionContext, interactionService: interactionService);
+
+        var exception = await Assert.ThrowsAsync<ProjectLocatorException>(() =>
+            projectLocator.UseOrFindAppHostProjectFileAsync(
+                projectFile: null,
+                multipleAppHostProjectsFoundBehavior: MultipleAppHostProjectsFoundBehavior.None,
+                createSettingsFile: false,
+                CancellationToken.None)).DefaultTimeout();
+
+        Assert.Equal(ProjectLocatorFailureReason.UnsupportedProjects, exception.FailureReason);
+        var warning = Assert.Single(interactionService.DisplayedMessages);
+        Assert.Equal(KnownEmojis.Warning, warning.Emoji);
+        Assert.Contains("apphost.custom", warning.Message);
     }
 
     [Fact]
@@ -609,6 +649,43 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
 
         var returnedProjectFile = await projectLocator.UseOrFindAppHostProjectFileAsync(null, createSettingsFile: true).DefaultTimeout();
         Assert.Equal(projectFile.FullName, returnedProjectFile!.FullName);
+    }
+
+    [Fact]
+    public async Task UseOrFindAppHostProjectFileUpdatesStaleConfigForExplicitProjectFile()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var legacyAppHostFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "apphost.ts"));
+        var appHostFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "apphost.mts"));
+        await File.WriteAllTextAsync(appHostFile.FullName, "// TypeScript AppHost");
+
+        await File.WriteAllTextAsync(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName), JsonSerializer.Serialize(new
+        {
+            appHost = new
+            {
+                path = legacyAppHostFile.Name,
+                language = KnownLanguageId.TypeScript
+            }
+        }));
+
+        var globalSettingsFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "settings.global.json");
+        var globalSettingsFile = new FileInfo(globalSettingsFilePath);
+        var config = new ConfigurationBuilder().Build();
+        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var configurationService = new ConfigurationService(config, executionContext, globalSettingsFile, NullLogger<ConfigurationService>.Instance);
+        var projectLocator = CreateProjectLocator(
+            executionContext,
+            configurationService: configurationService,
+            projectFactory: new TestTypeScriptStarterProjectFactory((_, _, _) => Task.FromResult(true)));
+
+        var returnedProjectFile = await projectLocator.UseOrFindAppHostProjectFileAsync(appHostFile, createSettingsFile: true).DefaultTimeout();
+
+        Assert.Equal(appHostFile.FullName, returnedProjectFile!.FullName);
+
+        var updatedConfig = AspireConfigFile.Load(workspace.WorkspaceRoot.FullName);
+        Assert.Equal("apphost.mts", updatedConfig?.AppHost?.Path);
+        Assert.Equal(KnownLanguageId.TypeScript, updatedConfig?.AppHost?.Language);
     }
 
     [Fact]
