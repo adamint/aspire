@@ -309,9 +309,28 @@ extends:
                     # itself is pinned in extension/package.json via the
                     # `packageManager` field, which `corepack prepare --activate`
                     # reads from the current working directory.
-                    npm install -g corepack@0.34.7
+                    $CorepackVersion = '0.34.7'
+                    npm install -g "corepack@$CorepackVersion"
+                    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+                    # Verify the version actually on PATH matches our pin. On
+                    # Windows the Node.js installer registers a `corepack.cmd`
+                    # under %ProgramFiles%\nodejs which may shadow the
+                    # npm-global shim under %APPDATA%\npm, so a successful
+                    # `npm install -g corepack@<version>` does NOT guarantee
+                    # that subsequent `corepack` calls resolve to it.
+                    $installed = (corepack --version).Trim()
+                    if ($installed -ne $CorepackVersion) {
+                      Write-Error "corepack version mismatch: expected $CorepackVersion, got '$installed'. The bundled Corepack on PATH may be taking precedence over the npm-global install."
+                      exit 1
+                    }
+
                     corepack enable
+                    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
                     corepack prepare --activate
+                    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
                     corepack yarn --version
                   workingDirectory: '$(Build.SourcesDirectory)\extension'
 

@@ -42,3 +42,26 @@ The build rejects public npm registry URLs in `yarn.lock`; ensure regenerated en
 ## Updating the Yarn version
 
 Edit the `"packageManager": "yarn@x.y.z"` field in `extension/package.json`. Corepack picks the new version up automatically the next time `build.sh` / `build.ps1` runs (`corepack prepare --activate` reads `packageManager`). No further changes required in `build.sh`, `build.ps1`, or `extension/Extension.proj` — they all call `corepack yarn …` without an explicit version.
+
+> **Heads up about the internal npm mirror.** The repo's `.npmrc` routes all package downloads through the dnceng `dotnet-public-npm` Azure Artifacts feed, which is a pull-through cache of npmjs.org. The first time anyone (locally or in CI) asks the feed for a Yarn release that has never been requested, the feed has to fetch it from npmjs.org — and anonymous pull-through fetches fail with HTTP 401. After the first authenticated request the tarball is cached forever. If you bump the Yarn version, either ensure CI has run once with credentials, or pre-seed the feed by running an authenticated `npm install yarn@<new>` against the `dotnet-public-npm` registry yourself.
+
+## Troubleshooting
+
+### `EACCES` from `npm install --global` on Linux/macOS
+
+The build scripts run `npm install --global corepack@<version>` to pin the Corepack version. On systems where Node.js is installed from a package manager (apt, yum, the official `.pkg`), the npm global prefix is typically `/usr/lib/node_modules` or `/usr/local/lib/node_modules`, which is root-owned. The install will fail with `EACCES`. The cleanest fix is to use a Node version manager that puts the npm prefix in your home directory:
+
+- [`nvm`](https://github.com/nvm-sh/nvm) — installs Node and configures the npm prefix automatically.
+- [`fnm`](https://github.com/Schniz/fnm), [`asdf`](https://asdf-vm.com/), [`volta`](https://volta.sh/) — same idea, different tradeoffs.
+
+Alternatively, point npm at a user-writable prefix without changing your Node install:
+
+```bash
+mkdir -p ~/.npm-global
+npm config set prefix ~/.npm-global
+export PATH="$HOME/.npm-global/bin:$PATH"   # add to ~/.bashrc or ~/.zshrc
+```
+
+### `corepack version mismatch` from `build.sh` / `build.ps1`
+
+This means the `corepack` resolved from `PATH` is not the one we just installed via `npm install -g`. Most often the system Node install (`/usr/bin/corepack`, `%ProgramFiles%\nodejs\corepack.cmd`) is sitting in front of the npm global bin directory. On Windows, ensure `%APPDATA%\npm` comes before `%ProgramFiles%\nodejs` on `PATH`. On Linux/macOS, follow the `EACCES` remediation above and the npm prefix will be on `PATH` ahead of the system Node directory.

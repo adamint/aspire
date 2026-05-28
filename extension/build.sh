@@ -9,9 +9,7 @@ set -e
 COREPACK_VERSION="0.34.7"
 
 # Yarn version is pinned in extension/package.json via the "packageManager"
-# field, which Corepack reads automatically. To change the Yarn release, edit
-# packageManager there and update the inline pin in extension/Extension.proj
-# if any commands need to predate the working-directory switch.
+# field, which Corepack reads automatically when invoked from this directory.
 
 # Point Corepack at the dnceng internal npm mirror unless the caller already
 # set a registry. Corepack does NOT read .npmrc, so we have to feed it through
@@ -62,7 +60,28 @@ echo ""
 echo "Installing pinned Corepack ${COREPACK_VERSION}..."
 # Reinstall every time so we overwrite any older Corepack shim that Node.js
 # may have placed on PATH ahead of npm's global prefix.
-npm install --global "corepack@${COREPACK_VERSION}"
+#
+# Force the public npm registry for this one install: the rest of the build
+# runs against the dnceng `dotnet-public-npm` mirror via .npmrc, but Corepack
+# itself is not always cached in that mirror, and OSS contributors without
+# dnceng auth would fail with HTTP 401 on a cache miss. Corepack is purely
+# build tooling (it never ships in the extension) so pulling it from npmjs.org
+# does not change what we publish.
+npm install --global --registry=https://registry.npmjs.org "corepack@${COREPACK_VERSION}"
+
+# Verify the version actually on PATH matches our pin. If a system-bundled
+# Corepack shim shadows the npm-global install (common on Windows; possible on
+# macOS/Linux when /usr/local/bin precedes the npm prefix), `npm install -g`
+# can "succeed" while subsequent `corepack` calls still resolve to the bundled
+# version. Fail loudly here so we don't silently run with the wrong tool.
+installed_corepack=$(corepack --version 2>/dev/null || echo "")
+if [ "$installed_corepack" != "$COREPACK_VERSION" ]; then
+    echo "Error: corepack version mismatch: expected $COREPACK_VERSION, got '$installed_corepack'."
+    echo "The bundled Corepack on PATH may be taking precedence over the npm-global install."
+    echo "Ensure your npm global bin directory comes before any other Node.js install on PATH,"
+    echo "or use a Node version manager (nvm, asdf, fnm) that places the npm prefix appropriately."
+    exit 1
+fi
 
 echo ""
 echo "Enabling Corepack package manager shims..."

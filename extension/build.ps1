@@ -10,9 +10,7 @@ $ErrorActionPreference = "Stop"
 $CorepackVersion = "0.34.7"
 
 # Yarn version is pinned in extension/package.json via the "packageManager"
-# field, which Corepack reads automatically. To change the Yarn release, edit
-# packageManager there and update the inline pin in extension/Extension.proj
-# if any commands need to predate the working-directory switch.
+# field, which Corepack reads automatically when invoked from this directory.
 
 # Point Corepack at the dnceng internal npm mirror unless the caller already
 # set a registry. Corepack does NOT read .npmrc, so we have to feed it through
@@ -68,11 +66,37 @@ Write-Host ""
 Write-Host "Installing pinned Corepack $CorepackVersion..."
 # Reinstall every time so we overwrite any older Corepack shim that Node.js
 # may have placed on PATH ahead of npm's global prefix.
-npm install --global "corepack@$CorepackVersion"
+#
+# Force the public npm registry for this one install: the rest of the build
+# runs against the dnceng `dotnet-public-npm` mirror via .npmrc, but Corepack
+# itself is not always cached in that mirror, and OSS contributors without
+# dnceng auth would fail with HTTP 401 on a cache miss. Corepack is purely
+# build tooling (it never ships in the extension) so pulling it from npmjs.org
+# does not change what we publish.
+npm install --global --registry=https://registry.npmjs.org "corepack@$CorepackVersion"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "npm install -g corepack@$CorepackVersion failed with exit code $LASTEXITCODE"
     exit $LASTEXITCODE
+}
+
+# Verify the version actually on PATH matches our pin. On Windows the Node.js
+# installer registers a `corepack.cmd` under %ProgramFiles%\nodejs which may
+# shadow the npm-global shim under %APPDATA%\npm, so a successful
+# `npm install -g corepack@<version>` does NOT guarantee that subsequent
+# `corepack` calls resolve to it. Fail loudly here so we don't silently run
+# with the wrong tool.
+$installedCorepack = $null
+try { $installedCorepack = (corepack --version).Trim() } catch { }
+if ($installedCorepack -ne $CorepackVersion) {
+    Write-Error @"
+corepack version mismatch: expected $CorepackVersion, got '$installedCorepack'.
+The bundled Corepack on PATH may be taking precedence over the npm-global install.
+Ensure your npm global bin directory (typically %APPDATA%\npm on Windows) comes
+before %ProgramFiles%\nodejs on PATH, or run `corepack disable` to remove the
+bundled shim before re-running this script.
+"@
+    exit 1
 }
 
 Write-Host ""

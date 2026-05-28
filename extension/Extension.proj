@@ -87,7 +87,7 @@
       Condition="'@(_PublicNpmRegistryLine)' != ''" />
   </Target>
 
-  <Target Name="CheckYarnInstalled" DependsOnTargets="ValidateYarnLockRegistries">
+  <Target Name="CheckYarnInstalled">
     <!-- Resolves the Yarn release pinned in extension/package.json (the
          packageManager field), via Corepack. WorkingDirectory must be the
          extension directory or Corepack will fall back to its default. -->
