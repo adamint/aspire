@@ -12,13 +12,11 @@ $CorepackVersion = "0.34.7"
 # Yarn version is pinned in extension/package.json via the "packageManager"
 # field, which Corepack reads automatically when invoked from this directory.
 
-# Point Corepack at the dnceng internal npm mirror unless the caller already
-# set a registry. Corepack does NOT read .npmrc, so we have to feed it through
-# its own env var. See https://github.com/nodejs/corepack#environment-variables.
-# Override locally with `$env:COREPACK_NPM_REGISTRY = '<url>'; ./build.ps1`. To
-# bypass the internal mirror, set it to `https://registry.npmjs.org/`.
-if (-not $env:COREPACK_NPM_REGISTRY) {
-    $env:COREPACK_NPM_REGISTRY = "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/"
+# Point npm at the dnceng internal npm mirror when installing the pinned Corepack
+# shim. npm global installs do not use the project .npmrc, so pass the registry
+# explicitly. Override locally with `$env:NPM_REGISTRY = '<url>'; ./build.ps1`.
+if (-not $env:NPM_REGISTRY) {
+    $env:NPM_REGISTRY = "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/"
 }
 if (-not $env:COREPACK_ENABLE_DOWNLOAD_PROMPT) {
     $env:COREPACK_ENABLE_DOWNLOAD_PROMPT = "0"
@@ -67,7 +65,7 @@ Write-Host "Installing pinned Corepack $CorepackVersion..."
 # Reinstall every time so we overwrite any older Corepack shim that Node.js
 # may have placed on PATH ahead of npm's global prefix. npm global installs do
 # not use the project .npmrc, so pass the registry explicitly.
-npm install --global --registry "$env:COREPACK_NPM_REGISTRY" "corepack@$CorepackVersion"
+npm install --global --registry "$env:NPM_REGISTRY" "corepack@$CorepackVersion"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "npm install -g corepack@$CorepackVersion failed with exit code $LASTEXITCODE"

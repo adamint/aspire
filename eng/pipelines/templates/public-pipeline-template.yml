@@ -32,13 +32,9 @@ variables:
   - name: _InternalBuildArgs
     value: ''
 
-  # Corepack provisions the Yarn release pinned in extension/package.json's
-  # `packageManager` field. Corepack does NOT read .npmrc, so we point it at the
-  # dnceng `dotnet-public-npm` mirror via its own env var. Without this, Corepack
-  # would attempt to download the Yarn tarball from https://registry.npmjs.org,
-  # which is blocked from most internal agents.
-  # See https://github.com/nodejs/corepack#environment-variables.
-  - name: COREPACK_NPM_REGISTRY
+  # npm global installs don't use the repo .npmrc, so pass this registry
+  # explicitly when installing the pinned Corepack shim.
+  - name: NPM_REGISTRY
     value: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/
   # Disable the interactive "Do you want to download yarn@x.y.z?" prompt so
   # pipeline steps don't hang waiting for stdin.
