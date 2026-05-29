@@ -453,7 +453,10 @@ internal sealed class ProjectLocator(
                     return;
                 }
 
-                var pathComparison = OperatingSystem.IsWindows()
+                // Windows and default macOS APFS volumes are case-insensitive, so a
+                // differently-cased settings path can still refer to the same file found
+                // by the discovery walk. See https://github.com/microsoft/aspire/issues/17635.
+                var pathComparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
                     ? StringComparison.OrdinalIgnoreCase
                     : StringComparison.Ordinal;
 

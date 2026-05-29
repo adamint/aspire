@@ -2931,6 +2931,44 @@ builder.Build().Run();");
         Assert.Single(found);
     }
 
+    [Fact]
+    public async Task FindAppHostProjectsAsync_DeduplicatesAspireConfigCandidateWithDifferentCasing()
+    {
+        // Regression test for https://github.com/microsoft/aspire/issues/17635.
+        // Case-insensitive file systems can resolve a user-authored config path like
+        // APPHOST.csproj to the same file that the discovery walk reports as
+        // AppHost.csproj. The two strings differ, but the paths should still dedupe.
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var appHostProjectFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "AppHost.csproj"));
+        await File.WriteAllTextAsync(appHostProjectFile.FullName, "Not a real project file.");
+
+        var differentlyCasedPath = Path.Combine(workspace.WorkspaceRoot.FullName, "APPHOST.csproj");
+        if (!File.Exists(differentlyCasedPath))
+        {
+            Assert.Skip("The current file system is case-sensitive.");
+        }
+
+        Assert.NotEqual(appHostProjectFile.FullName, differentlyCasedPath);
+
+        var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        await File.WriteAllTextAsync(configPath, $$"""
+            { "appHost": { "path": {{JsonSerializer.Serialize(differentlyCasedPath)}} } }
+            """);
+
+        var projectFactory = new TestAppHostProjectFactory
+        {
+            ValidateAppHostCallback = _ => new AppHostValidationResult(IsValid: true)
+        };
+
+        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var projectLocator = CreateProjectLocator(executionContext, projectFactory: projectFactory);
+
+        var found = await projectLocator.FindAppHostProjectsAsync(workspace.WorkspaceRoot, AppHostDiscoveryScope.DefaultFiltered, CancellationToken.None).DefaultTimeout();
+
+        Assert.Single(found);
+    }
+
     private static ProjectLocator CreateProjectLocator(
         CliExecutionContext executionContext,
         IInteractionService? interactionService = null,
