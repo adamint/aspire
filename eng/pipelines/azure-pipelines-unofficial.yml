@@ -214,12 +214,13 @@ extends:
                 inputs:
                   targetType: 'inline'
                   script: |
-                    # Install the pinned Corepack shim. Keep this version in
-                    # sync with COREPACK_VERSION in extension/build.sh and
-                    # $CorepackVersion in extension/build.ps1. The Yarn release
-                    # itself is pinned in extension/package.json via the
-                    # `packageManager` field.
-                    $CorepackVersion = '0.34.7'
+                    # Pinned Corepack shim version, sourced from
+                    # extension/scripts/corepack-version.txt so this script,
+                    # extension/build.sh, extension/build.ps1, the GitHub Actions
+                    # workflow, and the other AzDO pipelines stay in sync. The
+                    # Yarn release itself is pinned in extension/package.json
+                    # via the `packageManager` field.
+                    $CorepackVersion = (Get-Content -Raw -Path '$(Build.SourcesDirectory)/extension/scripts/corepack-version.txt').Trim()
                     $corepackHome = Join-Path '$(Agent.TempDirectory)' 'corepack'
                     $env:COREPACK_HOME = $corepackHome
                     Write-Host "##vso[task.setvariable variable=COREPACK_HOME]$corepackHome"

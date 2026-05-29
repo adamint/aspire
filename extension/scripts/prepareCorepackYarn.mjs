@@ -8,7 +8,16 @@ import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
 const DefaultNpmRegistry = 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/';
-const PackageManagerPattern = /^yarn@(?<version>\d+\.\d+\.\d+)$/;
+// Yarn 1.x `packageManager` strings can carry an integrity suffix when written
+// by `corepack use yarn@<v>` (the workflow CONTRIBUTING.MD points contributors
+// at to update the pin), producing values like
+//   "yarn@1.22.22+sha512.f7062e6a5ee1f3aa…".
+// The suffix is optional but its presence must not break us. Match an optional
+// `+<token>` suffix and ignore it; only the version is needed to seed the cache
+// (Corepack itself verifies the package hash via its own metadata after we
+// rename the staging dir into place).
+// Spec: https://nodejs.org/api/packages.html#packagemanager
+const PackageManagerPattern = /^yarn@(?<version>\d+\.\d+\.\d+)(?:\+[\w.-]+)?$/;
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const extensionDirectory = dirname(scriptDirectory);
@@ -102,16 +111,12 @@ function getCorepackHome() {
     return process.env.COREPACK_HOME;
   }
 
-  // Mirror Corepack 0.34.x's own cache-path resolution so we seed exactly the
-  // directory Corepack will later read from. This is an intentional implicit
-  // coupling to the pinned COREPACK_VERSION in build.sh / build.ps1: if a
-  // future Corepack release switches to a different scheme (e.g., env-paths,
-  // which would relocate the macOS cache to ~/Library/Caches/node/corepack),
-  // this fallback will seed the wrong directory and Corepack will then try to
-  // fetch Yarn itself, which fails against Azure Artifacts (no /<pkg>/<ver>
-  // metadata route). The AzDO pipelines avoid this coupling by setting
-  // COREPACK_HOME explicitly; doing the same in build.sh / build.ps1 is the
-  // simplest hardening if/when COREPACK_VERSION is bumped.
+  // build.sh / build.ps1 / the GitHub Actions workflow / the AzDO pipelines all
+  // set COREPACK_HOME explicitly to a build-scoped directory. This fallback
+  // exists only for ad-hoc invocations of this script (e.g. local debugging,
+  // running `node ./scripts/prepareCorepackYarn.mjs` directly). It mirrors
+  // Corepack 0.34.x's own cache-path resolution so we seed the directory
+  // Corepack will later read from.
   // Source: https://github.com/nodejs/corepack/blob/v0.34.0/sources/folderUtils.ts
   const baseDirectory = process.env.XDG_CACHE_HOME
     ?? process.env.LOCALAPPDATA

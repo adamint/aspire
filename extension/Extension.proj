@@ -96,7 +96,7 @@
       <Output TaskParameter="ConsoleOutput" PropertyName="YarnVersion" />
     </Exec>
 
-    <Error Condition="'$(YarnExitCode)' != '0'" Text="Corepack is not installed or cannot run the Yarn version pinned in extension/package.json. To build the extension, run extension/build.sh or extension/build.ps1 first, which installs a pinned Corepack via npm." />
+    <Error Condition="'$(YarnExitCode)' != '0'" Text="Corepack is not installed or cannot run the Yarn version pinned in extension/package.json. The extension's Corepack and Yarn bootstrap lives in extension/build.sh and extension/build.ps1: those scripts install a pinned Corepack via npm and seed Corepack's Yarn cache from the internal npm feed. Run one of them once before invoking the extension build, including before `./build.sh -build-extension` (the root Arcade flow) or direct `dotnet build extension/Extension.proj` — neither installs Corepack itself. See extension/CONTRIBUTING.MD for details." />
 
     <Message Importance="high" Text="yarn version: $(YarnVersion)" />
   </Target>
