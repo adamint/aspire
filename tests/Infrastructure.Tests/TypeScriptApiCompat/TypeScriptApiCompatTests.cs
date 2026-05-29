@@ -323,6 +323,36 @@ public sealed class TypeScriptApiCompatTests
         Assert.DoesNotContain("Unused suppressions", report, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void RunnerIgnoresDuplicateEquivalentCapabilities()
+    {
+        using var tempDirectory = new TestTempDirectory();
+        var baselineRoot = Path.Combine(tempDirectory.Path, "baseline");
+        var currentRoot = Path.Combine(tempDirectory.Path, "current");
+        var reportPath = Path.Combine(tempDirectory.Path, "report.md");
+
+        WriteSurface(baselineRoot, "Package", """
+            # Capabilities
+            Package/duplicate(value?: string) -> void
+            Package/duplicate(value?: string) -> void
+            """);
+        WriteSurface(currentRoot, "Package", """
+            # Capabilities
+            Package/duplicate(value?: string) -> void
+            """);
+
+        var exitCode = TypeScriptApiCompatRunner.Run(new CommandLineOptions(
+            baselineRoot,
+            currentRoot,
+            tempDirectory.Path,
+            BaselineSuppressionsRoot: null,
+            ExcludedPackagesFile: null,
+            ReportPath: reportPath,
+            GitHubAnnotations: false));
+
+        Assert.Equal(0, exitCode);
+    }
+
     private static void WriteSurface(string rootPath, string packageName, string content)
     {
         var apiDirectory = Path.Combine(rootPath, "src", packageName, "api");
