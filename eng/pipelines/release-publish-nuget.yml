@@ -1306,7 +1306,16 @@ extends:
                     }
                     finally {
                       if (Test-Path -LiteralPath $npmRoot) {
-                        Remove-Item -LiteralPath $npmRoot -Recurse -Force
+                        # Best-effort cleanup. On Windows, freshly extracted
+                        # binaries may still be held open briefly by AV / file
+                        # indexers, which can make Remove-Item throw EPERM /
+                        # IOException. Swallow those so a successful smoke
+                        # test isn't masked by a transient cleanup error.
+                        try {
+                          Remove-Item -LiteralPath $npmRoot -Recurse -Force -ErrorAction Stop
+                        } catch {
+                          Write-Warning "Best-effort cleanup of '$npmRoot' failed: $($_.Exception.Message)"
+                        }
                       }
                     }
                   displayName: 'Validate Published npm Package from Registry'

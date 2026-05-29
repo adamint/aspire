@@ -104,12 +104,25 @@ function ensureCachedBinary(sourcePath, binaryName, version, rid) {
     fs.chmodSync(tempPath, 0o755);
   }
 
-  // Node's rename uses replace-existing semantics on all supported platforms.
-  // If the cached executable is still running on Windows, the rename fails and
-  // the previous cache entry remains usable instead of being deleted first.
+  // Node's rename uses replace-existing semantics on POSIX. On Windows, the
+  // rename fails with EBUSY/EPERM if the cached executable is currently
+  // running (e.g., another concurrent first-run already populated the cache
+  // and is executing it). When that happens, check whether the existing
+  // target is already a valid copy of the source - if it is, the other
+  // process won the race and our tmp can be discarded without failing the
+  // launcher. Any other error is unexpected and must propagate.
   try {
     fs.renameSync(tempPath, targetPath);
   } catch (error) {
+    try {
+      if (!needsCopy(sourcePath, targetPath)) {
+        fs.rmSync(tempPath, { force: true });
+        return targetPath;
+      }
+    } catch {
+      // Fall through and rethrow the original rename error below.
+    }
+
     fs.rmSync(tempPath, { force: true });
     throw error;
   }
