@@ -4,8 +4,8 @@
 
 - Node.js (LTS version) — `npm` must be on the PATH (it ships with Node.js). The
   build scripts (`build.sh` / `build.ps1`) install a pinned [Corepack](https://github.com/nodejs/corepack)
-  via `npm install -g corepack@<version>` from the configured registry and use it
-  to provision the Yarn release pinned by the `packageManager` field in
+  via `npm install -g corepack@<version>` from the configured registry and seed
+  Corepack's cache with the Yarn release pinned by the `packageManager` field in
   `extension/package.json`. You do **not** need to install Yarn yourself.
 - Visual Studio Code (latest) or Visual Studio Code Insiders
 - [Aspire CLI](https://aspire.dev/get-started/install-cli/) must be installed and available in the PATH
@@ -29,7 +29,7 @@ You can use the `Aspire: Extension settings` command to open VS Code settings di
 
 ## Updating dependency overrides
 
-The extension is built with **yarn**, pinned to the version recorded in `packageManager` of `package.json` (Corepack reads this). `package.json` uses `resolutions` for transitive dependency pins and `yarn.lock` is the authoritative lockfile.
+The extension is built with **yarn**, pinned to the version recorded in `packageManager` of `package.json`. `package.json` uses `resolutions` for transitive dependency pins and `yarn.lock` is the authoritative lockfile.
 
 When pinning a transitive dependency (e.g. to address a security advisory), add the pin to `resolutions` and regenerate `yarn.lock` in the same change:
 
@@ -41,9 +41,9 @@ The build rejects public npm registry URLs in `yarn.lock`; ensure regenerated en
 
 ## Updating the Yarn version
 
-Edit the `"packageManager": "yarn@x.y.z"` field in `extension/package.json`. Corepack picks the new version up automatically the next time `build.sh` / `build.ps1` runs (`corepack prepare --activate` reads `packageManager`). No further changes required in `build.sh`, `build.ps1`, or `extension/Extension.proj` — they all call `corepack yarn …` without an explicit version.
+Edit the `"packageManager": "yarn@x.y.z"` field in `extension/package.json`. The next `build.sh` / `build.ps1` run seeds Corepack's cache with that version before calling `corepack yarn …`. No further changes are required in `build.sh`, `build.ps1`, or `extension/Extension.proj`.
 
-> **Heads up about the internal npm mirror.** The repo's `.npmrc` and the build scripts' `NPM_REGISTRY` default route npm package downloads through the dnceng `dotnet-public-npm` Azure Artifacts feed, which is a pull-through cache of npmjs.org. The first time anyone asks the feed for a version that has never been requested, the feed has to fetch it from npmjs.org — and anonymous pull-through fetches fail with HTTP 401. Subsequent anonymous reads work fine. If you bump the pinned Corepack version, pre-seed the feed with credentials using `npm install --global --registry https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/ corepack@<version>`. Do not point `COREPACK_NPM_REGISTRY` at this Azure Artifacts feed for Yarn: Corepack requests the `/<package>/<version>` npm metadata route, and Azure Artifacts returns 404 for that route even when the package and tarball exist.
+> **Heads up about the internal npm mirror.** The repo's `.npmrc` and the build scripts' `NPM_REGISTRY` default route npm package downloads through the dnceng `dotnet-public-npm` Azure Artifacts feed, which is a pull-through cache of npmjs.org. The first time anyone asks the feed for a version that has never been requested, the feed has to fetch it from npmjs.org — and anonymous pull-through fetches fail with HTTP 401. Subsequent anonymous reads work fine. If you bump the pinned Corepack or Yarn version, pre-seed the feed with credentials using `npm install --global --registry https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/ corepack@<version>` or `npm pack --registry https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/ yarn@<version>`. Do not point `COREPACK_NPM_REGISTRY` at this Azure Artifacts feed for Yarn: Corepack requests the `/<package>/<version>` npm metadata route, and Azure Artifacts returns 404 for that route even when the package and tarball exist.
 
 ## Troubleshooting
 

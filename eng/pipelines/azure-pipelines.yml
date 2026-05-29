@@ -307,9 +307,11 @@ extends:
                     # sync with COREPACK_VERSION in extension/build.sh and
                     # $CorepackVersion in extension/build.ps1. The Yarn release
                     # itself is pinned in extension/package.json via the
-                    # `packageManager` field, which `corepack prepare --activate`
-                    # reads from the current working directory.
+                    # `packageManager` field.
                     $CorepackVersion = '0.34.7'
+                    $corepackHome = Join-Path '$(Agent.TempDirectory)' 'corepack'
+                    $env:COREPACK_HOME = $corepackHome
+                    Write-Host "##vso[task.setvariable variable=COREPACK_HOME]$corepackHome"
 
                     # Hosted Windows images can already have yarn in npm's
                     # global prefix. The npm Corepack package owns that shim too,
@@ -336,7 +338,7 @@ extends:
                     corepack enable
                     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-                    corepack prepare --activate
+                    node ./scripts/prepareCorepackYarn.mjs
                     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
                     corepack yarn --version

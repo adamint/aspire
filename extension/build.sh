@@ -9,11 +9,12 @@ set -e
 COREPACK_VERSION="0.34.7"
 
 # Yarn version is pinned in extension/package.json via the "packageManager"
-# field, which Corepack reads automatically when invoked from this directory.
+# field, which scripts/prepareCorepackYarn.mjs uses to seed Corepack's cache.
 
 # Point npm at the dnceng internal npm mirror when installing the pinned Corepack
-# shim. npm global installs do not use the project .npmrc, so pass the registry
-# explicitly. Override locally with `NPM_REGISTRY=<url> ./build.sh`.
+# shim and seeding Corepack's Yarn cache. npm global installs do not use the
+# project .npmrc, so pass the registry explicitly. Override locally with
+# `NPM_REGISTRY=<url> ./build.sh`.
 : "${NPM_REGISTRY:=https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/}"
 : "${COREPACK_ENABLE_DOWNLOAD_PROMPT:=0}"
 export COREPACK_ENABLE_DOWNLOAD_PROMPT
@@ -81,10 +82,7 @@ corepack enable
 
 echo ""
 echo "Preparing Yarn from packageManager pin in package.json..."
-# `corepack prepare --activate` (no args) reads the "packageManager" field from
-# the package.json in the current directory and provisions/activates that exact
-# version. See https://github.com/nodejs/corepack#corepack-prepare-.
-corepack prepare --activate
+node ./scripts/prepareCorepackYarn.mjs
 
 echo ""
 echo "Running yarn install..."
