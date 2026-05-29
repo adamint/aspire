@@ -49,7 +49,8 @@ let cacheSeeded = false;
 
 try {
   console.log(`Packing yarn@${yarnVersion} from ${registry}`);
-  const packResult = run(getNpmCommand(), ['pack', '--json', '--registry', registry, `yarn@${yarnVersion}`], temporaryDirectory);
+  const npm = getNpmInvocation();
+  const packResult = run(npm.command, [...npm.args, 'pack', '--json', '--registry', registry, `yarn@${yarnVersion}`], temporaryDirectory);
   const packEntries = parseNpmPackJson(packResult.stdout);
   const packEntry = packEntries[0];
 
@@ -108,8 +109,21 @@ function getCorepackHome() {
   return join(baseDirectory, 'node', 'corepack');
 }
 
-function getNpmCommand() {
-  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
+function getNpmInvocation() {
+  if (process.platform !== 'win32') {
+    return { command: 'npm', args: [] };
+  }
+
+  const npmCliPath = join(dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+
+  if (!existsSync(npmCliPath)) {
+    fail(`Could not find npm CLI at ${npmCliPath}. Corepack Yarn cache seeding requires the npm CLI that ships with Node.js.`);
+  }
+
+  // Avoid spawning npm.cmd directly on Windows. Some hosted images reject the
+  // .cmd shim from child_process.spawnSync with EINVAL, while invoking the
+  // npm CLI through node.exe avoids shell/cmd parsing entirely.
+  return { command: process.execPath, args: [npmCliPath] };
 }
 
 function corepackMetadataPathFor(directory) {
