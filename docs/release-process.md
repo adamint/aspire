@@ -83,13 +83,14 @@ Before starting a release:
    | `SkipNuGetPublish` | Set `true` if re-running after NuGet success. | `false` |
    | `SkipNpmPublish` | Set `true` if re-running after all npm packages are published. | `false` |
    | `SkipNpmRidPublish` | Set `true` if npm RID packages published but the pointer package did not. | `false` |
+   | `SkipNpmPointerPublish` | Set `true` if the pointer package published but a later validation or promotion step failed. Registry validation still runs. | `false` |
    | `SkipChannelPromotion` | Set `true` if re-running after darc success. | `false` |
    | `SkipWinGetPublish` | Set `true` if re-running after WinGet success. | `true` |
    | `SkipGitHubTasks` | Set `true` to skip dispatching the GH workflow. | `false` |
    | `SkipReleaseAssets` | Set `true` to skip uploading `aspire-cli-*` assets to the GitHub release. | `false` |
    | `SkipHomebrewValidation` | Set `true` if re-running after a successful Homebrew cask validation against the live GitHub release. | `false` |
-   | `NpmPublishOwners` | Comma-separated ESRP owner aliases or emails. Required when `DryRun` is `false` and npm publishing is not skipped. | `alias@microsoft.com` |
-   | `NpmPublishApprovers` | Comma-separated ESRP approver aliases or emails. Required when `DryRun` is `false` and npm publishing is not skipped. | `approver@microsoft.com` |
+   | `NpmPublishOwners` | Comma-separated ESRP owner aliases or emails. Required when `DryRun` is `false` and npm publishing is not skipped; must include `joperezr` and `ankj`. | `joperezr,ankj` |
+   | `NpmPublishApprovers` | Comma-separated ESRP approver aliases or emails. Required when `DryRun` is `false` and npm publishing is not skipped; must include `adamratzman` and must not overlap owners. | `adamratzman` |
    | `NpmRegistryPropagationDelayMinutes` | Delay between npm RID package and pointer package submissions. | `10` |
    | `GitHubTasksWorkflowRef` | Ref to load `release-github-tasks.yml` from when dispatching. Only affects the workflow source; the release branch and commit are passed via inputs. Override only when testing pipeline changes on a topic branch. | `main` |
 
@@ -99,7 +100,7 @@ Before starting a release:
 5. Click **Run** and monitor the pipeline. The final stage (`GitHubTasks`) dispatches `release-github-tasks.yml`, waits for it to complete, uploads the `aspire-cli-*` archives from the source build's `BlobArtifacts` onto the newly-created GitHub release, and validates the Homebrew cask against that live release. The AzDO pipeline only succeeds if the enabled GitHub tasks, asset upload, and Homebrew validation succeed.
 6. Verify packages appear on NuGet.org and npm, and verify that the `aspire-cli-*` archives are attached to the GitHub release.
 
-The npm release path validates Windows, Linux, and macOS install summaries, publishes the seven RID packages first, waits for ESRP completion, waits for the configured propagation delay, and then publishes the top-level `@microsoft/aspire-cli` pointer package. This avoids installing a pointer package whose optional RID dependencies are not visible yet. For prereleases, set `SkipNpmPublish=true` unless the npm publishing path has gained explicit non-`latest` dist-tag support.
+The npm release path validates Windows, Linux, and macOS install summaries, publishes the seven RID packages first, waits for ESRP completion, waits for the configured propagation delay, and then publishes the top-level `@microsoft/aspire-cli` pointer package. After the pointer package publishes, the pipeline installs it from the live npm registry and runs `aspire --version` before channel promotion. This avoids installing a pointer package whose optional RID dependencies are not visible yet and catches registry propagation issues before the release is promoted. For prereleases, set `SkipNpmPublish=true` unless the npm publishing path has gained explicit non-`latest` dist-tag support.
 
 `commit_sha` and `release_branch` for the GitHub workflow are derived automatically from the source build resource, so there is no need to copy them by hand.
 
@@ -157,6 +158,7 @@ Both automations are designed to be idempotent and safe to re-run.
 | Prepare/List npm Packages | Check that the selected source build produced all eight `microsoft-aspire-cli*.tgz` tarballs and matching `.tgz.sig` sidecars in `BlobArtifacts`. |
 | Push Packages to NuGet.org | Check NuGet.org for partial success, then re-run with already-completed steps skipped as needed. |
 | MicroBuild npm Publish | Check the ESRP release result. If RID packages published but the pointer package did not, re-run with `SkipNuGetPublish: true`, `SkipNpmRidPublish: true`, and `SkipChannelPromotion: true`; do not set `SkipNpmPublish` until the pointer package is published. |
+| Validate Published npm Package from Registry | Confirm the pointer package is visible on npm and that `npm install -g @microsoft/aspire-cli@<version>` works. If registry propagation is slow, re-run with completed publish steps skipped after the package is visible. |
 | Promote Build to Channel | Re-run with completed publish steps skipped. |
 | WinGet publishing / Homebrew validation | Re-run with the corresponding skip flags for completed work. |
 | GitHubTasks dispatch | Re-run with completed AzDO-side work skipped and `SkipGitHubTasks: false`; set `SkipReleaseAssets` according to whether release asset upload already completed. |
@@ -181,7 +183,7 @@ Re-run with the corresponding `skip_*` input set to `true` to skip steps that ha
 
 ### 1ES and MicroBuild compliance
 
-The AzDO pipeline extends the 1ES Official Pipeline Template (`v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates`) to be compliant with Microsoft organization requirements. It also consumes `MicroBuild.Publish.yml@MicroBuildTemplate` for npm submissions through ESRP. The source build creates, signs where platform signing applies, verifies, and stages the package artifacts; the release pipeline consumes those pre-built artifacts and does not rebuild or re-pack the CLI.
+The AzDO pipeline extends the MicroBuild publish-enabled 1ES template (`azure-pipelines/1ES.Official.Publish.yml@MicroBuildTemplate`) to be compliant with Microsoft organization requirements and to grant `MicroBuild.Publish.yml@MicroBuildTemplate` access to the DevDiv ESRP service connection for npm submissions. The source build creates, signs where platform signing applies, verifies, and stages the package artifacts; the release pipeline consumes those pre-built artifacts and does not rebuild or re-pack the CLI.
 
 ### Variable groups
 
@@ -236,6 +238,8 @@ If ESRP published the RID packages but failed before publishing `@microsoft/aspi
 3. Set `SkipNpmRidPublish: true` and keep `SkipNpmPublish: false` so only the pointer package is submitted.
 4. Set `SkipNpmPublish: true` only after the pointer package is visible.
 
+If the pointer package published but the live npm registry validation failed afterward, re-run with `SkipNpmRidPublish: true`, `SkipNpmPointerPublish: true`, and `SkipNpmPublish: false` so the pipeline retries the install smoke without resubmitting already-published packages.
+
 ### Tag already exists but points to different commit
 
 This indicates a mismatch between the expected release commit and an existing tag. Resolution:
@@ -281,6 +285,7 @@ Azure DevOps release-publish-nuget.yml
      -> publish npm RID packages through MicroBuild.Publish
      -> wait for npm propagation
      -> publish npm pointer package through MicroBuild.Publish
+     -> install the pointer package from npm and run aspire --version
      -> promote BAR build to GA channel
   -> WinGetJob
   -> GitHubTasks

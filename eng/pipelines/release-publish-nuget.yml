@@ -63,6 +63,11 @@ parameters:
     type: boolean
     default: false
 
+  - name: SkipNpmPointerPublish
+    displayName: 'Skip npm Pointer Package Publishing (set true if pointer package already completed)'
+    type: boolean
+    default: false
+
   - name: SkipChannelPromotion
     displayName: '[Advanced] Skip Channel Promotion (re-run after success)'
     type: boolean
@@ -91,12 +96,12 @@ parameters:
   - name: NpmPublishOwners
     displayName: 'npm ESRP owners (comma-separated Microsoft aliases or emails)'
     type: string
-    default: ''
+    default: 'joperezr,ankj'
 
   - name: NpmPublishApprovers
     displayName: 'npm ESRP approvers (comma-separated Microsoft aliases or emails)'
     type: string
-    default: ''
+    default: 'adamratzman'
 
   - name: NpmRegistryPropagationDelayMinutes
     displayName: 'Minutes to wait between npm RID and pointer package submissions'
@@ -125,10 +130,6 @@ variables:
 
 resources:
   repositories:
-    - repository: 1ESPipelineTemplates
-      type: git
-      name: 1ESPipelineTemplates/1ESPipelineTemplates
-      ref: refs/tags/release
     - repository: MicroBuildTemplate
       type: git
       name: 1ESPipelineTemplates/MicroBuildTemplate
@@ -140,7 +141,7 @@ resources:
       trigger: none          # Manual trigger only - no automatic releases
 
 extends:
-  template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates
+  template: azure-pipelines/1ES.Official.Publish.yml@MicroBuildTemplate
   parameters:
     pool:
       name: NetCore1ESPool-Internal
@@ -648,6 +649,7 @@ extends:
                   Write-Host "Skip NuGet Publish: ${{ parameters.SkipNuGetPublish }}"
                   Write-Host "Skip npm Publish: ${{ parameters.SkipNpmPublish }}"
                   Write-Host "Skip npm RID Publish: ${{ parameters.SkipNpmRidPublish }}"
+                  Write-Host "Skip npm Pointer Publish: ${{ parameters.SkipNpmPointerPublish }}"
                   Write-Host "Skip Channel Promotion: ${{ parameters.SkipChannelPromotion }}"
                   Write-Host "Installer-only mode: ${{ and(eq(parameters.SkipNuGetPublish, true), eq(parameters.SkipNpmPublish, true), eq(parameters.SkipChannelPromotion, true)) }}"
 
@@ -657,8 +659,43 @@ extends:
                       exit 1
                     }
 
+                    function ConvertTo-NpmReleaseAliasSet([string] $value, [string] $parameterName) {
+                      $aliases = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+
+                      foreach ($entry in $value -split ',') {
+                        $alias = $entry.Trim()
+                        if ([string]::IsNullOrWhiteSpace($alias)) {
+                          continue
+                        }
+
+                        if ($alias.EndsWith('@microsoft.com', [StringComparison]::OrdinalIgnoreCase)) {
+                          $alias = $alias.Substring(0, $alias.Length - '@microsoft.com'.Length)
+                        } elseif ($alias.Contains('@')) {
+                          Write-Error "$parameterName entry '$entry' must be a Microsoft alias or @microsoft.com email address."
+                          exit 1
+                        }
+
+                        [void]$aliases.Add($alias.ToLowerInvariant())
+                      }
+
+                      return ,$aliases
+                    }
+
+                    function Assert-ContainsRequiredNpmAliases(
+                      [System.Collections.Generic.HashSet[string]] $actualAliases,
+                      [string[]] $requiredAliases,
+                      [string] $parameterName) {
+                      $missing = @($requiredAliases | Where-Object { -not $actualAliases.Contains($_) })
+                      if ($missing.Count -gt 0) {
+                        Write-Error "$parameterName must include required ESRP alias(es): $($missing -join ', ')."
+                        exit 1
+                      }
+                    }
+
                     $owners = "${{ parameters.NpmPublishOwners }}"
                     $approvers = "${{ parameters.NpmPublishApprovers }}"
+                    $requiredNpmOwners = @('joperezr', 'ankj')
+                    $requiredNpmApprovers = @('adamratzman')
 
                     if ([string]::IsNullOrWhiteSpace($owners)) {
                       Write-Error "NpmPublishOwners must be set before publishing npm packages."
@@ -670,7 +707,29 @@ extends:
                       exit 1
                     }
 
-                    Write-Host "npm ESRP owners and approvers were provided."
+                    $normalizedOwners = ConvertTo-NpmReleaseAliasSet $owners 'NpmPublishOwners'
+                    $normalizedApprovers = ConvertTo-NpmReleaseAliasSet $approvers 'NpmPublishApprovers'
+
+                    if ($normalizedOwners.Count -eq 0) {
+                      Write-Error "NpmPublishOwners must contain at least one alias before publishing npm packages."
+                      exit 1
+                    }
+
+                    if ($normalizedApprovers.Count -eq 0) {
+                      Write-Error "NpmPublishApprovers must contain at least one alias before publishing npm packages."
+                      exit 1
+                    }
+
+                    Assert-ContainsRequiredNpmAliases $normalizedOwners $requiredNpmOwners 'NpmPublishOwners'
+                    Assert-ContainsRequiredNpmAliases $normalizedApprovers $requiredNpmApprovers 'NpmPublishApprovers'
+
+                    $overlappingAliases = @($normalizedOwners | Where-Object { $normalizedApprovers.Contains($_) })
+                    if ($overlappingAliases.Count -gt 0) {
+                      Write-Error "NpmPublishOwners and NpmPublishApprovers must not contain the same alias(es): $($overlappingAliases -join ', ')."
+                      exit 1
+                    }
+
+                    Write-Host "npm ESRP owners and approvers were provided and include the required release contacts."
                   }
 
                   Write-Host "==================================="
@@ -839,6 +898,12 @@ extends:
 
               # ===== PUBLISH TO npm =====
               - ${{ if eq(parameters.SkipNpmPublish, false) }}:
+                - task: NodeTool@0
+                  displayName: 'Install Node.js for npm Validation'
+                  inputs:
+                    versionSpec: '22.x'
+
+              - ${{ if eq(parameters.SkipNpmPublish, false) }}:
                 - powershell: |
                     $ErrorActionPreference = 'Stop'
                     $validationRoot = "$(Pipeline.Workspace)/npm/validation-summary"
@@ -987,13 +1052,71 @@ extends:
                       Write-Host "Then the pipeline would wait ${{ parameters.NpmRegistryPropagationDelayMinutes }} minute(s) for registry propagation."
                     }
                     Write-Host ""
-                    Write-Host "The pointer package would be submitted last:"
-                    Get-ChildItem -Path "$(Pipeline.Workspace)/npm/pointer-package" -Filter "*.tgz" -File | ForEach-Object {
-                      Write-Host "  - $($_.Name)"
+                    if ("${{ parameters.SkipNpmPointerPublish }}" -eq "true") {
+                      Write-Host "Pointer package submission would be skipped because SkipNpmPointerPublish=true."
+                    } else {
+                      Write-Host "The pointer package would be submitted last:"
+                      Get-ChildItem -Path "$(Pipeline.Workspace)/npm/pointer-package" -Filter "*.tgz" -File | ForEach-Object {
+                        Write-Host "  - $($_.Name)"
+                      }
                     }
                     Write-Host ""
                     Write-Host "=== DRY RUN - No npm packages were actually published ==="
                   displayName: 'Dry Run - List npm Packages (No Publish)'
+
+                - pwsh: |
+                    $ErrorActionPreference = 'Stop'
+                    $pointerPackagePath = "$(Pipeline.Workspace)/npm/pointer-package"
+                    $pointerPackages = @(Get-ChildItem -Path $pointerPackagePath -Filter "*.tgz" -File)
+                    if ($pointerPackages.Count -ne 1) {
+                      Write-Error "Expected exactly one npm pointer package in '$pointerPackagePath', found $($pointerPackages.Count)."
+                      exit 1
+                    }
+
+                    $metadataRoot = Join-Path "$(Agent.TempDirectory)" "npm-pointer-package-$([Guid]::NewGuid().ToString('N'))"
+                    New-Item -ItemType Directory -Path $metadataRoot -Force | Out-Null
+                    try {
+                      tar -xzf $pointerPackages[0].FullName -C $metadataRoot
+                      if ($LASTEXITCODE -ne 0) {
+                        Write-Error "Failed to extract pointer package '$($pointerPackages[0].FullName)'."
+                        exit 1
+                      }
+
+                      $packageJsonPath = Join-Path $metadataRoot 'package/package.json'
+                      if (!(Test-Path -LiteralPath $packageJsonPath)) {
+                        Write-Error "Pointer package '$($pointerPackages[0].Name)' is missing package/package.json."
+                        exit 1
+                      }
+
+                      $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
+                      $packageName = "$($packageJson.name)"
+                      $packageVersion = "$($packageJson.version)"
+                      if ([string]::IsNullOrWhiteSpace($packageName) -or [string]::IsNullOrWhiteSpace($packageVersion)) {
+                        Write-Error "Pointer package '$($pointerPackages[0].Name)' must include name and version in package.json."
+                        exit 1
+                      }
+
+                      $packageSpec = "$packageName@$packageVersion"
+                      Write-Host "Dry-run registry smoke target: $packageSpec"
+                    }
+                    finally {
+                      if (Test-Path -LiteralPath $metadataRoot) {
+                        Remove-Item -LiteralPath $metadataRoot -Recurse -Force
+                      }
+                    }
+
+                    Write-Host "node version: $(node --version)"
+                    Write-Host "npm version: $(npm --version)"
+                    $pingOutput = npm ping --registry=https://registry.npmjs.org/ --loglevel=warn 2>&1
+                    if ($LASTEXITCODE -ne 0) {
+                      Write-Host $pingOutput
+                      Write-Error "Unable to reach https://registry.npmjs.org/ from the release job."
+                      exit 1
+                    }
+
+                    Write-Host $pingOutput
+                    Write-Host "Dry run skipped installing '$packageSpec' because the package has not been published."
+                  displayName: 'Dry Run - Validate npm Registry Reachability'
 
               - ${{ if and(eq(parameters.DryRun, false), eq(parameters.SkipNpmPublish, false), eq(parameters.IsPrerelease, false)) }}:
                 - ${{ if eq(parameters.SkipNpmRidPublish, false) }}:
@@ -1023,15 +1146,170 @@ extends:
                       Write-Host "Skipping npm RID package publish because SkipNpmRidPublish=true. The pointer package will still be submitted."
                     displayName: 'Skip npm RID Publish (flagged)'
 
-                - template: MicroBuild.Publish.yml@MicroBuildTemplate
-                  parameters:
-                    intent: 'PackageDistribution'
-                    contentType: 'npm'
-                    contentSource: 'Folder'
-                    folderLocation: '$(Pipeline.Workspace)\npm\pointer-package'
-                    waitForReleaseCompletion: true
-                    owners: '${{ parameters.NpmPublishOwners }}'
-                    approvers: '${{ parameters.NpmPublishApprovers }}'
+                - ${{ if eq(parameters.SkipNpmPointerPublish, false) }}:
+                  - template: MicroBuild.Publish.yml@MicroBuildTemplate
+                    parameters:
+                      intent: 'PackageDistribution'
+                      contentType: 'npm'
+                      contentSource: 'Folder'
+                      folderLocation: '$(Pipeline.Workspace)\npm\pointer-package'
+                      waitForReleaseCompletion: true
+                      owners: '${{ parameters.NpmPublishOwners }}'
+                      approvers: '${{ parameters.NpmPublishApprovers }}'
+
+                - ${{ if eq(parameters.SkipNpmPointerPublish, true) }}:
+                  - powershell: |
+                      Write-Host "Skipping npm pointer package publish because SkipNpmPointerPublish=true. Registry validation will still install the selected source build's pointer package version from npm."
+                    displayName: 'Skip npm Pointer Publish (flagged)'
+
+                - pwsh: |
+                    $ErrorActionPreference = 'Stop'
+                    $pointerPackagePath = "$(Pipeline.Workspace)/npm/pointer-package"
+                    $pointerPackages = @(Get-ChildItem -Path $pointerPackagePath -Filter "*.tgz" -File)
+                    if ($pointerPackages.Count -ne 1) {
+                      Write-Error "Expected exactly one npm pointer package in '$pointerPackagePath', found $($pointerPackages.Count)."
+                      exit 1
+                    }
+
+                    $metadataRoot = Join-Path "$(Agent.TempDirectory)" "npm-pointer-package-$([Guid]::NewGuid().ToString('N'))"
+                    New-Item -ItemType Directory -Path $metadataRoot -Force | Out-Null
+                    try {
+                      tar -xzf $pointerPackages[0].FullName -C $metadataRoot
+                      if ($LASTEXITCODE -ne 0) {
+                        Write-Error "Failed to extract pointer package '$($pointerPackages[0].FullName)'."
+                        exit 1
+                      }
+
+                      $packageJsonPath = Join-Path $metadataRoot 'package/package.json'
+                      if (!(Test-Path -LiteralPath $packageJsonPath)) {
+                        Write-Error "Pointer package '$($pointerPackages[0].Name)' is missing package/package.json."
+                        exit 1
+                      }
+
+                      $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
+                      $packageName = "$($packageJson.name)"
+                      $packageVersion = "$($packageJson.version)"
+                      if ([string]::IsNullOrWhiteSpace($packageName) -or [string]::IsNullOrWhiteSpace($packageVersion)) {
+                        Write-Error "Pointer package '$($pointerPackages[0].Name)' must include name and version in package.json."
+                        exit 1
+                      }
+
+                      $packageSpec = "$packageName@$packageVersion"
+                    }
+                    finally {
+                      if (Test-Path -LiteralPath $metadataRoot) {
+                        Remove-Item -LiteralPath $metadataRoot -Recurse -Force
+                      }
+                    }
+
+                    $npmRoot = Join-Path "$(Agent.TempDirectory)" "npm-registry-smoke-$([Guid]::NewGuid().ToString('N'))"
+                    $npmPrefix = Join-Path $npmRoot 'prefix'
+                    $npmCache = Join-Path $npmRoot 'cache'
+                    New-Item -ItemType Directory -Path $npmPrefix -Force | Out-Null
+                    New-Item -ItemType Directory -Path $npmCache -Force | Out-Null
+
+                    try {
+                      $env:npm_config_prefix = $npmPrefix
+                      $env:npm_config_cache = $npmCache
+                      $env:npm_config_registry = 'https://registry.npmjs.org/'
+
+                      Write-Host "node version: $(node --version)"
+                      Write-Host "npm version: $(npm --version)"
+                      Write-Host "Validating published npm package from registry: $packageSpec"
+
+                      $pingOutput = npm ping --registry=https://registry.npmjs.org/ --loglevel=warn 2>&1
+                      if ($LASTEXITCODE -ne 0) {
+                        Write-Host $pingOutput
+                        Write-Error "Unable to reach https://registry.npmjs.org/ from the release job."
+                        exit 1
+                      }
+
+                      $attempts = 10
+                      $delaySeconds = 30
+                      $available = $false
+                      $lastViewOutput = $null
+                      for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+                        Write-Host "Checking npm registry metadata for $packageSpec (attempt $attempt/$attempts)..."
+                        $lastViewOutput = npm view $packageSpec version --registry=https://registry.npmjs.org/ --loglevel=warn 2>&1
+                        if ($LASTEXITCODE -eq 0) {
+                          $viewVersion = @($lastViewOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Select-Object -First 1)
+                          if ($viewVersion -eq $packageVersion) {
+                            $available = $true
+                            break
+                          }
+                        }
+
+                        if ($attempt -lt $attempts) {
+                          Write-Warning "npm registry has not returned $packageSpec yet. Retrying in $delaySeconds second(s)."
+                          Start-Sleep -Seconds $delaySeconds
+                        }
+                      }
+
+                      if (!$available) {
+                        Write-Host $lastViewOutput
+                        Write-Error "npm registry did not return '$packageVersion' for '$packageSpec' after $attempts attempt(s)."
+                        exit 1
+                      }
+
+                      $installed = $false
+                      $lastInstallOutput = $null
+                      for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+                        Write-Host "Installing $packageSpec from npm registry (attempt $attempt/$attempts)..."
+                        $lastInstallOutput = npm install -g --foreground-scripts=true --no-audit --no-fund --loglevel=warn --registry=https://registry.npmjs.org/ $packageSpec 2>&1
+                        if ($LASTEXITCODE -eq 0) {
+                          $installed = $true
+                          break
+                        }
+
+                        if ($attempt -lt $attempts) {
+                          Write-Host $lastInstallOutput
+                          Write-Warning "npm install failed while registry propagation may still be in progress. Retrying in $delaySeconds second(s)."
+                          Start-Sleep -Seconds $delaySeconds
+                        }
+                      }
+
+                      if (!$installed) {
+                        Write-Host $lastInstallOutput
+                        Write-Error "Failed to install '$packageSpec' from npm registry after $attempts attempt(s)."
+                        exit 1
+                      }
+
+                      Write-Host $lastInstallOutput
+
+                      $aspireCommand = if ($IsWindows) {
+                        Join-Path $npmPrefix 'aspire.cmd'
+                      } else {
+                        Join-Path $npmPrefix 'bin/aspire'
+                      }
+
+                      if (!(Test-Path -LiteralPath $aspireCommand)) {
+                        Write-Error "npm install succeeded but the Aspire CLI command was not found at '$aspireCommand'."
+                        exit 1
+                      }
+
+                      $versionOutput = & $aspireCommand --version 2>&1
+                      if ($LASTEXITCODE -ne 0) {
+                        Write-Host $versionOutput
+                        Write-Error "Installed Aspire CLI failed to run --version."
+                        exit 1
+                      }
+
+                      $versionLine = @($versionOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Select-Object -First 1)
+                      $versionPattern = "^$([System.Text.RegularExpressions.Regex]::Escape($packageVersion))(\+.*)?$"
+                      if ($versionLine -notmatch $versionPattern) {
+                        Write-Host $versionOutput
+                        Write-Error "Installed Aspire CLI version '$versionLine' did not match expected npm package version '$packageVersion'."
+                        exit 1
+                      }
+
+                      Write-Host "aspire --version output matched the published npm package version: $versionLine"
+                    }
+                    finally {
+                      if (Test-Path -LiteralPath $npmRoot) {
+                        Remove-Item -LiteralPath $npmRoot -Recurse -Force
+                      }
+                    }
+                  displayName: 'Validate Published npm Package from Registry'
 
               - ${{ if eq(parameters.SkipNpmPublish, true) }}:
                 - powershell: |
@@ -1134,10 +1412,13 @@ extends:
                     Write-Host " (DRY RUN)"
                   } elseif ("${{ parameters.IsPrerelease }}" -eq "true") {
                     Write-Host " (BLOCKED - prerelease requires non-latest npm dist-tag support)"
+                  } elseif ("${{ parameters.SkipNpmPointerPublish }}" -eq "true") {
+                    Write-Host " (PARTIAL - pointer publish skipped; registry smoke still ran)"
                   } else {
                     Write-Host " (EXECUTED)"
                   }
                   Write-Host "║ npm RID Skip:   ${{ parameters.SkipNpmRidPublish }}"
+                  Write-Host "║ npm Ptr Skip:   ${{ parameters.SkipNpmPointerPublish }}"
                   Write-Host "║ Channel Promo:  ${{ parameters.SkipChannelPromotion }}" -NoNewline
                   if ("${{ parameters.SkipChannelPromotion }}" -eq "true") {
                     Write-Host " (SKIPPED)"

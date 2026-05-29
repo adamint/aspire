@@ -130,7 +130,7 @@ $pointerPackage = Assert-SinglePackage `
 Write-Step "RID package: $($ridPackage.Name)"
 Write-Step "Pointer package: $($pointerPackage.Name)"
 
-$root = Join-Path ([System.IO.Path]::GetTempPath()) "aspire-cli-npm-package-$([System.IO.Path]::GetRandomFileName())"
+$root = [System.IO.Directory]::CreateTempSubdirectory('aspire-cli-npm-package-').FullName
 $ridExtract = Join-Path $root 'rid'
 $pointerExtract = Join-Path $root 'pointer'
 $archiveExtract = Join-Path $root 'archive'

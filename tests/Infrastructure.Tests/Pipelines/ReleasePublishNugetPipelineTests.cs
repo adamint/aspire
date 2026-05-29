@@ -31,6 +31,63 @@ public sealed class ReleasePublishNugetPipelineTests
             nuGetPublishIndex);
     }
 
+    [Fact]
+    public async Task UsesEsrpPublishTemplateForNpmPublishing()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        Assert.Contains("template: azure-pipelines/1ES.Official.Publish.yml@MicroBuildTemplate", pipeline);
+        Assert.DoesNotContain("template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates", pipeline);
+    }
+
+    [Fact]
+    public async Task UsesRequiredNpmEsrpOwnersAndApprover()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        Assert.Contains("default: 'joperezr,ankj'", pipeline);
+        Assert.Contains("default: 'adamratzman'", pipeline);
+        Assert.Contains("$requiredNpmOwners = @('joperezr', 'ankj')", pipeline);
+        Assert.Contains("$requiredNpmApprovers = @('adamratzman')", pipeline);
+        Assert.Contains("NpmPublishOwners and NpmPublishApprovers must not contain the same alias(es)", pipeline);
+    }
+
+    [Fact]
+    public async Task ValidatesPublishedNpmPackageFromRegistryAfterPublish()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+        var pointerPublishIndex = FindRequiredText(pipeline, "folderLocation: '$(Pipeline.Workspace)\\npm\\pointer-package'");
+        var registryValidationIndex = FindRequiredText(pipeline, "npm install -g --foreground-scripts=true --no-audit --no-fund --loglevel=warn --registry=https://registry.npmjs.org/ $packageSpec");
+        var channelPromotionIndex = FindRequiredText(pipeline, "# ===== PROMOTE TO CHANNEL =====");
+        var nodeToolIndex = FindRequiredText(pipeline, "task: NodeTool@0");
+        var dryRunReachabilityIndex = FindRequiredText(pipeline, "Dry Run - Validate npm Registry Reachability");
+        var pointerSkipIndex = FindRequiredText(pipeline, "SkipNpmPointerPublish");
+
+        Assert.True(
+            pointerPublishIndex < registryValidationIndex,
+            "Expected registry validation to happen after the npm pointer package is published.");
+
+        Assert.True(
+            registryValidationIndex < channelPromotionIndex,
+            "Expected registry validation to happen before channel promotion.");
+
+        Assert.True(
+            nodeToolIndex < registryValidationIndex,
+            "Expected Node.js to be installed before registry validation uses npm.");
+
+        Assert.True(
+            dryRunReachabilityIndex < registryValidationIndex,
+            "Expected dry-run registry reachability validation to exercise npm before the actual publish-only install smoke.");
+
+        Assert.True(
+            pointerSkipIndex < registryValidationIndex,
+            "Expected pointer package publishing to be independently skippable so registry validation can be retried without republishing.");
+
+        Assert.Contains("aspire --version output matched the published npm package version", pipeline);
+        Assert.Contains("npm view $packageSpec version --registry=https://registry.npmjs.org/", pipeline);
+        Assert.Contains("Registry validation will still install the selected source build's pointer package version from npm.", pipeline);
+    }
+
     private static void AssertBefore(string contents, string text, int boundaryIndex)
     {
         var textIndex = FindRequiredText(contents, text);
