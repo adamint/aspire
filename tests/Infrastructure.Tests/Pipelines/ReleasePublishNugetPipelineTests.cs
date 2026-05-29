@@ -31,6 +31,23 @@ public sealed class ReleasePublishNugetPipelineTests
             nuGetPublishIndex);
     }
 
+    [Fact]
+    public async Task HomebrewDryRunUsesOfflineValidationMode()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+        var homebrewJobIndex = FindRequiredText(pipeline, "job: HomebrewValidateJob");
+        var validateScriptIndex = FindRequiredText(pipeline, "\"$(Build.SourcesDirectory)/eng/homebrew/validate-cask-artifact.sh\"");
+        var jobSetup = pipeline[homebrewJobIndex..validateScriptIndex];
+
+        Assert.Contains("validation_mode=\"LiveRelease\"", jobSetup);
+        Assert.Contains("'${{ parameters.DryRun }}' == 'true'", jobSetup);
+        Assert.Contains("validation_mode=\"LiveArchives\"", jobSetup);
+
+        var validateScriptCall = pipeline[validateScriptIndex..Math.Min(pipeline.Length, validateScriptIndex + 500)];
+        Assert.Contains("--validation-mode \"$validation_mode\"", validateScriptCall);
+        Assert.DoesNotContain("--validation-mode LiveRelease", validateScriptCall);
+    }
+
     private static void AssertBefore(string contents, string text, int boundaryIndex)
     {
         var textIndex = FindRequiredText(contents, text);

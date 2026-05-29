@@ -70,23 +70,24 @@ what `brew install` fetches from the GitHub release URL.
 
 ## CI Pipeline
 
-| Pipeline | Prepares | Validates against live release | Publishes |
+| Pipeline | Prepares | Release-time validation | Publishes |
 |---|---|---|---|
 | `.github/workflows/tests.yml` | Prerelease casks (artifacts only) | — | — |
 | `azure-pipelines.yml` (prepare stage) | Stable or prerelease casks (artifacts only) | — | — |
-| `release-publish-nuget.yml` (release) | — | Stable cask, LiveRelease mode | — (autobump handles bumps; see below) |
+| `release-publish-nuget.yml` (release, DryRun=true) | — | Stable cask, LiveArchives mode | — |
+| `release-publish-nuget.yml` (release, DryRun=false) | — | Stable cask, LiveRelease mode | — (autobump handles bumps; see below) |
 
 The release pipeline's `HomebrewValidateJob` runs `validate-cask-artifact.sh`
-in LiveRelease mode against the cask emitted by the source build, after the
-release-asset upload step has attached the `aspire-cli-osx-*.tar.gz`
-archives to the GitHub release. This is the first point at which the
-cask's `url` (a `v#{version}` GitHub release-asset URL) actually resolves;
-the source-build prepare stage can only validate offline because the
-GitHub release for the version being built does not exist yet. Failures
-in this job catch problems that would otherwise only surface to end
-users running `brew install aspire`, or block Homebrew/homebrew-cask's
-autobump PR a few hours later. Gated by `SkipHomebrewValidation` for
-partial-failure re-runs.
+against the cask emitted by the source build. In non-dry runs it uses
+LiveRelease mode after the release-asset upload step has attached the
+`aspire-cli-osx-*.tar.gz` archives to the GitHub release. This is the first
+point at which the cask's `url` (a `v#{version}` GitHub release-asset URL)
+actually resolves; the source-build prepare stage and release dry-runs use
+LiveArchives mode because the GitHub release for the version being built does
+not exist yet. Failures in the non-dry LiveRelease job catch problems that
+would otherwise only surface to end users running `brew install aspire`, or
+block Homebrew/homebrew-cask's autobump PR a few hours later. Gated by
+`SkipHomebrewValidation` for partial-failure re-runs.
 
 ### Submission: upstream autobump
 
