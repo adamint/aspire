@@ -65,8 +65,18 @@ steps:
       #   microsoft-aspire-cli-<version>.tgz                  (pointer package)
       #   microsoft-aspire-cli-<rid>-<version>.tgz            (RID package)
       # The pointer filename never embeds a RID, so distinguish them on that.
-      shopt -s globstar nullglob
-      mapfile -t allPackages < <(find "$packagesDir" -type f -name "microsoft-aspire-cli*.tgz" | sort -u)
+      #
+      # IMPORTANT: This script must stay portable to Bash 3.2 because the
+      # AzDO Bash@3 task on the macOS image executes scripts with /bin/bash
+      # which is still 3.2.x. That means: no extended-glob shell options
+      # (those are 4+), no array-load builtins (those are 4+), no associative
+      # arrays (4+). We therefore enumerate the tarballs with `find` (always
+      # available) and read them into a regular indexed array with a
+      # portable `while read` loop that survives names containing spaces.
+      allPackages=()
+      while IFS= read -r pkg; do
+        [ -n "$pkg" ] && allPackages+=("$pkg")
+      done < <(find "$packagesDir" -type f -name "microsoft-aspire-cli*.tgz" | LC_ALL=C sort -u)
 
       if [ ${#allPackages[@]} -eq 0 ]; then
         echo "##[error]No microsoft-aspire-cli*.tgz files found under $packagesDir"

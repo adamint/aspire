@@ -88,6 +88,23 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.Contains("Registry validation will still install the selected source build's pointer package version from npm.", pipeline);
     }
 
+    [Fact]
+    public async Task PrepareNpmCliPackagesScriptIsBash32Compatible()
+    {
+        var template = await ReadRepoFileAsync("eng/pipelines/templates/prepare-npm-cli-packages.yml");
+
+        // macOS AzDO runners execute bash@3 tasks with /bin/bash which is still
+        // Bash 3.2 on every shipping macOS release. These constructs are Bash 4+
+        // and silently break the install/uninstall smoke that gates the npm release.
+        // See dry-run build 2987449 where `shopt: globstar: invalid shell option name`
+        // killed `🟣Locate pointer and RID tarballs` on macOS.
+        Assert.DoesNotContain("shopt -s globstar", template);
+        Assert.DoesNotContain("mapfile ", template);
+        Assert.DoesNotContain("readarray ", template);
+        // declare -A (associative arrays) is also Bash 4+.
+        Assert.DoesNotContain("declare -A", template);
+    }
+
     private static void AssertBefore(string contents, string text, int boundaryIndex)
     {
         var textIndex = FindRequiredText(contents, text);
