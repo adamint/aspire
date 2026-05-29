@@ -15,7 +15,12 @@ COREPACK_VERSION="0.34.7"
 # shim and seeding Corepack's Yarn cache. npm global installs do not use the
 # project .npmrc, so pass the registry explicitly. Override locally with
 # `NPM_REGISTRY=<url> ./build.sh`.
+# Export NPM_REGISTRY so the child `node ./scripts/prepareCorepackYarn.mjs`
+# process inherits it; without `export`, the script silently falls back to its
+# own DefaultNpmRegistry constant and any user override of NPM_REGISTRY would
+# be ignored when seeding Corepack's Yarn cache.
 : "${NPM_REGISTRY:=https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/}"
+export NPM_REGISTRY
 : "${COREPACK_ENABLE_DOWNLOAD_PROMPT:=0}"
 export COREPACK_ENABLE_DOWNLOAD_PROMPT
 
