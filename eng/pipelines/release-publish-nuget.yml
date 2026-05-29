@@ -650,6 +650,29 @@ extends:
                   Write-Host "Skip npm RID Publish: ${{ parameters.SkipNpmRidPublish }}"
                   Write-Host "Skip Channel Promotion: ${{ parameters.SkipChannelPromotion }}"
                   Write-Host "Installer-only mode: ${{ and(eq(parameters.SkipNuGetPublish, true), eq(parameters.SkipNpmPublish, true), eq(parameters.SkipChannelPromotion, true)) }}"
+
+                  if ("${{ parameters.DryRun }}" -eq "false" -and "${{ parameters.SkipNpmPublish }}" -eq "false") {
+                    if ("${{ parameters.IsPrerelease }}" -eq "true") {
+                      Write-Error "npm publishing is blocked for prerelease runs because the MicroBuild npm publish template does not yet expose a dist-tag parameter. Set SkipNpmPublish=true or run with DryRun=true until prereleases can publish under a non-latest tag."
+                      exit 1
+                    }
+
+                    $owners = "${{ parameters.NpmPublishOwners }}"
+                    $approvers = "${{ parameters.NpmPublishApprovers }}"
+
+                    if ([string]::IsNullOrWhiteSpace($owners)) {
+                      Write-Error "NpmPublishOwners must be set before publishing npm packages."
+                      exit 1
+                    }
+
+                    if ([string]::IsNullOrWhiteSpace($approvers)) {
+                      Write-Error "NpmPublishApprovers must be set before publishing npm packages."
+                      exit 1
+                    }
+
+                    Write-Host "npm ESRP owners and approvers were provided."
+                  }
+
                   Write-Host "==================================="
                 displayName: 'Validate Parameters'
 
@@ -972,30 +995,7 @@ extends:
                     Write-Host "=== DRY RUN - No npm packages were actually published ==="
                   displayName: 'Dry Run - List npm Packages (No Publish)'
 
-              - ${{ if and(eq(parameters.DryRun, false), eq(parameters.SkipNpmPublish, false), eq(parameters.IsPrerelease, true)) }}:
-                - powershell: |
-                    Write-Error "npm publishing is blocked for prerelease runs because the MicroBuild npm publish template does not yet expose a dist-tag parameter. Set SkipNpmPublish=true or run with DryRun=true until prereleases can publish under a non-latest tag."
-                    exit 1
-                  displayName: 'Block npm Publish for Prerelease'
-
               - ${{ if and(eq(parameters.DryRun, false), eq(parameters.SkipNpmPublish, false), eq(parameters.IsPrerelease, false)) }}:
-                - powershell: |
-                    $owners = "${{ parameters.NpmPublishOwners }}"
-                    $approvers = "${{ parameters.NpmPublishApprovers }}"
-
-                    if ([string]::IsNullOrWhiteSpace($owners)) {
-                      Write-Error "NpmPublishOwners must be set before publishing npm packages."
-                      exit 1
-                    }
-
-                    if ([string]::IsNullOrWhiteSpace($approvers)) {
-                      Write-Error "NpmPublishApprovers must be set before publishing npm packages."
-                      exit 1
-                    }
-
-                    Write-Host "npm ESRP owners and approvers were provided."
-                  displayName: 'Validate npm ESRP Parameters'
-
                 - ${{ if eq(parameters.SkipNpmRidPublish, false) }}:
                   - template: MicroBuild.Publish.yml@MicroBuildTemplate
                     parameters:
