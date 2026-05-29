@@ -120,6 +120,20 @@ public sealed class TypeScriptApiCompatTests
     }
 
     [Fact]
+    public void ParserIgnoresDuplicateEquivalentCapabilities()
+    {
+        var surface = AtsSurfaceParser.Parse("Pkg", """
+            # Capabilities
+            Pkg/addThing(name: string, port?: number) -> Pkg/Thing
+            Pkg/addThing(name: string, port?: number) -> Pkg/Thing
+            """);
+
+        var capability = Assert.Single(surface.Capabilities.Values);
+        Assert.Equal("Pkg/addThing", capability.CapabilityId);
+        Assert.Equal("Pkg/Thing", capability.ReturnTypeId);
+    }
+
+    [Fact]
     public void ComparerClassifiesBreakingAndAdditiveChanges()
     {
         using var tempDirectory = new TestTempDirectory();
@@ -321,36 +335,6 @@ public sealed class TypeScriptApiCompatTests
         Assert.Contains("`Excluded`", report, StringComparison.Ordinal);
         Assert.DoesNotContain("package-removed", report, StringComparison.Ordinal);
         Assert.DoesNotContain("Unused suppressions", report, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void RunnerIgnoresDuplicateEquivalentCapabilities()
-    {
-        using var tempDirectory = new TestTempDirectory();
-        var baselineRoot = Path.Combine(tempDirectory.Path, "baseline");
-        var currentRoot = Path.Combine(tempDirectory.Path, "current");
-        var reportPath = Path.Combine(tempDirectory.Path, "report.md");
-
-        WriteSurface(baselineRoot, "Package", """
-            # Capabilities
-            Package/duplicate(value?: string) -> void
-            Package/duplicate(value?: string) -> void
-            """);
-        WriteSurface(currentRoot, "Package", """
-            # Capabilities
-            Package/duplicate(value?: string) -> void
-            """);
-
-        var exitCode = TypeScriptApiCompatRunner.Run(new CommandLineOptions(
-            baselineRoot,
-            currentRoot,
-            tempDirectory.Path,
-            BaselineSuppressionsRoot: null,
-            ExcludedPackagesFile: null,
-            ReportPath: reportPath,
-            GitHubAnnotations: false));
-
-        Assert.Equal(0, exitCode);
     }
 
     private static void WriteSurface(string rootPath, string packageName, string content)

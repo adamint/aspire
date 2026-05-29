@@ -212,21 +212,22 @@ internal static class AtsSurfaceParser
 
     private static void AddCapability(Dictionary<string, AtsCapability> capabilities, AtsCapability capability)
     {
-        if (!capabilities.TryGetValue(capability.CapabilityId, out var existingCapability))
+        if (capabilities.TryGetValue(capability.CapabilityId, out var existingCapability))
         {
-            capabilities.Add(capability.CapabilityId, capability);
-            return;
+            if (CapabilitiesAreEquivalent(existingCapability, capability))
+            {
+                return;
+            }
+
+            throw new InvalidDataException($"Duplicate capability '{capability.CapabilityId}' has conflicting signatures.");
         }
 
-        if (!AreEquivalent(existingCapability, capability))
-        {
-            throw new InvalidDataException($"Conflicting capability '{capability.CapabilityId}' appeared more than once.");
-        }
+        capabilities.Add(capability.CapabilityId, capability);
     }
 
-    private static bool AreEquivalent(AtsCapability left, AtsCapability right)
-        => string.Equals(left.ReturnTypeId, right.ReturnTypeId, StringComparison.Ordinal) &&
-            left.Parameters.SequenceEqual(right.Parameters);
+    private static bool CapabilitiesAreEquivalent(AtsCapability left, AtsCapability right) =>
+        string.Equals(left.ReturnTypeId, right.ReturnTypeId, StringComparison.Ordinal) &&
+        left.Parameters.SequenceEqual(right.Parameters);
 
     private static AtsParameter ParseParameter(string parameterText)
     {
