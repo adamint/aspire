@@ -315,9 +315,6 @@ jobs:
     env:
       NPM_REGISTRY: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/
       COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
-      # Scope Corepack's cache to this job so prepareCorepackYarn.mjs cannot
-      # collide with any other build sharing the runner's user profile.
-      COREPACK_HOME: ${{ runner.temp }}/corepack
     defaults:
       run:
         working-directory: ./extension
@@ -330,6 +327,14 @@ jobs:
           node-version: '20.x'
       - name: Install Corepack
         run: |
+          # Scope Corepack's cache to this job so prepareCorepackYarn.mjs cannot
+          # collide with any other build sharing the runner's user profile.
+          # Cannot be set at job-level env: the `runner` context is unavailable
+          # in job env evaluation, so we forward it through $GITHUB_ENV instead.
+          $CorepackHome = Join-Path $env:RUNNER_TEMP 'corepack'
+          $env:COREPACK_HOME = $CorepackHome
+          "COREPACK_HOME=$CorepackHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
           $CorepackVersion = (Get-Content -Raw -Path 'scripts/corepack-version.txt').Trim()
           # The hosted Windows image already has a yarn shim in npm's global
           # prefix. The npm Corepack package owns that shim too, so force only
@@ -392,7 +397,6 @@ jobs:
     env:
       NPM_REGISTRY: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/
       COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
-      COREPACK_HOME: ${{ runner.temp }}/corepack
     defaults:
       run:
         working-directory: ./extension
@@ -406,6 +410,11 @@ jobs:
       - name: Install Corepack
         run: |
           set -euo pipefail
+          # Scope Corepack's cache to this job. Set via $GITHUB_ENV because the
+          # `runner` context is not available in job-level env evaluation.
+          export COREPACK_HOME="$RUNNER_TEMP/corepack"
+          echo "COREPACK_HOME=$COREPACK_HOME" >> "$GITHUB_ENV"
+
           CorepackVersion="$(tr -d '[:space:]' < scripts/corepack-version.txt)"
           npm install --global --force --registry "$NPM_REGISTRY" "corepack@${CorepackVersion}"
 
