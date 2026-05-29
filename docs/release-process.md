@@ -45,7 +45,7 @@ Before starting a release:
    - Select this build from the `aspire-build` resource dropdown when running the release pipeline.
    - The build should have a `BAR ID - NNNNNN` tag, which the pipeline extracts automatically.
    - The build should also have a `release-version - X.Y.Z` tag, which the pipeline uses when `ReleaseVersion` is left as `auto`.
-   - The build must include native CLI NuGet packages, `microsoft-aspire-cli*.tgz` npm tarballs from the native archive jobs, and the Windows, Linux, and macOS npm install validation summaries.
+   - The build must include native CLI NuGet packages, `microsoft-aspire-cli*.tgz` npm tarballs from the native archive jobs, matching `.tgz.sig` detached signature sidecars, and the Windows, Linux, and macOS npm install validation summaries.
 2. **Release branch**: Ensure the release branch exists, for example `release/9.2`.
 3. **Permissions and approvals**:
    - Access to run Azure DevOps pipelines with the publishing pool.
@@ -154,7 +154,7 @@ Both automations are designed to be idempotent and safe to re-run.
 | Derive ReleaseVersion | Check that the build has a `release-version - X.Y.Z` tag, or pass `ReleaseVersion` explicitly. |
 | Extract BAR Build ID | Check that the build has a `BAR ID - NNNNNN` tag. |
 | Prepare/List/Verify NuGet Packages | Check that the selected source build produced `PackageArtifacts`. |
-| Prepare/List npm Packages | Check that the selected source build produced all eight `microsoft-aspire-cli*.tgz` tarballs in `BlobArtifacts`. |
+| Prepare/List npm Packages | Check that the selected source build produced all eight `microsoft-aspire-cli*.tgz` tarballs and matching `.tgz.sig` sidecars in `BlobArtifacts`. |
 | Push Packages to NuGet.org | Check NuGet.org for partial success, then re-run with already-completed steps skipped as needed. |
 | MicroBuild npm Publish | Check the ESRP release result. If RID packages published but the pointer package did not, re-run with `SkipNuGetPublish: true`, `SkipNpmRidPublish: true`, and `SkipChannelPromotion: true`; do not set `SkipNpmPublish` until the pointer package is published. |
 | Promote Build to Channel | Re-run with completed publish steps skipped. |

@@ -55,6 +55,41 @@ steps:
               /p:BuildExtension=true
       displayName: 🟣Build
 
+    - pwsh: |
+        $ErrorActionPreference = 'Stop'
+        $shippingPackagesDir = '${{ parameters.repoArtifactsPath }}/packages/${{ parameters.buildConfig }}/Shipping'
+
+        if (!(Test-Path $shippingPackagesDir)) {
+          Write-Error "Shipping packages directory not found: $shippingPackagesDir"
+          exit 1
+        }
+
+        $npmPackages = @(Get-ChildItem -Path $shippingPackagesDir -Filter "microsoft-aspire-cli*.tgz" -Recurse -File)
+        if ($npmPackages.Count -eq 0) {
+          Write-Error "No Aspire CLI npm packages were found under '$shippingPackagesDir'."
+          exit 1
+        }
+
+        $missingSignatures = @()
+        foreach ($package in $npmPackages) {
+          $signaturePath = "$($package.FullName).sig"
+          if (!(Test-Path $signaturePath)) {
+            $missingSignatures += $signaturePath
+            continue
+          }
+
+          Write-Host "Found npm package signature sidecar: $([System.IO.Path]::GetFileName($signaturePath))"
+        }
+
+        if ($missingSignatures.Count -gt 0) {
+          Write-Error "Missing detached signature sidecar(s) for npm package(s): $($missingSignatures -join ', ')"
+          exit 1
+        }
+
+        Write-Host "Validated $($npmPackages.Count) Aspire CLI npm package signature sidecar(s)."
+      displayName: 🟣Validate npm package signatures
+      condition: and(succeeded(), eq(variables['_SignType'], 'real'))
+
     # Log MicroBuild environment for debugging
     # MicroBuildOutputFolderOverride is set by the MicroBuildSigningPlugin task in eng/common/templates-official/job/onelocbuild.yml
     # which is installed via the Arcade SDK's install-microbuild.yml template that runs before our build steps.

@@ -192,6 +192,10 @@ extends:
                   displayName: 'Publish npm Validation Summary'
                   targetPath: '$(Pipeline.Workspace)/npm/validation-summary'
                   artifactName: 'NpmValidationSummary'
+                - output: pipelineArtifact
+                  displayName: 'Publish npm Signature Sidecars'
+                  targetPath: '$(Pipeline.Workspace)/npm/signatures'
+                  artifactName: 'NpmSignatureArtifacts'
                 - ${{ if eq(parameters.SkipWinGetPublish, false) }}:
                   - output: pipelineArtifact
                     displayName: 'Publish WinGet Manifests'
@@ -313,7 +317,9 @@ extends:
                 - download: aspire-build
                   displayName: 'Download npm packages from Source Build'
                   artifact: BlobArtifacts
-                  patterns: '**/microsoft-aspire-cli*.tgz'
+                  patterns: |
+                    **/microsoft-aspire-cli*.tgz
+                    **/microsoft-aspire-cli*.tgz.sig
 
                 - download: aspire-build
                   displayName: 'Download npm validation summary from Source Build (win-x64)'
@@ -372,6 +378,7 @@ extends:
                     $sourcePath = "$(Pipeline.Workspace)/aspire-build/BlobArtifacts"
                     $ridTargetPath = "$(Pipeline.Workspace)/npm/rid-packages"
                     $pointerTargetPath = "$(Pipeline.Workspace)/npm/pointer-package"
+                    $signatureTargetPath = "$(Pipeline.Workspace)/npm/signatures"
                     $expectedRids = @(
                       'win-x64',
                       'win-arm64',
@@ -384,6 +391,7 @@ extends:
 
                     New-Item -ItemType Directory -Path $ridTargetPath -Force | Out-Null
                     New-Item -ItemType Directory -Path $pointerTargetPath -Force | Out-Null
+                    New-Item -ItemType Directory -Path $signatureTargetPath -Force | Out-Null
 
                     Write-Host "Preparing npm packages from $sourcePath"
                     if (!(Test-Path $sourcePath)) {
@@ -408,17 +416,55 @@ extends:
                     $pointerPattern = "^microsoft-aspire-cli-($versionPattern)\.tgz$"
                     $ridPattern = "^microsoft-aspire-cli-(?<Rid>.+?)-(?<Version>$versionPattern)\.tgz$"
                     $packages = @(Get-ChildItem -Path $sourcePath -Filter "microsoft-aspire-cli*.tgz" -Recurse -File)
+                    $signatureSidecars = @(Get-ChildItem -Path $sourcePath -Filter "microsoft-aspire-cli*.tgz.sig" -Recurse -File)
                     $pointerPackages = @($packages | Where-Object { $_.Name -match $pointerPattern })
                     $ridPackages = @($packages | Where-Object { $_.Name -match $ridPattern })
                     $unexpectedPackages = @($packages | Where-Object { $_.Name -notmatch $pointerPattern -and $_.Name -notmatch $ridPattern })
+                    $signatureSidecarsByPackageName = @{}
+                    $duplicateSignatureSidecars = [System.Collections.Generic.List[string]]::new()
 
                     Write-Host "Found $($packages.Count) npm package(s)."
                     foreach ($pkg in $packages) {
                       Write-Host "  - $($pkg.Name)"
                     }
 
+                    Write-Host "Found $($signatureSidecars.Count) npm detached signature sidecar(s)."
+                    foreach ($signatureSidecar in $signatureSidecars) {
+                      Write-Host "  - $($signatureSidecar.Name)"
+
+                      $packageName = $signatureSidecar.Name.Substring(0, $signatureSidecar.Name.Length - '.sig'.Length)
+                      if ($signatureSidecarsByPackageName.ContainsKey($packageName)) {
+                        $duplicateSignatureSidecars.Add($signatureSidecar.Name)
+                        continue
+                      }
+
+                      $signatureSidecarsByPackageName[$packageName] = $signatureSidecar
+                    }
+
+                    if ($duplicateSignatureSidecars.Count -gt 0) {
+                      Write-Error "Duplicate npm detached signature sidecar(s): $($duplicateSignatureSidecars -join ', ')"
+                      exit 1
+                    }
+
                     if ($unexpectedPackages.Count -gt 0) {
                       Write-Error "Unexpected npm package filename(s): $($unexpectedPackages.Name -join ', ')"
+                      exit 1
+                    }
+
+                    $missingSignaturePackages = @($packages | Where-Object { !$signatureSidecarsByPackageName.ContainsKey($_.Name) })
+                    if ($missingSignaturePackages.Count -gt 0) {
+                      Write-Error "Missing detached signature sidecar(s) for npm package(s): $($missingSignaturePackages.Name -join ', ')"
+                      exit 1
+                    }
+
+                    $packageNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+                    foreach ($pkg in $packages) {
+                      [void]$packageNames.Add($pkg.Name)
+                    }
+
+                    $orphanSignatureSidecars = @($signatureSidecarsByPackageName.GetEnumerator() | Where-Object { !$packageNames.Contains($_.Key) } | ForEach-Object { $_.Value })
+                    if ($orphanSignatureSidecars.Count -gt 0) {
+                      Write-Error "Found detached signature sidecar(s) without a matching npm package: $($orphanSignatureSidecars.Name -join ', ')"
                       exit 1
                     }
 
@@ -468,6 +514,9 @@ extends:
                       Copy-Item $pkg.FullName -Destination $ridTargetPath -Force
                     }
                     Copy-Item $pointerPackages[0].FullName -Destination $pointerTargetPath -Force
+                    foreach ($signatureSidecar in $signatureSidecars) {
+                      Copy-Item $signatureSidecar.FullName -Destination $signatureTargetPath -Force
+                    }
 
                     $summaryTarget = "$(Pipeline.Workspace)/npm/validation-summary"
                     New-Item -ItemType Directory -Path $summaryTarget -Force | Out-Null
@@ -493,7 +542,7 @@ extends:
                       Copy-Item $summarySource -Destination (Join-Path $summaryOutputDirectory 'validation-summary.json') -Force
                     }
 
-                    Write-Host "Prepared $($ridPackages.Count) RID npm package(s) and pointer package version $($versions[0])."
+                    Write-Host "Prepared $($ridPackages.Count) RID npm package(s), pointer package version $($versions[0]), and $($signatureSidecars.Count) detached signature sidecar(s)."
                   displayName: 'Prepare npm Artifacts for Publishing'
 
               - ${{ if eq(parameters.SkipNpmPublish, true) }}:
@@ -504,6 +553,7 @@ extends:
                     New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/validation-summary/win-x64" -Force | Out-Null
                     New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/validation-summary/linux-x64" -Force | Out-Null
                     New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/validation-summary/osx" -Force | Out-Null
+                    New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/signatures" -Force | Out-Null
                     Write-Host "Created empty npm artifact placeholders because SkipNpmPublish=true."
                   displayName: 'Prepare Empty npm Artifact Placeholders'
 
@@ -578,6 +628,9 @@ extends:
                 - input: pipelineArtifact
                   artifactName: NpmValidationSummary
                   targetPath: '$(Pipeline.Workspace)/npm/validation-summary'
+                - input: pipelineArtifact
+                  artifactName: NpmSignatureArtifacts
+                  targetPath: '$(Pipeline.Workspace)/npm/signatures'
             steps:
               # ===== VALIDATION =====
               # Note: No checkout - releaseJob doesn't allow it. All scripts are inlined.
@@ -851,10 +904,12 @@ extends:
                 - powershell: |
                     $ridPackagesPath = "$(Pipeline.Workspace)/npm/rid-packages"
                     $pointerPackagePath = "$(Pipeline.Workspace)/npm/pointer-package"
+                    $signaturePath = "$(Pipeline.Workspace)/npm/signatures"
                     Write-Host "=== npm Package Inventory ==="
 
                     $ridPackages = @(Get-ChildItem -Path $ridPackagesPath -Filter "*.tgz" -File)
                     $pointerPackages = @(Get-ChildItem -Path $pointerPackagePath -Filter "*.tgz" -File)
+                    $signatureSidecars = @(Get-ChildItem -Path $signaturePath -Filter "*.tgz.sig" -File)
 
                     Write-Host "RID packages: $($ridPackages.Count)"
                     foreach ($pkg in $ridPackages) {
@@ -868,8 +923,25 @@ extends:
                       Write-Host "  - $($pkg.Name) ($sizeMB MB)"
                     }
 
+                    Write-Host "Signature sidecars: $($signatureSidecars.Count)"
+                    foreach ($signatureSidecar in $signatureSidecars) {
+                      $sizeKB = [math]::Round($signatureSidecar.Length / 1KB, 2)
+                      Write-Host "  - $($signatureSidecar.Name) ($sizeKB KB)"
+                    }
+
                     if ($ridPackages.Count -ne 7 -or $pointerPackages.Count -ne 1) {
                       Write-Error "Expected 7 npm RID packages and 1 npm pointer package."
+                      exit 1
+                    }
+
+                    $signatureNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+                    foreach ($signatureSidecar in $signatureSidecars) {
+                      [void]$signatureNames.Add($signatureSidecar.Name)
+                    }
+
+                    $missingSignatures = @($ridPackages + $pointerPackages | Where-Object { !$signatureNames.Contains("$($_.Name).sig") })
+                    if ($missingSignatures.Count -gt 0) {
+                      Write-Error "Missing detached signature sidecar(s) for npm package(s): $($missingSignatures.Name -join ', ')"
                       exit 1
                     }
 
