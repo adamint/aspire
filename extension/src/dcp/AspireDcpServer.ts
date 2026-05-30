@@ -198,13 +198,41 @@ export default class AspireDcpServer {
                 // Emit early — even unsupported resource types count as engagement
                 // because the user did try to run something through us.
                 hooks.onRunSessionAccepted?.({ resourceType: launchConfig.type, mode });
+                const runSessionStartTimeMs = Date.now();
                 sendTelemetryEvent('debug/runSession/start', {
                     resource_type: launchConfig.type,
                     debugger_extension_matched: foundDebuggerExtension ? 'true' : 'false',
                     mode,
                 });
 
+                // Emits a `debug/runSession/end` event paired with the start above and
+                // updates the parent AppHost aggregate so failures captured on early-
+                // return paths still surface in the `debug/appHost/end` summary. All
+                // post-start failure paths in this handler must route through here so
+                // we never leave an orphaned start event in the telemetry pipeline.
+                const emitRunSessionFailureEnd = (endReason: string, errorKind?: string): void => {
+                    let aggregate = debugSessionStats.get(debugSessionId);
+                    if (!aggregate) {
+                        aggregate = { totalChildSessions: 0, distinctResourceTypes: new Set<string>(), anyNonZeroExit: false };
+                        debugSessionStats.set(debugSessionId, aggregate);
+                    }
+                    aggregate.totalChildSessions += 1;
+                    aggregate.distinctResourceTypes.add(launchConfig.type);
+                    aggregate.anyNonZeroExit = true;
+
+                    sendTelemetryErrorEvent('debug/runSession/end', {
+                        resource_type: launchConfig.type,
+                        mode,
+                        exit_code_bucket: 'nonzero',
+                        end_reason: endReason,
+                        ...(errorKind ? { error_kind: errorKind } : {}),
+                    }, {
+                        duration_ms: Date.now() - runSessionStartTimeMs,
+                    });
+                };
+
                 if (!foundDebuggerExtension) {
+                    emitRunSessionFailureEnd('unsupported_launch_config');
                     const error: ErrorDetails = {
                         code: 'UnsupportedLaunchConfiguration',
                         message: `Unsupported launch configuration type: ${launchConfig.type}`,
@@ -219,6 +247,7 @@ export default class AspireDcpServer {
 
                 const aspireDebugSession = getDebugSession(debugSessionId);
                 if (!aspireDebugSession) {
+                    emitRunSessionFailureEnd('debug_session_not_found');
                     const error: ErrorDetails = {
                         code: 'DebugSessionNotFound',
                         message: `No Aspire debug session found for Debug Session ID ${debugSessionId}`,
@@ -244,6 +273,8 @@ export default class AspireDcpServer {
                     const resourceDebugSession = await aspireDebugSession.startAndGetDebugSession(config);
 
                     if (!resourceDebugSession) {
+                        emitRunSessionFailureEnd('debugger_did_not_start');
+
                         // Clean up any processes associated with this run (registered by resource-type extensions)
                         cleanupRun(runId);
 
@@ -263,7 +294,7 @@ export default class AspireDcpServer {
                     extensionLogOutputChannel.info(`Debugging session created with ID: ${runId}`);
 
                     runsBySession.set(runId, processes);
-                    runTelemetryById.set(runId, { startTimeMs: Date.now(), resourceType: launchConfig.type, mode, debugSessionId });
+                    runTelemetryById.set(runId, { startTimeMs: runSessionStartTimeMs, resourceType: launchConfig.type, mode, debugSessionId });
 
                     // Track aggregate stats for the parent AppHost debug session so we can
                     // emit a single `debug/appHost/end` summary when the AppHost terminates.
@@ -280,29 +311,10 @@ export default class AspireDcpServer {
                 } catch (err) {
                     extensionLogOutputChannel.error(`Error creating debug session ${runId}: ${err}`);
 
-                    // Track in aggregate AppHost-debug-session stats even for synchronous
-                    // launch failures so the eventual `debug/appHost/end` summary reflects
-                    // them.
-                    let aggregateOnFailure = debugSessionStats.get(debugSessionId);
-                    if (!aggregateOnFailure) {
-                        aggregateOnFailure = { totalChildSessions: 0, distinctResourceTypes: new Set<string>(), anyNonZeroExit: false };
-                        debugSessionStats.set(debugSessionId, aggregateOnFailure);
-                    }
-                    aggregateOnFailure.totalChildSessions += 1;
-                    aggregateOnFailure.distinctResourceTypes.add(launchConfig.type);
-                    aggregateOnFailure.anyNonZeroExit = true;
-
-                    // Synchronous launch failure — emit the end event immediately
-                    // since no sessionTerminated will be observed downstream.
-                    sendTelemetryErrorEvent('debug/runSession/end', {
-                        resource_type: launchConfig.type,
-                        mode,
-                        exit_code_bucket: 'nonzero',
-                        end_reason: 'launch_failed',
-                        error_kind: err instanceof Error ? err.name || 'Error' : typeof err,
-                    }, {
-                        duration_ms: 0,
-                    });
+                    // Synchronous launch failure — emit the matching end event and update
+                    // aggregate stats via the shared helper before responding so the eventual
+                    // `debug/appHost/end` summary reflects the failure.
+                    emitRunSessionFailureEnd('launch_failed', err instanceof Error ? err.name || 'Error' : typeof err);
 
                     // Clean up any processes associated with this run (registered by resource-type extensions)
                     cleanupRun(runId);
@@ -427,7 +439,12 @@ export default class AspireDcpServer {
                 const durationMs = Date.now() - entry.startTimeMs;
                 const exitCode = sessionTerminated.exit_code;
                 const exitBucket = exitCode === 0 ? 'success' : exitCode === -1 ? 'canceled' : 'nonzero';
-                sendTelemetryEvent('debug/runSession/end', {
+                // Route non-zero exits through the error-event channel so they get the
+                // reporter's stricter scrubbing pass and are surfaced as errors in the
+                // telemetry pipeline (consistent with the synchronous launch-failure path
+                // above and the dashboard fault path in DashboardTelemetryPassthrough).
+                const emitEnd = exitBucket === 'nonzero' ? sendTelemetryErrorEvent : sendTelemetryEvent;
+                emitEnd('debug/runSession/end', {
                     resource_type: entry.resourceType,
                     mode: entry.mode,
                     exit_code_bucket: exitBucket,

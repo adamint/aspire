@@ -234,9 +234,9 @@ Events the extension reports include:
 - **`runningAppHostsView/shown`** — when the Aspire side panel becomes visible, along with how many AppHosts are running.
 - **`debug/appHost/start`** and **`debug/appHost/end`** — when an Aspire AppHost debug session begins and ends, including the AppHost language family (C# / TypeScript) and aggregate counts of child resource sessions to help us understand multi-language debugging usage.
 - **`debug/runSession/start`** and **`debug/runSession/end`** — per-resource debug-session lifecycle events with the resource type and duration.
-- **Dashboard telemetry passthrough** — when the extension hosts the Aspire dashboard, telemetry events emitted by the dashboard are forwarded through the extension's reporter using the same global VS Code telemetry setting.
+- **Dashboard telemetry passthrough** — when the extension hosts the Aspire dashboard, telemetry events emitted by the dashboard are forwarded through the extension's reporter using the same global VS Code telemetry setting. The dashboard's own events are anonymous by design; the extension drops any property the dashboard explicitly tags as personally identifiable before forwarding.
 
-No source code, file paths, environment variable values, resource names, or other workspace contents are reported.
+Events the extension originates do not include source code, file paths, environment variable values, resource names, or other workspace contents.
 
 ---
 

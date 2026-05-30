@@ -538,28 +538,49 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     this._disposed = true;
     extensionLogOutputChannel.info('Stopping the Aspire debug session');
 
-    // Telemetry: emit `debug/appHost/end` with aggregate stats accumulated by the
-    // DCP server across this AppHost session's lifetime. Only fire if `launch`
-    // ever ran (i.e. `_appHostStartTimeMs` is set) — otherwise we'd be reporting
-    // a phantom session for AppHosts that aborted before reaching the CLI spawn.
-    if (this._appHostStartTimeMs !== undefined) {
-      const durationMs = Date.now() - this._appHostStartTimeMs;
-      const aggregate = this._dcpServer.takeDebugSessionAggregateStats(this.debugSessionId);
-      sendTelemetryEvent('debug/appHost/end', {
-        mode: this._appHostModeAtLaunch,
-        apphost_language: this._appHostLanguageAtLaunch,
-        ended_with_error: aggregate?.anyNonZeroExit ? 'true' : 'false',
-        distinct_resource_types: aggregate ? aggregate.distinctResourceTypes.join(',') : '',
-      }, {
-        duration_ms: durationMs,
-        total_child_sessions: aggregate?.totalChildSessions ?? 0,
-        distinct_resource_type_count: aggregate?.distinctResourceTypes.length ?? 0,
-      });
-    }
+    // Snapshot start-event metadata before we run disposables so the deferred
+    // `debug/appHost/end` callback has a stable view even if instance state
+    // mutates further (or the instance is reaped by VS Code before the timer
+    // fires).
+    const startMs = this._appHostStartTimeMs;
+    const mode = this._appHostModeAtLaunch;
+    const language = this._appHostLanguageAtLaunch;
+    const debugSessionId = this.debugSessionId;
+    const dcpServer = this._dcpServer;
 
-    vscode.debug.stopDebugging(this._session);
+    // Stop child debug sessions first so their `sessionTerminated`
+    // notifications can flow back through `AspireDcpServer.sendNotification`
+    // and update the aggregate stats BEFORE we snapshot them for
+    // `debug/appHost/end`. Without this ordering, late nonzero exits (notably
+    // Windows' SIGTERM → 143 exit code which is not normalized to 0) would
+    // be missed and the summary would under-report failures.
     this._disposables.forEach(disposable => disposable.dispose());
     this._trackedDebugAdapters = [];
+    vscode.debug.stopDebugging(this._session);
+
+    // Telemetry: emit `debug/appHost/end` after a short grace window so any
+    // pending `sessionTerminated` notifications kicked off by the child-stop
+    // disposables above have time to flow through the adapterTracker → DCP
+    // notification pipeline and update `anyNonZeroExit`. 500ms is enough for
+    // the common case under normal load while keeping the bound short enough
+    // to survive most extension teardown scenarios. We only fire the event if
+    // `launch` ever ran — otherwise we'd be reporting a phantom session for
+    // AppHosts that aborted before reaching the CLI spawn.
+    if (startMs !== undefined) {
+      setTimeout(() => {
+        const aggregate = dcpServer.takeDebugSessionAggregateStats(debugSessionId);
+        sendTelemetryEvent('debug/appHost/end', {
+          mode,
+          apphost_language: language,
+          ended_with_error: aggregate?.anyNonZeroExit ? 'true' : 'false',
+          distinct_resource_types: aggregate ? aggregate.distinctResourceTypes.join(',') : '',
+        }, {
+          duration_ms: Date.now() - startMs,
+          total_child_sessions: aggregate?.totalChildSessions ?? 0,
+          distinct_resource_type_count: aggregate?.distinctResourceTypes.length ?? 0,
+        });
+      }, 500);
+    }
   }
 
   /**

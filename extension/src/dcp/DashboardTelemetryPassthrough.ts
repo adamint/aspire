@@ -355,12 +355,22 @@ export class DashboardTelemetryPassthrough {
  * Translates a dashboard property bag into the `{ properties, measurements }`
  * shape expected by `@vscode/extension-telemetry`'s TelemetryReporter.
  *
- * Numeric values and properties tagged as `Metric` go into `measurements`.
- * Everything else is stringified into `properties` (objects are JSON-encoded
- * so they survive the round trip — TelemetryReporter only supports string
- * values, but the dashboard occasionally sends complex objects, e.g. enum
- * descriptors). PII-tagged values are still forwarded; the reporter performs
- * its own scrubbing pass on top.
+ * Routing rules:
+ *  - Properties tagged `Metric` are routed to `measurements`. The dashboard
+ *    serializes metric values as invariant-culture strings (see
+ *    `src/Aspire.Dashboard/Components/Pages/Metrics.razor.cs:359` and
+ *    `StructuredLogs.razor.cs:622` where `int.ToString(CultureInfo.InvariantCulture)`
+ *    is invoked before wrapping in `AspireTelemetryProperty(..., Metric)`), so we
+ *    parse strings as well as accept raw numbers. Anything we can't coerce to a
+ *    finite number falls through to the string-property path.
+ *  - Properties tagged `Pii` are dropped. The dashboard does not actually tag
+ *    anything as `Pii` today, but honoring the discriminator keeps the README's
+ *    "no resource names or workspace contents are reported" guarantee enforced
+ *    end-to-end rather than incidental.
+ *  - Everything else is stringified into `properties` (objects are JSON-encoded
+ *    so they survive the round trip — TelemetryReporter only supports string
+ *    values, but the dashboard occasionally sends complex objects, e.g. enum
+ *    descriptors).
  */
 function flattenProperties(input: { [key: string]: AspireTelemetryProperty } | undefined): { properties: { [key: string]: string }, measurements: { [key: string]: number } } {
     const properties: { [key: string]: string } = {};
@@ -374,21 +384,31 @@ function flattenProperties(input: { [key: string]: AspireTelemetryProperty } | u
         if (!prop || prop.Value === undefined || prop.Value === null) {
             continue;
         }
-        const value = prop.Value;
-        const isMetric = prop.PropertyType === PropertyType.Metric;
-        if (isMetric && typeof value === 'number' && Number.isFinite(value)) {
-            measurements[key] = value;
+        if (prop.PropertyType === PropertyType.Pii) {
             continue;
         }
-        if (typeof value === 'number' && Number.isFinite(value)) {
-            measurements[key] = value;
-            continue;
+        const value = prop.Value;
+        if (prop.PropertyType === PropertyType.Metric) {
+            const numericValue = typeof value === 'number'
+                ? value
+                : typeof value === 'string'
+                    ? Number(value)
+                    : Number.NaN;
+            if (Number.isFinite(numericValue)) {
+                measurements[key] = numericValue;
+                continue;
+            }
+            // Fall through and persist as a string so the dimension still surfaces
+            // even when the value can't be coerced.
         }
         if (typeof value === 'string') {
             properties[key] = value;
         }
         else if (typeof value === 'boolean') {
             properties[key] = value ? 'true' : 'false';
+        }
+        else if (typeof value === 'number') {
+            properties[key] = String(value);
         }
         else {
             try {
@@ -413,3 +433,7 @@ function attachCorrelations(properties: { [key: string]: string }, correlations:
 // Re-exported so `getTelemetryReporter` isn't a hidden coupling — callers
 // importing this module can verify the reporter is wired before mounting.
 export { getTelemetryReporter };
+
+// Exported for unit tests so the property/measurement routing rules can be
+// covered without standing up an Express app or a TelemetryReporter.
+export const __testOnly__ = { flattenProperties };
