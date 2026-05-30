@@ -329,7 +329,11 @@ async function tryExecuteCommand(commandName: string, terminalProvider: AspireTe
       if (!cliCheckExcludedCommands.includes(commandName)) {
         const result = await checkCliAvailableOrRedirect();
         if (!result.available) {
-          return;
+          // The command body never ran — the user was redirected to install the
+          // CLI. Throwing a cancellation makes withCommandTelemetry record this
+          // as `canceled` rather than a false `success`, and the catch below
+          // suppresses the error toast (the redirect already informed the user).
+          throw new vscode.CancellationError();
         }
       }
 

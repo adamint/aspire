@@ -10,7 +10,7 @@ import { createDebugSessionConfiguration, getResourceDebuggerExtensions } from '
 import { cleanupRun } from '../debugger/runCleanupRegistry';
 import { timingSafeEqual, randomBytes } from 'crypto';
 import { getRunSessionInfo, getSupportedCapabilities } from '../capabilities';
-import { authorizationAndDcpHeadersRequired, authorizationHeaderMustStartWithBearer, encounteredErrorStartingResource, invalidOrMissingToken, invalidTokenLength } from '../loc/strings';
+import { authorizationAndDcpHeadersRequired, authorizationHeaderMustStartWithBearer, authorizationHeaderRequired, encounteredErrorStartingResource, invalidOrMissingToken, invalidTokenLength } from '../loc/strings';
 import { DashboardTelemetryPassthrough } from './DashboardTelemetryPassthrough';
 import { sendTelemetryErrorEvent, sendTelemetryEvent } from '../utils/telemetry';
 
@@ -136,10 +136,16 @@ export default class AspireDcpServer {
                 return { kind: 'ok' };
             }
 
+            // `validateBearerToken` only returns 'missing' when the Authorization
+            // header is absent; the requireHeaders path catches that case inline
+            // (with the combined message) before calling validateBearerToken, so
+            // this branch is reached only from requireBearerOnly (/telemetry/*),
+            // where the DCP instance-id header is intentionally NOT required.
+            // Use an Authorization-only message so that client error is accurate.
             function respondToBearerFailure(res: Response, kind: 'missing' | 'invalid_scheme' | 'invalid_length' | 'invalid_token'): void {
                 switch (kind) {
                     case 'missing':
-                        respondWithError(res, 401, { error: { code: 'MissingHeaders', message: authorizationAndDcpHeadersRequired, details: [] } });
+                        respondWithError(res, 401, { error: { code: 'MissingHeaders', message: authorizationHeaderRequired, details: [] } });
                         return;
                     case 'invalid_scheme':
                         respondWithError(res, 401, { error: { code: 'InvalidAuthHeader', message: authorizationHeaderMustStartWithBearer, details: [] } });
