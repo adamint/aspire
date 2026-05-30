@@ -548,31 +548,36 @@ jobs:
           fi
           git -c http.extraHeader="AUTHORIZATION: bearer ${GH_TOKEN}" push --force-with-lease origin "$BRANCH_NAME"
 
-          # Create or update draft PR
+          # Create or update draft PR. Capture the PR number directly from each
+          # path (the update path already resolved it; `gh pr create` prints the
+          # new PR's URL) instead of re-querying with `gh pr list` afterwards,
+          # which can transiently return empty immediately after creation.
           EXISTING_PR=$(gh pr list --head "$BRANCH_NAME" --base main --json number --jq '.[0].number // empty' 2>/dev/null || true)
           if [ -n "$EXISTING_PR" ]; then
             gh pr edit "$EXISTING_PR" \
               --title "Prepare VS Code extension release v${NEW_VERSION}" \
               --body-file "$WORK_DIR/pr_body.md"
-            echo "✓ Updated existing draft PR #${EXISTING_PR} for extension release v${NEW_VERSION}"
+            PR_NUMBER="$EXISTING_PR"
+            echo "✓ Updated existing draft PR #${PR_NUMBER} for extension release v${NEW_VERSION}"
           else
-            gh pr create \
+            # `gh pr create` prints the created PR URL (e.g. https://github.com/microsoft/aspire/pull/123)
+            # on its last line; take the trailing path segment as the number.
+            PR_URL=$(gh pr create \
               --base main \
               --head "$BRANCH_NAME" \
               --title "Prepare VS Code extension release v${NEW_VERSION}" \
               --body-file "$WORK_DIR/pr_body.md" \
-              --draft
-            echo "✓ Created draft PR for extension release v${NEW_VERSION}"
+              --draft | tail -n1)
+            PR_NUMBER="${PR_URL##*/}"
+            echo "✓ Created draft PR #${PR_NUMBER} for extension release v${NEW_VERSION}"
           fi
 
-          # Resolve the PR number (covers both the create and update paths) and apply
-          # the trigger label. Applying the label with the GitHub App token — not the
-          # default GITHUB_TOKEN — is what lets the downstream `extension-changelog`
-          # agentic workflow fire on the `labeled` event (workflows are not triggered
-          # by actions performed with the implicit GITHUB_TOKEN).
-          PR_NUMBER=$(gh pr list --head "$BRANCH_NAME" --base main --json number --jq '.[0].number // empty')
-          if [ -z "$PR_NUMBER" ]; then
-            echo "::error::Could not resolve the extension release PR number to apply the trigger label."
+          # Apply the trigger label using the GitHub App token — not the default
+          # GITHUB_TOKEN — which is what lets the downstream `extension-changelog`
+          # agentic workflow fire on the `labeled` event (workflows are not
+          # triggered by actions performed with the implicit GITHUB_TOKEN).
+          if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "::error::Could not resolve the extension release PR number to apply the trigger label (got '${PR_NUMBER}')."
             exit 1
           fi
           # Ensure the label exists before adding it (`--force` is idempotent: it
