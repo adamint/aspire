@@ -23,6 +23,8 @@ namespace Aspire.Cli.Commands;
 /// <summary>
 /// JSON output format for a log line.
 /// </summary>
+// `aspire logs --format json` and `aspire logs --format json --follow` use this shape;
+// keep docs/specs/cli-output-formats.md in sync when changing it.
 internal sealed class LogLineJson
 {
     public required string ResourceName { get; init; }
@@ -34,6 +36,7 @@ internal sealed class LogLineJson
 /// <summary>
 /// Wrapper for logs snapshot output.
 /// </summary>
+// `aspire logs --format json` uses this wrapper; keep docs/specs/cli-output-formats.md in sync when changing it.
 internal sealed class LogsOutput
 {
     public required LogLineJson[] Logs { get; init; }
@@ -482,11 +485,22 @@ internal sealed class LogsCommand : BaseCommand
 
     private static bool MatchesSearch(LogEntry entry, string search)
     {
+        var fragments = SearchTextParser.ParseFragments(search);
+        if (fragments.Length == 0)
+        {
+            return true;
+        }
+
         var content = entry.RawContent ?? entry.Content ?? string.Empty;
         var prefix = entry.ResourcePrefix ?? string.Empty;
-        return content.Contains(search, StringComparisons.FullTextSearch) ||
-               prefix.Contains(search, StringComparisons.FullTextSearch) ||
-               AnsiParser.StripControlSequences(content).Contains(search, StringComparisons.FullTextSearch);
+        var stripped = AnsiParser.StripControlSequences(content);
+
+        // Console logs have no structured attributes, so all search text is treated as
+        // free-text fragments matched against the log content and resource name.
+        return SearchTextParser.MatchesAllFragments(fragments, (content, prefix, stripped), static (state, fragment) =>
+            state.content.Contains(fragment, StringComparisons.FullTextSearch) ||
+            state.prefix.Contains(fragment, StringComparisons.FullTextSearch) ||
+            state.stripped.Contains(fragment, StringComparisons.FullTextSearch));
     }
 
     private static string ResolveResourceName(string resourceName, IEnumerable<ResourceSnapshot> snapshots)

@@ -6,6 +6,7 @@ using Aspire.Dashboard.Api;
 using Aspire.Dashboard.Model;
 using Aspire.Dashboard.Otlp.Model;
 using Aspire.Dashboard.Otlp.Storage;
+using Aspire.Otlp.Serialization;
 using Google.Protobuf.Collections;
 using OpenTelemetry.Proto.Logs.V1;
 using OpenTelemetry.Proto.Trace.V1;
@@ -28,7 +29,7 @@ public class TelemetryApiServiceTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
         var receivedItems = new List<string>();
-        await foreach (var item in service.FollowSpansAsync(null, null, null, null, cts.Token))
+        await foreach (var item in service.FollowSpansAsync(null, null, null, null, cancellationToken: cts.Token))
         {
             receivedItems.Add(item);
             if (receivedItems.Count >= 5)
@@ -63,26 +64,6 @@ public class TelemetryApiServiceTests
     }
 
     [Theory]
-    [InlineData(false, "ok-span", "error-span")]
-    [InlineData(true, "error-span", "ok-span")]
-    public void GetSpans_HasErrorFilter_ReturnsExpectedSpans(bool hasError, string expectedSpan, string excludedSpan)
-    {
-        var repository = CreateRepository();
-        AddSpansWithStatus(repository);
-
-        var service = CreateService(repository);
-
-        var result = service.GetSpans(resourceNames: null, traceId: null, hasError: hasError, limit: null);
-
-        Assert.NotNull(result);
-        Assert.Equal(1, result.ReturnedCount);
-
-        var json = System.Text.Json.JsonSerializer.Serialize(result.Data);
-        Assert.Contains(expectedSpan, json);
-        Assert.DoesNotContain(excludedSpan, json);
-    }
-
-    [Theory]
     [InlineData(false, 1)]
     [InlineData(true, 1)]
     [InlineData(null, 2)]
@@ -111,7 +92,7 @@ public class TelemetryApiServiceTests
         var receivedItems = new List<string>();
         try
         {
-            await foreach (var item in service.FollowSpansAsync(["nonexistent-service"], null, null, null, cts.Token))
+            await foreach (var item in service.FollowSpansAsync(["nonexistent-service"], null, null, null, cancellationToken: cts.Token))
             {
                 receivedItems.Add(item);
             }
@@ -177,27 +158,49 @@ public class TelemetryApiServiceTests
     }
 
     [Fact]
-    public void GetSpans_WithLimit_ReturnsMostRecentSpans()
+    public async Task FollowSpansAsync_WithTraceIdFilter_MatchesShortenedIds()
     {
         var repository = CreateRepository();
+        var traceId = Encoding.UTF8.GetString(Convert.FromHexString("747261636531"));
+
         AddSpansToRepository(repository, [
-            CreateSpan(traceId: "trace1", spanId: "old-span", startTime: s_testTime, endTime: s_testTime.AddMinutes(1)),
-            CreateSpan(traceId: "trace2", spanId: "mid-span", startTime: s_testTime.AddMinutes(2), endTime: s_testTime.AddMinutes(3)),
-            CreateSpan(traceId: "trace3", spanId: "new-span", startTime: s_testTime.AddMinutes(4), endTime: s_testTime.AddMinutes(5))
+            CreateSpan(traceId: traceId, spanId: "matching-span", startTime: s_testTime, endTime: s_testTime.AddMinutes(1)),
+            CreateSpan(traceId: "other-trace", spanId: "other-span", startTime: s_testTime.AddMinutes(2), endTime: s_testTime.AddMinutes(3))
+        ]);
+
+        var service = CreateService(repository);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var receivedItems = new List<string>();
+        await foreach (var streamedItem in service.FollowSpansAsync(null, "7472616", null, null, cancellationToken: cts.Token))
+        {
+            receivedItems.Add(streamedItem);
+            break;
+        }
+
+        var receivedItem = Assert.Single(receivedItems);
+        Assert.Contains("matching-span", receivedItem);
+        Assert.DoesNotContain("other-span", receivedItem);
+    }
+
+    [Fact]
+    public void GetTrace_ReturnsAllSpansForTrace()
+    {
+        var repository = CreateRepository();
+        var traceId = Encoding.UTF8.GetString(Convert.FromHexString("747261636531"));
+
+        AddSpansToRepository(repository, [
+            CreateSpan(traceId: traceId, spanId: "short-span", startTime: s_testTime, endTime: s_testTime.AddMilliseconds(49)),
+            CreateSpan(traceId: traceId, spanId: "long-span", startTime: s_testTime.AddSeconds(1), endTime: s_testTime.AddSeconds(1).AddMilliseconds(50))
         ]);
 
         var service = CreateService(repository);
 
-        var result = service.GetSpans(resourceNames: null, traceId: null, hasError: null, limit: 2);
+        var result = service.GetTrace("747261636531");
 
         Assert.NotNull(result);
-        Assert.Equal(3, result.TotalCount);
+        Assert.Equal(2, result.TotalCount);
         Assert.Equal(2, result.ReturnedCount);
-
-        var json = System.Text.Json.JsonSerializer.Serialize(result.Data);
-        Assert.DoesNotContain("old-span", json);
-        Assert.Contains("mid-span", json);
-        Assert.Contains("new-span", json);
     }
 
     [Fact]
@@ -218,6 +221,91 @@ public class TelemetryApiServiceTests
         Assert.DoesNotContain("span1", json);
         Assert.Contains("span2", json);
         Assert.Contains("span3", json);
+    }
+
+    [Fact]
+    public void GetTraces_WithLimitAndDurationSearchFilter_ReturnsMostRecentMatchingTraces()
+    {
+        var repository = CreateRepository();
+        AddSpans(repository, count: 3, startMinuteSpacing: 10);
+
+        var service = CreateService(repository);
+
+        var result = service.GetTraces(resourceNames: null, hasError: null, limit: 2, search: "duration:>=50");
+
+        Assert.NotNull(result);
+        Assert.Equal(3, result.TotalCount);
+        Assert.Equal(2, result.ReturnedCount);
+
+        var spanIds = GetAllSpans(result).Select(s => DecodeSpanId(s.SpanId)).ToList();
+        Assert.Equal(2, spanIds.Count);
+        Assert.Contains("span2", spanIds);
+        Assert.Contains("span3", spanIds);
+        Assert.DoesNotContain("span1", spanIds);
+    }
+
+    [Fact]
+    public void GetTraces_WithDurationSearchFilter_FiltersShortSpans()
+    {
+        var repository = CreateRepository();
+        AddSpansToRepository(repository, [
+            CreateSpan(traceId: "short-trace", spanId: "short-trace-span", startTime: s_testTime, endTime: s_testTime.AddMilliseconds(49))
+        ]);
+        AddSpansToRepository(repository, [
+            CreateSpan(traceId: "mixed-trace", spanId: "mixed-short-span", startTime: s_testTime.AddSeconds(1), endTime: s_testTime.AddSeconds(1).AddMilliseconds(49)),
+            CreateSpan(traceId: "mixed-trace", spanId: "mixed-long-span", startTime: s_testTime.AddSeconds(2), endTime: s_testTime.AddSeconds(2).AddMilliseconds(50))
+        ]);
+
+        var service = CreateService(repository);
+
+        var result = service.GetTraces(resourceNames: null, hasError: null, limit: null, search: "duration:>=50");
+
+        Assert.NotNull(result);
+        // The trace with short-trace-span (49ms) is excluded because no span matches the filter.
+        // The mixed-trace is included because mixed-long-span (50ms) matches, and all its spans are returned.
+        Assert.Equal(1, result.TotalCount);
+        Assert.Equal(1, result.ReturnedCount);
+
+        var spans = GetAllSpans(result);
+        Assert.Equal(2, spans.Count);
+        Assert.Contains(spans, s => DecodeSpanId(s.SpanId) == "mixed-short-span");
+        Assert.Contains(spans, s => DecodeSpanId(s.SpanId) == "mixed-long-span");
+    }
+
+    [Fact]
+    public void GetTraces_WithHasErrorAndDurationSearchFilter_ReturnsAllSpansFromMatchingTraces()
+    {
+        var repository = CreateRepository();
+        AddSpansToRepository(repository, [
+            CreateSpan(
+                traceId: "mixed-trace",
+                spanId: "short-error-span",
+                startTime: s_testTime,
+                endTime: s_testTime.AddMilliseconds(49),
+                status: new Status { Code = Status.Types.StatusCode.Error }),
+            CreateSpan(
+                traceId: "mixed-trace",
+                spanId: "long-ok-span",
+                startTime: s_testTime.AddSeconds(1),
+                endTime: s_testTime.AddSeconds(1).AddMilliseconds(50),
+                status: new Status { Code = Status.Types.StatusCode.Ok })
+        ]);
+
+        var service = CreateService(repository);
+
+        var result = service.GetTraces(resourceNames: null, hasError: true, limit: null, search: "duration:>=50");
+
+        Assert.NotNull(result);
+        // The trace matches hasError because it has an error span.
+        // The duration filter selects the trace because long-ok-span (50ms) matches.
+        // All spans from the matching trace are returned.
+        Assert.Equal(1, result.TotalCount);
+        Assert.Equal(1, result.ReturnedCount);
+
+        var spans = GetAllSpans(result);
+        Assert.Equal(2, spans.Count);
+        Assert.Contains(spans, s => DecodeSpanId(s.SpanId) == "short-error-span");
+        Assert.Contains(spans, s => DecodeSpanId(s.SpanId) == "long-ok-span");
     }
 
     [Fact]
@@ -315,27 +403,6 @@ public class TelemetryApiServiceTests
 
     [Theory]
     [InlineData("span1", 1)]
-    [InlineData("products", 1)]
-    public void GetSpans_WithSearch_FiltersSpans(string search, int expectedCount)
-    {
-        var repository = CreateRepository();
-        AddSpansToRepository(repository, [
-            CreateSpan(traceId: "trace1", spanId: "span1", startTime: s_testTime, endTime: s_testTime.AddMinutes(1),
-                attributes: [new KeyValuePair<string, string>("http.url", "/api/products")]),
-            CreateSpan(traceId: "trace2", spanId: "span2", startTime: s_testTime.AddMinutes(2), endTime: s_testTime.AddMinutes(3),
-                attributes: [new KeyValuePair<string, string>("http.url", "/api/orders")])
-        ]);
-
-        var service = CreateService(repository);
-
-        var result = service.GetSpans(resourceNames: null, traceId: null, hasError: null, limit: null, search: search);
-
-        Assert.NotNull(result);
-        Assert.Equal(expectedCount, result.ReturnedCount);
-    }
-
-    [Theory]
-    [InlineData("span1", 1)]
     [InlineData("nonexistent-xyz", 0)]
     public void GetTraces_WithSearch_FiltersTraces(string search, int expectedCount)
     {
@@ -362,6 +429,115 @@ public class TelemetryApiServiceTests
             Assert.NotNull(allResult);
             Assert.Equal(2, allResult.ReturnedCount);
         }
+    }
+
+    [Fact]
+    public void GetSpans_WithAttributeFilter_FiltersSpans()
+    {
+        var repository = CreateRepository();
+        AddSpansToRepository(repository, [
+            CreateSpan(traceId: "trace1", spanId: "span1", startTime: s_testTime, endTime: s_testTime.AddMinutes(1),
+                attributes: [new KeyValuePair<string, string>("http.method", "GET")]),
+            CreateSpan(traceId: "trace1", spanId: "span2", startTime: s_testTime.AddMinutes(2), endTime: s_testTime.AddMinutes(3),
+                attributes: [new KeyValuePair<string, string>("http.method", "POST")])
+        ]);
+
+        var service = CreateService(repository);
+
+        var result = service.GetSpans(resourceNames: null, traceId: null, hasError: null, limit: null, search: "@http.method:GET");
+
+        Assert.NotNull(result);
+        Assert.Equal(1, result.ReturnedCount);
+
+        var spans = GetAllSpans(result);
+        Assert.Single(spans);
+        Assert.Equal("span1", DecodeSpanId(spans[0].SpanId));
+    }
+
+    [Fact]
+    public void GetTraces_WithAttributeFilter_FiltersTraces()
+    {
+        var repository = CreateRepository();
+        AddSpansToRepository(repository, [
+            CreateSpan(traceId: "trace1", spanId: "span1", startTime: s_testTime, endTime: s_testTime.AddMinutes(1),
+                attributes: [new KeyValuePair<string, string>("http.method", "GET")])
+        ]);
+        AddSpansToRepository(repository, [
+            CreateSpan(traceId: "trace2", spanId: "span2", startTime: s_testTime.AddMinutes(10), endTime: s_testTime.AddMinutes(11),
+                attributes: [new KeyValuePair<string, string>("http.method", "POST")])
+        ]);
+
+        var service = CreateService(repository);
+
+        var result = service.GetTraces(resourceNames: null, hasError: null, limit: null, search: "@http.method:POST");
+
+        Assert.NotNull(result);
+        Assert.Equal(1, result.ReturnedCount);
+
+        var spanIds = GetAllSpans(result).Select(s => DecodeSpanId(s.SpanId)).ToList();
+        Assert.Contains("span2", spanIds);
+        Assert.DoesNotContain("span1", spanIds);
+    }
+
+    [Fact]
+    public void GetLogs_WithAttributeFilter_FiltersLogs()
+    {
+        var repository = CreateRepository();
+        AddLogsToRepository(repository, [
+            CreateLogRecord(time: s_testTime, message: "log1", severity: SeverityNumber.Info,
+                attributes: [new KeyValuePair<string, string>("http.method", "GET")]),
+            CreateLogRecord(time: s_testTime.AddMinutes(1), message: "log2", severity: SeverityNumber.Info,
+                attributes: [new KeyValuePair<string, string>("http.method", "POST")])
+        ]);
+
+        var service = CreateService(repository);
+
+        var result = service.GetLogs(resourceNames: null, traceId: null, severity: null, limit: null, search: "@http.method:GET");
+
+        Assert.NotNull(result);
+        Assert.Equal(1, result.ReturnedCount);
+    }
+
+    [Fact]
+    public void GetSpans_WithDurationRangeFilter_ReturnsSpansInRange()
+    {
+        var repository = CreateRepository();
+        AddSpansToRepository(repository, [
+            CreateSpan(traceId: "trace1", spanId: "short-span", startTime: s_testTime, endTime: s_testTime.AddMilliseconds(30)),
+            CreateSpan(traceId: "trace1", spanId: "mid-span", startTime: s_testTime.AddSeconds(1), endTime: s_testTime.AddSeconds(1).AddMilliseconds(75)),
+            CreateSpan(traceId: "trace1", spanId: "long-span", startTime: s_testTime.AddSeconds(2), endTime: s_testTime.AddSeconds(2).AddMilliseconds(200))
+        ]);
+
+        var service = CreateService(repository);
+
+        // Filter for spans with duration > 50ms AND < 100ms (only mid-span at 75ms matches)
+        var result = service.GetSpans(resourceNames: null, traceId: null, hasError: null, limit: null, search: "duration:>50 duration:<100");
+
+        Assert.NotNull(result);
+        Assert.Equal(1, result.ReturnedCount);
+
+        var spans = GetAllSpans(result);
+        Assert.Single(spans);
+        Assert.Equal("mid-span", DecodeSpanId(spans[0].SpanId));
+    }
+
+    [Fact]
+    public void GetLogs_WithUrlSearch_MatchesExactScheme()
+    {
+        var repository = CreateRepository();
+        AddLogs(repository, [
+            "Request to http://www.contoso.com/api completed",
+            "Request to https://www.contoso.com/api completed",
+            "No URL in this message"
+        ]);
+
+        var service = CreateService(repository);
+
+        // The entire URL should be treated as a text fragment, not parsed as a qualifier
+        var result = service.GetLogs(resourceNames: null, traceId: null, severity: null, limit: null, search: "http://www.contoso.com");
+
+        Assert.NotNull(result);
+        Assert.Equal(1, result.ReturnedCount);
     }
 
     /// <summary>
@@ -398,17 +574,6 @@ public class TelemetryApiServiceTests
                 }
             }
         });
-    }
-
-    /// <summary>
-    /// Adds one OK span and one Error span to the repository for hasError filter tests.
-    /// </summary>
-    private static void AddSpansWithStatus(TelemetryRepository repository)
-    {
-        AddSpansToRepository(repository, [
-            CreateSpan(traceId: "trace1", spanId: "ok-span", startTime: s_testTime, endTime: s_testTime.AddMinutes(1), status: new Status { Code = Status.Types.StatusCode.Ok }),
-            CreateSpan(traceId: "trace2", spanId: "error-span", startTime: s_testTime.AddMinutes(2), endTime: s_testTime.AddMinutes(3), status: new Status { Code = Status.Types.StatusCode.Error })
-        ]);
     }
 
     /// <summary>
@@ -467,5 +632,27 @@ public class TelemetryApiServiceTests
         return new TelemetryApiService(
             repository ?? CreateRepository(),
             peerResolvers ?? []);
+    }
+
+    private static List<OtlpSpanJson> GetAllSpans(TelemetryApiResponse result)
+    {
+        // These tests care about which OTLP spans are returned, not the complete JSON
+        // serialization shape. Assert over the structured response model so a formatting
+        // change can't hide a filtering regression or create snapshot churn.
+        return result.Data?.ResourceSpans?
+            .SelectMany(rs => rs.ScopeSpans ?? [])
+            .SelectMany(ss => ss.Spans ?? [])
+            .ToList() ?? [];
+    }
+
+    // SpanId is serialized as lowercase hex per the OTLP/JSON spec
+    // (see https://opentelemetry.io/docs/specs/otlp/#json-protobuf-encoding), and our
+    // CreateSpan test helper stores the friendly identifier as the raw UTF-8 bytes of
+    // the SpanId. Decode the hex back to text so assertions can compare against the
+    // original identifier the test supplied.
+    private static string DecodeSpanId(string? hexSpanId)
+    {
+        Assert.NotNull(hexSpanId);
+        return Encoding.UTF8.GetString(Convert.FromHexString(hexSpanId));
     }
 }

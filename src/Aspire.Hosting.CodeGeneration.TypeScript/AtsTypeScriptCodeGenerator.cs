@@ -175,12 +175,12 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
     /// </summary>
     private string MapTypeRefToTypeScript(AtsTypeRef? typeRef)
     {
-        if (typeRef == null)
+        if (typeRef is null)
         {
             return "unknown";
         }
 
-        // ReferenceExpression is a value type defined in base.ts, not a handle-based wrapper
+        // ReferenceExpression is a value type defined in base.mts, not a handle-based wrapper
         if (typeRef.TypeId == AtsConstants.ReferenceExpressionTypeId)
         {
             return GetReferenceExpressionInterfaceName();
@@ -236,6 +236,36 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         return typeRef.TypeId is AtsConstants.Void or AtsConstants.Any or AtsConstants.CancellationToken
             ? mappedType
             : $"{mappedType} | null";
+    }
+
+    private string MapDtoPropertyTypeToTypeScript(AtsTypeRef? typeRef)
+    {
+        if (typeRef is null)
+        {
+            return "unknown";
+        }
+
+        return typeRef.Category switch
+        {
+            AtsTypeCategory.Array or AtsTypeCategory.List => $"{MapDtoPropertyTypeToTypeScript(typeRef.ElementType)}[]",
+            AtsTypeCategory.Dict => $"Record<{MapDtoPropertyTypeToTypeScript(typeRef.KeyType)}, {MapDtoPropertyTypeToTypeScript(typeRef.ValueType)}>",
+            AtsTypeCategory.Union => MapDtoUnionTypeToTypeScript(typeRef),
+            _ => MapTypeRefToTypeScript(typeRef)
+        };
+    }
+
+    private string MapDtoUnionTypeToTypeScript(AtsTypeRef typeRef)
+    {
+        if (typeRef.UnionTypes is null || typeRef.UnionTypes.Count == 0)
+        {
+            return "unknown";
+        }
+
+        var memberTypes = typeRef.UnionTypes
+            .Select(MapDtoPropertyTypeToTypeScript)
+            .Distinct();
+
+        return string.Join(" | ", memberTypes);
     }
 
     /// <summary>
@@ -695,6 +725,14 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         return parameterName;
     }
 
+    private static string GetLocalParameterName(AtsParameterInfo parameter)
+    {
+        // ES modules are always strict mode, where "arguments" cannot be used as
+        // a local binding name. Keep the wire/API name unchanged and only rename
+        // the generated implementation variable.
+        return parameter.Name == "arguments" ? "argumentsValue" : parameter.Name;
+    }
+
     private static string GetRpcArgumentEntry(string parameterName, AtsTypeRef? typeRef)
     {
         var valueExpression = GetRpcArgumentValueExpression(parameterName, typeRef);
@@ -723,6 +761,16 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         return GetRpcArgumentValueExpression(param.Name, param.Type);
     }
 
+    private static string GetRpcArgumentExpression(AtsParameterInfo param, string localParameterName, bool useRegisteredCallback = true)
+    {
+        if (useRegisteredCallback && param.IsCallback)
+        {
+            return $"{localParameterName}Id";
+        }
+
+        return GetRpcArgumentValueExpression(localParameterName, param.Type);
+    }
+
     /// <summary>
     /// Gets the TypeId from a capability's return type.
     /// </summary>
@@ -736,12 +784,12 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
     {
         var files = new Dictionary<string, string>();
 
-        // Add embedded resource files (transport.ts, base.ts)
-        files["transport.ts"] = EmbeddedResources.Read("transport.ts");
-        files["base.ts"] = EmbeddedResources.Read("base.ts");
+        // Add embedded resource files (transport.mts, base.mts)
+        files["transport.mts"] = EmbeddedResources.Read("transport.mts");
+        files["base.mts"] = EmbeddedResources.Read("base.mts");
 
-        // Generate the capability-based aspire.ts SDK
-        files["aspire.ts"] = GenerateAspireSdk(context);
+        // Generate the capability-based aspire.mts SDK
+        files["aspire.mts"] = GenerateAspireSdk(context);
 
         return files;
     }
@@ -757,7 +805,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
     }
 
     /// <summary>
-    /// Generates the aspire.ts SDK file with capability-based API.
+    /// Generates the aspire.mts SDK file with capability-based API.
     /// </summary>
     private string GenerateAspireSdk(AtsContext context)
     {
@@ -766,7 +814,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
 
         // Header
         WriteLine("""
-            // aspire.ts - Capability-based Aspire SDK
+            // aspire.mts - Capability-based Aspire SDK
             // This SDK uses the ATS (Aspire Type System) capability API.
             // Capabilities are endpoints like 'Aspire.Hosting/createBuilder'.
             //
@@ -783,10 +831,10 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
                 wrapIfHandle,
                 registerHandleWrapper,
                 isPromiseLike
-            } from './transport.js';
-            import type { AspireClientRpc } from './transport.js';
+            } from './transport.mjs';
+            import type { AspireClientRpc } from './transport.mjs';
 
-            import type { HandleReference } from './base.js';
+            import type { HandleReference } from './base.mjs';
 
             import {
                 ResourceBuilderBase,
@@ -794,24 +842,24 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
                 refExpr,
                 AspireDict,
                 AspireList
-            } from './base.js';
+            } from './base.mjs';
 
             export {
                 InputType,
                 InteractionInputCollection
-            } from './base.js';
+            } from './base.mjs';
 
             export type {
                 InteractionInput,
                 InteractionInputOption
-            } from './base.js';
+            } from './base.mjs';
 
             import type {
                 Awaitable,
                 InteractionInput,
                 InteractionInputCollection,
                 InputType
-            } from './base.js';
+            } from './base.mjs';
             """);
         WriteLine();
 
@@ -904,7 +952,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
             }
         }
         // Note: ReferenceExpression is intentionally NOT added to _wrapperClassNames.
-        // It is a value type defined in base.ts with a private constructor and static factory,
+        // It is a value type defined in base.mts with a private constructor and static factory,
         // not a handle-based wrapper. It is handled via MapTypeRefToTypeScript instead.
 
         // Generate handle type aliases
@@ -1078,7 +1126,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
             {
                 var tsType = prop.IsCallback
                     ? GenerateCallbackTypeSignature(prop.CallbackParameters, prop.CallbackReturnType)
-                    : MapTypeRefToTypeScript(prop.Type);
+                    : MapDtoPropertyTypeToTypeScript(prop.Type);
                 // All DTO properties are optional in TypeScript to allow partial objects
                 // Convert PascalCase to camelCase for TypeScript
                 var propName = ToCamelCase(prop.Name);
@@ -1641,8 +1689,15 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
 
         if (getter != null)
         {
-            var returnTypeName = MapTypeRefToTypeScript(getter.ReturnType);
-            WriteLine($"        get: () => Promise<{returnTypeName}>;");
+            if (TryGetPromiseWrapperType(getter.ReturnType, out var promiseInterfaceName, out _))
+            {
+                WriteLine($"        get: () => {promiseInterfaceName};");
+            }
+            else
+            {
+                var returnTypeName = MapTypeRefToTypeScript(getter.ReturnType);
+                WriteLine($"        get: () => Promise<{returnTypeName}>;");
+            }
         }
 
         if (setter != null)
@@ -1709,8 +1764,15 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
             WriteCapabilityDocComment("    ", capability, requiredParams, hasOptionals ? "options" : null);
             if (hasNonBuilderReturn)
             {
-                var returnType = MapTypeRefToTypeScript(capability.ReturnType);
-                WriteLine($"    {capability.MethodName}({publicParamsString}): Promise<{returnType}>;");
+                if (TryGetPromiseWrapperType(capability.ReturnType, out var promiseInterfaceName, out _))
+                {
+                    WriteLine($"    {capability.MethodName}({publicParamsString}): {promiseInterfaceName};");
+                }
+                else
+                {
+                    var returnType = MapTypeRefToTypeScript(capability.ReturnType);
+                    WriteLine($"    {capability.MethodName}({publicParamsString}): Promise<{returnType}>;");
+                }
             }
             else
             {
@@ -1762,8 +1824,15 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
             WriteCapabilityDocComment("    ", capability, requiredParams, hasOptionals ? "options" : null);
             if (hasNonBuilderReturn)
             {
-                var returnType = MapTypeRefToTypeScript(capability.ReturnType);
-                WriteLine($"    {capability.MethodName}({paramsString}): Promise<{returnType}>;");
+                if (TryGetPromiseWrapperType(capability.ReturnType, out var returnPromiseInterfaceName, out _))
+                {
+                    WriteLine($"    {capability.MethodName}({paramsString}): {returnPromiseInterfaceName};");
+                }
+                else
+                {
+                    var returnType = MapTypeRefToTypeScript(capability.ReturnType);
+                    WriteLine($"    {capability.MethodName}({paramsString}): Promise<{returnType}>;");
+                }
             }
             else
             {
@@ -1826,6 +1895,9 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         var hasMethods = standardMethods.Count > 0;
 
         var properties = GroupPropertiesByName(getters, setters);
+        var getterOnlyProperties = properties
+            .Where(p => IsGetterOnlyProperty(p.Getter, p.Setter))
+            .ToList();
         foreach (var prop in properties)
         {
             GenerateInterfaceProperty(prop.PropertyName, prop.Getter, prop.Setter);
@@ -1839,14 +1911,14 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         WriteLine("}");
         WriteLine();
 
-        if (!hasMethods)
+        if (!hasMethods && getterOnlyProperties.Count == 0)
         {
             return;
         }
 
         var promiseInterfaceName = GetPromiseInterfaceName(className);
         WriteLine($"export interface {promiseInterfaceName} extends PromiseLike<{interfaceName}> {{");
-        foreach (var prop in properties.Where(p => IsGetterOnlyProperty(p.Getter, p.Setter)))
+        foreach (var prop in getterOnlyProperties)
         {
             GenerateGetterOnlyPropertyPromiseSignature(prop.PropertyName, prop.Getter!);
         }
@@ -1993,6 +2065,46 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         var hasNonBuilderReturn = !returnsBuilder && capability.ReturnType != null;
         if (hasNonBuilderReturn)
         {
+            if (TryGetPromiseWrapperType(capability.ReturnType, out var returnPromiseInterfaceName, out var returnPromiseImplementationClassName))
+            {
+                var wrappedReturnTypeId = capability.ReturnType!.TypeId;
+                var wrappedReturnClassName = GetConcreteClassName(wrappedReturnTypeId);
+                var returnImplementationClassNameForWrapper = GetImplementationClassName(wrappedReturnClassName);
+                var returnHandleType = GetHandleTypeName(wrappedReturnTypeId);
+
+                WriteCapabilityDocComment("    ", capability, requiredParams, hasOptionals ? publicOptionsParamName : null);
+                Write($"    {methodName}(");
+                Write(publicParamsString);
+                WriteLine($"): {returnPromiseInterfaceName} {{");
+                WriteLine("        const promise = (async () => {");
+
+                foreach (var param in hasDirectOptionsParameter ? [] : optionalParams)
+                {
+                    var localParameterName = GetLocalParameterName(param);
+                    WriteLine($"            {(IsWidenedHandleType(param.Type) ? "let" : "const")} {localParameterName} = {publicOptionsParamName}?.{param.Name};");
+                }
+
+                var callbackParamsForPromiseWrapper = userParams.Where(p => p.IsCallback).ToList();
+                foreach (var callbackParam in callbackParamsForPromiseWrapper)
+                {
+                    GenerateCallbackRegistration(callbackParam, "            ");
+                }
+
+                GeneratePromiseResolution(userParams, "            ");
+                GenerateArgsObjectWithConditionals(targetParamName, requiredParams, optionalParams, useSafeOptionalLocalNames: true, indent: "            ");
+
+                WriteLine($"            const handle = await this._client.invokeCapability<{returnHandleType}>(");
+                WriteLine($"                '{capability.CapabilityId}',");
+                WriteLine("                rpcArgs");
+                WriteLine("            );");
+                WriteLine($"            return new {returnImplementationClassNameForWrapper}(handle, this._client);");
+                WriteLine("        })();");
+                WriteLine($"        return new {returnPromiseImplementationClassName}(promise, this._client);");
+                WriteLine("    }");
+                WriteLine();
+                return;
+            }
+
             // Generate a simple async method that returns the actual type
             var returnType = MapTypeRefToTypeScript(capability.ReturnType);
 
@@ -2004,7 +2116,8 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
             // Extract optional params from options object
             foreach (var param in hasDirectOptionsParameter ? [] : optionalParams)
             {
-                WriteLine($"        {(IsWidenedHandleType(param.Type) ? "let" : "const")} {param.Name} = {publicOptionsParamName}?.{param.Name};");
+                var localParameterName = GetLocalParameterName(param);
+                WriteLine($"        {(IsWidenedHandleType(param.Type) ? "let" : "const")} {localParameterName} = {publicOptionsParamName}?.{param.Name};");
             }
 
             // Handle callback registration if any
@@ -2018,7 +2131,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
             GeneratePromiseResolution(userParams);
 
             // Build args object with conditional inclusion
-            GenerateArgsObjectWithConditionals(targetParamName, requiredParams, optionalParams);
+            GenerateArgsObjectWithConditionals(targetParamName, requiredParams, optionalParams, useSafeOptionalLocalNames: true);
 
             if (capability.ReturnType?.TypeId == AtsConstants.CancellationToken)
             {
@@ -2091,11 +2204,12 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         // Extract optional params from options object and forward to internal method
         foreach (var param in hasDirectOptionsParameter ? [] : optionalParams)
         {
-            WriteLine($"        {(IsWidenedHandleType(param.Type) ? "let" : "const")} {param.Name} = {publicOptionsParamName}?.{param.Name};");
+            var localParameterName = GetLocalParameterName(param);
+            WriteLine($"        {(IsWidenedHandleType(param.Type) ? "let" : "const")} {localParameterName} = {publicOptionsParamName}?.{param.Name};");
         }
 
         // Forward all params to internal method
-        var allParamNames = userParams.Select(p => p.Name);
+        var allParamNames = userParams.Select(p => optionalParams.Contains(p) ? GetLocalParameterName(p) : p.Name);
         var internalCall = $"this.{internalMethodName}({string.Join(", ", allParamNames)})";
 
         // For build(), flush pending promises before invoking the internal method.
@@ -2222,6 +2336,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         IReadOnlyList<AtsParameterInfo> allParams,
         List<AtsParameterInfo> requiredParams,
         List<AtsParameterInfo> optionalParams,
+        bool useSafeOptionalLocalNames = false,
         string indent = "        ")
     {
         // Resolve any promise-like handle parameters
@@ -2239,8 +2354,9 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         // Conditionally add optional params
         foreach (var param in optionalParams)
         {
-            var rpcExpression = GetRpcArgumentExpression(param);
-            WriteLine($"{indent}if ({param.Name} !== undefined) rpcArgs.{param.Name} = {rpcExpression};");
+            var localParameterName = useSafeOptionalLocalNames ? GetLocalParameterName(param) : param.Name;
+            var rpcExpression = GetRpcArgumentExpression(param, localParameterName);
+            WriteLine($"{indent}if ({localParameterName} !== undefined) rpcArgs.{param.Name} = {rpcExpression};");
         }
     }
 
@@ -2251,6 +2367,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         string targetParamName,
         List<AtsParameterInfo> requiredParams,
         List<AtsParameterInfo> optionalParams,
+        bool useSafeOptionalLocalNames = false,
         string indent = "        ")
     {
         // Build the required args inline
@@ -2265,8 +2382,9 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         // Conditionally add optional params
         foreach (var param in optionalParams)
         {
-            var rpcExpression = GetRpcArgumentExpression(param);
-            WriteLine($"{indent}if ({param.Name} !== undefined) rpcArgs.{param.Name} = {rpcExpression};");
+            var localParameterName = useSafeOptionalLocalNames ? GetLocalParameterName(param) : param.Name;
+            var rpcExpression = GetRpcArgumentExpression(param, localParameterName);
+            WriteLine($"{indent}if ({localParameterName} !== undefined) rpcArgs.{param.Name} = {rpcExpression};");
         }
     }
 
@@ -2392,6 +2510,19 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
 
             if (hasNonBuilderReturn)
             {
+                if (TryGetPromiseWrapperType(capability.ReturnType, out var returnPromiseInterfaceName, out var returnPromiseImplementationClassName))
+                {
+                    Write($"    {methodName}(");
+                    Write(paramsString);
+                    WriteLine($"): {returnPromiseInterfaceName} {{");
+                    Write($"        return new {returnPromiseImplementationClassName}(this._promise.then(obj => obj.{methodName}(");
+                    Write(argsString);
+                    WriteLine(")), this._client);");
+                    WriteLine("    }");
+                    WriteLine();
+                    continue;
+                }
+
                 // For non-builder returns, call the public method directly
                 var returnType = MapTypeRefToTypeScript(capability.ReturnType);
                 Write($"    {methodName}(");
@@ -2806,9 +2937,9 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
             }
 
             // Re-export commonly used types
-            export { Handle, AppHostUsageError, CancellationToken, CapabilityError, registerCallback } from './transport.js';
-            export { refExpr, ReferenceExpression } from './base.js';
-            export type { HandleReference, Awaitable } from './base.js';
+            export { Handle, AppHostUsageError, CancellationToken, CapabilityError, registerCallback } from './transport.mjs';
+            export { refExpr, ReferenceExpression } from './base.mjs';
+            export type { HandleReference, Awaitable } from './base.mjs';
             """);
         WriteLine();
     }
@@ -2902,7 +3033,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
     /// <summary>
     /// Generates a type class (context type or wrapper type).
     /// Uses property-like objects for mutable properties and methods for getter-only properties.
-    /// For types with methods, also generates a Promise wrapper class for fluent chaining.
+    /// For types with generated async members, also generates a Promise wrapper class for fluent chaining.
     /// </summary>
     private void GenerateTypeClass(BuilderModel model)
     {
@@ -2935,6 +3066,9 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
 
         // Group getters and setters by property name to create property members
         var properties = GroupPropertiesByName(getters, setters);
+        var getterOnlyProperties = properties
+            .Where(p => IsGetterOnlyProperty(p.Getter, p.Setter))
+            .ToList();
 
         // Generate property access members
         foreach (var prop in properties)
@@ -2966,8 +3100,8 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         WriteLine("}");
         WriteLine();
 
-        // Generate thenable wrapper class if this type has methods
-        if (hasMethods)
+        // Generate thenable wrapper class if this type has generated async members
+        if (hasMethods || getterOnlyProperties.Count > 0)
         {
             GenerateTypeClassThenableWrapper(model, allMethods);
         }
@@ -3240,13 +3374,29 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         var wrapperImplementationClassName = GetImplementationClassName(wrapperClassName);
 
         WriteLine($"    {propertyName} = {{");
-        WriteLine($"        get: async (): Promise<{wrapperClassName}> => {{");
-        WriteLine($"            const handle = await this._client.invokeCapability<{handleType}>(");
-        WriteLine($"                '{getter.CapabilityId}',");
-        WriteLine($"                {{ context: this._handle }}");
-        WriteLine("            );");
-        WriteLine($"            return new {wrapperImplementationClassName}(handle, this._client);");
-        WriteLine("        },");
+        if (TryGetPromiseWrapperType(getter.ReturnType, out var promiseInterfaceName, out var promiseImplementationClassName))
+        {
+            WriteLine($"        get: (): {promiseInterfaceName} => {{");
+            WriteLine("            const promise = (async () => {");
+            WriteLine($"                const handle = await this._client.invokeCapability<{handleType}>(");
+            WriteLine($"                    '{getter.CapabilityId}',");
+            WriteLine($"                    {{ context: this._handle }}");
+            WriteLine("                );");
+            WriteLine($"                return new {wrapperImplementationClassName}(handle, this._client);");
+            WriteLine("            })();");
+            WriteLine($"            return new {promiseImplementationClassName}(promise, this._client, false);");
+            WriteLine("        },");
+        }
+        else
+        {
+            WriteLine($"        get: async (): Promise<{wrapperClassName}> => {{");
+            WriteLine($"            const handle = await this._client.invokeCapability<{handleType}>(");
+            WriteLine($"                '{getter.CapabilityId}',");
+            WriteLine($"                {{ context: this._handle }}");
+            WriteLine("            );");
+            WriteLine($"            return new {wrapperImplementationClassName}(handle, this._client);");
+            WriteLine("        },");
+        }
 
         if (setter != null)
         {
@@ -3457,6 +3607,39 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
             ? MapTypeRefToTypeScript(method.ReturnType)
             : "void";
 
+        if (TryGetPromiseWrapperType(method.ReturnType, out var returnPromiseInterfaceName, out var returnPromiseImplementationClassName))
+        {
+            var returnTypeId = method.ReturnType!.TypeId;
+            var returnClassName = GetConcreteClassName(returnTypeId);
+            var returnImplementationClassName = GetImplementationClassName(returnClassName);
+            var returnHandleType = GetHandleTypeName(returnTypeId);
+
+            WriteCapabilityDocComment("    ", method, requiredParams, hasOptionals ? publicOptionsParamName : null);
+            Write($"    {methodName}(");
+            Write(paramsString);
+            WriteLine($"): {returnPromiseInterfaceName} {{");
+            WriteLine("        const promise = (async () => {");
+
+            foreach (var param in hasDirectOptionsParameter ? [] : optionalParams)
+            {
+                var localParameterName = GetLocalParameterName(param);
+                WriteLine($"            {(IsWidenedHandleType(param.Type) ? "let" : "const")} {localParameterName} = {publicOptionsParamName}?.{param.Name};");
+            }
+
+            GenerateResolveAndBuildArgs(targetParamName, userParams, requiredParams, optionalParams, useSafeOptionalLocalNames: true, indent: "            ");
+
+            WriteLine($"            const handle = await this._client.invokeCapability<{returnHandleType}>(");
+            WriteLine($"                '{method.CapabilityId}',");
+            WriteLine("                rpcArgs");
+            WriteLine("            );");
+            WriteLine($"            return new {returnImplementationClassName}(handle, this._client);");
+            WriteLine("        })();");
+            WriteLine($"        return new {returnPromiseImplementationClassName}(promise, this._client);");
+            WriteLine("    }");
+            WriteLine();
+            return;
+        }
+
         // Generate async method
         WriteCapabilityDocComment("    ", method, requiredParams, hasOptionals ? publicOptionsParamName : null);
         Write($"    async {methodName}(");
@@ -3466,11 +3649,12 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         // Extract optional params from options object
         foreach (var param in hasDirectOptionsParameter ? [] : optionalParams)
         {
-            WriteLine($"        {(IsWidenedHandleType(param.Type) ? "let" : "const")} {param.Name} = {publicOptionsParamName}?.{param.Name};");
+            var localParameterName = GetLocalParameterName(param);
+            WriteLine($"        {(IsWidenedHandleType(param.Type) ? "let" : "const")} {localParameterName} = {publicOptionsParamName}?.{param.Name};");
         }
 
         // Resolve promise-like params and build args
-        GenerateResolveAndBuildArgs(targetParamName, userParams, requiredParams, optionalParams);
+        GenerateResolveAndBuildArgs(targetParamName, userParams, requiredParams, optionalParams, useSafeOptionalLocalNames: true);
 
         if (returnType == "void")
         {
@@ -3536,6 +3720,39 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         // Determine return type
         var returnType = MapTypeRefToTypeScript(capability.ReturnType);
 
+        if (TryGetPromiseWrapperType(capability.ReturnType, out var returnPromiseInterfaceName, out var returnPromiseImplementationClassName))
+        {
+            var returnTypeId = capability.ReturnType!.TypeId;
+            var returnClassName = GetConcreteClassName(returnTypeId);
+            var returnImplementationClassName = GetImplementationClassName(returnClassName);
+            var returnHandleType = GetHandleTypeName(returnTypeId);
+
+            WriteCapabilityDocComment("    ", capability, requiredParams, hasOptionals ? publicOptionsParamName : null);
+            Write($"    {methodName}(");
+            Write(paramsString);
+            WriteLine($"): {returnPromiseInterfaceName} {{");
+            WriteLine("        const promise = (async () => {");
+
+            foreach (var param in hasDirectOptionsParameter ? [] : optionalParams)
+            {
+                var localParameterName = GetLocalParameterName(param);
+                WriteLine($"            {(IsWidenedHandleType(param.Type) ? "let" : "const")} {localParameterName} = {publicOptionsParamName}?.{param.Name};");
+            }
+
+            GenerateResolveAndBuildArgs(firstParamName, userParams, requiredParams, optionalParams, useSafeOptionalLocalNames: true, indent: "            ");
+
+            WriteLine($"            const handle = await this._client.invokeCapability<{returnHandleType}>(");
+            WriteLine($"                '{capability.CapabilityId}',");
+            WriteLine("                rpcArgs");
+            WriteLine("            );");
+            WriteLine($"            return new {returnImplementationClassName}(handle, this._client);");
+            WriteLine("        })();");
+            WriteLine($"        return new {returnPromiseImplementationClassName}(promise, this._client);");
+            WriteLine("    }");
+            WriteLine();
+            return;
+        }
+
         // Generate async method
         WriteCapabilityDocComment("    ", capability, requiredParams, hasOptionals ? publicOptionsParamName : null);
         Write($"    async {methodName}(");
@@ -3545,11 +3762,12 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
         // Extract optional params from options object
         foreach (var param in hasDirectOptionsParameter ? [] : optionalParams)
         {
-            WriteLine($"        {(IsWidenedHandleType(param.Type) ? "let" : "const")} {param.Name} = {publicOptionsParamName}?.{param.Name};");
+            var localParameterName = GetLocalParameterName(param);
+            WriteLine($"        {(IsWidenedHandleType(param.Type) ? "let" : "const")} {localParameterName} = {publicOptionsParamName}?.{param.Name};");
         }
 
         // Resolve promise-like params and build args
-        GenerateResolveAndBuildArgs(firstParamName, userParams, requiredParams, optionalParams);
+        GenerateResolveAndBuildArgs(firstParamName, userParams, requiredParams, optionalParams, useSafeOptionalLocalNames: true);
 
         if (returnType == "void")
         {
@@ -3677,10 +3895,12 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
             // Extract optional params and forward
             foreach (var param in hasDirectOptionsParameter ? [] : optionalParams)
             {
-                WriteLine($"        {(IsWidenedHandleType(param.Type) ? "let" : "const")} {param.Name} = {publicOptionsParamName}?.{param.Name};");
+                var localParameterName = GetLocalParameterName(param);
+                WriteLine($"        {(IsWidenedHandleType(param.Type) ? "let" : "const")} {localParameterName} = {publicOptionsParamName}?.{param.Name};");
             }
 
-            var internalCall = $"this.{internalMethodName}({string.Join(", ", userParams.Select(p => p.Name))})";
+            var internalCallArgs = userParams.Select(p => optionalParams.Contains(p) ? GetLocalParameterName(p) : p.Name);
+            var internalCall = $"this.{internalMethodName}({string.Join(", ", internalCallArgs)})";
 
             // For build(), flush pending promises before invoking the internal method to avoid deadlock
             if (string.Equals(methodName, "build", StringComparison.OrdinalIgnoreCase))
@@ -3733,11 +3953,12 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
             // Extract optional params and forward
             foreach (var param in optionalParams)
             {
-                WriteLine($"        {(IsWidenedHandleType(param.Type) ? "let" : "const")} {param.Name} = {publicOptionsParamName}?.{param.Name};");
+                var localParameterName = GetLocalParameterName(param);
+                WriteLine($"        {(IsWidenedHandleType(param.Type) ? "let" : "const")} {localParameterName} = {publicOptionsParamName}?.{param.Name};");
             }
 
             Write($"        return new {promiseImplementationClass}(this.{internalMethodName}(");
-            Write(string.Join(", ", userParams.Select(p => p.Name)));
+            Write(string.Join(", ", userParams.Select(p => optionalParams.Contains(p) ? GetLocalParameterName(p) : p.Name)));
             WriteLine("), this._client);");
             WriteLine("    }");
         }
@@ -3752,7 +3973,8 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
             // Extract optional params from options object
             foreach (var param in optionalParams)
             {
-                WriteLine($"        {(IsWidenedHandleType(param.Type) ? "let" : "const")} {param.Name} = {publicOptionsParamName}?.{param.Name};");
+                var localParameterName = GetLocalParameterName(param);
+                WriteLine($"        {(IsWidenedHandleType(param.Type) ? "let" : "const")} {localParameterName} = {publicOptionsParamName}?.{param.Name};");
             }
 
             // Handle callback registration if any
@@ -3766,7 +3988,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
             GeneratePromiseResolution(userParams);
 
             // Build args with conditional inclusion
-            GenerateArgsObjectWithConditionals(targetParamName, requiredParams, optionalParams);
+            GenerateArgsObjectWithConditionals(targetParamName, requiredParams, optionalParams, useSafeOptionalLocalNames: true);
 
             if (capability.ReturnType?.TypeId == AtsConstants.CancellationToken)
             {
@@ -3983,8 +4205,8 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
                 continue;
             }
 
-            // These types are implemented manually in base.ts, including handle wrapper
-            // registrations, so they must not also generate duplicate wrappers in aspire.ts.
+            // These types are implemented manually in base.mts, including handle wrapper
+            // registrations, so they must not also generate duplicate wrappers in aspire.mts.
             if (targetTypeId is AtsConstants.ReferenceExpressionTypeId or InteractionInputCollectionTypeId)
             {
                 continue;
@@ -4265,15 +4487,23 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
     }
 
     /// <summary>
-    /// Determines if a type has chainable methods and should have a Promise wrapper.
-    /// Types with instance methods or wrapper methods get Promise wrappers.
+    /// Determines if a type has generated async members and should have a Promise wrapper.
+    /// Types with instance methods, wrapper methods, or getter-only properties get Promise wrappers.
     /// </summary>
     private static bool HasChainableMethods(BuilderModel model)
     {
-        // Check for instance methods (from ExposeMethods=true) or wrapper methods
-        return model.Capabilities.Any(c =>
+        var hasMethods = model.Capabilities.Any(c =>
             c.CapabilityKind == AtsCapabilityKind.InstanceMethod ||
             c.CapabilityKind == AtsCapabilityKind.Method);
+        if (hasMethods)
+        {
+            return true;
+        }
+
+        var getters = model.Capabilities.Where(c => c.CapabilityKind == AtsCapabilityKind.PropertyGetter).ToList();
+        var setters = model.Capabilities.Where(c => c.CapabilityKind == AtsCapabilityKind.PropertySetter).ToList();
+
+        return GroupPropertiesByName(getters, setters).Any(p => IsGetterOnlyProperty(p.Getter, p.Setter));
     }
 
     /// <summary>

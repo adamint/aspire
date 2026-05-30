@@ -9,7 +9,10 @@ The Aspire release process involves two main automation components:
 1. **Azure DevOps Pipeline** ([`release-publish-nuget`](https://dev.azure.com/dnceng/internal/_build?definitionId=1600&_a=summary), source: `eng/pipelines/release-publish-nuget.yml`)
    - Publishes NuGet packages to NuGet.org
    - Promotes the build to the GA channel via darc
-   - Submits WinGet and Homebrew installer PRs
+   - Submits WinGet manifest PRs
+   - Validates the Homebrew cask against the live GitHub release
+     (cask version bumps themselves are submitted by upstream autobump —
+     see [Installer channels](#installer-channels))
    - Optionally publishes the signed VS Code extension to the Visual Studio Marketplace
    - Dispatches the GitHub Actions workflow below as the `aspire-repo-bot`
      GitHub App and waits for it to complete
@@ -29,11 +32,25 @@ The Aspire release process involves two main automation components:
    - Defaults its comparison baseline to the latest stable Marketplace VSIX's embedded `extension/.version` commit SHA
    - Can run with `dry_run: true` in forks to validate changelog generation without bot secrets
 
+## Installer channels
+
+Aspire ships through several channels. The release pipeline either submits the bump itself or validates a bump submitted upstream; the per-channel docs describe manifest shape, validation modes, and dogfooding workflows in detail.
+
+| Channel | Who submits the version bump | Per-channel docs |
+|---------|------------------------------|------------------|
+| **NuGet** (libraries, AppHost SDK, `Aspire.Cli` tool packages) | `release-publish-nuget` pushes to NuGet.org | This document |
+| **WinGet** (`winget install Microsoft.Aspire`) | `release-publish-nuget` submits manifest PRs to `microsoft/winget-pkgs` via `wingetcreate` | [`eng/winget/README.md`](../eng/winget/README.md) |
+| **Homebrew cask** (`brew install --cask aspire`) | Upstream Homebrew/homebrew-cask's [autobump workflow](https://github.com/Homebrew/homebrew-cask/blob/master/.github/workflows/autobump.yml) opens the bump PR on a 3-hour schedule, detecting the new version via the cask's `livecheck` block. `release-publish-nuget` only validates the cask against the live GitHub release after asset upload. | [`eng/homebrew/README.md`](../eng/homebrew/README.md) |
+| **`dotnet tool install -g Aspire.Cli`** | `release-publish-nuget` pushes the per-RID `Aspire.Cli.*.nupkg` packages to NuGet.org alongside the libraries | [`docs/specs/install-routes.md`](specs/install-routes.md) |
+| **Install script** (`get-aspire-cli.sh` / `.ps1`) | No separate publication — the script downloads directly from the GitHub release assets attached in Step 1 | [`docs/specs/install-routes.md`](specs/install-routes.md), `eng/scripts/get-aspire-cli.*` |
+
+The CLI identifies which channel installed it via a per-install sidecar so that self-update can route back through the same channel. See [`docs/specs/install-routes.md`](specs/install-routes.md).
+
 ## Prerequisites
 
 Before starting a release:
 
-1. **Signed Build**: Have a successful signed build from the official `microsoft-aspire` pipeline
+1. **Signed Build**: Have a successful signed build from the official [`microsoft-aspire`](https://dev.azure.com/dnceng/internal/_build?definitionId=1602) pipeline
    - The build will be selected from a dropdown when running the release pipeline
    - The build should have a `BAR ID - NNNNNN` tag (auto-extracted by the pipeline)
    - If publishing the VS Code extension, the build must include the `aspire-vscode-extension` artifact with exactly one `.vsix`, matching `.manifest`, and matching `.signature.p7s`
@@ -66,17 +83,7 @@ Before starting a release:
    [release-publish-nuget](https://dev.azure.com/dnceng/internal/_build?definitionId=1600&_a=summary)
    (definition `1600` in `dnceng/internal`)
 2. Click "Run pipeline"
-3. Under **Resources**, select the source build from the `aspire-build` dropdown
-   - The picker shows all recent builds from the `microsoft-aspire`
-     pipeline regardless of branch. Pick the build that corresponds to the
-     release branch and version you intend to ship.
-   - Each build's tags are shown alongside its number — verify the
-     `release-version - X.Y.Z` tag matches the version you intend to ship
-     **before** clicking Run. If the tag is missing, either re-run the
-     source build (after the tag-emitting change in `azure-pipelines.yml`
-     is on that release branch) or pass an explicit `ReleaseVersion`
-     override below.
-4. Fill in the parameters. **Most should stay at their defaults** — the
+3. Fill in the parameters. **Most should stay at their defaults** — the
    ones flagged `[Advanced]` in the run-pipeline form are only for
    re-running after a partial failure or for testing pipeline changes on a
    topic branch.
@@ -96,13 +103,23 @@ Before starting a release:
    |-----------|-------------|---------|
    | `SkipNuGetPublish` | Set `true` if re-running after NuGet success | `false` |
    | `SkipChannelPromotion` | Set `true` if re-running after darc success | `false` |
-   | `SkipWinGetPublish` | Set `true` if re-running after WinGet success | `true` |
-   | `SkipHomebrewPublish` | Set `true` if re-running after Homebrew success | `true` |
+   | `SkipWinGetPublish` | Set `true` if re-running after WinGet success | `false` |
    | `SkipGitHubTasks` | Set `true` to skip dispatching the GH workflow | `false` |
    | `SkipReleaseAssets` | Set `true` to skip uploading aspire-cli-* assets to the GitHub release | `false` |
+   | `SkipHomebrewValidation` | Set `true` if re-running after a successful Homebrew cask validation (validates against the live GH release) | `false` |
    | `SkipVSCodeExtensionPublish` | Set `false` to publish the signed `aspire-vscode-extension` artifact to the Visual Studio Marketplace | `true` |
    | `GitHubTasksWorkflowRef` | Ref to load `release-github-tasks.yml` from when dispatching. Only affects the workflow source — the release branch/commit are passed via inputs. Override only when testing pipeline changes on a topic branch. | `main` |
-
+   
+4. Select the **Resources** button in the bottom right, then select the source build from the `aspire-build` dropdown
+   - The picker shows all recent builds from the `microsoft-aspire`
+     pipeline regardless of branch. Pick the build that corresponds to the
+     release branch and version you intend to ship.
+   - Each build's tags are shown alongside its number — verify the
+     `release-version - X.Y.Z` tag matches the version you intend to ship
+     **before** clicking Run. If the tag is missing, either re-run the
+     source build (after the tag-emitting change in `azure-pipelines.yml`
+     is on that release branch) or pass an explicit `ReleaseVersion`
+     override below.
 5. Click "Run" and monitor the pipeline. The final stage (`GitHubTasks`)
    dispatches `release-github-tasks.yml`, waits for it to complete, and
    then uploads the `aspire-cli-*` archives from the source build's
@@ -160,8 +177,8 @@ bot. If a GitHub-side step fails partway through and you need to re-run
 only the GitHub work, you can:
 
 1. Re-run the AzDO pipeline with `SkipNuGetPublish`, `SkipChannelPromotion`,
-   `SkipWinGetPublish`, `SkipHomebrewPublish` all set to `true` (and the
-   appropriate other skips), keeping `SkipGitHubTasks: false`. The
+   `SkipWinGetPublish` all set to `true` (and the appropriate other skips),
+   keeping `SkipGitHubTasks: false`. The
    `GitHubTasks` stage will dispatch the workflow again with the right
    inputs, and the workflow's own `skip_*` idempotency makes the
    completed steps no-ops.
@@ -187,14 +204,14 @@ only the GitHub work, you can:
 
 After automation completes:
 
-1. **Review and merge PRs**:
+1. **Review and merge automatically created PRs**:
    - Merge-back PR: `$RELEASE_BRANCH` → `main`
    - Baseline version PR: Updates `PackageValidationBaselineVersion`
 
 2. **Verify the release**:
    - Check the [GitHub Releases page](https://github.com/microsoft/aspire/releases)
-   - Verify packages on [NuGet.org](https://www.nuget.org/packages?q=owner%3Adotnet+aspire)
-   - Test installation: `dotnet new install Aspire.ProjectTemplates::VERSION`
+   - Verify packages on [NuGet.org](https://www.nuget.org/packages?q=owner%3Aaspire)
+   - Test installation: `dotnet new install Aspire.ProjectTemplates::VERSION` and `aspire update --self`
 
 3. **Communicate**:
    - Update any tracking issues
@@ -369,3 +386,6 @@ The workflow checks for existing PRs before creating. If a PR exists with a diff
 
 - [Contributing Guide](contributing.md)
 - [Quarantined Tests](quarantined-tests.md)
+- [Install routes & sidecars](specs/install-routes.md) — how the CLI identifies its install channel
+- [WinGet README](../eng/winget/README.md) — manifest layout, prepare/publish, dogfooding
+- [Homebrew README](../eng/homebrew/README.md) — cask layout, livecheck/autobump, validation modes

@@ -543,6 +543,24 @@ public class GuestAppHostProjectTests : IDisposable
         Assert.Equal("Testing", envVars["ASPIRE_ENVIRONMENT"]);
     }
 
+    [Fact]
+    public void ConvertGeneratedFilesForLegacyTypeScriptAppHost_UsesTsFilesAndJsSpecifiers()
+    {
+        var files = new Dictionary<string, string>
+        {
+            ["aspire.mts"] = "import { refExpr } from './base.mjs';\n// aspire.mts",
+            ["base.mts"] = "export type { MarshalledHandle } from './transport.mjs';\n// base.mts",
+            ["transport.mts"] = "// transport.mts"
+        };
+
+        var convertedFiles = GuestAppHostProject.ConvertGeneratedFilesForLegacyTypeScriptAppHost(files);
+
+        Assert.Equal(["aspire.ts", "base.ts", "transport.ts"], convertedFiles.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal("import { refExpr } from './base.js';\n// aspire.ts", convertedFiles["aspire.ts"]);
+        Assert.Equal("export type { MarshalledHandle } from './transport.js';\n// base.ts", convertedFiles["base.ts"]);
+        Assert.Equal("// transport.ts", convertedFiles["transport.ts"]);
+    }
+
     /// <summary>
     /// Regression test for issue #17077: <c>aspire update</c> must not leave
     /// <c>aspire.config.json</c> advanced to newer package versions when guest SDK
@@ -577,7 +595,7 @@ public class GuestAppHostProjectTests : IDisposable
                 ])
         };
 
-        var implicitChannel = PackageChannel.CreateImplicitChannel(fakeCache);
+        var implicitChannel = PackageChannel.CreateImplicitChannel(fakeCache, new TestFeatures());
 
         var interactionService = new TestInteractionService
         {
@@ -676,7 +694,8 @@ public class GuestAppHostProjectTests : IDisposable
             PackageChannelNames.Stable,
             PackageChannelQuality.Both,
             [new PackageMapping("Aspire.*", "stable")],
-            stableCache);
+            stableCache,
+            features: new TestFeatures());
 
         var interactionService = new TestInteractionService
         {
@@ -730,7 +749,8 @@ public class GuestAppHostProjectTests : IDisposable
             PackageChannelNames.Staging,
             PackageChannelQuality.Both,
             [new PackageMapping("Aspire*", "staging")],
-            stagingCache);
+            stagingCache,
+            features: new TestFeatures());
 
         var interactionService = new TestInteractionService
         {
@@ -758,7 +778,7 @@ public class GuestAppHostProjectTests : IDisposable
     }
 
     [Fact]
-    public async Task UpdatePackagesAsync_ExplicitStableChannel_PersistsStableChannelWhenProjectIsUpToDate()
+    public async Task UpdatePackagesAsync_ExplicitStableChannel_DoesNotPersistStableChannelWhenProjectIsUpToDate()
     {
         var configPath = Path.Combine(_workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
         await File.WriteAllTextAsync(configPath, """
@@ -785,7 +805,8 @@ public class GuestAppHostProjectTests : IDisposable
             PackageChannelNames.Stable,
             PackageChannelQuality.Both,
             [new PackageMapping("Aspire.*", "stable")],
-            stableCache);
+            stableCache,
+            features: new TestFeatures());
 
         var project = CreateGuestAppHostProject();
 
@@ -799,10 +820,10 @@ public class GuestAppHostProjectTests : IDisposable
 
         var result = await project.UpdatePackagesAsync(context, CancellationToken.None);
 
-        Assert.True(result.UpdatesApplied);
+        Assert.False(result.UpdatesApplied);
         var reloaded = AspireConfigFile.Load(_workspace.WorkspaceRoot.FullName);
         Assert.NotNull(reloaded);
-        Assert.Equal(PackageChannelNames.Stable, reloaded.Channel);
+        Assert.Equal(PackageChannelNames.Staging, reloaded.Channel);
         Assert.Equal("2.0.0", reloaded.SdkVersion);
         Assert.Equal("2.0.0", reloaded.Packages?["Aspire.Hosting"]);
     }
