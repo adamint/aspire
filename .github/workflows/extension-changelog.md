@@ -15,7 +15,7 @@ on:
     # `labeled` is the only trigger: `.github/workflows/extension-release.yml`
     # applies the `vscode-extension-release` label after opening the PR, using a
     # GitHub App token so the event fires. Recovery (if a run fails or is missed)
-    # is simply removing and re-adding the label. The native `labels` filter
+    # is simply removing and re-adding the label. The native `names` label filter
     # below means only that label fires this workflow, and the placeholder-marker
     # check in the body makes every run idempotent. We deliberately avoid
     # `synchronize` so the safe-output push (which re-triggers `pull_request`)
