@@ -1147,6 +1147,93 @@ extends:
                     displayName: 'Skip npm RID Publish (flagged)'
 
                 - ${{ if eq(parameters.SkipNpmPointerPublish, false) }}:
+                  # Preflight: the pointer package pins all RID packages via
+                  # optionalDependencies at the same version. If even one RID
+                  # tarball is missing from npm at this moment (operator set
+                  # SkipNpmRidPublish=true to re-run only the pointer, or only
+                  # a subset of RIDs landed in a prior attempt), the pointer
+                  # install at end-user time will silently succeed but the
+                  # launcher will throw "The Aspire CLI native package '…' was
+                  # not installed" on first invocation. The post-publish smoke
+                  # below only validates the publish pool's own RID, so a
+                  # missing linux-arm64 would otherwise reach customers
+                  # invisibly. Fail loudly here instead.
+                  #
+                  # Read the RID list from the pointer tarball's own
+                  # optionalDependencies so we don't drift if a RID is added or
+                  # removed.
+                  - pwsh: |
+                      $ErrorActionPreference = 'Stop'
+                      $pointerPackagePath = "$(Pipeline.Workspace)/npm/pointer-package"
+                      $pointerPackages = @(Get-ChildItem -Path $pointerPackagePath -Filter "*.tgz" -File)
+                      if ($pointerPackages.Count -ne 1) {
+                        Write-Error "Expected exactly one npm pointer package in '$pointerPackagePath', found $($pointerPackages.Count)."
+                        exit 1
+                      }
+
+                      $metadataRoot = Join-Path "$(Agent.TempDirectory)" "npm-pointer-preflight-$([Guid]::NewGuid().ToString('N'))"
+                      New-Item -ItemType Directory -Path $metadataRoot -Force | Out-Null
+                      try {
+                        tar -xzf $pointerPackages[0].FullName -C $metadataRoot
+                        if ($LASTEXITCODE -ne 0) {
+                          Write-Error "Failed to extract pointer package '$($pointerPackages[0].FullName)'."
+                          exit 1
+                        }
+
+                        $packageJsonPath = Join-Path $metadataRoot 'package/package.json'
+                        $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
+                        $packageName = "$($packageJson.name)"
+                        $packageVersion = "$($packageJson.version)"
+
+                        $optionalDeps = $packageJson.optionalDependencies
+                        if ($null -eq $optionalDeps) {
+                          Write-Error "Pointer package '$packageName' has no optionalDependencies; nothing to preflight."
+                          exit 1
+                        }
+
+                        $depNames = @($optionalDeps.PSObject.Properties.Name)
+                        if ($depNames.Count -eq 0) {
+                          Write-Error "Pointer package '$packageName' has empty optionalDependencies."
+                          exit 1
+                        }
+
+                        $missing = New-Object System.Collections.Generic.List[string]
+                        foreach ($depName in $depNames) {
+                          $depVersion = "$($optionalDeps.$depName)"
+                          $spec = "$depName@$depVersion"
+                          Write-Host "Checking npm registry for $spec"
+                          $resolved = & npm view $spec version 2>&1
+                          if ($LASTEXITCODE -ne 0 -or -not $resolved) {
+                            Write-Warning "npm view failed for $spec (exit $LASTEXITCODE): $resolved"
+                            $missing.Add($spec) | Out-Null
+                            continue
+                          }
+                          $resolvedLine = @($resolved | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Select-Object -First 1)
+                          if ($resolvedLine.Count -eq 0 -or [string]::IsNullOrWhiteSpace([string]$resolvedLine[0])) {
+                            Write-Warning "npm view returned empty version for $spec"
+                            $missing.Add($spec) | Out-Null
+                            continue
+                          }
+                          Write-Host "  found: $resolvedLine"
+                        }
+                        if ($missing.Count -gt 0) {
+                          Write-Error ("Refusing to publish pointer package '$packageName@$packageVersion' because the following RID packages are not yet available on npm: " + ($missing -join ', '))
+                          exit 1
+                        }
+                        Write-Host "All $($depNames.Count) RID packages are present on npm at the pointer's pinned versions. Safe to publish pointer."
+                      }
+                      finally {
+                        if (Test-Path -LiteralPath $metadataRoot) {
+                          Remove-Item -LiteralPath $metadataRoot -Recurse -Force
+                        }
+                      }
+                    displayName: 'Verify npm RID Packages Present Before Pointer Publish'
+                    # DryRun=true never reaches this step because the gating
+                    # parent `if eq(parameters.SkipNpmPointerPublish, false)`
+                    # is only entered in real publish runs (the pointer publish
+                    # step lives directly below this one and is what the gate
+                    # protects).
+
                   - template: MicroBuild.Publish.yml@MicroBuildTemplate
                     parameters:
                       intent: 'PackageDistribution'
@@ -1295,6 +1382,18 @@ extends:
                       }
 
                       $versionLine = @($versionOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Select-Object -First 1)
+                      # `@(...)` wraps to an empty array when no non-empty lines
+                      # are emitted; PowerShell's `-notmatch` against an empty
+                      # array silently returns an empty array (falsy), which
+                      # would let an `aspire --version` that exits 0 with empty
+                      # stdout slip past the version-pattern check. Reject the
+                      # empty case explicitly before the regex compare so the
+                      # smoke test actually validates what it claims to.
+                      if ($versionLine.Count -eq 0 -or [string]::IsNullOrWhiteSpace([string]$versionLine[0])) {
+                        Write-Host $versionOutput
+                        Write-Error "Installed Aspire CLI '$aspireCommand --version' produced no output."
+                        exit 1
+                      }
                       $versionPattern = "^$([System.Text.RegularExpressions.Regex]::Escape($packageVersion))(\+.*)?$"
                       if ($versionLine -notmatch $versionPattern) {
                         Write-Host $versionOutput
