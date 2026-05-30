@@ -1,5 +1,8 @@
 import * as assert from 'assert';
-import { summarizeAppHostLanguages, classifyAppHostPath } from '../utils/appHostLanguage';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { summarizeAppHostLanguages, classifyAppHostPath, classifyAppHostDirectory } from '../utils/appHostLanguage';
 import type { CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 
 function c(language: string | null): CandidateAppHostDisplayInfo {
@@ -72,5 +75,74 @@ suite('appHostLanguage.classifyAppHostPath', () => {
     test('classification is case-insensitive', () => {
         assert.strictEqual(classifyAppHostPath('APPHOST.CSPROJ'), 'csharp');
         assert.strictEqual(classifyAppHostPath('AppHost.TS'), 'typescript');
+    });
+});
+
+suite('appHostLanguage.classifyAppHostDirectory', () => {
+    // Each test creates a unique temp directory under the OS temp root and
+    // tears it down after. We rely on real fs because classifyAppHostDirectory
+    // uses readdirSync; mocking would defeat the purpose.
+    const tempDirs: string[] = [];
+    function makeTempDir(): string {
+        const dir = mkdtempSync(join(tmpdir(), 'aspire-classify-'));
+        tempDirs.push(dir);
+        return dir;
+    }
+    teardown(() => {
+        for (const dir of tempDirs) {
+            if (existsSync(dir)) {
+                rmSync(dir, { recursive: true, force: true });
+            }
+        }
+        tempDirs.length = 0;
+    });
+
+    test('returns unknown for undefined or missing directory', () => {
+        assert.strictEqual(classifyAppHostDirectory(undefined), 'unknown');
+        assert.strictEqual(classifyAppHostDirectory(''), 'unknown');
+        assert.strictEqual(classifyAppHostDirectory('/path/that/definitely/does/not/exist/aspire-test'), 'unknown');
+    });
+
+    test('classifies directory containing a .csproj as csharp', () => {
+        const dir = makeTempDir();
+        writeFileSync(join(dir, 'AppHost.csproj'), '');
+        assert.strictEqual(classifyAppHostDirectory(dir), 'csharp');
+    });
+
+    test('classifies directory containing a .cs AppHost as csharp', () => {
+        const dir = makeTempDir();
+        writeFileSync(join(dir, 'AppHost.cs'), '');
+        writeFileSync(join(dir, 'README.md'), '');
+        assert.strictEqual(classifyAppHostDirectory(dir), 'csharp');
+    });
+
+    test('classifies directory containing an apphost.ts as typescript', () => {
+        const dir = makeTempDir();
+        writeFileSync(join(dir, 'apphost.ts'), '');
+        writeFileSync(join(dir, 'package.json'), '{}');
+        assert.strictEqual(classifyAppHostDirectory(dir), 'typescript');
+    });
+
+    test('classifies directory containing an apphost.cjs as typescript', () => {
+        const dir = makeTempDir();
+        writeFileSync(join(dir, 'apphost.cjs'), '');
+        assert.strictEqual(classifyAppHostDirectory(dir), 'typescript');
+    });
+
+    test('returns unknown for a directory with no recognized AppHost markers', () => {
+        const dir = makeTempDir();
+        writeFileSync(join(dir, 'README.md'), '');
+        writeFileSync(join(dir, 'main.py'), '');
+        assert.strictEqual(classifyAppHostDirectory(dir), 'unknown');
+    });
+
+    test('returns csharp when both csharp and typescript markers exist (deterministic fallback)', () => {
+        // Highly unusual but plausible during polyglot migration. The
+        // classifier prefers csharp so the dimension stays deterministic
+        // rather than depending on directory-listing order.
+        const dir = makeTempDir();
+        writeFileSync(join(dir, 'AppHost.csproj'), '');
+        writeFileSync(join(dir, 'apphost.ts'), '');
+        assert.strictEqual(classifyAppHostDirectory(dir), 'csharp');
     });
 });

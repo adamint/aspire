@@ -103,6 +103,56 @@ export default class AspireDcpServer {
             const app = express();
             app.use(express.json());
 
+            // Validates an HTTP Authorization header of the form
+            //   Authorization: Bearer <token>
+            // per RFC 6750 §2.1. Returns a discriminated result describing
+            // which validation step failed. Factored out so the two middlewares
+            // below share identical parsing semantics (the prior
+            // `.split('Bearer ').length === 2` check accepted other schemes
+            // that happened to contain `Bearer ` as a substring, e.g.
+            // `X-Bearer <token>`).
+            const BEARER_PREFIX = 'Bearer ';
+            function validateBearerToken(auth: string | undefined):
+                | { kind: 'ok' }
+                | { kind: 'missing' }
+                | { kind: 'invalid_scheme' }
+                | { kind: 'invalid_length' }
+                | { kind: 'invalid_token' } {
+                if (!auth) {
+                    return { kind: 'missing' };
+                }
+                if (!auth.startsWith(BEARER_PREFIX) || auth.length === BEARER_PREFIX.length) {
+                    return { kind: 'invalid_scheme' };
+                }
+                const candidateToken = Buffer.from(auth.slice(BEARER_PREFIX.length));
+                const expectedToken = Buffer.from(token);
+                if (candidateToken.length !== expectedToken.length) {
+                    return { kind: 'invalid_length' };
+                }
+                // timingSafeEqual is used to verify that the tokens are equivalent in a way that mitigates timing attacks
+                if (timingSafeEqual(candidateToken, expectedToken) === false) {
+                    return { kind: 'invalid_token' };
+                }
+                return { kind: 'ok' };
+            }
+
+            function respondToBearerFailure(res: Response, kind: 'missing' | 'invalid_scheme' | 'invalid_length' | 'invalid_token'): void {
+                switch (kind) {
+                    case 'missing':
+                        respondWithError(res, 401, { error: { code: 'MissingHeaders', message: authorizationAndDcpHeadersRequired, details: [] } });
+                        return;
+                    case 'invalid_scheme':
+                        respondWithError(res, 401, { error: { code: 'InvalidAuthHeader', message: authorizationHeaderMustStartWithBearer, details: [] } });
+                        return;
+                    case 'invalid_length':
+                        respondWithError(res, 401, { error: { code: 'InvalidToken', message: invalidTokenLength, details: [] } });
+                        return;
+                    case 'invalid_token':
+                        respondWithError(res, 401, { error: { code: 'InvalidToken', message: invalidOrMissingToken, details: [] } });
+                        return;
+                }
+            }
+
             function requireHeaders(req: Request, res: Response, next: NextFunction): void {
                 const auth = req.header('Authorization');
                 const dcpId = req.header('microsoft-developer-dcp-instance-id');
@@ -111,22 +161,9 @@ export default class AspireDcpServer {
                     return;
                 }
 
-                if (auth.split('Bearer ').length !== 2) {
-                    respondWithError(res, 401, { error: { code: 'InvalidAuthHeader', message: authorizationHeaderMustStartWithBearer, details: [] } });
-                    return;
-                }
-
-                const bearerTokenBuffer = Buffer.from(auth.split('Bearer ')[1]);
-                const expectedTokenBuffer = Buffer.from(token);
-
-                if (bearerTokenBuffer.length !== expectedTokenBuffer.length) {
-                    respondWithError(res, 401, { error: { code: 'InvalidToken', message: invalidTokenLength, details: [] } });
-                    return;
-                }
-
-                // timingSafeEqual is used to verify that the tokens are equivalent in a way that mitigates timing attacks
-                if (timingSafeEqual(bearerTokenBuffer, expectedTokenBuffer) === false) {
-                    respondWithError(res, 401, { error: { code: 'InvalidToken', message: invalidOrMissingToken, details: [] } });
+                const result = validateBearerToken(auth);
+                if (result.kind !== 'ok') {
+                    respondToBearerFailure(res, result.kind);
                     return;
                 }
 
@@ -140,23 +177,9 @@ export default class AspireDcpServer {
             // bearer token as requireHeaders but skips the DCP id check.
             // See `Aspire.Dashboard/Model/DebugSessionHelpers.cs` (CreateHttpClient).
             function requireBearerOnly(req: Request, res: Response, next: NextFunction): void {
-                const auth = req.header('Authorization');
-                if (!auth) {
-                    respondWithError(res, 401, { error: { code: 'MissingHeaders', message: authorizationAndDcpHeadersRequired, details: [] } });
-                    return;
-                }
-                if (auth.split('Bearer ').length !== 2) {
-                    respondWithError(res, 401, { error: { code: 'InvalidAuthHeader', message: authorizationHeaderMustStartWithBearer, details: [] } });
-                    return;
-                }
-                const bearerTokenBuffer = Buffer.from(auth.split('Bearer ')[1]);
-                const expectedTokenBuffer = Buffer.from(token);
-                if (bearerTokenBuffer.length !== expectedTokenBuffer.length) {
-                    respondWithError(res, 401, { error: { code: 'InvalidToken', message: invalidTokenLength, details: [] } });
-                    return;
-                }
-                if (timingSafeEqual(bearerTokenBuffer, expectedTokenBuffer) === false) {
-                    respondWithError(res, 401, { error: { code: 'InvalidToken', message: invalidOrMissingToken, details: [] } });
+                const result = validateBearerToken(req.header('Authorization'));
+                if (result.kind !== 'ok') {
+                    respondToBearerFailure(res, result.kind);
                     return;
                 }
                 next();
@@ -195,12 +218,20 @@ export default class AspireDcpServer {
                 const launchConfig = payload.launch_configurations[0];
                 const foundDebuggerExtension = getResourceDebuggerExtensions().find(ext => ext.resourceType === launchConfig.type) ?? null;
                 const mode = launchConfig.mode ?? 'Unknown';
+                // Telemetry: clamp `launchConfig.type` to the set of resource types we
+                // actually understand. Unsupported types come from
+                // `payload.launch_configurations[0].type` which is a CLI-controlled
+                // string and could otherwise leak arbitrary content (custom resource
+                // type names, typos) into telemetry. The supported set is the
+                // discriminator we care about — "did the user run something we know
+                // how to debug?" — and one bucket for everything else is enough.
+                const supportedResourceType = foundDebuggerExtension ? launchConfig.type : 'unsupported';
                 // Emit early — even unsupported resource types count as engagement
                 // because the user did try to run something through us.
                 hooks.onRunSessionAccepted?.({ resourceType: launchConfig.type, mode });
                 const runSessionStartTimeMs = Date.now();
                 sendTelemetryEvent('debug/runSession/start', {
-                    resource_type: launchConfig.type,
+                    resource_type: supportedResourceType,
                     debugger_extension_matched: foundDebuggerExtension ? 'true' : 'false',
                     mode,
                 });
@@ -217,11 +248,11 @@ export default class AspireDcpServer {
                         debugSessionStats.set(debugSessionId, aggregate);
                     }
                     aggregate.totalChildSessions += 1;
-                    aggregate.distinctResourceTypes.add(launchConfig.type);
+                    aggregate.distinctResourceTypes.add(supportedResourceType);
                     aggregate.anyNonZeroExit = true;
 
                     sendTelemetryErrorEvent('debug/runSession/end', {
-                        resource_type: launchConfig.type,
+                        resource_type: supportedResourceType,
                         mode,
                         exit_code_bucket: 'nonzero',
                         end_reason: endReason,
@@ -294,7 +325,7 @@ export default class AspireDcpServer {
                     extensionLogOutputChannel.info(`Debugging session created with ID: ${runId}`);
 
                     runsBySession.set(runId, processes);
-                    runTelemetryById.set(runId, { startTimeMs: runSessionStartTimeMs, resourceType: launchConfig.type, mode, debugSessionId });
+                    runTelemetryById.set(runId, { startTimeMs: runSessionStartTimeMs, resourceType: supportedResourceType, mode, debugSessionId });
 
                     // Track aggregate stats for the parent AppHost debug session so we can
                     // emit a single `debug/appHost/end` summary when the AppHost terminates.
@@ -304,7 +335,7 @@ export default class AspireDcpServer {
                         debugSessionStats.set(debugSessionId, aggregate);
                     }
                     aggregate.totalChildSessions += 1;
-                    aggregate.distinctResourceTypes.add(launchConfig.type);
+                    aggregate.distinctResourceTypes.add(supportedResourceType);
 
                     res.status(201).set('Location', `https://${req.get('host')}/run_session/${runId}`).end();
                     extensionLogOutputChannel.info(`New run session created with ID: ${runId}`);

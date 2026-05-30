@@ -1,3 +1,4 @@
+import { readdirSync } from 'node:fs';
 import { CandidateAppHostDisplayInfo } from './appHostDiscovery';
 
 /**
@@ -86,6 +87,10 @@ export function summarizeAppHostLanguages(candidates: readonly CandidateAppHostD
  * where we have a concrete program/project path but no `aspire ls` candidate.
  * Mirrors {@link summarizeAppHostLanguages} categories so dashboard cohorts can
  * combine the two signals.
+ *
+ * When `appHostPath` points at a directory (rather than a file), callers should
+ * use {@link classifyAppHostDirectory} which peeks for marker files. This entry
+ * point only looks at the file extension.
  */
 export function classifyAppHostPath(appHostPath: string | undefined): 'csharp' | 'typescript' | 'unknown' {
     if (!appHostPath) {
@@ -97,6 +102,57 @@ export function classifyAppHostPath(appHostPath: string | undefined): 'csharp' |
     }
     if (lower.endsWith('.ts') || lower.endsWith('.mts') || lower.endsWith('.cts') ||
         lower.endsWith('.js') || lower.endsWith('.mjs') || lower.endsWith('.cjs')) {
+        return 'typescript';
+    }
+    return 'unknown';
+}
+
+/**
+ * Directory variant of {@link classifyAppHostPath}. The Aspire CLI commonly
+ * launches AppHosts as a directory (e.g. `aspire run` without `--apphost`)
+ * because the entry file lives next to `package.json` / `*.csproj` and is
+ * discovered at runtime. Looking only at the directory name itself loses the
+ * language signal entirely, so we synchronously enumerate the directory and
+ * match well-known AppHost file names.
+ *
+ * Used at telemetry-emit time only — the function is intentionally synchronous
+ * to keep the launch-telemetry call path simple and to avoid plumbing async
+ * through {@link AspireDebugSession.handleMessage}. Directory reads are
+ * O(entries), small for typical AppHost roots; any failure (permissions,
+ * missing directory) returns `'unknown'` rather than throwing.
+ */
+export function classifyAppHostDirectory(directoryPath: string | undefined): 'csharp' | 'typescript' | 'unknown' {
+    if (!directoryPath) {
+        return 'unknown';
+    }
+    let entries: string[];
+    try {
+        entries = readdirSync(directoryPath);
+    }
+    catch {
+        return 'unknown';
+    }
+    let sawCsharp = false;
+    let sawTypescript = false;
+    for (const entry of entries) {
+        const family = classifyAppHostPath(entry);
+        if (family === 'csharp') {
+            sawCsharp = true;
+        }
+        else if (family === 'typescript') {
+            sawTypescript = true;
+        }
+    }
+    if (sawCsharp && sawTypescript) {
+        // Highly unusual; prefer csharp because Aspire's reference AppHost
+        // implementation is csproj-based. Either signal is fine here — the
+        // telemetry value is "we recognized it", not "we picked the right one".
+        return 'csharp';
+    }
+    if (sawCsharp) {
+        return 'csharp';
+    }
+    if (sawTypescript) {
         return 'typescript';
     }
     return 'unknown';

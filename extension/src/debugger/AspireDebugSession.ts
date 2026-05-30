@@ -20,7 +20,7 @@ import path from "path";
 import os from "os";
 import { EnvironmentVariables } from "../utils/environment";
 import { sendTelemetryEvent } from "../utils/telemetry";
-import { classifyAppHostPath } from "../utils/appHostLanguage";
+import { classifyAppHostPath, classifyAppHostDirectory } from "../utils/appHostLanguage";
 
 export type DashboardBrowserType = 'openExternalBrowser' | 'integratedBrowser' | 'debugChrome' | 'debugEdge' | 'debugFirefox';
 
@@ -108,13 +108,22 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       // entry point that triggers an actual CLI spawn. The matching end event
       // is emitted from dispose().
       this._appHostStartTimeMs = Date.now();
-      this._appHostLanguageAtLaunch = classifyAppHostPath(appHostIsDirectory ? undefined : appHostPath);
+      this._appHostLanguageAtLaunch = appHostIsDirectory
+        ? classifyAppHostDirectory(appHostPath)
+        : classifyAppHostPath(appHostPath);
       this._appHostModeAtLaunch = noDebug ? 'run' : 'debug';
+      // `command` originates in the user's launch.json and is typed in the
+      // contributing extension surface as AspireCommandType ('run'|'deploy'|
+      // 'publish'|'do'), but launch.json is freeform JSON — a typo or custom
+      // value would otherwise leak verbatim into telemetry. Clamp to the known
+      // set so the dimension stays bounded.
+      const knownCommands: ReadonlySet<string> = new Set(['run', 'deploy', 'publish', 'do']);
+      const commandForTelemetry = knownCommands.has(command) ? command : 'other';
       sendTelemetryEvent('debug/appHost/start', {
         mode: this._appHostModeAtLaunch,
         apphost_language: this._appHostLanguageAtLaunch,
         apphost_is_directory: appHostIsDirectory ? 'true' : 'false',
-        command,
+        command: commandForTelemetry,
       });
 
       // For 'do' with an explicit step (old CLI fallback), pass it as a positional argument
