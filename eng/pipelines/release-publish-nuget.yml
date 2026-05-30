@@ -127,6 +127,15 @@ variables:
   - group: Aspire-Release-Secrets
   # Variable group containing aspire-winget-bot-pat for WinGet publishing
   - group: Aspire-Secrets
+  # Required by the MicroBuildCleanup@1 telemetry task auto-injected by
+  # MicroBuild.1ES.Official.Publish.yml@MicroBuildTemplate at the END of every job.
+  # If absent, the task fails with: "The TeamName variable is required to use MicroBuild."
+  # common-variables.yml defines `_TeamName: dotnet-aspire` for Arcade build conventions but
+  # MicroBuild specifically reads the unprefixed `TeamName` variable, so we set it explicitly
+  # here at pipeline scope so it propagates to all jobs (PrepareJob, ReleaseJob, WinGetJob, etc.).
+  # See https://devdiv.visualstudio.com/DevDiv/_wiki/wikis/DevDiv.wiki/?pagePath=/MicroBuild/Plugins/MicroBuild
+  - name: TeamName
+    value: dotnet-aspire
 
 resources:
   repositories:
@@ -185,6 +194,17 @@ extends:
             variables:
               SourceBuildId: $(resources.pipeline.aspire-build.runID)
             templateContext:
+              # Disable the auto-injected MicroBuildAuthorizePublishPlugin@0 task for jobs
+              # that do not perform an ESRP publish. PrepareJob only downloads artifacts
+              # and re-publishes them as pipeline artifacts (so 1ES PT can attach SBOM);
+              # the actual NuGet/npm push happens in ReleaseJob via 1ES.PublishNuget@1 and
+              # MicroBuild.Publish.yml. Without this opt-out, the plugin tries to fetch its
+              # nuget package from devdiv.pkgs.visualstudio.com/_packaging/MicroBuildToolset
+              # using credentials this pipeline (in the dnceng collection) does not have,
+              # producing a 401 and failing the stage. See MicroBuildTemplate Jobs/PublishJob.yml.
+              mb:
+                publish:
+                  enabled: false
               outputs:
                 - output: pipelineArtifact
                   displayName: 'Publish PackageArtifacts with SBOM'
@@ -625,6 +645,18 @@ extends:
             templateContext:
               type: releaseJob
               isProduction: true
+              # ReleaseJob is the only job that performs ESRP-backed publish (1ES.PublishNuget@1,
+              # MicroBuild.Publish.yml for npm via DryRun=true gating). The auto-injected
+              # MicroBuildAuthorizePublishPlugin@0 task must therefore be able to authenticate
+              # to the MicroBuildToolset feed. The dnceng collection (b55de4ed-4b5a-4215-a8e4-0a0a5f71e7d8)
+              # hosts its own mirror at pkgs.dev.azure.com/dnceng/_packaging/MicroBuildToolset,
+              # which is accessible to builds in this collection automatically. Using the dnceng
+              # mirror avoids needing the DevDivEsrpAzDoSrvConn service connection (which is
+              # only required for the actual sign/publish ESRP calls, gated by DryRun=false).
+              # Pattern: dotnet/roslyn uses the same dnceng MicroBuildToolset mirror.
+              mb:
+                publish:
+                  feedSource: 'https://pkgs.dev.azure.com/dnceng/_packaging/MicroBuildToolset/nuget/v3/index.json'
               inputs:
                 - input: pipelineArtifact
                   artifactName: PackageArtifacts
@@ -1587,6 +1619,12 @@ extends:
             templateContext:
               type: releaseJob
               isProduction: true
+              # No ESRP publish in this job (winget cli + git push to the WinGet community repo
+              # using a PAT). Skip the auto-injected MicroBuildAuthorizePublishPlugin@0 so it
+              # does not 401 against the devdiv MicroBuildToolset feed.
+              mb:
+                publish:
+                  enabled: false
               inputs:
                 - input: pipelineArtifact
                   artifactName: winget-manifests-stable
@@ -1670,6 +1708,12 @@ extends:
             variables:
               # Pulled from the deriveReleaseVersion step in PrepareJob (PrepareArtifacts stage).
               ReleaseVersionEffective: $[ stageDependencies.PrepareArtifacts.PrepareJob.outputs['deriveReleaseVersion.releaseVersionEffective'] ]
+            templateContext:
+              # No ESRP publish in this job (dispatches a GitHub Actions workflow via GH App JWT
+              # and polls for completion). Skip the auto-injected publish auth task.
+              mb:
+                publish:
+                  enabled: false
             steps:
               - checkout: self
                 displayName: 'Checkout repo (for dispatch script)'
@@ -1765,6 +1809,12 @@ extends:
               # Mapped here independently of DispatchGitHubTasksJob so this job still gets the
               # value when SkipGitHubTasks=true causes its sibling to be skipped.
               ReleaseVersionEffective: $[ stageDependencies.PrepareArtifacts.PrepareJob.outputs['deriveReleaseVersion.releaseVersionEffective'] ]
+            templateContext:
+              # No ESRP publish in this job (gh CLI upload to GitHub Release via App-token auth).
+              # Skip the auto-injected publish auth task.
+              mb:
+                publish:
+                  enabled: false
             steps:
               - checkout: self
                 displayName: 'Checkout repo (for upload script)'
@@ -1903,6 +1953,12 @@ extends:
               name: Azure Pipelines
               vmImage: macOS-latest-internal
               os: macOS
+            templateContext:
+              # No ESRP publish in this job (read-only brew audit / brew install of a public cask).
+              # Skip the auto-injected publish auth task.
+              mb:
+                publish:
+                  enabled: false
             steps:
               - checkout: self
                 displayName: 'Checkout repo (for validate-cask-artifact.sh)'

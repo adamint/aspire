@@ -50,6 +50,45 @@ public sealed class ReleasePublishNugetPipelineTests
     }
 
     [Fact]
+    public async Task DefinesTeamNameVariableForMicroBuildTelemetry()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        // MicroBuild.1ES.Official.Publish.yml@MicroBuildTemplate auto-injects MicroBuildCleanup@1
+        // (displayName "🔩 MicroBuild Telemetry") at the END of every job. That task hard-requires
+        // a variable literally named `TeamName`; if absent the task fails with:
+        //   "The TeamName variable is required to use MicroBuild. Please update your definition
+        //    variables to include your team name in the 'TeamName' variable."
+        // common-variables.yml defines `_TeamName: dotnet-aspire` for Arcade conventions but
+        // MicroBuild reads the unprefixed name, so we must declare TeamName at pipeline scope.
+        Assert.Contains("- name: TeamName", pipeline);
+        Assert.Contains("value: dotnet-aspire", pipeline);
+    }
+
+    [Fact]
+    public async Task RoutesMicroBuildPublishAuthPluginToDncengFeedOrDisablesIt()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        // MicroBuild.1ES.Official.Publish.yml@MicroBuildTemplate -> Stages/PublishStage.yml
+        // -> Jobs/PublishJob.yml auto-injects MicroBuildAuthorizePublishPlugin@0 at the START
+        // of every job. By default that task pulls its nuget package from
+        // `devdiv.pkgs.visualstudio.com/_packaging/MicroBuildToolset`, which is NOT accessible
+        // from the dnceng collection -> 401 -> stage fails before any customer step runs.
+        // Two valid escapes from MicroBuildTemplate are required:
+        //   1) templateContext.mb.publish.enabled: false  (for jobs that don't ESRP-publish)
+        //   2) templateContext.mb.publish.feedSource: <dnceng mirror>  (for the publishing job)
+        // Both must be present in this pipeline:
+        //   - non-publishing jobs (PrepareJob, WinGetJob, DispatchGitHubTasksJob,
+        //     PublishReleaseAssetsJob, HomebrewValidateJob) -> enabled: false
+        //   - ReleaseJob (the only job that actually publishes) -> feedSource = dnceng mirror
+        Assert.Contains("enabled: false", pipeline);
+        Assert.Contains(
+            "feedSource: 'https://pkgs.dev.azure.com/dnceng/_packaging/MicroBuildToolset/nuget/v3/index.json'",
+            pipeline);
+    }
+
+    [Fact]
     public async Task UsesRequiredNpmEsrpOwnersAndApprover()
     {
         var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
