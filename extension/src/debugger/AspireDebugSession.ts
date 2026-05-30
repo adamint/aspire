@@ -19,6 +19,8 @@ import { ICliRpcClient } from "../server/rpcClient";
 import path from "path";
 import os from "os";
 import { EnvironmentVariables } from "../utils/environment";
+import { sendTelemetryEvent } from "../utils/telemetry";
+import { classifyAppHostPath } from "../utils/appHostLanguage";
 
 export type DashboardBrowserType = 'openExternalBrowser' | 'integratedBrowser' | 'debugChrome' | 'debugEdge' | 'debugFirefox';
 
@@ -39,6 +41,16 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private _dashboardDebugSession: vscode.DebugSession | null = null;
   private readonly _disposables: vscode.Disposable[] = [];
   private _disposed = false;
+  // Timestamp for the `debug/appHost/end` duration measurement. Captured the first
+  // time we observe a `launch` request so it covers the actual user-visible session
+  // lifetime, not the moment the AspireDebugSession object was constructed.
+  private _appHostStartTimeMs: number | undefined = undefined;
+  // Tracks the AppHost-language classification of the launched program so it can
+  // be repeated on the matching end event without re-deriving from `configuration`.
+  private _appHostLanguageAtLaunch: 'csharp' | 'typescript' | 'unknown' = 'unknown';
+  // Mode the AppHost was launched with (`run` | `debug`) — captured for the
+  // matching end event.
+  private _appHostModeAtLaunch: 'run' | 'debug' = 'run';
 
   public readonly onDidSendMessage = this._onDidSendMessage.event;
   public readonly debugSessionId: string;
@@ -89,6 +101,21 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       const appHostPath = this._session.configuration.program as string;
       const appHostIsDirectory = isDirectory(appHostPath);
       const extensionArgs: string[] = [];
+
+      // Telemetry: emit `debug/appHost/start` once per AppHost launch. We do it
+      // here (rather than in the constructor) because the constructor runs
+      // before VS Code's debug-launch UX completes; this branch is the single
+      // entry point that triggers an actual CLI spawn. The matching end event
+      // is emitted from dispose().
+      this._appHostStartTimeMs = Date.now();
+      this._appHostLanguageAtLaunch = classifyAppHostPath(appHostIsDirectory ? undefined : appHostPath);
+      this._appHostModeAtLaunch = noDebug ? 'run' : 'debug';
+      sendTelemetryEvent('debug/appHost/start', {
+        mode: this._appHostModeAtLaunch,
+        apphost_language: this._appHostLanguageAtLaunch,
+        apphost_is_directory: appHostIsDirectory ? 'true' : 'false',
+        command,
+      });
 
       // For 'do' with an explicit step (old CLI fallback), pass it as a positional argument
       const step = this.configuration.step;
@@ -510,6 +537,26 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
     this._disposed = true;
     extensionLogOutputChannel.info('Stopping the Aspire debug session');
+
+    // Telemetry: emit `debug/appHost/end` with aggregate stats accumulated by the
+    // DCP server across this AppHost session's lifetime. Only fire if `launch`
+    // ever ran (i.e. `_appHostStartTimeMs` is set) — otherwise we'd be reporting
+    // a phantom session for AppHosts that aborted before reaching the CLI spawn.
+    if (this._appHostStartTimeMs !== undefined) {
+      const durationMs = Date.now() - this._appHostStartTimeMs;
+      const aggregate = this._dcpServer.takeDebugSessionAggregateStats(this.debugSessionId);
+      sendTelemetryEvent('debug/appHost/end', {
+        mode: this._appHostModeAtLaunch,
+        apphost_language: this._appHostLanguageAtLaunch,
+        ended_with_error: aggregate?.anyNonZeroExit ? 'true' : 'false',
+        distinct_resource_types: aggregate ? aggregate.distinctResourceTypes.join(',') : '',
+      }, {
+        duration_ms: durationMs,
+        total_child_sessions: aggregate?.totalChildSessions ?? 0,
+        distinct_resource_type_count: aggregate?.distinctResourceTypes.length ?? 0,
+      });
+    }
+
     vscode.debug.stopDebugging(this._session);
     this._disposables.forEach(disposable => disposable.dispose());
     this._trackedDebugAdapters = [];

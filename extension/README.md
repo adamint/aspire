@@ -223,6 +223,23 @@ Found a bug or have an idea? File it on the [microsoft/aspire](https://github.co
 
 ---
 
+## Data and telemetry
+
+The Aspire extension collects anonymous usage data and sends it to Microsoft to help improve our products and services. Telemetry is gated by the global [`telemetry.telemetryLevel`](https://code.visualstudio.com/docs/getstarted/telemetry) VS Code setting — disable it there to opt out. Read our [privacy statement](https://privacy.microsoft.com/privacystatement) to learn more.
+
+Events the extension reports include:
+
+- **`command/invoked`** — whenever a user runs an Aspire command, with the command name, where it was invoked from (command palette, tree view, code lens, walkthrough, or editor), outcome, and duration.
+- **`engagement/active`** — fired once per session the first time we detect meaningful engagement (an AppHost in the workspace, a command invocation, or a debug session start).
+- **`runningAppHostsView/shown`** — when the Aspire side panel becomes visible, along with how many AppHosts are running.
+- **`debug/appHost/start`** and **`debug/appHost/end`** — when an Aspire AppHost debug session begins and ends, including the AppHost language family (C# / TypeScript) and aggregate counts of child resource sessions to help us understand multi-language debugging usage.
+- **`debug/runSession/start`** and **`debug/runSession/end`** — per-resource debug-session lifecycle events with the resource type and duration.
+- **Dashboard telemetry passthrough** — when the extension hosts the Aspire dashboard, telemetry events emitted by the dashboard are forwarded through the extension's reporter using the same global VS Code telemetry setting.
+
+No source code, file paths, environment variable values, resource names, or other workspace contents are reported.
+
+---
+
 ## License
 
 See [LICENSE.TXT](./LICENSE.TXT) for details.
