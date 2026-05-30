@@ -68,11 +68,19 @@ const TelemetryResultLabel: { readonly [K in TelemetryResult]: string } = {
     3: 'UserFault',
     4: 'UserCancel',
 };
-function telemetryResultLabel(value: TelemetryResult | undefined): string {
-    if (value === undefined) {
+function telemetryResultLabel(value: unknown): string {
+    // `value` is only *typed* as TelemetryResult upstream; at the JSON boundary
+    // it can be any shape. Coerce to an integer before interpolating so a
+    // hostile/buggy sender cannot route an arbitrary string or array (e.g.
+    // `[1,2,"leak"]` → `"1,2,leak"`) verbatim into the `result` property.
+    if (value === undefined || value === null) {
         return 'Unknown';
     }
-    return TelemetryResultLabel[value] ?? `Unknown(${value})`;
+    const n = Math.trunc(Number(value));
+    if (Number.isFinite(n) && n in TelemetryResultLabel) {
+        return TelemetryResultLabel[n as TelemetryResult];
+    }
+    return Number.isFinite(n) ? `Unknown(${n})` : 'Unknown';
 }
 // Failure / UserFault are routed through `sendTelemetryErrorEvent` so they
 // participate in the reporter's stricter scrubbing pass.
@@ -90,11 +98,18 @@ const FaultSeverityLabel: { readonly [K in FaultSeverity]: string } = {
     3: 'Critical',
     4: 'Crash',
 };
-function faultSeverityLabel(value: FaultSeverity | undefined): string {
-    if (value === undefined) {
+function faultSeverityLabel(value: unknown): string {
+    // Same JSON-boundary hardening as telemetryResultLabel: coerce to an
+    // integer before interpolating so non-enum input can't leak verbatim into
+    // the `fault_severity` property.
+    if (value === undefined || value === null) {
         return 'Unknown';
     }
-    return FaultSeverityLabel[value] ?? `Unknown(${value})`;
+    const n = Math.trunc(Number(value));
+    if (Number.isFinite(n) && n in FaultSeverityLabel) {
+        return FaultSeverityLabel[n as FaultSeverity];
+    }
+    return Number.isFinite(n) ? `Unknown(${n})` : 'Unknown';
 }
 
 interface TelemetryEventCorrelation {
@@ -279,7 +294,7 @@ export class DashboardTelemetryPassthrough {
             const properties: EventProperties<'dashboard/asset'> = {
                 dashboard_event_name: clampDashboardKey(payload.eventName),
                 asset_id: clampDashboardKey(payload.assetId),
-                asset_event_version: String(payload.assetEventVersion),
+                asset_event_version: formatAssetEventVersion(payload.assetEventVersion),
             };
             applyBundleAndCorrelations(properties, payload.additionalProperties, payload.correlatedWith);
             sendTelemetryEvent('dashboard/asset', properties);
@@ -489,7 +504,12 @@ export class DashboardTelemetryPassthrough {
             const properties: EventProperties<'dashboard/property/set' | 'dashboard/property/recurring'> = {
                 property_name: clampDashboardKey(payload.propertyName),
             };
-            applyBundleFields(properties, { value: payload.propertyValue });
+            // Bundle under the real property name (not a synthetic `value` key)
+            // so the DROPPED_FREEFORM_PROPERTY_KEYS denylist and key clamping in
+            // bundleDashboardData apply to this route exactly as they do to the
+            // additionalProperties routes. A computed non-string key is coerced
+            // to a string by JS and then clamped, so this is boundary-safe.
+            applyBundleFields(properties, { [payload.propertyName]: payload.propertyValue });
             sendTelemetryEvent(eventName, properties);
             res.status(200).end();
         };
@@ -631,7 +651,14 @@ function bundleDashboardData(input: { [key: string]: AspireTelemetryProperty } |
         if (!prop || prop.value === undefined || prop.value === null) {
             continue;
         }
-        if (prop.propertyType === PropertyType.Pii) {
+        // Coerce the discriminator once. `propertyType` is only *typed* as the
+        // PropertyType enum; at the JSON boundary a sender can send the string
+        // `"0"`, which would slip past a strict `=== PropertyType.Pii` check and
+        // defeat the Pii drop. Number() folds `0`/`"0"` to the same value;
+        // undefined/garbage become NaN and fall through to the Basic string path
+        // (matching the prior default behavior for untagged properties).
+        const propType = Number(prop.propertyType);
+        if (propType === PropertyType.Pii) {
             continue;
         }
         // Drop free-form keys whose values carry workspace content regardless
@@ -641,7 +668,7 @@ function bundleDashboardData(input: { [key: string]: AspireTelemetryProperty } |
         }
         const key = clampDashboardKey(rawKey);
         const value = prop.value;
-        if (prop.propertyType === PropertyType.Metric) {
+        if (propType === PropertyType.Metric) {
             const numericValue = typeof value === 'number'
                 ? value
                 : typeof value === 'string'
@@ -762,6 +789,7 @@ function formatCorrelations(correlations: unknown): string | undefined {
     // correlations per event; anything beyond MAX_CORRELATIONS is almost
     // certainly a bug or a malicious sender and is dropped silently.
     const formatted: string[] = [];
+    let totalChars = 0;
     for (const c of correlations) {
         if (formatted.length >= MAX_CORRELATIONS) {
             break;
@@ -787,7 +815,16 @@ function formatCorrelations(correlations: unknown): string | undefined {
         // able to break the parser by mistake.
         const eventType = clampDashboardKey(obj.eventType).replace(/[;:]/g, '_');
         const id = clampDashboardKey(obj.id).replace(/[;:]/g, '_');
-        formatted.push(`${eventType}:${id}`);
+        const entry = `${eventType}:${id}`;
+        // Bound the TOTAL serialized size as well as the per-element/count caps.
+        // 100 entries × ~257 chars could otherwise produce a ~26 KB property,
+        // well over the AppInsights per-property cap (~8192). Stop once the
+        // running total (entries plus `;` separators) would exceed the budget.
+        if (totalChars + entry.length + formatted.length > MAX_BUNDLE_CHARS) {
+            break;
+        }
+        totalChars += entry.length;
+        formatted.push(entry);
     }
     return formatted.length === 0 ? undefined : formatted.join(';');
 }
@@ -811,6 +848,11 @@ const MAX_BUNDLE_ENTRIES = 100;
 // path or user-controlled string into a key. Applied uniformly so an
 // attacker / buggy upstream can't smuggle PII through the metadata side.
 const MAX_DASHBOARD_KEY_LENGTH = 256;
+
+// Appended to any value truncated by clampDashboardKey / scrubFreeformDiagnosticText.
+// Its length is reserved inside each cap so the returned string never exceeds
+// the documented maximum.
+const TRUNCATION_MARKER = '...[truncated]';
 
 // Maximum length applied to each string VALUE inside the dashboard property
 // bundle (`dashboard_properties`). The known free-form diagnostic fields
@@ -853,6 +895,12 @@ const MAX_PENDING_OPERATIONS = 10_000;
 const DROPPED_FREEFORM_PROPERTY_KEYS = new Set<string>([
     'Aspire.Dashboard.Exception.Message',
     'Aspire.Dashboard.Exception.StackTrace',
+    // Resource names are user-chosen and constitute workspace content. The
+    // dashboard declares this key (TelemetryPropertyKeys.ConsoleLogsResourceName)
+    // though it is not wired to a Basic-tagged sender today; drop it pre-emptively
+    // as defense-in-depth so a future dashboard regression can't ship resource
+    // names through `dashboard_properties` and violate the README guarantee.
+    'Aspire.Dashboard.ConsoleLogs.ResourceName',
 ]);
 
 /**
@@ -868,7 +916,22 @@ function clampDashboardKey(value: string): string {
     if (value.length <= MAX_DASHBOARD_KEY_LENGTH) {
         return value;
     }
-    return value.slice(0, MAX_DASHBOARD_KEY_LENGTH) + '...[truncated]';
+    // Reserve the marker's budget inside the cap so the returned string never
+    // exceeds MAX_DASHBOARD_KEY_LENGTH (other call sites size their budgets
+    // assuming this is a hard cap).
+    return value.slice(0, MAX_DASHBOARD_KEY_LENGTH - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
+}
+
+/**
+ * Coerces the dashboard-supplied `assetEventVersion` (typed `int` on the wire)
+ * to a bounded numeric string. A hostile/buggy sender could put an arbitrary
+ * string or array here, which `String()` would forward verbatim into the
+ * first-class `asset_event_version` property; coerce through Number() and fall
+ * back to 'unknown' for non-finite input.
+ */
+function formatAssetEventVersion(value: unknown): string {
+    const n = Number(value);
+    return Number.isFinite(n) ? String(n) : 'unknown';
 }
 
 /**
@@ -940,7 +1003,9 @@ function scrubFreeformDiagnosticText(text: unknown): string {
         return text;
     }
     // Marker so receivers can recognize truncation without parsing the length.
-    return text.slice(0, MAX_DIAGNOSTIC_STRING_LENGTH) + '...[truncated]';
+    // Reserve the marker's budget inside the cap so the result never exceeds
+    // MAX_DIAGNOSTIC_STRING_LENGTH.
+    return text.slice(0, MAX_DIAGNOSTIC_STRING_LENGTH - TRUNCATION_MARKER.length) + TRUNCATION_MARKER;
 }
 
 // Exported for unit tests so the property/measurement routing rules can be
@@ -954,6 +1019,7 @@ export const __testOnly__ = {
     faultSeverityLabel,
     isFailureResult,
     scrubFreeformDiagnosticText,
+    formatAssetEventVersion,
     MAX_DIAGNOSTIC_STRING_LENGTH,
     MAX_BUNDLE_CHARS,
     MAX_BUNDLE_ENTRIES,

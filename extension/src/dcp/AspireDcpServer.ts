@@ -12,7 +12,7 @@ import { timingSafeEqual, randomBytes } from 'crypto';
 import { getRunSessionInfo, getSupportedCapabilities } from '../capabilities';
 import { authorizationAndDcpHeadersRequired, authorizationHeaderMustStartWithBearer, encounteredErrorStartingResource, invalidOrMissingToken, invalidTokenLength } from '../loc/strings';
 import { DashboardTelemetryPassthrough } from './DashboardTelemetryPassthrough';
-import { isExtensionTelemetryEnabled, sendTelemetryErrorEvent, sendTelemetryEvent } from '../utils/telemetry';
+import { sendTelemetryErrorEvent, sendTelemetryEvent } from '../utils/telemetry';
 
 /**
  * Callbacks the DCP server invokes for cross-cutting telemetry concerns.

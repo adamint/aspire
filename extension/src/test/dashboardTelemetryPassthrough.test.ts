@@ -10,6 +10,7 @@ const {
     faultSeverityLabel,
     isFailureResult,
     scrubFreeformDiagnosticText,
+    formatAssetEventVersion,
     MAX_DIAGNOSTIC_STRING_LENGTH,
     MAX_BUNDLE_CHARS,
     MAX_BUNDLE_ENTRIES,
@@ -257,7 +258,8 @@ suite('DashboardTelemetryPassthrough.bundleDashboardData', () => {
         const keys = Object.keys(envelope.v);
         assert.strictEqual(keys.length, 1);
         assert.ok(keys[0].endsWith('...[truncated]'), `expected truncated key, got '${keys[0].slice(0, 50)}…'`);
-        assert.strictEqual(keys[0].length, MAX_DASHBOARD_KEY_LENGTH + '...[truncated]'.length);
+        // The marker's budget is reserved inside the cap, so the result is exactly the cap.
+        assert.strictEqual(keys[0].length, MAX_DASHBOARD_KEY_LENGTH);
         assert.strictEqual(envelope.v[keys[0]], 'ok');
     });
 
@@ -289,6 +291,32 @@ suite('DashboardTelemetryPassthrough.bundleDashboardData', () => {
         assert.strictEqual(props['Aspire.Dashboard.Exception.StackTrace'], undefined);
         assert.strictEqual(props['Aspire.Dashboard.Exception.Type'], 'System.InvalidOperationException');
         assert.strictEqual(props['Aspire.Dashboard.Exception.RuntimeVersion'], '10.0.0');
+    });
+
+    test('drops the console-logs resource-name key (defense-in-depth against workspace content)', () => {
+        // Resource names are user-chosen workspace content. The dashboard
+        // declares this key but does not wire a Basic sender to it today; drop
+        // it pre-emptively so a future regression can't leak resource names.
+        const result = bundleDashboardData({
+            'Aspire.Dashboard.ConsoleLogs.ResourceName': { value: 'my-private-service', propertyType: PropertyType.Basic },
+            'Aspire.Dashboard.Exception.Type': { value: 'System.Exception', propertyType: PropertyType.Basic },
+        });
+        const props = JSON.parse(result.properties ?? '{}').v;
+        assert.strictEqual(props['Aspire.Dashboard.ConsoleLogs.ResourceName'], undefined);
+        assert.strictEqual(props['Aspire.Dashboard.Exception.Type'], 'System.Exception');
+    });
+
+    test('honors the Pii discriminator even when sent as a stringified number', () => {
+        // propertyType is only *typed* as the enum; a JSON sender can send the
+        // string "0" for Pii. A strict === check would let it slip past the Pii
+        // drop, so the discriminator is coerced through Number().
+        const result = bundleDashboardData({
+            email: { value: 'user@example.com', propertyType: '0' as unknown as 0 },
+            ok: { value: 'safe', propertyType: PropertyType.Basic },
+        });
+        const props = JSON.parse(result.properties ?? '{}').v;
+        assert.strictEqual(props.email, undefined);
+        assert.strictEqual(props.ok, 'safe');
     });
 });
 
@@ -371,7 +399,20 @@ suite('DashboardTelemetryPassthrough.formatCorrelations', () => {
         const result = formatCorrelations([{ id: longId, eventType: 'Operation' }]);
         const [, id] = (result ?? '').split(':');
         assert.ok(id.endsWith('...[truncated]'), 'expected truncation marker on id');
-        assert.strictEqual(id.length, MAX_DASHBOARD_KEY_LENGTH + '...[truncated]'.length);
+        assert.strictEqual(id.length, MAX_DASHBOARD_KEY_LENGTH);
+    });
+
+    test('bounds the total serialized size, not just the per-element/count caps', () => {
+        // 100 entries x ~257 chars could otherwise produce a ~26 KB property,
+        // well over the AppInsights per-property cap. The running total must be
+        // bounded by MAX_BUNDLE_CHARS.
+        const many = Array.from({ length: MAX_CORRELATIONS }, () => ({
+            id: 'i'.repeat(MAX_DASHBOARD_KEY_LENGTH + 50),
+            eventType: 'Operation',
+        }));
+        const result = formatCorrelations(many) ?? '';
+        assert.ok(result.length <= MAX_BUNDLE_CHARS, `expected <= ${MAX_BUNDLE_CHARS}, got ${result.length}`);
+        assert.ok(result.length > 0, 'expected at least one correlation to be emitted');
     });
 });
 
@@ -385,7 +426,7 @@ suite('DashboardTelemetryPassthrough.clampDashboardKey', () => {
         const long = 'a'.repeat(MAX_DASHBOARD_KEY_LENGTH + 100);
         const result = clampDashboardKey(long);
         assert.ok(result.endsWith('...[truncated]'), 'expected truncation marker');
-        assert.strictEqual(result.length, MAX_DASHBOARD_KEY_LENGTH + '...[truncated]'.length);
+        assert.strictEqual(result.length, MAX_DASHBOARD_KEY_LENGTH);
     });
 
     test('returns empty string for non-string input (defensive)', () => {
@@ -477,12 +518,32 @@ suite('DashboardTelemetryPassthrough enum label mappers', () => {
         assert.strictEqual(isFailureResult(undefined), false);
     });
 
-    test('faultSeverityLabel maps numeric wire values to readable labels', () => {
-        assert.strictEqual(faultSeverityLabel(0), 'Uncategorized');
-        assert.strictEqual(faultSeverityLabel(1), 'Diagnostic');
-        assert.strictEqual(faultSeverityLabel(2), 'General');
-        assert.strictEqual(faultSeverityLabel(3), 'Critical');
-        assert.strictEqual(faultSeverityLabel(4), 'Crash');
+    test('telemetryResultLabel coerces non-numeric JSON input instead of interpolating it verbatim', () => {
+        // The wire field is only *typed* as an int; a hostile/buggy sender can
+        // send a string or array. These must NOT leak verbatim into the label.
+        assert.strictEqual(telemetryResultLabel('2' as unknown as 0), 'Failure');
+        assert.strictEqual(telemetryResultLabel([1, 2, 'leak'] as unknown as 0), 'Unknown');
+        assert.strictEqual(telemetryResultLabel('arbitrary workspace text' as unknown as 0), 'Unknown');
+        assert.strictEqual(telemetryResultLabel(null as unknown as 0), 'Unknown');
+        assert.strictEqual(telemetryResultLabel({} as unknown as 0), 'Unknown');
+    });
+
+    test('faultSeverityLabel coerces non-numeric JSON input instead of interpolating it verbatim', () => {
+        assert.strictEqual(faultSeverityLabel('3' as unknown as 0), 'Critical');
+        assert.strictEqual(faultSeverityLabel(['x', 'secret'] as unknown as 0), 'Unknown');
+        assert.strictEqual(faultSeverityLabel(99 as unknown as 0), 'Unknown(99)');
+        assert.strictEqual(faultSeverityLabel('boom' as unknown as 0), 'Unknown');
+    });
+
+    test('formatAssetEventVersion coerces non-numeric JSON input to a bounded string', () => {
+        // assetEventVersion is typed `int` upstream; coerce so an arbitrary
+        // string/array can't ship verbatim into asset_event_version.
+        assert.strictEqual(formatAssetEventVersion(3), '3');
+        assert.strictEqual(formatAssetEventVersion('5'), '5');
+        assert.strictEqual(formatAssetEventVersion('leaked workspace value'), 'unknown');
+        assert.strictEqual(formatAssetEventVersion([1, 2, 'secret']), 'unknown');
+        assert.strictEqual(formatAssetEventVersion(undefined), 'unknown');
+        assert.strictEqual(formatAssetEventVersion({}), 'unknown');
     });
 });
 
@@ -500,7 +561,7 @@ suite('DashboardTelemetryPassthrough.scrubFreeformDiagnosticText', () => {
         const longText = 'x'.repeat(MAX_DIAGNOSTIC_STRING_LENGTH + 500);
         const scrubbed = scrubFreeformDiagnosticText(longText);
         assert.ok(scrubbed.endsWith('...[truncated]'), `expected truncation marker, got ${scrubbed.slice(-30)}`);
-        assert.strictEqual(scrubbed.length, MAX_DIAGNOSTIC_STRING_LENGTH + '...[truncated]'.length);
+        assert.strictEqual(scrubbed.length, MAX_DIAGNOSTIC_STRING_LENGTH);
     });
 
     test('returns empty string for non-string input without throwing (untrusted JSON body)', () => {
