@@ -13,9 +13,19 @@ const DefaultNpmRegistry = 'https://pkgs.dev.azure.com/dnceng/public/_packaging/
 // at to update the pin), producing values like
 //   "yarn@1.22.22+sha512.f7062e6a5ee1f3aa…".
 // The suffix is optional but its presence must not break us. Match an optional
-// `+<token>` suffix and ignore it; only the version is needed to seed the cache
-// (Corepack itself verifies the package hash via its own metadata after we
-// rename the staging dir into place).
+// `+<token>` suffix and ignore it; only the version is needed to seed the cache.
+//
+// Integrity note: when Corepack's `installVersion` finds an existing cache dir
+// containing a `.corepack` file, it returns the recorded `hash`/`bin`
+// immediately without re-hashing or signature-checking the install (see
+// https://github.com/nodejs/corepack/blob/v0.34.7/sources/corepackUtils.ts).
+// Its `Mismatch hashes` check fires only on the download path, which a
+// pre-seeded cache never reaches. That means the `sha1.${packEntry.shasum}` we
+// write to `.corepack` below is recorded for completeness but is never
+// re-verified on reuse — trust on the seeded Yarn rests entirely on the
+// `npm pack` fetch from `$NPM_REGISTRY` (the internal dnceng feed), which is
+// the same authentication and integrity boundary npm uses for any other
+// install through this feed.
 // Spec: https://nodejs.org/api/packages.html#packagemanager
 const PackageManagerPattern = /^yarn@(?<version>\d+\.\d+\.\d+)(?:\+[\w.-]+)?$/;
 
@@ -91,7 +101,18 @@ try {
     renameSync(stagingDirectory, installDirectory);
     cacheSeeded = true;
   } catch (error) {
-    if (error?.code === 'EEXIST') {
+    // Lost a race with a concurrent build (same worktree, same COREPACK_HOME).
+    // The winner's renameSync atomically populated installDirectory; ours then
+    // fails because the destination already exists. Filesystem-level error
+    // codes vary:
+    //   - Windows / macOS HFS+: EEXIST when the destination dir exists.
+    //   - Linux / macOS APFS:   ENOTEMPTY (rename(2) rejects renaming over a
+    //                           non-empty directory; see
+    //                           https://man7.org/linux/man-pages/man2/rename.2.html).
+    // Both mean the cache is already in place, so log and exit cleanly. Any
+    // other error code is a real failure (permission, ENOSPC, etc.) and is
+    // re-thrown.
+    if (error?.code === 'EEXIST' || error?.code === 'ENOTEMPTY') {
       console.log(`Corepack cache already contains yarn@${yarnVersion} at ${installDirectory}`);
     } else {
       throw error;
@@ -117,7 +138,7 @@ function getCorepackHome() {
   // running `node ./scripts/prepareCorepackYarn.mjs` directly). It mirrors
   // Corepack 0.34.x's own cache-path resolution so we seed the directory
   // Corepack will later read from.
-  // Source: https://github.com/nodejs/corepack/blob/v0.34.0/sources/folderUtils.ts
+  // Source: https://github.com/nodejs/corepack/blob/v0.34.7/sources/folderUtils.ts
   const baseDirectory = process.env.XDG_CACHE_HOME
     ?? process.env.LOCALAPPDATA
     ?? join(homedir(), process.platform === 'win32' ? 'AppData/Local' : '.cache');

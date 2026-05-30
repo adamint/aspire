@@ -42,8 +42,10 @@ if (-not $env:COREPACK_ENABLE_DOWNLOAD_PROMPT) {
 # (rmSync(installDirectory) followed by renameSync(staging, installDirectory)),
 # so concurrent builds racing on the same Corepack home can corrupt each other's
 # cache. The CI pipelines already scope this per-job (e.g. AzDO uses
-# Agent.TempDirectory); do the same here so local concurrent invocations and
-# multi-worktree setups stay isolated. The directory is gitignored.
+# Agent.TempDirectory); do the same here so multi-worktree setups stay
+# isolated. Concurrent builds in the *same* worktree still race on this shared
+# directory — prepareCorepackYarn.mjs handles the EEXIST/ENOTEMPTY rename
+# collision but is not a substitute for a lock. The directory is gitignored.
 if (-not $env:COREPACK_HOME) {
     $env:COREPACK_HOME = Join-Path $PSScriptRoot '.corepack-cache'
 }
