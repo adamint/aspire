@@ -14,6 +14,7 @@ The Aspire release process uses two main automation components:
    - Promotes the build to the GA channel via darc.
    - Submits WinGet manifest PRs.
    - Validates the Homebrew cask against the live GitHub release (cask version bumps themselves are submitted by upstream autobump; see [Installer channels](#installer-channels)).
+   - Optionally publishes the signed VS Code extension to the Visual Studio Marketplace.
    - Dispatches the GitHub Actions workflow below as the `aspire-repo-bot` GitHub App and waits for it to complete.
    - Uploads `aspire-cli-*` archives from the source build's `BlobArtifacts` onto the GitHub Release as the `aspire-repo-bot`.
 2. **GitHub Actions workflow** (`.github/workflows/release-github-tasks.yml`)
@@ -22,6 +23,12 @@ The Aspire release process uses two main automation components:
    - Creates merge-back PRs.
    - Creates baseline version update PRs.
    - Normally dispatched automatically by the AzDO pipeline above; it can also be run manually as a fallback for partial-failure re-runs.
+3. **GitHub Actions workflow** (`.github/workflows/extension-release.yml`)
+   - Prepares a VS Code extension release PR.
+   - Bumps `extension/package.json`.
+   - Generates or updates `extension/CHANGELOG.md`.
+   - Defaults its comparison baseline to the latest stable Marketplace VSIX's embedded `extension/.version` commit SHA.
+   - Can run with `dry_run: true` in forks to validate changelog generation without bot secrets.
 
 ## Installer channels
 
@@ -46,6 +53,8 @@ Before starting a release:
    - The build should have a `BAR ID - NNNNNN` tag, which the pipeline extracts automatically.
    - The build should also have a `release-version - X.Y.Z` tag, which the pipeline uses when `ReleaseVersion` is left as `auto`.
    - The build must include native CLI NuGet packages, `microsoft-aspire-cli*.tgz` npm tarballs from the native archive jobs, matching `.tgz.sig` detached signature sidecars, and the Windows, Linux, and macOS npm install validation summaries.
+   - If publishing the VS Code extension, the build must include the `aspire-vscode-extension` artifact with exactly one `.vsix`, matching `.manifest`, and matching `.signature.p7s`.
+   - If publishing the VS Code extension as a Marketplace pre-release, the build that runs automatically on merge will not work because it packages a stable VSIX; manually queue the `microsoft-aspire` source build on the merge commit with `Package VS Code Extension as Pre-Release=true` so the produced VSIX is marked as pre-release before signing.
 2. **Release branch**: Ensure the release branch exists, for example `release/9.2`.
 3. **Permissions and approvals**:
    - Access to run Azure DevOps pipelines with the publishing pool.
@@ -89,6 +98,7 @@ Before starting a release:
    | `SkipGitHubTasks` | Set `true` to skip dispatching the GH workflow. | `false` |
    | `SkipReleaseAssets` | Set `true` to skip uploading `aspire-cli-*` assets to the GitHub release. | `false` |
    | `SkipHomebrewValidation` | Set `true` if re-running after a successful Homebrew cask validation against the live GitHub release. | `false` |
+   | `SkipVSCodeExtensionPublish` | Set `false` to publish the signed `aspire-vscode-extension` artifact to the Visual Studio Marketplace. | `true` |
    | `NpmPublishOwners` | Comma-separated ESRP owner aliases or emails. Required when `DryRun` is `false` and npm publishing is not skipped; must include `joperezr` and `ankj`. | `joperezr,ankj` |
    | `NpmPublishApprovers` | Comma-separated ESRP approver aliases or emails. Required when `DryRun` is `false` and npm publishing is not skipped; must include `adamratzman` and must not overlap owners. | `adamratzman` |
    | `NpmRegistryPropagationDelayMinutes` | Delay between npm RID package and pointer package submissions. | `10` |
@@ -100,13 +110,49 @@ Before starting a release:
 5. Click **Run** and monitor the pipeline. The final stage (`GitHubTasks`) dispatches `release-github-tasks.yml`, waits for it to complete, uploads the `aspire-cli-*` archives from the source build's `BlobArtifacts` onto the newly-created GitHub release, and validates the Homebrew cask against that live release. The AzDO pipeline only succeeds if the enabled GitHub tasks, asset upload, and Homebrew validation succeed.
 6. Verify packages appear on NuGet.org and npm, and verify that the `aspire-cli-*` archives are attached to the GitHub release.
 
+To publish only the VS Code extension after merging an extension release PR, run the same `release-publish-nuget` pipeline, select the signed source build from that merge, and set:
+
+| Parameter | Value |
+|-----------|-------|
+| `ReleaseVersion` | `auto` |
+| `IsPrerelease` | `false` for stable, `true` for pre-release |
+| `DryRun` | `false` |
+| `SkipNuGetPublish` | `true` |
+| `SkipChannelPromotion` | `true` |
+| `SkipWinGetPublish` | `true` |
+| `SkipHomebrewValidation` | `true` |
+| `SkipGitHubTasks` | `true` |
+| `SkipReleaseAssets` | `true` |
+| `SkipVSCodeExtensionPublish` | `false` |
+
+> **Stable vs. pre-release source build:** For a stable release (`IsPrerelease=false`), use the `microsoft-aspire` build that ran automatically on merge. For a pre-release (`IsPrerelease=true`), that automatic build is stable-only and cannot be used — manually queue the `microsoft-aspire` pipeline on the merge commit with `Package VS Code Extension as Pre-Release=true`, wait for it to finish, and select that build instead. The publish job fails if the VSIX's embedded pre-release flag does not match `IsPrerelease`.
+
+For a full Aspire release that should also publish the extension, keep the normal NuGet/channel/GitHub task settings and set `SkipVSCodeExtensionPublish` to `false`. `IsPrerelease` also controls whether extension publishing passes `--pre-release` to `vsce`; for a pre-release extension, the selected source build must also have been queued with `Package VS Code Extension as Pre-Release=true`.
+
 The npm release path validates Windows, Linux, and macOS install summaries, publishes the seven RID packages first, waits for ESRP completion, waits for the configured propagation delay, and then publishes the top-level `@microsoft/aspire-cli` pointer package. After the pointer package publishes, the pipeline installs it from the live npm registry and runs `aspire --version` before channel promotion. This avoids installing a pointer package whose optional RID dependencies are not visible yet and catches registry propagation issues before the release is promoted. For prereleases, set `SkipNpmPublish=true` unless the npm publishing path has gained explicit non-`latest` dist-tag support.
 
 `commit_sha` and `release_branch` for the GitHub workflow are derived automatically from the source build resource, so there is no need to copy them by hand.
 
 > **Tip**: Use `DryRun: true` to test end-to-end without publishing, promoting, tagging, creating PRs, or uploading release assets. The dry-run state is propagated to the GitHub workflow as `dry_run: true`.
 
-### Step 2 (fallback): Manually re-run the GitHub workflow
+### Step 2: Prepare a VS Code extension release PR
+
+Run this step only when releasing the VS Code extension independently of the normal Aspire release train, or when the extension changelog/version bump needs to be prepared before setting `SkipVSCodeExtensionPublish=false` in the AzDO release pipeline.
+
+1. Navigate to Actions → "Extension Release".
+2. Click "Run workflow".
+3. Fill in the parameters:
+
+   | Parameter | Description | Example |
+   |-----------|-------------|---------|
+   | `release_version` | New VS Code extension version | `1.0.10` |
+   | `from_sha` | Optional start commit SHA. Leave empty to use the latest stable Marketplace VSIX's bundled `extension/.version` SHA. Pass an explicit SHA for non-stable or historical baselines. | empty |
+   | `to_sha` | Optional end commit SHA. Leave empty to use the latest `main` commit. | empty |
+   | `dry_run` | `true` to validate and upload the proposed changelog/PR body artifact without creating a branch or PR. This can be used from forks because it does not require bot secrets. | `true` |
+
+4. Review the generated draft PR. Its description contains the exact `release-publish-nuget` parameter set for publishing the extension after the PR is merged.
+
+### Step 3 (fallback): Manually re-run the GitHub workflow
 
 The GitHub workflow is normally dispatched by the AzDO pipeline as the `aspire-repo-bot` GitHub App, with its `authorize` job bypassed for the bot. If a GitHub-side step fails partway through and you need to re-run only the GitHub work, you can:
 
@@ -127,7 +173,7 @@ The GitHub workflow is normally dispatched by the AzDO pipeline as the `aspire-r
 
 Manual runs go through the normal `authorize` check (admin/maintain permission required).
 
-### Step 3: Post-release tasks
+### Step 4: Post-Release Tasks (Manual)
 
 After automation completes:
 
@@ -161,6 +207,7 @@ Both automations are designed to be idempotent and safe to re-run.
 | Validate Published npm Package from Registry | Confirm the pointer package is visible on npm and that `npm install -g @microsoft/aspire-cli@<version>` works. If registry propagation is slow, re-run with completed publish steps skipped after the package is visible. |
 | Promote Build to Channel | Re-run with completed publish steps skipped. |
 | WinGet publishing / Homebrew validation | Re-run with the corresponding skip flags for completed work. |
+| Publish VS Code Extension to Marketplace | Check that `aspire-vscode-extension` contains one `.vsix`, `.manifest`, and `.signature.p7s`; verify `VscePublishToken` in `Aspire-Release-Secrets` has Marketplace: Manage scope; re-run with the already-completed `Skip*` flags set to `true`. |
 | GitHubTasks dispatch | Re-run with completed AzDO-side work skipped and `SkipGitHubTasks: false`; set `SkipReleaseAssets` according to whether release asset upload already completed. |
 | Release asset upload | Re-run with `SkipGitHubTasks: true` and `SkipReleaseAssets: false` after the GitHub release exists. |
 
@@ -191,7 +238,7 @@ The pipeline uses:
 
 | Variable group | Purpose |
 |----------------|---------|
-| `Aspire-Release-Secrets` | Release pipeline secrets, including the `aspire-repo-bot` GitHub App credentials. NuGet publishing uses a service connection rather than a variable-group API key. |
+| `Aspire-Release-Secrets` | Release pipeline secrets, including the `aspire-repo-bot` GitHub App credentials. NuGet publishing uses a service connection rather than a variable-group API key. `VscePublishToken` in this group is used only by the VS Code extension Marketplace publish job; rotate it from the Visual Studio Marketplace publisher management UI when `vsce verify-pat microsoft-aspire` fails or before the PAT expires. |
 | `Aspire-Secrets` | WinGet bot token. |
 
 ### Service connections
