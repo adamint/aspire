@@ -186,10 +186,22 @@ steps:
       # token so we are not thrown off by an incidental warn/info line printed before
       # or after the version (System.CommandLine's VersionOption normally just prints
       # the version and exits, but be defensive).
+      #
+      # The version we get from `aspire --version` is the InformationalVersion from
+      # the assembly, which the dotnet build embeds as SemVer 2.0 with build metadata
+      # appended after `+`. For example:
+      #     13.5.0-preview.1.26279.34+727fe3ca9dcecbcc6d10d8b4373ae6f5779b25b4
+      # We accept this form and strip the `+<buildmeta>` suffix before comparing to
+      # the npm package version, which intentionally drops build metadata because
+      # npm SemVer (npm/semver) doesn't honor it for equality.
+      # See https://semver.org/#spec-item-10 and https://github.com/npm/node-semver#advanced-range-syntax
       versionOutput="$(aspire --version 2>&1)"
-      actualVersion="$(printf '%s\n' "$versionOutput" | grep -Eo '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9._-]+)?$' | head -n 1 || true)"
+      versionLine="$(printf '%s\n' "$versionOutput" | grep -Eo '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9._-]+)?(\+[A-Za-z0-9._-]+)?$' | head -n 1 || true)"
+      # ${var%+*} strips the longest matching `+*` suffix. POSIX, works in Bash 3.2.
+      actualVersion="${versionLine%+*}"
       echo "  Raw output: $versionOutput"
-      echo "  Reported version: $actualVersion"
+      echo "  Matched semver line: $versionLine"
+      echo "  Comparable version (no +buildmeta): $actualVersion"
       if [ -z "$actualVersion" ] || [ "$actualVersion" != "$expectedVersion" ]; then
         echo "##[error]aspire --version reported '$actualVersion' but expected '$expectedVersion'"
         exit 1
