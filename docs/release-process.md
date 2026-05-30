@@ -54,7 +54,7 @@ Before starting a release:
    - The build will be selected from a dropdown when running the release pipeline
    - The build should have a `BAR ID - NNNNNN` tag (auto-extracted by the pipeline)
    - If publishing the VS Code extension, the build must include the `aspire-vscode-extension` artifact with exactly one `.vsix`, matching `.manifest`, and matching `.signature.p7s`
-   - If publishing the VS Code extension as a Marketplace pre-release, queue the signed source build with `Package VS Code Extension as Pre-Release=true` so the produced VSIX is marked as pre-release before signing
+   - If publishing the VS Code extension as a Marketplace pre-release, the build that runs automatically on merge will not work because it packages a stable VSIX; manually queue the `microsoft-aspire` source build on the merge commit with `Package VS Code Extension as Pre-Release=true` so the produced VSIX is marked as pre-release before signing
 
 2. **Release Branch**: Ensure the release branch exists (e.g., `release/9.2`)
 
@@ -142,6 +142,8 @@ To publish only the VS Code extension after merging an extension release PR, run
 | `SkipGitHubTasks` | `true` |
 | `SkipReleaseAssets` | `true` |
 | `SkipVSCodeExtensionPublish` | `false` |
+
+> **Stable vs. pre-release source build:** For a stable release (`IsPrerelease=false`), use the `microsoft-aspire` build that ran automatically on merge. For a pre-release (`IsPrerelease=true`), that automatic build is stable-only and cannot be used — manually queue the `microsoft-aspire` pipeline on the merge commit with `Package VS Code Extension as Pre-Release=true`, wait for it to finish, and select that build instead. The publish job fails if the VSIX's embedded pre-release flag does not match `IsPrerelease`.
 
 For a full Aspire release that should also publish the extension, keep the normal NuGet/channel/GitHub task settings and set `SkipVSCodeExtensionPublish` to `false`. `IsPrerelease` also controls whether extension publishing passes `--pre-release` to `vsce`; for a pre-release extension, the selected source build must also have been queued with `Package VS Code Extension as Pre-Release=true`.
 
