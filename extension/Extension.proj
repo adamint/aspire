@@ -3,20 +3,30 @@
     <TargetFramework>$(DefaultTargetFramework)</TargetFramework>
     <ExtensionSrcDir>$(MSBuildThisFileDirectory)</ExtensionSrcDir>
     <!--
-      Scope Corepack's cache to a build-scoped directory inside the extension
-      tree (gitignored). Required because the documented recovery path —
-      "run extension/build.sh once, then `./build.sh -build-extension` or
-      direct `dotnet build extension/Extension.proj`" — runs the root Arcade
-      flow in a fresh shell where the COREPACK_HOME that extension/build.sh
-      exported did not persist (subprocess scope). Without this, the corepack
-      invocations below fall back to ~/.cache/node/corepack and miss the
-      Yarn release the bootstrap scripts seeded. Setting it here, plus
-      EnvironmentVariables="COREPACK_HOME=$(_CorepackHome)" on every Exec
-      that runs corepack, keeps the recovery path's first-time experience
-      working from any parent shell. extension/build.sh and build.ps1 export
-      the same path so subsequent direct invocations reuse the same cache.
+      Scope Corepack's cache for the corepack <Exec> invocations below.
+      Resolution order:
+        1. Inherit COREPACK_HOME from the parent environment when set. The
+           AzDO pipelines (eng/pipelines/templates/install-corepack.yml)
+           seed the cache at $(Agent.TempDirectory)/corepack and export
+           COREPACK_HOME to that path; the GitHub Actions extension jobs
+           do the same via $GITHUB_ENV. If this target overrode COREPACK_HOME
+           unconditionally, the seed would never be read and corepack would
+           fall back to its default download (registry.yarnpkg.com), defeating
+           the registry lockdown that the bootstrap is meant to enforce.
+        2. Otherwise (local dev, root Arcade flow invoked directly), fall
+           back to a build-scoped cache inside the gitignored extension tree.
+           This is the documented recovery path: "run extension/build.sh once,
+           then `./build.sh -build-extension` or direct
+           `dotnet build extension/Extension.proj`". extension/build.sh and
+           build.ps1 export the same fallback path so subsequent direct
+           invocations reuse the cache they seeded.
+      The EnvironmentVariables attribute on every corepack <Exec> below is
+      still required so corepack receives _CorepackHome even when MSBuild was
+      launched from a shell whose COREPACK_HOME we inherited but child Exec
+      scope would otherwise lose.
     -->
-    <_CorepackHome>$([MSBuild]::NormalizePath($(ExtensionSrcDir), '.corepack-cache'))</_CorepackHome>
+    <_CorepackHome Condition="'$(COREPACK_HOME)' != ''">$(COREPACK_HOME)</_CorepackHome>
+    <_CorepackHome Condition="'$(_CorepackHome)' == ''">$([MSBuild]::NormalizePath($(ExtensionSrcDir), '.corepack-cache'))</_CorepackHome>
   </PropertyGroup>
 
   <Target Name="BuildAndPackageExtension" BeforeTargets="Build" DependsOnTargets="ValidateYarnLockRegistries;CheckYarnInstalled;CheckVsceInstalled">

@@ -59,7 +59,16 @@ if (existsSync(corepackMetadataPath)) {
   process.exit(0);
 }
 
-rmSync(installDirectory, { recursive: true, force: true });
+// Race-safe cleanup: only remove the install directory when it is stale
+// (no `.corepack` metadata). The earlier existsSync at line 57 races against
+// a concurrent winner whose renameSync could complete between that check and
+// here; an unconditional rmSync would destroy that just-seeded cache. A
+// narrow residual window remains between this re-check and the rmSync, but
+// the rename at line 101 below would then fail with EEXIST/ENOTEMPTY and
+// fall through to the existing concurrent-cache recovery path.
+if (existsSync(installDirectory) && !existsSync(corepackMetadataPath)) {
+  rmSync(installDirectory, { recursive: true, force: true });
+}
 
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'aspire-corepack-yarn-'));
 mkdirSync(installParentDirectory, { recursive: true });
@@ -85,7 +94,7 @@ try {
   // resolve Yarn through the Azure Artifacts pull-through feed.
   run('tar', ['-xzf', tarballPath, '-C', stagingDirectory, '--strip-components=1'], temporaryDirectory);
 
-  writeFileSync(corepackMetadataPathFor(stagingDirectory), JSON.stringify({
+  writeFileSync(join(stagingDirectory, '.corepack'), JSON.stringify({
     locator: {
       name: 'yarn',
       reference: yarnVersion
@@ -161,10 +170,6 @@ function getNpmInvocation() {
   // .cmd shim from child_process.spawnSync with EINVAL, while invoking the
   // npm CLI through node.exe avoids shell/cmd parsing entirely.
   return { command: process.execPath, args: [npmCliPath] };
-}
-
-function corepackMetadataPathFor(directory) {
-  return join(directory, '.corepack');
 }
 
 function parseNpmPackJson(stdout) {
