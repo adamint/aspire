@@ -49,22 +49,22 @@ suite('telemetry utilities', () => {
 
     test('sendTelemetryEvent merges common properties', () => {
         setCommonTelemetryProperties({ apphost_languages: 'csharp', apphost_present: 'true' });
-        sendTelemetryEvent('test/event', { extra: 'value' });
+        sendTelemetryEvent('command/invoked', { command: 'cmd.x' });
         assert.strictEqual(fake.events.length, 1);
         const event = fake.events[0];
-        assert.strictEqual(event.name, 'test/event');
+        assert.strictEqual(event.name, 'command/invoked');
         assert.deepStrictEqual(event.properties, {
             apphost_languages: 'csharp',
             apphost_present: 'true',
-            extra: 'value',
+            command: 'cmd.x',
         });
     });
 
     test('setCommonTelemetryProperties replaces and clears keys', () => {
-        setCommonTelemetryProperties({ a: 'first', b: 'keep' });
-        setCommonTelemetryProperties({ a: undefined, c: 'new' });
-        sendTelemetryEvent('test/event');
-        assert.deepStrictEqual(fake.events[0].properties, { b: 'keep', c: 'new' });
+        setCommonTelemetryProperties({ apphost_languages: 'first', apphost_present: 'keep' });
+        setCommonTelemetryProperties({ apphost_languages: undefined });
+        sendTelemetryEvent('command/invoked', { command: 'cmd.y' });
+        assert.deepStrictEqual(fake.events[0].properties, { apphost_present: 'keep', command: 'cmd.y' });
     });
 
     test('withCommandTelemetry emits success outcome', async () => {

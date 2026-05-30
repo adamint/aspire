@@ -8,7 +8,7 @@ import { AspireResourceDebugSession, DcpServerConnectionInfo, ErrorDetails, Erro
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import { createDebugSessionConfiguration, getResourceDebuggerExtensions } from '../debugger/debuggerExtensions';
 import { cleanupRun } from '../debugger/runCleanupRegistry';
-import { timingSafeEqual } from 'crypto';
+import { timingSafeEqual, randomBytes } from 'crypto';
 import { getRunSessionInfo, getSupportedCapabilities } from '../capabilities';
 import { authorizationAndDcpHeadersRequired, authorizationHeaderMustStartWithBearer, encounteredErrorStartingResource, invalidOrMissingToken, invalidTokenLength } from '../loc/strings';
 import { DashboardTelemetryPassthrough } from './DashboardTelemetryPassthrough';
@@ -191,7 +191,12 @@ export default class AspireDcpServer {
             // can finally talk to the extension's reporter.
             dashboardTelemetry.register(app, requireBearerOnly);
 
-            app.get('/info', (req: Request, res: Response) => {
+            // Per the DCP IDE-execution spec, GET /info requires both the
+            // bearer token and the DCP instance id. See
+            // docs/specs/IDE-execution.md (#ide-endpoint-information-request).
+            // Without auth, any local process could enumerate which VS Code
+            // language extensions are installed on the user's machine.
+            app.get('/info', requireHeaders, (req: Request, res: Response) => {
                 res.json(getRunSessionInfo());
             });
 
@@ -404,8 +409,36 @@ export default class AspireDcpServer {
 
             server.on('upgrade', (request, socket, head) => {
                 if (request.url?.startsWith('/run_session/notify')) {
+                    // Per the DCP IDE-execution spec, /run_session/notify
+                    // upgrade requires both the bearer token and the DCP
+                    // instance id headers. See
+                    // docs/specs/IDE-execution.md (#subscribe-to-session-change-notifications-request).
+                    //
+                    // Without this check, any local actor able to reach our
+                    // localhost port could:
+                    //   - Subscribe to the notification stream and receive
+                    //     `serviceLogs` (stdout/stderr of debugged user
+                    //     processes) and `sessionTerminated` notifications
+                    //     by guessing or predicting a `dcpId`.
+                    //   - Hijack notification delivery for an active debug
+                    //     session — `wsBySession.set(dcpId, ws)` below
+                    //     replaces any existing entry, so a second connection
+                    //     for the same `dcpId` silently steals all future
+                    //     notifications from the legitimate DCP client.
+                    const authHeader = request.headers['authorization'] as string | undefined;
+                    const dcpId = request.headers['microsoft-developer-dcp-instance-id'] as string | undefined;
+                    if (!dcpId) {
+                        socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+                        socket.destroy();
+                        return;
+                    }
+                    const authResult = validateBearerToken(authHeader);
+                    if (authResult.kind !== 'ok') {
+                        socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');
+                        socket.destroy();
+                        return;
+                    }
                     wss.handleUpgrade(request, socket, head, (ws) => {
-                        const dcpId = request.headers['microsoft-developer-dcp-instance-id'] as string;
                         extensionLogOutputChannel.info(`WebSocket connection established for DCP ID: ${dcpId}`);
                         wsBySession.set(dcpId, ws);
 
@@ -561,12 +594,22 @@ export default class AspireDcpServer {
     }
 }
 
+// Cryptographically-secure identifier generators. The DCP instance id is
+// used as the keying material for routing notifications back to a specific
+// debug session (`wsBySession.set(dcpId, ws)`) — a predictable id combined
+// with the WebSocket upgrade endpoint would let a colocated process hijack
+// the notification stream. `Math.random()` is NOT cryptographically secure
+// (V8's xorshift128+ is predictable from a small number of outputs), so use
+// `randomBytes` instead. 16 hex chars = 64 bits of true entropy.
+//
+// Returns only `[0-9a-f]` so the `getDcpIdPrefix` regex below
+// (`aspire-extension-run-[a-z0-9]+`) keeps matching without changes.
 export function generateRunId(): string {
-    return `run-${Math.random().toString(36).substring(2, 15)}`;
+    return `run-${randomBytes(8).toString('hex')}`;
 }
 
 export function generateDcpIdPrefix(): string {
-    return `aspire-extension-run-${Math.random().toString(36).substring(2, 15)}`;
+    return `aspire-extension-run-${randomBytes(8).toString('hex')}`;
 }
 
 function getDcpIdPrefix(dcpId: string): string | null {

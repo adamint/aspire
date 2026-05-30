@@ -1,5 +1,20 @@
 import { TelemetryReporter } from '@vscode/extension-telemetry';
 import * as vscode from 'vscode';
+import {
+    CommonTelemetryProperties,
+    CommonTelemetryProperty,
+    EventMeasurements,
+    EventProperties,
+    KnownTelemetryEventName,
+} from './telemetryRegistry';
+
+export type {
+    KnownTelemetryEventName,
+    EventProperties,
+    EventMeasurements,
+    CommonTelemetryProperty,
+    CommonTelemetryProperties,
+} from './telemetryRegistry';
 
 // Module-private state.
 // Aspire emits all telemetry through a single TelemetryReporter (which itself
@@ -13,9 +28,12 @@ let reporter: TelemetryReporter | undefined;
 // Common properties merged into every event we emit. The TelemetryReporter
 // already injects extension version, OS, machine id, etc., so this map is
 // reserved for Aspire-specific cross-event signals (e.g. detected AppHost
-// language, run mode). Values are kept as strings because @vscode/extension-telemetry
-// only supports string-valued properties; numeric data must go through `measurements`.
-const commonProperties: { [key: string]: string } = {};
+// language, run mode). The key set is intentionally tiny and registered in
+// `telemetryRegistry.ts` because each common property duplicates into a row
+// per event in the classification catalog.
+// Values are kept as strings because @vscode/extension-telemetry only supports
+// string-valued properties; numeric data must go through `measurements`.
+const commonProperties: Partial<Record<CommonTelemetryProperty, string>> = {};
 
 // Optional listener invoked from {@link withCommandTelemetry} on every
 // successful or attempted command invocation. The engagement reporter sets
@@ -39,16 +57,6 @@ export function initializeTelemetry(context: vscode.ExtensionContext): void {
 }
 
 /**
- * Returns the shared TelemetryReporter, or undefined if telemetry has not been
- * initialized (e.g. tests that skip activation, or builds without an AI key).
- * Callers that need to bypass the helper functions (notably the dashboard
- * telemetry passthrough) use this to call sendTelemetryEvent directly.
- */
-export function getTelemetryReporter(): TelemetryReporter | undefined {
-    return reporter;
-}
-
-/**
  * Whether telemetry is allowed to leave the machine right now. Combines our
  * reporter availability with VS Code's global telemetry user setting so that
  * the dashboard passthrough endpoint advertises "enabled" only when both are
@@ -64,9 +72,14 @@ export function isExtensionTelemetryEnabled(): boolean {
  * emitted via {@link sendTelemetryEvent}, {@link sendTelemetryErrorEvent}, and
  * {@link withCommandTelemetry}. Existing values for the same keys are replaced.
  * `undefined` values clear a key.
+ *
+ * The key set is restricted to {@link CommonTelemetryProperty} on purpose:
+ * every common property creates a (event, property) row in the classification
+ * catalog for *every* event we emit, so adding one is a deliberate decision
+ * that must go through `telemetryRegistry.ts`.
  */
-export function setCommonTelemetryProperties(properties: { [key: string]: string | undefined }): void {
-    for (const [key, value] of Object.entries(properties)) {
+export function setCommonTelemetryProperties(properties: CommonTelemetryProperties): void {
+    for (const [key, value] of Object.entries(properties) as Array<[CommonTelemetryProperty, string | undefined]>) {
         if (value === undefined) {
             delete commonProperties[key];
         }
@@ -76,16 +89,32 @@ export function setCommonTelemetryProperties(properties: { [key: string]: string
     }
 }
 
-export function getCommonTelemetryProperties(): Readonly<{ [key: string]: string }> {
+export function getCommonTelemetryProperties(): Readonly<Partial<Record<CommonTelemetryProperty, string>>> {
     return commonProperties;
 }
 
-function mergeProperties(properties?: { [key: string]: string }): { [key: string]: string } {
-    return { ...commonProperties, ...(properties ?? {}) };
+function mergeProperties<E extends KnownTelemetryEventName>(properties?: EventProperties<E>): { [key: string]: string } {
+    // Spread order matters: explicit per-event properties win over commons so
+    // a caller can override (e.g. tests forcing apphost_present to a known
+    // value). The result is intentionally widened to `{ [key: string]: string }`
+    // because that's what the underlying TelemetryReporter expects — the
+    // narrow typing is enforced at the public wrapper boundary above.
+    return { ...commonProperties, ...((properties ?? {}) as { [key: string]: string }) };
 }
 
-export function sendTelemetryEvent(eventName: string, properties?: { [key: string]: string }, measurements?: { [key: string]: number }): void {
-    reporter?.sendTelemetryEvent(eventName, mergeProperties(properties), measurements);
+/**
+ * Emit a telemetry event. The `eventName` is constrained to entries in
+ * {@link KnownTelemetryEventName} (see telemetryRegistry.ts) and the
+ * accepted `properties` / `measurements` keys are constrained to the per-event
+ * union declared there. This prevents accidental introduction of new
+ * (event, property) pairs that would need data classification.
+ */
+export function sendTelemetryEvent<E extends KnownTelemetryEventName>(
+    eventName: E,
+    properties?: EventProperties<E>,
+    measurements?: EventMeasurements<E>
+): void {
+    reporter?.sendTelemetryEvent(eventName, mergeProperties(properties), measurements as { [key: string]: number } | undefined);
 }
 
 /**
@@ -93,8 +122,12 @@ export function sendTelemetryEvent(eventName: string, properties?: { [key: strin
  * dashboard fault posts, etc.) — the underlying reporter applies stricter
  * PII scrubbing on error events than on regular events.
  */
-export function sendTelemetryErrorEvent(eventName: string, properties?: { [key: string]: string }, measurements?: { [key: string]: number }): void {
-    reporter?.sendTelemetryErrorEvent(eventName, mergeProperties(properties), measurements);
+export function sendTelemetryErrorEvent<E extends KnownTelemetryEventName>(
+    eventName: E,
+    properties?: EventProperties<E>,
+    measurements?: EventMeasurements<E>
+): void {
+    reporter?.sendTelemetryErrorEvent(eventName, mergeProperties(properties), measurements as { [key: string]: number } | undefined);
 }
 
 /**
@@ -128,7 +161,7 @@ export type CommandOutcome = 'success' | 'canceled' | 'error';
 export async function withCommandTelemetry<T>(
     commandName: string,
     fn: () => Promise<T> | T,
-    additionalProperties?: { [key: string]: string }
+    additionalProperties?: Partial<Record<'source', string>>
 ): Promise<T> {
     commandInvocationListener?.();
     const startTime = Date.now();
@@ -149,7 +182,7 @@ export async function withCommandTelemetry<T>(
     }
     finally {
         const durationMs = Date.now() - startTime;
-        const properties: { [key: string]: string } = {
+        const properties: EventProperties<'command/invoked'> = {
             command: commandName,
             outcome,
             ...(additionalProperties ?? {}),
@@ -224,7 +257,7 @@ export function __setReporterForTests(fake: TelemetryReporter | undefined): () =
 
 /** Test seam: clear common properties so tests don't bleed into each other. */
 export function __resetCommonPropertiesForTests(): void {
-    for (const key of Object.keys(commonProperties)) {
+    for (const key of Object.keys(commonProperties) as CommonTelemetryProperty[]) {
         delete commonProperties[key];
     }
 }
