@@ -1,12 +1,24 @@
 #!/bin/bash
 set -e
 
+# Ensure we run from the extension directory so corepack/yarn pick up
+# extension/.npmrc and extension/package.json (which holds the packageManager pin).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Pinned Corepack shim version. Node.js >= 16.10 bundles a Corepack, but the
 # bundled version drifts with each Node release and Corepack is on track to be
 # unbundled from Node entirely (see https://github.com/nodejs/node/issues/54647).
 # Installing a pinned Corepack from npm makes the build reproducible regardless
 # of which Node version a developer or CI runner happens to have.
-COREPACK_VERSION="0.34.7"
+#
+# The version is stored in scripts/corepack-version.txt so that this script, the
+# PowerShell build script, the GitHub Actions workflow, and the AzDO pipelines
+# all read from a single source of truth.
+COREPACK_VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/scripts/corepack-version.txt")"
+if [ -z "$COREPACK_VERSION" ]; then
+    echo "Error: scripts/corepack-version.txt is empty or unreadable."
+    exit 1
+fi
 
 # Yarn version is pinned in extension/package.json via the "packageManager"
 # field, which scripts/prepareCorepackYarn.mjs uses to seed Corepack's cache.
@@ -15,9 +27,28 @@ COREPACK_VERSION="0.34.7"
 # shim and seeding Corepack's Yarn cache. npm global installs do not use the
 # project .npmrc, so pass the registry explicitly. Override locally with
 # `NPM_REGISTRY=<url> ./build.sh`.
+# Export NPM_REGISTRY so the child `node ./scripts/prepareCorepackYarn.mjs`
+# process inherits it; without `export`, the script silently falls back to its
+# own DefaultNpmRegistry constant and any user override of NPM_REGISTRY would
+# be ignored when seeding Corepack's Yarn cache.
 : "${NPM_REGISTRY:=https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/}"
+export NPM_REGISTRY
 : "${COREPACK_ENABLE_DOWNLOAD_PROMPT:=0}"
 export COREPACK_ENABLE_DOWNLOAD_PROMPT
+
+# Pin Corepack's cache directory to a build-scoped location. Without this, every
+# build shares the user's default cache (~/.cache/node/corepack on Linux,
+# ~/Library/Caches/node/corepack on macOS, %LOCALAPPDATA%\node\corepack on
+# Windows). prepareCorepackYarn.mjs rewrites that cache in place
+# (rmSync(installDirectory) followed by renameSync(staging, installDirectory)),
+# so concurrent builds racing on the same Corepack home can corrupt each other's
+# cache. The CI pipelines already scope this per-job (e.g. AzDO uses
+# Agent.TempDirectory); do the same here so multi-worktree setups stay
+# isolated. Concurrent builds in the *same* worktree still race on this shared
+# directory — prepareCorepackYarn.mjs handles the EEXIST/ENOTEMPTY rename
+# collision but is not a substitute for a lock. The directory is gitignored.
+: "${COREPACK_HOME:=$SCRIPT_DIR/.corepack-cache}"
+export COREPACK_HOME
 
 echo "Checking prerequisites..."
 
@@ -50,9 +81,6 @@ fi
 
 echo "All prerequisites satisfied."
 
-# Ensure we run from the extension directory so corepack/yarn pick up
-# extension/.npmrc and extension/package.json (which holds the packageManager pin).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo ""
@@ -60,7 +88,14 @@ echo "Installing pinned Corepack ${COREPACK_VERSION}..."
 # Reinstall every time so we overwrite any older Corepack shim that Node.js
 # may have placed on PATH ahead of npm's global prefix. npm global installs do
 # not use the project .npmrc, so pass the registry explicitly.
-npm install --global --registry "$NPM_REGISTRY" "corepack@${COREPACK_VERSION}"
+#
+# --force is required because Corepack's npm package declares `yarn`, `yarnpkg`,
+# `pnpm`, `pnpx`, and `corepack` as bin entries. Without --force, npm refuses to
+# overwrite bins owned by a pre-existing global yarn or pnpm (a very common
+# setup, and the state this repo itself was in before this build script existed)
+# and aborts with EEXIST. The CI pipelines already pass --force for the same
+# reason.
+npm install --global --force --registry "$NPM_REGISTRY" "corepack@${COREPACK_VERSION}"
 
 # Verify the version actually on PATH matches our pin. If a system-bundled
 # Corepack shim shadows the npm-global install (common on Windows; possible on

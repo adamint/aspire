@@ -8,7 +8,26 @@ import { fileURLToPath } from 'node:url';
 import process from 'node:process';
 
 const DefaultNpmRegistry = 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/';
-const PackageManagerPattern = /^yarn@(?<version>\d+\.\d+\.\d+)$/;
+// Yarn 1.x `packageManager` strings can carry an integrity suffix when written
+// by `corepack use yarn@<v>` (the workflow CONTRIBUTING.MD points contributors
+// at to update the pin), producing values like
+//   "yarn@1.22.22+sha512.f7062e6a5ee1f3aa…".
+// The suffix is optional but its presence must not break us. Match an optional
+// `+<token>` suffix and ignore it; only the version is needed to seed the cache.
+//
+// Integrity note: when Corepack's `installVersion` finds an existing cache dir
+// containing a `.corepack` file, it returns the recorded `hash`/`bin`
+// immediately without re-hashing or signature-checking the install (see
+// https://github.com/nodejs/corepack/blob/v0.34.7/sources/corepackUtils.ts).
+// Its `Mismatch hashes` check fires only on the download path, which a
+// pre-seeded cache never reaches. That means the `sha1.${packEntry.shasum}` we
+// write to `.corepack` below is recorded for completeness but is never
+// re-verified on reuse — trust on the seeded Yarn rests entirely on the
+// `npm pack` fetch from `$NPM_REGISTRY` (the internal dnceng feed), which is
+// the same authentication and integrity boundary npm uses for any other
+// install through this feed.
+// Spec: https://nodejs.org/api/packages.html#packagemanager
+const PackageManagerPattern = /^yarn@(?<version>\d+\.\d+\.\d+)(?:\+[\w.-]+)?$/;
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const extensionDirectory = dirname(scriptDirectory);
@@ -40,7 +59,16 @@ if (existsSync(corepackMetadataPath)) {
   process.exit(0);
 }
 
-rmSync(installDirectory, { recursive: true, force: true });
+// Race-safe cleanup: only remove the install directory when it is stale
+// (no `.corepack` metadata). The earlier existsSync at line 57 races against
+// a concurrent winner whose renameSync could complete between that check and
+// here; an unconditional rmSync would destroy that just-seeded cache. A
+// narrow residual window remains between this re-check and the rmSync, but
+// the rename at line 101 below would then fail with EEXIST/ENOTEMPTY and
+// fall through to the existing concurrent-cache recovery path.
+if (existsSync(installDirectory) && !existsSync(corepackMetadataPath)) {
+  rmSync(installDirectory, { recursive: true, force: true });
+}
 
 const temporaryDirectory = mkdtempSync(join(tmpdir(), 'aspire-corepack-yarn-'));
 mkdirSync(installParentDirectory, { recursive: true });
@@ -66,7 +94,7 @@ try {
   // resolve Yarn through the Azure Artifacts pull-through feed.
   run('tar', ['-xzf', tarballPath, '-C', stagingDirectory, '--strip-components=1'], temporaryDirectory);
 
-  writeFileSync(corepackMetadataPathFor(stagingDirectory), JSON.stringify({
+  writeFileSync(join(stagingDirectory, '.corepack'), JSON.stringify({
     locator: {
       name: 'yarn',
       reference: yarnVersion
@@ -82,7 +110,18 @@ try {
     renameSync(stagingDirectory, installDirectory);
     cacheSeeded = true;
   } catch (error) {
-    if (error?.code === 'EEXIST') {
+    // Lost a race with a concurrent build (same worktree, same COREPACK_HOME).
+    // The winner's renameSync atomically populated installDirectory; ours then
+    // fails because the destination already exists. Filesystem-level error
+    // codes vary:
+    //   - Windows / macOS HFS+: EEXIST when the destination dir exists.
+    //   - Linux / macOS APFS:   ENOTEMPTY (rename(2) rejects renaming over a
+    //                           non-empty directory; see
+    //                           https://man7.org/linux/man-pages/man2/rename.2.html).
+    // Both mean the cache is already in place, so log and exit cleanly. Any
+    // other error code is a real failure (permission, ENOSPC, etc.) and is
+    // re-thrown.
+    if (error?.code === 'EEXIST' || error?.code === 'ENOTEMPTY') {
       console.log(`Corepack cache already contains yarn@${yarnVersion} at ${installDirectory}`);
     } else {
       throw error;
@@ -102,6 +141,13 @@ function getCorepackHome() {
     return process.env.COREPACK_HOME;
   }
 
+  // build.sh / build.ps1 / the GitHub Actions workflow / the AzDO pipelines all
+  // set COREPACK_HOME explicitly to a build-scoped directory. This fallback
+  // exists only for ad-hoc invocations of this script (e.g. local debugging,
+  // running `node ./scripts/prepareCorepackYarn.mjs` directly). It mirrors
+  // Corepack 0.34.x's own cache-path resolution so we seed the directory
+  // Corepack will later read from.
+  // Source: https://github.com/nodejs/corepack/blob/v0.34.7/sources/folderUtils.ts
   const baseDirectory = process.env.XDG_CACHE_HOME
     ?? process.env.LOCALAPPDATA
     ?? join(homedir(), process.platform === 'win32' ? 'AppData/Local' : '.cache');
@@ -124,10 +170,6 @@ function getNpmInvocation() {
   // .cmd shim from child_process.spawnSync with EINVAL, while invoking the
   // npm CLI through node.exe avoids shell/cmd parsing entirely.
   return { command: process.execPath, args: [npmCliPath] };
-}
-
-function corepackMetadataPathFor(directory) {
-  return join(directory, '.corepack');
 }
 
 function parseNpmPackJson(stdout) {

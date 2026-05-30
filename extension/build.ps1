@@ -2,12 +2,24 @@
 
 $ErrorActionPreference = "Stop"
 
+# Ensure we run from the extension directory so corepack/yarn pick up
+# extension/.npmrc and extension/package.json (which holds the packageManager pin).
+Set-Location $PSScriptRoot
+
 # Pinned Corepack shim version. Node.js >= 16.10 bundles a Corepack, but the
 # bundled version drifts with each Node release and Corepack is on track to be
 # unbundled from Node entirely (see https://github.com/nodejs/node/issues/54647).
 # Installing a pinned Corepack from npm makes the build reproducible regardless
 # of which Node version a developer or CI runner happens to have.
-$CorepackVersion = "0.34.7"
+#
+# The version is stored in scripts/corepack-version.txt so that this script, the
+# Bash build script, the GitHub Actions workflow, and the AzDO pipelines all
+# read from a single source of truth.
+$CorepackVersion = (Get-Content -Raw -Path (Join-Path $PSScriptRoot 'scripts/corepack-version.txt')).Trim()
+if ([string]::IsNullOrWhiteSpace($CorepackVersion)) {
+    Write-Error "scripts/corepack-version.txt is empty or unreadable."
+    exit 1
+}
 
 # Yarn version is pinned in extension/package.json via the "packageManager"
 # field, which scripts/prepareCorepackYarn.mjs uses to seed Corepack's cache.
@@ -21,6 +33,21 @@ if (-not $env:NPM_REGISTRY) {
 }
 if (-not $env:COREPACK_ENABLE_DOWNLOAD_PROMPT) {
     $env:COREPACK_ENABLE_DOWNLOAD_PROMPT = "0"
+}
+
+# Pin Corepack's cache directory to a build-scoped location. Without this, every
+# build shares the user's default cache (%LOCALAPPDATA%\node\corepack on
+# Windows, ~/.cache/node/corepack on Linux, ~/Library/Caches/node/corepack on
+# macOS). prepareCorepackYarn.mjs rewrites that cache in place
+# (rmSync(installDirectory) followed by renameSync(staging, installDirectory)),
+# so concurrent builds racing on the same Corepack home can corrupt each other's
+# cache. The CI pipelines already scope this per-job (e.g. AzDO uses
+# Agent.TempDirectory); do the same here so multi-worktree setups stay
+# isolated. Concurrent builds in the *same* worktree still race on this shared
+# directory — prepareCorepackYarn.mjs handles the EEXIST/ENOTEMPTY rename
+# collision but is not a substitute for a lock. The directory is gitignored.
+if (-not $env:COREPACK_HOME) {
+    $env:COREPACK_HOME = Join-Path $PSScriptRoot '.corepack-cache'
 }
 
 Write-Host "Checking prerequisites..."
@@ -57,16 +84,19 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
 
 Write-Host "All prerequisites satisfied."
 
-# Ensure we run from the extension directory so corepack/yarn pick up
-# extension/.npmrc and extension/package.json (which holds the packageManager pin).
-Set-Location $PSScriptRoot
-
 Write-Host ""
 Write-Host "Installing pinned Corepack $CorepackVersion..."
 # Reinstall every time so we overwrite any older Corepack shim that Node.js
 # may have placed on PATH ahead of npm's global prefix. npm global installs do
 # not use the project .npmrc, so pass the registry explicitly.
-npm install --global --registry "$env:NPM_REGISTRY" "corepack@$CorepackVersion"
+#
+# --force is required because Corepack's npm package declares `yarn`, `yarnpkg`,
+# `pnpm`, `pnpx`, and `corepack` as bin entries. Without --force, npm refuses to
+# overwrite bins owned by a pre-existing global yarn or pnpm (a very common
+# setup, and the state this repo itself was in before this build script existed)
+# and aborts with EEXIST. The CI pipelines already pass --force for the same
+# reason.
+npm install --global --force --registry "$env:NPM_REGISTRY" "corepack@$CorepackVersion"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "npm install -g corepack@$CorepackVersion failed with exit code $LASTEXITCODE"
