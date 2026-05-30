@@ -343,16 +343,24 @@ jobs:
           RELEASE_NOTES_CONTENT=$(printf '%.8000s' "$(cat "$RELEASE_NOTES")")
           printf '%s\n' "$RELEASE_NOTES_CONTENT" > "$RELEASE_NOTES"
 
+          # The changelog entry committed to the PR is a PLACEHOLDER, not the
+          # deterministic commit list. A separate agentic workflow
+          # (.github/workflows/extension-changelog.md) detects the marker comment
+          # below, generates polished user-facing notes from the extension commit
+          # range, and replaces this block on the PR branch via a safe output. This
+          # keeps AI generation in an agentic workflow (read-only agent + safe
+          # outputs) instead of invoking a model inline here. The deterministic
+          # commit list ("$RELEASE_NOTES") is preserved in the PR body as a
+          # human-reviewable fallback in case the agent never runs (e.g. on a fork).
+          #
+          # The marker carries the full from/to SHAs and the Marketplace base
+          # version so the agent can validate them and recompute the same range.
+          # BASE_VERSION may be empty when no Marketplace baseline was resolved.
           {
             echo "## v${NEW_VERSION}"
             echo ""
-            if [ -n "$BASE_VERSION" ]; then
-              echo "_Changes since VS Code Marketplace v${BASE_VERSION} (${FROM_SHA:0:7}..${TO_SHA:0:7})._"
-            else
-              echo "_Changes in ${FROM_SHA:0:7}..${TO_SHA:0:7}._"
-            fi
-            echo ""
-            cat "$RELEASE_NOTES"
+            echo "<!-- aspire-ext-changelog from=${FROM_SHA} to=${TO_SHA} base=${BASE_VERSION} -->"
+            echo "_Release notes are being generated automatically and will replace this placeholder shortly. If this line is still here after the \`extension-changelog\` workflow runs, copy the deterministic commit list from the pull request description into this entry before merging._"
           } > "$WORK_DIR/changelog_entry.md"
 
       - name: Update package.json version
@@ -435,13 +443,15 @@ jobs:
               echo "**Baseline:** explicitly supplied \`from_sha\`"
             fi
             echo ""
-            echo "### Release Notes (auto-generated from commits)"
+            echo "### Proposed release notes (deterministic fallback)"
+            echo ""
+            echo "The \`extension-changelog\` agentic workflow generates the final, polished \`extension/CHANGELOG.md\` entry and replaces the placeholder on this branch. The commit-derived list below is the human-reviewable fallback — if the agent does not run, paste it into \`extension/CHANGELOG.md\` before merging."
             echo ""
             printf '%s\n' "$RELEASE_NOTES"
             echo ""
             echo "### Release instructions"
             echo ""
-            echo "1. Review and merge this PR after confirming \`extension/CHANGELOG.md\` is specific, user-facing, and free of internal-only changes."
+            echo "1. Confirm \`extension/CHANGELOG.md\` is specific, user-facing, and free of internal-only changes. The \`extension-changelog\` agentic workflow replaces the placeholder entry with generated notes shortly after this PR is opened; if the placeholder is still present, fill it in from the deterministic fallback above before merging."
             echo "2. Get a signed Azure DevOps \`microsoft-aspire\` source build of the merge commit that published the \`aspire-vscode-extension\` artifact with exactly one \`.vsix\`, matching \`.manifest\`, and matching \`.signature.p7s\`:"
             echo "   - **Stable release:** use the build that runs automatically on merge — it packages the extension as a stable (non-pre-release) VSIX."
             echo "   - **Pre-release:** the automatic merge build is stable-only, so manually queue the [\`microsoft-aspire\`](https://dev.azure.com/dnceng/internal/_build?definitionId=1602) pipeline on the merge commit with \`Package VS Code Extension as Pre-Release=true\`, then use that build instead. The publish job fails if the VSIX pre-release flag does not match \`IsPrerelease\`."
@@ -554,3 +564,31 @@ jobs:
               --draft
             echo "✓ Created draft PR for extension release v${NEW_VERSION}"
           fi
+
+          # Resolve the PR number (covers both the create and update paths) and apply
+          # the trigger label. Applying the label with the GitHub App token — not the
+          # default GITHUB_TOKEN — is what lets the downstream `extension-changelog`
+          # agentic workflow fire on the `labeled` event (workflows are not triggered
+          # by actions performed with the implicit GITHUB_TOKEN).
+          PR_NUMBER=$(gh pr list --head "$BRANCH_NAME" --base main --json number --jq '.[0].number // empty')
+          if [ -z "$PR_NUMBER" ]; then
+            echo "::error::Could not resolve the extension release PR number to apply the trigger label."
+            exit 1
+          fi
+          # Ensure the label exists before adding it (`--force` is idempotent: it
+          # updates the label if it already exists and creates it otherwise).
+          gh label create vscode-extension-release \
+            --color BFD4F2 \
+            --description "Bot-created VS Code extension release PR; triggers the extension-changelog agentic workflow." \
+            --force >/dev/null 2>&1 || true
+          # Remove then re-add the label so a fresh `labeled` event always fires,
+          # even on a re-run where the label is already present (adding a label
+          # that already exists on the PR is a no-op that fires no event). On a
+          # re-run the release workflow has just force-pushed a new placeholder,
+          # so the downstream changelog workflow must run again. The remove is a
+          # harmless no-op (with `|| true`) when the label isn't present yet, and
+          # the resulting `unlabeled` event is ignored by extension-changelog
+          # (which only triggers on `labeled`).
+          gh pr edit "$PR_NUMBER" --remove-label vscode-extension-release >/dev/null 2>&1 || true
+          gh pr edit "$PR_NUMBER" --add-label vscode-extension-release
+          echo "✓ Applied 'vscode-extension-release' label to PR #${PR_NUMBER}"
