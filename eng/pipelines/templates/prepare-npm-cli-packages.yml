@@ -162,14 +162,39 @@ steps:
 
       # Install the RID package first so it lands as a top-level sibling of the
       # pointer package. Then install the pointer with --omit=optional so npm
-      # does not try to fetch the matching RID dep from the registry (the
-      # just-built version does not yet exist in the public registry during
-      # this validation step).
+      # does not install the matching RID dep from the registry (the just-built
+      # version does not yet exist in the public registry during this validation
+      # step).
+      #
+      # IMPORTANT: --omit=optional only prevents the *install* of an optional
+      # dep; npm still resolves its metadata from the registry while building
+      # the dependency tree. The pointer declares ALL 7 supported RIDs as
+      # optionalDependencies pinned to the just-built version, so on a network
+      # path that doesn't get a fast 404 (some 1ES Linux/Windows pools, where
+      # the npm registry call gets blackholed by network isolation rules), each
+      # of the 7 lookups burns the full --fetch-timeout. That's how the pointer
+      # install took 9m on Linux while only 3s on macOS during dry-run build
+      # 2987581. Pair --omit=optional with --offline so npm never touches the
+      # network for this validation: optional deps are skipped without a
+      # resolution attempt and the local tarball is installed straight from
+      # disk. A short --fetch-timeout is set as belt-and-suspenders in case any
+      # code path bypasses --offline (it should not, but if it does we'd rather
+      # fail in seconds than minutes). NPM_CONFIG_CACHE points at a fresh empty
+      # directory above, so --offline cannot accidentally use a poisoned cache.
+      npmInstallArgs=(
+        --foreground-scripts=false
+        --no-audit
+        --no-fund
+        --loglevel=warn
+        --offline
+        --fetch-timeout=15000
+      )
+
       echo "Installing RID package..."
-      npm install -g --foreground-scripts=false --no-audit --no-fund --loglevel=warn "$ridTarball"
+      npm install -g "${npmInstallArgs[@]}" "$ridTarball"
 
       echo "Installing pointer package..."
-      npm install -g --foreground-scripts=false --no-audit --no-fund --loglevel=warn --omit=optional "$pointer"
+      npm install -g "${npmInstallArgs[@]}" --omit=optional "$pointer"
 
       echo ""
       echo "Verifying aspire CLI is available on PATH..."
@@ -228,7 +253,10 @@ steps:
 
       echo ""
       echo "Uninstalling pointer and RID packages..."
-      npm uninstall -g --loglevel=warn '@microsoft/aspire-cli' "@microsoft/aspire-cli-${rid}"
+      # Reuse the offline/timeout-capped args so a stray audit/funding call
+      # on an isolated 1ES pool cannot hang the uninstall step the way it
+      # almost hung the install step.
+      npm uninstall -g "${npmInstallArgs[@]}" '@microsoft/aspire-cli' "@microsoft/aspire-cli-${rid}"
 
       if command -v aspire >/dev/null 2>&1; then
         echo "##[error]aspire command still on PATH after uninstall ($(command -v aspire))"

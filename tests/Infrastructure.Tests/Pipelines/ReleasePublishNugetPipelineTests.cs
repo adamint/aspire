@@ -105,6 +105,25 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.DoesNotContain("declare -A", template);
     }
 
+    [Fact]
+    public async Task PrepareNpmCliPackagesScriptInstallsOfflineWithTimeout()
+    {
+        var template = await ReadRepoFileAsync("eng/pipelines/templates/prepare-npm-cli-packages.yml");
+
+        // The pointer package declares every supported RID as an optionalDependency
+        // pinned to the just-built version, which does not yet exist in the public
+        // npm registry. Even with --omit=optional, npm still resolves optional dep
+        // metadata while building the dep tree. In 1ES Linux/Windows pools the
+        // registry call is blackholed by network isolation rules and each of 7
+        // lookups burns the full fetch-timeout — that's the 9-minute pointer install
+        // hang observed in dry-run build 2987581. Pair --omit=optional with --offline
+        // (no registry traffic at all) and cap any accidental fetch with a short
+        // --fetch-timeout. NPM_CONFIG_CACHE points at a fresh empty directory so
+        // --offline cannot reuse a poisoned cache.
+        Assert.Contains("--offline", template);
+        Assert.Contains("--fetch-timeout=", template);
+    }
+
     private static void AssertBefore(string contents, string text, int boundaryIndex)
     {
         var textIndex = FindRequiredText(contents, text);
