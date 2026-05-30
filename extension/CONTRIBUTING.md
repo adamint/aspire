@@ -22,7 +22,9 @@ For TypeScript/UI changes that don't require debugging the Aspire CLI itself, sk
 
 From `extension/`:
 
-    corepack yarn install   # restore dependencies
+```bash
+corepack yarn install   # restore dependencies
+```
 
 Open `extension/` in VS Code and launch **Run Extension** (`F5`) to start an Extension Development Host with your build. The launch config runs the `tasks: watch extension` preLaunchTask (which executes `yarn watch`) to keep `dist/` up to date while you edit. After rebuilds, re-launch or run **Developer: Reload Window** in the host to pick up changes.
 ## Project structure
