@@ -452,7 +452,7 @@ jobs:
             echo "   | \`SkipNuGetPublish\` | \`true\` |"
             echo "   | \`SkipChannelPromotion\` | \`true\` |"
             echo "   | \`SkipWinGetPublish\` | \`true\` |"
-            echo "   | \`SkipHomebrewPublish\` | \`true\` |"
+            echo "   | \`SkipHomebrewValidation\` | \`true\` |"
             echo "   | \`SkipGitHubTasks\` | \`true\` |"
             echo "   | \`SkipReleaseAssets\` | \`true\` |"
             echo "   | \`SkipVSCodeExtensionPublish\` | \`false\` |"

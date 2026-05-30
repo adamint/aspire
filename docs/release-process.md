@@ -138,7 +138,7 @@ To publish only the VS Code extension after merging an extension release PR, run
 | `SkipNuGetPublish` | `true` |
 | `SkipChannelPromotion` | `true` |
 | `SkipWinGetPublish` | `true` |
-| `SkipHomebrewPublish` | `true` |
+| `SkipHomebrewValidation` | `true` |
 | `SkipGitHubTasks` | `true` |
 | `SkipReleaseAssets` | `true` |
 | `SkipVSCodeExtensionPublish` | `false` |
