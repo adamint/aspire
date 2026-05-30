@@ -157,13 +157,24 @@ if ($ridInfo.Contains('Libc')) {
 }
 
 Write-JsonFile (Join-Path $ridPackageRoot 'package.json') $ridPackageJson
-Write-TextFile (Join-Path $ridPackageRoot 'README.md') @"
-# $ridPackageName
+# Use a non-expanding here-string so the markdown backticks (`) survive verbatim.
+# In a normal (double-quoted) here-string ` is the PowerShell escape character, which
+# both swallows the backticks and suppresses $-interpolation; using @'...'@ and a
+# manual -replace lets us emit literal `<value>` code spans for $Rid / $PackageName.
+$ridReadmeTemplate = @'
+# __RID_PACKAGE_NAME__
 
-Native Aspire CLI binary for `$Rid`.
+Native Aspire CLI binary for `__RID__`.
 
-This package is installed as an optional dependency of `$PackageName`.
-"@
+This package is installed as an optional dependency of `__PACKAGE_NAME__`.
+'@
+
+$ridReadme = $ridReadmeTemplate `
+  -replace '__RID_PACKAGE_NAME__', $ridPackageName `
+  -replace '__RID__', $Rid `
+  -replace '__PACKAGE_NAME__', $PackageName
+
+Write-TextFile (Join-Path $ridPackageRoot 'README.md') $ridReadme
 
 $pointerPackageRoot = Join-Path $StagingRoot 'pointer'
 $pointerPackageBin = Join-Path $pointerPackageRoot 'bin'
