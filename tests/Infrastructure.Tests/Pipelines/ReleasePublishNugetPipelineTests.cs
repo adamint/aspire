@@ -36,8 +36,17 @@ public sealed class ReleasePublishNugetPipelineTests
     {
         var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
 
-        Assert.Contains("template: azure-pipelines/1ES.Official.Publish.yml@MicroBuildTemplate", pipeline);
+        // The MicroBuild. prefix is REQUIRED for ESRP-based publishing — it wires the MicroBuild
+        // signing/publish credential context so MicroBuild.Publish.yml and the auto-injected
+        // MicroBuildAuthorizePublishPlugin task can authenticate against the
+        // devdiv.pkgs.visualstudio.com/_packaging/MicroBuildToolset feed.
+        // Plain `1ES.Official.Publish.yml@MicroBuildTemplate` (no `MicroBuild.` prefix) injects
+        // the authorize task without supplying credentials, causing a 401.
+        // See microsoft/vscode-azuretools, microsoft/pyright, microsoft/vscode-python-environments.
+        Assert.Contains("template: azure-pipelines/MicroBuild.1ES.Official.Publish.yml@MicroBuildTemplate", pipeline);
         Assert.DoesNotContain("template: v1/1ES.Official.PipelineTemplate.yml@1ESPipelineTemplates", pipeline);
+        // Guard against accidental regression to the plain template (without the MicroBuild. prefix)
+        Assert.DoesNotContain("template: azure-pipelines/1ES.Official.Publish.yml@MicroBuildTemplate", pipeline);
     }
 
     [Fact]
