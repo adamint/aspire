@@ -7,12 +7,30 @@ const os = require('os');
 const path = require('path');
 
 // Package names are generated at pack time so changing the npm package name in
-// MSBuild does not require editing this launcher.
-const ridPackageNames = loadRidPackageNames();
+// MSBuild does not require editing this launcher. Resolved lazily inside main()
+// so a missing/corrupt aspire-package-map.json surfaces through the same
+// friendly error path used by the rest of the launcher (try/catch around main).
+let ridPackageNames = null;
 
 function loadRidPackageNames() {
   const packageMapPath = path.join(__dirname, 'aspire-package-map.json');
-  return new Map(Object.entries(JSON.parse(fs.readFileSync(packageMapPath, 'utf8'))));
+  let raw;
+  try {
+    raw = fs.readFileSync(packageMapPath, 'utf8');
+  } catch (error) {
+    throw new Error(
+      `Aspire CLI installation is corrupted: package map '${packageMapPath}' could not be read. ` +
+      'Reinstall @microsoft/aspire-cli.',
+      { cause: error });
+  }
+  try {
+    return new Map(Object.entries(JSON.parse(raw)));
+  } catch (error) {
+    throw new Error(
+      `Aspire CLI installation is corrupted: package map '${packageMapPath}' is not valid JSON. ` +
+      'Reinstall @microsoft/aspire-cli.',
+      { cause: error });
+  }
 }
 
 function detectRid() {
@@ -28,8 +46,17 @@ function detectRid() {
   }
 
   if (platform === 'linux') {
-    if (arch === 'x64' && isMusl()) {
+    // libc-mismatched binaries crash at exec with cryptic dynamic-linker errors
+    // (e.g. missing ld-linux-aarch64.so.1 / "GLIBC_X.Y not found"). Detect musl
+    // for all supported arches so unsupported combinations fall through to the
+    // friendly "Unsupported platform" error below, instead of silently
+    // resolving the glibc-linked RID package.
+    const musl = isMusl();
+    if (arch === 'x64' && musl) {
       return 'linux-musl-x64';
+    }
+    if (arch === 'arm64' && musl) {
+      throw new Error(`Unsupported platform: ${platform} musl ${arch}`);
     }
 
     if (arch === 'x64' || arch === 'arm64') {
@@ -155,6 +182,11 @@ function needsCopy(sourcePath, targetPath) {
 }
 
 function main() {
+  // Lazy-initialize so a missing/corrupt aspire-package-map.json reaches the
+  // top-level try/catch and produces a friendly error instead of a Node stack.
+  if (ridPackageNames === null) {
+    ridPackageNames = loadRidPackageNames();
+  }
   const packageJson = require(path.join(__dirname, '..', 'package.json'));
   const rid = detectRid();
   const nativeBinary = resolveNativeBinary(rid);
@@ -172,6 +204,30 @@ function main() {
       ASPIRE_NPM_PACKAGE_RID: rid
     }
   });
+
+  // Forward terminating signals to the child so programmatic `kill <wrapper>`
+  // does not orphan the native CLI (especially important for long-lived
+  // `aspire run` sessions that keep an AppHost alive). In TTY usage the kernel
+  // already broadcasts SIGINT/SIGQUIT to the whole foreground process group, so
+  // this primarily covers tooling that targets the wrapper PID directly.
+  // SIGHUP/SIGQUIT are POSIX-only; on Windows Node maps SIGTERM/SIGINT to
+  // TerminateProcess on the child, which is semantically what callers expect.
+  // Use `once` so a second signal can still terminate the wrapper if the child
+  // ignores the first one.
+  const forwardedSignals = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'];
+  for (const signal of forwardedSignals) {
+    process.once(signal, () => {
+      if (!child.killed) {
+        try {
+          child.kill(signal);
+        } catch {
+          // Best-effort: the child may have exited between the check and kill,
+          // or the signal may be unsupported on this platform. Either way we
+          // let the 'exit' handler below run to propagate the final state.
+        }
+      }
+    });
+  }
 
   child.on('error', error => {
     console.error(error.message);
