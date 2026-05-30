@@ -28,6 +28,16 @@ on:
   # look for at runtime; we don't need gh-aw's stale-check guard, and the lock
   # file shouldn't drift just because the frontmatter changed.
   stale-check: false
+  # The `labeled` event is fired by the `aspire-repo-bot` GitHub App (the release
+  # bot mints its token in extension-release.yml to apply the label so the event
+  # fires at all). gh-aw's activation gate checks the triggering actor's repo
+  # permission and, finding the App is not a collaborator, would otherwise mark
+  # the run `insufficient_permissions` and skip the agent. Allow-listing the bot
+  # here compiles to `GH_AW_ALLOWED_BOTS`, so the membership check authorizes the
+  # App (after confirming it is installed/active on the repo) instead of the
+  # default human-role check. The slug must match the App that mints the label
+  # token (secrets.ASPIRE_BOT_*); see docs/release-process.md for `aspire-repo-bot`.
+  bots: [aspire-repo-bot]
 
 # Only run for the canonical repo. Fork-sourced `pull_request` runs don't get
 # secrets, so the GitHub App token mint (and therefore the agent and the
