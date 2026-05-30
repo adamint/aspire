@@ -71,10 +71,34 @@ steps:
         }
 
         $missingSignatures = @()
+        $invalidSignatures = @()
         foreach ($package in $npmPackages) {
           $signaturePath = "$($package.FullName).sig"
           if (!(Test-Path $signaturePath)) {
             $missingSignatures += $signaturePath
+            continue
+          }
+
+          # Content sanity check: catch the most likely silent failure mode
+          # where Arcade/ESRP signing emits the sidecar file but the content
+          # is empty or garbage. A real PGP signature is hundreds of bytes
+          # and starts with either the ASCII-armored header
+          # `-----BEGIN PGP SIGNATURE-----` (RFC 9580 §6) or an OpenPGP
+          # binary signature packet (tag 2: old-format 0x88..0x8B or
+          # new-format 0xC2, RFC 9580 §4.3 / §5.2).
+          $signatureFile = Get-Item -LiteralPath $signaturePath
+          if ($signatureFile.Length -lt 64) {
+            $invalidSignatures += "$signaturePath (only $($signatureFile.Length) bytes)"
+            continue
+          }
+          $bytes = [System.IO.File]::ReadAllBytes($signaturePath)[0..63]
+          $asciiPreview = [System.Text.Encoding]::ASCII.GetString($bytes)
+          $looksArmored = $asciiPreview.Contains('-----BEGIN PGP SIGNATURE-----')
+          $firstByte = $bytes[0]
+          $looksBinarySignaturePacket = ($firstByte -ge 0x88 -and $firstByte -le 0x8B) -or $firstByte -eq 0xC2
+          if (-not $looksArmored -and -not $looksBinarySignaturePacket) {
+            $hexPrefix = ($bytes[0..15] | ForEach-Object { '{0:x2}' -f $_ }) -join ' '
+            $invalidSignatures += "$signaturePath (no PGP signature marker; first 16 bytes: $hexPrefix)"
             continue
           }
 
@@ -83,6 +107,11 @@ steps:
 
         if ($missingSignatures.Count -gt 0) {
           Write-Error "Missing detached signature sidecar(s) for npm package(s): $($missingSignatures -join ', ')"
+          exit 1
+        }
+
+        if ($invalidSignatures.Count -gt 0) {
+          Write-Error "Detached signature sidecar(s) failed content sanity check: $($invalidSignatures -join '; ')"
           exit 1
         }
 

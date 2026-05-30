@@ -214,6 +214,139 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.Contains("produced no output.", pipeline);
     }
 
+    [Fact]
+    public async Task PointerPreflightPinsPublicNpmRegistry()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        // Every npm command in the publish flow MUST explicitly pin
+        // `--registry=https://registry.npmjs.org/`. The release agent's
+        // ambient registry is not guaranteed to be public npmjs — an
+        // internal mirror may be configured via .npmrc or
+        // npm_config_registry. Without the explicit pin, the preflight
+        // could (a) spuriously fail after a successful public publish
+        // if the mirror lacks the new package, or (b) pass against a
+        // stale mirror and let the pointer publish reference RIDs the
+        // public registry can't serve. Guard against future drift by
+        // asserting the preflight `npm view` is registry-pinned.
+        Assert.Contains(
+            "npm view $spec version --registry=https://registry.npmjs.org/",
+            pipeline);
+    }
+
+    [Fact]
+    public async Task PointerPreflightRetriesForPropagationLag()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        // The post-publish smoke uses 10×30s retry loops to ride out npm
+        // CDN propagation. The pre-pointer RID preflight must do the same
+        // because npm propagation of 7 freshly-published scoped tarballs
+        // can exceed the fixed NpmRegistryPropagationDelayMinutes wait.
+        // A single-shot preflight would fail closed AFTER all 7 RID
+        // packages are already published, forcing a manual re-run with
+        // SkipNpmRidPublish=true. Assert the preflight has its own
+        // retry loop.
+        Assert.Contains("$preflightAttempts = 10", pipeline);
+        Assert.Contains("$preflightDelaySeconds = 30", pipeline);
+        Assert.Contains("for ($preflightAttempt = 1; $preflightAttempt -le $preflightAttempts;", pipeline);
+    }
+
+    [Fact]
+    public async Task NpmViewParsingFiltersToSemverShape()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        // `npm view --loglevel=warn` merges deprecation / peer-dep /
+        // EBADENGINE warnings onto stderr. With `2>&1`, taking
+        // `Select-Object -First 1` could latch a warning line as the
+        // version, burn all 10 retries, and fail the release even though
+        // the publish succeeded. Both the preflight and post-publish
+        // smoke filter to lines that match a semver shape before
+        // comparing.
+        var semverRegexUses = System.Text.RegularExpressions.Regex.Matches(
+            pipeline,
+            @"\$semverRegex\s*=\s*'\^\\d\+\\\.\\d\+\\\.\\d\+");
+        Assert.True(
+            semverRegexUses.Count >= 2,
+            $"Expected the semver regex to be defined in both the preflight and post-publish smoke; found {semverRegexUses.Count} occurrence(s).");
+    }
+
+    [Fact]
+    public async Task NpmSignatureSidecarsAreContentSanityChecked()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+        var buildAndTest = await ReadRepoFileAsync("eng/pipelines/templates/BuildAndTest.yml");
+
+        // The earlier validation only checked that the `.tgz.sig` files
+        // EXIST. If Arcade SignTool silently produced an empty or garbage
+        // sidecar (signing service hiccup, plugin misconfiguration), the
+        // release would publish a tarball whose sidecar is unverifiable
+        // and nothing in CI would catch it. Full PGP verification would
+        // require importing the LinuxSign500180PGP public key and running
+        // gpg on every agent. As a low-risk middle ground, both source
+        // build (BuildAndTest.yml) and release pipeline assert each
+        // `.sig` is non-empty AND contains an OpenPGP signature marker
+        // (ASCII-armored "-----BEGIN PGP SIGNATURE-----" per RFC 9580 §6,
+        // OR a binary OpenPGP signature packet — tag 2, RFC 9580 §4.3
+        // / §5.2 — starting with 0x88-0x8B (old format) or 0xC2 (new
+        // format)).
+        Assert.Contains("'-----BEGIN PGP SIGNATURE-----'", pipeline);
+        Assert.Contains("'-----BEGIN PGP SIGNATURE-----'", buildAndTest);
+        Assert.Contains("0x8B", pipeline);
+        Assert.Contains("0x8B", buildAndTest);
+        Assert.Contains("0xC2", pipeline);
+        Assert.Contains("0xC2", buildAndTest);
+        Assert.Contains("content sanity check", pipeline);
+        Assert.Contains("content sanity check", buildAndTest);
+    }
+
+    [Fact]
+    public async Task AspireVersionCaptureStripsCarriageReturnForWindowsRunner()
+    {
+        var template = await ReadRepoFileAsync("eng/pipelines/templates/prepare-npm-cli-packages.yml");
+
+        // Regression guard for the CRLF-stripping fix surfaced by opus-4.7 review.
+        //
+        // On Windows runners the prepare-npm step runs under Git Bash, which
+        // launches `aspire.exe` as a Windows console process. System.CommandLine
+        // 2.x's VersionOption writes through Console.Out.WriteLine, which
+        // terminates lines with Environment.NewLine = "\r\n" on Windows. Bash
+        // command substitution `$(...)` strips trailing LF but NOT CR, so the
+        // captured variable ends with "\r". The semver capture regex used by
+        // the install validation is anchored with `$` (end-of-line), which does
+        // not match a literal CR — so without `tr -d '\r'` on the version
+        // capture, the entire install validation silently fails on Windows with
+        // "##[error]aspire --version reported '' but expected '<version>'".
+        //
+        // Verified locally: `printf 'X\r\n' | grep -Eo '^X$'` produces NO match.
+        //
+        // This regressed in commit debf4ebf38 ("Harden npm prepare/publish
+        // validation against partial-failure leakage"), which replaced the
+        // earlier `tr -d '[:space:]'` form with a `grep -Eo`+`$` form. The dry
+        // run on 2987740 did NOT exercise this path because SkipNpmPublish=true
+        // skips the release-pipeline consumer that reads the win-x64 validation
+        // summary; the Monday real publish would have hit the bug at the
+        // first source-build Windows install validation.
+        Assert.Contains("aspire --version 2>&1 | tr -d '\\r'", template);
+    }
+
+    [Fact]
+    public async Task PointerPreflightExplicitlyPinsRegistryOnSpecLine()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        // The preflight that gates the pointer publish runs `npm view $spec ...`
+        // (note: `$spec`, not `$packageSpec` — the latter is the post-publish
+        // smoke). A separate test asserts the post-publish line is registry-
+        // pinned; this one asserts the preflight line is also pinned, so that
+        // a future refactor that drops `--registry=https://registry.npmjs.org/`
+        // from the preflight call would be caught at PR-time rather than
+        // silently letting a stale internal-mirror result decide whether to
+        // ship a broken pointer to npmjs.
+        Assert.Contains("npm view $spec version --registry=https://registry.npmjs.org/", pipeline);
+    }
+
     private static void AssertBefore(string contents, string text, int boundaryIndex)
     {
         var textIndex = FindRequiredText(contents, text);

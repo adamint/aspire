@@ -220,7 +220,19 @@ steps:
       # the npm package version, which intentionally drops build metadata because
       # npm SemVer (npm/semver) doesn't honor it for equality.
       # See https://semver.org/#spec-item-10 and https://github.com/npm/node-semver#advanced-range-syntax
-      versionOutput="$(aspire --version 2>&1)"
+      #
+      # IMPORTANT: pipe the subprocess output through `tr -d '\r'` BEFORE capturing.
+      # On Windows runners this template's `bash:` step runs under Git Bash, which
+      # spawns `aspire.exe` as a Windows console process. System.CommandLine 2.x's
+      # VersionOption writes through Console.Out.WriteLine, which terminates lines
+      # with Environment.NewLine = "\r\n" on Windows. Bash command substitution
+      # `$(...)` strips trailing LF but NOT CR, so the captured variable ends with
+      # "\r". The semver regex below is anchored with `$`, which matches end-of-line
+      # but not the literal CR — so without the `tr -d '\r'`, the entire match
+      # silently fails on Windows and the step exits with
+      # "##[error]aspire --version reported '' but expected '<version>'".
+      # Verified locally: `printf 'X\r\n' | grep -Eo '^X$'` produces NO match.
+      versionOutput="$(aspire --version 2>&1 | tr -d '\r')"
       versionLine="$(printf '%s\n' "$versionOutput" | grep -Eo '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9._-]+)?(\+[A-Za-z0-9._-]+)?$' | head -n 1 || true)"
       # ${var%+*} strips the longest matching `+*` suffix. POSIX, works in Bash 3.2.
       actualVersion="${versionLine%+*}"

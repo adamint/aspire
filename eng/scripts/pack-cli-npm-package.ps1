@@ -212,8 +212,14 @@ $pointerPackageJson = [ordered]@{
   bin = [ordered]@{
     aspire = 'bin/aspire.js'
   }
+  # Minimum Node 20: the launcher (`bin/aspire.js`) uses Error options-bag
+  # `new Error(msg, { cause: err })` which was added in Node 16.9.0. The
+  # `libc` selector in the per-RID optionalDependencies relies on
+  # npm >= 10.7 (ships with Node 20.10+). Node 18 reaches end-of-life
+  # 2025-04-30, so Node 20 is the lowest LTS we should support at GA.
+  # See: https://nodejs.org/en/about/previous-releases
   engines = [ordered]@{
-    node = '>=16'
+    node = '>=20'
   }
   optionalDependencies = $optionalDependencies
   files = New-StringList @('bin', 'README.md')

@@ -78,6 +78,28 @@ public sealed class NpmCliPackageTests
         Assert.DoesNotContain("Native Aspire CLI binary for `$Rid`.", packScript);
     }
 
+    [Fact]
+    public async Task PointerPackageRequiresNode20OrLater()
+    {
+        var packScript = await ReadRepoFileAsync("eng/scripts/pack-cli-npm-package.ps1");
+
+        // The launcher (`bin/aspire.js`) uses the Error options-bag
+        // `new Error(msg, { cause: err })` which was added in Node 16.9.0.
+        // Node 16.0–16.8.x would throw `TypeError: Unknown option 'cause'`
+        // at module load before the friendly "Aspire CLI installation is
+        // corrupted" message could be printed.
+        // The per-RID `libc` selector in optionalDependencies relies on
+        // npm >= 10.7 which ships with Node 20.10+. Node 18 reaches end
+        // of life on 2025-04-30, so Node 20 is the lowest LTS we should
+        // pin at GA. See https://nodejs.org/en/about/previous-releases.
+        // Guard against accidental regression to `>=16` (or any earlier
+        // version) which would let the launcher crash on supported Node
+        // engines.
+        Assert.Contains("node = '>=20'", packScript);
+        Assert.DoesNotContain("node = '>=16'", packScript);
+        Assert.DoesNotContain("node = '>=18'", packScript);
+    }
+
     private Task<string> ReadRepoFileAsync(string relativePath)
         => File.ReadAllTextAsync(Path.Combine(_repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)));
 

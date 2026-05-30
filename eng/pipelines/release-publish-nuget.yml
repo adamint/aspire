@@ -1074,6 +1074,47 @@ extends:
                       exit 1
                     }
 
+                    # Content sanity check: catch the most likely failure mode
+                    # where ESRP/Arcade silently produces an empty/garbage `.sig`
+                    # file. Full PGP signature verification would require
+                    # importing the LinuxSign500180PGP public key and running
+                    # `gpg --verify` (gpg is not guaranteed on 1ES Windows
+                    # agents). At minimum, assert each sidecar (a) is non-empty
+                    # (a real PGP signature is hundreds of bytes), and (b)
+                    # contains an OpenPGP signature marker — either the
+                    # ASCII-armored header `-----BEGIN PGP SIGNATURE-----`
+                    # (RFC 9580 §6) or a binary OpenPGP signature packet (tag
+                    # 2, RFC 9580 §5.2). RFC 9580 §4.3 packet tag encoding:
+                    # old format with tag 2 = 0x88..0x8B; new format with tag
+                    # 2 = 0xC2; any signature packet must begin with one of
+                    # these bytes when the sig file is binary.
+                    $invalidSignatures = New-Object System.Collections.Generic.List[string]
+                    foreach ($signatureSidecar in $signatureSidecars) {
+                      if ($signatureSidecar.Length -lt 64) {
+                        $invalidSignatures.Add("$($signatureSidecar.Name) (only $($signatureSidecar.Length) bytes)") | Out-Null
+                        continue
+                      }
+                      # Peek at the first chunk so we don't load whole sigs.
+                      # ASCII-armored PGP signatures start with the header
+                      # within the first few bytes; binary OpenPGP signature
+                      # packets are tag 2 and begin with 0x88-0x8B (old) or
+                      # 0xC2 (new). We read 64 bytes which is enough to see
+                      # the armor header verbatim.
+                      $bytes = [System.IO.File]::ReadAllBytes($signatureSidecar.FullName)[0..63]
+                      $asciiPreview = [System.Text.Encoding]::ASCII.GetString($bytes)
+                      $looksArmored = $asciiPreview.Contains('-----BEGIN PGP SIGNATURE-----')
+                      $firstByte = $bytes[0]
+                      $looksBinarySignaturePacket = ($firstByte -ge 0x88 -and $firstByte -le 0x8B) -or $firstByte -eq 0xC2
+                      if (-not $looksArmored -and -not $looksBinarySignaturePacket) {
+                        $hexPrefix = ($bytes[0..15] | ForEach-Object { '{0:x2}' -f $_ }) -join ' '
+                        $invalidSignatures.Add("$($signatureSidecar.Name) (no PGP signature marker; first 16 bytes: $hexPrefix)") | Out-Null
+                      }
+                    }
+                    if ($invalidSignatures.Count -gt 0) {
+                      Write-Error ("Detached signature sidecar(s) failed content sanity check: " + ($invalidSignatures -join '; '))
+                      exit 1
+                    }
+
                     Write-Host "=============================="
                   displayName: 'List npm Packages'
 
@@ -1239,23 +1280,61 @@ extends:
                         }
 
                         $missing = New-Object System.Collections.Generic.List[string]
+                        # Same propagation tolerance as the post-publish smoke
+                        # below: npm CDN propagation of 7 freshly-published scoped
+                        # tarballs can exceed the fixed NpmRegistryPropagationDelayMinutes
+                        # wait, especially across multiple regions. A single-shot
+                        # `npm view` would fail closed on transient propagation lag
+                        # AFTER all 7 RID packages are already published, forcing a
+                        # manual re-run with SkipNpmRidPublish=true. Bound it with
+                        # the same 10×30s retry the post-publish smoke uses.
+                        $preflightAttempts = 10
+                        $preflightDelaySeconds = 30
+                        # Strict semver pattern (1.2.3, 1.2.3-prerelease, 1.2.3+build).
+                        # `npm view` with `--loglevel=warn` merges deprecation /
+                        # peer-dep / EBADENGINE warnings onto stderr; combining
+                        # stderr with stdout and taking `Select-Object -First 1`
+                        # could latch the warning line as the version. Filter to
+                        # the first line that matches a semver shape and only
+                        # then compare to the pinned version.
+                        $semverRegex = '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$'
                         foreach ($depName in $depNames) {
                           $depVersion = "$($optionalDeps.$depName)"
                           $spec = "$depName@$depVersion"
-                          Write-Host "Checking npm registry for $spec"
-                          $resolved = & npm view $spec version 2>&1
-                          if ($LASTEXITCODE -ne 0 -or -not $resolved) {
-                            Write-Warning "npm view failed for $spec (exit $LASTEXITCODE): $resolved"
-                            $missing.Add($spec) | Out-Null
-                            continue
+                          $resolvedVersion = $null
+                          $lastError = $null
+                          for ($preflightAttempt = 1; $preflightAttempt -le $preflightAttempts; $preflightAttempt++) {
+                            Write-Host "Checking npm registry for $spec (attempt $preflightAttempt/$preflightAttempts)"
+                            # Every other npm call in the release job explicitly pins
+                            # `--registry=https://registry.npmjs.org/`. The agent's
+                            # ambient registry is not guaranteed to be public npmjs
+                            # (an internal mirror may be configured via .npmrc or
+                            # npm_config_registry). Without the explicit pin, this
+                            # preflight could (a) spuriously fail after a successful
+                            # public publish if the mirror lacks the new package,
+                            # or (b) pass against a stale mirror and let a pointer
+                            # publish reference RIDs the public registry can't serve.
+                            $resolved = & npm view $spec version --registry=https://registry.npmjs.org/ 2>$null
+                            if ($LASTEXITCODE -eq 0 -and $resolved) {
+                              $candidate = $resolved | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match $semverRegex } | Select-Object -First 1
+                              if ($candidate -eq $depVersion) {
+                                $resolvedVersion = $candidate
+                                Write-Host "  found: $resolvedVersion"
+                                break
+                              }
+                              $lastError = "npm view returned '$resolved' (no semver line matched pinned version '$depVersion')"
+                            } else {
+                              $lastError = "npm view exit $LASTEXITCODE for ${spec}: $resolved"
+                            }
+                            if ($preflightAttempt -lt $preflightAttempts) {
+                              Write-Warning "$lastError. Retrying in $preflightDelaySeconds second(s)."
+                              Start-Sleep -Seconds $preflightDelaySeconds
+                            }
                           }
-                          $resolvedLine = @($resolved | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Select-Object -First 1)
-                          if ($resolvedLine.Count -eq 0 -or [string]::IsNullOrWhiteSpace([string]$resolvedLine[0])) {
-                            Write-Warning "npm view returned empty version for $spec"
+                          if (-not $resolvedVersion) {
+                            Write-Warning "Preflight failed for ${spec}: $lastError"
                             $missing.Add($spec) | Out-Null
-                            continue
                           }
-                          Write-Host "  found: $resolvedLine"
                         }
                         if ($missing.Count -gt 0) {
                           Write-Error ("Refusing to publish pointer package '$packageName@$packageVersion' because the following RID packages are not yet available on npm: " + ($missing -join ', '))
@@ -1356,11 +1435,20 @@ extends:
                       $delaySeconds = 30
                       $available = $false
                       $lastViewOutput = $null
+                      # Strict semver regex catches: 1.2.3, 1.2.3-prerelease, 1.2.3+build.
+                      # `npm view --loglevel=warn` merges deprecation / peer-dep /
+                      # EBADENGINE warnings onto stderr; combining stderr with
+                      # stdout via `2>&1` and taking `Select-Object -First 1`
+                      # could latch the warning line as the version, then burn
+                      # all 10 retries and fail the release even though publish
+                      # succeeded. Filter to the first line that matches a semver
+                      # shape and only then compare to the published version.
+                      $semverRegex = '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$'
                       for ($attempt = 1; $attempt -le $attempts; $attempt++) {
                         Write-Host "Checking npm registry metadata for $packageSpec (attempt $attempt/$attempts)..."
                         $lastViewOutput = npm view $packageSpec version --registry=https://registry.npmjs.org/ --loglevel=warn 2>&1
                         if ($LASTEXITCODE -eq 0) {
-                          $viewVersion = @($lastViewOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ } | Select-Object -First 1)
+                          $viewVersion = $lastViewOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match $semverRegex } | Select-Object -First 1
                           if ($viewVersion -eq $packageVersion) {
                             $available = $true
                             break
