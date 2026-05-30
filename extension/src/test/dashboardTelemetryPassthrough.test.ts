@@ -270,6 +270,26 @@ suite('DashboardTelemetryPassthrough.bundleDashboardData', () => {
         assert.deepStrictEqual(bundleDashboardData('oops' as unknown as undefined), {});
         assert.deepStrictEqual(bundleDashboardData(42 as unknown as undefined), {});
     });
+
+    test('drops Basic-tagged exception message and stack trace keys (workspace-content leak)', () => {
+        // The dashboard's TelemetryErrorRecorder tags exception message and
+        // stack trace as Basic, not Pii, but their values embed user-chosen
+        // resource names, interpolated strings, home-directory paths, and
+        // user-assembly type names. They must never leave the machine even
+        // though they pass the Pii filter. Structured exception dimensions are
+        // retained. Keys mirror TelemetryPropertyKeys.cs.
+        const result = bundleDashboardData({
+            'Aspire.Dashboard.Exception.Message': { value: 'Could not connect to my-secret-db', propertyType: PropertyType.Basic },
+            'Aspire.Dashboard.Exception.StackTrace': { value: '   at MyApp.Secret.Thing() in /Users/alice/proj/Foo.cs:line 42', propertyType: PropertyType.Basic },
+            'Aspire.Dashboard.Exception.Type': { value: 'System.InvalidOperationException', propertyType: PropertyType.Basic },
+            'Aspire.Dashboard.Exception.RuntimeVersion': { value: '10.0.0', propertyType: PropertyType.Basic },
+        });
+        const props = JSON.parse(result.properties ?? '{}').v;
+        assert.strictEqual(props['Aspire.Dashboard.Exception.Message'], undefined);
+        assert.strictEqual(props['Aspire.Dashboard.Exception.StackTrace'], undefined);
+        assert.strictEqual(props['Aspire.Dashboard.Exception.Type'], 'System.InvalidOperationException');
+        assert.strictEqual(props['Aspire.Dashboard.Exception.RuntimeVersion'], '10.0.0');
+    });
 });
 
 suite('DashboardTelemetryPassthrough.formatCorrelations', () => {
@@ -341,6 +361,18 @@ suite('DashboardTelemetryPassthrough.formatCorrelations', () => {
         ]);
         assert.strictEqual(result, 'Op_eration_X:a_b_c');
     });
+
+    test('clamps over-long element values (no per-element length cap previously)', () => {
+        // Only the *count* (MAX_CORRELATIONS) was bounded; a single huge id or
+        // eventType (within the express.json() body limit) would otherwise ship
+        // verbatim. Clamp each element to MAX_DASHBOARD_KEY_LENGTH like every
+        // other dashboard-supplied field.
+        const longId = 'i'.repeat(MAX_DASHBOARD_KEY_LENGTH + 200);
+        const result = formatCorrelations([{ id: longId, eventType: 'Operation' }]);
+        const [, id] = (result ?? '').split(':');
+        assert.ok(id.endsWith('...[truncated]'), 'expected truncation marker on id');
+        assert.strictEqual(id.length, MAX_DASHBOARD_KEY_LENGTH + '...[truncated]'.length);
+    });
 });
 
 suite('DashboardTelemetryPassthrough.clampDashboardKey', () => {
@@ -399,6 +431,23 @@ suite('DashboardTelemetryPassthrough.formatFlagPrefixes', () => {
         const result = formatFlagPrefixes([long]);
         assert.ok(result.endsWith('...[truncated]'));
     });
+
+    test('strips flag values, keeping only the flag name (=, :, and whitespace separators)', () => {
+        // This endpoint is a network boundary. A buggy or hostile sender could
+        // pass full arguments instead of bare prefixes; the value half can
+        // carry secrets (tokens, passwords, connection strings) and must never
+        // reach the first-class flag_prefixes property. Only the name survives.
+        assert.strictEqual(formatFlagPrefixes(['--token=secret']), '--token');
+        assert.strictEqual(formatFlagPrefixes(['--password:hunter2']), '--password');
+        assert.strictEqual(formatFlagPrefixes(['--key value']), '--key');
+        assert.strictEqual(formatFlagPrefixes(['--a=1', '--b:2']), '--a,--b');
+    });
+
+    test('skips entries that are empty once the value is stripped', () => {
+        // A leading separator leaves no name portion; drop it rather than
+        // emitting an empty token.
+        assert.strictEqual(formatFlagPrefixes(['=onlyvalue', '--ok']), '--ok');
+    });
 });
 
 suite('DashboardTelemetryPassthrough enum label mappers', () => {
@@ -452,5 +501,18 @@ suite('DashboardTelemetryPassthrough.scrubFreeformDiagnosticText', () => {
         const scrubbed = scrubFreeformDiagnosticText(longText);
         assert.ok(scrubbed.endsWith('...[truncated]'), `expected truncation marker, got ${scrubbed.slice(-30)}`);
         assert.strictEqual(scrubbed.length, MAX_DIAGNOSTIC_STRING_LENGTH + '...[truncated]'.length);
+    });
+
+    test('returns empty string for non-string input without throwing (untrusted JSON body)', () => {
+        // The request field is only *typed* as a string; a malformed/hostile
+        // body can send any JSON value. Before the guard, `.slice` on a
+        // non-string threw a TypeError that surfaced as an Express 500 (and on
+        // the endOperation path, after the pending entry was already deleted —
+        // silently dropping an in-flight start). All of these must coerce to ''.
+        assert.strictEqual(scrubFreeformDiagnosticText({} as unknown as string), '');
+        assert.strictEqual(scrubFreeformDiagnosticText([] as unknown as string), '');
+        assert.strictEqual(scrubFreeformDiagnosticText(42 as unknown as string), '');
+        assert.strictEqual(scrubFreeformDiagnosticText(null as unknown as string), '');
+        assert.strictEqual(scrubFreeformDiagnosticText(true as unknown as string), '');
     });
 });

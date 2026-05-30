@@ -221,17 +221,21 @@ suite('DashboardTelemetryPassthrough route-level normalization', () => {
         assert.ok(endEvent.measurements!.duration_ms >= 0);
     });
 
-    test('endOperation with Failure result routes through sendTelemetryErrorEvent', async () => {
+    test('endOperation with Failure result routes through the error channel and drops the free-form error message', async () => {
         const startRes = await postJson(h.baseUrl, '/telemetry/startOperation', {
             eventName: 'aspire/dashboard/error',
             settings: { postStartEvent: false, startEventProperties: {}, correlations: [] },
         });
         const { operationId } = JSON.parse(startRes.text);
 
+        // The dashboard's only producer of errorMessage passes a caught
+        // exception's ex.Message (DashboardCommandExecutor.cs), which can embed
+        // resource names / workspace paths. It must not be forwarded; the
+        // Failure result label already carries the failure signal.
         await postJson(h.baseUrl, '/telemetry/endOperation', {
             id: operationId,
             result: 2, // Failure
-            errorMessage: 'something broke',
+            errorMessage: 'connect failed for resource my-secret-db at /Users/someone/repos/super-secret',
         });
 
         // postStartEvent: false → no start event emitted, just the end.
@@ -240,7 +244,11 @@ suite('DashboardTelemetryPassthrough route-level normalization', () => {
         assert.strictEqual(event.name, 'dashboard/scope/end');
         assert.strictEqual(event.isError, true);
         assert.strictEqual(event.properties?.result, 'Failure');
-        assert.strictEqual(event.properties?.error_message, 'something broke');
+        assert.strictEqual(event.properties?.error_message, undefined);
+        // The raw message text must appear nowhere in the serialized event.
+        const serialized = JSON.stringify(event);
+        assert.ok(!serialized.includes('my-secret-db'), 'error message leaked into end event');
+        assert.ok(!serialized.includes('super-secret'), 'workspace path leaked into end event');
     });
 
     test('endOperation without a matching start is silently dropped with HTTP 200', async () => {
@@ -289,34 +297,66 @@ suite('DashboardTelemetryPassthrough route-level normalization', () => {
         assert.strictEqual(body.IsEnabled, body.is_enabled);
     });
 
-    test('PostFault enforces per-entry truncation on Properties values (privacy guarantee)', async () => {
-        // The dashboard's TelemetryErrorRecorder forwards full stack traces
-        // as Basic-tagged properties — see
-        // src/Aspire.Dashboard/Telemetry/TelemetryErrorRecorder.cs. The
-        // bundler must cap each such value before it ever lands in the
-        // bundle, defending the README's "no workspace contents are reported"
-        // claim. This test guarantees the cap is applied along the actual
-        // request path, not just in the helper unit tests.
-        const fakeStackTrace = 'at Foo() in C:\\\\Users\\\\someone\\\\repos\\\\super-secret\\\\Foo.cs:line 1\n'.repeat(200);
+    test('PostFault drops exception message/stack-trace and never forwards the free-form description (privacy guarantee)', async () => {
+        // The dashboard's TelemetryErrorRecorder builds the fault description as
+        // `${ExceptionType}: ${exception.Message}` and forwards the message and
+        // full stack trace as Basic-tagged properties — see
+        // src/Aspire.Dashboard/Telemetry/TelemetryErrorRecorder.cs. All of these
+        // embed user-chosen resource names and home-directory paths, so none may
+        // leave the machine. The structured exception type/runtime version are
+        // retained. This guards the README's "no workspace contents are
+        // reported" claim along the actual request path.
+        const secretMessage = 'Could not connect to my-secret-db at /Users/someone/repos/super-secret';
+        const fakeStackTrace = 'at Foo() in C:\\\\Users\\\\someone\\\\repos\\\\super-secret\\\\Foo.cs:line 1\n'.repeat(50);
+        await postJson(h.baseUrl, '/telemetry/fault', {
+            eventName: 'aspire/dashboard/error',
+            description: `System.InvalidOperationException: ${secretMessage}`,
+            severity: 3,
+            properties: {
+                'Aspire.Dashboard.Exception.Message': { value: secretMessage, propertyType: 1 },
+                'Aspire.Dashboard.Exception.StackTrace': { value: fakeStackTrace, propertyType: 1 },
+                'Aspire.Dashboard.Exception.Type': { value: 'System.InvalidOperationException', propertyType: 1 },
+                'Aspire.Dashboard.Exception.RuntimeVersion': { value: '10.0.0', propertyType: 1 },
+            },
+        });
+        assert.strictEqual(h.fake.events.length, 1);
+        const event = h.fake.events[0];
+        // The free-form description must not be forwarded at all.
+        assert.strictEqual(event.properties?.description, undefined);
+        // And the raw secret text must appear nowhere in the serialized event.
+        const serialized = JSON.stringify(event);
+        assert.ok(!serialized.includes('my-secret-db'), 'exception message leaked into fault event');
+        assert.ok(!serialized.includes('super-secret'), 'workspace path leaked into fault event');
+        // Structured, non-sensitive exception dimensions are retained.
+        const envelope = JSON.parse(event.properties?.dashboard_properties ?? '{}');
+        assert.strictEqual(envelope.v['Aspire.Dashboard.Exception.Message'], undefined);
+        assert.strictEqual(envelope.v['Aspire.Dashboard.Exception.StackTrace'], undefined);
+        assert.strictEqual(envelope.v['Aspire.Dashboard.Exception.Type'], 'System.InvalidOperationException');
+        assert.strictEqual(envelope.v['Aspire.Dashboard.Exception.RuntimeVersion'], '10.0.0');
+    });
+
+    test('PostFault enforces per-entry truncation on other Basic-tagged Properties values', async () => {
+        // Defense-in-depth for any Basic-tagged free-form value that is NOT on
+        // the drop list: it must still be capped before it lands in the bundle.
+        const longValue = 'x'.repeat(20_000);
         await postJson(h.baseUrl, '/telemetry/fault', {
             eventName: 'aspire/dashboard/error',
             description: 'short',
             severity: 3,
             properties: {
-                'aspire.dashboard.exception.stacktrace': { value: fakeStackTrace, propertyType: 1 },
+                'Aspire.Dashboard.SomeOtherDiagnostic': { value: longValue, propertyType: 1 },
             },
         });
         assert.strictEqual(h.fake.events.length, 1);
         const bundle = h.fake.events[0].properties?.dashboard_properties;
         assert.ok(bundle, 'expected dashboard_properties bundle');
         const envelope = JSON.parse(bundle);
-        const stackValue = envelope.v['aspire.dashboard.exception.stacktrace'] as string;
-        assert.ok(typeof stackValue === 'string');
-        // The per-entry cap MUST have triggered.
-        assert.ok(stackValue.endsWith('...[truncated]'),
-            `expected per-entry truncation marker, got ${stackValue.slice(-40)}`);
-        assert.ok(stackValue.length < fakeStackTrace.length,
-            `expected truncation; entry length ${stackValue.length} vs input ${fakeStackTrace.length}`);
+        const value = envelope.v['Aspire.Dashboard.SomeOtherDiagnostic'] as string;
+        assert.ok(typeof value === 'string');
+        assert.ok(value.endsWith('...[truncated]'),
+            `expected per-entry truncation marker, got ${value.slice(-40)}`);
+        assert.ok(value.length < longValue.length,
+            `expected truncation; entry length ${value.length} vs input ${longValue.length}`);
     });
 
     test('PostOperation clamps dashboard-supplied event names so a buggy upstream cannot leak long strings', async () => {

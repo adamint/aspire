@@ -255,9 +255,18 @@ export class DashboardTelemetryPassthrough {
 
         app.post('/telemetry/fault', requireHeaders, (req: Request, res: Response) => {
             const payload = req.body as PostFaultRequest;
+            // Intentionally do NOT forward `payload.description`. The dashboard's
+            // only fault producer (TelemetryErrorRecorder.RecordError) builds it
+            // as `${exception.GetType().FullName}: ${exception.Message}`, so the
+            // free-form exception *message* — which embeds user-chosen resource
+            // names and arbitrary interpolated workspace strings — would leak
+            // verbatim (truncation bounds volume, not sensitivity) and violate
+            // the README's "no resource names or workspace contents" guarantee.
+            // The non-sensitive exception *type* is still reported structurally
+            // via the retained `Aspire.Dashboard.Exception.Type` bundle property,
+            // alongside `fault_severity` and `dashboard_event_name`.
             const properties: EventProperties<'dashboard/fault'> = {
                 dashboard_event_name: clampDashboardKey(payload.eventName),
-                description: scrubFreeformDiagnosticText(payload.description),
                 fault_severity: faultSeverityLabel(payload.severity),
             };
             applyBundleAndCorrelations(properties, payload.properties, payload.correlatedWith);
@@ -399,9 +408,15 @@ export class DashboardTelemetryPassthrough {
         if (pending.startMeasurements !== undefined) {
             endProperties.dashboard_measurements = pending.startMeasurements;
         }
-        if (payload.errorMessage) {
-            endProperties.error_message = scrubFreeformDiagnosticText(payload.errorMessage);
-        }
+        // Intentionally do NOT forward `payload.errorMessage`. The dashboard's
+        // only producer of a non-null errorMessage passes a caught exception's
+        // `ex.Message` (see DashboardCommandExecutor.cs: EndOperation(..., ex.Message)),
+        // which embeds user-chosen resource names and arbitrary interpolated
+        // workspace strings — truncation bounds volume, not sensitivity, so it
+        // would violate the README's "no resource names or workspace contents"
+        // guarantee. The failure itself is still reported via the `result`
+        // label (Failure/UserFault) plus the retained structured bundle, which
+        // is routed through the error channel below.
         // Intentionally do NOT set `dashboard_correlated_with` on scope/end.
         // `operation_id` already joins start↔end events deterministically,
         // and `dashboard_correlated_with` on every OTHER event means "this
@@ -444,9 +459,13 @@ export class DashboardTelemetryPassthrough {
             dashboard_event_name: clampDashboardKey(payload.eventName),
             result: telemetryResultLabel(payload.result),
         };
-        if (payload.resultSummary) {
-            properties.result_summary = scrubFreeformDiagnosticText(payload.resultSummary);
-        }
+        // Intentionally do NOT forward `payload.resultSummary`. It is a
+        // free-form, dashboard-composed string at this bearer-authenticated
+        // network boundary; like the fault description and operation error
+        // message it could embed resource names or workspace paths, which the
+        // README's "no resource names or workspace contents" guarantee forbids.
+        // The `result` label plus the retained structured bundle preserve the
+        // outcome signal.
         applyBundleAndCorrelations(properties, payload.properties, payload.correlatedWith);
         if (isFailureResult(payload.result)) {
             sendTelemetryErrorEvent(eventName, properties);
@@ -615,6 +634,11 @@ function bundleDashboardData(input: { [key: string]: AspireTelemetryProperty } |
         if (prop.propertyType === PropertyType.Pii) {
             continue;
         }
+        // Drop free-form keys whose values carry workspace content regardless
+        // of their (Basic) propertyType tag. See DROPPED_FREEFORM_PROPERTY_KEYS.
+        if (DROPPED_FREEFORM_PROPERTY_KEYS.has(rawKey)) {
+            continue;
+        }
         const key = clampDashboardKey(rawKey);
         const value = prop.value;
         if (prop.propertyType === PropertyType.Metric) {
@@ -657,10 +681,11 @@ function bundleDashboardData(input: { [key: string]: AspireTelemetryProperty } |
                 stringValue = String(value);
             }
         }
-        // Per-entry value truncation. See the privacy mitigation note on
-        // bundleDashboardData — the dashboard's TelemetryErrorRecorder
-        // forwards full stack traces as Basic-tagged properties, so any
-        // single entry must be bounded before it ever reaches the bundle.
+        // Per-entry value truncation as defense-in-depth. The most sensitive
+        // free-form keys (exception message/stack trace) are dropped entirely
+        // above via DROPPED_FREEFORM_PROPERTY_KEYS; any other Basic-tagged
+        // string is still bounded here so a single oversized value can't bloat
+        // the bundle or smuggle large workspace content.
         properties.push([key, scrubFreeformDiagnosticText(stringValue)]);
     }
 
@@ -748,12 +773,20 @@ function formatCorrelations(correlations: unknown): string | undefined {
         if (typeof obj.eventType !== 'string' || typeof obj.id !== 'string') {
             continue;
         }
+        // Clamp each element before formatting. Unlike every other
+        // dashboard-supplied field, this path had only a count cap
+        // (MAX_CORRELATIONS) and no per-element length bound, so a single
+        // ~100 KB `id` (within the express.json() body limit) would ship
+        // verbatim as the `dashboard_correlated_with` property on every event.
+        // The dashboard only ever sends well-known enum names + UUIDs; clamp
+        // to MAX_DASHBOARD_KEY_LENGTH for consistency with the other fields.
+        //
         // Strip our wire-format delimiters from values so we can't ambiguate
         // the parser on the receiving side. The dashboard only ever sends
         // well-known enum names + UUIDs, but a future change shouldn't be
         // able to break the parser by mistake.
-        const eventType = obj.eventType.replace(/[;:]/g, '_');
-        const id = obj.id.replace(/[;:]/g, '_');
+        const eventType = clampDashboardKey(obj.eventType).replace(/[;:]/g, '_');
+        const id = clampDashboardKey(obj.id).replace(/[;:]/g, '_');
         formatted.push(`${eventType}:${id}`);
     }
     return formatted.length === 0 ? undefined : formatted.join(';');
@@ -779,10 +812,12 @@ const MAX_BUNDLE_ENTRIES = 100;
 // attacker / buggy upstream can't smuggle PII through the metadata side.
 const MAX_DASHBOARD_KEY_LENGTH = 256;
 
-// Maximum length of free-form diagnostic strings we forward from the dashboard
-// (error_message on EndOperation, description on PostFault). Long enough to
-// preserve useful framing/cause information, short enough that an accidental
-// path or stack-trace fragment cannot dump the whole thing into telemetry.
+// Maximum length applied to each string VALUE inside the dashboard property
+// bundle (`dashboard_properties`). The known free-form diagnostic fields
+// (exception message/stack trace, fault description, operation error message,
+// result summary) are dropped entirely elsewhere rather than forwarded; this
+// cap is the residual per-entry bound on every OTHER Basic-tagged bundle value
+// so a single property can't dump multi-KB workspace content into telemetry.
 // `@vscode/extension-telemetry` performs additional PII scrubbing on the
 // remainder, so this cap is defense-in-depth, not the only mitigation.
 const MAX_DIAGNOSTIC_STRING_LENGTH = 1024;
@@ -801,6 +836,24 @@ const MAX_FLAG_PREFIXES = 100;
 // memory. When full, the oldest pending entry is evicted (its end event is
 // dropped — same outcome as if it had been abandoned via the TTL).
 const MAX_PENDING_OPERATIONS = 10_000;
+
+// Dashboard property keys whose VALUES are known to carry free-form
+// user/workspace content rather than a bounded categorical signal. The
+// dashboard's `TelemetryErrorRecorder` tags these `Basic` (not `Pii`), so the
+// propertyType discriminator in bundleDashboardData does not catch them, yet
+// they routinely contain workspace content: exception *messages* can embed
+// user-chosen resource names and arbitrary interpolated strings, and stack
+// *traces* embed home-directory file paths and user-assembly type names. That
+// directly contradicts the README's "no resource names or workspace contents
+// are reported" guarantee, and a 1 KB truncation only bounds the volume, not
+// the sensitivity. Drop them outright; the structured `Exception.Type` and
+// `Exception.RuntimeVersion` keys are retained and preserve the useful,
+// non-sensitive fault signal. Keys must match the dashboard constants in
+// `src/Aspire.Dashboard/Telemetry/TelemetryPropertyKeys.cs`.
+const DROPPED_FREEFORM_PROPERTY_KEYS = new Set<string>([
+    'Aspire.Dashboard.Exception.Message',
+    'Aspire.Dashboard.Exception.StackTrace',
+]);
 
 /**
  * Clamps a single dashboard-supplied key/short-metadata string to
@@ -837,31 +890,50 @@ function formatFlagPrefixes(prefixes: unknown): string {
         if (typeof p !== 'string') {
             continue;
         }
+        // Keep only the flag *name* portion. The dashboard is expected to send
+        // sanitized prefixes (e.g. `--project`), but this endpoint is a network
+        // boundary: a buggy or hostile bearer-authenticated sender could pass a
+        // full argument like `--token=secret`, `--password:secret`, or
+        // `--key value`, which would otherwise leak the value verbatim into the
+        // first-class `flag_prefixes` property. Drop everything from the first
+        // value separator (`=`, `:`, or whitespace) onward so only the flag
+        // name survives.
+        const namePart = p.split(/[=:\s]/, 1)[0];
+        if (namePart.length === 0) {
+            continue;
+        }
         // Strip commas defensively — they are our delimiter on the joined
         // wire format and an attacker should not be able to inject extra
         // synthetic prefixes by smuggling commas into a single string.
-        formatted.push(clampDashboardKey(p).replace(/,/g, '_'));
+        formatted.push(clampDashboardKey(namePart).replace(/,/g, '_'));
     }
     return formatted.join(',');
 }
 
 /**
- * Sanitizes user-facing diagnostic text we forward from the dashboard. Two
- * mitigations:
- *  - Truncate to {@link MAX_DIAGNOSTIC_STRING_LENGTH} characters so a long
- *    stack trace or rendered exception message cannot serve as a side channel
- *    for arbitrary workspace content.
- *  - The remaining content still runs through `sendTelemetryErrorEvent`, which
- *    `@vscode/extension-telemetry` scrubs more aggressively than basic events
- *    (home-directory paths, emails, well-known token shapes).
+ * Caps the length of a single dashboard-supplied bundle VALUE before it is
+ * placed in `dashboard_properties`. The known free-form diagnostic fields
+ * (exception message/stack trace, fault description, operation error message,
+ * result summary) are dropped entirely by their handlers rather than forwarded,
+ * so this is the residual per-entry bound for every other Basic-tagged value:
+ *  - Truncate to {@link MAX_DIAGNOSTIC_STRING_LENGTH} characters so a single
+ *    oversized value cannot serve as a side channel for arbitrary workspace
+ *    content or bloat the bundle.
+ *  - Bundle values forwarded on failure events still run through
+ *    `sendTelemetryErrorEvent`, which `@vscode/extension-telemetry` scrubs more
+ *    aggressively (home-directory paths, emails, well-known token shapes).
  *
- * This is intentionally not a PII filter — the dashboard's exception messages
- * can contain user-controlled strings (e.g. resource names) that aren't in
- * the reporter's pattern set. The README documents this as a known limitation
- * of the passthrough channel.
+ * This is intentionally not a PII filter — it is a length cap plus the
+ * reporter's pattern scrubbing, applied as defense-in-depth on top of the
+ * drop-list and the Pii-tag filter in {@link bundleDashboardData}.
  */
-function scrubFreeformDiagnosticText(text: string | undefined): string {
-    if (!text) {
+function scrubFreeformDiagnosticText(text: unknown): string {
+    // Callers pass values straight off the JSON-parsed request body, where the
+    // field is only *typed* as a string. A malformed or hostile payload can
+    // send an object/array/number; without this guard `text.slice(...)` below
+    // throws a TypeError that would escape as an Express 500. Coerce
+    // non-strings to ''.
+    if (typeof text !== 'string' || text.length === 0) {
         return '';
     }
     if (text.length <= MAX_DIAGNOSTIC_STRING_LENGTH) {

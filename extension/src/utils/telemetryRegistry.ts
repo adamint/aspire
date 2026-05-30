@@ -96,8 +96,7 @@ export interface TelemetryEventSchema {
             | 'dashboard_properties'
             | 'dashboard_measurements'
             | 'dashboard_correlated_with'
-            | 'result'
-            | 'result_summary';
+            | 'result';
         measurements: never;
     };
     'dashboard/userTask': {
@@ -106,8 +105,7 @@ export interface TelemetryEventSchema {
             | 'dashboard_properties'
             | 'dashboard_measurements'
             | 'dashboard_correlated_with'
-            | 'result'
-            | 'result_summary';
+            | 'result';
         measurements: never;
     };
     'dashboard/fault': {
@@ -116,7 +114,6 @@ export interface TelemetryEventSchema {
             | 'dashboard_properties'
             | 'dashboard_measurements'
             | 'dashboard_correlated_with'
-            | 'description'
             | 'fault_severity';
         measurements: never;
     };
@@ -147,8 +144,7 @@ export interface TelemetryEventSchema {
             | 'dashboard_measurements'
             | 'operation_id'
             | 'scope_kind'
-            | 'result'
-            | 'error_message';
+            | 'result';
         // duration_ms is computed at the end-event call site so it's the only
         // first-class measurement (vs the JSON-bundled `dashboard_measurements`
         // which preserves the start-time bag).

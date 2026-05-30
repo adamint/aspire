@@ -222,7 +222,19 @@ export default class AspireDcpServer {
 
                 const launchConfig = payload.launch_configurations[0];
                 const foundDebuggerExtension = getResourceDebuggerExtensions().find(ext => ext.resourceType === launchConfig.type) ?? null;
-                const mode = launchConfig.mode ?? 'Unknown';
+                // Telemetry: clamp `launchConfig.mode` to the known
+                // LaunchConfigurationMode values. It originates from the
+                // CLI-controlled request body and feeds the `mode` dimension on
+                // multiple events; without clamping an arbitrary string would
+                // leak verbatim, mirroring the `supportedResourceType` clamp
+                // below. `== null` catches both `undefined` and a malformed
+                // JSON `null` (preserving the prior `?? 'Unknown'` behavior) and
+                // keeps the 'Unknown' bucket; any other unexpected value
+                // collapses to 'other'.
+                const rawMode = launchConfig.mode;
+                const mode = rawMode == null
+                    ? 'Unknown'
+                    : (rawMode === 'Debug' || rawMode === 'NoDebug' ? rawMode : 'other');
                 // Telemetry: clamp `launchConfig.type` to the set of resource types we
                 // actually understand. Unsupported types come from
                 // `payload.launch_configurations[0].type` which is a CLI-controlled
