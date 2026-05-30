@@ -103,7 +103,7 @@ Before starting a release:
    |-----------|-------------|---------|
    | `SkipNuGetPublish` | Set `true` if re-running after NuGet success | `false` |
    | `SkipChannelPromotion` | Set `true` if re-running after darc success | `false` |
-   | `SkipWinGetPublish` | Set `true` if re-running after WinGet success | `false` |
+   | `SkipWinGetPublish` | Set `true` if re-running after WinGet success | `true` |
    | `SkipGitHubTasks` | Set `true` to skip dispatching the GH workflow | `false` |
    | `SkipReleaseAssets` | Set `true` to skip uploading aspire-cli-* assets to the GitHub release | `false` |
    | `SkipHomebrewValidation` | Set `true` if re-running after a successful Homebrew cask validation (validates against the live GH release) | `false` |

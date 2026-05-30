@@ -158,7 +158,9 @@ jobs:
               try:
                   package_json = json.loads(archive.read("extension/package.json").decode("utf-8"))
                   version = package_json.get("version", "")
-              except KeyError:
+              except (KeyError, ValueError):
+                  # version is only used for a non-fatal mismatch warning, so a
+                  # missing or malformed package.json must not fail the workflow.
                   version = ""
 
           print(json.dumps({"sha": sha, "packageVersion": version}))
@@ -472,6 +474,10 @@ jobs:
           set -eo pipefail
 
           WORK_DIR="${RUNNER_TEMP}/extension-release/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # CHANGELOG.md may be newly created (untracked), and `git diff` skips
+          # untracked files. Mark it intent-to-add so the preview diff includes
+          # the changelog entry — the primary artifact a dry run is meant to show.
+          git add -N extension/CHANGELOG.md
           git diff -- extension/package.json extension/CHANGELOG.md > "$WORK_DIR/proposed_changes.diff"
 
           {
