@@ -69,17 +69,52 @@ function detectRid() {
 
 function isMusl() {
   // npm supports libc-specific packages. Prefer Node's runtime report because
-  // it avoids spawning a process on glibc systems, then fall back to ldd.
+  // it avoids spawning a process on glibc systems.
   if (process.report && typeof process.report.getReport === 'function') {
     const report = process.report.getReport();
+    // glibcVersionRuntime is present only when the process is dynamically
+    // linked against glibc, so its presence definitively rules out musl.
     if (report && report.header && report.header.glibcVersionRuntime) {
       return false;
     }
+
+    // Some Node builds list the loaded shared objects; a musl loader/libc path
+    // proves musl even when `ldd` is missing (common on minimal Alpine images).
+    if (report && Array.isArray(report.sharedObjects) &&
+        report.sharedObjects.some(entry => typeof entry === 'string' && /(\/ld-musl-|\/libc\.musl-)/.test(entry))) {
+      return true;
+    }
   }
 
+  // `ldd --version` prints a "musl libc" banner on musl and a GNU/glibc banner
+  // on glibc. Treat ldd as authoritative in BOTH directions when it produces a
+  // recognizable banner: this keeps a glibc host that happens to have musl
+  // installed side-by-side (so a /lib/ld-musl-*.so file exists) from being
+  // misclassified as musl by the filesystem probe below.
   const lddResult = childProcess.spawnSync('ldd', ['--version'], { encoding: 'utf8' });
   const lddOutput = `${lddResult.stdout || ''}${lddResult.stderr || ''}`.toLowerCase();
-  return lddOutput.includes('musl');
+  if (lddOutput.includes('musl')) {
+    return true;
+  }
+  if (lddOutput.includes('glibc') || lddOutput.includes('gnu libc') || lddOutput.includes('gnu c library')) {
+    return false;
+  }
+
+  // Last resort when `ldd` is absent or gave no recognizable banner (common on
+  // stripped-down Alpine images): the musl dynamic linker is installed as
+  // /lib/ld-musl-<arch>.so.1. Without this probe we would wrongly assume glibc
+  // and resolve a binary whose dynamic linker is missing, crashing at exec.
+  for (const dir of ['/lib', '/usr/lib']) {
+    try {
+      if (fs.readdirSync(dir).some(name => /^ld-musl-.*\.so/.test(name))) {
+        return true;
+      }
+    } catch {
+      // Directory unreadable or absent; try the next candidate.
+    }
+  }
+
+  return false;
 }
 
 function resolveNativeBinary(rid) {
@@ -116,7 +151,12 @@ function ensureCachedBinary(sourcePath, binaryName, version, rid) {
   // The Aspire CLI self-extracts relative to its process path on first run.
   // Running directly from node_modules could write into read-only package
   // stores, so copy the native binary to an Aspire-owned writable layout.
-  fs.mkdirSync(targetDirectory, { recursive: true });
+  // Create the cache as owner-only (0700) so that, if the cache root ever lands
+  // in a shared location (e.g. an ASPIRE_NPM_CACHE_DIR override or the
+  // os.tmpdir() fallback when no home directory is available), another local
+  // user cannot pre-create or read the cached executable. Mode is ignored on
+  // Windows and on pre-existing directories, so this only hardens dirs we make.
+  fs.mkdirSync(targetDirectory, { recursive: true, mode: 0o700 });
 
   if (!needsCopy(sourcePath, targetPath)) {
     return targetPath;
@@ -209,7 +249,51 @@ function main() {
   const rid = detectRid();
   const nativeBinary = resolveNativeBinary(rid);
   const executablePath = ensureCachedBinary(nativeBinary.binaryPath, nativeBinary.binaryName, packageJson.version, rid);
-  const child = childProcess.spawn(executablePath, process.argv.slice(2), {
+
+  // Forward terminating signals to the child so programmatic `kill <wrapper>`
+  // does not orphan the native CLI (especially important for long-lived
+  // `aspire run` sessions that keep an AppHost alive). In TTY usage the kernel
+  // already broadcasts SIGINT to the whole foreground process group, so this
+  // primarily covers tooling that targets the wrapper PID directly.
+  //
+  // Register the handlers BEFORE spawning so a signal that arrives between
+  // spawn and registration cannot terminate the wrapper and orphan the child;
+  // `child` is captured by reference and is always assigned before any handler
+  // can run (signal callbacks fire on a later tick, after this stack unwinds).
+  //
+  // SIGQUIT is POSIX-only: on Windows `process.once('SIGQUIT', ...)` throws
+  // `uv_signal_start EINVAL` because libuv cannot map it, which would crash the
+  // launcher (and orphan the child spawned below) on every Windows invocation.
+  // So build the list per platform: on Windows Node maps SIGINT/SIGTERM/SIGHUP
+  // to TerminateProcess on the child and SIGBREAK covers Ctrl+Break; on POSIX
+  // add SIGQUIT. Each registration is additionally wrapped so an unexpected
+  // platform/libuv mismatch can never crash the launcher.
+  // Use `once` so a second signal can still terminate the wrapper if the child
+  // ignores the first one.
+  let child;
+  const forwardedSignals = process.platform === 'win32'
+    ? ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']
+    : ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'];
+  for (const signal of forwardedSignals) {
+    try {
+      process.once(signal, () => {
+        if (child && !child.killed) {
+          try {
+            child.kill(signal);
+          } catch {
+            // Best-effort: the child may have exited between the check and kill,
+            // or the signal may be unsupported on this platform. Either way we
+            // let the 'exit' handler below run to propagate the final state.
+          }
+        }
+      });
+    } catch {
+      // Registering a listener for a signal this platform's libuv rejects must
+      // not crash the launcher.
+    }
+  }
+
+  child = childProcess.spawn(executablePath, process.argv.slice(2), {
     stdio: 'inherit',
     env: {
       ...process.env,
@@ -222,30 +306,6 @@ function main() {
       ASPIRE_NPM_PACKAGE_RID: rid
     }
   });
-
-  // Forward terminating signals to the child so programmatic `kill <wrapper>`
-  // does not orphan the native CLI (especially important for long-lived
-  // `aspire run` sessions that keep an AppHost alive). In TTY usage the kernel
-  // already broadcasts SIGINT/SIGQUIT to the whole foreground process group, so
-  // this primarily covers tooling that targets the wrapper PID directly.
-  // SIGHUP/SIGQUIT are POSIX-only; on Windows Node maps SIGTERM/SIGINT to
-  // TerminateProcess on the child, which is semantically what callers expect.
-  // Use `once` so a second signal can still terminate the wrapper if the child
-  // ignores the first one.
-  const forwardedSignals = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT'];
-  for (const signal of forwardedSignals) {
-    process.once(signal, () => {
-      if (!child.killed) {
-        try {
-          child.kill(signal);
-        } catch {
-          // Best-effort: the child may have exited between the check and kill,
-          // or the signal may be unsupported on this platform. Either way we
-          // let the 'exit' handler below run to propagate the final state.
-        }
-      }
-    });
-  }
 
   child.on('error', error => {
     console.error(error.message);

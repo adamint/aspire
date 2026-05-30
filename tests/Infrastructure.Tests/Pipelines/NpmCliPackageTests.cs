@@ -46,12 +46,69 @@ public sealed class NpmCliPackageTests
         // Programmatic `kill <wrapper-pid>` was orphaning the native CLI because
         // the launcher only handled child exit and never forwarded inbound
         // signals to the child. Especially bad for `aspire run` which keeps an
-        // AppHost alive. Verify all 4 standard termination signals are wired up
-        // and that we use `once` so a second signal can still kill the wrapper
-        // if the child ignores the first.
-        Assert.Contains("const forwardedSignals = ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT']", launcher);
+        // AppHost alive. Verify termination signals are wired up and that we use
+        // `once` so a second signal can still kill the wrapper if the child
+        // ignores the first.
         Assert.Contains("process.once(signal", launcher);
         Assert.Contains("child.kill(signal)", launcher);
+    }
+
+    [Fact]
+    public async Task LauncherUsesPlatformSpecificSignalListToAvoidWindowsCrash()
+    {
+        var launcher = await ReadRepoFileAsync("eng/clipack/npm/aspire.js");
+
+        // SIGQUIT is POSIX-only: on Windows `process.once('SIGQUIT', ...)` throws
+        // `uv_signal_start EINVAL`, which (because the child is already spawned)
+        // would crash the launcher and orphan the running CLI on every Windows
+        // invocation. Verify the signal list is built per platform so SIGQUIT is
+        // never registered on Windows, and that each registration is guarded so an
+        // unexpected platform/libuv mismatch can never crash the launcher.
+        Assert.Contains("process.platform === 'win32'", launcher);
+        Assert.Contains("? ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK']", launcher);
+        Assert.Contains(": ['SIGINT', 'SIGTERM', 'SIGHUP', 'SIGQUIT']", launcher);
+    }
+
+    [Fact]
+    public async Task LauncherRegistersSignalHandlersBeforeSpawningChild()
+    {
+        var launcher = await ReadRepoFileAsync("eng/clipack/npm/aspire.js");
+
+        // A signal delivered in the window between spawn and handler registration
+        // could terminate the wrapper and orphan the child - the exact failure the
+        // forwarding is meant to prevent. Verify `child` is declared before the
+        // signal loop and assigned by `childProcess.spawn` afterwards.
+        var declarationIndex = launcher.IndexOf("let child;", System.StringComparison.Ordinal);
+        var spawnIndex = launcher.IndexOf("child = childProcess.spawn(", System.StringComparison.Ordinal);
+        Assert.True(declarationIndex >= 0, "Expected `let child;` declaration in launcher.");
+        Assert.True(spawnIndex >= 0, "Expected `child = childProcess.spawn(` assignment in launcher.");
+        Assert.True(declarationIndex < spawnIndex, "Signal handlers must be registered before the child is spawned.");
+    }
+
+    [Fact]
+    public async Task LauncherDetectsMuslViaFilesystemFallbackWhenLddMissing()
+    {
+        var launcher = await ReadRepoFileAsync("eng/clipack/npm/aspire.js");
+
+        // On minimal Alpine images `ldd` can be absent, in which case the old code
+        // wrongly assumed glibc and resolved a binary whose dynamic linker is
+        // missing (crashing at exec). Verify the launcher falls back to probing
+        // for the musl dynamic linker (/lib/ld-musl-*.so) when ldd gives no
+        // recognizable banner.
+        Assert.Contains("ld-musl-", launcher);
+        Assert.Contains("readdirSync", launcher);
+    }
+
+    [Fact]
+    public async Task LauncherCreatesCacheDirectoryOwnerOnly()
+    {
+        var launcher = await ReadRepoFileAsync("eng/clipack/npm/aspire.js");
+
+        // The native binary cache may land in a shared location (an
+        // ASPIRE_NPM_CACHE_DIR override, or the os.tmpdir() fallback when no home
+        // directory is available). Create it owner-only so another local user
+        // cannot pre-create or read the cached executable.
+        Assert.Contains("recursive: true, mode: 0o700", launcher);
     }
 
     [Fact]

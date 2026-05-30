@@ -201,6 +201,33 @@ public sealed class ReleasePublishNugetPipelineTests
     }
 
     [Fact]
+    public async Task VerifiesStagedNpmPackageVersionsBeforeRidPublish()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        // An npm publish is unrevocable. The pointer preflight cross-checks the
+        // pointer version against the prepare-stage validated version, but that
+        // runs AFTER the 7 RID tarballs are already submitted to ESRP. So every
+        // staged RID and pointer tarball's own package.json version must be
+        // asserted against NpmValidatedExpectedVersion BEFORE the RID publish, or
+        // a wrong-version build that slipped into staging would leak onto the
+        // public registry before any version gate fires.
+        Assert.Contains("Verify Staged npm Package Versions", pipeline);
+        Assert.Contains("does not match the prepare-stage validated version", pipeline);
+
+        var versionCheckIndex = pipeline.IndexOf("Verify Staged npm Package Versions", StringComparison.Ordinal);
+        Assert.True(versionCheckIndex > 0);
+
+        // The version check must precede the RID-package publish so it can gate
+        // submission to ESRP.
+        var ridPublishIndex = pipeline.IndexOf(
+            "folderLocation: '$(Pipeline.Workspace)\\npm\\rid-packages'",
+            StringComparison.Ordinal);
+        Assert.True(ridPublishIndex > versionCheckIndex,
+            "Staged-version check must appear before the RID-publish step.");
+    }
+
+    [Fact]
     public async Task PostPublishSmokeRejectsEmptyAspireVersionOutput()
     {
         var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");

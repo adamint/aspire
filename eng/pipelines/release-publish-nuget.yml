@@ -11,7 +11,6 @@
 #    baseline PR) and waits for it to complete
 # 7. Uploads aspire-cli-* archives from the source build's BlobArtifacts
 #    onto the GitHub Release as the aspire-repo-bot
-# 7. Validates the Homebrew cask against the live GitHub release
 #
 # For full documentation, see: docs/release-process.md
 
@@ -1200,6 +1199,77 @@ extends:
 
                     Write-Host "=============================="
                   displayName: 'List npm Packages'
+
+                - pwsh: |
+                    $ErrorActionPreference = 'Stop'
+
+                    # Fail closed if the prepare-stage validation gate did not run:
+                    # every staged RID and pointer tarball must be the exact version
+                    # that was install-tested. NpmValidatedExpectedVersion is set by
+                    # 'Validate npm Prepare-Stage Summaries' earlier in this job (both
+                    # gated on SkipNpmPublish==false). A missing/empty/unexpanded token
+                    # here means that gate did not run, so we must not publish.
+                    $validatedVersion = "$(NpmValidatedExpectedVersion)"
+                    if ([string]::IsNullOrWhiteSpace($validatedVersion) -or $validatedVersion -like '$(*)') {
+                      Write-Error "NpmValidatedExpectedVersion was not set by the prepare-stage validation gate (got '$validatedVersion'). Refusing to publish npm packages without a verified version."
+                      exit 1
+                    }
+
+                    $ridPackagesPath = "$(Pipeline.Workspace)/npm/rid-packages"
+                    $pointerPackagePath = "$(Pipeline.Workspace)/npm/pointer-package"
+                    $tarballs = @(Get-ChildItem -Path $ridPackagesPath -Filter "*.tgz" -File) + @(Get-ChildItem -Path $pointerPackagePath -Filter "*.tgz" -File)
+                    if ($tarballs.Count -eq 0) {
+                      Write-Error "No npm tarballs found to version-check under '$ridPackagesPath' or '$pointerPackagePath'."
+                      exit 1
+                    }
+
+                    # Assert each staged tarball's OWN package.json version (the bytes
+                    # npm will publish) matches the validated version. This runs BEFORE
+                    # the RID packages are submitted to ESRP, because an npm publish is
+                    # unrevocable: a mismatch caught only at the pointer preflight (which
+                    # runs after RID publish) would already have leaked wrong-version RID
+                    # packages onto the public registry.
+                    Write-Host "=== Verifying staged npm package versions against '$validatedVersion' ==="
+                    foreach ($tarball in $tarballs) {
+                      $metadataRoot = Join-Path "$(Agent.TempDirectory)" "npm-version-check-$([Guid]::NewGuid().ToString('N'))"
+                      New-Item -ItemType Directory -Path $metadataRoot -Force | Out-Null
+                      try {
+                        tar -xzf $tarball.FullName -C $metadataRoot
+                        if ($LASTEXITCODE -ne 0) {
+                          Write-Error "Failed to extract npm package '$($tarball.FullName)'."
+                          exit 1
+                        }
+
+                        $packageJsonPath = Join-Path $metadataRoot 'package/package.json'
+                        if (!(Test-Path -LiteralPath $packageJsonPath)) {
+                          Write-Error "npm package '$($tarball.Name)' is missing package/package.json."
+                          exit 1
+                        }
+
+                        $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
+                        $packageName = "$($packageJson.name)"
+                        $packageVersion = "$($packageJson.version)"
+                        if ([string]::IsNullOrWhiteSpace($packageVersion)) {
+                          Write-Error "npm package '$($tarball.Name)' has no version in package.json."
+                          exit 1
+                        }
+
+                        if ($packageVersion -ne $validatedVersion) {
+                          Write-Error "npm package '$packageName' ($($tarball.Name)) version '$packageVersion' does not match the prepare-stage validated version '$validatedVersion'. The staged packages differ from what was install-tested; refusing to publish."
+                          exit 1
+                        }
+
+                        Write-Host "  - $packageName@$packageVersion OK"
+                      }
+                      finally {
+                        if (Test-Path -LiteralPath $metadataRoot) {
+                          Remove-Item -LiteralPath $metadataRoot -Recurse -Force
+                        }
+                      }
+                    }
+
+                    Write-Host "All staged npm tarballs match validated version '$validatedVersion'."
+                  displayName: 'Verify Staged npm Package Versions'
 
               - ${{ if and(eq(parameters.DryRun, true), eq(parameters.SkipNpmPublish, false)) }}:
                 - powershell: |
