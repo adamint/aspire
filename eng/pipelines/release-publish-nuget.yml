@@ -694,8 +694,14 @@ extends:
                   Write-Host "Skip Channel Promotion: ${{ parameters.SkipChannelPromotion }}"
                   Write-Host "Installer-only mode: ${{ and(eq(parameters.SkipNuGetPublish, true), eq(parameters.SkipNpmPublish, true), eq(parameters.SkipChannelPromotion, true)) }}"
 
-                  if ("${{ parameters.DryRun }}" -eq "false" -and "${{ parameters.SkipNpmPublish }}" -eq "false") {
-                    if ("${{ parameters.IsPrerelease }}" -eq "true") {
+                  if ("${{ parameters.SkipNpmPublish }}" -eq "false") {
+                    # Validate ESRP owner/approver configuration on dry runs as well
+                    # as real publishes so a misconfigured alias set fails the cheap
+                    # dry run instead of only surfacing on the real release. The
+                    # prerelease hard-block below stays gated on DryRun=false because
+                    # a dry run never actually publishes and is the documented way to
+                    # exercise the npm path for a prerelease build.
+                    if ("${{ parameters.DryRun }}" -eq "false" -and "${{ parameters.IsPrerelease }}" -eq "true") {
                       Write-Error "npm publishing is blocked for prerelease runs because the MicroBuild npm publish template does not yet expose a dist-tag parameter. Set SkipNpmPublish=true or run with DryRun=true until prereleases can publish under a non-latest tag."
                       exit 1
                     }
@@ -1028,6 +1034,12 @@ extends:
                     }
 
                     Write-Host "npm validation summaries verified ($($validatedRids -join ', '), version $expectedVersion)."
+
+                    # Surface the prepare-stage validated version to later steps in
+                    # this job so the pointer preflight can assert the package about
+                    # to be submitted to ESRP is the exact version that was install-
+                    # tested, not a different build that slipped into staging.
+                    Write-Host "##vso[task.setvariable variable=NpmValidatedExpectedVersion]$expectedVersion"
                   displayName: 'Validate npm Prepare-Stage Summaries'
 
                 - powershell: |
@@ -1266,6 +1278,24 @@ extends:
                         $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
                         $packageName = "$($packageJson.name)"
                         $packageVersion = "$($packageJson.version)"
+
+                        # Fail closed if the pointer package about to be published
+                        # is not the exact version the prepare-stage install tests
+                        # validated. NpmValidatedExpectedVersion is set by the
+                        # 'Validate npm Prepare-Stage Summaries' step earlier in this
+                        # job; pointer publish never runs without that gate, so a
+                        # missing/empty/unexpanded token here is itself a signal that
+                        # the gate did not run and we must not publish.
+                        $validatedVersion = "$(NpmValidatedExpectedVersion)"
+                        if ([string]::IsNullOrWhiteSpace($validatedVersion) -or $validatedVersion -like '$(*)') {
+                          Write-Error "NpmValidatedExpectedVersion was not set by the prepare-stage validation gate (got '$validatedVersion'). Refusing to publish pointer package '$packageName' without a verified version."
+                          exit 1
+                        }
+
+                        if ($packageVersion -ne $validatedVersion) {
+                          Write-Error "Pointer package '$packageName' version '$packageVersion' does not match the prepare-stage validated version '$validatedVersion'. The staged packages differ from what was install-tested; refusing to publish."
+                          exit 1
+                        }
 
                         $optionalDeps = $packageJson.optionalDependencies
                         if ($null -eq $optionalDeps) {

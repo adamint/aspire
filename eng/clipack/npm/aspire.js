@@ -159,14 +159,32 @@ function ensureCachedBinary(sourcePath, binaryName, version, rid) {
 
 function needsCopy(sourcePath, targetPath) {
   try {
+    // lstat (not stat) so the final path component is never followed: a cached
+    // entry that is a symlink (or any non-regular file) is never trusted and is
+    // replaced via the atomic temp-file rename below. This blocks the cheap
+    // attack where a same-user process swaps the cached binary for a symlink
+    // pointing at attacker-controlled content between launches.
+    const target = fs.lstatSync(targetPath);
+    if (!target.isFile()) {
+      return true;
+    }
+
     const source = fs.statSync(sourcePath);
-    const target = fs.statSync(targetPath);
 
     // Size mismatch always means stale cache. Even when the size matches, the
     // cached binary is only trusted if its mtime is at or after the source's
     // mtime. This catches the case where a same-version reinstall replaces the
     // source binary but the cache was left from a prior install with identical
     // content size (e.g., partial overwrite, corruption, or a swapped build).
+    //
+    // We deliberately do NOT byte-compare the cached binary against the source
+    // on every launch. The source is tens of MB and this runs on the hot CLI
+    // startup path; a same-user attacker who can pre-plant a same-size,
+    // newer-mtime regular file at the cache path can equally tamper with
+    // node_modules, PATH, or shell startup files, so per-launch content
+    // verification would tax startup for a threat that already defeats this
+    // process's trust boundary (and a TOCTOU window to exec would remain). The
+    // symlink rejection above closes the only cheap, low-privilege vector.
     if (source.size !== target.size) {
       return true;
     }

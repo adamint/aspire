@@ -24,6 +24,21 @@ public sealed class NpmCliPackageTests
     }
 
     [Fact]
+    public async Task LauncherRejectsNonRegularCachedBinary()
+    {
+        var launcher = await ReadRepoFileAsync("eng/clipack/npm/aspire.js");
+
+        // The native binary is copied from the (signed) node_modules source into
+        // a writable cache before exec. `needsCopy` previously trusted any cache
+        // entry that matched the source size/mtime, so a same-user process could
+        // swap the cache entry for a symlink to attacker content and the launcher
+        // would exec it. Verify the staleness check lstat's the target and only
+        // trusts regular files, forcing a fresh copy otherwise.
+        Assert.Contains("const target = fs.lstatSync(targetPath);", launcher);
+        Assert.Contains("if (!target.isFile()) {", launcher);
+    }
+
+    [Fact]
     public async Task LauncherForwardsTerminatingSignalsToChild()
     {
         var launcher = await ReadRepoFileAsync("eng/clipack/npm/aspire.js");

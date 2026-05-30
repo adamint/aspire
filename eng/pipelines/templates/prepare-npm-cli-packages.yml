@@ -300,28 +300,47 @@ steps:
       # Lowercase booleans so the JSON is valid.
       skipRegistry="$(printf '%s' "$skipRegistry" | tr '[:upper:]' '[:lower:]')"
 
+      # Single-quote the AzDO macro expansions so an unexpanded '$(NpmCheckXxx)'
+      # token is never re-interpreted by the shell as a command substitution.
+      # Every check is initialized to 'failed' up front (see the locate step), so
+      # these are always set; validatedByPreparePipeline is true only when all
+      # four checks actually passed. This keeps the field honest instead of a
+      # hardcoded 'true', so the release-side gate that reads it is meaningful.
+      checkInstall='$(NpmCheckInstall)'
+      checkVersion='$(NpmCheckVersion)'
+      checkLauncher='$(NpmCheckLauncher)'
+      checkUninstall='$(NpmCheckUninstall)'
+
+      validatedByPreparePipeline=false
+      if [ "$checkInstall" = "passed" ] && \
+         [ "$checkVersion" = "passed" ] && \
+         [ "$checkLauncher" = "passed" ] && \
+         [ "$checkUninstall" = "passed" ]; then
+        validatedByPreparePipeline=true
+      fi
+
       cat > "$outputPath" <<EOF
       {
         "schemaVersion": 1,
-        "validatedByPreparePipeline": true,
+        "validatedByPreparePipeline": $validatedByPreparePipeline,
         "rid": "$rid",
         "expectedVersion": "$expectedVersion",
         "skipRegistryResolution": $skipRegistry,
         "checks": {
           "install": {
-            "status": "$(NpmCheckInstall)",
+            "status": "$checkInstall",
             "details": "npm install -g <rid>.tgz && npm install -g --omit=optional <pointer>.tgz"
           },
           "version": {
-            "status": "$(NpmCheckVersion)",
+            "status": "$checkVersion",
             "details": "aspire --version output matched the build version"
           },
           "launcher": {
-            "status": "$(NpmCheckLauncher)",
+            "status": "$checkLauncher",
             "details": "Launcher cached native binary at ASPIRE_NPM_CACHE_DIR/<version>/<rid>/bin/<binaryName>"
           },
           "uninstall": {
-            "status": "$(NpmCheckUninstall)",
+            "status": "$checkUninstall",
             "details": "npm uninstall -g @microsoft/aspire-cli @microsoft/aspire-cli-$rid"
           }
         }
