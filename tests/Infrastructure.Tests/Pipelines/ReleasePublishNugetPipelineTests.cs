@@ -124,6 +124,48 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.Contains("--fetch-timeout=", template);
     }
 
+    [Fact]
+    public async Task PointerPublishPreflightsRidPackagesAreOnRegistry()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        // The pointer pins each RID package via optionalDependencies. If any
+        // RID dep is missing on npm at pointer-publish time (operator set
+        // SkipNpmRidPublish=true; only some RIDs landed in an earlier attempt;
+        // ESRP partial failure), end-user `npm install -g @microsoft/aspire-cli`
+        // succeeds but the launcher throws "The Aspire CLI native package '…'
+        // was not installed" on first invocation. The post-publish smoke only
+        // covers the publish-pool's own RID, so missing other-RID tarballs
+        // reach customers invisibly without this preflight.
+        Assert.Contains("Verify npm RID Packages Present Before Pointer Publish", pipeline);
+        Assert.Contains("Refusing to publish pointer package", pipeline);
+
+        var preflightIndex = pipeline.IndexOf("Verify npm RID Packages Present Before Pointer Publish", StringComparison.Ordinal);
+        Assert.True(preflightIndex > 0);
+
+        // The preflight must precede the actual pointer publish so it can gate
+        // submission.
+        var pointerPublishIndex = pipeline.IndexOf(
+            "folderLocation: '$(Pipeline.Workspace)\\npm\\pointer-package'",
+            StringComparison.Ordinal);
+        Assert.True(pointerPublishIndex > preflightIndex,
+            "Preflight RID-check must appear before the pointer-publish step.");
+    }
+
+    [Fact]
+    public async Task PostPublishSmokeRejectsEmptyAspireVersionOutput()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        // Without an explicit empty-stdout check, `@(...)` wraps an empty
+        // version line into an empty array and PowerShell's `-notmatch`
+        // against an empty array silently returns an empty array (falsy),
+        // letting an `aspire --version` that exits 0 with no output slip past
+        // the version-pattern check. Assert the explicit guard is present.
+        Assert.Contains("$versionLine.Count -eq 0", pipeline);
+        Assert.Contains("produced no output.", pipeline);
+    }
+
     private static void AssertBefore(string contents, string text, int boundaryIndex)
     {
         var textIndex = FindRequiredText(contents, text);
