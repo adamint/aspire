@@ -141,7 +141,16 @@ resources:
       trigger: none          # Manual trigger only - no automatic releases
 
 extends:
-  template: azure-pipelines/1ES.Official.Publish.yml@MicroBuildTemplate
+  # Use the MicroBuild + 1ES Official composite template (NOT the plain 1ES.Official.Publish.yml).
+  # The `MicroBuild.` prefix is REQUIRED for ESRP-based publishing — it wires the MicroBuild
+  # signing/publish credential context so `MicroBuild.Publish.yml@MicroBuildTemplate` and the
+  # auto-injected `MicroBuildAuthorizePublishPlugin` task can authenticate against the
+  # `devdiv.pkgs.visualstudio.com/_packaging/MicroBuildToolset` feed.
+  # Pattern from microsoft/vscode-azuretools, microsoft/pyright, microsoft/vscode-python-environments
+  # and other Microsoft-owned npm-publishing-via-ESRP pipelines.
+  # The plain `1ES.Official.Publish.yml@MicroBuildTemplate` (no `MicroBuild.` prefix) injects the
+  # authorize task without supplying credentials, causing a 401 on the MicroBuildToolset feed.
+  template: azure-pipelines/MicroBuild.1ES.Official.Publish.yml@MicroBuildTemplate
   parameters:
     pool:
       name: NetCore1ESPool-Internal
