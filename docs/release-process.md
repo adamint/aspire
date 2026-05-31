@@ -99,9 +99,10 @@ Before starting a release:
    | `SkipReleaseAssets` | Set `true` to skip uploading `aspire-cli-*` assets to the GitHub release. | `false` |
    | `SkipHomebrewValidation` | Set `true` if re-running after a successful Homebrew cask validation against the live GitHub release. | `false` |
    | `SkipVSCodeExtensionPublish` | Set `false` to publish the signed `aspire-vscode-extension` artifact to the Visual Studio Marketplace. | `true` |
-   | `NpmPublishOwners` | Comma-separated ESRP owner aliases or emails. Required when `DryRun` is `false` and npm publishing is not skipped; must include `joperezr` and `ankj`. | `joperezr,ankj` |
-   | `NpmPublishApprovers` | Comma-separated ESRP approver aliases or emails. Required when `DryRun` is `false` and npm publishing is not skipped; must include `adamratzman` and must not overlap owners. | `adamratzman` |
+   | `NpmPublishOwners` | Optional comma-separated ESRP owner aliases or emails. Leave empty for the repo default; overrides must still include the required owner aliases from `eng/pipelines/common-variables.yml`. | empty |
+   | `NpmPublishApprovers` | Optional comma-separated ESRP approver aliases or emails. Leave empty for the repo default; overrides must still include the required approver aliases from `eng/pipelines/common-variables.yml` and must not overlap owners. | empty |
    | `NpmRegistryPropagationDelayMinutes` | Delay between npm RID package and pointer package submissions. | `10` |
+   | `AllowNpmLatestDistTagMove` | Emergency override for intentionally moving npm `latest` to an older stable version. Older servicing releases should normally use `SkipNpmPublish=true`. | `false` |
    | `GitHubTasksWorkflowRef` | Ref to load `release-github-tasks.yml` from when dispatching. Only affects the workflow source; the release branch and commit are passed via inputs. Override only when testing pipeline changes on a topic branch. | `main` |
 
 4. Select the **Resources** button in the bottom right, then select the source build from the `aspire-build` dropdown.
@@ -118,6 +119,9 @@ To publish only the VS Code extension after merging an extension release PR, run
 | `IsPrerelease` | `false` for stable, `true` for pre-release |
 | `DryRun` | `false` |
 | `SkipNuGetPublish` | `true` |
+| `SkipNpmPublish` | `true` |
+| `SkipNpmRidPublish` | `true` |
+| `SkipNpmPointerPublish` | `true` |
 | `SkipChannelPromotion` | `true` |
 | `SkipWinGetPublish` | `true` |
 | `SkipHomebrewValidation` | `true` |

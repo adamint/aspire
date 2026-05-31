@@ -522,28 +522,10 @@ extends:
               image: 1es-windows-2022
               os: windows
             steps:
-            - checkout: self
-              fetchDepth: 1
-            # Download the just-built npm tarballs the build stage published as
-            # blob artifacts via stage-native-cli-tool-packages.ps1. Filter to
-            # avoid pulling unrelated blob assets.
-            - task: DownloadPipelineArtifact@2
-              displayName: 🟣Download npm packages from build
-              inputs:
-                artifact: BlobArtifacts
-                itemPattern: '**/microsoft-aspire-cli*.tgz'
-                targetPath: '$(Pipeline.Workspace)/npm-packages'
-            - task: NodeTool@0
-              displayName: 🟣Install Node.js
-              inputs:
-                versionSpec: '22.x'
-            - template: /eng/pipelines/templates/prepare-npm-cli-packages.yml@self
-              parameters:
-                npmPackagesDir: $(Pipeline.Workspace)/npm-packages
-                expectedVersion: $(aspireVersion)
-                rid: win-x64
-                validationSummaryArtifactName: npm-validation-summary-win-x64
-                skipRegistryResolution: true
+              - template: /eng/pipelines/templates/npm-cli-install-validation-steps.yml@self
+                parameters:
+                  rid: win-x64
+                  validationSummaryArtifactName: $(NPM_VALIDATION_SUMMARY_WIN_X64_ARTIFACT)
 
           - job: NpmInstall_Linux_x64
             displayName: npm install validation (linux-x64)
@@ -553,28 +535,10 @@ extends:
               image: 1es-ubuntu-2204
               os: linux
             steps:
-            - checkout: self
-              fetchDepth: 1
-            # Download the just-built npm tarballs the build stage published as
-            # blob artifacts via stage-native-cli-tool-packages.ps1. Filter to
-            # avoid pulling unrelated blob assets.
-            - task: DownloadPipelineArtifact@2
-              displayName: 🟣Download npm packages from build
-              inputs:
-                artifact: BlobArtifacts
-                itemPattern: '**/microsoft-aspire-cli*.tgz'
-                targetPath: '$(Pipeline.Workspace)/npm-packages'
-            - task: NodeTool@0
-              displayName: 🟣Install Node.js
-              inputs:
-                versionSpec: '22.x'
-            - template: /eng/pipelines/templates/prepare-npm-cli-packages.yml@self
-              parameters:
-                npmPackagesDir: $(Pipeline.Workspace)/npm-packages
-                expectedVersion: $(aspireVersion)
-                rid: linux-x64
-                validationSummaryArtifactName: npm-validation-summary-linux-x64
-                skipRegistryResolution: true
+              - template: /eng/pipelines/templates/npm-cli-install-validation-steps.yml@self
+                parameters:
+                  rid: linux-x64
+                  validationSummaryArtifactName: $(NPM_VALIDATION_SUMMARY_LINUX_X64_ARTIFACT)
 
           - job: NpmInstall_macOS
             displayName: npm install validation (macOS native RID)
@@ -584,36 +548,19 @@ extends:
               vmImage: macOS-latest-internal
               os: macOS
             steps:
-            - checkout: self
-              fetchDepth: 1
-            - pwsh: |
-                $ErrorActionPreference = 'Stop'
-                $rid = switch ('$(Agent.OSArchitecture)') {
-                  'ARM64' { 'osx-arm64' }
-                  'X64' { 'osx-x64' }
-                  default { throw "Unsupported macOS agent architecture '$(Agent.OSArchitecture)'." }
-                }
+              - template: /eng/pipelines/templates/npm-cli-install-validation-steps.yml@self
+                parameters:
+                  rid: $(NpmValidationRid)
+                  validationSummaryArtifactName: $(NPM_VALIDATION_SUMMARY_OSX_ARTIFACT)
+                  preSteps:
+                    - pwsh: |
+                        $ErrorActionPreference = 'Stop'
+                        $rid = switch ('$(Agent.OSArchitecture)') {
+                          'ARM64' { 'osx-arm64' }
+                          'X64' { 'osx-x64' }
+                          default { throw "Unsupported macOS agent architecture '$(Agent.OSArchitecture)'." }
+                        }
 
-                Write-Host "Resolved macOS npm validation RID: $rid"
-                Write-Host "##vso[task.setvariable variable=NpmValidationRid]$rid"
-              displayName: 🟣Resolve native macOS RID
-            # Download the just-built npm tarballs the build stage published as
-            # blob artifacts via stage-native-cli-tool-packages.ps1. Filter to
-            # avoid pulling unrelated blob assets.
-            - task: DownloadPipelineArtifact@2
-              displayName: 🟣Download npm packages from build
-              inputs:
-                artifact: BlobArtifacts
-                itemPattern: '**/microsoft-aspire-cli*.tgz'
-                targetPath: '$(Pipeline.Workspace)/npm-packages'
-            - task: NodeTool@0
-              displayName: 🟣Install Node.js
-              inputs:
-                versionSpec: '22.x'
-            - template: /eng/pipelines/templates/prepare-npm-cli-packages.yml@self
-              parameters:
-                npmPackagesDir: $(Pipeline.Workspace)/npm-packages
-                expectedVersion: $(aspireVersion)
-                rid: $(NpmValidationRid)
-                validationSummaryArtifactName: npm-validation-summary-osx
-                skipRegistryResolution: true
+                        Write-Host "Resolved macOS npm validation RID: $rid"
+                        Write-Host "##vso[task.setvariable variable=NpmValidationRid]$rid"
+                      displayName: 🟣Resolve native macOS RID

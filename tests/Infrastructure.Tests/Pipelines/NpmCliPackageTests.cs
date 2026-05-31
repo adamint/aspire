@@ -172,8 +172,98 @@ public sealed class NpmCliPackageTests
         Assert.DoesNotContain("node = '>=18'", packScript);
     }
 
+    [Fact]
+    public async Task NpmInstallValidationJobsUseExplicitJobsSharedStepsTemplateAndCentralArtifactNames()
+    {
+        var commonVariables = await ReadRepoFileAsync("eng/pipelines/common-variables.yml");
+        var buildPipeline = await ReadRepoFileAsync("eng/pipelines/azure-pipelines.yml");
+        var releasePipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        Assert.Contains("NPM_VALIDATION_SUMMARY_WIN_X64_ARTIFACT", commonVariables);
+        Assert.Contains("NPM_VALIDATION_SUMMARY_LINUX_X64_ARTIFACT", commonVariables);
+        Assert.Contains("NPM_VALIDATION_SUMMARY_OSX_ARTIFACT", commonVariables);
+
+        Assert.Equal(3, CountOccurrences(buildPipeline, "template: /eng/pipelines/templates/npm-cli-install-validation-steps.yml@self"));
+        Assert.DoesNotContain("template: /eng/pipelines/templates/npm-cli-install-validation-job.yml@self", buildPipeline);
+        Assert.Contains("job: NpmInstall_Windows_x64", buildPipeline);
+        Assert.Contains("job: NpmInstall_Linux_x64", buildPipeline);
+        Assert.Contains("job: NpmInstall_macOS", buildPipeline);
+        Assert.DoesNotContain("validationSummaryArtifactName: npm-validation-summary-win-x64", buildPipeline);
+        Assert.DoesNotContain("validationSummaryArtifactName: npm-validation-summary-linux-x64", buildPipeline);
+        Assert.DoesNotContain("validationSummaryArtifactName: npm-validation-summary-osx", buildPipeline);
+
+        Assert.DoesNotContain("artifact: npm-validation-summary-win-x64", releasePipeline);
+        Assert.DoesNotContain("artifact: npm-validation-summary-linux-x64", releasePipeline);
+        Assert.DoesNotContain("artifact: npm-validation-summary-osx", releasePipeline);
+        Assert.Contains("$(NPM_VALIDATION_SUMMARY_WIN_X64_ARTIFACT)", releasePipeline);
+        Assert.Contains("$(NPM_VALIDATION_SUMMARY_LINUX_X64_ARTIFACT)", releasePipeline);
+        Assert.Contains("$(NPM_VALIDATION_SUMMARY_OSX_ARTIFACT)", releasePipeline);
+    }
+
+    [Fact]
+    public async Task ReleasePipelinePreflightsScheduledNpmPackagesBeforePublishing()
+    {
+        var releasePipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        var preflightIndex = releasePipeline.IndexOf("Verify npm Packages Are Not Already Published", System.StringComparison.Ordinal);
+        var publishIndex = releasePipeline.IndexOf("template: MicroBuild.Publish.yml@MicroBuildTemplate", System.StringComparison.Ordinal);
+
+        Assert.True(preflightIndex >= 0, "Expected an already-published npm package preflight.");
+        Assert.True(publishIndex >= 0, "Expected npm MicroBuild publish template usage.");
+        Assert.True(preflightIndex < publishIndex, "Already-published npm package preflight must run before MicroBuild publish.");
+        Assert.Contains("SkipNpmRidPublish", releasePipeline);
+        Assert.Contains("SkipNpmPointerPublish", releasePipeline);
+        Assert.Contains("npm view $packageSpec version", releasePipeline);
+        Assert.Contains("already exists on npm", releasePipeline);
+        Assert.Contains("Set SkipNpmRidPublish=true", releasePipeline);
+        Assert.Contains("Set SkipNpmPointerPublish=true", releasePipeline);
+    }
+
+    [Fact]
+    public async Task ReleasePipelineGuardsNpmLatestDistTagAgainstServicingDowngrade()
+    {
+        var releasePipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        Assert.Contains("AllowNpmLatestDistTagMove", releasePipeline);
+        Assert.Contains("npm view @microsoft/aspire-cli@latest version", releasePipeline);
+        Assert.Contains("would move the npm latest dist-tag backward", releasePipeline);
+        Assert.Contains("SkipNpmPublish=true for older servicing releases", releasePipeline);
+    }
+
+    [Fact]
+    public async Task ReleasePipelineUsesEffectiveNpmOwnersAndApproversFromSingleSource()
+    {
+        var commonVariables = await ReadRepoFileAsync("eng/pipelines/common-variables.yml");
+        var releasePipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        Assert.Contains("NPM_PUBLISH_REQUIRED_OWNERS", commonVariables);
+        Assert.Contains("NPM_PUBLISH_REQUIRED_APPROVERS", commonVariables);
+        Assert.Contains("default: ''", releasePipeline);
+        Assert.Contains("NpmPublishOwnersEffective", releasePipeline);
+        Assert.Contains("NpmPublishApproversEffective", releasePipeline);
+        Assert.Contains("owners: '$(NpmPublishOwnersEffective)'", releasePipeline);
+        Assert.Contains("approvers: '$(NpmPublishApproversEffective)'", releasePipeline);
+        Assert.DoesNotContain("$requiredNpmOwners = @('joperezr', 'ankj')", releasePipeline);
+        Assert.DoesNotContain("owners: '${{ parameters.NpmPublishOwners }}'", releasePipeline);
+        Assert.DoesNotContain("approvers: '${{ parameters.NpmPublishApprovers }}'", releasePipeline);
+    }
+
     private Task<string> ReadRepoFileAsync(string relativePath)
         => File.ReadAllTextAsync(Path.Combine(_repoRoot, relativePath.Replace('/', Path.DirectorySeparatorChar)));
+
+    private static int CountOccurrences(string value, string substring)
+    {
+        var count = 0;
+        var index = 0;
+
+        while ((index = value.IndexOf(substring, index, System.StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += substring.Length;
+        }
+
+        return count;
+    }
 
     private static string FindRepoRoot()
     {

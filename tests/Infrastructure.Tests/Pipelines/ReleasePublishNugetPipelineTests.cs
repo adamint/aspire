@@ -22,12 +22,12 @@ public sealed class ReleasePublishNugetPipelineTests
 
         AssertBefore(
             pipeline,
-            "NpmPublishOwners must be set before publishing npm packages.",
+            "$parameterName must include required ESRP alias(es)",
             nuGetPublishIndex);
 
         AssertBefore(
             pipeline,
-            "NpmPublishApprovers must be set before publishing npm packages.",
+            "Assert-ContainsRequiredNpmAliases $normalizedApprovers $requiredNpmApprovers 'NpmPublishApprovers'",
             nuGetPublishIndex);
     }
 
@@ -91,12 +91,19 @@ public sealed class ReleasePublishNugetPipelineTests
     [Fact]
     public async Task UsesRequiredNpmEsrpOwnersAndApprover()
     {
+        var commonVariables = await ReadRepoFileAsync("eng/pipelines/common-variables.yml");
         var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
 
-        Assert.Contains("default: 'joperezr,ankj'", pipeline);
-        Assert.Contains("default: 'adamratzman'", pipeline);
-        Assert.Contains("$requiredNpmOwners = @('joperezr', 'ankj')", pipeline);
-        Assert.Contains("$requiredNpmApprovers = @('adamratzman')", pipeline);
+        Assert.Contains("- name: NPM_PUBLISH_REQUIRED_OWNERS", commonVariables);
+        Assert.Contains("value: joperezr,ankj", commonVariables);
+        Assert.Contains("- name: NPM_PUBLISH_REQUIRED_APPROVERS", commonVariables);
+        Assert.Contains("value: adamratzman", commonVariables);
+        Assert.Contains("displayName: 'npm ESRP owners (comma-separated Microsoft aliases or emails; leave blank for repo default)'", pipeline);
+        Assert.Contains("displayName: 'npm ESRP approvers (comma-separated Microsoft aliases or emails; leave blank for repo default)'", pipeline);
+        Assert.Contains("$requiredNpmOwnersValue = \"$(NPM_PUBLISH_REQUIRED_OWNERS)\"", pipeline);
+        Assert.Contains("$requiredNpmApproversValue = \"$(NPM_PUBLISH_REQUIRED_APPROVERS)\"", pipeline);
+        Assert.Contains("owners: '$(NpmPublishOwnersEffective)'", pipeline);
+        Assert.Contains("approvers: '$(NpmPublishApproversEffective)'", pipeline);
         Assert.Contains("NpmPublishOwners and NpmPublishApprovers must not contain the same alias(es)", pipeline);
     }
 

@@ -268,19 +268,7 @@ public class AspireJsLauncherTests
 
         var binaryName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "aspire.exe" : "aspire";
         var binaryPath = Path.Combine(ridBinDir, binaryName);
-        File.Copy(GetNodeExecutablePath(), binaryPath);
-
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            var chmod = Process.Start(new ProcessStartInfo
-            {
-                FileName = "chmod",
-                ArgumentList = { "+x", binaryPath },
-                RedirectStandardError = true,
-                UseShellExecute = false
-            })!;
-            chmod.WaitForExit();
-        }
+        CreateFakeNativeBinary(binaryPath);
 
         var probeScript = Path.Combine(rootPath, "probe-native.js");
         File.WriteAllText(probeScript, """
@@ -294,6 +282,35 @@ public class AspireJsLauncherTests
             """);
 
         return new FakeNpmLayout(launcherScript, cacheDir, probeScript, Path.Combine(ridPackageDir, "package.json"));
+    }
+
+    private static void CreateFakeNativeBinary(string binaryPath)
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            File.Copy(GetNodeExecutablePath(), binaryPath);
+            return;
+        }
+
+        // Keep the fake native binary as a small script on Unix. Some macOS CI
+        // Node builds abort when copied and executed from a different path/name,
+        // which obscures what this fixture actually needs to validate: launcher
+        // copy/cache behavior plus environment and argv forwarding.
+        File.WriteAllText(binaryPath, """
+            #!/bin/sh
+            exec node "$@"
+            """);
+
+        var result = RunProcess(new ProcessStartInfo
+        {
+            FileName = "chmod",
+            ArgumentList = { "+x", binaryPath },
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false
+        });
+
+        Assert.Equal(0, result.ExitCode);
     }
 
     private static ProcessResult RunLauncher(string launcherScript, string cacheDir, string[] args, string? requiredScript = null)

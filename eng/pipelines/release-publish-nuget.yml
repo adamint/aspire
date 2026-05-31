@@ -68,6 +68,11 @@ parameters:
     type: boolean
     default: false
 
+  - name: AllowNpmLatestDistTagMove
+    displayName: '[Advanced] Allow npm latest dist-tag to move to an older stable version'
+    type: boolean
+    default: false
+
   - name: SkipChannelPromotion
     displayName: '[Advanced] Skip Channel Promotion (re-run after success)'
     type: boolean
@@ -94,14 +99,14 @@ parameters:
     default: false
 
   - name: NpmPublishOwners
-    displayName: 'npm ESRP owners (comma-separated Microsoft aliases or emails)'
+    displayName: 'npm ESRP owners (comma-separated Microsoft aliases or emails; leave blank for repo default)'
     type: string
-    default: 'joperezr,ankj'
+    default: ''
 
   - name: NpmPublishApprovers
-    displayName: 'npm ESRP approvers (comma-separated Microsoft aliases or emails)'
+    displayName: 'npm ESRP approvers (comma-separated Microsoft aliases or emails; leave blank for repo default)'
     type: string
-    default: 'adamratzman'
+    default: ''
 
   - name: NpmRegistryPropagationDelayMinutes
     displayName: 'Minutes to wait between npm RID and pointer package submissions'
@@ -364,15 +369,15 @@ extends:
 
                 - download: aspire-build
                   displayName: 'Download npm validation summary from Source Build (win-x64)'
-                  artifact: npm-validation-summary-win-x64
+                  artifact: $(NPM_VALIDATION_SUMMARY_WIN_X64_ARTIFACT)
 
                 - download: aspire-build
                   displayName: 'Download npm validation summary from Source Build (linux-x64)'
-                  artifact: npm-validation-summary-linux-x64
+                  artifact: $(NPM_VALIDATION_SUMMARY_LINUX_X64_ARTIFACT)
 
                 - download: aspire-build
                   displayName: 'Download npm validation summary from Source Build (macOS)'
-                  artifact: npm-validation-summary-osx
+                  artifact: $(NPM_VALIDATION_SUMMARY_OSX_ARTIFACT)
 
               - ${{ if eq(parameters.SkipWinGetPublish, false) }}:
                 - download: aspire-build
@@ -570,9 +575,9 @@ extends:
                     # Copy each install-test validation summary into its own folder.
                     # Stage 2 re-validates every summary before submitting to ESRP/MicroBuild.
                     $validationSummaries = @(
-                      @{ Name = 'win-x64'; Artifact = 'npm-validation-summary-win-x64' },
-                      @{ Name = 'linux-x64'; Artifact = 'npm-validation-summary-linux-x64' },
-                      @{ Name = 'osx'; Artifact = 'npm-validation-summary-osx' }
+                      @{ Name = 'win-x64'; Artifact = '$(NPM_VALIDATION_SUMMARY_WIN_X64_ARTIFACT)' },
+                      @{ Name = 'linux-x64'; Artifact = '$(NPM_VALIDATION_SUMMARY_LINUX_X64_ARTIFACT)' },
+                      @{ Name = 'osx'; Artifact = '$(NPM_VALIDATION_SUMMARY_OSX_ARTIFACT)' }
                     )
 
                     foreach ($validationSummary in $validationSummaries) {
@@ -800,7 +805,7 @@ extends:
 
                     function Assert-ContainsRequiredNpmAliases(
                       [System.Collections.Generic.HashSet[string]] $actualAliases,
-                      [string[]] $requiredAliases,
+                      [System.Collections.Generic.HashSet[string]] $requiredAliases,
                       [string] $parameterName) {
                       $missing = @($requiredAliases | Where-Object { -not $actualAliases.Contains($_) })
                       if ($missing.Count -gt 0) {
@@ -811,19 +816,21 @@ extends:
 
                     $owners = "${{ parameters.NpmPublishOwners }}"
                     $approvers = "${{ parameters.NpmPublishApprovers }}"
-                    $requiredNpmOwners = @('joperezr', 'ankj')
-                    $requiredNpmApprovers = @('adamratzman')
+                    $requiredNpmOwnersValue = "$(NPM_PUBLISH_REQUIRED_OWNERS)"
+                    $requiredNpmApproversValue = "$(NPM_PUBLISH_REQUIRED_APPROVERS)"
 
                     if ([string]::IsNullOrWhiteSpace($owners)) {
-                      Write-Error "NpmPublishOwners must be set before publishing npm packages."
-                      exit 1
+                      $owners = $requiredNpmOwnersValue
+                      Write-Host "NpmPublishOwners not provided; using NPM_PUBLISH_REQUIRED_OWNERS."
                     }
 
                     if ([string]::IsNullOrWhiteSpace($approvers)) {
-                      Write-Error "NpmPublishApprovers must be set before publishing npm packages."
-                      exit 1
+                      $approvers = $requiredNpmApproversValue
+                      Write-Host "NpmPublishApprovers not provided; using NPM_PUBLISH_REQUIRED_APPROVERS."
                     }
 
+                    $requiredNpmOwners = ConvertTo-NpmReleaseAliasSet $requiredNpmOwnersValue 'NPM_PUBLISH_REQUIRED_OWNERS'
+                    $requiredNpmApprovers = ConvertTo-NpmReleaseAliasSet $requiredNpmApproversValue 'NPM_PUBLISH_REQUIRED_APPROVERS'
                     $normalizedOwners = ConvertTo-NpmReleaseAliasSet $owners 'NpmPublishOwners'
                     $normalizedApprovers = ConvertTo-NpmReleaseAliasSet $approvers 'NpmPublishApprovers'
 
@@ -846,7 +853,12 @@ extends:
                       exit 1
                     }
 
-                    Write-Host "npm ESRP owners and approvers were provided and include the required release contacts."
+                    $effectiveOwners = ($normalizedOwners | Sort-Object) -join ','
+                    $effectiveApprovers = ($normalizedApprovers | Sort-Object) -join ','
+
+                    Write-Host "##vso[task.setvariable variable=NpmPublishOwnersEffective]$effectiveOwners"
+                    Write-Host "##vso[task.setvariable variable=NpmPublishApproversEffective]$effectiveApprovers"
+                    Write-Host "npm ESRP owners and approvers were resolved and include the required release contacts."
                   }
 
                   Write-Host "==================================="
@@ -1354,6 +1366,167 @@ extends:
                   displayName: 'Dry Run - Validate npm Registry Reachability'
 
               - ${{ if and(eq(parameters.DryRun, false), eq(parameters.SkipNpmPublish, false), eq(parameters.IsPrerelease, false)) }}:
+                - pwsh: |
+                    $ErrorActionPreference = 'Stop'
+
+                    function Get-NpmTarballPackageIdentity([System.IO.FileInfo] $tarball) {
+                      $metadataRoot = Join-Path "$(Agent.TempDirectory)" "npm-already-published-$([Guid]::NewGuid().ToString('N'))"
+                      New-Item -ItemType Directory -Path $metadataRoot -Force | Out-Null
+                      try {
+                        tar -xzf $tarball.FullName -C $metadataRoot
+                        if ($LASTEXITCODE -ne 0) {
+                          Write-Error "Failed to extract npm package '$($tarball.FullName)'."
+                          exit 1
+                        }
+
+                        $packageJsonPath = Join-Path $metadataRoot 'package/package.json'
+                        if (!(Test-Path -LiteralPath $packageJsonPath)) {
+                          Write-Error "npm package '$($tarball.Name)' is missing package/package.json."
+                          exit 1
+                        }
+
+                        $packageJson = Get-Content -Raw -LiteralPath $packageJsonPath | ConvertFrom-Json
+                        $packageName = "$($packageJson.name)"
+                        $packageVersion = "$($packageJson.version)"
+                        if ([string]::IsNullOrWhiteSpace($packageName) -or [string]::IsNullOrWhiteSpace($packageVersion)) {
+                          Write-Error "npm package '$($tarball.Name)' must include name and version in package.json."
+                          exit 1
+                        }
+
+                        [PSCustomObject]@{
+                          Name = $packageName
+                          Version = $packageVersion
+                          Spec = "$packageName@$packageVersion"
+                          Tarball = $tarball.FullName
+                        }
+                      }
+                      finally {
+                        if (Test-Path -LiteralPath $metadataRoot) {
+                          Remove-Item -LiteralPath $metadataRoot -Recurse -Force
+                        }
+                      }
+                    }
+
+                    $scheduledPackageGroups = [System.Collections.Generic.List[object]]::new()
+
+                    if ("${{ parameters.SkipNpmRidPublish }}" -ne "true") {
+                      $scheduledPackageGroups.Add([PSCustomObject]@{
+                        Name = 'RID'
+                        Path = "$(Pipeline.Workspace)/npm/rid-packages"
+                      }) | Out-Null
+                    } else {
+                      Write-Host "Skipping already-published preflight for RID packages because SkipNpmRidPublish=true."
+                    }
+
+                    if ("${{ parameters.SkipNpmPointerPublish }}" -ne "true") {
+                      $scheduledPackageGroups.Add([PSCustomObject]@{
+                        Name = 'pointer'
+                        Path = "$(Pipeline.Workspace)/npm/pointer-package"
+                      }) | Out-Null
+                    } else {
+                      Write-Host "Skipping already-published preflight for pointer package because SkipNpmPointerPublish=true."
+                    }
+
+                    if ($scheduledPackageGroups.Count -eq 0) {
+                      Write-Host "No npm packages are scheduled for publishing; already-published preflight has nothing to check."
+                      exit 0
+                    }
+
+                    $scheduledPackages = [System.Collections.Generic.List[object]]::new()
+                    foreach ($group in $scheduledPackageGroups) {
+                      $tarballs = @(Get-ChildItem -Path $group.Path -Filter "*.tgz" -File)
+                      if ($tarballs.Count -eq 0) {
+                        Write-Error "No $($group.Name) npm tarballs were found under '$($group.Path)' for already-published preflight."
+                        exit 1
+                      }
+
+                      foreach ($tarball in $tarballs) {
+                        $scheduledPackages.Add((Get-NpmTarballPackageIdentity $tarball)) | Out-Null
+                      }
+                    }
+
+                    Write-Host "Checking $($scheduledPackages.Count) scheduled npm package(s) for version collisions on https://registry.npmjs.org/."
+                    $semverRegex = '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$'
+                    $stableSemverRegex = '^\d+\.\d+\.\d+$'
+
+                    if ("${{ parameters.AllowNpmLatestDistTagMove }}" -ne "true" -and "${{ parameters.SkipNpmPointerPublish }}" -ne "true") {
+                      $pointerPackages = @($scheduledPackages | Where-Object { $_.Name -eq '@microsoft/aspire-cli' })
+                      if ($pointerPackages.Count -ne 1) {
+                        Write-Error "Expected exactly one scheduled @microsoft/aspire-cli pointer package while checking the npm latest dist-tag, found $($pointerPackages.Count)."
+                        exit 1
+                      }
+
+                      $pointerPackage = $pointerPackages[0]
+                      if ($pointerPackage.Version -notmatch $stableSemverRegex) {
+                        Write-Error "Stable npm latest dist-tag validation expected a stable SemVer version, but scheduled pointer package version is '$($pointerPackage.Version)'."
+                        exit 1
+                      }
+
+                      $latestOutput = & npm view @microsoft/aspire-cli@latest version --registry=https://registry.npmjs.org/ --loglevel=warn 2>&1
+                      $latestExitCode = $LASTEXITCODE
+                      $latestText = ($latestOutput | ForEach-Object { "$_" }) -join "`n"
+                      if ($latestExitCode -eq 0) {
+                        $latestVersion = $latestOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match $stableSemverRegex } | Select-Object -First 1
+                        if ([string]::IsNullOrWhiteSpace($latestVersion)) {
+                          Write-Error "Unable to parse the current @microsoft/aspire-cli@latest version as stable SemVer. Output: $latestText"
+                          exit 1
+                        }
+
+                        if ([version]$pointerPackage.Version -lt [version]$latestVersion) {
+                          Write-Error "Publishing $($pointerPackage.Spec) would move the npm latest dist-tag backward from $latestVersion. Set SkipNpmPublish=true for older servicing releases, or set AllowNpmLatestDistTagMove=true only after release-owner approval."
+                          exit 1
+                        }
+
+                        Write-Host "Scheduled pointer package $($pointerPackage.Version) will not move npm latest backward from $latestVersion."
+                      } elseif ($latestText -match '(?i)(\bE404\b|404 Not Found)') {
+                        Write-Host "@microsoft/aspire-cli@latest is not published yet; latest dist-tag guard has nothing to compare."
+                      } else {
+                        Write-Error "Unable to query @microsoft/aspire-cli@latest before publishing. Output: $latestText"
+                        exit 1
+                      }
+                    } elseif ("${{ parameters.AllowNpmLatestDistTagMove }}" -eq "true") {
+                      Write-Warning "AllowNpmLatestDistTagMove=true; skipping npm latest dist-tag downgrade guard."
+                    }
+
+                    $collisions = [System.Collections.Generic.List[string]]::new()
+                    $verificationFailures = [System.Collections.Generic.List[string]]::new()
+
+                    foreach ($package in $scheduledPackages) {
+                      $packageSpec = $package.Spec
+                      Write-Host "Checking npm registry for $packageSpec"
+                      $viewOutput = & npm view $packageSpec version --registry=https://registry.npmjs.org/ --loglevel=warn 2>&1
+                      $viewExitCode = $LASTEXITCODE
+                      $viewText = ($viewOutput | ForEach-Object { "$_" }) -join "`n"
+
+                      if ($viewExitCode -eq 0) {
+                        $resolvedVersion = $viewOutput | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match $semverRegex } | Select-Object -First 1
+                        if ($resolvedVersion -eq $package.Version) {
+                          $collisions.Add($packageSpec) | Out-Null
+                        } elseif ([string]::IsNullOrWhiteSpace($resolvedVersion)) {
+                          $verificationFailures.Add("npm view $packageSpec succeeded but did not return a semver version. Output: $viewText") | Out-Null
+                        } else {
+                          $verificationFailures.Add("npm view $packageSpec returned unexpected version '$resolvedVersion'. Output: $viewText") | Out-Null
+                        }
+                      } elseif ($viewText -match '(?i)(\bE404\b|404 Not Found)') {
+                        Write-Host "  not published yet"
+                      } else {
+                        $verificationFailures.Add("npm view $packageSpec failed with exit code $viewExitCode. Output: $viewText") | Out-Null
+                      }
+                    }
+
+                    if ($verificationFailures.Count -gt 0) {
+                      Write-Error ("Unable to verify whether every scheduled npm package is unpublished. " + ($verificationFailures -join ' | '))
+                      exit 1
+                    }
+
+                    if ($collisions.Count -gt 0) {
+                      Write-Error ("The following scheduled npm package version(s) already exists on npm and cannot be published again: " + ($collisions -join ', ') + ". Set SkipNpmRidPublish=true only when all RID packages for this version are already published and should be skipped. Set SkipNpmPointerPublish=true only when the pointer package for this version is already published and should be skipped.")
+                      exit 1
+                    }
+
+                    Write-Host "No scheduled npm package versions already exist on npm."
+                  displayName: 'Verify npm Packages Are Not Already Published'
+
                 - ${{ if eq(parameters.SkipNpmRidPublish, false) }}:
                   - template: MicroBuild.Publish.yml@MicroBuildTemplate
                     parameters:
@@ -1362,8 +1535,8 @@ extends:
                       contentSource: 'Folder'
                       folderLocation: '$(Pipeline.Workspace)\npm\rid-packages'
                       waitForReleaseCompletion: true
-                      owners: '${{ parameters.NpmPublishOwners }}'
-                      approvers: '${{ parameters.NpmPublishApprovers }}'
+                      owners: '$(NpmPublishOwnersEffective)'
+                      approvers: '$(NpmPublishApproversEffective)'
 
                   - powershell: |
                       $delayMinutes = [int]'${{ parameters.NpmRegistryPropagationDelayMinutes }}'
@@ -1532,8 +1705,8 @@ extends:
                       contentSource: 'Folder'
                       folderLocation: '$(Pipeline.Workspace)\npm\pointer-package'
                       waitForReleaseCompletion: true
-                      owners: '${{ parameters.NpmPublishOwners }}'
-                      approvers: '${{ parameters.NpmPublishApprovers }}'
+                      owners: '$(NpmPublishOwnersEffective)'
+                      approvers: '$(NpmPublishApproversEffective)'
 
                 - ${{ if eq(parameters.SkipNpmPointerPublish, true) }}:
                   - powershell: |
