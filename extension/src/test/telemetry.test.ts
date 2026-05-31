@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { __resetCommonPropertiesForTests, __setReporterForTests, isCommandCancellation, sendTelemetryEvent, setCommandInvocationListener, setCommonTelemetryProperties, withCommandTelemetry } from '../utils/telemetry';
+import { __resetCommonPropertiesForTests, __resetTelemetryEventPrefixForTests, __setReporterForTests, __setTelemetryEventPrefixForTests, isCommandCancellation, sendTelemetryEvent, setCommandInvocationListener, setCommonTelemetryProperties, withCommandTelemetry } from '../utils/telemetry';
 
 interface RecordedEvent {
     name: string;
@@ -44,6 +44,7 @@ suite('telemetry utilities', () => {
     teardown(() => {
         setCommandInvocationListener(undefined);
         restore();
+        __resetTelemetryEventPrefixForTests();
         __resetCommonPropertiesForTests();
     });
 
@@ -65,6 +66,18 @@ suite('telemetry utilities', () => {
         setCommonTelemetryProperties({ apphost_languages: undefined });
         sendTelemetryEvent('command/invoked', { command: 'cmd.y' });
         assert.deepStrictEqual(fake.events[0].properties, { apphost_present: 'keep', command: 'cmd.y' });
+    });
+
+    test('sendTelemetryEvent prefixes reporter event names when initialized by VS Code', () => {
+        const restorePrefix = __setTelemetryEventPrefixForTests('microsoft-aspire.aspire-vscode');
+        try {
+            sendTelemetryEvent('command/invoked', { command: 'cmd.prefixed' });
+        }
+        finally {
+            restorePrefix();
+        }
+
+        assert.strictEqual(fake.events[0].name, 'microsoft-aspire.aspire-vscode/command/invoked');
     });
 
     test('withCommandTelemetry emits success outcome', async () => {

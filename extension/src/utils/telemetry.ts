@@ -24,6 +24,7 @@ export type {
 // the command wrapper, the engagement reporter, the tree view, the debug
 // session, and the dashboard telemetry passthrough server.
 let reporter: TelemetryReporter | undefined;
+let telemetryEventPrefix: string | undefined;
 
 // Common properties merged into every event we emit. The TelemetryReporter
 // already injects extension version, OS, machine id, etc., so this map is
@@ -47,10 +48,11 @@ export function initializeTelemetry(context: vscode.ExtensionContext): void {
     if (reporter) {
         return;
     }
-    // Get the AI key from package.json.
-    const extension = vscode.extensions.getExtension(context.extension.id);
-    const aiKey = extension?.packageJSON.aiKey;
+    // Use the ExtensionContext-provided package metadata so activation and
+    // telemetry initialization read from the same extension manifest.
+    const aiKey = context.extension.packageJSON.aiKey;
     if (aiKey) {
+        telemetryEventPrefix = context.extension.id;
         reporter = new TelemetryReporter(aiKey);
         context.subscriptions.push({ dispose: () => reporter?.dispose() });
     }
@@ -102,6 +104,10 @@ function mergeProperties<E extends KnownTelemetryEventName>(properties?: EventPr
     return { ...commonProperties, ...((properties ?? {}) as { [key: string]: string }) };
 }
 
+function formatEventName(eventName: KnownTelemetryEventName): string {
+    return telemetryEventPrefix ? `${telemetryEventPrefix}/${eventName}` : eventName;
+}
+
 /**
  * Emit a telemetry event. The `eventName` is constrained to entries in
  * {@link KnownTelemetryEventName} (see telemetryRegistry.ts) and the
@@ -114,7 +120,7 @@ export function sendTelemetryEvent<E extends KnownTelemetryEventName>(
     properties?: EventProperties<E>,
     measurements?: EventMeasurements<E>
 ): void {
-    reporter?.sendTelemetryEvent(eventName, mergeProperties(properties), measurements as { [key: string]: number } | undefined);
+    reporter?.sendTelemetryEvent(formatEventName(eventName), mergeProperties(properties), measurements as { [key: string]: number } | undefined);
 }
 
 /**
@@ -127,7 +133,7 @@ export function sendTelemetryErrorEvent<E extends KnownTelemetryEventName>(
     properties?: EventProperties<E>,
     measurements?: EventMeasurements<E>
 ): void {
-    reporter?.sendTelemetryErrorEvent(eventName, mergeProperties(properties), measurements as { [key: string]: number } | undefined);
+    reporter?.sendTelemetryErrorEvent(formatEventName(eventName), mergeProperties(properties), measurements as { [key: string]: number } | undefined);
 }
 
 /**
@@ -253,6 +259,18 @@ export function __setReporterForTests(fake: TelemetryReporter | undefined): () =
     const previous = reporter;
     reporter = fake;
     return () => { reporter = previous; };
+}
+
+/** Test seam: override the event prefix applied at the reporter boundary. */
+export function __setTelemetryEventPrefixForTests(prefix: string | undefined): () => void {
+    const previous = telemetryEventPrefix;
+    telemetryEventPrefix = prefix;
+    return () => { telemetryEventPrefix = previous; };
+}
+
+/** Test seam: clear the event prefix so tests don't bleed into each other. */
+export function __resetTelemetryEventPrefixForTests(): void {
+    telemetryEventPrefix = undefined;
 }
 
 /** Test seam: clear common properties so tests don't bleed into each other. */

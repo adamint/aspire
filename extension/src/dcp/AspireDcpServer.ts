@@ -172,10 +172,9 @@ export default class AspireDcpServer {
 
             // `validateBearerToken` only returns 'missing' when the Authorization
             // header is absent; the requireHeaders path catches that case inline
-            // (with the combined message) before calling validateBearerToken, so
-            // this branch is reached only from requireBearerOnly (/telemetry/*),
-            // where the DCP instance-id header is intentionally NOT required.
-            // Use an Authorization-only message so that client error is accurate.
+            // (with the combined message) before calling validateBearerToken.
+            // Keep this helper Authorization-only for DCP endpoints that already
+            // performed their own DCP instance-id validation.
             function respondToBearerFailure(res: Response, kind: 'missing' | 'invalid_scheme' | 'invalid_length' | 'invalid_token'): void {
                 switch (kind) {
                     case 'missing':
@@ -210,18 +209,47 @@ export default class AspireDcpServer {
                 next();
             }
 
-            // The dashboard's telemetry pipeline calls /telemetry/* with only
-            // the bearer token (Authorization header) — it does not carry a
-            // DCP instance id because the dashboard does not participate in
-            // run_session orchestration. This middleware enforces the same
-            // bearer token as requireHeaders but skips the DCP id check.
-            // See `Aspire.Dashboard/Model/DebugSessionHelpers.cs` (CreateHttpClient).
-            function requireBearerOnly(req: Request, res: Response, next: NextFunction): void {
-                const result = validateBearerToken(req.header('Authorization'));
-                if (result.kind !== 'ok') {
-                    respondToBearerFailure(res, result.kind);
+            function respondWithTelemetryAuthError(res: Response, statusCode: number, code: string, message: string): void {
+                res.status(statusCode).json({ error: { code, message, details: [] } }).end();
+            }
+
+            function respondToTelemetryBearerFailure(res: Response, kind: 'missing' | 'invalid_scheme' | 'invalid_length' | 'invalid_token'): void {
+                switch (kind) {
+                    case 'missing':
+                        respondWithTelemetryAuthError(res, 401, 'MissingHeaders', authorizationAndDcpHeadersRequired);
+                        return;
+                    case 'invalid_scheme':
+                        respondWithTelemetryAuthError(res, 401, 'InvalidAuthHeader', authorizationHeaderMustStartWithBearer);
+                        return;
+                    case 'invalid_length':
+                        respondWithTelemetryAuthError(res, 401, 'InvalidToken', invalidTokenLength);
+                        return;
+                    case 'invalid_token':
+                        respondWithTelemetryAuthError(res, 401, 'InvalidToken', invalidOrMissingToken);
+                        return;
+                }
+            }
+
+            function requireTelemetryHeaders(req: Request, res: Response, next: NextFunction): void {
+                const auth = req.header('Authorization');
+                const dcpId = req.header('microsoft-developer-dcp-instance-id');
+                if (!auth || !dcpId) {
+                    respondWithTelemetryAuthError(res, 401, 'MissingHeaders', authorizationAndDcpHeadersRequired);
                     return;
                 }
+
+                const result = validateBearerToken(auth);
+                if (result.kind !== 'ok') {
+                    respondToTelemetryBearerFailure(res, result.kind);
+                    return;
+                }
+
+                const debugSessionId = getDcpIdPrefix(dcpId);
+                if (!debugSessionId || !getDebugSession(debugSessionId)) {
+                    respondWithTelemetryAuthError(res, 401, 'InvalidDcpInstanceId', 'Missing valid DCP prefix corresponding to an Aspire debug session.');
+                    return;
+                }
+
                 next();
             }
 
@@ -229,7 +257,7 @@ export default class AspireDcpServer {
             // the /telemetry/enabled handshake. Replaces the old hardcoded
             // is_enabled:false response so the dashboard's telemetry pipeline
             // can finally talk to the extension's reporter.
-            dashboardTelemetry.register(app, requireBearerOnly);
+            dashboardTelemetry.register(app, requireTelemetryHeaders);
 
             // Per the DCP IDE-execution spec, GET /info requires both the
             // bearer token and the DCP instance id. See
