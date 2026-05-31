@@ -33,9 +33,7 @@ function loadRidPackageNames() {
   }
 }
 
-function detectRid() {
-  const platform = process.platform;
-  const arch = process.arch;
+function detectRid(platform = process.platform, arch = process.arch, musl = null) {
 
   if (platform === 'win32' && (arch === 'x64' || arch === 'arm64')) {
     return `win-${arch}`;
@@ -51,7 +49,9 @@ function detectRid() {
     // for all supported arches so unsupported combinations fall through to the
     // friendly "Unsupported platform" error below, instead of silently
     // resolving the glibc-linked RID package.
-    const musl = isMusl();
+    if (musl === null) {
+      musl = isMusl();
+    }
     if (arch === 'x64' && musl) {
       return 'linux-musl-x64';
     }
@@ -117,7 +117,7 @@ function isMusl() {
   return false;
 }
 
-function resolveNativeBinary(rid) {
+function resolveNativeBinary(rid, expectedVersion) {
   const packageName = ridPackageNames.get(rid);
   if (!packageName) {
     throw new Error(`No Aspire CLI npm package is available for RID '${rid}'.`);
@@ -127,10 +127,35 @@ function resolveNativeBinary(rid) {
   try {
     packageJsonPath = require.resolve(`${packageName}/package.json`);
   } catch (error) {
+    if (error && error.code === 'ERR_INVALID_PACKAGE_CONFIG') {
+      throw new Error(
+        `Aspire CLI installation is corrupted: native package '${packageName}' package.json is not valid JSON. ` +
+        'Reinstall @microsoft/aspire-cli.',
+        { cause: error });
+    }
+
     throw new Error(
       `The Aspire CLI native package '${packageName}' was not installed. ` +
       'Reinstall @microsoft/aspire-cli with optional dependencies enabled.',
       { cause: error });
+  }
+
+  // Verify the RID package version matches the pointer package version to catch
+  // partial or mismatched installs before caching or spawning the binary.
+  let ridPackageJson;
+  try {
+    ridPackageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+  } catch (error) {
+    throw new Error(
+      `Aspire CLI installation is corrupted: native package '${packageName}' package.json '${packageJsonPath}' is not valid JSON. ` +
+      'Reinstall @microsoft/aspire-cli.',
+      { cause: error });
+  }
+  if (ridPackageJson.version !== expectedVersion) {
+    throw new Error(
+      `The Aspire CLI native package '${packageName}' version ${ridPackageJson.version} ` +
+      `does not match the pointer package version ${expectedVersion}. ` +
+      'Reinstall @microsoft/aspire-cli.');
   }
 
   const binaryName = process.platform === 'win32' ? 'aspire.exe' : 'aspire';
@@ -165,31 +190,41 @@ function ensureCachedBinary(sourcePath, binaryName, version, rid) {
   // Copy through a temp file and atomically rename it over the previous cache
   // entry so concurrent first runs never observe a missing or partial executable.
   const tempPath = path.join(targetDirectory, `${binaryName}.${process.pid}.${Date.now()}.tmp`);
-  fs.copyFileSync(sourcePath, tempPath);
 
-  if (process.platform !== 'win32') {
-    fs.chmodSync(tempPath, 0o755);
-  }
-
-  // Node's rename uses replace-existing semantics on POSIX. On Windows, the
-  // rename fails with EBUSY/EPERM if the cached executable is currently
-  // running (e.g., another concurrent first-run already populated the cache
-  // and is executing it). When that happens, check whether the existing
-  // target is already a valid copy of the source - if it is, the other
-  // process won the race and our tmp can be discarded without failing the
-  // launcher. Any other error is unexpected and must propagate.
+  // Wrap copy and chmod in try-finally to ensure temp file cleanup even when
+  // copyFileSync or chmodSync fails. Without this, an I/O error or permission
+  // failure during chmod would leave the .tmp file behind.
   try {
-    fs.renameSync(tempPath, targetPath);
-  } catch (error) {
-    try {
-      if (!needsCopy(sourcePath, targetPath)) {
-        fs.rmSync(tempPath, { force: true });
-        return targetPath;
-      }
-    } catch {
-      // Fall through and rethrow the original rename error below.
+    fs.copyFileSync(sourcePath, tempPath);
+
+    if (process.platform !== 'win32') {
+      fs.chmodSync(tempPath, 0o755);
     }
 
+    // Node's rename uses replace-existing semantics on POSIX. On Windows, the
+    // rename fails with EBUSY/EPERM if the cached executable is currently
+    // running (e.g., another concurrent first-run already populated the cache
+    // and is executing it). When that happens, check whether the existing
+    // target is already a valid copy of the source - if it is, the other
+    // process won the race and our tmp can be discarded without failing the
+    // launcher. Any other error is unexpected and must propagate.
+    try {
+      fs.renameSync(tempPath, targetPath);
+    } catch (error) {
+      try {
+        if (!needsCopy(sourcePath, targetPath)) {
+          fs.rmSync(tempPath, { force: true });
+          return targetPath;
+        }
+      } catch {
+        // Fall through and rethrow the original rename error below.
+      }
+
+      fs.rmSync(tempPath, { force: true });
+      throw error;
+    }
+  } catch (error) {
+    // Clean up temp file if copy or chmod failed before rename was attempted
     fs.rmSync(tempPath, { force: true });
     throw error;
   }
@@ -247,7 +282,7 @@ function main() {
   }
   const packageJson = require(path.join(__dirname, '..', 'package.json'));
   const rid = detectRid();
-  const nativeBinary = resolveNativeBinary(rid);
+  const nativeBinary = resolveNativeBinary(rid, packageJson.version);
   const executablePath = ensureCachedBinary(nativeBinary.binaryPath, nativeBinary.binaryName, packageJson.version, rid);
 
   // Forward terminating signals to the child so programmatic `kill <wrapper>`
@@ -322,9 +357,17 @@ function main() {
   });
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error.message);
-  process.exit(1);
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
+  }
 }
+
+module.exports = {
+  __testing: {
+    detectRid
+  }
+};
