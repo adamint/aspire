@@ -13,7 +13,6 @@ const {
     formatAssetEventVersion,
     MAX_DIAGNOSTIC_STRING_LENGTH,
     MAX_BUNDLE_CHARS,
-    MAX_BUNDLE_ENTRIES,
     MAX_DASHBOARD_KEY_LENGTH,
     MAX_CORRELATIONS,
     MAX_FLAG_PREFIXES,
@@ -49,39 +48,42 @@ suite('DashboardTelemetryPassthrough.bundleDashboardData', () => {
         // StructuredLogs.razor.cs. The contract is "tag is Metric, payload is a
         // string" — the bundler must route them to the measurements bundle.
         const result = bundleDashboardData({
-            filter_count: { value: '3', propertyType: PropertyType.Metric },
-            instrument_count: { value: '-1', propertyType: PropertyType.Metric },
+            'Aspire.Dashboard.StructuredLogs.FilterCount': { value: '3', propertyType: PropertyType.Metric },
+            'Aspire.Dashboard.Metrics.InstrumentsCount': { value: '-1', propertyType: PropertyType.Metric },
         });
         assert.strictEqual(result.properties, undefined);
         assert.deepStrictEqual(JSON.parse(result.measurements ?? ''), {
-            v: { filter_count: 3, instrument_count: -1 },
+            v: {
+                'Aspire.Dashboard.StructuredLogs.FilterCount': 3,
+                'Aspire.Dashboard.Metrics.InstrumentsCount': -1,
+            },
         });
     });
 
     test('bundles raw numeric Metric values into dashboard_measurements', () => {
         const result = bundleDashboardData({
-            count: { value: 42, propertyType: PropertyType.Metric },
+            'Aspire.Dashboard.StructuredLogs.FilterCount': { value: 42, propertyType: PropertyType.Metric },
         });
-        assert.deepStrictEqual(JSON.parse(result.measurements ?? ''), { v: { count: 42 } });
+        assert.deepStrictEqual(JSON.parse(result.measurements ?? ''), { v: { 'Aspire.Dashboard.StructuredLogs.FilterCount': 42 } });
         assert.strictEqual(result.properties, undefined);
     });
 
-    test('Metric value that cannot be coerced to a number falls through to dashboard_properties', () => {
+    test('Metric value that cannot be coerced to a number is dropped', () => {
         const result = bundleDashboardData({
-            invalid: { value: 'not-a-number', propertyType: PropertyType.Metric },
+            'Aspire.Dashboard.StructuredLogs.FilterCount': { value: 'not-a-number', propertyType: PropertyType.Metric },
         });
         assert.strictEqual(result.measurements, undefined);
-        assert.deepStrictEqual(JSON.parse(result.properties ?? ''), { v: { invalid: 'not-a-number' } });
+        assert.strictEqual(result.properties, undefined);
     });
 
     test('non-Metric numeric values are NOT promoted to measurements', () => {
         // Pre-fix behavior promoted any number to a measurement, which mis-bucketed
         // basic numeric dimensions; this test pins the contract.
         const result = bundleDashboardData({
-            answer: { value: 42, propertyType: PropertyType.Basic },
+            'Aspire.Dashboard.AIAssistant.ChatMessageCount': { value: 42, propertyType: PropertyType.Basic },
         });
         assert.strictEqual(result.measurements, undefined);
-        assert.deepStrictEqual(JSON.parse(result.properties ?? ''), { v: { answer: '42' } });
+        assert.deepStrictEqual(JSON.parse(result.properties ?? ''), { v: { 'Aspire.Dashboard.AIAssistant.ChatMessageCount': '42' } });
     });
 
     test('Pii-tagged properties are dropped end-to-end', () => {
@@ -90,24 +92,24 @@ suite('DashboardTelemetryPassthrough.bundleDashboardData', () => {
         // it into either bundle.
         const result = bundleDashboardData({
             email: { value: 'user@example.com', propertyType: PropertyType.Pii },
-            count: { value: 1, propertyType: PropertyType.Metric },
+            'Aspire.Dashboard.StructuredLogs.FilterCount': { value: 1, propertyType: PropertyType.Metric },
         });
         const props = result.properties ? JSON.parse(result.properties) : { v: {} };
         const measurements = result.measurements ? JSON.parse(result.measurements) : { v: {} };
         assert.strictEqual(props.v.email, undefined);
-        assert.deepStrictEqual(measurements, { v: { count: 1 } });
+        assert.deepStrictEqual(measurements, { v: { 'Aspire.Dashboard.StructuredLogs.FilterCount': 1 } });
     });
 
-    test('stringifies booleans and complex objects inside dashboard_properties', () => {
+    test('stringifies known booleans and string arrays inside dashboard_properties', () => {
         const result = bundleDashboardData({
-            enabled: { value: true, propertyType: PropertyType.Basic },
-            disabled: { value: false, propertyType: PropertyType.Basic },
-            settings: { value: { a: 1, b: 'two' }, propertyType: PropertyType.Basic },
+            'Aspire.Dashboard.ConsoleLogs.ShowTimestamp': { value: true, propertyType: PropertyType.Basic },
+            'Aspire.Dashboard.AIAssistant.Enabled': { value: false, propertyType: PropertyType.Basic },
+            'Aspire.Dashboard.Resource.Types': { value: ['project', 'container'], propertyType: PropertyType.Basic },
         });
         const envelope = JSON.parse(result.properties ?? '');
-        assert.strictEqual(envelope.v.enabled, 'true');
-        assert.strictEqual(envelope.v.disabled, 'false');
-        assert.strictEqual(envelope.v.settings, '{"a":1,"b":"two"}');
+        assert.strictEqual(envelope.v['Aspire.Dashboard.ConsoleLogs.ShowTimestamp'], 'true');
+        assert.strictEqual(envelope.v['Aspire.Dashboard.AIAssistant.Enabled'], 'false');
+        assert.strictEqual(envelope.v['Aspire.Dashboard.Resource.Types'], '["project","container"]');
         assert.strictEqual(envelope.t, undefined);
     });
 
@@ -115,9 +117,9 @@ suite('DashboardTelemetryPassthrough.bundleDashboardData', () => {
         const result = bundleDashboardData({
             a: { value: null, propertyType: PropertyType.Basic },
             b: { value: undefined, propertyType: PropertyType.Basic },
-            c: { value: 'present', propertyType: PropertyType.Basic },
+            'Aspire.Dashboard.Version': { value: 'present', propertyType: PropertyType.Basic },
         });
-        assert.deepStrictEqual(JSON.parse(result.properties ?? ''), { v: { c: 'present' } });
+        assert.deepStrictEqual(JSON.parse(result.properties ?? ''), { v: { 'Aspire.Dashboard.Version': 'present' } });
         assert.strictEqual(result.measurements, undefined);
     });
 
@@ -134,19 +136,26 @@ suite('DashboardTelemetryPassthrough.bundleDashboardData', () => {
         assert.deepStrictEqual(result, {});
     });
 
-    test('truncates by entry count and sets the t flag on the envelope', () => {
-        const tooMany: { [key: string]: { value: string; propertyType: 1 } } = {};
-        for (let i = 0; i < MAX_BUNDLE_ENTRIES + 5; i++) {
-            tooMany[`k${i}`] = { value: `v${i}`, propertyType: PropertyType.Basic };
-        }
-        const result = bundleDashboardData(tooMany);
+    test('drops unknown Basic/UserSetting properties', () => {
+        const result = bundleDashboardData({
+            secret: { value: 'connection-string=secret', propertyType: PropertyType.Basic },
+            customSetting: { value: 'private-path', propertyType: PropertyType.UserSetting },
+            'Aspire.Dashboard.Version': { value: '10.0.0', propertyType: PropertyType.Basic },
+        });
         const envelope = JSON.parse(result.properties ?? '');
-        assert.strictEqual(envelope.t, true);
-        // We keep the first MAX_BUNDLE_ENTRIES entries (insertion order).
-        assert.strictEqual(Object.keys(envelope.v).length, MAX_BUNDLE_ENTRIES);
-        assert.strictEqual(envelope.v.k0, 'v0');
-        assert.strictEqual(envelope.v[`k${MAX_BUNDLE_ENTRIES - 1}`], `v${MAX_BUNDLE_ENTRIES - 1}`);
-        assert.strictEqual(envelope.v[`k${MAX_BUNDLE_ENTRIES}`], undefined);
+        assert.strictEqual(envelope.v.secret, undefined);
+        assert.strictEqual(envelope.v.customSetting, undefined);
+        assert.strictEqual(envelope.v['Aspire.Dashboard.Version'], '10.0.0');
+    });
+
+    test('drops unknown Metric properties before key names can leak', () => {
+        const result = bundleDashboardData({
+            '/Users/alice/repo/secret': { value: '1', propertyType: PropertyType.Metric },
+            'Aspire.Dashboard.StructuredLogs.FilterCount': { value: '3', propertyType: PropertyType.Metric },
+        });
+        const envelope = JSON.parse(result.measurements ?? '');
+        assert.strictEqual(envelope.v['/Users/alice/repo/secret'], undefined);
+        assert.strictEqual(envelope.v['Aspire.Dashboard.StructuredLogs.FilterCount'], 3);
     });
 
     test('per-entry truncation caps a single huge value before it reaches the bundle', () => {
@@ -157,20 +166,20 @@ suite('DashboardTelemetryPassthrough.bundleDashboardData', () => {
         // to ~1KB + the truncation marker and lands in the bundle normally.
         const huge = 'x'.repeat(MAX_BUNDLE_CHARS * 2);
         const result = bundleDashboardData({
-            small: { value: 'ok', propertyType: PropertyType.Basic },
-            big: { value: huge, propertyType: PropertyType.Basic },
+            'Aspire.Dashboard.Version': { value: 'ok', propertyType: PropertyType.Basic },
+            'Aspire.Dashboard.BuildId': { value: huge, propertyType: PropertyType.Basic },
         });
         const blob = result.properties ?? '';
         assert.ok(blob.length <= MAX_BUNDLE_CHARS, `expected blob ≤ ${MAX_BUNDLE_CHARS} chars, got ${blob.length}`);
         const envelope = JSON.parse(blob);
         // No bundle-level truncation: both entries are present and `t` is unset.
         assert.strictEqual(envelope.t, undefined);
-        assert.strictEqual(envelope.v.small, 'ok');
-        assert.ok(typeof envelope.v.big === 'string', 'big value should be present in bundle');
+        assert.strictEqual(envelope.v['Aspire.Dashboard.Version'], 'ok');
+        assert.ok(typeof envelope.v['Aspire.Dashboard.BuildId'] === 'string', 'big value should be present in bundle');
         // But the value was truncated per-entry — it has the per-entry
         // truncation marker appended.
-        assert.ok((envelope.v.big as string).endsWith('...[truncated]'),
-            `expected per-entry truncation marker on big value, got ${(envelope.v.big as string).slice(-30)}`);
+        assert.ok((envelope.v['Aspire.Dashboard.BuildId'] as string).endsWith('...[truncated]'),
+            `expected per-entry truncation marker on big value, got ${(envelope.v['Aspire.Dashboard.BuildId'] as string).slice(-30)}`);
     });
 
     test('bundle char-cap truncation kicks in when many capped entries cumulatively exceed the budget', () => {
@@ -178,89 +187,76 @@ suite('DashboardTelemetryPassthrough.bundleDashboardData', () => {
         // cap is 8KB, so several large-ish entries together can still exceed
         // the bundle budget. Verify the bundle-level char-cap loop drops
         // trailing entries and sets the envelope `t` flag.
+        const propertyKeys = [
+            'Aspire.Dashboard.Version',
+            'Aspire.Dashboard.BuildId',
+            'Aspire.Dashboard.ComponentId',
+            'Aspire.Dashboard.ComponentType',
+            'Aspire.Dashboard.UserAgent',
+            'Aspire.Dashboard.Metrics.SelectedDuration',
+            'Aspire.Dashboard.Metrics.SelectedView',
+            'Aspire.Dashboard.Exception.Type',
+            'Aspire.Dashboard.Exception.RuntimeVersion',
+            'Aspire.Dashboard.Resource.Type',
+            'Aspire.Dashboard.Resource.View',
+            'Aspire.Dashboard.RequestId',
+        ];
         const flood: { [key: string]: { value: string; propertyType: 1 } } = {};
-        for (let i = 0; i < 12; i++) {
-            flood[`k${i}`] = { value: 'x'.repeat(MAX_BUNDLE_CHARS * 2), propertyType: PropertyType.Basic };
+        for (const key of propertyKeys) {
+            flood[key] = { value: 'x'.repeat(MAX_BUNDLE_CHARS * 2), propertyType: PropertyType.Basic };
         }
         const result = bundleDashboardData(flood);
         const blob = result.properties ?? '';
         assert.ok(blob.length <= MAX_BUNDLE_CHARS, `expected blob ≤ ${MAX_BUNDLE_CHARS} chars, got ${blob.length}`);
         const envelope = JSON.parse(blob);
         assert.strictEqual(envelope.t, true, 'expected envelope truncation flag');
-        assert.ok(Object.keys(envelope.v).length < 12, `expected some entries dropped, got ${Object.keys(envelope.v).length}`);
+        assert.ok(Object.keys(envelope.v).length < propertyKeys.length, `expected some entries dropped, got ${Object.keys(envelope.v).length}`);
         assert.ok(Object.keys(envelope.v).length > 0, 'expected at least one entry kept');
         // Truncation drops trailing entries first.
-        assert.strictEqual(envelope.v.k0?.endsWith('...[truncated]'), true);
+        assert.strictEqual(envelope.v['Aspire.Dashboard.Version']?.endsWith('...[truncated]'), true);
     });
 
-    test('drops measurements past MAX_BUNDLE_ENTRIES independently from properties', () => {
-        // Property and measurement caps are independent — a flood of metrics
-        // must not consume the property budget and vice-versa.
+    test('keeps allowed measurements independent from properties', () => {
         const flood: { [key: string]: { value: string; propertyType: 1 | 2 } } = {};
-        for (let i = 0; i < MAX_BUNDLE_ENTRIES + 5; i++) {
-            flood[`m${i}`] = { value: String(i), propertyType: PropertyType.Metric };
-        }
-        flood['kept_prop'] = { value: 'present', propertyType: PropertyType.Basic };
+        flood['Aspire.Dashboard.StructuredLogs.FilterCount'] = { value: '5', propertyType: PropertyType.Metric };
+        flood['Aspire.Dashboard.Version'] = { value: 'present', propertyType: PropertyType.Basic };
         const result = bundleDashboardData(flood);
         const measEnvelope = JSON.parse(result.measurements ?? '');
-        assert.strictEqual(measEnvelope.t, true);
+        assert.deepStrictEqual(measEnvelope, { v: { 'Aspire.Dashboard.StructuredLogs.FilterCount': 5 } });
         const propEnvelope = JSON.parse(result.properties ?? '');
-        assert.strictEqual(propEnvelope.v.kept_prop, 'present');
+        assert.strictEqual(propEnvelope.v['Aspire.Dashboard.Version'], 'present');
         assert.strictEqual(propEnvelope.t, undefined);
     });
 
-    test('envelope isolates dashboard property literally named __truncated__ from the truncation flag', () => {
-        // A real dashboard property literally named __truncated__ must not
-        // be confused with our truncation marker. The envelope places all
-        // dashboard data inside `v`, so a property called "__truncated__"
-        // lives at envelope.v.__truncated__ and never at envelope.t.
+    test('drops unknown dashboard measurement literally named __truncated__', () => {
         const result = bundleDashboardData({
-            __truncated__: { value: 'looks-like-marker', propertyType: PropertyType.Basic },
-            other: { value: 'ok', propertyType: PropertyType.Basic },
+            __truncated__: { value: 1, propertyType: PropertyType.Metric },
+            'Aspire.Dashboard.Metrics.InstrumentsCount': { value: 2, propertyType: PropertyType.Metric },
         });
-        const envelope = JSON.parse(result.properties ?? '');
-        assert.strictEqual(envelope.v.__truncated__, 'looks-like-marker');
-        assert.strictEqual(envelope.v.other, 'ok');
+        const envelope = JSON.parse(result.measurements ?? '');
+        assert.strictEqual(envelope.v.__truncated__, undefined);
+        assert.strictEqual(envelope.v['Aspire.Dashboard.Metrics.InstrumentsCount'], 2);
         assert.strictEqual(envelope.t, undefined);
     });
 
-    test('preserves observed key order for integer-like keys via tuple-array truncation', () => {
-        // Object-iteration places integer-index-like string keys ahead of
-        // other string keys, so if we built the truncated result by writing
-        // back into a plain object the dashboard's key order would be
-        // silently reshuffled. Using an entries array sidesteps that.
-        const input: { [key: string]: { value: string; propertyType: 1 } } = {};
-        for (let i = 0; i < MAX_BUNDLE_ENTRIES + 3; i++) {
-            // Use numeric-looking string keys; ECMAScript orders these
-            // ascending in object iteration.
-            input[String(i)] = { value: `v${i}`, propertyType: PropertyType.Basic };
-        }
-        const result = bundleDashboardData(input);
-        const envelope = JSON.parse(result.properties ?? '');
-        assert.strictEqual(envelope.t, true);
-        // First MAX_BUNDLE_ENTRIES integer keys kept; last three dropped.
-        assert.strictEqual(envelope.v['0'], 'v0');
-        assert.strictEqual(envelope.v[String(MAX_BUNDLE_ENTRIES - 1)], `v${MAX_BUNDLE_ENTRIES - 1}`);
-        assert.strictEqual(envelope.v[String(MAX_BUNDLE_ENTRIES)], undefined);
+    test('preserves observed key order for allowed measurements', () => {
+        const result = bundleDashboardData({
+            'Aspire.Dashboard.Metrics.InstrumentsCount': { value: '1', propertyType: PropertyType.Metric },
+            'Aspire.Dashboard.StructuredLogs.FilterCount': { value: '2', propertyType: PropertyType.Metric },
+        });
+        const envelope = JSON.parse(result.measurements ?? '');
+        assert.deepStrictEqual(Object.keys(envelope.v), [
+            'Aspire.Dashboard.Metrics.InstrumentsCount',
+            'Aspire.Dashboard.StructuredLogs.FilterCount',
+        ]);
     });
 
-    test('truncates over-long keys so a buggy dashboard cannot smuggle PII through key names', () => {
-        // Defense-in-depth: every dashboard-supplied identifier (event names,
-        // property names, asset ids, AND bundle keys) is clamped to
-        // MAX_DASHBOARD_KEY_LENGTH so an upstream regression that places a
-        // path or user-controlled string into a key can't leak it into
-        // telemetry at full length.
+    test('drops over-long unknown Metric keys so a buggy dashboard cannot smuggle PII through key names', () => {
         const longKey = 'k' + 'a'.repeat(MAX_DASHBOARD_KEY_LENGTH + 200);
         const result = bundleDashboardData({
-            [longKey]: { value: 'ok', propertyType: PropertyType.Basic },
+            [longKey]: { value: 1, propertyType: PropertyType.Metric },
         });
-        const envelope = JSON.parse(result.properties ?? '');
-        const keys = Object.keys(envelope.v);
-        assert.strictEqual(keys.length, 1);
-        assert.ok(keys[0].endsWith('...[truncated]'), `expected truncated key, got '${keys[0].slice(0, 50)}…'`);
-        // The marker's budget is reserved inside the cap, so the result is exactly the cap.
-        assert.strictEqual(keys[0].length, MAX_DASHBOARD_KEY_LENGTH);
-        assert.strictEqual(envelope.v[keys[0]], 'ok');
+        assert.strictEqual(result.measurements, undefined);
     });
 
     test('rejects non-object input shapes (defensive)', () => {
@@ -312,11 +308,11 @@ suite('DashboardTelemetryPassthrough.bundleDashboardData', () => {
         // drop, so the discriminator is coerced through Number().
         const result = bundleDashboardData({
             email: { value: 'user@example.com', propertyType: '0' as unknown as 0 },
-            ok: { value: 'safe', propertyType: PropertyType.Basic },
+            'Aspire.Dashboard.Version': { value: 'safe', propertyType: PropertyType.Basic },
         });
         const props = JSON.parse(result.properties ?? '{}').v;
         assert.strictEqual(props.email, undefined);
-        assert.strictEqual(props.ok, 'safe');
+        assert.strictEqual(props['Aspire.Dashboard.Version'], 'safe');
     });
 });
 
@@ -515,6 +511,7 @@ suite('DashboardTelemetryPassthrough enum label mappers', () => {
         assert.strictEqual(isFailureResult(2), true);  // Failure
         assert.strictEqual(isFailureResult(3), true);  // UserFault
         assert.strictEqual(isFailureResult(4), false); // UserCancel
+        assert.strictEqual(isFailureResult('2' as unknown as 0), true);
         assert.strictEqual(isFailureResult(undefined), false);
     });
 

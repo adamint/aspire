@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { AppHostDataRepository } from '../views/AppHostDataRepository';
+import { AppHostDataRepository, isMatchingAppHostPath } from '../views/AppHostDataRepository';
 import { sendTelemetryEvent } from '../utils/telemetry';
 
 /**
@@ -73,7 +73,7 @@ export class AppHostsViewTelemetry implements vscode.Disposable {
     private _fire(initial: boolean): void {
         const appHosts = this._dataRepository.appHosts;
         const runningAppHosts = appHosts.length;
-        const totalResources = appHosts.reduce((acc, host) => acc + (host.resources?.length ?? 0), 0);
+        const totalResources = this._getDisplayedResourceCount();
         sendTelemetryEvent('runningAppHostsView/shown', {
             view_mode: this._dataRepository.viewMode,
             initial_visibility: initial ? 'true' : 'false',
@@ -81,5 +81,27 @@ export class AppHostsViewTelemetry implements vscode.Disposable {
             running_apphosts: runningAppHosts,
             total_resources: totalResources,
         });
+    }
+
+    private _getDisplayedResourceCount(): number {
+        const appHosts = this._dataRepository.appHosts;
+        const workspaceResources = this._dataRepository.workspaceResources;
+
+        if (this._dataRepository.viewMode !== 'workspace' || workspaceResources.length === 0) {
+            return appHosts.reduce((acc, host) => acc + (host.resources?.length ?? 0), 0);
+        }
+
+        const workspaceAppHostPath = this._dataRepository.workspaceAppHostPath;
+        let countedWorkspaceResources = false;
+        const totalResources = appHosts.reduce((acc, host) => {
+            if (isMatchingAppHostPath(host.appHostPath, workspaceAppHostPath)) {
+                countedWorkspaceResources = true;
+                return acc + workspaceResources.length;
+            }
+
+            return acc + (host.resources?.length ?? 0);
+        }, 0);
+
+        return countedWorkspaceResources ? totalResources : totalResources + workspaceResources.length;
     }
 }

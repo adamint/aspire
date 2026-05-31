@@ -255,6 +255,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
           vscode.window.showErrorMessage(processExceptionOccurred(error.message, commandLabel));
         },
         exitCallback: (code) => {
+          this._dcpServer.recordAppHostProcessExit(this.debugSessionId, code);
           // Flush any partial line left in either buffer so trailing output isn't lost.
           if (stdoutBuffer.length > 0) {
             flushBuffer(stdoutBuffer, 'stdout');

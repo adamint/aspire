@@ -84,8 +84,13 @@ function telemetryResultLabel(value: unknown): string {
 }
 // Failure / UserFault are routed through `sendTelemetryErrorEvent` so they
 // participate in the reporter's stricter scrubbing pass.
-function isFailureResult(value: TelemetryResult | undefined): boolean {
-    return value === 2 || value === 3;
+function isFailureResult(value: unknown): boolean {
+    if (value === undefined || value === null) {
+        return false;
+    }
+
+    const n = Math.trunc(Number(value));
+    return n === 2 || n === 3;
 }
 
 // Matches `FaultSeverity` enum in VisualStudioTelemetryTypes.cs. Same
@@ -501,6 +506,12 @@ export class DashboardTelemetryPassthrough {
     private _propertyHandler(eventName: 'dashboard/property/set' | 'dashboard/property/recurring') {
         return (req: Request, res: Response): void => {
             const payload = req.body as PostPropertyRequest;
+            const bundle = bundleDashboardData({ [payload.propertyName]: payload.propertyValue });
+            if (bundle.properties === undefined && bundle.measurements === undefined) {
+                res.status(200).end();
+                return;
+            }
+
             const properties: EventProperties<'dashboard/property/set' | 'dashboard/property/recurring'> = {
                 property_name: clampDashboardKey(payload.propertyName),
             };
@@ -509,7 +520,7 @@ export class DashboardTelemetryPassthrough {
             // bundleDashboardData apply to this route exactly as they do to the
             // additionalProperties routes. A computed non-string key is coerced
             // to a string by JS and then clamped, so this is boundary-safe.
-            applyBundleFields(properties, { [payload.propertyName]: payload.propertyValue });
+            applyBundle(properties, bundle);
             sendTelemetryEvent(eventName, properties);
             res.status(200).end();
         };
@@ -534,7 +545,13 @@ function applyBundleFields(
     target: { dashboard_properties?: string; dashboard_measurements?: string },
     properties: { [key: string]: AspireTelemetryProperty } | undefined,
 ): void {
-    const bundle = bundleDashboardData(properties);
+    applyBundle(target, bundleDashboardData(properties));
+}
+
+function applyBundle(
+    target: { dashboard_properties?: string; dashboard_measurements?: string },
+    bundle: { properties?: string; measurements?: string },
+): void {
     if (bundle.properties !== undefined) {
         target.dashboard_properties = bundle.properties;
     }
@@ -585,16 +602,16 @@ function applyBundleAndCorrelations(
  *    `StructuredLogs.razor.cs` where
  *    `int.ToString(CultureInfo.InvariantCulture)` is invoked before wrapping
  *    in `AspireTelemetryProperty(..., Metric)`), so we parse strings as well
- *    as accept raw numbers. Anything we can't coerce to a finite number falls
- *    through to the string-properties bundle.
+ *    as accept raw numbers. Anything we can't coerce to a finite number is
+ *    dropped rather than falling back to a string property.
  *  - Properties tagged `Pii` are dropped. The dashboard does not actually tag
  *    anything as `Pii` today, but honoring the discriminator keeps the
  *    README's "no resource names or workspace contents are reported"
  *    guarantee enforced end-to-end rather than incidental.
- *  - Everything else is stringified into the properties bundle (objects are
- *    JSON-encoded so they survive — TelemetryReporter only supports string
- *    values, but the dashboard occasionally sends complex objects, e.g. enum
- *    descriptors).
+ *  - Known-safe dashboard `Basic` / `UserSetting` keys are stringified into the
+ *    properties bundle. Unknown free-form property keys are dropped so a future
+ *    dashboard regression cannot smuggle secrets or workspace contents through
+ *    `dashboard_properties`.
  *
  * Privacy mitigation (per-entry):
  *  - Every string value (including JSON-stringified objects) is capped at
@@ -607,8 +624,8 @@ function applyBundleAndCorrelations(
  *    include type names from user assemblies. Without a per-entry cap a
  *    single property value could dump multiple KB of arbitrary workspace
  *    content through the bundle, defeating the README's "no workspace
- *    contents are reported" guarantee. The cap is applied uniformly so any
- *    future `Basic`-tagged free-form text property is automatically limited.
+ *    contents are reported" guarantee. Unknown free-form properties are
+ *    dropped, and retained known-safe string values still get this residual cap.
  *  - Every KEY is also clamped to {@link MAX_DASHBOARD_KEY_LENGTH} via
  *    {@link clampDashboardKey}. Keys come from the dashboard verbatim and
  *    could (via a bug or future telemetry refactor) end up carrying paths
@@ -669,6 +686,10 @@ function bundleDashboardData(input: { [key: string]: AspireTelemetryProperty } |
         const key = clampDashboardKey(rawKey);
         const value = prop.value;
         if (propType === PropertyType.Metric) {
+            if (!ALLOWED_DASHBOARD_METRIC_KEYS.has(rawKey)) {
+                continue;
+            }
+
             const numericValue = typeof value === 'number'
                 ? value
                 : typeof value === 'string'
@@ -683,8 +704,10 @@ function bundleDashboardData(input: { [key: string]: AspireTelemetryProperty } |
                 }
                 continue;
             }
-            // Fall through and persist as a string so the dimension still
-            // surfaces even when the value can't be coerced.
+            continue;
+        }
+        if (!isAllowedDashboardProperty(rawKey, value)) {
+            continue;
         }
         if (properties.length >= MAX_BUNDLE_ENTRIES) {
             propTruncatedByCount = true;
@@ -701,12 +724,7 @@ function bundleDashboardData(input: { [key: string]: AspireTelemetryProperty } |
             stringValue = String(value);
         }
         else {
-            try {
-                stringValue = JSON.stringify(value);
-            }
-            catch {
-                stringValue = String(value);
-            }
+            stringValue = JSON.stringify(value);
         }
         // Per-entry value truncation as defense-in-depth. The most sensitive
         // free-form keys (exception message/stack trace) are dropped entirely
@@ -902,6 +920,57 @@ const DROPPED_FREEFORM_PROPERTY_KEYS = new Set<string>([
     // names through `dashboard_properties` and violate the README guarantee.
     'Aspire.Dashboard.ConsoleLogs.ResourceName',
 ]);
+
+// Known-safe non-metric dashboard property keys. Keep this in sync with
+// `src/Aspire.Dashboard/Telemetry/TelemetryPropertyKeys.cs`; unknown Basic or
+// UserSetting keys are free-form strings at the dashboard boundary and could
+// carry workspace content or secrets.
+const ALLOWED_DASHBOARD_PROPERTY_KEYS = new Set<string>([
+    'Aspire.Dashboard.Version',
+    'Aspire.Dashboard.BuildId',
+    'Aspire.Dashboard.ComponentId',
+    'Aspire.Dashboard.ComponentType',
+    'Aspire.Dashboard.UserAgent',
+    'Aspire.Dashboard.ConsoleLogs.ShowTimestamp',
+    'Aspire.Dashboard.Metrics.ResourceIsReplica',
+    'Aspire.Dashboard.Metrics.SelectedDuration',
+    'Aspire.Dashboard.Metrics.SelectedView',
+    'Aspire.Dashboard.Exception.Type',
+    'Aspire.Dashboard.Exception.RuntimeVersion',
+    'Aspire.Dashboard.Resource.Types',
+    'Aspire.Dashboard.Resource.Type',
+    'Aspire.Dashboard.Resource.View',
+    'Aspire.Dashboard.RequestId',
+    'Aspire.Dashboard.StructuredLogs.SelectedLogLevel',
+    'Aspire.Dashboard.Command.Name',
+    'Aspire.Dashboard.AIAssistant.Enabled',
+    'Aspire.Dashboard.AIAssistant.ChatMessageCount',
+    'Aspire.Dashboard.AIAssistant.SelectedModel',
+    'Aspire.Dashboard.AIAssistant.ToolCalls',
+    'Aspire.Dashboard.AIAssistant.FeedbackType',
+]);
+
+const ALLOWED_DASHBOARD_METRIC_KEYS = new Set<string>([
+    'Aspire.Dashboard.Metrics.InstrumentsCount',
+    'Aspire.Dashboard.StructuredLogs.FilterCount',
+]);
+
+const ALLOWED_STRING_ARRAY_PROPERTY_KEYS = new Set<string>([
+    'Aspire.Dashboard.Resource.Types',
+    'Aspire.Dashboard.AIAssistant.ToolCalls',
+]);
+
+function isAllowedDashboardProperty(rawKey: string, value: unknown): boolean {
+    if (!ALLOWED_DASHBOARD_PROPERTY_KEYS.has(rawKey)) {
+        return false;
+    }
+
+    if (ALLOWED_STRING_ARRAY_PROPERTY_KEYS.has(rawKey)) {
+        return Array.isArray(value) && value.every(entry => typeof entry === 'string');
+    }
+
+    return typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number';
+}
 
 /**
  * Clamps a single dashboard-supplied key/short-metadata string to

@@ -111,8 +111,17 @@ export async function activate(context: vscode.ExtensionContext) {
     // parameter just to satisfy the wrapper).
     fn: (...args: any[]) => any,
   ): vscode.Disposable {
-    return vscode.commands.registerCommand(commandName, (...args) => {
-      return withCommandTelemetry(commandName, () => fn(...args), { source });
+    return vscode.commands.registerCommand(commandName, async (...args) => {
+      try {
+        return await withCommandTelemetry(commandName, () => fn(...args), { source });
+      }
+      catch (error) {
+        if (isCommandCancellation(error)) {
+          return undefined;
+        }
+
+        throw error;
+      }
     });
   }
 

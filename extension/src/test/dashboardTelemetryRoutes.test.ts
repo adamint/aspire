@@ -335,9 +335,9 @@ suite('DashboardTelemetryPassthrough route-level normalization', () => {
         assert.strictEqual(envelope.v['Aspire.Dashboard.Exception.RuntimeVersion'], '10.0.0');
     });
 
-    test('PostFault enforces per-entry truncation on other Basic-tagged Properties values', async () => {
-        // Defense-in-depth for any Basic-tagged free-form value that is NOT on
-        // the drop list: it must still be capped before it lands in the bundle.
+    test('PostFault drops unknown Basic-tagged Properties values', async () => {
+        // Unknown Basic/UserSetting keys are free-form dashboard input. Drop
+        // them instead of forwarding potentially sensitive workspace content.
         const longValue = 'x'.repeat(20_000);
         await postJson(h.baseUrl, '/telemetry/fault', {
             eventName: 'aspire/dashboard/error',
@@ -345,18 +345,15 @@ suite('DashboardTelemetryPassthrough route-level normalization', () => {
             severity: 3,
             properties: {
                 'Aspire.Dashboard.SomeOtherDiagnostic': { value: longValue, propertyType: 1 },
+                'Aspire.Dashboard.Version': { value: '10.0.0', propertyType: 1 },
             },
         });
         assert.strictEqual(h.fake.events.length, 1);
         const bundle = h.fake.events[0].properties?.dashboard_properties;
         assert.ok(bundle, 'expected dashboard_properties bundle');
         const envelope = JSON.parse(bundle);
-        const value = envelope.v['Aspire.Dashboard.SomeOtherDiagnostic'] as string;
-        assert.ok(typeof value === 'string');
-        assert.ok(value.endsWith('...[truncated]'),
-            `expected per-entry truncation marker, got ${value.slice(-40)}`);
-        assert.ok(value.length < longValue.length,
-            `expected truncation; entry length ${value.length} vs input ${longValue.length}`);
+        assert.strictEqual(envelope.v['Aspire.Dashboard.SomeOtherDiagnostic'], undefined);
+        assert.strictEqual(envelope.v['Aspire.Dashboard.Version'], '10.0.0');
     });
 
     test('PostOperation clamps dashboard-supplied event names so a buggy upstream cannot leak long strings', async () => {
@@ -402,16 +399,25 @@ suite('DashboardTelemetryPassthrough route-level normalization', () => {
         assert.strictEqual(h.fake.events[0].properties?.flag_prefixes, '');
     });
 
-    test('PostProperty clamps over-long property names', async () => {
+    test('PostProperty drops unknown property names', async () => {
         const longName = 'a'.repeat(2000);
-        await postJson(h.baseUrl, '/telemetry/property', {
+        const { status } = await postJson(h.baseUrl, '/telemetry/property', {
             propertyName: longName,
             propertyValue: { value: 'ok', propertyType: 1 },
         });
+        assert.strictEqual(status, 200);
+        assert.strictEqual(h.fake.events.length, 0);
+    });
+
+    test('PostProperty carries known property names', async () => {
+        const { status } = await postJson(h.baseUrl, '/telemetry/property', {
+            propertyName: 'Aspire.Dashboard.Version',
+            propertyValue: { value: '10.0.0', propertyType: 1 },
+        });
+        assert.strictEqual(status, 200);
         assert.strictEqual(h.fake.events.length, 1);
-        const carried = h.fake.events[0].properties?.property_name ?? '';
-        assert.ok(carried.length < longName.length, 'expected property name clamp');
-        assert.ok(carried.endsWith('...[truncated]'));
+        assert.strictEqual(h.fake.events[0].properties?.property_name, 'Aspire.Dashboard.Version');
+        assert.strictEqual(JSON.parse(h.fake.events[0].properties?.dashboard_properties ?? '').v['Aspire.Dashboard.Version'], '10.0.0');
     });
 
     test('PostAsset clamps over-long asset ids', async () => {

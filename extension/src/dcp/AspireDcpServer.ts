@@ -29,6 +29,12 @@ export interface DcpTelemetryHooks {
     onRunSessionAccepted?: (info: { resourceType: string; mode: string }) => void;
 }
 
+type DebugSessionAggregateStats = {
+    totalChildSessions: number;
+    distinctResourceTypes: Set<string>;
+    anyNonZeroExit: boolean;
+};
+
 export default class AspireDcpServer {
     private readonly app: express.Express;
     private server: https.Server;
@@ -45,7 +51,7 @@ export default class AspireDcpServer {
     // session. Used to emit the `debug/appHost/end` summary when an AppHost debug session
     // terminates. Entries are added on first run_session for a debugSessionId and removed
     // (and returned) by takeDebugSessionAggregateStats().
-    private readonly _debugSessionStats: Map<string, { totalChildSessions: number; distinctResourceTypes: Set<string>; anyNonZeroExit: boolean }>;
+    private readonly _debugSessionStats: Map<string, DebugSessionAggregateStats>;
 
     public readonly connectionInfo: DcpServerConnectionInfo;
 
@@ -58,7 +64,7 @@ export default class AspireDcpServer {
         pendingNotificationQueueByDcpId: Map<string, RunSessionNotification[]>,
         dashboardTelemetry: DashboardTelemetryPassthrough,
         runTelemetryById: Map<string, { startTimeMs: number; resourceType: string; mode: string; debugSessionId: string }>,
-        debugSessionStats: Map<string, { totalChildSessions: number; distinctResourceTypes: Set<string>; anyNonZeroExit: boolean }>) {
+        debugSessionStats: Map<string, DebugSessionAggregateStats>) {
         this.connectionInfo = info;
         this.app = app;
         this.server = server;
@@ -89,10 +95,38 @@ export default class AspireDcpServer {
         };
     }
 
+    recordAppHostProcessExit(debugSessionId: string, exitCode: number | null): void {
+        if (exitCode === 0 || exitCode === null) {
+            return;
+        }
+
+        const stats = this._getOrCreateDebugSessionStats(debugSessionId);
+        stats.anyNonZeroExit = true;
+    }
+
+    private _getOrCreateDebugSessionStats(debugSessionId: string): DebugSessionAggregateStats {
+        let stats = this._debugSessionStats.get(debugSessionId);
+        if (!stats) {
+            stats = { totalChildSessions: 0, distinctResourceTypes: new Set<string>(), anyNonZeroExit: false };
+            this._debugSessionStats.set(debugSessionId, stats);
+        }
+
+        return stats;
+    }
+
     static async create(getDebugSession: (debugSessionId: string) => AspireDebugSession | null, hooks: DcpTelemetryHooks = {}): Promise<AspireDcpServer> {
         const runsBySession = new Map<string, AspireResourceDebugSession[]>();
         const runTelemetryById = new Map<string, { startTimeMs: number; resourceType: string; mode: string; debugSessionId: string }>();
-        const debugSessionStats = new Map<string, { totalChildSessions: number; distinctResourceTypes: Set<string>; anyNonZeroExit: boolean }>();
+        const debugSessionStats = new Map<string, DebugSessionAggregateStats>();
+        const getOrCreateDebugSessionStats = (debugSessionId: string): DebugSessionAggregateStats => {
+            let aggregate = debugSessionStats.get(debugSessionId);
+            if (!aggregate) {
+                aggregate = { totalChildSessions: 0, distinctResourceTypes: new Set<string>(), anyNonZeroExit: false };
+                debugSessionStats.set(debugSessionId, aggregate);
+            }
+
+            return aggregate;
+        };
         const wsBySession = new Map<string, WebSocket>();
         const pendingNotificationQueueByDcpId = new Map<string, RunSessionNotification[]>();
         const dashboardTelemetry = new DashboardTelemetryPassthrough();
@@ -265,11 +299,7 @@ export default class AspireDcpServer {
                 // post-start failure paths in this handler must route through here so
                 // we never leave an orphaned start event in the telemetry pipeline.
                 const emitRunSessionFailureEnd = (endReason: string, errorKind?: string): void => {
-                    let aggregate = debugSessionStats.get(debugSessionId);
-                    if (!aggregate) {
-                        aggregate = { totalChildSessions: 0, distinctResourceTypes: new Set<string>(), anyNonZeroExit: false };
-                        debugSessionStats.set(debugSessionId, aggregate);
-                    }
+                    const aggregate = getOrCreateDebugSessionStats(debugSessionId);
                     aggregate.totalChildSessions += 1;
                     aggregate.distinctResourceTypes.add(supportedResourceType);
                     aggregate.anyNonZeroExit = true;
@@ -352,11 +382,7 @@ export default class AspireDcpServer {
 
                     // Track aggregate stats for the parent AppHost debug session so we can
                     // emit a single `debug/appHost/end` summary when the AppHost terminates.
-                    let aggregate = debugSessionStats.get(debugSessionId);
-                    if (!aggregate) {
-                        aggregate = { totalChildSessions: 0, distinctResourceTypes: new Set<string>(), anyNonZeroExit: false };
-                        debugSessionStats.set(debugSessionId, aggregate);
-                    }
+                    const aggregate = getOrCreateDebugSessionStats(debugSessionId);
                     aggregate.totalChildSessions += 1;
                     aggregate.distinctResourceTypes.add(supportedResourceType);
 
@@ -487,7 +513,7 @@ export default class AspireDcpServer {
                 extensionLogOutputChannel.info(`Received message from WebSocket client: ${data}`);
             });
 
-            server.listen(0, () => {
+            server.listen(0, 'localhost', () => {
                 const addr = server.address();
                 if (typeof addr === 'object' && addr) {
                     extensionLogOutputChannel.info(`DCP server listening on port ${addr.port} (HTTPS)`);
@@ -539,10 +565,7 @@ export default class AspireDcpServer {
                 // the eventual `debug/appHost/end` summary reflects whether any child
                 // resource session ended unsuccessfully.
                 if (exitBucket === 'nonzero') {
-                    const aggregate = this._debugSessionStats.get(entry.debugSessionId);
-                    if (aggregate) {
-                        aggregate.anyNonZeroExit = true;
-                    }
+                    this.recordAppHostProcessExit(entry.debugSessionId, exitCode);
                 }
             }
         }
