@@ -304,6 +304,7 @@ jobs:
           }
 
       - name: Upload E2E diagnostics
+        id: upload_e2e_diagnostics
         if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -317,3 +318,38 @@ jobs:
             extension/.test-recordings/**
           if-no-files-found: ignore
           include-hidden-files: true
+
+      - name: Print E2E diagnostics links
+        if: always()
+        working-directory: extension
+        run: |
+          $artifactName = "extension-e2e-diagnostics-${{ matrix.rid }}-${{ matrix.shardName }}-attempt${{ github.run_attempt }}"
+          $artifactUrl = "${{ steps.upload_e2e_diagnostics.outputs.artifact-url }}"
+          if ([string]::IsNullOrWhiteSpace($artifactUrl)) {
+            $artifactUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts"
+          }
+          $hasResults = Test-Path ".test-results"
+          $hasStorage = Test-Path ".test-storage"
+          $recordings = Get-ChildItem -Path ".test-recordings" -Recurse -File -ErrorAction SilentlyContinue
+          $screenshots = Get-ChildItem -Path ".test-storage" -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match "[/\\]screenshots[/\\]" }
+
+          Write-Host "Extension E2E diagnostics artifact: $artifactName"
+          Write-Host "Artifacts page: $artifactUrl"
+          if ($hasResults) {
+            Write-Host "Mocha/state files are under .test-results inside the artifact."
+          }
+          if ($hasStorage) {
+            Write-Host "VS Code logs and Aspire home diagnostics are under .test-storage inside the artifact."
+          }
+          if ($screenshots) {
+            Write-Host "Failure screenshots:"
+            $screenshots | ForEach-Object { Write-Host "  $($_.FullName.Replace((Get-Location).Path + [IO.Path]::DirectorySeparatorChar, ''))" }
+          } else {
+            Write-Host "No failure screenshots were found for this shard."
+          }
+          if ($recordings) {
+            Write-Host "E2E recordings:"
+            $recordings | ForEach-Object { Write-Host "  $($_.FullName.Replace((Get-Location).Path + [IO.Path]::DirectorySeparatorChar, ''))" }
+          } else {
+            Write-Host "No E2E recordings were kept for this shard. Linux CI keeps recordings on failure by default; set ASPIRE_EXTENSION_E2E_RECORDING_MODE=always for successful-run videos."
+          }
