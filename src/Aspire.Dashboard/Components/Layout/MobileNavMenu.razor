@@ -1,13 +1,21 @@
 ﻿<FluentMenu Class="aspire-menu-container" Open="@IsNavMenuOpen" Anchored="false" Style="grid-area: nav-menu; height: 100vh; margin-top: 2px; overflow-y: auto;">
     @foreach (var item in GetMobileNavMenuEntries())
     {
-        <FluentMenuItem OnClick="@(async () => { CloseNavMenu(); await item.OnClick(); })" Style="height: 40px; width: 100vw; margin-bottom: 6px;" title="@item.Text">
+        var isActive = item.LinkMatchRegex is not null && item.LinkMatchRegex.IsMatch($"/{NavigationManager.ToBaseRelativePath(NavigationManager.Uri)}");
+        var menuItemAttributes = new Dictionary<string, object>
+        {
+            ["title"] = item.Text
+        };
+        if (isActive)
+        {
+            menuItemAttributes["aria-current"] = "page";
+        }
+
+        <FluentMenuItem OnClick="@(async () => { CloseNavMenu(); await item.OnClick(); })" Class="@(isActive ? "mobile-nav-menu-item-active" : null)" Style="height: 40px; width: 100vw; margin-bottom: 6px;" AdditionalAttributes="@menuItemAttributes">
             <span>@item.Text</span>
 
             @if (item.Icon is { } icon)
             {
-                var isActive = item.LinkMatchRegex is not null && item.LinkMatchRegex.IsMatch($"/{NavigationManager.ToBaseRelativePath(NavigationManager.Uri)}");
-
                 <span slot="start">
                     @if (isActive)
                     {
@@ -18,6 +26,11 @@
                         <FluentIcon Class="align-text-bottom" Value="@icon" Slot="start" Color="Color.Neutral" />
                     }
                 </span>
+            }
+
+            @if (isActive)
+            {
+                <span slot="end" class="mobile-nav-menu-selected-indicator" aria-hidden="true">✓</span>
             }
         </FluentMenuItem>
 
