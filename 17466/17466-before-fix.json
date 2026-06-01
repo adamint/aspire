@@ -1,0 +1,17 @@
+{
+  "label": "BEFORE FIX",
+  "records": [
+    {
+      "phase": "closed",
+      "ariaExpanded": "<absent>",
+      "ariaHaspopup": "\"true\"",
+      "snapshot": "- button \"View options\""
+    },
+    {
+      "phase": "open",
+      "ariaExpanded": "<empty string>",
+      "ariaHaspopup": "\"true\"",
+      "snapshot": "- button \"View options\""
+    }
+  ]
+}

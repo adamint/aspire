@@ -1,0 +1,20 @@
+{
+  "label": "AFTER FIX",
+  "selectedItemText": "Collapse child resources",
+  "focusedBefore": {
+    "tagName": "FLUENT-BUTTON",
+    "id": "f4c2e3850",
+    "role": null,
+    "ariaLabel": "View options",
+    "text": "",
+    "isBody": false
+  },
+  "focusedAfter": {
+    "tagName": "FLUENT-BUTTON",
+    "id": "f4c2e3850",
+    "role": null,
+    "ariaLabel": "View options",
+    "text": "",
+    "isBody": false
+  }
+}

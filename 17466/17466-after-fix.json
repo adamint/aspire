@@ -1,0 +1,17 @@
+{
+  "label": "AFTER FIX",
+  "records": [
+    {
+      "phase": "closed",
+      "ariaExpanded": "\"false\"",
+      "ariaHaspopup": "\"true\"",
+      "snapshot": "- button \"View options\""
+    },
+    {
+      "phase": "open",
+      "ariaExpanded": "\"true\"",
+      "ariaHaspopup": "\"true\"",
+      "snapshot": "- button \"View options\" [expanded]"
+    }
+  ]
+}

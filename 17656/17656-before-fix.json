@@ -1,0 +1,20 @@
+{
+  "label": "BEFORE FIX",
+  "selectedItemText": "Collapse child resources",
+  "focusedBefore": {
+    "tagName": "FLUENT-BUTTON",
+    "id": "f2c78b2f",
+    "role": null,
+    "ariaLabel": "View options",
+    "text": "",
+    "isBody": false
+  },
+  "focusedAfter": {
+    "tagName": "BODY",
+    "id": "",
+    "role": null,
+    "ariaLabel": null,
+    "text": "TestShop Resources Console Structured Traces Metricsinfo Update nowAspire 13.5.0-preview.1.26280.5 is available.Upgrade instructions Ignore Resources #f6165ab42 { --first-size: 0.5fr; --second-size: 0.5fr; } Resources Parameters Graph Name State Start time Source URLs Actions apigatewayWaiting mcr.microsoft.com/dotnet/nightly/yarp:2.3-preview basketcacheRunning 5/31/2026 11:29:21 PMdocker.io/library/redis:8.6 redis-server --requirepass $REDIS_PASSWORD --save 60 1 --tls-port 6379 --port 6380 --tls-ca-cert-file /usr/lib/ssl/aspire/cert.pem --tls-cert-file /usr/lib/ssl/aspire/private/A6158C918A7496F11ED62EEDDE0042E368A1732A.crt --tls-key-file /usr/lib/ssl/aspire/private/A6158C918A7496F11ED62EEDDE0042E368A1732A.key --tls-auth-clients no tcp://localhost:49667rediss://localhost:49657 +1 messagingThis container is persistent and won't be stopped when the app host is shut down.Running 5/30/2026 7:57:35 PMdocker.io/library/rabbitmq:4.3-management http://messaging-testshop.dev.localhost:49981tcp://localhost:49982 +1 pgadminRunning 5/31/2026 11:29:21 PMdocker.io/dpage/pgadmin4:9.15.0 PG Admin postgresExited 5/31/2026 11:29:19 PMdocker.io/library/postgres:18.3 rediscommanderRunning 5/31/2026 11:29:21 PMghcr.io/joeferner/redis-commander:latest Redis Commander redisinsightRunning 5/31/2026 11:29:19 PMdocker.io/redis/redisinsight:3.4 Redis Insight basketserviceRunning 5/31/2026 11:29:22 PMBasketService.csproj https://basketservice-testshop.dev.localhost:49669http://basketservice-testshop.dev.localhost:49663 +1 catalogdbappWaiting CatalogDb.csproj catalogservice-vptvtbysWaiting CatalogService.csproj catalogservice-wwgahthnWaiting CatalogService.csproj frontendWaiting MyFrontend.csproj orderprocessorRunning 5/31/2026 11:29:19 PMOrderProcessor.csproj Showing 13 resources An unhandled error has occurred. Reload 🗙 Rejoining the server... Rejoin failed... trying again in seconds. Failed to rejoin.Please retry or reload the page. Retry #17656 BEFORE FIX Step 2: Selecting menu item: Collapse child resources Expected after selection: focus should return to View options.",
+    "isBody": true
+  }
+}
