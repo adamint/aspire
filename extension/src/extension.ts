@@ -42,10 +42,17 @@ import { ResourceCommandJson } from './views/AppHostDataRepository';
 import { AppHostDiscoveryService } from './utils/appHostDiscovery';
 import { AppHostLaunchService } from './services/AppHostLaunchService';
 import { AppHostsViewTelemetry } from './views/AppHostsViewTelemetry';
+import { AcquiredTestRunSession, TestRunSessionAcquireOptions } from './dcp/TestRunSessionManager';
 
 let aspireExtensionContext = new AspireExtensionContext();
 
-export async function activate(context: vscode.ExtensionContext) {
+export interface AspireExtensionApi {
+  rpcServerInfo: RpcServerConnectionInfo;
+  acquireTestRunSession(options: TestRunSessionAcquireOptions): AcquiredTestRunSession;
+  releaseTestRunSession(id: string): Promise<void>;
+}
+
+export async function activate(context: vscode.ExtensionContext): Promise<AspireExtensionApi> {
   const gitCommitSha = readGitCommitSha(context);
   extensionLogOutputChannel.info(`Activating Aspire extension (commit: ${gitCommitSha})`);
   initializeTelemetry(context);
@@ -323,6 +330,8 @@ export async function activate(context: vscode.ExtensionContext) {
   // Return exported API for tests or other extensions
   return {
     rpcServerInfo: rpcServer.connectionInfo,
+    acquireTestRunSession: (options: TestRunSessionAcquireOptions) => dcpServer.acquireTestRunSession(options),
+    releaseTestRunSession: (id: string) => dcpServer.releaseTestRunSession(id),
   };
 }
 
