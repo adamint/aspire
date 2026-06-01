@@ -465,18 +465,14 @@
   <data name="ManageDataDialogTitle" xml:space="preserve">
     <value>Manage logs and telemetry</value>
   </data>
+  <data name="ManageDataAllDataCheckboxLabel" xml:space="preserve">
+    <value>All data</value>
+  </data>
   <data name="ManageDataConsoleLogs" xml:space="preserve">
     <value>Console logs</value>
   </data>
-  <data name="ManageDataDeselectAllButtonLabel" xml:space="preserve">
-    <value>Deselect all</value>
-  </data>
-  <data name="ManageDataDeselectItemButtonLabel" xml:space="preserve">
-    <value>Deselect {0}</value>
-    <comment>{0} is the resource or data type display name.</comment>
-  </data>
-  <data name="ManageDataDeselectDataTypeForResourceButtonLabel" xml:space="preserve">
-    <value>Deselect {0} for {1}</value>
+  <data name="ManageDataDataTypeForResourceCheckboxLabel" xml:space="preserve">
+    <value>{0} for {1}</value>
     <comment>{0} is the data type display name. {1} is the parent resource display name.</comment>
   </data>
   <data name="ManageDataExportButtonText" xml:space="preserve">
@@ -505,17 +501,6 @@
   </data>
   <data name="ManageDataResource" xml:space="preserve">
     <value>Resource</value>
-  </data>
-  <data name="ManageDataSelectAllButtonLabel" xml:space="preserve">
-    <value>Select all</value>
-  </data>
-  <data name="ManageDataSelectItemButtonLabel" xml:space="preserve">
-    <value>Select {0}</value>
-    <comment>{0} is the resource or data type display name.</comment>
-  </data>
-  <data name="ManageDataSelectDataTypeForResourceButtonLabel" xml:space="preserve">
-    <value>Select {0} for {1}</value>
-    <comment>{0} is the data type display name. {1} is the parent resource display name.</comment>
   </data>
   <data name="SettingsDialogTimeFormat" xml:space="preserve">
     <value>Time format</value>
