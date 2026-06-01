@@ -1,0 +1,27 @@
+{
+  "label": "BEFORE FIX",
+  "records": [
+    {
+      "phase": "focused",
+      "url": "https://testshop.dev.localhost:49661/",
+      "activeTag": "FLUENT-BUTTON",
+      "activeAria": "Open in text visualizer",
+      "activeText": "",
+      "dialogCount": 0,
+      "dialogText": null,
+      "hasDetailsPane": false,
+      "detailsText": null
+    },
+    {
+      "phase": "after-enter",
+      "url": "https://testshop.dev.localhost:49661/",
+      "activeTag": "DIV",
+      "activeAria": null,
+      "activeText": "Source Select format",
+      "dialogCount": 1,
+      "dialogText": "Source Select format Close 1mcr.microsoft.com/dotnet/nightly/yarp:2.3-preview Copy to clipboard",
+      "hasDetailsPane": true,
+      "detailsText": "Container: apigateway Resource5 Name ValueDisplay name apigateway State Waiting State details Waiting for dependencies: catalogservice-vptvtbys, catalogservice-wwgahthn Container image mcr.microsoft.com/dotnet/nightly/yarp:2.3-preview Conta"
+    }
+  ]
+}

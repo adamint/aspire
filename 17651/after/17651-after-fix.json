@@ -1,0 +1,27 @@
+{
+  "label": "AFTER FIX",
+  "records": [
+    {
+      "phase": "focused",
+      "url": "https://testshop.dev.localhost:51731/",
+      "activeTag": "FLUENT-BUTTON",
+      "activeAria": "Open in text visualizer",
+      "activeText": "",
+      "dialogCount": 0,
+      "dialogText": null,
+      "hasDetailsPane": false,
+      "detailsText": null
+    },
+    {
+      "phase": "after-enter",
+      "url": "https://testshop.dev.localhost:51731/",
+      "activeTag": "DIV",
+      "activeAria": null,
+      "activeText": "Source Select format",
+      "dialogCount": 1,
+      "dialogText": "Source Select format Close 1mcr.microsoft.com/dotnet/nightly/yarp:2.3-preview Copy to clipboard",
+      "hasDetailsPane": false,
+      "detailsText": null
+    }
+  ]
+}
