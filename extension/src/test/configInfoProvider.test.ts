@@ -1,7 +1,14 @@
 import * as assert from 'assert';
-import { parseConfigInfoOutput } from '../utils/configInfoProvider';
+import * as sinon from 'sinon';
+import * as vscode from 'vscode';
+import type { ChildProcessWithoutNullStreams } from 'child_process';
+import { getConfigInfo, parseConfigInfoOutput } from '../utils/configInfoProvider';
+import type { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
+import * as cliModule from '../debugger/languages/cli';
 
 suite('configInfoProvider tests', () => {
+    teardown(() => sinon.restore());
+
     test('parseConfigInfoOutput accepts current camel-case CLI JSON', () => {
         const configInfo = parseConfigInfoOutput(JSON.stringify({
             localSettingsPath: '/workspace/aspire.config.json',
@@ -82,5 +89,37 @@ suite('configInfoProvider tests', () => {
         assert.strictEqual(configInfo.AvailableFeatures[0].Description, 'Pipeline support');
         assert.strictEqual(configInfo.LocalSettingsSchema.Properties[0].AdditionalPropertiesType, 'string');
         assert.deepStrictEqual(configInfo.Capabilities, ['pipelines']);
+    });
+
+    test('getConfigInfo runs in the workspace folder when one is open', async () => {
+        const workspaceFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file('/workspace'),
+            name: 'workspace',
+            index: 0,
+        };
+        sinon.stub(vscode.workspace, 'workspaceFolders').value([workspaceFolder]);
+        const terminalProvider = {
+            getAspireCliExecutablePath: async () => '/usr/bin/aspire',
+            createEnvironment: () => ({}),
+        } as unknown as AspireTerminalProvider;
+        let workingDirectory: string | undefined;
+        const spawnStub = sinon.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, options) => {
+            workingDirectory = options?.workingDirectory;
+            options?.stdoutCallback?.(JSON.stringify({
+                localSettingsPath: '/workspace/aspire.config.json',
+                globalSettingsPath: '/home/user/.aspire/aspire.config.json',
+                availableFeatures: [],
+                localSettingsSchema: { properties: [] },
+                globalSettingsSchema: { properties: [] },
+            }));
+            options?.exitCallback?.(0);
+            return {} as ChildProcessWithoutNullStreams;
+        });
+
+        const configInfo = await getConfigInfo(terminalProvider);
+
+        assert.ok(configInfo);
+        assert.strictEqual(workingDirectory, '/workspace');
+        assert.strictEqual(spawnStub.firstCall.args[3]?.noExtensionVariables, true);
     });
 });

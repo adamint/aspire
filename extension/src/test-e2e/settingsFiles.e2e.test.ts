@@ -11,6 +11,10 @@ interface ActiveEditorInfo {
     fileName?: string;
 }
 
+interface WorkspaceFolderInfo {
+    fileName?: string;
+}
+
 suite('Aspire settings file command E2E', function () {
     this.timeout(180000);
 
@@ -21,6 +25,7 @@ suite('Aspire settings file command E2E', function () {
 
     test('creates and opens local and isolated global Aspire settings files', async () => {
         await openAspireView();
+        await waitForWorkspaceFolderPath(getWorkspaceRoot());
         await waitForRepositoryIdle();
 
         assertNoInstallRouteSidecar();
@@ -49,6 +54,23 @@ suite('Aspire settings file command E2E', function () {
         assert.strictEqual(fs.readFileSync(globalSettingsPath, 'utf8'), '{}');
     });
 });
+
+async function waitForWorkspaceFolderPath(expectedPath: string, timeoutMs = 60000): Promise<WorkspaceFolderInfo> {
+    const started = Date.now();
+    let lastFolders: WorkspaceFolderInfo[] | undefined;
+    while (Date.now() - started < timeoutMs) {
+        const result = (await executeE2eControlCommand({ name: 'getWorkspaceFolders' })).result as WorkspaceFolderInfo[];
+        lastFolders = result;
+        const folder = result.find(folder => folder.fileName && isSamePath(folder.fileName, expectedPath));
+        if (folder) {
+            return folder;
+        }
+
+        await delay(200);
+    }
+
+    throw new Error(`Timed out after ${timeoutMs}ms waiting for workspace folder '${expectedPath}'. Last workspace folders: ${JSON.stringify(lastFolders)}`);
+}
 
 async function waitForActiveEditorPath(expectedPath: string, timeoutMs = 60000): Promise<ActiveEditorInfo> {
     const started = Date.now();

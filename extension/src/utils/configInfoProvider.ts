@@ -39,6 +39,7 @@ type RawConfigInfo = Partial<ConfigInfo> & {
  */
 export async function getConfigInfo(terminalProvider: AspireTerminalProvider): Promise<ConfigInfo | null> {
     const cliPath = await terminalProvider.getAspireCliExecutablePath();
+    const workingDirectory = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 
     return new Promise<ConfigInfo | null>((resolve) => {
         const args = ['config', 'info', '--json'];
@@ -74,6 +75,7 @@ export async function getConfigInfo(terminalProvider: AspireTerminalProvider): P
                 vscode.window.showErrorMessage(strings.errorGettingConfigInfo(error));
                 resolve(null);
             },
+            workingDirectory,
             noExtensionVariables: true
         });
     });

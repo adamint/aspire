@@ -847,6 +847,14 @@ async function executeE2eControlCommand(
       markStarted();
       return await vscode.env.clipboard.readText();
     }
+    case 'getWorkspaceFolders': {
+      markStarted();
+      return vscode.workspace.workspaceFolders?.map(folder => ({
+        name: folder.name,
+        uri: folder.uri.toString(),
+        fileName: folder.uri.fsPath,
+      })) ?? [];
+    }
     case 'getActiveEditor': {
       markStarted();
       return getActiveEditorInfo();
