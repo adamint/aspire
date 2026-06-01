@@ -1,0 +1,261 @@
+{
+  "url": "https://TestShop.dev.localhost:56785/login?t=<redacted>",
+  "steps": [
+    {
+      "label": "initial",
+      "state": {
+        "active": [
+          {
+            "tag": "BODY",
+            "text": "TestShop Resources Console Structured Traces Metrics Update nowAspire 13.5.0-preview.1.26280.5 is av",
+            "aria": null,
+            "role": null,
+            "id": "",
+            "cls": "",
+            "href": null,
+            "title": null,
+            "tabindex": null,
+            "hidden": false,
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "width": 1366,
+              "height": 768
+            }
+          }
+        ],
+        "filter": {
+          "tag": "FLUENT-BUTTON",
+          "text": "",
+          "aria": "No filters",
+          "role": null,
+          "id": "resourceFilterButton",
+          "cls": "stealth",
+          "href": null,
+          "title": "No filters",
+          "tabindex": "-1",
+          "hidden": false,
+          "rect": {
+            "x": 1294,
+            "y": 111,
+            "width": 32,
+            "height": 32
+          }
+        },
+        "popovers": []
+      }
+    },
+    {
+      "label": "filter-focused-programmatic",
+      "state": {
+        "active": [
+          {
+            "tag": "FLUENT-BUTTON",
+            "text": "",
+            "aria": "No filters",
+            "role": null,
+            "id": "resourceFilterButton",
+            "cls": "stealth",
+            "href": null,
+            "title": "No filters",
+            "tabindex": "-1",
+            "hidden": false,
+            "rect": {
+              "x": 1294,
+              "y": 111,
+              "width": 32,
+              "height": 32
+            }
+          },
+          {
+            "tag": "BUTTON",
+            "text": "",
+            "aria": "No filters",
+            "role": null,
+            "id": "",
+            "cls": "control icon-only",
+            "href": null,
+            "title": null,
+            "tabindex": null,
+            "hidden": false,
+            "rect": {
+              "x": 1294,
+              "y": 111,
+              "width": 32,
+              "height": 32
+            }
+          }
+        ],
+        "filter": {
+          "tag": "FLUENT-BUTTON",
+          "text": "",
+          "aria": "No filters",
+          "role": null,
+          "id": "resourceFilterButton",
+          "cls": "stealth",
+          "href": null,
+          "title": "No filters",
+          "tabindex": "-1",
+          "hidden": false,
+          "rect": {
+            "x": 1294,
+            "y": 111,
+            "width": 32,
+            "height": 32
+          }
+        },
+        "popovers": []
+      }
+    },
+    {
+      "label": "after-enter",
+      "state": {
+        "active": [
+          {
+            "tag": "FLUENT-CHECKBOX",
+            "text": "(All)",
+            "aria": null,
+            "role": "checkbox",
+            "id": "f442cff77",
+            "cls": "checked",
+            "href": null,
+            "title": null,
+            "tabindex": "0",
+            "hidden": false,
+            "rect": {
+              "x": 1097,
+              "y": 192,
+              "width": 65,
+              "height": 20
+            }
+          }
+        ],
+        "filter": {
+          "tag": "FLUENT-BUTTON",
+          "text": "",
+          "aria": "No filters",
+          "role": null,
+          "id": "resourceFilterButton",
+          "cls": "stealth",
+          "href": null,
+          "title": "No filters",
+          "tabindex": "-1",
+          "hidden": false,
+          "rect": {
+            "x": 1294,
+            "y": 111,
+            "width": 32,
+            "height": 32
+          }
+        },
+        "popovers": []
+      }
+    },
+    {
+      "label": "after-shift-tab",
+      "state": {
+        "active": [
+          {
+            "tag": "FLUENT-SEARCH",
+            "text": "",
+            "aria": null,
+            "role": null,
+            "id": "f61902e91",
+            "cls": "",
+            "href": null,
+            "title": null,
+            "tabindex": "0",
+            "hidden": false,
+            "rect": {
+              "x": 1054,
+              "y": 111,
+              "width": 232,
+              "height": 32
+            }
+          },
+          {
+            "tag": "INPUT",
+            "text": "",
+            "aria": null,
+            "role": null,
+            "id": "control",
+            "cls": "control",
+            "href": null,
+            "title": null,
+            "tabindex": null,
+            "hidden": false,
+            "rect": {
+              "x": 1087,
+              "y": 114,
+              "width": 164,
+              "height": 26
+            }
+          }
+        ],
+        "filter": {
+          "tag": "FLUENT-BUTTON",
+          "text": "",
+          "aria": "No filters",
+          "role": null,
+          "id": "resourceFilterButton",
+          "cls": "stealth",
+          "href": null,
+          "title": "No filters",
+          "tabindex": "-1",
+          "hidden": false,
+          "rect": {
+            "x": 1294,
+            "y": 111,
+            "width": 32,
+            "height": 32
+          }
+        },
+        "popovers": []
+      }
+    },
+    {
+      "label": "after-tab",
+      "state": {
+        "active": [
+          {
+            "tag": "FLUENT-TAB",
+            "text": "Resources",
+            "aria": "Resources",
+            "role": "tab",
+            "id": "tab-Table",
+            "cls": "tab-label",
+            "href": null,
+            "title": null,
+            "tabindex": "0",
+            "hidden": false,
+            "rect": {
+              "x": 81,
+              "y": 161,
+              "width": 108,
+              "height": 40
+            }
+          }
+        ],
+        "filter": {
+          "tag": "FLUENT-BUTTON",
+          "text": "",
+          "aria": "No filters",
+          "role": null,
+          "id": "resourceFilterButton",
+          "cls": "stealth",
+          "href": null,
+          "title": "No filters",
+          "tabindex": "-1",
+          "hidden": false,
+          "rect": {
+            "x": 1294,
+            "y": 111,
+            "width": 32,
+            "height": 32
+          }
+        },
+        "popovers": []
+      }
+    }
+  ]
+}

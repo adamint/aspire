@@ -1,0 +1,57 @@
+{
+  "status": "NO_REPRO",
+  "issue": "microsoft/aspire#10129",
+  "worktree": "/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10129",
+  "apphost": "playground/TestShop/TestShop.AppHost/TestShop.AppHost.csproj",
+  "dashboardUrlUsed": "https://TestShop.dev.localhost:56785/login?t=<redacted>",
+  "codeInspected": [
+    "src/Aspire.Dashboard/Components/Layout/MainLayout.razor",
+    "src/Aspire.Dashboard/Components/Layout/DesktopNavMenu.razor",
+    "src/Aspire.Dashboard/Components/Layout/MobileNavMenu.razor",
+    "src/Aspire.Dashboard/Components/Pages/Resources.razor",
+    "src/Aspire.Dashboard/wwwroot/js/app.js"
+  ],
+  "reproAttempts": [
+    {
+      "name": "desktop nav Resources item",
+      "sequence": "Tab x8 to left nav Resources; Enter; Shift+Tab",
+      "result": "Focus moved from Resources nav item to Settings header button, the immediately previous interactive element in DOM/tab order."
+    },
+    {
+      "name": "desktop Resources view tab with update message visible",
+      "sequence": "Tab x16 to Resources tab inside Resources page; Enter; Shift+Tab; Shift+Tab",
+      "result": "Focus moved to search input, then update message Ignore button. This matches preceding focus order observed in the JSON trail."
+    },
+    {
+      "name": "desktop Resources view tab after dismissing update message",
+      "sequence": "Dismiss update message; Tab to Resources tab; Enter; Shift+Tab; Shift+Tab",
+      "result": "Focus moved to search input, then Metrics nav item. This is the logical reverse order once the message bar is gone."
+    },
+    {
+      "name": "narrow/mobile Resources menu item",
+      "sequence": "Tab to navigation button; Enter; Tab to Resources menu item; Enter; Shift+Tab",
+      "result": "Focus returned to the navigation button after the menu item activated and closed."
+    },
+    {
+      "name": "resource filter popover probe",
+      "sequence": "Programmatically focus filter trigger; Enter; Shift+Tab; Tab",
+      "result": "Popover focused first checkbox; Shift+Tab moved to search. The trigger currently has tabindex=-1, so this appears to be Fluent Popover/focus behavior rather than a Resources tab repro."
+    }
+  ],
+  "evidenceFiles": [
+    "focus-sequences.json",
+    "focus-clean-banner-dismissed.json",
+    "popover-probe.json",
+    "desktop-nav-resources-enter-shift-tab-09-tab-8.png",
+    "desktop-nav-resources-enter-shift-tab-11-after-shift-tab-from-resources-nav.png",
+    "desktop-resources-tab-enter-shift-tab-17-tab-16.png",
+    "desktop-resources-tab-enter-shift-tab-19-after-shift-tab-from-resources-view-tab.png",
+    "clean-03-after-enter-on-resources-view-tab.png",
+    "clean-04-after-shift-tab-from-resources-view-tab.png",
+    "popover-03-after-enter.png",
+    "popover-04-after-shift-tab.png"
+  ],
+  "attachment": "Downloaded to ../issue-attachment.mp4; ffprobe failed because local ffmpeg is missing libx265. Browser frame extraction did not complete, so reproduction is based on live Playwright evidence and the issue text/comments.",
+  "changes": "No repository files changed.",
+  "tests": "Not run; no code changes were made."
+}

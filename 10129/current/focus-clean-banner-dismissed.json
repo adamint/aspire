@@ -1,0 +1,163 @@
+{
+  "url": "https://TestShop.dev.localhost:56785/login?t=<redacted>",
+  "steps": [
+    {
+      "label": "initial-after-banner-dismiss",
+      "chain": [
+        {
+          "tag": "BODY",
+          "text": "TestShop Resources Console Structured Traces Metrics Resources Resources Parameters Graph Name State",
+          "aria": null,
+          "role": null,
+          "id": "",
+          "cls": "",
+          "href": null,
+          "tabindex": null,
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 1366,
+            "height": 768
+          }
+        }
+      ]
+    },
+    {
+      "label": "tab-1",
+      "chain": [
+        {
+          "tag": "FLUENT-SEARCH",
+          "text": "",
+          "aria": null,
+          "role": null,
+          "id": "f1e66416f",
+          "cls": "",
+          "href": null,
+          "tabindex": "0",
+          "rect": {
+            "x": 1054,
+            "y": 65,
+            "width": 232,
+            "height": 32
+          }
+        },
+        {
+          "tag": "INPUT",
+          "text": "",
+          "aria": null,
+          "role": null,
+          "id": "control",
+          "cls": "control",
+          "href": null,
+          "tabindex": null,
+          "rect": {
+            "x": 1087,
+            "y": 68,
+            "width": 164,
+            "height": 26
+          }
+        }
+      ]
+    },
+    {
+      "label": "tab-2",
+      "chain": [
+        {
+          "tag": "FLUENT-TAB",
+          "text": "Resources",
+          "aria": "Resources",
+          "role": "tab",
+          "id": "tab-Table",
+          "cls": "tab-label",
+          "href": null,
+          "tabindex": "0",
+          "rect": {
+            "x": 81,
+            "y": 115,
+            "width": 108,
+            "height": 40
+          }
+        }
+      ]
+    },
+    {
+      "label": "after-enter-on-resources-view-tab",
+      "chain": [
+        {
+          "tag": "FLUENT-TAB",
+          "text": "Resources",
+          "aria": "Resources",
+          "role": "tab",
+          "id": "tab-Table",
+          "cls": "tab-label",
+          "href": null,
+          "tabindex": "0",
+          "rect": {
+            "x": 81,
+            "y": 115,
+            "width": 108,
+            "height": 40
+          }
+        }
+      ]
+    },
+    {
+      "label": "after-shift-tab-from-resources-view-tab",
+      "chain": [
+        {
+          "tag": "FLUENT-SEARCH",
+          "text": "",
+          "aria": null,
+          "role": null,
+          "id": "f1e66416f",
+          "cls": "",
+          "href": null,
+          "tabindex": "0",
+          "rect": {
+            "x": 1054,
+            "y": 65,
+            "width": 232,
+            "height": 32
+          }
+        },
+        {
+          "tag": "INPUT",
+          "text": "",
+          "aria": null,
+          "role": null,
+          "id": "control",
+          "cls": "control",
+          "href": null,
+          "tabindex": null,
+          "rect": {
+            "x": 1087,
+            "y": 68,
+            "width": 164,
+            "height": 26
+          }
+        }
+      ]
+    },
+    {
+      "label": "after-second-shift-tab-from-resources-view-tab",
+      "chain": [
+        {
+          "tag": "A",
+          "text": "Metrics",
+          "aria": null,
+          "role": null,
+          "id": "",
+          "cls": "",
+          "href": "/metrics",
+          "tabindex": null,
+          "rect": {
+            "x": 0,
+            "y": 250,
+            "width": 68,
+            "height": 48
+          }
+        }
+      ]
+    }
+  ]
+}
