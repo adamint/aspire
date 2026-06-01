@@ -108,7 +108,7 @@ parameters:
   - name: NpmPublishApprovers
     displayName: 'npm ESRP approvers (comma-separated Microsoft aliases or emails; leave unchanged for repo default)'
     type: string
-    default: 'adamratzman'
+    default: 'adamratzman,David.Pine'
 
   - name: NpmRegistryPropagationDelayMinutes
     displayName: 'Minutes to wait between npm RID and pointer package submissions'
