@@ -284,6 +284,9 @@ jobs:
           ASPIRE_EXTENSION_E2E_VSIX: ${{ github.workspace }}/extension/out/aspire-extension.vsix
           ASPIRE_EXTENSION_E2E_SHARD: ${{ matrix.shardName }}
           ASPIRE_EXTENSION_E2E_SPEC: ${{ matrix.spec }}
+          # Linux E2E jobs run under Xvfb, so record by default but keep/upload videos only for failures.
+          # Set ASPIRE_EXTENSION_E2E_RECORDING_MODE=always when manually rerunning to keep successful recordings too.
+          ASPIRE_EXTENSION_E2E_RECORDING_MODE: ${{ matrix.useXvfb && 'failure' || 'off' }}
           # vscode-extension-tester isn't mirrored to dotnet-public-npm yet; the runner keeps
           # this explicit so the regular extension dependency restore still uses the internal feed.
           ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY: https://registry.npmjs.org
@@ -305,4 +308,5 @@ jobs:
             extension/.test-storage/**/logs/**
             extension/.test-workspaces/**/.aspire/**
             extension/.test-workspaces/**/*.log
+            extension/.test-recordings/**
           if-no-files-found: ignore

@@ -4,7 +4,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 const extensionRoot = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(extensionRoot, '..');
@@ -25,6 +25,7 @@ const workspaceRoot = process.env.ASPIRE_EXTENSION_E2E_WORKSPACE_ROOT
   : path.join(shortRunRoot, 'workspace');
 const storageDiagnosticsDir = path.join(diagnosticsStorageRoot, shardName, runId);
 const workspaceDiagnosticsDir = path.join(extensionRoot, '.test-workspaces', shardName, runId);
+const recordingsDir = path.join(extensionRoot, '.test-recordings', shardName);
 const defaultVsixPath = path.join(artifactsDir, 'aspire-extension-e2e.vsix');
 const stateFile = path.join(resultsDir, 'extension-state.json');
 const controlFile = path.join(resultsDir, 'extension-control.json');
@@ -43,6 +44,7 @@ const csharpFileHeader = `// Licensed to the .NET Foundation under one or more a
 `;
 
 fs.rmSync(resultsDir, { recursive: true, force: true });
+fs.rmSync(recordingsDir, { recursive: true, force: true });
 for (const directory of [artifactsDir, resultsDir, diagnosticsStorageRoot, isolatedAspireHome, storageDir, extensionsDir, workspaceRoot]) {
   fs.mkdirSync(directory, { recursive: true });
 }
@@ -145,6 +147,113 @@ function toPosixPath(value) {
   return path.resolve(value).replace(/^\\\\\?\\/, '').split(path.sep).join('/');
 }
 
+function startRecording() {
+  const mode = getRecordingMode();
+  if (mode === 'off') {
+    return undefined;
+  }
+
+  if (process.platform !== 'linux') {
+    console.warn(`Skipping Aspire extension E2E recording because '${mode}' recording is only supported on Linux runners.`);
+    return undefined;
+  }
+
+  const display = process.env.DISPLAY;
+  if (!display) {
+    console.warn('Skipping Aspire extension E2E recording because DISPLAY is not set.');
+    return undefined;
+  }
+
+  const ffmpegCheck = spawnSync('ffmpeg', ['-version'], { encoding: 'utf8', stdio: 'ignore' });
+  if (ffmpegCheck.error || ffmpegCheck.status !== 0) {
+    console.warn('Skipping Aspire extension E2E recording because ffmpeg is not available.');
+    return undefined;
+  }
+
+  fs.mkdirSync(recordingsDir, { recursive: true });
+  const outputPath = path.join(recordingsDir, `${runId}.mp4`);
+  const displayInput = display.includes('.') ? display : `${display}.0`;
+  const args = [
+    '-y',
+    '-video_size',
+    process.env.ASPIRE_EXTENSION_E2E_RECORDING_SIZE || '1920x1080',
+    '-framerate',
+    process.env.ASPIRE_EXTENSION_E2E_RECORDING_FRAMERATE || '15',
+    '-f',
+    'x11grab',
+    '-draw_mouse',
+    '1',
+    '-i',
+    displayInput,
+    '-an',
+    '-c:v',
+    'libx264',
+    '-preset',
+    'ultrafast',
+    '-pix_fmt',
+    'yuv420p',
+    outputPath,
+  ];
+  const logPath = path.join(recordingsDir, `${runId}.ffmpeg.log`);
+  const logFd = fs.openSync(logPath, 'w');
+  const ffmpeg = spawn('ffmpeg', args, {
+    stdio: ['ignore', logFd, logFd],
+    detached: false,
+  });
+
+  ffmpeg.on('error', error => {
+    console.warn(`Aspire extension E2E recording failed to start: ${error.message}`);
+  });
+
+  return {
+    mode,
+    outputPath,
+    logPath,
+    pid: ffmpeg.pid,
+    closeLog: () => fs.closeSync(logFd),
+  };
+}
+
+function getRecordingMode() {
+  const configured = (process.env.ASPIRE_EXTENSION_E2E_RECORDING_MODE || 'off').toLowerCase();
+  if (configured === 'off' || configured === 'failure' || configured === 'always') {
+    return configured;
+  }
+
+  throw new Error(`ASPIRE_EXTENSION_E2E_RECORDING_MODE must be 'off', 'failure', or 'always'. Got '${process.env.ASPIRE_EXTENSION_E2E_RECORDING_MODE}'.`);
+}
+
+function stopRecording(recording, testFailure) {
+  if (!recording) {
+    return;
+  }
+
+  try {
+    if (recording.pid) {
+      spawnSync('bash', ['-lc', `kill -INT ${recording.pid} 2>/dev/null || true; sleep 2; kill -TERM ${recording.pid} 2>/dev/null || true`], {
+        stdio: 'ignore',
+      });
+    }
+  }
+  finally {
+    recording.closeLog();
+  }
+
+  const keepRecording = recording.mode === 'always' || (recording.mode === 'failure' && testFailure);
+  if (!keepRecording) {
+    fs.rmSync(recording.outputPath, { force: true });
+    fs.rmSync(recording.logPath, { force: true });
+    return;
+  }
+
+  if (fs.existsSync(recording.outputPath)) {
+    console.log(`Aspire extension E2E recording saved to ${recording.outputPath}`);
+  }
+  else {
+    console.warn(`Aspire extension E2E recording was requested but no recording file was written. Check ${recording.logPath}.`);
+  }
+}
+
 const cliPath = isolateCliPath(resolveCliPath());
 validateCliPath(cliPath);
 const appHostSdkVersion = resolveAppHostSdkVersion(cliPath);
@@ -182,6 +291,7 @@ runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', storageD
 runWithRetry(process.execPath, [extesterCli, 'get-chromedriver', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 3, retryDelayMs: 5000 });
 run(process.execPath, [extesterCli, 'install-vsix', '--storage', storageDir, '--extensions_dir', extensionsDir, '--vsix_file', vsixPath], extestEnv);
 let testFailure;
+const recording = startRecording();
 try {
   run(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js'), '--open_resource', workspaceRoot], extestEnv);
 }
@@ -189,6 +299,7 @@ catch (error) {
   testFailure = error;
 }
 finally {
+  stopRecording(recording, testFailure);
   stopWorkspaceAppHost();
   copyStorageDiagnostics();
   copyWorkspaceDiagnostics();
