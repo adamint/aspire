@@ -41,15 +41,17 @@ else if (DisplayedUrls.Count > 1)
                         @Loc[nameof(Resources.Columns.UrlsColumnDisplayOverflowTitle)]
                     </Header>
                     <Body>
-                        <div class="url-popup">
-                            @foreach (var item in items)
-                            {
-                                var d = (DisplayedUrl)item.Data!;
-                                <div class="url-link">
-                                    @WriteUrl(d)
-                                </div>
-                            }
-                        </div>
+                        <AspirePopupFocusNavigation AnchorId="@overflow.IdMoreButton" @bind-Open="_popoverVisible">
+                            <div class="url-popup">
+                                @foreach (var item in items)
+                                {
+                                    var d = (DisplayedUrl)item.Data!;
+                                    <div class="url-link">
+                                        @WriteUrl(d)
+                                    </div>
+                                }
+                            </div>
+                        </AspirePopupFocusNavigation>
                     </Body>
                 </FluentPopover>
             </div>
