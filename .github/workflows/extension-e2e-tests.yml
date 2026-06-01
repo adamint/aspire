@@ -310,3 +310,4 @@ jobs:
             extension/.test-workspaces/**/*.log
             extension/.test-recordings/**
           if-no-files-found: ignore
+          include-hidden-files: true
