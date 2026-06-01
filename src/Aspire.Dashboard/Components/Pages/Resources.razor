@@ -119,7 +119,7 @@
                                     </FluentTab>
                                 </FluentTabs>
                             }
-                            <div class="resources-grid-container" hidden="@(PageViewModel.SelectedViewKind == ResourceViewKind.Graph)">
+                            <div @ref="_resourcesGridContainer" class="resources-grid-container" hidden="@(PageViewModel.SelectedViewKind == ResourceViewKind.Graph)">
                                 <GridColumnManager @ref="_manager" Columns="@_gridColumns">
                                     <FluentDataGrid @ref="_dataGrid"
                                                     ColumnResizeLabels="@_resizeLabels"
