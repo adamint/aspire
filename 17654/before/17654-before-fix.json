@@ -1,0 +1,72 @@
+{
+  "label": "BEFORE FIX",
+  "state": {
+    "url": "https://testshop.dev.localhost:49661/",
+    "innerWidth": 320,
+    "tabs": [
+      {
+        "text": "Resources",
+        "overflow": false,
+        "fixed": false,
+        "selected": "true",
+        "rect": {
+          "x": 13,
+          "y": 207,
+          "width": 107.59375,
+          "height": 40,
+          "right": 120.59375,
+          "bottom": 247
+        },
+        "visible": true
+      },
+      {
+        "text": "Parameters",
+        "overflow": false,
+        "fixed": false,
+        "selected": "false",
+        "rect": {
+          "x": 120.59375,
+          "y": 207,
+          "width": 108.359375,
+          "height": 40,
+          "right": 228.953125,
+          "bottom": 247
+        },
+        "visible": true
+      },
+      {
+        "text": "Graph",
+        "overflow": true,
+        "fixed": false,
+        "selected": "false",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 0,
+          "height": 0,
+          "right": 0,
+          "bottom": 0
+        },
+        "visible": false
+      }
+    ],
+    "graph": {
+      "text": "Graph",
+      "overflow": true,
+      "fixed": false,
+      "selected": "false",
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 0,
+        "height": 0,
+        "right": 0,
+        "bottom": 0
+      },
+      "visible": false
+    },
+    "badge": [
+      "+1"
+    ]
+  }
+}
