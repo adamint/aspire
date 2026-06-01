@@ -346,7 +346,6 @@ async function tryExecuteCommand(commandName: string, terminalProvider: AspireTe
   try {
     await withCommandTelemetry(commandName, async () => {
       const cliCheckExcludedCommands: string[] = ["aspire-vscode.settings", "aspire-vscode.configureLaunchJson"];
-
       if (!cliCheckExcludedCommands.includes(commandName)) {
         if (isE2eBridgeEnabled() && process.env.ASPIRE_EXTENSION_E2E_FORCE_CLI_UNAVAILABLE === 'true') {
           vscode.window.showErrorMessage(

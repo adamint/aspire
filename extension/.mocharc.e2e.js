@@ -16,7 +16,7 @@ function getScreenshotName(test) {
 module.exports = {
   ui: 'tdd',
   timeout: 240000,
-  reporter: 'json',
+  reporter: path.join(__dirname, 'scripts', 'e2e-mocha-reporter.cjs'),
   reporterOptions: {
     output: path.join(resultsDir, 'mocha.json'),
   },

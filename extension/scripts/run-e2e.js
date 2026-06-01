@@ -30,6 +30,7 @@ const defaultVsixPath = path.join(artifactsDir, 'aspire-extension-e2e.vsix');
 const stateFile = path.join(resultsDir, 'extension-state.json');
 const controlFile = path.join(resultsDir, 'extension-control.json');
 const testSpec = process.env.ASPIRE_EXTENSION_E2E_SPEC || 'out/test-e2e/**/*.e2e.test.js';
+const matchedTestSpecs = findSpecMatches(testSpec);
 const vscodeVersion = process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.122.1';
 const extesterVersion = process.env.ASPIRE_EXTENSION_E2E_EXTESTER_VERSION || '8.23.0';
 const extesterNpmRegistry = process.env.ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY || 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/';
@@ -50,6 +51,7 @@ for (const directory of [artifactsDir, resultsDir, diagnosticsStorageRoot, isola
   fs.mkdirSync(directory, { recursive: true });
 }
 assertSpecMatches(testSpec);
+logE2eConfiguration();
 
 function shouldUseShellForCommand(command) {
   // npm and corepack are .cmd shims on Windows. Node.js 20+ intentionally refuses
@@ -58,10 +60,25 @@ function shouldUseShellForCommand(command) {
 }
 
 function assertSpecMatches(spec) {
-  const matches = findSpecMatches(spec);
-  if (matches.length === 0) {
+  if (matchedTestSpecs.length === 0) {
     throw new Error(`E2E spec '${spec}' did not match any compiled test files under ${path.relative(extensionRoot, path.join(extensionRoot, 'out', 'test-e2e'))}. Run corepack yarn@1.22.22 compile-e2e and check ASPIRE_EXTENSION_E2E_SPEC.`);
   }
+}
+
+function logE2eConfiguration() {
+  console.log('Aspire extension E2E configuration:');
+  console.log(`  shard: ${shardName}`);
+  console.log(`  spec: ${testSpec}`);
+  console.log(`  matched specs: ${matchedTestSpecs.map(file => path.relative(extensionRoot, file)).join(', ')}`);
+  console.log(`  VS Code: ${vscodeVersion}`);
+  console.log(`  ExTester: ${extesterVersion}`);
+  console.log(`  results: ${path.relative(extensionRoot, resultsDir)}`);
+  console.log(`  storage diagnostics: ${path.relative(extensionRoot, storageDiagnosticsDir)}`);
+  console.log(`  workspace diagnostics: ${path.relative(extensionRoot, workspaceDiagnosticsDir)}`);
+}
+
+function logStep(name) {
+  console.log(`\n--- ${name} ---`);
 }
 
 function findSpecMatches(spec) {
@@ -299,12 +316,16 @@ const extestEnv = getAspireCliEnvironment({
   NODE_PATH: [extesterNodeModules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
 });
 
+logStep('Downloading VS Code');
 runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 3, retryDelayMs: 5000, beforeRetry: cleanPartialExtesterDownloads });
+logStep('Downloading ChromeDriver');
 runWithRetry(process.execPath, [extesterCli, 'get-chromedriver', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 3, retryDelayMs: 5000, beforeRetry: cleanPartialExtesterDownloads });
+logStep('Installing VSIX');
 run(process.execPath, [extesterCli, 'install-vsix', '--storage', storageDir, '--extensions_dir', extensionsDir, '--vsix_file', vsixPath], extestEnv);
 let testFailure;
 const recording = startRecording();
 try {
+  logStep('Running VS Code extension E2E tests');
   run(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js'), '--open_resource', workspaceRoot], extestEnv);
 }
 catch (error) {
@@ -319,8 +340,11 @@ finally {
 }
 
 if (testFailure) {
+  printFailureDiagnosticsSummary();
   throw testFailure;
 }
+
+printSuccessDiagnosticsSummary();
 
 function resolveCliPath() {
   if (process.env.ASPIRE_EXTENSION_E2E_CLI_PATH) {
@@ -869,6 +893,101 @@ function copyWorkspaceProjectSources() {
     copyIfExists(path.join(sourceDirectory, 'Program.cs'), path.join(destinationDirectory, 'Program.cs'));
     copyIfExists(path.join(sourceDirectory, `${entry.name}.csproj`), path.join(destinationDirectory, `${entry.name}.csproj`));
   }
+}
+
+function printSuccessDiagnosticsSummary() {
+  const results = readMochaResults();
+  if (!results) {
+    console.log(`Aspire extension E2E shard '${shardName}' completed. Mocha JSON was not found at ${path.relative(extensionRoot, path.join(resultsDir, 'mocha.json'))}.`);
+    return;
+  }
+
+  const stats = results.stats ?? {};
+  console.log(`Aspire extension E2E shard '${shardName}' passed: ${stats.passes ?? results.passes?.length ?? 0}/${stats.tests ?? results.tests?.length ?? 0} tests in ${stats.duration ?? 'unknown'}ms.`);
+}
+
+function printFailureDiagnosticsSummary() {
+  console.error(`Aspire extension E2E shard '${shardName}' failed.`);
+  console.error(`Results directory: ${path.relative(extensionRoot, resultsDir)}`);
+  console.error(`VS Code diagnostics directory: ${path.relative(extensionRoot, storageDiagnosticsDir)}`);
+  console.error(`Workspace diagnostics directory: ${path.relative(extensionRoot, workspaceDiagnosticsDir)}`);
+
+  const results = readMochaResults();
+  if (results?.failures?.length > 0) {
+    console.error('Failed E2E tests:');
+    for (const failure of results.failures) {
+      console.error(`  - ${failure.fullTitle ?? failure.title}`);
+      const message = failure.err?.message;
+      if (message) {
+        console.error(indentBlock(message, '      '));
+      }
+    }
+  }
+  else {
+    console.error('Mocha failure details were not available in mocha.json.');
+  }
+
+  const state = readJsonIfExists(stateFile);
+  if (state?.state) {
+    console.error('Last exported extension state:');
+    console.error(indentBlock(JSON.stringify({
+      viewMode: state.state.viewMode,
+      isRepositoryLoading: state.state.isRepositoryLoading,
+      isWorkspaceAppHostDiscoveryComplete: state.state.isWorkspaceAppHostDiscoveryComplete,
+      hasError: state.state.hasError,
+      errorMessage: state.state.errorMessage,
+      workspaceAppHostPath: state.state.workspaceAppHostPath,
+      workspaceAppHostCandidatePaths: state.state.workspaceAppHostCandidatePaths,
+      workspaceResources: state.state.workspaceResources?.map(resource => `${resource.name}:${resource.state}`),
+      appHosts: state.state.appHosts?.map(appHost => appHost.appHostPath),
+      launchingPaths: state.state.launchingPaths,
+      debugSessions: state.state.debugSessions,
+    }, null, 2), '  '));
+  }
+
+  const extensionLogPath = findLatestExtensionLogPath();
+  if (extensionLogPath) {
+    console.error(`Last Aspire extension log lines (${path.relative(extensionRoot, extensionLogPath)}):`);
+    console.error(indentBlock(tailLines(fs.readFileSync(extensionLogPath, 'utf8'), 120), '  '));
+  }
+}
+
+function readMochaResults() {
+  return readJsonIfExists(path.join(resultsDir, 'mocha.json'));
+}
+
+function readJsonIfExists(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  }
+  catch (error) {
+    console.warn(`Failed to parse ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
+}
+
+function findLatestExtensionLogPath() {
+  const logsRoot = path.join(storageDiagnosticsDir, 'settings', 'logs');
+  if (!fs.existsSync(logsRoot)) {
+    return undefined;
+  }
+
+  return getFilesRecursive(logsRoot)
+    .filter(file => path.basename(file) === 'Aspire Extension.log')
+    .sort((left, right) => fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs)[0];
+}
+
+function tailLines(value, lineCount) {
+  const lines = value.split(/\r?\n/);
+  return lines.slice(Math.max(0, lines.length - lineCount)).join('\n');
+}
+
+function indentBlock(value, prefix) {
+  return String(value).split(/\r?\n/).map(line => `${prefix}${line}`).join('\n');
 }
 
 function cleanupTemporaryRunRoot() {
