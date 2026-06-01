@@ -11,6 +11,7 @@ using Aspire.Dashboard.Resources;
 using Aspire.Dashboard.Telemetry;
 using Aspire.Dashboard.Utils;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.Localization;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
@@ -64,6 +65,8 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
     private readonly Icon _iconUnselectedMultiple = new Icons.Regular.Size20.CheckboxUnchecked().WithColor(Color.FillInverse);
     private readonly Icon _iconSelectedMultiple = new Icons.Filled.Size20.CheckboxChecked();
     private readonly Icon _iconIndeterminate = new Icons.Filled.Size20.CheckboxIndeterminate();
+    private ElementReference _dataGridContainer;
+    private IJSObjectReference? _jsModule;
     private Task? _resourceSubscriptionTask;
     private FluentDataGrid<ManageDataGridItem>? _dataGrid;
     private bool _isExporting;
@@ -85,6 +88,15 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
 
         // Initialize telemetry-only resources
         UpdateData();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _jsModule = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Dialogs/ManageDataDialog.razor.js");
+            await _jsModule.InvokeVoidAsync("initializeSelectionCheckboxKeyboard", _dataGridContainer);
+        }
     }
 
     private async Task OnTelemetryChangedAsync()
@@ -343,9 +355,7 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
 
     private string GetOtlpResourceName(OtlpResource resource) => OtlpHelpers.GetResourceName(resource, TelemetryRepository.GetResources());
 
-    private string GetHeaderSelectionLabel() => AreAllSelected()
-        ? Loc[nameof(Resources.Dialogs.ManageDataDeselectAllButtonLabel)]
-        : Loc[nameof(Resources.Dialogs.ManageDataSelectAllButtonLabel)];
+    private string GetHeaderSelectionLabel() => Loc[nameof(Resources.Dialogs.ManageDataAllDataCheckboxLabel)];
 
     private string GetResourceDisplayName(ResourceDataRow row)
     {
@@ -364,15 +374,8 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
 
     private string GetResourceDisplayName(string resourceName) => _resourceDataRows.TryGetValue(resourceName, out var row) ? GetResourceDisplayName(row) : resourceName;
 
-    private string GetResourceSelectionLabel(ResourceDataRow row, string resourceDisplayName) => GetSelectionLabel(AreAllDataRowsSelected(row), resourceDisplayName);
-
-    private string GetDataRowSelectionLabel(string resourceName, AspireDataType dataType, string dataTypeDisplayName, string parentResourceDisplayName) => IsDataRowSelected(resourceName, dataType)
-        ? Loc[nameof(Resources.Dialogs.ManageDataDeselectDataTypeForResourceButtonLabel), dataTypeDisplayName, parentResourceDisplayName]
-        : Loc[nameof(Resources.Dialogs.ManageDataSelectDataTypeForResourceButtonLabel), dataTypeDisplayName, parentResourceDisplayName];
-
-    private string GetSelectionLabel(bool selected, string displayName) => selected
-        ? Loc[nameof(Resources.Dialogs.ManageDataDeselectItemButtonLabel), displayName]
-        : Loc[nameof(Resources.Dialogs.ManageDataSelectItemButtonLabel), displayName];
+    private string GetDataRowSelectionLabel(string dataTypeDisplayName, string parentResourceDisplayName) =>
+        Loc[nameof(Resources.Dialogs.ManageDataDataTypeForResourceCheckboxLabel), dataTypeDisplayName, parentResourceDisplayName];
 
     private string GetDataTypeDisplayName(AspireDataType dataType) => dataType switch
     {
@@ -399,6 +402,11 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
 
     private void OnSelectAllClicked()
     {
+        if (_resourceDataRows.Count == 0)
+        {
+            return;
+        }
+
         // If any are unselected (including data rows), select all. Otherwise deselect all.
         var shouldSelectAll = !AreAllSelected();
 
@@ -514,6 +522,10 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
 
     private string GetHeaderCheckboxAriaChecked() => GetCheckboxAriaChecked(AreAllSelected(), AreNoneSelected());
 
+    private string GetHeaderSelectionCheckboxTabIndex() => _resourceDataRows.Count == 0 ? "-1" : "0";
+
+    private string? GetHeaderSelectionCheckboxAriaDisabled() => _resourceDataRows.Count == 0 ? "true" : null;
+
     private Icon GetResourceCheckboxIcon(ResourceDataRow row)
     {
         if (AreAllDataRowsSelected(row))
@@ -537,6 +549,26 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
         (_, true) => "false",
         _ => "mixed"
     };
+
+    private void OnSelectAllCheckboxKeyDown(KeyboardEventArgs args) => OnSelectionCheckboxKeyDown(args, OnSelectAllClicked);
+
+    private void OnResourceCheckboxKeyDown(KeyboardEventArgs args, ResourceDataRow row) =>
+        OnSelectionCheckboxKeyDown(args, () => OnSelectRowClicked(row));
+
+    private void OnDataRowCheckboxKeyDown(KeyboardEventArgs args, string resourceName, AspireDataType dataType) =>
+        OnSelectionCheckboxKeyDown(args, () => OnSelectDataRowClicked(resourceName, dataType));
+
+    private static void OnSelectionCheckboxKeyDown(KeyboardEventArgs args, Action toggle)
+    {
+        if (!args.Repeat && IsSpaceKey(args))
+        {
+            toggle();
+        }
+    }
+
+    private static bool IsSpaceKey(KeyboardEventArgs args) =>
+        args.Key is " " or "Spacebar" ||
+        string.Equals(args.Code, "Space", StringComparison.Ordinal);
 
     private void NavigateToDataPage(TelemetryDataRow dataRow)
     {
@@ -707,6 +739,24 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
 
     public async ValueTask DisposeAsync()
     {
+        if (_jsModule is not null)
+        {
+            try
+            {
+                await _jsModule.InvokeVoidAsync("disposeSelectionCheckboxKeyboard", _dataGridContainer);
+            }
+            catch (JSDisconnectedException)
+            {
+                // The browser may already be gone when the dialog is disposed.
+            }
+            catch (OperationCanceledException)
+            {
+                // The browser may already be gone when the dialog is disposed.
+            }
+
+            await JSInteropHelpers.SafeDisposeAsync(_jsModule);
+        }
+
         _resourcesSubscription?.Dispose();
 
         await _cts.CancelAsync();

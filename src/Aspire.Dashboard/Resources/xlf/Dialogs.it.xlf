@@ -484,20 +484,15 @@ For more information about using AI agents with the dashboard, including setting
         <target state="translated">OK</target>
         <note />
       </trans-unit>
-      <trans-unit id="ManageDataDeselectAllButtonLabel">
-        <source>Deselect all</source>
-        <target state="new">Deselect all</target>
+      <trans-unit id="ManageDataAllDataCheckboxLabel">
+        <source>All data</source>
+        <target state="new">All data</target>
         <note />
       </trans-unit>
-      <trans-unit id="ManageDataDeselectDataTypeForResourceButtonLabel">
-        <source>Deselect {0} for {1}</source>
-        <target state="new">Deselect {0} for {1}</target>
+      <trans-unit id="ManageDataDataTypeForResourceCheckboxLabel">
+        <source>{0} for {1}</source>
+        <target state="new">{0} for {1}</target>
         <note>{0} is the data type display name. {1} is the parent resource display name.</note>
-      </trans-unit>
-      <trans-unit id="ManageDataDeselectItemButtonLabel">
-        <source>Deselect {0}</source>
-        <target state="new">Deselect {0}</target>
-        <note>{0} is the resource or data type display name.</note>
       </trans-unit>
       <trans-unit id="ManageDataDialogTitle">
         <source>Manage logs and telemetry</source>
@@ -543,21 +538,6 @@ For more information about using AI agents with the dashboard, including setting
         <source>Resource</source>
         <target state="translated">Risorsa</target>
         <note />
-      </trans-unit>
-      <trans-unit id="ManageDataSelectAllButtonLabel">
-        <source>Select all</source>
-        <target state="new">Select all</target>
-        <note />
-      </trans-unit>
-      <trans-unit id="ManageDataSelectDataTypeForResourceButtonLabel">
-        <source>Select {0} for {1}</source>
-        <target state="new">Select {0} for {1}</target>
-        <note>{0} is the data type display name. {1} is the parent resource display name.</note>
-      </trans-unit>
-      <trans-unit id="ManageDataSelectItemButtonLabel">
-        <source>Select {0}</source>
-        <target state="new">Select {0}</target>
-        <note>{0} is the resource or data type display name.</note>
       </trans-unit>
       <trans-unit id="ManageDataStructuredLogs">
         <source>Structured logs</source>

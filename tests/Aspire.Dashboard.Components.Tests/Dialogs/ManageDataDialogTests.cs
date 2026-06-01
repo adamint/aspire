@@ -11,7 +11,10 @@ using Aspire.Dashboard.Model.ManageData;
 using Aspire.Dashboard.Tests.Shared;
 using Aspire.Tests.Shared.DashboardModel;
 using Bunit;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Xunit;
 
@@ -43,10 +46,40 @@ public sealed class ManageDataDialogTests : DashboardTestContext
         cut.WaitForAssertion(() =>
         {
             AssertSelectionCheckboxCount(cut, 3);
-            AssertSelectionCheckbox(cut, "Deselect all", "true");
-            AssertSelectionCheckbox(cut, "Deselect Basket service", "true");
-            AssertSelectionCheckbox(cut, "Deselect Catalog service", "true");
+            AssertSelectionCheckbox(cut, "All data", "true");
+            AssertSelectionCheckbox(cut, "Basket service", "true");
+            AssertSelectionCheckbox(cut, "Catalog service", "true");
+            AssertSelectionCheckboxesHaveNoActionLabels(cut);
             AssertNoButtonHasAccessibleName(cut, "Name");
+        });
+
+        PressKey(AssertSelectionCheckbox(cut, "Basket service", "true"), "Tab");
+        AssertSelectionCheckbox(cut, "Basket service", "true");
+
+        PressKey(AssertSelectionCheckbox(cut, "Basket service", "true"), "Tab", shiftKey: true);
+        AssertSelectionCheckbox(cut, "Basket service", "true");
+
+        PressKey(AssertSelectionCheckbox(cut, "Basket service", "true"), "Enter");
+        AssertSelectionCheckbox(cut, "Basket service", "true");
+
+        PressSpace(AssertSelectionCheckbox(cut, "Basket service", "true"));
+
+        cut.WaitForAssertion(() =>
+        {
+            AssertSelectionCheckboxCount(cut, 3);
+            AssertSelectionCheckbox(cut, "All data", "mixed");
+            AssertSelectionCheckbox(cut, "Basket service", "false");
+            AssertSelectionCheckbox(cut, "Catalog service", "true");
+        });
+
+        PressSpace(AssertSelectionCheckbox(cut, "Basket service", "false"));
+
+        cut.WaitForAssertion(() =>
+        {
+            AssertSelectionCheckboxCount(cut, 3);
+            AssertSelectionCheckbox(cut, "All data", "true");
+            AssertSelectionCheckbox(cut, "Basket service", "true");
+            AssertSelectionCheckbox(cut, "Catalog service", "true");
         });
 
         ExpandResourceRows(cut, expectedCount: 2);
@@ -54,48 +87,50 @@ public sealed class ManageDataDialogTests : DashboardTestContext
         cut.WaitForAssertion(() =>
         {
             AssertAllSelectionControlsSelected(cut);
-            AssertNoButtonHasAccessibleName(cut, "Deselect Console logs");
+            AssertNoSelectionCheckboxHasAccessibleName(cut, "Console logs");
             AssertNoButtonHasAccessibleName(cut, "Name");
         });
 
-        AssertSelectionCheckbox(cut, "Deselect Console logs for Basket service", "true").Click();
+        AssertSelectionCheckbox(cut, "Console logs for Basket service", "true").Click();
 
         cut.WaitForAssertion(() =>
         {
             AssertSelectionCheckboxCount(cut, 7);
-            AssertSelectionCheckbox(cut, "Select all", "mixed");
-            AssertSelectionCheckbox(cut, "Select Basket service", "mixed");
-            AssertSelectionCheckbox(cut, "Deselect Catalog service", "true");
-            AssertSelectionCheckbox(cut, "Deselect Resource for Basket service", "true");
-            AssertSelectionCheckbox(cut, "Select Console logs for Basket service", "false");
-            AssertSelectionCheckbox(cut, "Deselect Resource for Catalog service", "true");
-            AssertSelectionCheckbox(cut, "Deselect Console logs for Catalog service", "true");
-            AssertNoButtonHasAccessibleName(cut, "Select Console logs");
+            AssertSelectionCheckbox(cut, "All data", "mixed");
+            AssertSelectionCheckbox(cut, "Basket service", "mixed");
+            AssertSelectionCheckbox(cut, "Catalog service", "true");
+            AssertSelectionCheckbox(cut, "Resource for Basket service", "true");
+            AssertSelectionCheckbox(cut, "Console logs for Basket service", "false");
+            AssertSelectionCheckbox(cut, "Resource for Catalog service", "true");
+            AssertSelectionCheckbox(cut, "Console logs for Catalog service", "true");
+            AssertSelectionCheckboxesHaveNoActionLabels(cut);
+            AssertNoSelectionCheckboxHasAccessibleName(cut, "Console logs");
             AssertNoButtonHasAccessibleName(cut, "Name");
         });
 
-        AssertSelectionCheckbox(cut, "Select all", "mixed").Click();
+        AssertSelectionCheckbox(cut, "All data", "mixed").Click();
 
         cut.WaitForAssertion(() =>
         {
             AssertAllSelectionControlsSelected(cut);
-            AssertNoButtonHasAccessibleName(cut, "Deselect Console logs");
+            AssertNoSelectionCheckboxHasAccessibleName(cut, "Console logs");
             AssertNoButtonHasAccessibleName(cut, "Name");
         });
 
-        AssertSelectionCheckbox(cut, "Deselect all", "true").Click();
+        AssertSelectionCheckbox(cut, "All data", "true").Click();
 
         cut.WaitForAssertion(() =>
         {
             AssertSelectionCheckboxCount(cut, 7);
-            AssertSelectionCheckbox(cut, "Select all", "false");
-            AssertSelectionCheckbox(cut, "Select Basket service", "false");
-            AssertSelectionCheckbox(cut, "Select Catalog service", "false");
-            AssertSelectionCheckbox(cut, "Select Resource for Basket service", "false");
-            AssertSelectionCheckbox(cut, "Select Console logs for Basket service", "false");
-            AssertSelectionCheckbox(cut, "Select Resource for Catalog service", "false");
-            AssertSelectionCheckbox(cut, "Select Console logs for Catalog service", "false");
-            AssertNoButtonHasAccessibleName(cut, "Select Console logs");
+            AssertSelectionCheckbox(cut, "All data", "false");
+            AssertSelectionCheckbox(cut, "Basket service", "false");
+            AssertSelectionCheckbox(cut, "Catalog service", "false");
+            AssertSelectionCheckbox(cut, "Resource for Basket service", "false");
+            AssertSelectionCheckbox(cut, "Console logs for Basket service", "false");
+            AssertSelectionCheckbox(cut, "Resource for Catalog service", "false");
+            AssertSelectionCheckbox(cut, "Console logs for Catalog service", "false");
+            AssertSelectionCheckboxesHaveNoActionLabels(cut);
+            AssertNoSelectionCheckboxHasAccessibleName(cut, "Console logs");
             AssertNoButtonHasAccessibleName(cut, "Name");
         });
     }
@@ -103,18 +138,22 @@ public sealed class ManageDataDialogTests : DashboardTestContext
     private void SetupManageDataDialogServices(TestDashboardClient dashboardClient)
     {
         FluentUISetupHelpers.AddCommonDashboardServices(this);
-        Services.AddLogging();
+        Services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         Services.AddOptions<DashboardOptions>().Configure(options => options.UI.DisableImport = true);
-        Services.AddSingleton<IconResolver>();
         Services.AddSingleton<IDashboardClient>(dashboardClient);
-        Services.AddScoped<ConsoleLogsManager>();
-        Services.AddScoped<ConsoleLogsFetcher>();
-        Services.AddScoped<TelemetryExportService>();
-        Services.AddScoped<TelemetryImportService>();
+        Services.AddSingleton<IconResolver>();
+        Services.AddSingleton<ConsoleLogsManager>();
+        Services.AddSingleton<ConsoleLogsFetcher>();
+        Services.AddSingleton<TelemetryExportService>();
+        Services.AddSingleton<TelemetryImportService>();
 
         FluentUISetupHelpers.SetupFluentUIComponents(this);
         FluentUISetupHelpers.SetupFluentButton(this);
         FluentUISetupHelpers.SetupFluentDataGrid(this);
+
+        var module = JSInterop.SetupModule("./Components/Dialogs/ManageDataDialog.razor.js");
+        module.SetupVoid("initializeSelectionCheckboxKeyboard", _ => true);
+        module.SetupVoid("disposeSelectionCheckboxKeyboard", _ => true);
     }
 
     private static void ExpandResourceRows(IRenderedComponent<ManageDataDialog> cut, int expectedCount)
@@ -132,38 +171,66 @@ public sealed class ManageDataDialogTests : DashboardTestContext
     private static void AssertAllSelectionControlsSelected(IRenderedComponent<ManageDataDialog> cut)
     {
         AssertSelectionCheckboxCount(cut, 7);
-        AssertSelectionCheckbox(cut, "Deselect all", "true");
-        AssertSelectionCheckbox(cut, "Deselect Basket service", "true");
-        AssertSelectionCheckbox(cut, "Deselect Catalog service", "true");
-        AssertSelectionCheckbox(cut, "Deselect Resource for Basket service", "true");
-        AssertSelectionCheckbox(cut, "Deselect Console logs for Basket service", "true");
-        AssertSelectionCheckbox(cut, "Deselect Resource for Catalog service", "true");
-        AssertSelectionCheckbox(cut, "Deselect Console logs for Catalog service", "true");
+        AssertSelectionCheckbox(cut, "All data", "true");
+        AssertSelectionCheckbox(cut, "Basket service", "true");
+        AssertSelectionCheckbox(cut, "Catalog service", "true");
+        AssertSelectionCheckbox(cut, "Resource for Basket service", "true");
+        AssertSelectionCheckbox(cut, "Console logs for Basket service", "true");
+        AssertSelectionCheckbox(cut, "Resource for Catalog service", "true");
+        AssertSelectionCheckbox(cut, "Console logs for Catalog service", "true");
+        AssertSelectionCheckboxesHaveNoActionLabels(cut);
     }
 
     private static IElement AssertSelectionCheckbox(IRenderedComponent<ManageDataDialog> cut, string accessibleName, string ariaChecked)
     {
-        var button = Assert.Single(GetSelectionCheckboxes(cut), button => ButtonHasAccessibleName(button, accessibleName));
+        var checkbox = Assert.Single(GetSelectionCheckboxes(cut), checkbox => ElementHasAccessibleName(checkbox, accessibleName));
 
-        Assert.Equal("checkbox", button.GetAttribute("role"));
-        Assert.Equal(ariaChecked, button.GetAttribute("aria-checked"));
+        Assert.Equal("span", checkbox.LocalName);
+        Assert.Equal("checkbox", checkbox.GetAttribute("role"));
+        Assert.Equal(ariaChecked, checkbox.GetAttribute("aria-checked"));
+        Assert.Equal("0", checkbox.GetAttribute("tabindex"));
+        Assert.Empty(checkbox.QuerySelectorAll("fluent-button"));
 
-        return button;
+        return checkbox;
     }
 
-    private static void AssertSelectionCheckboxCount(IRenderedComponent<ManageDataDialog> cut, int expectedCount) =>
+    private static void AssertSelectionCheckboxCount(IRenderedComponent<ManageDataDialog> cut, int expectedCount)
+    {
+        Assert.Empty(cut.FindAll("fluent-button[role='checkbox']"));
         Assert.Equal(expectedCount, GetSelectionCheckboxes(cut).Count);
+    }
+
+    private static void AssertSelectionCheckboxesHaveNoActionLabels(IRenderedComponent<ManageDataDialog> cut)
+    {
+        Assert.DoesNotContain(GetSelectionCheckboxes(cut), button =>
+        {
+            var accessibleName = button.GetAttribute("aria-label");
+
+            return accessibleName is not null &&
+                (accessibleName.StartsWith("Select ", StringComparison.Ordinal) ||
+                 accessibleName.StartsWith("Deselect ", StringComparison.Ordinal));
+        });
+    }
+
+    private static void AssertNoSelectionCheckboxHasAccessibleName(IRenderedComponent<ManageDataDialog> cut, string accessibleName) =>
+        Assert.DoesNotContain(GetSelectionCheckboxes(cut), checkbox => ElementHasAccessibleName(checkbox, accessibleName));
 
     private static void AssertNoButtonHasAccessibleName(IRenderedComponent<ManageDataDialog> cut, string accessibleName) =>
         Assert.DoesNotContain(
             cut.FindAll("fluent-button"),
-            button =>
-                string.Equals(button.GetAttribute("title"), accessibleName, StringComparison.Ordinal) ||
-                string.Equals(button.GetAttribute("aria-label"), accessibleName, StringComparison.Ordinal));
+            element =>
+                string.Equals(element.GetAttribute("title"), accessibleName, StringComparison.Ordinal) ||
+                string.Equals(element.GetAttribute("aria-label"), accessibleName, StringComparison.Ordinal));
 
-    private static bool ButtonHasAccessibleName(IElement button, string accessibleName) =>
-        string.Equals(button.GetAttribute("title"), accessibleName, StringComparison.Ordinal) &&
-        string.Equals(button.GetAttribute("aria-label"), accessibleName, StringComparison.Ordinal);
+    private static bool ElementHasAccessibleName(IElement element, string accessibleName) =>
+        string.Equals(element.GetAttribute("title"), accessibleName, StringComparison.Ordinal) &&
+        string.Equals(element.GetAttribute("aria-label"), accessibleName, StringComparison.Ordinal);
+
+    private static void PressSpace(IElement element) =>
+        PressKey(element, " ", code: "Space");
+
+    private static void PressKey(IElement element, string key, string? code = null, bool shiftKey = false) =>
+        element.TriggerEvent("onkeydown", new KeyboardEventArgs { Key = key, Code = code ?? string.Empty, ShiftKey = shiftKey });
 
     private static IReadOnlyList<IElement> GetSelectionCheckboxes(IRenderedComponent<ManageDataDialog> cut)
     {

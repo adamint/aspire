@@ -827,6 +827,15 @@ namespace Aspire.Dashboard.Resources {
                 return ResourceManager.GetString("InteractionButtonOk", resourceCulture);
             }
         }
+
+        /// <summary>
+        ///   Looks up a localized string similar to All data.
+        /// </summary>
+        public static string ManageDataAllDataCheckboxLabel {
+            get {
+                return ResourceManager.GetString("ManageDataAllDataCheckboxLabel", resourceCulture);
+            }
+        }
         
         /// <summary>
         ///   Looks up a localized string similar to Console logs.
@@ -836,31 +845,13 @@ namespace Aspire.Dashboard.Resources {
                 return ResourceManager.GetString("ManageDataConsoleLogs", resourceCulture);
             }
         }
-        
-        /// <summary>
-        ///   Looks up a localized string similar to Deselect all.
-        /// </summary>
-        public static string ManageDataDeselectAllButtonLabel {
-            get {
-                return ResourceManager.GetString("ManageDataDeselectAllButtonLabel", resourceCulture);
-            }
-        }
 
         /// <summary>
-        ///   Looks up a localized string similar to Deselect {0}.
+        ///   Looks up a localized string similar to {0} for {1}.
         /// </summary>
-        public static string ManageDataDeselectItemButtonLabel {
+        public static string ManageDataDataTypeForResourceCheckboxLabel {
             get {
-                return ResourceManager.GetString("ManageDataDeselectItemButtonLabel", resourceCulture);
-            }
-        }
-
-        /// <summary>
-        ///   Looks up a localized string similar to Deselect {0} for {1}.
-        /// </summary>
-        public static string ManageDataDeselectDataTypeForResourceButtonLabel {
-            get {
-                return ResourceManager.GetString("ManageDataDeselectDataTypeForResourceButtonLabel", resourceCulture);
+                return ResourceManager.GetString("ManageDataDataTypeForResourceCheckboxLabel", resourceCulture);
             }
         }
 
@@ -951,33 +942,6 @@ namespace Aspire.Dashboard.Resources {
         public static string ManageDataResource {
             get {
                 return ResourceManager.GetString("ManageDataResource", resourceCulture);
-            }
-        }
-        
-        /// <summary>
-        ///   Looks up a localized string similar to Select all.
-        /// </summary>
-        public static string ManageDataSelectAllButtonLabel {
-            get {
-                return ResourceManager.GetString("ManageDataSelectAllButtonLabel", resourceCulture);
-            }
-        }
-
-        /// <summary>
-        ///   Looks up a localized string similar to Select {0}.
-        /// </summary>
-        public static string ManageDataSelectItemButtonLabel {
-            get {
-                return ResourceManager.GetString("ManageDataSelectItemButtonLabel", resourceCulture);
-            }
-        }
-
-        /// <summary>
-        ///   Looks up a localized string similar to Select {0} for {1}.
-        /// </summary>
-        public static string ManageDataSelectDataTypeForResourceButtonLabel {
-            get {
-                return ResourceManager.GetString("ManageDataSelectDataTypeForResourceButtonLabel", resourceCulture);
             }
         }
 
