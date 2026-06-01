@@ -4,8 +4,56 @@ on:
   workflow_call:
 
 jobs:
+  verify_extester_feed:
+    name: Verify ExTester internal feed availability
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.verify.outputs.available }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Verify ExTester can install from dotnet-public-npm
+        id: verify
+        working-directory: extension
+        run: |
+          set +e
+          node scripts/run-e2e.js --verify-extester-feed
+          exit_code=$?
+          set -e
+          if [ "$exit_code" -eq 0 ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### VS Code extension E2E matrix skipped"
+              echo
+              echo "The E2E runner could not install vscode-extension-tester from the internal dotnet-public-npm feed."
+              echo "Pre-seed vscode-extension-tester and its transitive packages into dotnet-public-npm, then rerun CI."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::warning::vscode-extension-tester is not available from dotnet-public-npm; skipping the VS Code extension E2E matrix."
+          fi
+
+  extester_feed_unavailable:
+    name: VS Code extension E2E dependency unavailable
+    needs: verify_extester_feed
+    if: ${{ needs.verify_extester_feed.outputs.available != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report skipped E2E matrix
+        run: |
+          {
+            echo "### VS Code extension E2E matrix skipped"
+            echo
+            echo "The workflow is configured to use only the internal dotnet-public-npm feed."
+            echo "vscode-extension-tester is not currently installable from that feed without authentication."
+            echo "Pre-seed vscode-extension-tester and its transitive packages into dotnet-public-npm, then rerun CI to execute the matrix."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   extension_e2e:
     name: VS Code extension E2E (${{ matrix.name }}, ${{ matrix.shardName }})
+    needs: verify_extester_feed
+    if: ${{ needs.verify_extester_feed.outputs.available == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -202,7 +250,7 @@ jobs:
 
       - name: Validate lockfile registries
         working-directory: extension
-        run: node -e "const fs = require('fs'); const lock = fs.readFileSync('yarn.lock', 'utf8'); if (/registry\\.(?:npmjs\\.org|yarnpkg\\.com)/.test(lock)) { throw new Error('extension/yarn.lock contains public npm registry URLs. Regenerate it using the internal dotnet-public-npm feed before restoring.'); }"
+        run: node -e "const fs = require('fs'); const allow = 'pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm'; const bad = fs.readFileSync('yarn.lock', 'utf8').split(/\\r?\\n/).filter(l => /^\\s*resolved\\s+\\x22/.test(l)).filter(l => !l.includes(allow)); if (bad.length) { throw new Error('extension/yarn.lock contains resolved entries outside the internal dotnet-public-npm feed. Regenerate it through the internal feed before restoring. First offender -> ' + bad[0]); }"
 
       - name: Install extension dependencies
         working-directory: extension

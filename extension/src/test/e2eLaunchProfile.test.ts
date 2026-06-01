@@ -63,12 +63,23 @@ suite('E2E launch profile', () => {
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
         const internalFeed = 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/';
-        const publicRegistryPattern = /registry\.(?:npmjs\.org|yarnpkg\.com)|npmjs\.org|yarnpkg\.com/;
 
         assert.ok(runner.includes(internalFeed));
         assert.ok(!workflow.includes('ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY'));
-        assert.ok(!publicRegistryPattern.test(runner));
-        assert.ok(!publicRegistryPattern.test(workflow));
+        assert.ok(!runner.includes('registry=https://'));
+        assert.ok(!workflow.includes('registry=https://'));
+    });
+
+    test('preflights ExTester internal feed availability before starting the E2E matrix', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
+
+        assert.ok(runner.includes('--verify-extester-feed'));
+        assert.ok(runner.includes('pre-seed vscode-extension-tester'));
+        assert.ok(workflow.includes('verify_extester_feed:'));
+        assert.ok(workflow.includes("needs.verify_extester_feed.outputs.available == 'true'"));
+        assert.ok(workflow.includes('extester_feed_unavailable:'));
     });
 
     test('opts out of telemetry for all CLI processes spawned by E2E tests', () => {

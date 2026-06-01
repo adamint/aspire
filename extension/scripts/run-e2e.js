@@ -34,6 +34,7 @@ const matchedTestSpecs = findSpecMatches(testSpec);
 const vscodeVersion = process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.122.1';
 const extesterVersion = process.env.ASPIRE_EXTENSION_E2E_EXTESTER_VERSION || '8.23.0';
 const extesterNpmRegistry = process.env.ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY || 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/';
+const verifyExtesterFeedOnly = process.argv.includes('--verify-extester-feed');
 const extesterInstallRoot = path.join(artifactsDir, 'extester-runner');
 const extesterNodeModules = path.join(extesterInstallRoot, 'node_modules');
 const extesterModule = path.join(extesterNodeModules, 'vscode-extension-tester');
@@ -59,6 +60,11 @@ function getRunTestsTimeoutMs() {
 
   return configured;
 }
+if (verifyExtesterFeedOnly) {
+  verifyExtesterFeed();
+  process.exit(0);
+}
+
 assertSpecMatches(testSpec);
 logE2eConfiguration();
 
@@ -466,23 +472,33 @@ function ensureExtester() {
       'vscode-extension-tester': extesterVersion,
     },
     // Keep the runtime ExTester install on versions already available from the
-    // public dnceng npm mirror. These are transitive-compatible with the ranges
-    // requested by vscode-extension-tester@8.23.0 and avoid first-read upstream
-    // cache misses on anonymous CI agents.
+    // internal dnceng npm feed. These are transitive-compatible with the ranges
+    // requested by vscode-extension-tester@8.23.0 and avoid first-read cache
+    // misses on anonymous CI agents.
     overrides: {
       'js-yaml': '4.1.1',
       'yauzl': '3.3.1',
     },
   }, undefined, 2));
-  runWithRetry('npm', [
-    'install',
-    '--prefix',
-    extesterInstallRoot,
-    '--no-package-lock',
-    '--ignore-scripts',
-  ], {
-    npm_config_registry: extesterNpmRegistry,
-  }, { attempts: 3, retryDelayMs: 5000 });
+  try {
+    runWithRetry('npm', [
+      'install',
+      '--prefix',
+      extesterInstallRoot,
+      '--no-package-lock',
+      '--ignore-scripts',
+      '--no-audit',
+    ], {
+      npm_config_registry: extesterNpmRegistry,
+    }, { attempts: 3, retryDelayMs: 5000 });
+  } catch (error) {
+    throw new Error(`${error.message}\nUnable to install vscode-extension-tester@${extesterVersion} from ${extesterNpmRegistry}. If this is running in CI, pre-seed vscode-extension-tester and its locked transitive packages into the internal dotnet-public-npm feed before enabling the E2E matrix.`);
+  }
+}
+
+function verifyExtesterFeed() {
+  console.log(`Verifying vscode-extension-tester@${extesterVersion} can be installed from ${extesterNpmRegistry}`);
+  ensureExtester();
 }
 
 function patchExtesterLaunchLocale() {
