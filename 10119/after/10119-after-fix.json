@@ -1,0 +1,38 @@
+{
+  "label": "AFTER FIX",
+  "beforeOpen": {
+    "active": {
+      "tag": "FLUENT-BUTTON",
+      "id": "dashboard-help-button",
+      "aria": "Help",
+      "title": "Help",
+      "text": ""
+    },
+    "dialogs": []
+  },
+  "open": {
+    "active": {
+      "tag": "DIV",
+      "id": "",
+      "aria": null,
+      "title": null,
+      "text": "Help"
+    },
+    "dialogs": [
+      {
+        "hidden": false,
+        "text": "Help CloseGo to aspire.dev documentation\n\nKeyboard Shortcuts\n\nPanels\n                Increase panel size\n                            \n                            +Decrease panel size\n                 "
+      }
+    ]
+  },
+  "closed": {
+    "active": {
+      "tag": "FLUENT-BUTTON",
+      "id": "dashboard-help-button",
+      "aria": "Help",
+      "title": "Help",
+      "text": ""
+    },
+    "dialogs": []
+  }
+}

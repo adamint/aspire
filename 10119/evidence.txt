@@ -1,0 +1,27 @@
+Issue: microsoft/aspire#10119
+Worktree: /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10119
+
+Characterization:
+- Help and Settings are opened from MainLayout via Fluent dialog/panel parameters. Close handling only cleared _openPageDialog; it did not explicitly return focus to the header launcher.
+- GitHub Copilot on desktop is rendered as AssistantSidebarDialog rather than a Fluent dialog, so Fluent dialog focus restoration cannot run when its close button hides the sidebar.
+- Copilot button is configuration-gated by IAIContextProvider.Enabled; the component-level close path was verified with a test fake because the real Copilot service is not available in this test configuration.
+
+Fix evidence:
+- Added stable ids to Help, GitHub Copilot, and Settings header buttons.
+- Help/Settings dialog close now queues focus restoration through MainLayout after render using window.focusElement.
+- AssistantSidebarDialog close now hides the sidebar and focuses the launch button id supplied by MainLayout.
+
+Targeted test command:
+dotnet test --project tests/Aspire.Dashboard.Components.Tests/Aspire.Dashboard.Components.Tests.csproj --no-launch-profile -- --filter-class "*.MainLayoutTests" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"
+
+Result:
+Passed: 8 succeeded, 0 failed, 0 skipped, duration 1s 509ms. Full output: test-output.txt.
+
+Changed files:
+src/Aspire.Dashboard/Components/Dialogs/AssistantSidebarDialog.razor
+src/Aspire.Dashboard/Components/Dialogs/AssistantSidebarDialog.razor.cs
+src/Aspire.Dashboard/Components/Layout/MainLayout.razor
+src/Aspire.Dashboard/Components/Layout/MainLayout.razor.cs
+tests/Aspire.Dashboard.Components.Tests/Layout/MainLayoutTests.cs
+tests/Shared/TestAIContextProvider.cs
+tests/Shared/TestDialogService.cs

@@ -1,0 +1,8 @@
+ .../Dialogs/AssistantSidebarDialog.razor           |   2 +-
+ .../Dialogs/AssistantSidebarDialog.razor.cs        |  18 +++-
+ .../Components/Layout/MainLayout.razor             |  12 ++-
+ .../Components/Layout/MainLayout.razor.cs          |  57 ++++++++++--
+ .../Layout/MainLayoutTests.cs                      | 100 ++++++++++++++++++++-
+ tests/Shared/TestAIContextProvider.cs              |  15 ++--
+ tests/Shared/TestDialogService.cs                  |  20 ++++-
+ 7 files changed, 198 insertions(+), 26 deletions(-)
