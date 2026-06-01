@@ -58,6 +58,19 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes('timeout: getRunTestsTimeoutMs()'));
     });
 
+    test('installs the E2E runner dependencies from the internal npm feed', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
+        const internalFeed = 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/';
+        const publicRegistryPattern = /registry\.(?:npmjs\.org|yarnpkg\.com)|npmjs\.org|yarnpkg\.com/;
+
+        assert.ok(runner.includes(internalFeed));
+        assert.ok(!workflow.includes('ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY'));
+        assert.ok(!publicRegistryPattern.test(runner));
+        assert.ok(!publicRegistryPattern.test(workflow));
+    });
+
     test('opts out of telemetry for all CLI processes spawned by E2E tests', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');

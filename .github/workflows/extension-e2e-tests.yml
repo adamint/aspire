@@ -299,8 +299,6 @@ jobs:
           # Linux E2E jobs run under Xvfb, so record by default but keep/upload videos only for failures.
           # Set ASPIRE_EXTENSION_E2E_RECORDING_MODE=always when manually rerunning to keep successful recordings too.
           ASPIRE_EXTENSION_E2E_RECORDING_MODE: ${{ matrix.useXvfb && 'failure' || 'off' }}
-          # TODO: remove once vscode-extension-tester@8.23.0 and its transitive tarballs are seeded in dotnet-public-npm.
-          ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY: https://registry.npmjs.org
         run: |
           if ('${{ matrix.useXvfb }}' -eq 'true') {
             xvfb-run -a node scripts/run-e2e.js

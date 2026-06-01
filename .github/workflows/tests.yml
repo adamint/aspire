@@ -398,9 +398,9 @@ jobs:
 
           # Seed Corepack's cache from the internal dnceng npm feed. Corepack's
           # built-in `corepack prepare --activate` would download Yarn 1.x from
-          # registry.yarnpkg.com (hardcoded in Corepack 0.34's config.json and
-          # not redirectable via COREPACK_NPM_REGISTRY), bypassing the dnceng
-          # mirror this workflow is supposed to validate. The shared
+          # its hardcoded upstream endpoint rather than the configured internal
+          # feed, bypassing the dependency source this workflow is supposed to
+          # validate. The shared
           # prepareCorepackYarn.mjs script does the equivalent via `npm pack`
           # against $NPM_REGISTRY, then drops the same on-disk layout Corepack
           # would have written.
@@ -413,8 +413,7 @@ jobs:
         # yarn.lock that carry a tarball URL — `npm:` aliases don't).
         # CONTRIBUTING.MD asks contributors to regenerate yarn.lock through the
         # internal dotnet-public-npm feed; an allowlist catches drift to any
-        # other public mirror (npmmirror.com, jsr.io, github.com tarballs, ...)
-        # rather than only npmjs.org and yarnpkg.com.
+        # other public mirror or tarball host.
         run: |
           node -e "const fs = require('fs'); const allow = 'pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm'; const bad = fs.readFileSync('yarn.lock', 'utf8').split(/\r?\n/).filter(l => /^\s*resolved\s+\x22/.test(l)).filter(l => !l.includes(allow)); if (bad.length) { throw new Error('extension/yarn.lock contains resolved entries outside the internal dotnet-public-npm feed. Regenerate it through the internal feed before restoring. First offender -> ' + bad[0]); }"
       - name: Install dependencies
