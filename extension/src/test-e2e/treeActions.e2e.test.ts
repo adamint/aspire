@@ -1,4 +1,6 @@
 import * as assert from 'assert';
+import * as http from 'http';
+import * as https from 'https';
 import * as path from 'path';
 import { getCommandInvocationCount, isSamePath, waitForCommandOutcome, waitForDashboardUrl, waitForExtensionState, waitForRepositoryIdle, waitForResource, waitForResourceState, waitForRunningAppHost, waitForWorkspaceAppHost } from './helpers/assertions';
 import { executeE2eControlCommand, restoreWorkspaceCliPath, setCliUnavailableForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
@@ -54,12 +56,14 @@ suite('Aspire tree action command E2E', function () {
         assert.strictEqual(copiedResourceName.result, 'e2e-worker');
 
         const copiedEndpointUrl = await executeE2eControlCommand({ name: 'copyEndpointUrl', appHostPath, resourceName: 'e2e-worker' });
-        assert.ok(String(copiedEndpointUrl.result).startsWith('http'));
+        const endpointUrl = String(copiedEndpointUrl.result);
+        assert.ok(endpointUrl.startsWith('http'));
 
         before = getCommandInvocationCount('aspire-vscode.openInIntegratedBrowser');
         await executeE2eControlCommand({ name: 'openInIntegratedBrowser', appHostPath, resourceName: 'e2e-worker' });
         await waitForCommandOutcome('aspire-vscode.openInIntegratedBrowser', 'success', 60000, before);
-        assert.ok((await waitForEditorTitle('Simple Browser', 120000)).includes('Simple Browser'));
+        assert.ok((await waitForEditorTitle(new URL(endpointUrl).host, 120000, { matchCase: false })).toLowerCase().includes(new URL(endpointUrl).host.toLowerCase()));
+        assert.strictEqual(await waitForHttpText(endpointUrl, 'ok'), 'ok');
 
         const viewedLog = await executeE2eControlCommand({ name: 'viewAppHostLogFile', appHostPath });
         const viewedLogFileName = (viewedLog.result as { fileName?: string }).fileName;
@@ -91,3 +95,53 @@ suite('Aspire tree action command E2E', function () {
         await waitForResourceState('e2e-worker', ['Running'], 120000);
     });
 });
+
+async function waitForHttpText(url: string, expectedText: string, timeoutMs = 120000): Promise<string> {
+    const started = Date.now();
+    let lastError: string | undefined;
+
+    while (Date.now() - started < timeoutMs) {
+        try {
+            const body = await getUrlText(url);
+            if (body.includes(expectedText)) {
+                return expectedText;
+            }
+
+            lastError = `response did not contain '${expectedText}': ${body}`;
+        }
+        catch (error) {
+            lastError = error instanceof Error ? error.message : String(error);
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    throw new Error(`Timed out waiting for ${url} to return '${expectedText}'. Last error: ${lastError ?? '<none>'}`);
+}
+
+function getUrlText(url: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const parsed = new URL(url);
+        const handleResponse = (response: http.IncomingMessage): void => {
+            const chunks: Buffer[] = [];
+            response.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+            response.on('end', () => {
+                const body = Buffer.concat(chunks).toString('utf8');
+                if (response.statusCode && response.statusCode >= 400) {
+                    reject(new Error(`${url} returned HTTP ${response.statusCode}: ${body}`));
+                    return;
+                }
+
+                resolve(body);
+            });
+        };
+        const request = parsed.protocol === 'https:'
+            ? https.get(parsed, { rejectUnauthorized: false }, handleResponse)
+            : http.get(parsed, handleResponse);
+
+        request.on('error', reject);
+        request.setTimeout(10000, () => {
+            request.destroy(new Error(`${url} timed out`));
+        });
+    });
+}

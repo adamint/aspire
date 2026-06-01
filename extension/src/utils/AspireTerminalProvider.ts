@@ -239,6 +239,11 @@ export class AspireTerminalProvider implements vscode.Disposable {
             env.ASPIRE_EXTENSION_DEBUG_RUN_MODE = noDebug === false ? "Debug" : "NoDebug";
             env.DEBUG_SESSION_INFO = JSON.stringify(getRunSessionInfo());
             env.ASPIRE_EXTENSION_CAPABILITIES = getSupportedCapabilities().join(',');
+            // Extension-managed debug/run sessions stream CLI output into VS Code's
+            // debug console, which is not an interactive terminal. Keep prompts routed
+            // through the extension backchannel while disabling Spectre live output
+            // such as the first-run banner and spinners.
+            env.ASPIRE_NON_INTERACTIVE = 'true';
 
             // if DCP debug logging is enabled, set DCP-specific logging environment variables
             const dcpDebugLoggingEnabled = vscode.workspace.getConfiguration('aspire').get<boolean>('enableAspireDcpDebugLogging', false);

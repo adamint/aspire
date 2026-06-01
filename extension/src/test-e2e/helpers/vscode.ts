@@ -1,16 +1,45 @@
-import { BottomBarPanel, EditorView, InputBox, Notification, SideBarView, TreeItem, TreeSection, VSBrowser, Workbench } from './extester';
+import { BottomBarPanel, By, EditorView, InputBox, Notification, SideBarView, TreeItem, TreeSection, VSBrowser, WebView, Workbench } from './extester';
+
+const escapeKey = '\uE00C';
+const aspireAppHostsSectionTitle = 'AppHosts';
 
 export async function openAspireView(): Promise<TreeSection> {
-    await new Workbench().executeCommand('workbench.view.extension.aspire-panel');
+    let lastSectionTitles: string[] = [];
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        await executeCommandFromPalette('workbench.view.extension.aspire-panel');
+
+        try {
+            const section = await VSBrowser.instance.driver.wait(async () => {
+                try {
+                    const sections = await new SideBarView().getContent().getSections();
+                    lastSectionTitles = await Promise.all(sections.map(section => section.getTitle()));
+                    const aspireSection = sections.find((_, index) => lastSectionTitles[index] === aspireAppHostsSectionTitle);
+                    return aspireSection ?? false;
+                }
+                catch {
+                    return false;
+                }
+            }, 10000, `Timed out waiting for '${aspireAppHostsSectionTitle}' section.`);
+
+            return section;
+        }
+        catch {
+            await delay(250);
+        }
+    }
+
     return await VSBrowser.instance.driver.wait(async () => {
         try {
             const sections = await new SideBarView().getContent().getSections();
-            return sections[0] ?? false;
+            lastSectionTitles = await Promise.all(sections.map(section => section.getTitle()));
+            const aspireSection = sections.find((_, index) => lastSectionTitles[index] === aspireAppHostsSectionTitle);
+            return aspireSection ?? false;
         }
         catch {
             return false;
         }
-    }, 30000, 'Timed out waiting for Aspire AppHost tree section.');
+    }, 30000, `Timed out waiting for '${aspireAppHostsSectionTitle}' section. Visible sections: ${lastSectionTitles.join(', ') || '<none>'}.`);
 }
 
 export async function waitForTreeItem(section: TreeSection, label: string, timeoutMs = 30000): Promise<TreeItem> {
@@ -54,7 +83,22 @@ export async function clickTreeItem(section: TreeSection, label: string, timeout
 }
 
 export async function executeCommandFromPalette(command: string): Promise<void> {
-    await new Workbench().executeCommand(command);
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            await dismissActiveInput();
+            await new Workbench().executeCommand(command);
+            return;
+        }
+        catch (error) {
+            lastError = error;
+            await dismissActiveInput();
+            await delay(250);
+        }
+    }
+
+    throw lastError;
 }
 
 export async function cancelActiveInput(): Promise<void> {
@@ -105,20 +149,71 @@ export async function waitForTerminalChannel(expectedText: string, timeoutMs = 3
     }, timeoutMs, `Timed out waiting for terminal channel containing '${expectedText}'.`);
 }
 
-export async function waitForEditorTitle(expectedText: string, timeoutMs = 60000): Promise<string> {
+export async function waitForEditorTitle(expectedText: string, timeoutMs = 60000, options?: { matchCase?: boolean }): Promise<string> {
+    const expected = options?.matchCase === false ? expectedText.toLowerCase() : expectedText;
     return await VSBrowser.instance.driver.wait(async () => {
         const titles = await new EditorView().getOpenEditorTitles();
-        return titles.find(title => title.includes(expectedText)) ?? false;
+        return titles.find(title => options?.matchCase === false ? title.toLowerCase().includes(expected) : title.includes(expected)) ?? false;
     }, timeoutMs, `Timed out waiting for editor title containing '${expectedText}'.`);
 }
 
 export async function waitForWorkbenchText(expectedText: string, timeoutMs = 30000): Promise<string> {
     return await VSBrowser.instance.driver.wait(async () => {
-        const text = await VSBrowser.instance.driver.executeScript<string>('return document.body?.innerText ?? "";');
+        const text = await getWorkbenchAndWebviewText();
         return text.includes(expectedText) ? text : false;
     }, timeoutMs, `Timed out waiting for workbench text containing '${expectedText}'.`);
 }
 
+export async function waitForWorkbenchTextAfterIntegratedBrowserNavigation(expectedText: string, timeoutMs = 120000): Promise<string> {
+    let lastReload = 0;
+
+    return await VSBrowser.instance.driver.wait(async () => {
+        const text = await getWorkbenchAndWebviewText();
+        if (text.includes(expectedText)) {
+            return text;
+        }
+
+        if ((text.includes('Failed to Load Page') || text.includes('ERR_CONNECTION_REFUSED')) && Date.now() - lastReload > 5000) {
+            lastReload = Date.now();
+            // VS Code's integrated browser can navigate as soon as the extension receives
+            // a healthy dashboard URL, before Chromium has a successful connection open.
+            await executeCommandFromPalette('workbench.action.webview.reloadWebview');
+        }
+
+        return false;
+    }, timeoutMs, `Timed out waiting for integrated browser text containing '${expectedText}'.`);
+}
+
 export async function closeAllEditors(): Promise<void> {
     await new EditorView().closeAllEditors();
+}
+
+async function getWorkbenchAndWebviewText(): Promise<string> {
+    const driver = VSBrowser.instance.driver;
+    const outerText = await driver.executeScript<string>('return document.body?.innerText ?? "";');
+    const webview = new WebView();
+
+    try {
+        await webview.switchToFrame(1000);
+        const webviewText = await (await webview.findWebElement(By.css('body'))).getText();
+        return `${outerText}\n${webviewText}`;
+    }
+    catch {
+        return outerText;
+    }
+    finally {
+        try {
+            await webview.switchBack();
+        }
+        catch {
+        }
+    }
+}
+
+async function dismissActiveInput(): Promise<void> {
+    await VSBrowser.instance.driver.actions().sendKeys(escapeKey).perform();
+}
+
+function delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }

@@ -153,6 +153,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
         extensionArgs.push('--start-debug-session');
       }
 
+      if (!commandArgs.includes('--nologo')) {
+        extensionArgs.push('--nologo');
+      }
+
       if (process.env[EnvironmentVariables.ASPIRE_CLI_STOP_ON_ENTRY] === 'true') {
         extensionArgs.push('--cli-wait-for-debugger');
       }

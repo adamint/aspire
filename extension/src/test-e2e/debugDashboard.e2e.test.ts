@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import { getTreeAppHostLabel, waitForCommandOutcome, waitForDebugDashboardUrl, waitForDebugSessionStartup, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
 import { executeE2eControlCommand, restoreWorkspaceCliPath, setCliUnavailableForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath } from './helpers/paths';
-import { executeCommandFromPalette, openAspireView, waitForEditorTitle, waitForTreeItem } from './helpers/vscode';
+import { openAspireView, waitForTreeItem, waitForWorkbenchTextAfterIntegratedBrowserNavigation } from './helpers/vscode';
 
 suite('Aspire debug dashboard E2E', function () {
     this.timeout(240000);
@@ -30,10 +30,10 @@ suite('Aspire debug dashboard E2E', function () {
         const dashboard = await waitForDebugDashboardUrl();
         assert.ok(dashboard.state.debugSessions.some(session => session.dashboardUrl?.startsWith('http')));
 
-        const browserTitle = await waitForEditorTitle('Simple Browser', 120000);
-        assert.ok(browserTitle.includes('Simple Browser'));
+        const browserText = await waitForWorkbenchTextAfterIntegratedBrowserNavigation('Resources');
+        assert.ok(browserText.includes('Resources'));
 
-        await executeCommandFromPalette('Debug: Stop');
+        await executeE2eControlCommand({ name: 'stopDebugging' });
         await waitForNoDebugSessions();
     });
 });

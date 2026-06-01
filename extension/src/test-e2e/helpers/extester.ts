@@ -4,6 +4,16 @@ const extester = require(extesterModulePath);
 export interface WebDriver {
     wait<T>(condition: () => Promise<T | boolean> | T | boolean, timeout?: number, message?: string): Promise<T>;
     executeScript<T>(script: string, ...args: unknown[]): Promise<T>;
+    actions(): {
+        sendKeys(...keys: string[]): { perform(): Promise<void> };
+    };
+}
+
+export interface Locator {
+}
+
+export interface WebElement {
+    getText(): Promise<string>;
 }
 
 export interface VSBrowserInstance {
@@ -31,6 +41,7 @@ export interface TreeItem {
 }
 
 export interface TreeSection {
+    getTitle(): Promise<string>;
     findItem(label: string, maxLevel?: number): Promise<TreeItem | undefined>;
     getVisibleItems(): Promise<TreeItem[]>;
     openItem(...path: string[]): Promise<TreeItem[]>;
@@ -85,6 +96,12 @@ export interface EditorView {
     closeAllEditors(): Promise<void>;
 }
 
+export interface WebView {
+    switchToFrame(timeout?: number): Promise<void>;
+    switchBack(): Promise<void>;
+    findWebElement(locator: Locator): Promise<WebElement>;
+}
+
 export interface Workbench {
     executeCommand(command: string): Promise<void>;
     openCommandPrompt(): Promise<InputBox>;
@@ -95,6 +112,8 @@ export const VSBrowser = extester.VSBrowser as { readonly instance: VSBrowserIns
 export const ActivityBar = extester.ActivityBar as new () => ActivityBar;
 export const SideBarView = extester.SideBarView as new () => SideBarView;
 export const Workbench = extester.Workbench as new () => Workbench;
+export const By = extester.By as { css(selector: string): Locator };
 export const InputBox = extester.InputBox as { create(timeout?: number): Promise<InputBox> };
 export const BottomBarPanel = extester.BottomBarPanel as new () => { openTerminalView(): Promise<TerminalView> };
 export const EditorView = extester.EditorView as new () => EditorView;
+export const WebView = extester.WebView as new () => WebView;

@@ -277,6 +277,7 @@ if (!fs.existsSync(vsixPath)) {
 validateVsix(vsixPath);
 
 ensureExtester();
+patchExtesterLaunchLocale();
 writeVsCodeLocaleFile();
 
 const extestEnv = getAspireCliEnvironment({
@@ -449,6 +450,23 @@ function ensureExtester() {
   ], {
     npm_config_registry: extesterNpmRegistry,
   }, { attempts: 3, retryDelayMs: 5000 });
+}
+
+function patchExtesterLaunchLocale() {
+  const browserPath = path.join(extesterModule, 'out', 'browser.js');
+  const source = fs.readFileSync(browserPath, 'utf8');
+  const target = "const args = ['--no-sandbox', '--disable-dev-shm-usage', `--user-data-dir=${path.join(this.storagePath, 'settings')}`];";
+  const replacement = "const args = ['--no-sandbox', '--disable-dev-shm-usage', '--lang=en-US', `--user-data-dir=${path.join(this.storagePath, 'settings')}`];";
+
+  if (source.includes(replacement)) {
+    return;
+  }
+
+  if (!source.includes(target)) {
+    throw new Error(`Unable to patch ExTester VS Code launch arguments in ${browserPath} to force the E2E browser locale.`);
+  }
+
+  fs.writeFileSync(browserPath, source.replace(target, replacement));
 }
 
 function prepareWorkspaceFixture(resolvedCliPath, resolvedAppHostSdkVersion) {

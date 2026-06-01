@@ -291,8 +291,13 @@ export class AppHostDataRepository {
         this._stopAllGlobalDescribes();
         this._workspaceResources.clear();
         this._clearErrors();
+        // A user-triggered refresh should observe AppHost/config files written by tools
+        // even when the file watcher has not delivered an invalidation event yet.
+        this._workspaceAppHostDiscoveryComplete = false;
+        this._clearWorkspaceAppHostDiscovery();
         this._updateWorkspaceContext();
         this._describeRestartDelay = 5000;
+        this._fetchWorkspaceAppHost({ forceRefresh: true });
         if (this._shouldWatchWorkspace) {
             this._startDescribeWatch();
         }
@@ -374,7 +379,7 @@ export class AppHostDataRepository {
 
     // ── Workspace app host (from aspire ls) ──
 
-    private _fetchWorkspaceAppHost(): void {
+    private _fetchWorkspaceAppHost(options?: { forceRefresh?: boolean }): void {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
             this._workspaceAppHostDiscoveryComplete = true;
@@ -385,7 +390,7 @@ export class AppHostDataRepository {
 
         extensionLogOutputChannel.info('Fetching workspace apphost via shared AppHost discovery');
 
-        this._appHostDiscoveryService.discover(rootFolder).then(appHosts => {
+        this._appHostDiscoveryService.discover(rootFolder, options?.forceRefresh).then(appHosts => {
             if (this._disposed) {
                 return;
             }

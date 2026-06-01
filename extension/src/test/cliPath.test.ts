@@ -53,6 +53,42 @@ suite('utils/cliPath tests', () => {
     });
 
     suite('resolveCliPath', () => {
+        let originalE2eCliPath: string | undefined;
+
+        setup(() => {
+            originalE2eCliPath = process.env.ASPIRE_EXTENSION_E2E_CLI_PATH;
+            delete process.env.ASPIRE_EXTENSION_E2E_CLI_PATH;
+        });
+
+        teardown(() => {
+            if (originalE2eCliPath === undefined) {
+                delete process.env.ASPIRE_EXTENSION_E2E_CLI_PATH;
+            }
+            else {
+                process.env.ASPIRE_EXTENSION_E2E_CLI_PATH = originalE2eCliPath;
+            }
+        });
+
+        test('prefers E2E-provided CLI path over settings and PATH', async () => {
+            const e2ePath = '/tmp/e2e/aspire';
+            process.env.ASPIRE_EXTENSION_E2E_CLI_PATH = e2ePath;
+            const setConfiguredPath = sinon.stub().resolves();
+
+            const deps = createMockDeps({
+                getConfiguredPath: () => '/configured/path/aspire',
+                isOnPath: async () => true,
+                tryExecute: async (p) => p === e2ePath,
+                setConfiguredPath,
+            });
+
+            const result = await resolveCliPath(deps);
+
+            assert.strictEqual(result.available, true);
+            assert.strictEqual(result.source, 'configured');
+            assert.strictEqual(result.cliPath, e2ePath);
+            assert.ok(setConfiguredPath.notCalled, 'should not rewrite settings for the E2E override path');
+        });
+
         test('falls back to default install path when CLI is not on PATH', async () => {
             const setConfiguredPath = sinon.stub().resolves();
 
@@ -208,4 +244,3 @@ suite('utils/cliPath tests', () => {
         });
     });
 });
-

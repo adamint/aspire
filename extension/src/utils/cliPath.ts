@@ -133,9 +133,10 @@ const defaultDependencies: CliPathDependencies = {
 
 /**
  * Resolves the Aspire CLI path, checking multiple locations in order:
- * 1. User-configured path in VS Code settings
- * 2. System PATH
- * 3. Default installation directories (~/.aspire/bin, ~/.dotnet/tools)
+ * 1. E2E runner-provided CLI path
+ * 2. User-configured path in VS Code settings
+ * 3. System PATH
+ * 4. Default installation directories (~/.aspire/bin, ~/.dotnet/tools)
  *
  * If the CLI is found at a default installation path but not on PATH,
  * the VS Code setting is updated to use that path.
@@ -146,8 +147,18 @@ const defaultDependencies: CliPathDependencies = {
 export async function resolveCliPath(deps: CliPathDependencies = defaultDependencies): Promise<CliPathResolutionResult> {
     const configuredPath = deps.getConfiguredPath();
     const defaultPaths = deps.getDefaultPaths();
+    const e2eCliPath = process.env.ASPIRE_EXTENSION_E2E_CLI_PATH?.trim();
 
-    // 1. Check if user has configured a custom path (not one of the defaults)
+    if (e2eCliPath) {
+        const isValid = await deps.tryExecute(e2eCliPath);
+        if (isValid) {
+            return { cliPath: e2eCliPath, available: true, source: 'configured' };
+        }
+
+        extensionLogOutputChannel.warn(`E2E CLI path is invalid: ${e2eCliPath}`);
+    }
+
+    // Check if user has configured a custom path (not one of the defaults)
     if (configuredPath && !defaultPaths.includes(configuredPath)) {
         const isValid = await deps.tryExecute(configuredPath);
         if (isValid) {

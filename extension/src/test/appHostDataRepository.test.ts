@@ -9,6 +9,7 @@ import { PassThrough } from 'stream';
 import { AppHostDataRepository } from '../views/AppHostDataRepository';
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import * as cliModule from '../debugger/languages/cli';
+import type { AppHostDiscoveryService, CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 
 class TestChildProcess extends EventEmitter {
     stdout = new PassThrough();
@@ -769,6 +770,61 @@ suite('AppHostDataRepository', () => {
         } finally {
             repository.dispose();
             workspaceFoldersStub.restore();
+        }
+    });
+
+    test('refresh forces workspace AppHost rediscovery', async () => {
+        const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-extension-workspace-'));
+        const firstAppHostPath = path.join(workspaceRoot, 'First', 'apphost.cs');
+        const secondAppHostPath = path.join(workspaceRoot, 'Second', 'apphost.cs');
+        const workspaceFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(workspaceRoot),
+            name: 'workspace',
+            index: 0,
+        };
+        const discoveryCalls: boolean[] = [];
+        let candidates: CandidateAppHostDisplayInfo[] = [{
+            path: firstAppHostPath,
+            language: 'csharp',
+            status: 'buildable',
+            selected: true,
+        }];
+        const discoveryChanges = new vscode.EventEmitter<vscode.WorkspaceFolder>();
+        const discoveryService = {
+            discover: async (_workspaceFolder: vscode.WorkspaceFolder, forceRefresh = false) => {
+                discoveryCalls.push(forceRefresh);
+                return candidates;
+            },
+            onDidChangeCandidates: discoveryChanges.event,
+            dispose: () => discoveryChanges.dispose(),
+        } as unknown as AppHostDiscoveryService;
+        const workspaceFoldersStub = stubWorkspaceFolders([workspaceFolder]);
+        const repository = new AppHostDataRepository(terminalProvider, discoveryService);
+
+        try {
+            repository.activate();
+            repository.setPanelVisible(true);
+            await waitForCondition(
+                () => repository.workspaceAppHostPath === firstAppHostPath,
+                'initial AppHost discovery did not finish');
+
+            candidates = [{
+                path: secondAppHostPath,
+                language: 'csharp',
+                status: 'buildable',
+                selected: true,
+            }];
+            repository.refresh();
+
+            await waitForCondition(
+                () => repository.workspaceAppHostPath === secondAppHostPath,
+                'refresh did not discover the new workspace AppHost');
+
+            assert.deepStrictEqual(discoveryCalls, [false, true]);
+        } finally {
+            repository.dispose();
+            workspaceFoldersStub.restore();
+            fs.rmSync(workspaceRoot, { recursive: true, force: true });
         }
     });
 

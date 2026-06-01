@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import { getCommandInvocationCount, getTerminalCommandCount, waitForCommandOutcome, waitForDebugDashboardUrl, waitForDebugSessionStartup, waitForNoDebugSessions, waitForRepositoryIdle, waitForSelectedWorkspaceAppHost, waitForTerminalCommand } from './helpers/assertions';
 import { addIntegrationPackageToAppHost, clearBreakpoints, createEmptyAppHostProject, executeE2eControlCommand, getGeneratedAppHostPath, removeGeneratedProject, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, setCliUnavailableForE2E, setSourceBreakpoint, setTerminalCommandExecutionSuppressedForE2E, stopAppHostIfRunning, writeWorkspaceAppHostConfigForPath } from './helpers/fixtures';
-import { executeCommandFromPalette, openAspireView, waitForEditorTitle, waitForTreeItem } from './helpers/vscode';
+import { openAspireView, waitForEditorTitle, waitForTreeItem, waitForWorkbenchTextAfterIntegratedBrowserNavigation } from './helpers/vscode';
 
 suite('Aspire zero-to-running E2E', function () {
     this.timeout(360000);
@@ -15,7 +15,7 @@ suite('Aspire zero-to-running E2E', function () {
         await setTerminalCommandExecutionSuppressedForE2E(false);
         await restoreWorkspaceCliPath();
         await clearBreakpoints().catch(() => undefined);
-        await executeCommandFromPalette('Debug: Stop').catch(() => undefined);
+        await executeE2eControlCommand({ name: 'stopDebugging' }).catch(() => undefined);
         await waitForNoDebugSessions().catch(() => undefined);
         await stopAppHostIfRunning(appHostPath).catch(() => undefined);
         restoreWorkspaceAppHostConfig();
@@ -23,7 +23,7 @@ suite('Aspire zero-to-running E2E', function () {
     });
 
     test('creates a new AppHost, adds a package, sets a breakpoint, and debugs to the dashboard', async () => {
-        const section = await openAspireView();
+        let section = await openAspireView();
         await waitForRepositoryIdle();
 
         await setTerminalCommandExecutionSuppressedForE2E(true);
@@ -60,6 +60,7 @@ suite('Aspire zero-to-running E2E', function () {
         await waitForCommandOutcome('aspire-vscode.refreshAppHosts', 'success', 60000, beforeRefresh);
         const selected = await waitForSelectedWorkspaceAppHost(appHostPath);
         const appHostLabel = selected.state.workspaceAppHostName ?? 'apphost.cs';
+        section = await openAspireView();
         const appHostItem = await waitForTreeItem(section, appHostLabel, 60000);
         await appHostItem.expand();
         await waitForTreeItem(section, 'Debug AppHost');
@@ -78,10 +79,10 @@ suite('Aspire zero-to-running E2E', function () {
         const dashboard = await waitForDebugDashboardUrl(appHostPath);
         assert.ok(dashboard.state.debugSessions.some(session => session.dashboardUrl?.startsWith('http')));
 
-        const browserTitle = await waitForEditorTitle('Simple Browser', 120000);
-        assert.ok(browserTitle.includes('Simple Browser'));
+        const browserText = await waitForWorkbenchTextAfterIntegratedBrowserNavigation('Resources');
+        assert.ok(browserText.includes('Resources'));
 
-        await executeCommandFromPalette('Debug: Stop');
+        await executeE2eControlCommand({ name: 'stopDebugging' });
         await waitForNoDebugSessions();
     });
 });
