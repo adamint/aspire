@@ -12,7 +12,7 @@ public class TestAIContextProvider : IAIContextProvider
 {
     public AssistantChatViewModel? AssistantChatViewModel { get; set; }
     public bool ShowAssistantSidebarDialog { get; set; }
-    public bool Enabled { get; }
+    public bool Enabled { get; init; }
     public AssistantChatState? ChatState { get; set; }
     public IceBreakersBuilder IceBreakersBuilder { get; } = new IceBreakersBuilder(new TestStringLocalizer<AIPrompts>());
 
