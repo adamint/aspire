@@ -1,0 +1,14 @@
+{
+  "label": "BEFORE FIX",
+  "info": {
+    "hasSemanticListAncestor": false,
+    "listTag": null,
+    "listLabelledBy": null,
+    "termTag": null,
+    "detailsTag": null,
+    "keyText": null,
+    "rowText": "Reset panel sizes shift+r",
+    "semanticListCount": 0
+  },
+  "snapshot": "- dialog:\n  - heading \"Help\" [level=4]\n  - button \"Close\"\n  - tooltip \"Tooltip\"\n  - link \"Go to aspire.dev documentation\":\n    - /url: https://aka.ms/aspire/dashboard\n  - heading \"Keyboard Shortcuts\" [level=5]\n  - heading \"Panels\" [level=6]\n  - text: Increase panel size + Decrease panel size - Reset panel sizes shift+r Toggle panel orientation shift+t Close panel shift+x\n  - heading \"Page navigation\" [level=6]\n  - text: Go to Resources r Go to Console Logs c Go to Structured Logs s Go to Traces t Go to Metrics m\n  - heading \"Site-wide navigation\" [level=6]\n  - text: Go to Help ? Go to Settings shift+s\n  - button \"Close\""
+}

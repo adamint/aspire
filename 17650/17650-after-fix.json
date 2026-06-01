@@ -1,0 +1,14 @@
+{
+  "label": "AFTER FIX",
+  "info": {
+    "hasSemanticListAncestor": true,
+    "listTag": "DL",
+    "listLabelledBy": "help-dialog-shortcut-category-0",
+    "termTag": "DT",
+    "detailsTag": "DD",
+    "keyText": "shift+r",
+    "rowText": "Reset panel sizes",
+    "semanticListCount": 3
+  },
+  "snapshot": "- dialog:\n  - heading \"Help\" [level=4]\n  - button \"Close\"\n  - tooltip \"Tooltip\"\n  - link \"Go to aspire.dev documentation\":\n    - /url: https://aka.ms/aspire/dashboard\n  - heading \"Keyboard Shortcuts\" [level=5]\n  - heading \"Panels\" [level=6]\n  - term: Increase panel size\n  - definition: +\n  - term: Decrease panel size\n  - definition: \"-\"\n  - term: Reset panel sizes\n  - definition: shift+r\n  - term: Toggle panel orientation\n  - definition: shift+t\n  - term: Close panel\n  - definition: shift+x\n  - heading \"Page navigation\" [level=6]\n  - term: Go to Resources\n  - definition: r\n  - term: Go to Console Logs\n  - definition: c\n  - term: Go to Structured Logs\n  - definition: s\n  - term: Go to Traces\n  - definition: t\n  - term: Go to Metrics\n  - definition: m\n  - heading \"Site-wide navigation\" [level=6]\n  - term: Go to Help\n  - definition: \"?\"\n  - term: Go to Settings\n  - definition: shift+s\n  - button \"Close\""
+}
