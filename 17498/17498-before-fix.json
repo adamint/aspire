@@ -1,0 +1,14 @@
+{
+  "label": "BEFORE FIX",
+  "info": {
+    "hasFluentSelect": false,
+    "selectAriaLabel": null,
+    "selectTabindex": null,
+    "hasMenuButton": false,
+    "hasSelectFormatButton": true,
+    "selectFormatButtonText": "Select format",
+    "menuItems": [],
+    "options": [],
+    "openedButtonIndex": 0
+  }
+}

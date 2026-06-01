@@ -1,0 +1,35 @@
+{
+  "label": "AFTER FIX",
+  "info": {
+    "hasFluentSelect": true,
+    "selectAriaLabel": "Select format",
+    "selectTabindex": "0",
+    "hasMenuButton": false,
+    "hasSelectFormatButton": false,
+    "selectFormatButtonText": null,
+    "menuItems": [],
+    "options": [
+      {
+        "text": "Unformatted",
+        "value": "plaintext",
+        "disabled": false
+      },
+      {
+        "text": "Markdown",
+        "value": "markdown",
+        "disabled": false
+      },
+      {
+        "text": "JSON",
+        "value": "json",
+        "disabled": true
+      },
+      {
+        "text": "XML",
+        "value": "xml",
+        "disabled": true
+      }
+    ],
+    "openedButtonIndex": 0
+  }
+}
