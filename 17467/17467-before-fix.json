@@ -1,0 +1,881 @@
+{
+  "label": "BEFORE FIX",
+  "info": {
+    "selectionButtons": [
+      {
+        "index": 0,
+        "rowText": "apigateway",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 1,
+        "rowText": "apigateway",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 2,
+        "rowText": "Resource",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 3,
+        "rowText": "Console logs",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 4,
+        "rowText": "aspire-dashboard",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 5,
+        "rowText": "aspire-dashboard",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 6,
+        "rowText": "aspire-dashboard",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 7,
+        "rowText": "aspire-dashboard",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 8,
+        "rowText": "Resource",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 9,
+        "rowText": "Console logs",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 10,
+        "rowText": "aspire-dashboard-rebuilder",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 11,
+        "rowText": "aspire-dashboard-rebuilder",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 12,
+        "rowText": "aspire-dashboard-rebuilder",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 13,
+        "rowText": "aspire-dashboard-rebuilder",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 14,
+        "rowText": "basketcache",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 15,
+        "rowText": "basketcache",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 16,
+        "rowText": "basketcache",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 17,
+        "rowText": "basketcache",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 18,
+        "rowText": "basketservice",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 19,
+        "rowText": "basketservice",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 20,
+        "rowText": "basketservice",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 21,
+        "rowText": "basketservice",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 22,
+        "rowText": "basketservice",
+        "title": "Structured logs",
+        "ariaLabel": "Structured logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 23,
+        "rowText": "basketservice",
+        "title": "Metrics",
+        "ariaLabel": "Metrics",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 24,
+        "rowText": "basketservice-rebuilder",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 25,
+        "rowText": "basketservice-rebuilder",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 26,
+        "rowText": "basketservice-rebuilder",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 27,
+        "rowText": "basketservice-rebuilder",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 28,
+        "rowText": "catalogdb",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 29,
+        "rowText": "catalogdb",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 30,
+        "rowText": "catalogdb",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 31,
+        "rowText": "catalogdb",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 32,
+        "rowText": "catalogdbapp",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 33,
+        "rowText": "catalogdbapp",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 34,
+        "rowText": "catalogdbapp",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 35,
+        "rowText": "catalogdbapp",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 36,
+        "rowText": "catalogdbapp-rebuilder",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 37,
+        "rowText": "catalogdbapp-rebuilder",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 38,
+        "rowText": "catalogdbapp-rebuilder",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 39,
+        "rowText": "catalogdbapp-rebuilder",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 40,
+        "rowText": "catalogservice-rebuilder",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 41,
+        "rowText": "catalogservice-rebuilder",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 42,
+        "rowText": "catalogservice-rebuilder",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 43,
+        "rowText": "catalogservice-rebuilder",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 44,
+        "rowText": "catalogservice-vptvtbys",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 45,
+        "rowText": "catalogservice-vptvtbys",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 46,
+        "rowText": "catalogservice-vptvtbys",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 47,
+        "rowText": "catalogservice-vptvtbys",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 48,
+        "rowText": "catalogservice-wwgahthn",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 49,
+        "rowText": "catalogservice-wwgahthn",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 50,
+        "rowText": "catalogservice-wwgahthn",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 51,
+        "rowText": "catalogservice-wwgahthn",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      }
+    ],
+    "buttons": [
+      {
+        "index": 0,
+        "rowText": "apigateway",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 1,
+        "rowText": "apigateway",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 2,
+        "rowText": "Resource",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 3,
+        "rowText": "Console logs",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 4,
+        "rowText": "aspire-dashboard",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 5,
+        "rowText": "aspire-dashboard",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 6,
+        "rowText": "aspire-dashboard",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 7,
+        "rowText": "aspire-dashboard",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 8,
+        "rowText": "Resource",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 9,
+        "rowText": "Console logs",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 10,
+        "rowText": "aspire-dashboard-rebuilder",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 11,
+        "rowText": "aspire-dashboard-rebuilder",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 12,
+        "rowText": "aspire-dashboard-rebuilder",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 13,
+        "rowText": "aspire-dashboard-rebuilder",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 14,
+        "rowText": "basketcache",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 15,
+        "rowText": "basketcache",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 16,
+        "rowText": "basketcache",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 17,
+        "rowText": "basketcache",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 18,
+        "rowText": "basketservice",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 19,
+        "rowText": "basketservice",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 20,
+        "rowText": "basketservice",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 21,
+        "rowText": "basketservice",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 22,
+        "rowText": "basketservice",
+        "title": "Structured logs",
+        "ariaLabel": "Structured logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 23,
+        "rowText": "basketservice",
+        "title": "Metrics",
+        "ariaLabel": "Metrics",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 24,
+        "rowText": "basketservice-rebuilder",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 25,
+        "rowText": "basketservice-rebuilder",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 26,
+        "rowText": "basketservice-rebuilder",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 27,
+        "rowText": "basketservice-rebuilder",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 28,
+        "rowText": "catalogdb",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 29,
+        "rowText": "catalogdb",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 30,
+        "rowText": "catalogdb",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 31,
+        "rowText": "catalogdb",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 32,
+        "rowText": "catalogdbapp",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 33,
+        "rowText": "catalogdbapp",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 34,
+        "rowText": "catalogdbapp",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 35,
+        "rowText": "catalogdbapp",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 36,
+        "rowText": "catalogdbapp-rebuilder",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 37,
+        "rowText": "catalogdbapp-rebuilder",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 38,
+        "rowText": "catalogdbapp-rebuilder",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 39,
+        "rowText": "catalogdbapp-rebuilder",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 40,
+        "rowText": "catalogservice-rebuilder",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 41,
+        "rowText": "catalogservice-rebuilder",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 42,
+        "rowText": "catalogservice-rebuilder",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 43,
+        "rowText": "catalogservice-rebuilder",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 44,
+        "rowText": "catalogservice-vptvtbys",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 45,
+        "rowText": "catalogservice-vptvtbys",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 46,
+        "rowText": "catalogservice-vptvtbys",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 47,
+        "rowText": "catalogservice-vptvtbys",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 48,
+        "rowText": "catalogservice-wwgahthn",
+        "title": null,
+        "ariaLabel": "Toggle nesting",
+        "text": "",
+        "className": "main-grid-expand-button lightweight"
+      },
+      {
+        "index": 49,
+        "rowText": "catalogservice-wwgahthn",
+        "title": null,
+        "ariaLabel": null,
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 50,
+        "rowText": "catalogservice-wwgahthn",
+        "title": "Resource",
+        "ariaLabel": "Resource",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 51,
+        "rowText": "catalogservice-wwgahthn",
+        "title": "Console logs",
+        "ariaLabel": "Console logs",
+        "text": "",
+        "className": "lightweight"
+      },
+      {
+        "index": 52,
+        "rowText": "",
+        "title": "Export selected",
+        "ariaLabel": "Export selected",
+        "text": "Export selected",
+        "className": "neutral"
+      },
+      {
+        "index": 53,
+        "rowText": "",
+        "title": "Remove selected",
+        "ariaLabel": "Remove selected",
+        "text": "Remove selected",
+        "className": "neutral"
+      },
+      {
+        "index": 54,
+        "rowText": "",
+        "title": "Import logs and telemetry",
+        "ariaLabel": "Import logs and telemetry",
+        "text": "Import logs and telemetry",
+        "className": "neutral"
+      },
+      {
+        "index": 55,
+        "rowText": "",
+        "title": "Close",
+        "ariaLabel": "Close",
+        "text": "Close",
+        "className": "accent"
+      },
+      {
+        "index": 56,
+        "rowText": "",
+        "title": null,
+        "ariaLabel": null,
+        "text": "Retry",
+        "className": "accent"
+      }
+    ]
+  }
+}
