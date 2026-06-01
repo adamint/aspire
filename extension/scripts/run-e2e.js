@@ -298,8 +298,8 @@ const extestEnv = getAspireCliEnvironment({
   NODE_PATH: [extesterNodeModules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
 });
 
-runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 3, retryDelayMs: 5000 });
-runWithRetry(process.execPath, [extesterCli, 'get-chromedriver', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 3, retryDelayMs: 5000 });
+runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 3, retryDelayMs: 5000, beforeRetry: cleanPartialExtesterDownloads });
+runWithRetry(process.execPath, [extesterCli, 'get-chromedriver', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 3, retryDelayMs: 5000, beforeRetry: cleanPartialExtesterDownloads });
 run(process.execPath, [extesterCli, 'install-vsix', '--storage', storageDir, '--extensions_dir', extensionsDir, '--vsix_file', vsixPath], extestEnv);
 let testFailure;
 const recording = startRecording();
@@ -789,11 +789,20 @@ function runWithRetry(command, args, extraEnv = {}, options) {
       }
 
       console.warn(`${command} ${args.join(' ')} failed on attempt ${attempt}/${options.attempts}: ${error instanceof Error ? error.message : String(error)}`);
+      options.beforeRetry?.();
       sleepSynchronously(options.retryDelayMs);
     }
   }
 
   throw lastError;
+}
+
+function cleanPartialExtesterDownloads() {
+  for (const file of getFilesRecursive(storageDir)) {
+    if (file.endsWith('.zip')) {
+      fs.rmSync(file, { force: true });
+    }
+  }
 }
 
 function sleepSynchronously(milliseconds) {
