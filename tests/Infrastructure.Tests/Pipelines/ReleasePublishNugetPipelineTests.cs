@@ -101,12 +101,14 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.Contains("displayName: 'npm ESRP owners (comma-separated Microsoft aliases or emails; leave unchanged for repo default)'", pipeline);
         Assert.Contains("displayName: 'npm ESRP approvers (comma-separated Microsoft aliases or emails; leave unchanged for repo default)'", pipeline);
         Assert.DoesNotContain("leave blank for repo default", pipeline);
-        Assert.Equal(
+        AssertContainsRequiredAliases(
             FindYamlVariableValue(commonVariables, "NPM_PUBLISH_REQUIRED_OWNERS"),
-            FindYamlParameterDefault(pipeline, "NpmPublishOwners"));
-        Assert.Equal(
+            FindYamlParameterDefault(pipeline, "NpmPublishOwners"),
+            "NpmPublishOwners");
+        AssertContainsRequiredAliases(
             FindYamlVariableValue(commonVariables, "NPM_PUBLISH_REQUIRED_APPROVERS"),
-            FindYamlParameterDefault(pipeline, "NpmPublishApprovers"));
+            FindYamlParameterDefault(pipeline, "NpmPublishApprovers"),
+            "NpmPublishApprovers");
         Assert.Contains("$requiredNpmOwnersValue = \"$(NPM_PUBLISH_REQUIRED_OWNERS)\"", pipeline);
         Assert.Contains("$requiredNpmApproversValue = \"$(NPM_PUBLISH_REQUIRED_APPROVERS)\"", pipeline);
         Assert.Contains("owners: '$(NpmPublishOwnersEffective)'", pipeline);
@@ -404,6 +406,37 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.True(index >= 0, $"Expected to find '{text}'.");
 
         return index;
+    }
+
+    private static void AssertContainsRequiredAliases(string requiredAliasesValue, string actualAliasesValue, string parameterName)
+    {
+        var actualAliases = ParseNpmReleaseAliasSet(actualAliasesValue);
+        var missingAliases = ParseNpmReleaseAliasSet(requiredAliasesValue)
+            .Where(requiredAlias => !actualAliases.Contains(requiredAlias))
+            .OrderBy(alias => alias)
+            .ToArray();
+
+        Assert.True(
+            missingAliases.Length == 0,
+            $"{parameterName} default must include required ESRP alias(es): {string.Join(", ", missingAliases)}.");
+    }
+
+    private static HashSet<string> ParseNpmReleaseAliasSet(string value)
+    {
+        var aliases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var alias = entry;
+            if (alias.EndsWith("@microsoft.com", StringComparison.OrdinalIgnoreCase))
+            {
+                alias = alias[..^"@microsoft.com".Length];
+            }
+
+            aliases.Add(alias.ToLowerInvariant());
+        }
+
+        return aliases;
     }
 
     private static string FindYamlVariableValue(string contents, string variableName)

@@ -98,8 +98,8 @@ parameters:
     type: boolean
     default: false
 
-  # Azure DevOps manual string parameters cannot be left blank. Keep these
-  # defaults in sync with NPM_PUBLISH_REQUIRED_* in common-variables.yml.
+  # Azure DevOps manual string parameters cannot be left blank. These defaults
+  # must include the NPM_PUBLISH_REQUIRED_* aliases from common-variables.yml.
   - name: NpmPublishOwners
     displayName: 'npm ESRP owners (comma-separated Microsoft aliases or emails; leave unchanged for repo default)'
     type: string
