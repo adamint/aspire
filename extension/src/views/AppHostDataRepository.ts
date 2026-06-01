@@ -166,6 +166,7 @@ export class AppHostDataRepository {
     private _workspaceAppHostDiscoveryComplete = false;
     private _workspaceAppHostDiscoveryUsesWorkspaceRoot = false;
     private readonly _appHostDiscoveryChangeDisposable: vscode.Disposable;
+    private readonly _workspaceFoldersChangeDisposable: vscode.Disposable;
     private readonly _appHostDiscoveryService: AppHostDiscoveryService;
     private readonly _ownsAppHostDiscoveryService: boolean;
 
@@ -189,6 +190,14 @@ export class AppHostDataRepository {
             if (rootFolder?.uri.toString() === workspaceFolder.uri.toString()) {
                 this._fetchWorkspaceAppHost();
             }
+        });
+        this._workspaceFoldersChangeDisposable = vscode.workspace.onDidChangeWorkspaceFolders(() => {
+            this._workspaceAppHostDiscoveryComplete = false;
+            this._clearWorkspaceAppHostDiscovery();
+            this._clearWorkspaceAppHostData();
+            this._clearErrors();
+            this._updateWorkspaceContext();
+            this._fetchWorkspaceAppHost({ forceRefresh: true });
         });
         this._fetchWorkspaceAppHost();
         this._configChangeDisposable = vscode.workspace.onDidChangeConfiguration(e => {
@@ -318,6 +327,7 @@ export class AppHostDataRepository {
         this._stopAllGlobalDescribes();
         this._configChangeDisposable.dispose();
         this._appHostDiscoveryChangeDisposable.dispose();
+        this._workspaceFoldersChangeDisposable.dispose();
         this._onDidChangeData.dispose();
         if (this._ownsAppHostDiscoveryService) {
             this._appHostDiscoveryService.dispose();

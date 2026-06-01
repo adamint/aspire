@@ -865,6 +865,62 @@ suite('AppHostDataRepository', () => {
         }
     });
 
+    test('workspace folder added after construction triggers AppHost discovery', async () => {
+        const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-extension-workspace-'));
+        const appHostPath = path.join(workspaceRoot, 'AppHost', 'AppHost.csproj');
+        const workspaceFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(workspaceRoot),
+            name: 'workspace',
+            index: 0,
+        };
+        let workspaceFolders: readonly vscode.WorkspaceFolder[] | undefined;
+        const workspaceFoldersChanged = new vscode.EventEmitter<vscode.WorkspaceFoldersChangeEvent>();
+        const discoveryChanges = new vscode.EventEmitter<vscode.WorkspaceFolder>();
+        const discoveryCalls: vscode.WorkspaceFolder[] = [];
+        const discoveryService = {
+            discover: async (folder: vscode.WorkspaceFolder) => {
+                discoveryCalls.push(folder);
+                return [{
+                    path: appHostPath,
+                    language: 'csharp',
+                    status: 'buildable',
+                    selected: true,
+                }];
+            },
+            onDidChangeCandidates: discoveryChanges.event,
+            dispose: () => {
+                discoveryChanges.dispose();
+            },
+        } as unknown as AppHostDiscoveryService;
+
+        defaultWorkspaceFoldersStub.restore();
+        defaultWorkspaceFoldersStub = { restore: () => { } } as sinon.SinonStub;
+        const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').get(() => workspaceFolders);
+        const workspaceFoldersChangedStub = sinon.stub(vscode.workspace, 'onDidChangeWorkspaceFolders').callsFake(listener => workspaceFoldersChanged.event(listener));
+        const repository = new AppHostDataRepository(terminalProvider, discoveryService);
+
+        try {
+            repository.activate();
+            repository.setPanelVisible(true);
+            await waitForMicrotasks();
+            assert.strictEqual(discoveryCalls.length, 0);
+
+            workspaceFolders = [workspaceFolder];
+            workspaceFoldersChanged.fire({ added: [workspaceFolder], removed: [] });
+
+            await waitForCondition(
+                () => repository.workspaceAppHostPath === appHostPath,
+                'workspace folder change did not trigger AppHost discovery');
+            assert.deepStrictEqual(discoveryCalls, [workspaceFolder]);
+        } finally {
+            repository.dispose();
+            workspaceFoldersChanged.dispose();
+            workspaceFoldersChangedStub.restore();
+            workspaceFoldersStub.restore();
+            fs.rmSync(workspaceRoot, { recursive: true, force: true });
+        }
+    });
+
     test('possibly unbuildable AppHost candidates do not force global mode', async () => {
         let getAppHostsLineCallback: ((line: string) => void) | undefined;
         spawnStub.onFirstCall().callsFake((_terminalProvider, _command, _args, options) => {
