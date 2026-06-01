@@ -1,0 +1,97 @@
+{
+  "label": "AFTER FIX",
+  "info": {
+    "active": {
+      "text": "Structured✓",
+      "ariaCurrent": "page",
+      "className": "mobile-nav-menu-item-active indent-1",
+      "hasIndicator": true,
+      "indicatorText": "✓",
+      "indicatorHidden": "true"
+    },
+    "activeItemCount": 1,
+    "indicatorCount": 1,
+    "items": [
+      {
+        "text": "Resources",
+        "ariaCurrent": null,
+        "className": "indent-1",
+        "hasIndicator": false,
+        "indicatorText": null,
+        "indicatorHidden": null
+      },
+      {
+        "text": "Console",
+        "ariaCurrent": null,
+        "className": "indent-1",
+        "hasIndicator": false,
+        "indicatorText": null,
+        "indicatorHidden": null
+      },
+      {
+        "text": "Structured✓",
+        "ariaCurrent": "page",
+        "className": "mobile-nav-menu-item-active indent-1",
+        "hasIndicator": true,
+        "indicatorText": "✓",
+        "indicatorHidden": "true"
+      },
+      {
+        "text": "Traces",
+        "ariaCurrent": null,
+        "className": "indent-1",
+        "hasIndicator": false,
+        "indicatorText": null,
+        "indicatorHidden": null
+      },
+      {
+        "text": "Metrics",
+        "ariaCurrent": null,
+        "className": "indent-1",
+        "hasIndicator": false,
+        "indicatorText": null,
+        "indicatorHidden": null
+      },
+      {
+        "text": "Aspire repo",
+        "ariaCurrent": null,
+        "className": "indent-1",
+        "hasIndicator": false,
+        "indicatorText": null,
+        "indicatorHidden": null
+      },
+      {
+        "text": "Help",
+        "ariaCurrent": null,
+        "className": "indent-1",
+        "hasIndicator": false,
+        "indicatorText": null,
+        "indicatorHidden": null
+      },
+      {
+        "text": "AI agents",
+        "ariaCurrent": null,
+        "className": "indent-1",
+        "hasIndicator": false,
+        "indicatorText": null,
+        "indicatorHidden": null
+      },
+      {
+        "text": "Notifications",
+        "ariaCurrent": null,
+        "className": "indent-1",
+        "hasIndicator": false,
+        "indicatorText": null,
+        "indicatorHidden": null
+      },
+      {
+        "text": "Settings",
+        "ariaCurrent": null,
+        "className": "indent-1",
+        "hasIndicator": false,
+        "indicatorText": null,
+        "indicatorHidden": null
+      }
+    ]
+  }
+}
