@@ -15,10 +15,11 @@ suite('Aspire AppHost tree E2E', function () {
     });
 
     test('discovers the workspace AppHost and renders it in the Aspire view', async () => {
-        const section = await openAspireView();
+        await openAspireView();
         await waitForRepositoryIdle();
         const stateFile = await waitForWorkspaceAppHost();
         const label = getTreeAppHostLabel(stateFile.state);
+        const section = await openAspireView();
 
         const item = await waitForTreeItem(section, label);
         assert.strictEqual(await item.getLabel(), label);
@@ -26,10 +27,11 @@ suite('Aspire AppHost tree E2E', function () {
     });
 
     test('runs, shows resources and dashboard state, routes resource commands, and stops from the tree', async () => {
-        let section = await openAspireView();
+        await openAspireView();
         await waitForRepositoryIdle();
         const discovered = await waitForWorkspaceAppHost();
         const appHostLabel = getTreeAppHostLabel(discovered.state);
+        let section = await openAspireView();
 
         const idleItem = await waitForTreeItem(section, appHostLabel);
         await idleItem.expand();

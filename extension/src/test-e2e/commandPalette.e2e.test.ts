@@ -1,8 +1,8 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getCommandInvocationCount, isSamePath, waitForCommandOutcome, waitForExtensionState, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
-import { createAdditionalAppHostCandidate, executeE2eControlCommand, removeAdditionalAppHostCandidate, removeWorkspaceAppHostConfig, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, setCliUnavailableForE2E, writeWorkspaceCliPath } from './helpers/fixtures';
+import { getCommandInvocationCount, getTerminalCommandCount, isSamePath, waitForCommandOutcome, waitForExtensionState, waitForRepositoryIdle, waitForTerminalCommand, waitForWorkspaceAppHost } from './helpers/assertions';
+import { createAdditionalAppHostCandidate, executeE2eControlCommand, removeAdditionalAppHostCandidate, removeWorkspaceAppHostConfig, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, setCliUnavailableForE2E, setTerminalCommandExecutionSuppressedForE2E, writeWorkspaceCliPath } from './helpers/fixtures';
 import { getWorkspaceRoot } from './helpers/paths';
 import { executeCommandFromPalette, openAspireView, waitForEditorTitle, waitForNotificationMessage, waitForTerminalChannel, waitForWorkbenchText } from './helpers/vscode';
 
@@ -12,6 +12,7 @@ suite('Aspire command palette E2E', function () {
     teardown(async () => {
         await executeE2eControlCommand({ name: 'closeAllEditors' }).catch(() => undefined);
         await setCliUnavailableForE2E(false);
+        await setTerminalCommandExecutionSuppressedForE2E(false);
         await restoreWorkspaceCliPath();
         restoreWorkspaceAppHostConfig();
         removeAdditionalAppHostCandidate();
@@ -38,6 +39,35 @@ suite('Aspire command palette E2E', function () {
         await executeCommandFromPalette('Aspire: Open Aspire terminal');
         await waitForNotificationMessage('Aspire CLI is not available');
         await waitForCommandOutcome('aspire-vscode.openTerminal', 'canceled', 60000, before);
+    });
+
+    test('routes terminal commands through a configured Windows cmd wrapper path with spaces', async function () {
+        if (process.platform !== 'win32') {
+            this.skip();
+        }
+
+        await openAspireView();
+        await waitForRepositoryIdle();
+        await waitForWorkspaceAppHost();
+
+        const wrapperDirectory = path.join(getWorkspaceRoot(), 'cli wrapper with spaces');
+        const wrapperPath = path.join(wrapperDirectory, 'aspire.cmd');
+        fs.mkdirSync(wrapperDirectory, { recursive: true });
+        fs.writeFileSync(wrapperPath, '@echo off\r\nexit /b 0\r\n');
+        await writeWorkspaceCliPath(wrapperPath);
+        await setTerminalCommandExecutionSuppressedForE2E(true);
+
+        const beforeInvocation = getCommandInvocationCount('aspire-vscode.new');
+        const beforeTerminalCommand = getTerminalCommandCount();
+        await executeE2eControlCommand({ name: 'executeAspireCommand', commandId: 'aspire-vscode.new' });
+        await waitForCommandOutcome('aspire-vscode.new', 'success', 60000, beforeInvocation);
+
+        const terminalCommand = await waitForTerminalCommand(
+            event => event.executionSuppressed && event.subcommand === 'new' && event.commandLine.includes(`& "${wrapperPath}" new`),
+            'Windows cmd wrapper terminal routing',
+            60000,
+            beforeTerminalCommand);
+        assert.strictEqual(terminalCommand.executionSuppressed, true);
     });
 
     test('opens settings UI and writes launch configuration through command palette commands', async () => {

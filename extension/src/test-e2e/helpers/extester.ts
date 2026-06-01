@@ -69,6 +69,8 @@ export interface Menu {
 
 export interface InputBox {
     setText(text: string): Promise<void>;
+    getPlaceHolder(): Promise<string>;
+    getTitle(): Promise<string | undefined>;
     getQuickPicks(): Promise<QuickPickItem[]>;
     selectQuickPick(labelOrIndex: string | number): Promise<void>;
     confirm(): Promise<void>;

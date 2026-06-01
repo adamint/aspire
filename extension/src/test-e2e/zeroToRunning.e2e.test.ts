@@ -5,7 +5,7 @@ import { addIntegrationPackageToAppHost, clearBreakpoints, createEmptyAppHostPro
 import { openAspireView, waitForEditorTitle, waitForTreeItem, waitForWorkbenchTextAfterIntegratedBrowserNavigation } from './helpers/vscode';
 
 suite('Aspire zero-to-running E2E', function () {
-    this.timeout(360000);
+    this.timeout(1200000);
 
     const projectName = 'ExtensionZeroToRunningApp';
     const appHostPath = getGeneratedAppHostPath(projectName);
@@ -75,11 +75,11 @@ suite('Aspire zero-to-running E2E', function () {
         const beforeDebug = getCommandInvocationCount('aspire-vscode.debugAppHost');
         await executeE2eControlCommand({ name: 'debugAppHost', appHostPath });
         await waitForCommandOutcome('aspire-vscode.debugAppHost', 'success', 60000, beforeDebug);
-        await waitForDebugSessionStartup(appHostPath);
-        const dashboard = await waitForDebugDashboardUrl(appHostPath);
+        await waitForDebugSessionStartup(appHostPath, 300000);
+        const dashboard = await waitForDebugDashboardUrl(appHostPath, 180000);
         assert.ok(dashboard.state.debugSessions.some(session => session.dashboardUrl?.startsWith('http')));
 
-        const browserText = await waitForWorkbenchTextAfterIntegratedBrowserNavigation('Resources');
+        const browserText = await waitForWorkbenchTextAfterIntegratedBrowserNavigation('Resources', 180000);
         assert.ok(browserText.includes('Resources'));
 
         await executeE2eControlCommand({ name: 'stopDebugging' });

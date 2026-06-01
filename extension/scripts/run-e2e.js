@@ -50,6 +50,15 @@ fs.rmSync(recordingsDir, { recursive: true, force: true });
 for (const directory of [artifactsDir, resultsDir, diagnosticsStorageRoot, isolatedAspireHome, storageDir, extensionsDir, workspaceRoot]) {
   fs.mkdirSync(directory, { recursive: true });
 }
+
+function getRunTestsTimeoutMs() {
+  const configured = Number(process.env.ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS || 1800000);
+  if (!Number.isFinite(configured) || configured <= 0) {
+    throw new Error(`ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS must be a positive number. Got '${process.env.ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS}'.`);
+  }
+
+  return configured;
+}
 assertSpecMatches(testSpec);
 logE2eConfiguration();
 
@@ -326,7 +335,7 @@ let testFailure;
 const recording = startRecording();
 try {
   logStep('Running VS Code extension E2E tests');
-  run(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js')], extestEnv);
+  run(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js')], extestEnv, { timeout: getRunTestsTimeoutMs() });
 }
 catch (error) {
   testFailure = error;
@@ -577,10 +586,37 @@ function writeAppHostProject(projectName, resolvedAppHostSdkVersion) {
 </Project>
 `);
 
-  fs.writeFileSync(path.join(projectDirectory, 'AppHost.cs'), `${csharpFileHeader}var builder = DistributedApplication.CreateBuilder(args);
+  fs.writeFileSync(path.join(projectDirectory, 'AppHost.cs'), `${csharpFileHeader}#pragma warning disable ASPIREINTERACTION001
+
+var builder = DistributedApplication.CreateBuilder(args);
 
 builder.AddProject<Projects.AspireE2E_Worker>("e2e-worker")
-    .WithHttpEndpoint(name: "http");
+    .WithHttpEndpoint(name: "http")
+    .WithCommand(
+        "echo-arguments",
+        "echo-arguments",
+        static _ => Task.FromResult(CommandResults.Success()),
+        new CommandOptions
+        {
+            Arguments =
+            [
+                new InteractionInput { Name = "message", Label = "Message", InputType = InputType.Text, Required = true },
+                new InteractionInput
+                {
+                    Name = "mode",
+                    Label = "Mode",
+                    InputType = InputType.Choice,
+                    Options =
+                    [
+                        new("alpha", "Alpha"),
+                        new("beta", "Beta"),
+                    ],
+                },
+                new InteractionInput { Name = "enabled", Label = "Enabled", InputType = InputType.Boolean, Value = "false" },
+                new InteractionInput { Name = "threshold", Label = "Threshold", InputType = InputType.Number },
+                new InteractionInput { Name = "token", Label = "Token", InputType = InputType.SecretText },
+            ],
+        });
 
 builder.Build().Run();
 `);
@@ -795,7 +831,7 @@ function getXmlProperty(xml, name) {
   return match[1];
 }
 
-function run(command, args, extraEnv = {}) {
+function run(command, args, extraEnv = {}, options = {}) {
   const useShell = shouldUseShellForCommand(command);
   const result = useShell
     ? spawnSync([command, ...args].map(quoteWindowsShellArgument).join(' '), [], {
@@ -803,12 +839,14 @@ function run(command, args, extraEnv = {}) {
       env: { ...process.env, ...extraEnv },
       shell: true,
       stdio: 'inherit',
+      timeout: options.timeout,
     })
     : spawnSync(command, args, {
     cwd: extensionRoot,
     env: { ...process.env, ...extraEnv },
     shell: false,
     stdio: 'inherit',
+    timeout: options.timeout,
   });
 
   if (result.error) {

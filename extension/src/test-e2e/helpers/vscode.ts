@@ -45,7 +45,19 @@ export async function openAspireView(): Promise<TreeSection> {
 export async function waitForTreeItem(section: TreeSection, label: string, timeoutMs = 30000): Promise<TreeItem> {
     return await VSBrowser.instance.driver.wait(async () => {
         try {
-            return await section.findItem(label, 4) ?? false;
+            const item = await section.findItem(label, 4);
+            if (item) {
+                return item;
+            }
+        }
+        catch {
+        }
+
+        try {
+            const sections = await new SideBarView().getContent().getSections();
+            const sectionTitles = await Promise.all(sections.map(section => section.getTitle()));
+            const currentSection = sections.find((_, index) => sectionTitles[index] === aspireAppHostsSectionTitle);
+            return currentSection ? await currentSection.findItem(label, 4) ?? false : false;
         }
         catch {
             return false;
@@ -111,6 +123,53 @@ export async function cancelActiveInput(): Promise<void> {
         }
     }, 30000, 'Timed out waiting for active input to appear.');
     await input.cancel();
+}
+
+export async function answerActiveInput(value: string, expectedPlaceholder: string, timeoutMs = 30000): Promise<void> {
+    let lastPrompt = '<none>';
+    const input = await VSBrowser.instance.driver.wait(async () => {
+        try {
+            const candidate = await InputBox.create();
+            const placeholder = await candidate.getPlaceHolder();
+            const title = await candidate.getTitle();
+            lastPrompt = `${title ?? '<no title>'} / ${placeholder}`;
+            return placeholder === expectedPlaceholder ? candidate : false;
+        }
+        catch {
+            return false;
+        }
+    }, timeoutMs, `Timed out waiting for input placeholder '${expectedPlaceholder}'. Last prompt: ${lastPrompt}.`);
+    await input.setText(value);
+    await input.confirm();
+}
+
+export async function chooseActiveQuickPick(label: string, timeoutMs = 30000): Promise<void> {
+    const input = await VSBrowser.instance.driver.wait(async () => {
+        try {
+            return await InputBox.create();
+        }
+        catch {
+            return false;
+        }
+    }, timeoutMs, 'Timed out waiting for active quick pick to appear.');
+    let visibleLabels: string[] = [];
+    const item = await VSBrowser.instance.driver.wait(async () => {
+        try {
+            const picks = await input.getQuickPicks();
+            visibleLabels = await Promise.all(picks.map(pick => pick.getLabel()));
+            for (const pick of picks) {
+                if (await pick.getLabel() === label) {
+                    return pick;
+                }
+            }
+
+            return false;
+        }
+        catch {
+            return false;
+        }
+    }, timeoutMs, `Timed out waiting for quick pick '${label}'. Visible labels: ${visibleLabels.join(', ') || '<none>'}.`);
+    await item.select();
 }
 
 export async function waitForNotificationMessage(expectedText: string, timeoutMs = 30000): Promise<Notification> {

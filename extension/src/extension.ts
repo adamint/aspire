@@ -43,7 +43,7 @@ import { createResourceCommandArgumentLoader } from './views/ResourceCommandArgu
 import { AppHostDisplayInfo, ResourceCommandJson, ResourceJson, isMatchingAppHostPath } from './views/AppHostDataRepository';
 import { AppHostDiscoveryService } from './utils/appHostDiscovery';
 import { AppHostLaunchRequestedEvent, AppHostLaunchService } from './services/AppHostLaunchService';
-import type { AspireAppHostState, AspireExtensionApi, AspireExtensionE2EControlCommand, AspireExtensionE2EControlPayload, AspireExtensionE2EControlStatus, AspireExtensionStateSnapshot, AspireResourceCommandState, AspireResourceState, AspireResourceUrlState, WaitForStateOptions } from './types/extensionApi';
+import type { AspireAppHostState, AspireExtensionApi, AspireExtensionE2ECommandInvocation, AspireExtensionE2EControlCommand, AspireExtensionE2EControlPayload, AspireExtensionE2EControlStatus, AspireExtensionE2EDebugLaunch, AspireExtensionE2ETerminalCommand, AspireExtensionStateSnapshot, AspireResourceCommandState, AspireResourceState, AspireResourceUrlState, WaitForStateOptions } from './types/extensionApi';
 import { AppHostsViewTelemetry } from './views/AppHostsViewTelemetry';
 
 let aspireExtensionContext = new AspireExtensionContext();
@@ -474,9 +474,12 @@ function createE2eStateFileBridge(
     return new vscode.Disposable(() => undefined);
   }
 
-  const commandInvocations: CommandInvocationEvent[] = [];
-  const terminalCommands: ReturnType<typeof cloneTerminalCommandEvent>[] = [];
-  const debugLaunches: ReturnType<typeof cloneDebugLaunchEvent>[] = [];
+  const commandInvocations: AspireExtensionE2ECommandInvocation[] = [];
+  const terminalCommands: AspireExtensionE2ETerminalCommand[] = [];
+  const debugLaunches: AspireExtensionE2EDebugLaunch[] = [];
+  let commandInvocationSequence = 0;
+  let terminalCommandSequence = 0;
+  let debugLaunchSequence = 0;
   let controlStatus: AspireExtensionE2EControlStatus | undefined;
   let lastControlRevision = -1;
   const writeStateFile = () => {
@@ -496,21 +499,24 @@ function createE2eStateFileBridge(
 
   const stateSubscription = onDidChangeState(writeStateFile);
   const commandSubscription = onDidInvokeCommand(event => {
-    commandInvocations.push(event);
+    commandInvocations.push({
+      ...event,
+      sequence: ++commandInvocationSequence,
+    });
     if (commandInvocations.length > 50) {
       commandInvocations.shift();
     }
     writeStateFile();
   });
   const terminalCommandSubscription = terminalProvider.onDidSendAspireCommand(event => {
-    terminalCommands.push(cloneTerminalCommandEvent(event));
+    terminalCommands.push(cloneTerminalCommandEvent(event, ++terminalCommandSequence));
     if (terminalCommands.length > 100) {
       terminalCommands.shift();
     }
     writeStateFile();
   });
   const debugLaunchSubscription = appHostLaunchService.onDidRequestLaunch(event => {
-    debugLaunches.push(cloneDebugLaunchEvent(event));
+    debugLaunches.push(cloneDebugLaunchEvent(event, ++debugLaunchSequence));
     if (debugLaunches.length > 100) {
       debugLaunches.shift();
     }
@@ -1028,8 +1034,9 @@ function getActiveEditorInfo(): { uri?: string; fileName?: string } {
   };
 }
 
-function cloneTerminalCommandEvent(event: AspireTerminalCommandEvent): AspireTerminalCommandEvent {
+function cloneTerminalCommandEvent(event: AspireTerminalCommandEvent, sequence: number): AspireExtensionE2ETerminalCommand {
   return {
+    sequence,
     subcommand: event.subcommand,
     commandLine: event.commandLine,
     showTerminal: event.showTerminal,
@@ -1039,8 +1046,9 @@ function cloneTerminalCommandEvent(event: AspireTerminalCommandEvent): AspireTer
   };
 }
 
-function cloneDebugLaunchEvent(event: AppHostLaunchRequestedEvent): AppHostLaunchRequestedEvent {
+function cloneDebugLaunchEvent(event: AppHostLaunchRequestedEvent, sequence: number): AspireExtensionE2EDebugLaunch {
   return {
+    sequence,
     appHostPath: event.appHostPath,
     command: event.command,
     noDebug: event.noDebug,

@@ -49,4 +49,38 @@ suite('E2E launch profile', () => {
         assert.ok(assertions.includes('getRemainingTimeout(deadline'));
         assert.ok(assertions.includes('throwIfControlFailed(openWorkspaceRevision);'));
     });
+
+    test('bounds the ExTester process below the workflow timeout so diagnostics still run', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+
+        assert.ok(runner.includes('ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS'));
+        assert.ok(runner.includes('timeout: getRunTestsTimeoutMs()'));
+    });
+
+    test('keeps the slow zero-to-running shard timeout above its composed wait budgets', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const zeroToRunning = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'zeroToRunning.e2e.test.ts'), 'utf8');
+
+        assert.ok(zeroToRunning.includes('this.timeout(1200000);'));
+        assert.ok(zeroToRunning.includes('waitForDebugSessionStartup(appHostPath, 300000)'));
+        assert.ok(zeroToRunning.includes('waitForDebugDashboardUrl(appHostPath, 180000)'));
+        assert.ok(zeroToRunning.includes("waitForWorkbenchTextAfterIntegratedBrowserNavigation('Resources', 180000)"));
+    });
+
+    test('uses monotonic E2E event sequences instead of positional slices over capped buffers', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const apiTypes = fs.readFileSync(path.join(extensionRoot, 'src', 'types', 'extensionApi.ts'), 'utf8');
+        const extension = fs.readFileSync(path.join(extensionRoot, 'src', 'extension.ts'), 'utf8');
+        const assertions = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'helpers', 'assertions.ts'), 'utf8');
+
+        assert.ok(apiTypes.includes('sequence: number;'));
+        assert.ok(extension.includes('commandInvocationSequence'));
+        assert.ok(extension.includes('terminalCommandSequence'));
+        assert.ok(extension.includes('debugLaunchSequence'));
+        assert.ok(assertions.includes('event.sequence > afterInvocationSequence'));
+        assert.ok(!assertions.includes('.slice(afterInvocationCount)'));
+        assert.ok(!assertions.includes('.slice(afterCommandCount)'));
+        assert.ok(!assertions.includes('.slice(afterLaunchCount)'));
+    });
 });

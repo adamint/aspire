@@ -229,6 +229,47 @@ jobs:
     with:
       versionOverrideArg: ${{ inputs.versionOverrideArg }}
 
+  extension_e2e_changes:
+    name: Detect VS Code extension E2E changes
+    runs-on: ubuntu-latest
+    outputs:
+      run_extension_e2e: ${{ steps.changed.outputs.run_extension_e2e }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Check changed paths
+        id: changed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          base='${{ github.event.pull_request.base.sha || github.event.before }}'
+          head='${{ github.sha }}'
+
+          if [ -z "$base" ] || [[ "$base" =~ ^0+$ ]]; then
+            echo "No usable base SHA is available; running extension E2E tests."
+            echo "run_extension_e2e=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            echo "Base SHA $base is not available after checkout; running extension E2E tests."
+            echo "run_extension_e2e=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          changed_files="$(git diff --name-only "$base" "$head")"
+          echo "$changed_files"
+
+          if echo "$changed_files" | grep -E -q '^(extension/|src/Aspire\.Cli/|src/Aspire/Cli/|src/Aspire\.Hosting/Cli/|tests/Aspire\.Cli\.Tests/|tests/Aspire\.Cli\.EndToEnd\.Tests/|tests/Aspire\.Hosting\.Tests/Cli/|eng/scripts/get-aspire-cli|\.github/workflows/(tests|extension-e2e-tests)\.yml$)'; then
+            echo "run_extension_e2e=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_extension_e2e=false" >> "$GITHUB_OUTPUT"
+          fi
+
   cli_starter_validation_windows:
     name: Aspire CLI Starter Validation (${{ matrix.os.name }})
     runs-on: ${{ matrix.os.runner }}
@@ -447,8 +488,9 @@ jobs:
 
   extension_e2e_tests:
     name: Run VS Code extension E2E tests
+    if: ${{ needs.extension_e2e_changes.outputs.run_extension_e2e == 'true' }}
     uses: ./.github/workflows/extension-e2e-tests.yml
-    needs: [build_packages, build_cli_archive_linux, build_cli_archive_windows, extension_tests_win, extension_bootstrap_linux]
+    needs: [extension_e2e_changes, build_packages, build_cli_archive_linux, build_cli_archive_windows, extension_tests_win, extension_bootstrap_linux]
 
   typescript_sdk_tests:
     name: TypeScript SDK Unit Tests
@@ -474,6 +516,7 @@ jobs:
       prepare_winget_installer_artifacts,
       prepare_homebrew_installer_artifacts,
       build_cli_e2e_image,
+      extension_e2e_changes,
       extension_tests_win,
       extension_e2e_tests,
       extension_bootstrap_linux,
@@ -556,6 +599,8 @@ jobs:
         #   tests, so an empty matrix and 'skipped' result are expected.
         # - cli_starter_validation_windows: this job only runs for pull requests and is expected to
         #   be skipped for other workflow events.
+        # - extension_e2e_tests: this job only runs when the PR/push changes the VS Code extension,
+        #   Aspire CLI, or the extension E2E workflow wiring.
         # - polyglot_validation: this job runs for pull requests and main branch builds; it is
         #   expected to be skipped for other workflow events.
         # All other jobs in this gate are required, and a 'skipped' result is treated as a failure.
@@ -565,7 +610,8 @@ jobs:
                contains(needs.*.result, 'cancelled') ||
                (github.event_name == 'pull_request' &&
                 (needs.extension_tests_win.result == 'skipped' ||
-                 needs.extension_e2e_tests.result == 'skipped' ||
+                 (needs.extension_e2e_changes.outputs.run_extension_e2e == 'true' &&
+                  needs.extension_e2e_tests.result == 'skipped') ||
                  needs.cli_starter_validation_windows.result == 'skipped' ||
                  needs.typescript_sdk_tests.result == 'skipped' ||
                  needs.typescript_api_compat.result == 'skipped' ||
@@ -583,7 +629,8 @@ jobs:
                  needs.polyglot_validation.result == 'skipped')) ||
                (github.event_name != 'pull_request' &&
                 (needs.extension_tests_win.result == 'skipped' ||
-                 needs.extension_e2e_tests.result == 'skipped' ||
+                 (needs.extension_e2e_changes.outputs.run_extension_e2e == 'true' &&
+                  needs.extension_e2e_tests.result == 'skipped') ||
                  needs.typescript_sdk_tests.result == 'skipped' ||
                  needs.build_cli_archive_macos_x64.result == 'skipped' ||
                  needs.prepare_winget_installer_artifacts.result == 'skipped' ||

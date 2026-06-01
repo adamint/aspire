@@ -165,6 +165,7 @@ export class AppHostDataRepository {
     private _workspaceAppHostDescription: string | undefined;
     private _workspaceAppHostDiscoveryComplete = false;
     private _workspaceAppHostDiscoveryUsesWorkspaceRoot = false;
+    private _workspaceAppHostDiscoveryVersion = 0;
     private readonly _appHostDiscoveryChangeDisposable: vscode.Disposable;
     private readonly _workspaceFoldersChangeDisposable: vscode.Disposable;
     private readonly _appHostDiscoveryService: AppHostDiscoveryService;
@@ -390,6 +391,7 @@ export class AppHostDataRepository {
     // ── Workspace app host (from aspire ls) ──
 
     private _fetchWorkspaceAppHost(options?: { forceRefresh?: boolean }): void {
+        const discoveryVersion = ++this._workspaceAppHostDiscoveryVersion;
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
             this._workspaceAppHostDiscoveryComplete = true;
@@ -406,7 +408,7 @@ export class AppHostDataRepository {
         extensionLogOutputChannel.info('Fetching workspace apphost via shared AppHost discovery');
 
         this._appHostDiscoveryService.discover(rootFolder, options?.forceRefresh).then(appHosts => {
-            if (this._disposed) {
+            if (!this._isCurrentWorkspaceDiscovery(discoveryVersion, rootFolder)) {
                 return;
             }
 
@@ -414,6 +416,10 @@ export class AppHostDataRepository {
             this._workspaceAppHostDiscoveryComplete = true;
             this._handleWorkspaceAppHostCandidates(result.app_host_candidates, result.selected_project_file);
         }).catch(error => {
+            if (!this._isCurrentWorkspaceDiscovery(discoveryVersion, rootFolder)) {
+                return;
+            }
+
             this._workspaceAppHostDiscoveryComplete = true;
             extensionLogOutputChannel.warn(`Failed to fetch workspace apphost: ${error}`);
             this._clearWorkspaceAppHostDiscovery();
@@ -447,8 +453,10 @@ export class AppHostDataRepository {
                 this._clearWorkspaceAppHostSelection();
             }
             this._workspaceAppHostDescription = workspaceViewSelectedMultipleAppHosts(buildableAppHostCandidates.length);
-            extensionLogOutputChannel.info(`Workspace contains ${buildableAppHostCandidates.length} buildable AppHosts; keeping workspace view`);
-            this.setViewMode('workspace');
+            extensionLogOutputChannel.info(`Workspace contains ${buildableAppHostCandidates.length} buildable AppHosts`);
+            if (this._viewMode === 'workspace') {
+                this.setViewMode('workspace');
+            }
             this._syncPolling();
             this._onDidChangeData.fire();
             return;
@@ -470,6 +478,13 @@ export class AppHostDataRepository {
         this._clearWorkspaceAppHostDiscovery();
         this._syncPolling();
         this._updateWorkspaceContext({ clearLoading: true });
+    }
+
+    private _isCurrentWorkspaceDiscovery(discoveryVersion: number, workspaceFolder: vscode.WorkspaceFolder): boolean {
+        const rootFolder = vscode.workspace.workspaceFolders?.[0];
+        return !this._disposed
+            && discoveryVersion === this._workspaceAppHostDiscoveryVersion
+            && rootFolder?.uri.toString() === workspaceFolder.uri.toString();
     }
 
     private _setWorkspaceAppHostPath(appHostPath: string, appHostCandidates: readonly AppHostCandidate[]): void {
@@ -505,8 +520,10 @@ export class AppHostDataRepository {
     private _clearWorkspaceAppHostData(): void {
         this._workspaceResources.clear();
         this._workspaceAppHost = undefined;
-        this._appHosts = [];
-        this._appHostsSnapshot = '[]';
+        if (this._viewMode === 'workspace') {
+            this._appHosts = [];
+            this._appHostsSnapshot = '[]';
+        }
     }
 
     // ── Workspace mode: describe --follow ──
@@ -1108,7 +1125,7 @@ export class AppHostDataRepository {
     private _updateErrorMessage(): void {
         const message = this._viewMode === 'workspace'
             ? this._describeErrorMessage ?? this._psErrorMessage
-            : this._psErrorMessage ?? this._describeErrorMessage;
+            : this._psErrorMessage;
         const hasError = message !== undefined;
         if (this._errorMessage !== message) {
             this._errorMessage = message;

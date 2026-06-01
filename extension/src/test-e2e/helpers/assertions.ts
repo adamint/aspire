@@ -38,6 +38,13 @@ export async function waitForRunningAppHost(timeoutMs = 180000): Promise<Extensi
     return await waitForExtensionState(file => findRunningAppHost(file.state) !== undefined, 'running AppHost', timeoutMs);
 }
 
+export async function waitForAppHostLaunching(appHostPath = getPrimaryAppHostProjectPath(), timeoutMs = 60000): Promise<ExtensionE2EStateFile> {
+    return await waitForExtensionState(
+        file => file.state.launchingPaths.some(launchingPath => isSamePath(launchingPath, appHostPath)),
+        `AppHost '${appHostPath}' to enter launching state`,
+        timeoutMs);
+}
+
 export async function waitForNoRunningAppHost(timeoutMs = 90000): Promise<ExtensionE2EStateFile> {
     return await waitForExtensionState(file => findRunningAppHost(file.state) === undefined && file.state.launchingPaths.length === 0, 'AppHost to stop', timeoutMs);
 }
@@ -66,9 +73,9 @@ export async function waitForNoDebugSessions(timeoutMs = 90000): Promise<Extensi
     return await waitForExtensionState(file => file.state.debugSessions.length === 0, 'debug sessions to stop', timeoutMs);
 }
 
-export async function waitForCommandOutcome(command: string, outcome: CommandInvocation['outcome'], timeoutMs = 60000, afterInvocationCount = 0): Promise<CommandInvocation> {
-    const file = await waitForExtensionState(stateFile => stateFile.commandInvocations.filter(event => event.command === command).slice(afterInvocationCount).some(event => event.outcome === outcome), `${command} ${outcome} outcome`, timeoutMs);
-    const event = file.commandInvocations.filter(event => event.command === command).slice(afterInvocationCount).find(candidate => candidate.outcome === outcome);
+export async function waitForCommandOutcome(command: string, outcome: CommandInvocation['outcome'], timeoutMs = 60000, afterInvocationSequence = 0): Promise<CommandInvocation> {
+    const file = await waitForExtensionState(stateFile => stateFile.commandInvocations.some(event => event.command === command && event.sequence > afterInvocationSequence && event.outcome === outcome), `${command} ${outcome} outcome`, timeoutMs);
+    const event = file.commandInvocations.find(candidate => candidate.command === command && candidate.sequence > afterInvocationSequence && candidate.outcome === outcome);
     if (!event) {
         throw new Error(`Command '${command}' did not produce '${outcome}' even though the state predicate matched.`);
     }
@@ -78,19 +85,21 @@ export async function waitForCommandOutcome(command: string, outcome: CommandInv
 
 export function getCommandInvocationCount(command?: string): number {
     const file = readStateFile();
-    return command
-        ? file.commandInvocations.filter(event => event.command === command).length
-        : file.commandInvocations.length;
+    const matchingEvents = command
+        ? file.commandInvocations.filter(event => event.command === command)
+        : file.commandInvocations;
+
+    return Math.max(0, ...matchingEvents.map(event => event.sequence));
 }
 
 export async function waitForTerminalCommand(
     predicate: (event: ExtensionE2EStateFile['terminalCommands'][number]) => boolean,
     description: string,
     timeoutMs = 60000,
-    afterCommandCount = 0,
+    afterCommandSequence = 0,
 ): Promise<ExtensionE2EStateFile['terminalCommands'][number]> {
-    const file = await waitForExtensionState(stateFile => stateFile.terminalCommands.slice(afterCommandCount).some(predicate), description, timeoutMs);
-    const event = file.terminalCommands.slice(afterCommandCount).find(predicate);
+    const file = await waitForExtensionState(stateFile => stateFile.terminalCommands.some(event => event.sequence > afterCommandSequence && predicate(event)), description, timeoutMs);
+    const event = file.terminalCommands.find(candidate => candidate.sequence > afterCommandSequence && predicate(candidate));
     if (!event) {
         throw new Error(`Terminal command '${description}' was not found even though the state predicate matched.`);
     }
@@ -99,17 +108,17 @@ export async function waitForTerminalCommand(
 }
 
 export function getTerminalCommandCount(): number {
-    return readStateFile().terminalCommands.length;
+    return Math.max(0, ...readStateFile().terminalCommands.map(event => event.sequence));
 }
 
 export async function waitForDebugLaunch(
     predicate: (event: ExtensionE2EStateFile['debugLaunches'][number]) => boolean,
     description: string,
     timeoutMs = 60000,
-    afterLaunchCount = 0,
+    afterLaunchSequence = 0,
 ): Promise<ExtensionE2EStateFile['debugLaunches'][number]> {
-    const file = await waitForExtensionState(stateFile => stateFile.debugLaunches.slice(afterLaunchCount).some(predicate), description, timeoutMs);
-    const event = file.debugLaunches.slice(afterLaunchCount).find(predicate);
+    const file = await waitForExtensionState(stateFile => stateFile.debugLaunches.some(event => event.sequence > afterLaunchSequence && predicate(event)), description, timeoutMs);
+    const event = file.debugLaunches.find(candidate => candidate.sequence > afterLaunchSequence && predicate(candidate));
     if (!event) {
         throw new Error(`Debug launch '${description}' was not found even though the state predicate matched.`);
     }
@@ -118,7 +127,7 @@ export async function waitForDebugLaunch(
 }
 
 export function getDebugLaunchCount(): number {
-    return readStateFile().debugLaunches.length;
+    return Math.max(0, ...readStateFile().debugLaunches.map(event => event.sequence));
 }
 
 export function getTreeAppHostLabel(state: ExtensionStateSnapshot): string {

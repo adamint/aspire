@@ -81,11 +81,21 @@ export interface AspireExtensionE2EStateFile {
     updatedAt: string;
     state: AspireExtensionStateSnapshot;
     dashboardUrl?: string;
-    commandInvocations: readonly CommandInvocationEvent[];
-    terminalCommands: readonly AspireTerminalCommandEvent[];
-    debugLaunches: readonly AppHostLaunchRequestedEvent[];
+    commandInvocations: readonly AspireExtensionE2ECommandInvocation[];
+    terminalCommands: readonly AspireExtensionE2ETerminalCommand[];
+    debugLaunches: readonly AspireExtensionE2EDebugLaunch[];
     control?: AspireExtensionE2EControlStatus;
 }
+
+export interface AspireExtensionE2ESequence {
+    sequence: number;
+}
+
+export type AspireExtensionE2ECommandInvocation = CommandInvocationEvent & AspireExtensionE2ESequence;
+
+export type AspireExtensionE2ETerminalCommand = AspireTerminalCommandEvent & AspireExtensionE2ESequence;
+
+export type AspireExtensionE2EDebugLaunch = AppHostLaunchRequestedEvent & AspireExtensionE2ESequence;
 
 export interface AspireExtensionE2EControlStatus {
     revision: number;
