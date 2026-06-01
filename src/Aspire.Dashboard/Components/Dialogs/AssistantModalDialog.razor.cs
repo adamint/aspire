@@ -86,7 +86,7 @@ public partial class AssistantModalDialog : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
-    public static async Task OpenDialogAsync(IDialogService dialogService, string title, AssistantDialogViewModel viewModel)
+    public static async Task OpenDialogAsync(IDialogService dialogService, IJSRuntime js, string title, AssistantDialogViewModel viewModel, string? returnFocusElementId = null)
     {
         var parameters = new DialogParameters
         {
@@ -95,7 +95,15 @@ public partial class AssistantModalDialog : IAsyncDisposable
             Width = "min(800px, 100vw)",
             TrapFocus = true,
             Modal = true,
-            PreventScroll = true
+            PreventScroll = true,
+            OnDialogClosing = EventCallback.Factory.Create<DialogInstance>(dialogService, async _ =>
+            {
+                if (returnFocusElementId is not null && viewModel.Chat?.DisplayContainer != AssistantChatDisplayContainer.Switching)
+                {
+                    // FluentUI can restore focus to a shadow-DOM proxy instead of the launcher.
+                    await js.InvokeVoidAsync("focusElement", returnFocusElementId);
+                }
+            })
         };
 
         await dialogService.ShowDialogAsync<AssistantModalDialog>(viewModel, parameters);
@@ -116,7 +124,7 @@ public partial class AssistantModalDialog : IAsyncDisposable
 
     private async Task DisplaySidebarViewAsync()
     {
-        await AIContextProvider.LaunchAssistantSidebarAsync(Content.Chat);
+        await AIContextProvider.LaunchAssistantSidebarAsync(Content.Chat, Content.ReturnFocusElementId);
     }
 
     public async Task StartNewChatAsync()
