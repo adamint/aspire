@@ -58,6 +58,14 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes('timeout: getRunTestsTimeoutMs()'));
     });
 
+    test('opts out of telemetry for all CLI processes spawned by E2E tests', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+
+        assert.ok(runner.includes("ASPIRE_CLI_TELEMETRY_OPTOUT: '1'"));
+        assert.ok(runner.includes("DOTNET_CLI_TELEMETRY_OPTOUT: '1'"));
+    });
+
     test('keeps the slow zero-to-running shard timeout above its composed wait budgets', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const zeroToRunning = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'zeroToRunning.e2e.test.ts'), 'utf8');
