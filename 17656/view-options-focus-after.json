@@ -1,0 +1,20 @@
+{
+  "url": "https://TestShop.dev.localhost:<port>/login?t=<redacted>",
+  "selectedItemText": "Collapse child resources",
+  "before": {
+    "tagName": "FLUENT-BUTTON",
+    "id": "f627a89bc",
+    "role": null,
+    "ariaLabel": "View options",
+    "text": "",
+    "isBody": false
+  },
+  "after": {
+    "tagName": "FLUENT-BUTTON",
+    "id": "f627a89bc",
+    "role": null,
+    "ariaLabel": "View options",
+    "text": "",
+    "isBody": false
+  }
+}

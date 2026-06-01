@@ -1,0 +1,14 @@
+{
+  "url": "https://TestShop.dev.localhost:<port>/login?t=<redacted>",
+  "before": {
+    "ariaExpanded": "false",
+    "ariaHaspopup": "true",
+    "snapshot": "- button \"View options\""
+  },
+  "after": {
+    "ariaExpanded": "true",
+    "ariaHaspopup": "true",
+    "snapshot": "- button \"View options\" [expanded]",
+    "menuItemCount": 3
+  }
+}
