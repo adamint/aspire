@@ -594,14 +594,28 @@ function writeNuGetConfigIfLocalPackageSourcesExist() {
   const sourceEntries = packageSources
     .map((source, index) => `    <add key="e2e-source-${index}" value="${escapeXml(source)}" />`)
     .join('\n');
+  const fallbackSourceEntries = getApprovedFallbackPackageSources()
+    .map(source => `    <add key="${escapeXml(source.key)}" value="${escapeXml(source.value)}" />`)
+    .join('\n');
   fs.writeFileSync(workspaceNuGetConfigPath, `<?xml version="1.0" encoding="utf-8"?>
 <configuration>
   <packageSources>
     <clear />
 ${sourceEntries}
+${fallbackSourceEntries}
   </packageSources>
 </configuration>
 `);
+}
+
+function getApprovedFallbackPackageSources() {
+  return [
+    { key: 'dotnet-public', value: 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public/nuget/v3/index.json' },
+    { key: 'dotnet-eng', value: 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-eng/nuget/v3/index.json' },
+    { key: 'dotnet9', value: 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet9/nuget/v3/index.json' },
+    { key: 'dotnet10', value: 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet10/nuget/v3/index.json' },
+    { key: 'dotnet-libraries', value: 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-libraries/nuget/v3/index.json' },
+  ];
 }
 
 function getAvailableAppHostSdkVersions() {
