@@ -278,6 +278,12 @@ jobs:
             throw "Compiled E2E shard spec was not found: ${{ matrix.spec }}"
           }
 
+      - name: Install E2E recorder
+        if: ${{ matrix.useXvfb }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+
       - name: Run extension E2E tests
         working-directory: extension
         env:
