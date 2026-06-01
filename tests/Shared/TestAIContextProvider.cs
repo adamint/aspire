@@ -10,10 +10,16 @@ namespace Aspire.Dashboard.Tests;
 
 public class TestAIContextProvider : IAIContextProvider
 {
+    private readonly object _lock = new();
+    private readonly List<Func<Task>> _displayChangedCallbacks = [];
+
     public AssistantChatViewModel? AssistantChatViewModel { get; set; }
     public bool ShowAssistantSidebarDialog { get; set; }
-    public bool Enabled { get; }
+    public string? AssistantReturnFocusElementId { get; private set; }
+    public bool RestoreFocusOnAssistantSidebarHidden { get; private set; } = true;
+    public bool Enabled { get; set; }
     public AssistantChatState? ChatState { get; set; }
+    public string? LastAssistantModelDialogReturnFocusElementId { get; private set; }
     public IceBreakersBuilder IceBreakersBuilder { get; } = new IceBreakersBuilder(new TestStringLocalizer<AIPrompts>());
 
     public AIContext AddNew(string description, Action<AIContext> configure)
@@ -31,24 +37,36 @@ public class TestAIContextProvider : IAIContextProvider
         throw new NotImplementedException();
     }
 
-    public Task HideAssistantSidebarAsync()
+    public async Task HideAssistantSidebarAsync(bool restoreFocus = true)
     {
-        throw new NotImplementedException();
+        AssistantChatViewModel = null;
+        ShowAssistantSidebarDialog = false;
+        RestoreFocusOnAssistantSidebarHidden = restoreFocus;
+        await ExecuteDisplayChangedCallbacksAsync();
     }
 
-    public Task LaunchAssistantModelDialogAsync(AssistantChatViewModel viewModel, bool openedForMobileView = false)
+    public async Task LaunchAssistantModelDialogAsync(AssistantChatViewModel viewModel, bool openedForMobileView = false, string? returnFocusElementId = null)
     {
-        throw new NotImplementedException();
+        AssistantReturnFocusElementId = returnFocusElementId;
+        LastAssistantModelDialogReturnFocusElementId = returnFocusElementId;
+        await ExecuteDisplayChangedCallbacksAsync();
     }
 
-    public Task LaunchAssistantSidebarAsync(AssistantChatViewModel viewModel)
+    public async Task LaunchAssistantSidebarAsync(AssistantChatViewModel viewModel, string? returnFocusElementId = null)
     {
-        throw new NotImplementedException();
+        AssistantChatViewModel = viewModel;
+        ShowAssistantSidebarDialog = true;
+        AssistantReturnFocusElementId = returnFocusElementId;
+        RestoreFocusOnAssistantSidebarHidden = true;
+        await ExecuteDisplayChangedCallbacksAsync();
     }
 
     public Task LaunchAssistantSidebarAsync(Func<InitializePromptContext, Task> sendInitialPrompt)
     {
-        throw new NotImplementedException();
+        ShowAssistantSidebarDialog = true;
+        AssistantReturnFocusElementId = null;
+        RestoreFocusOnAssistantSidebarHidden = false;
+        return ExecuteDisplayChangedCallbacksAsync();
     }
 
     public IDisposable OnContextChanged(Func<Task> callback)
@@ -58,22 +76,55 @@ public class TestAIContextProvider : IAIContextProvider
 
     public IDisposable OnDisplayChanged(Func<Task> callback)
     {
-        return new DisplayChangedSubscription();
+        lock (_lock)
+        {
+            _displayChangedCallbacks.Add(callback);
+        }
+
+        return new DisplayChangedSubscription(this, callback);
     }
 
     public void Remove(AIContext context)
     {
     }
 
-    public Task SetAssistantSidebarAsync(AssistantChatViewModel viewModel)
+    public async Task SetAssistantSidebarAsync(AssistantChatViewModel viewModel)
     {
-        throw new NotImplementedException();
+        AssistantChatViewModel = viewModel;
+        await ExecuteDisplayChangedCallbacksAsync();
+    }
+
+    private async Task ExecuteDisplayChangedCallbacksAsync()
+    {
+        Func<Task>[] callbacks;
+        lock (_lock)
+        {
+            callbacks = [.. _displayChangedCallbacks];
+        }
+
+        foreach (var callback in callbacks)
+        {
+            await callback();
+        }
     }
 
     private sealed class DisplayChangedSubscription : IDisposable
     {
+        private readonly TestAIContextProvider _provider;
+        private readonly Func<Task> _callback;
+
+        public DisplayChangedSubscription(TestAIContextProvider provider, Func<Task> callback)
+        {
+            _provider = provider;
+            _callback = callback;
+        }
+
         public void Dispose()
         {
+            lock (_provider._lock)
+            {
+                _provider._displayChangedCallbacks.Remove(_callback);
+            }
         }
     }
 }

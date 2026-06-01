@@ -5,6 +5,7 @@ using Aspire.Dashboard.Components.CustomIcons;
 using Aspire.Dashboard.Model.Assistant;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
+using Microsoft.JSInterop;
 
 namespace Aspire.Dashboard.Components.Dialogs;
 
@@ -26,6 +27,9 @@ public partial class AssistantSidebarDialog : IAsyncDisposable
 
     [Inject]
     public required IServiceProvider ServiceProvider { get; init; }
+
+    [Inject]
+    public required IJSRuntime JS { get; init; }
 
     protected override void OnInitialized()
     {
@@ -50,16 +54,16 @@ public partial class AssistantSidebarDialog : IAsyncDisposable
         }
     }
 
-    public void CloseDialog()
+    public async Task CloseDialogAsync()
     {
-        AIContextProvider.HideAssistantSidebarAsync();
+        await AIContextProvider.HideAssistantSidebarAsync();
     }
 
     public async Task ExpandDialogAsync(bool openedForMobileView)
     {
         Content.Chat.DisplayContainer = AssistantChatDisplayContainer.Switching;
-        await AIContextProvider.HideAssistantSidebarAsync();
-        await AIContextProvider.LaunchAssistantModelDialogAsync(Content.Chat, openedForMobileView);
+        await AIContextProvider.HideAssistantSidebarAsync(restoreFocus: false);
+        await AIContextProvider.LaunchAssistantModelDialogAsync(Content.Chat, openedForMobileView, Content.ReturnFocusElementId);
     }
 
     public async Task StartNewChatAsync()

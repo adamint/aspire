@@ -8,4 +8,6 @@ public sealed class AssistantDialogViewModel
     public AssistantChatViewModel Chat { get; set; } = null!;
 
     public bool OpenedForMobileView { get; set; }
+
+    public string? ReturnFocusElementId { get; set; }
 }

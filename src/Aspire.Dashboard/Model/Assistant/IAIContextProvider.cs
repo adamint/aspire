@@ -19,12 +19,14 @@ public interface IAIContextProvider
 
     AssistantChatViewModel? AssistantChatViewModel { get; }
     bool ShowAssistantSidebarDialog { get; }
+    string? AssistantReturnFocusElementId { get; }
+    bool RestoreFocusOnAssistantSidebarHidden { get; }
     AssistantChatState? ChatState { get; set; }
 
-    Task LaunchAssistantModelDialogAsync(AssistantChatViewModel viewModel, bool openedForMobileView = false);
+    Task LaunchAssistantModelDialogAsync(AssistantChatViewModel viewModel, bool openedForMobileView = false, string? returnFocusElementId = null);
     Task LaunchAssistantSidebarAsync(Func<InitializePromptContext, Task> sendInitialPrompt);
-    Task LaunchAssistantSidebarAsync(AssistantChatViewModel viewModel);
-    Task HideAssistantSidebarAsync();
+    Task LaunchAssistantSidebarAsync(AssistantChatViewModel viewModel, string? returnFocusElementId = null);
+    Task HideAssistantSidebarAsync(bool restoreFocus = true);
     Task SetAssistantSidebarAsync(AssistantChatViewModel viewModel);
     Task<GhcpInfoResponse> GetInfoAsync(CancellationToken cancellationToken);
 }
