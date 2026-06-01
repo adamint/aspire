@@ -1,0 +1,197 @@
+{
+  "label": "AFTER FIX",
+  "target": {
+    "text": "catalogdbapp",
+    "color": "rgb(0, 0, 0)",
+    "backgroundColor": "rgb(26, 126, 207)",
+    "rect": {
+      "x": 142,
+      "y": 284,
+      "width": 80.078125,
+      "height": 18
+    },
+    "contrast": 4.929263003658521
+  },
+  "prefixes": [
+    {
+      "text": "catalogdbapp",
+      "color": "rgb(0, 0, 0)",
+      "backgroundColor": "rgb(26, 126, 207)",
+      "rect": {
+        "x": 142,
+        "y": 284,
+        "width": 80.078125,
+        "height": 18
+      },
+      "contrast": 4.929263003658521
+    },
+    {
+      "text": "catalogdbapp",
+      "color": "rgb(0, 0, 0)",
+      "backgroundColor": "rgb(26, 126, 207)",
+      "rect": {
+        "x": 142,
+        "y": 304,
+        "width": 80.078125,
+        "height": 18
+      },
+      "contrast": 4.929263003658521
+    },
+    {
+      "text": "frontend",
+      "color": "rgb(255, 255, 255)",
+      "backgroundColor": "rgb(142, 96, 56)",
+      "rect": {
+        "x": 142,
+        "y": 324,
+        "width": 52.046875,
+        "height": 18
+      },
+      "contrast": 5.411799543735088
+    },
+    {
+      "text": "frontend",
+      "color": "rgb(255, 255, 255)",
+      "backgroundColor": "rgb(142, 96, 56)",
+      "rect": {
+        "x": 142,
+        "y": 344,
+        "width": 52.046875,
+        "height": 18
+      },
+      "contrast": 5.411799543735088
+    },
+    {
+      "text": "orderprocessor",
+      "color": "rgb(255, 255, 255)",
+      "backgroundColor": "rgb(42, 76, 138)",
+      "rect": {
+        "x": 142,
+        "y": 264,
+        "width": 88.703125,
+        "height": 18
+      },
+      "contrast": 8.402620645078565
+    },
+    {
+      "text": "apigateway",
+      "color": "rgb(0, 0, 0)",
+      "backgroundColor": "rgb(44, 183, 189)",
+      "rect": {
+        "x": 142,
+        "y": 224,
+        "width": 68.71875,
+        "height": 18
+      },
+      "contrast": 8.615313675351194
+    },
+    {
+      "text": "apigateway",
+      "color": "rgb(0, 0, 0)",
+      "backgroundColor": "rgb(44, 183, 189)",
+      "rect": {
+        "x": 142,
+        "y": 244,
+        "width": 68.71875,
+        "height": 18
+      },
+      "contrast": 8.615313675351194
+    },
+    {
+      "text": "basketservice",
+      "color": "rgb(0, 0, 0)",
+      "backgroundColor": "rgb(248, 145, 112)",
+      "rect": {
+        "x": 142,
+        "y": 364,
+        "width": 81.375,
+        "height": 18
+      },
+      "contrast": 9.275421718936423
+    },
+    {
+      "text": "basketservice",
+      "color": "rgb(0, 0, 0)",
+      "backgroundColor": "rgb(248, 145, 112)",
+      "rect": {
+        "x": 142,
+        "y": 384,
+        "width": 81.375,
+        "height": 18
+      },
+      "contrast": 9.275421718936423
+    },
+    {
+      "text": "catalogservice-bkjudstp",
+      "color": "rgb(0, 0, 0)",
+      "backgroundColor": "rgb(185, 178, 164)",
+      "rect": {
+        "x": 142,
+        "y": 424,
+        "width": 133.40625,
+        "height": 18
+      },
+      "contrast": 9.967082642083206
+    },
+    {
+      "text": "catalogservice-bkjudstp",
+      "color": "rgb(0, 0, 0)",
+      "backgroundColor": "rgb(185, 178, 164)",
+      "rect": {
+        "x": 142,
+        "y": 464,
+        "width": 133.40625,
+        "height": 18
+      },
+      "contrast": 9.967082642083206
+    },
+    {
+      "text": "catalogservice-bkjudstp",
+      "color": "rgb(0, 0, 0)",
+      "backgroundColor": "rgb(185, 178, 164)",
+      "rect": {
+        "x": 142,
+        "y": 504,
+        "width": 133.40625,
+        "height": 18
+      },
+      "contrast": 9.967082642083206
+    },
+    {
+      "text": "catalogservice-saxtswff",
+      "color": "rgb(0, 0, 0)",
+      "backgroundColor": "rgb(227, 186, 122)",
+      "rect": {
+        "x": 142,
+        "y": 404,
+        "width": 131.84375,
+        "height": 18
+      },
+      "contrast": 11.570769061477476
+    },
+    {
+      "text": "catalogservice-saxtswff",
+      "color": "rgb(0, 0, 0)",
+      "backgroundColor": "rgb(227, 186, 122)",
+      "rect": {
+        "x": 142,
+        "y": 444,
+        "width": 131.84375,
+        "height": 18
+      },
+      "contrast": 11.570769061477476
+    },
+    {
+      "text": "catalogservice-saxtswff",
+      "color": "rgb(0, 0, 0)",
+      "backgroundColor": "rgb(227, 186, 122)",
+      "rect": {
+        "x": 142,
+        "y": 484,
+        "width": 131.84375,
+        "height": 18
+      },
+      "contrast": 11.570769061477476
+    }
+  ]
+}
