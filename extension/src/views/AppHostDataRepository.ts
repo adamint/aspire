@@ -384,6 +384,8 @@ export class AppHostDataRepository {
         if (!workspaceFolders || workspaceFolders.length === 0) {
             this._workspaceAppHostDiscoveryComplete = true;
             this._clearWorkspaceAppHostDiscovery();
+            this._clearWorkspaceAppHostData();
+            this._clearErrors();
             this._syncPolling();
             this._updateWorkspaceContext({ clearLoading: true });
             return;
@@ -404,12 +406,28 @@ export class AppHostDataRepository {
         }).catch(error => {
             this._workspaceAppHostDiscoveryComplete = true;
             extensionLogOutputChannel.warn(`Failed to fetch workspace apphost: ${error}`);
+            this._clearWorkspaceAppHostDiscovery();
+            this._clearWorkspaceAppHostData();
+            this._setDescribeError(errorFetchingAppHosts(String(error)));
+            this._updateWorkspaceContext({ clearLoading: true });
             this._syncPolling();
         });
     }
 
     private _handleWorkspaceAppHostCandidates(appHostCandidates: readonly AppHostCandidate[], selectedAppHostPath: string | null): void {
         const buildableAppHostCandidates = appHostCandidates.filter(isBuildableAppHostCandidate);
+
+        if (buildableAppHostCandidates.length === 0) {
+            this._clearWorkspaceAppHostDiscovery();
+            this._clearWorkspaceAppHostData();
+            if (appHostCandidates.length > 0) {
+                extensionLogOutputChannel.info(`aspire ls found ${appHostCandidates.length} AppHost candidates, but none are buildable`);
+            }
+            this._clearErrors();
+            this._syncPolling();
+            this._updateWorkspaceContext({ clearLoading: true });
+            return;
+        }
 
         if (buildableAppHostCandidates.length > 1) {
             this._setWorkspaceAppHostCandidatePaths(buildableAppHostCandidates);
@@ -437,8 +455,6 @@ export class AppHostDataRepository {
             this._syncPolling();
             this._onDidChangeData.fire();
             return;
-        } else if (appHostCandidates.length > 0) {
-            extensionLogOutputChannel.info(`aspire ls found ${appHostCandidates.length} AppHost candidates, but none are buildable`);
         }
 
         this._clearWorkspaceAppHostDiscovery();
@@ -474,6 +490,13 @@ export class AppHostDataRepository {
         this._clearWorkspaceAppHostSelection();
         this._workspaceAppHostCandidatePaths = [];
         this._workspaceAppHostDescription = undefined;
+    }
+
+    private _clearWorkspaceAppHostData(): void {
+        this._workspaceResources.clear();
+        this._workspaceAppHost = undefined;
+        this._appHosts = [];
+        this._appHostsSnapshot = '[]';
     }
 
     // ── Workspace mode: describe --follow ──
@@ -934,10 +957,7 @@ export class AppHostDataRepository {
                 const errorMessage = errorFetchingAppHosts(String(error));
                 extensionLogOutputChannel.warn(errorMessage);
                 this._setPsError(errorMessage);
-                if (this._loadingGlobal) {
-                    this._loadingGlobal = false;
-                    this._updateLoadingContext();
-                }
+                this._clearLoadingForCurrentView();
                 this._supportsPsFollow = false;
                 this._startPsIntervalPolling(false);
             }
@@ -1030,8 +1050,7 @@ export class AppHostDataRepository {
                 this._setPsError(undefined);
                 this._handlePsOutput(stdout);
             } else {
-                this._loadingGlobal = false;
-                this._updateLoadingContext();
+                this._clearLoadingForCurrentView();
                 this._setPsError(errorFetchingAppHosts(stderr || `exit code ${code}`));
             }
             this._fetchInProgress = false;
@@ -1045,6 +1064,15 @@ export class AppHostDataRepository {
     private _updateLoadingContext(): void {
         const isLoading = this._viewMode === 'workspace' ? this._loadingWorkspace : this._loadingGlobal;
         vscode.commands.executeCommand('setContext', 'aspire.loading', isLoading);
+    }
+
+    private _clearLoadingForCurrentView(): void {
+        if (this._viewMode === 'workspace') {
+            this._loadingWorkspace = false;
+        } else {
+            this._loadingGlobal = false;
+        }
+        this._updateLoadingContext();
     }
 
     private _clearErrors(): void {
@@ -1235,10 +1263,7 @@ export class AppHostDataRepository {
                 extensionLogOutputChannel.warn(errorMessage);
                 this._setPsError(errorMessage);
                 this._fetchInProgress = false;
-                if (this._loadingGlobal) {
-                    this._loadingGlobal = false;
-                    this._updateLoadingContext();
-                }
+                this._clearLoadingForCurrentView();
             }
             return;
         }

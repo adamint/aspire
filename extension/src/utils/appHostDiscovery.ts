@@ -37,7 +37,7 @@ interface LegacyAppHostProjectSearchResult {
     all_project_file_candidates: string[];
 }
 
-const discoveryExcludePattern = '{**/artifacts/**,**/[Bb]in/**,**/[Oo]bj/**,**/node_modules/**,**/.git/**,**/.vs/**,**/.vscode-test/**,**/.idea/**,**/.aspire/modules/**}';
+const discoveryExcludePattern = '{**/artifacts/**,**/[Bb]in/**,**/[Oo]bj/**,**/node_modules/**,**/.git/**,**/.vs/**,**/.vscode-test/**,**/.worktrees/**,**/.idea/**,**/.aspire/modules/**}';
 
 export class AppHostDiscoveryService implements vscode.Disposable {
     private readonly _onDidChangeCandidates = new vscode.EventEmitter<vscode.WorkspaceFolder>();
@@ -477,6 +477,7 @@ function isExcludedDiscoveryUri(workspaceFolder: vscode.WorkspaceFolder, uri: vs
             || lowerSegment === '.git'
             || lowerSegment === '.vs'
             || lowerSegment === '.vscode-test'
+            || lowerSegment === '.worktrees'
             || lowerSegment === '.idea'
             || (lowerSegment === '.aspire' && segments[index + 1]?.toLowerCase() === 'modules');
     });
