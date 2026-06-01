@@ -1,0 +1,27 @@
+{
+  "issue": 10299,
+  "pr": 17780,
+  "states": [
+    {
+      "phase": "initial",
+      "helpfulAriaPressed": "false",
+      "unhelpfulAriaPressed": "false"
+    },
+    {
+      "phase": "after helpful click",
+      "helpfulAriaPressed": "true",
+      "unhelpfulAriaPressed": "false"
+    },
+    {
+      "phase": "after helpful click again",
+      "helpfulAriaPressed": "false",
+      "unhelpfulAriaPressed": "false"
+    },
+    {
+      "phase": "after unhelpful click",
+      "helpfulAriaPressed": "false",
+      "unhelpfulAriaPressed": "true"
+    }
+  ],
+  "note": "Live Copilot UI was not reachable in local dashboard; evidence comes from the verified bUnit component path."
+}
