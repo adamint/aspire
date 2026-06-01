@@ -383,6 +383,9 @@ export class AppHostDataRepository {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || workspaceFolders.length === 0) {
             this._workspaceAppHostDiscoveryComplete = true;
+            this._clearWorkspaceAppHostDiscovery();
+            this._syncPolling();
+            this._updateWorkspaceContext({ clearLoading: true });
             return;
         }
         const rootFolder = workspaceFolders[0];
@@ -433,9 +436,14 @@ export class AppHostDataRepository {
             extensionLogOutputChannel.info(`Workspace apphost resolved: ${selectedAppHostCandidate.path} (${selectedAppHostCandidate.language}, ${selectedAppHostCandidate.status})`);
             this._syncPolling();
             this._onDidChangeData.fire();
+            return;
         } else if (appHostCandidates.length > 0) {
             extensionLogOutputChannel.info(`aspire ls found ${appHostCandidates.length} AppHost candidates, but none are buildable`);
         }
+
+        this._clearWorkspaceAppHostDiscovery();
+        this._syncPolling();
+        this._updateWorkspaceContext({ clearLoading: true });
     }
 
     private _setWorkspaceAppHostPath(appHostPath: string, appHostCandidates: readonly AppHostCandidate[]): void {

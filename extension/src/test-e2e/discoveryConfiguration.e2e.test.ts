@@ -1,9 +1,10 @@
 import * as assert from 'assert';
+import * as fs from 'fs';
 import * as path from 'path';
 import { getCommandInvocationCount, isSamePath, waitForCommandOutcome, waitForExtensionState, waitForRepositoryIdle, waitForSelectedWorkspaceAppHost, waitForWorkspaceAppHost } from './helpers/assertions';
 import { createAdditionalAppHostCandidate, executeE2eControlCommand, removeAdditionalAppHostCandidate, removeLegacyAspireSettings, removeWorkspaceAppHostConfig, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, setCliUnavailableForE2E, stopPrimaryAppHostIfRunning, writeLegacyAspireSettings, writeWorkspaceAppHostConfig, writeWorkspaceAppHostConfigRaw } from './helpers/fixtures';
-import { getPrimaryAppHostProjectPath } from './helpers/paths';
-import { openAspireView } from './helpers/vscode';
+import { getPrimaryAppHostProjectPath, getWorkspaceRoot } from './helpers/paths';
+import { openAspireView, waitForWorkbenchText } from './helpers/vscode';
 
 suite('Aspire workspace discovery and configuration E2E', function () {
     this.timeout(180000);
@@ -104,5 +105,44 @@ suite('Aspire workspace discovery and configuration E2E', function () {
         await waitForCommandOutcome('aspire-vscode.refreshAppHosts', 'success', 60000, before);
         const selected = await waitForSelectedWorkspaceAppHost();
         assert.ok(!isSamePath(selected.state.workspaceAppHostPath ?? '', secondaryAppHostPath));
+    });
+
+    test('shows the empty workspace welcome after discovery finds no AppHosts', async () => {
+        await openAspireView();
+        await waitForRepositoryIdle();
+        await waitForSelectedWorkspaceAppHost();
+        await stopPrimaryAppHostIfRunning();
+
+        const appHostDirectory = path.dirname(getPrimaryAppHostProjectPath());
+        const hiddenAppHostDirectory = path.join(getWorkspaceRoot(), '.e2e-hidden-apphost');
+        fs.rmSync(hiddenAppHostDirectory, { recursive: true, force: true });
+
+        try {
+            fs.renameSync(appHostDirectory, hiddenAppHostDirectory);
+            removeWorkspaceAppHostConfig();
+
+            const before = getCommandInvocationCount('aspire-vscode.refreshAppHosts');
+            await executeE2eControlCommand({ name: 'refreshAppHosts' });
+            await waitForCommandOutcome('aspire-vscode.refreshAppHosts', 'success', 60000, before);
+
+            const emptyWorkspace = await waitForExtensionState(
+                file => file.state.isWorkspaceAppHostDiscoveryComplete
+                    && !file.state.isRepositoryLoading
+                    && file.state.workspaceAppHostCandidatePaths.length === 0
+                    && file.state.workspaceResources.length === 0
+                    && file.state.appHosts.length === 0
+                    && !file.state.hasError,
+                'empty workspace discovery to complete without loading forever',
+                60000);
+            assert.deepStrictEqual(emptyWorkspace.state.workspaceAppHostCandidatePaths, []);
+
+            await waitForWorkbenchText('No Aspire AppHosts detected in this workspace.', 30000);
+        } finally {
+            if (fs.existsSync(hiddenAppHostDirectory) && !fs.existsSync(appHostDirectory)) {
+                fs.renameSync(hiddenAppHostDirectory, appHostDirectory);
+            }
+            fs.rmSync(hiddenAppHostDirectory, { recursive: true, force: true });
+            restoreWorkspaceAppHostConfig();
+        }
     });
 });

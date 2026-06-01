@@ -377,6 +377,43 @@ suite('AppHostDataRepository', () => {
         }
     });
 
+    test('visible workspace panel clears loading when workspace has no AppHost candidates', async () => {
+        let getAppHostsLineCallback: ((line: string) => void) | undefined;
+        const getAppHostsProcess = new TestChildProcess();
+        spawnStub.onFirstCall().callsFake((_terminalProvider, _command, _args, options) => {
+            getAppHostsLineCallback = createLsLineCallback(options);
+            return getAppHostsProcess;
+        });
+        const workspaceFoldersStub = stubWorkspaceFolders([{
+            uri: vscode.Uri.file('/workspace'),
+            name: 'workspace',
+            index: 0,
+        }]);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            repository.activate();
+            repository.setPanelVisible(true);
+            await waitForAppHostDiscovery();
+            assert.ok(getAppHostsLineCallback);
+
+            getAppHostsLineCallback(JSON.stringify({
+                selected_project_file: null,
+                all_project_file_candidates: [],
+            }));
+            await waitForAppHostDiscovery();
+
+            assert.strictEqual(repository.isWorkspaceAppHostDiscoveryComplete, true);
+            assert.strictEqual(repository.isLoading, false);
+            assert.strictEqual(repository.workspaceAppHostCandidatePaths.length, 0);
+            assert.strictEqual(repository.hasError, false);
+            assert.strictEqual(spawnStub.callCount, 1);
+        } finally {
+            repository.dispose();
+            workspaceFoldersStub.restore();
+        }
+    });
+
     test('visible panel keeps workspace view when workspace has multiple AppHosts and one is selected', async () => {
         let getAppHostsLineCallback: ((line: string) => void) | undefined;
         const getAppHostsProcess = new TestChildProcess();
