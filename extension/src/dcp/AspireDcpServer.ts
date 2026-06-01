@@ -8,16 +8,28 @@ import { AspireResourceDebugSession, DcpServerConnectionInfo, ErrorDetails, Erro
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import { createDebugSessionConfiguration, getResourceDebuggerExtensions } from '../debugger/debuggerExtensions';
 import { cleanupRun } from '../debugger/runCleanupRegistry';
+import { createDebugAdapterTracker } from '../debugger/adapterTracker';
 import { timingSafeEqual } from 'crypto';
 import { getRunSessionInfo, getSupportedCapabilities } from '../capabilities';
 import { authorizationAndDcpHeadersRequired, authorizationHeaderMustStartWithBearer, encounteredErrorStartingResource, invalidOrMissingToken, invalidTokenLength } from '../loc/strings';
+import { AcquiredTestRunSession, TestRunSessionAcquireOptions, TestRunSessionLease, TestRunSessionManager } from './TestRunSessionManager';
+
+type AuthorizedDcpRequest = {
+    dcpId: string;
+    token: string;
+    testRunSessionLease?: TestRunSessionLease;
+};
 
 export default class AspireDcpServer {
     private readonly app: express.Express;
     private server: https.Server;
     private wss: WebSocketServer;
     private wsBySession: Map<string, WebSocket> = new Map();
+    private runsBySession: Map<string, AspireResourceDebugSession[]> = new Map();
+    private testRunSessionLeaseIdByRunId: Map<string, string> = new Map();
+    private debugAdapterTrackerDisposablesByAdapter: Map<string, vscode.Disposable> = new Map();
     private pendingNotificationQueueByDcpId: Map<string, RunSessionNotification[]> = new Map();
+    private testRunSessionManager: TestRunSessionManager;
 
     public readonly connectionInfo: DcpServerConnectionInfo;
 
@@ -26,55 +38,90 @@ export default class AspireDcpServer {
         app: express.Express,
         server: https.Server,
         wss: WebSocketServer,
+        runsBySession: Map<string, AspireResourceDebugSession[]>,
+        testRunSessionLeaseIdByRunId: Map<string, string>,
         wsBySession: Map<string, WebSocket>,
-        pendingNotificationQueueByDcpId: Map<string, RunSessionNotification[]>) {
+        pendingNotificationQueueByDcpId: Map<string, RunSessionNotification[]>,
+        testRunSessionManager: TestRunSessionManager) {
         this.connectionInfo = info;
         this.app = app;
         this.server = server;
         this.wss = wss;
+        this.runsBySession = runsBySession;
+        this.testRunSessionLeaseIdByRunId = testRunSessionLeaseIdByRunId;
         this.wsBySession = wsBySession;
         this.pendingNotificationQueueByDcpId = pendingNotificationQueueByDcpId;
+        this.testRunSessionManager = testRunSessionManager;
     }
 
     static async create(getDebugSession: (debugSessionId: string) => AspireDebugSession | null): Promise<AspireDcpServer> {
         const runsBySession = new Map<string, AspireResourceDebugSession[]>();
         const wsBySession = new Map<string, WebSocket>();
         const pendingNotificationQueueByDcpId = new Map<string, RunSessionNotification[]>();
+        let testRunSessionManager: TestRunSessionManager | undefined;
+        let dcpServerInstance: AspireDcpServer | undefined;
 
         return new Promise(async (resolve, reject) => {
             const token = generateToken();
 
             const app = express();
             app.use(express.json());
+            const testRunSessionLeaseIdByRunId = new Map<string, string>();
 
             function requireHeaders(req: Request, res: Response, next: NextFunction): void {
-                const auth = req.header('Authorization');
-                const dcpId = req.header('microsoft-developer-dcp-instance-id');
-                if (!auth || !dcpId) {
+                const authorization = authorizeDcpRequest(req.header('Authorization'), req.header('microsoft-developer-dcp-instance-id'));
+                if (!authorization) {
                     respondWithError(res, 401, { error: { code: 'MissingHeaders', message: authorizationAndDcpHeadersRequired, details: [] } });
                     return;
                 }
 
-                if (auth.split('Bearer ').length !== 2) {
+                if (authorization === 'invalid-auth-header') {
                     respondWithError(res, 401, { error: { code: 'InvalidAuthHeader', message: authorizationHeaderMustStartWithBearer, details: [] } });
                     return;
                 }
 
-                const bearerTokenBuffer = Buffer.from(auth.split('Bearer ')[1]);
-                const expectedTokenBuffer = Buffer.from(token);
-
-                if (bearerTokenBuffer.length !== expectedTokenBuffer.length) {
+                if (authorization === 'invalid-token-length') {
                     respondWithError(res, 401, { error: { code: 'InvalidToken', message: invalidTokenLength, details: [] } });
                     return;
                 }
 
-                // timingSafeEqual is used to verify that the tokens are equivalent in a way that mitigates timing attacks
-                if (timingSafeEqual(bearerTokenBuffer, expectedTokenBuffer) === false) {
+                if (authorization === 'invalid-token') {
                     respondWithError(res, 401, { error: { code: 'InvalidToken', message: invalidOrMissingToken, details: [] } });
                     return;
                 }
 
+                (req as Request & { aspireDcpAuthorization?: AuthorizedDcpRequest }).aspireDcpAuthorization = authorization;
                 next();
+            }
+
+            function authorizeDcpRequest(auth: string | undefined, dcpId: string | undefined): AuthorizedDcpRequest | 'invalid-auth-header' | 'invalid-token-length' | 'invalid-token' | undefined {
+                if (!auth || !dcpId) {
+                    return undefined;
+                }
+
+                if (!auth.startsWith('Bearer ')) {
+                    return 'invalid-auth-header';
+                }
+
+                const bearerToken = auth.substring('Bearer '.length);
+                const testRunSessionLease = testRunSessionManager?.tryAuthorizeDcpRequest(dcpId, bearerToken);
+                if (testRunSessionLease) {
+                    return { dcpId, token: bearerToken, testRunSessionLease };
+                }
+
+                const bearerTokenBuffer = Buffer.from(bearerToken);
+                const expectedTokenBuffer = Buffer.from(token);
+
+                if (bearerTokenBuffer.length !== expectedTokenBuffer.length) {
+                    return 'invalid-token-length';
+                }
+
+                // timingSafeEqual is used to verify that the tokens are equivalent in a way that mitigates timing attacks
+                if (timingSafeEqual(bearerTokenBuffer, expectedTokenBuffer) === false) {
+                    return 'invalid-token';
+                }
+
+                return { dcpId, token: bearerToken };
             }
 
             app.get("/telemetry/enabled", (req: Request, res: Response) => {
@@ -89,8 +136,9 @@ export default class AspireDcpServer {
             app.put('/run_session', requireHeaders, async (req: Request, res: Response) => {
                 const payload: RunSessionPayload = req.body;
                 const runId = generateRunId();
-                const dcpId = req.header('microsoft-developer-dcp-instance-id') as string;
-                const debugSessionId = getDcpIdPrefix(dcpId);
+                const authorization = (req as Request & { aspireDcpAuthorization: AuthorizedDcpRequest }).aspireDcpAuthorization;
+                const dcpId = authorization.dcpId;
+                const debugSessionId = getDcpIdPrefix(dcpId) ?? authorization.testRunSessionLease?.sessionId;
                 const processes: AspireResourceDebugSession[] = [];
 
                 if (!debugSessionId) {
@@ -123,7 +171,7 @@ export default class AspireDcpServer {
                 }
 
                 const aspireDebugSession = getDebugSession(debugSessionId);
-                if (!aspireDebugSession) {
+                if (!aspireDebugSession && !authorization.testRunSessionLease) {
                     const error: ErrorDetails = {
                         code: 'DebugSessionNotFound',
                         message: `No Aspire debug session found for Debug Session ID ${debugSessionId}`,
@@ -137,20 +185,27 @@ export default class AspireDcpServer {
                 }
 
                 try {
+                    if (authorization.testRunSessionLease) {
+                        testRunSessionLeaseIdByRunId.set(runId, authorization.testRunSessionLease.id);
+                    }
+
                     const config = await createDebugSessionConfiguration(
-                        aspireDebugSession.configuration,
+                        aspireDebugSession?.configuration ?? { type: 'aspire', request: 'launch', name: 'Aspire test run', program: '' },
                         launchConfig,
                         payload.args,
                         payload.env ?? [],
-                        { debug: launchConfig.mode === "Debug", runId, debugSessionId: dcpId, isApphost: false, debugSession: aspireDebugSession },
+                        { debug: launchConfig.mode === "Debug", runId, debugSessionId: dcpId, isApphost: false, debugSession: aspireDebugSession ?? undefined },
                         foundDebuggerExtension
                     );
 
-                    const resourceDebugSession = await aspireDebugSession.startAndGetDebugSession(config);
+                    const resourceDebugSession = aspireDebugSession
+                        ? await aspireDebugSession.startAndGetDebugSession(config)
+                        : await startAndGetDebugSession(config, dcpServerInstance);
 
                     if (!resourceDebugSession) {
                         // Clean up any processes associated with this run (registered by resource-type extensions)
                         cleanupRun(runId);
+                        testRunSessionLeaseIdByRunId.delete(runId);
 
                         const error: ErrorDetails = {
                             code: 'DebugSessionFailed',
@@ -164,10 +219,27 @@ export default class AspireDcpServer {
                         return;
                     }
 
+                    if (authorization.testRunSessionLease && !testRunSessionManager?.isActive(authorization.testRunSessionLease.id)) {
+                        await resourceDebugSession.stopSession();
+                        testRunSessionLeaseIdByRunId.delete(runId);
+
+                        const error: ErrorDetails = {
+                            code: 'TestRunSessionReleased',
+                            message: 'The Aspire test run session was released before the resource debug session started.',
+                            details: []
+                        };
+
+                        extensionLogOutputChannel.error(`Error creating debug session ${runId}: ${error.message}`);
+                        const response: ErrorResponse = { error };
+                        respondWithError(res, 410, response);
+                        return;
+                    }
+
                     processes.push(resourceDebugSession);
                     extensionLogOutputChannel.info(`Debugging session created with ID: ${runId}`);
 
                     runsBySession.set(runId, processes);
+
                     res.status(201).set('Location', `https://${req.get('host')}/run_session/${runId}`).end();
                     extensionLogOutputChannel.info(`New run session created with ID: ${runId}`);
                 } catch (err) {
@@ -175,6 +247,7 @@ export default class AspireDcpServer {
 
                     // Clean up any processes associated with this run (registered by resource-type extensions)
                     cleanupRun(runId);
+                    testRunSessionLeaseIdByRunId.delete(runId);
 
                     // Notify DCP via WebSocket that the session terminated so it can update
                     // resource state, AND respond with HTTP 500 so the original POST /run_session
@@ -207,13 +280,14 @@ export default class AspireDcpServer {
 
             app.delete('/run_session/:id', requireHeaders, async (req: Request, res: Response) => {
                 const runId = req.params.id as string;
+                const authorization = (req as Request & { aspireDcpAuthorization: AuthorizedDcpRequest }).aspireDcpAuthorization;
                 if (runsBySession.has(runId)) {
-                    const baseDebugSessions = runsBySession.get(runId);
-                    for (const debugSession of baseDebugSessions || []) {
-                        debugSession.stopSession();
+                    if (authorization.testRunSessionLease && testRunSessionLeaseIdByRunId.get(runId) !== authorization.testRunSessionLease.id) {
+                        res.status(404).end();
+                        return;
                     }
 
-                    runsBySession.delete(runId);
+                    await dcpServerInstance?.stopRunSession(runId);
                     res.status(200).end();
                 } else {
                     res.status(204).end();
@@ -227,8 +301,14 @@ export default class AspireDcpServer {
 
             server.on('upgrade', (request, socket, head) => {
                 if (request.url?.startsWith('/run_session/notify')) {
+                    const authorization = authorizeDcpRequest(request.headers.authorization, request.headers['microsoft-developer-dcp-instance-id'] as string | undefined);
+                    if (!authorization || typeof authorization === 'string') {
+                        socket.destroy();
+                        return;
+                    }
+
                     wss.handleUpgrade(request, socket, head, (ws) => {
-                        const dcpId = request.headers['microsoft-developer-dcp-instance-id'] as string;
+                        const dcpId = authorization.dcpId;
                         extensionLogOutputChannel.info(`WebSocket connection established for DCP ID: ${dcpId}`);
                         wsBySession.set(dcpId, ws);
 
@@ -268,7 +348,9 @@ export default class AspireDcpServer {
                         token: token,
                         certificate: certBase64
                     };
-                    resolve(new AspireDcpServer(info, app, server, wss, wsBySession, pendingNotificationQueueByDcpId));
+                    testRunSessionManager = new TestRunSessionManager(info);
+                    dcpServerInstance = new AspireDcpServer(info, app, server, wss, runsBySession, testRunSessionLeaseIdByRunId, wsBySession, pendingNotificationQueueByDcpId, testRunSessionManager);
+                    resolve(dcpServerInstance);
                 } else {
                     reject(new Error('Failed to get server address'));
                 }
@@ -276,6 +358,26 @@ export default class AspireDcpServer {
 
             server.on('error', reject);
         });
+    }
+
+    acquireTestRunSession(options: TestRunSessionAcquireOptions): AcquiredTestRunSession {
+        return this.testRunSessionManager.acquire(options);
+    }
+
+    async releaseTestRunSession(id: string): Promise<void> {
+        const lease = this.testRunSessionManager.release(id);
+        const stopSessionPromises: Promise<void>[] = [];
+        for (const [runId, leaseId] of this.testRunSessionLeaseIdByRunId) {
+            if (leaseId === id) {
+                stopSessionPromises.push(this.stopRunSession(runId));
+            }
+        }
+
+        if (lease) {
+            this.closeLeaseNotificationConnections(lease);
+        }
+
+        await Promise.all(stopSessionPromises);
     }
 
     sendNotification(notification: RunSessionNotification) {
@@ -325,7 +427,56 @@ export default class AspireDcpServer {
         }
     }
 
+    private async stopRunSession(runId: string): Promise<void> {
+        const baseDebugSessions = this.runsBySession.get(runId);
+        for (const debugSession of baseDebugSessions || []) {
+            await debugSession.stopSession();
+        }
+
+        this.runsBySession.delete(runId);
+        this.testRunSessionLeaseIdByRunId.delete(runId);
+    }
+
+    ensureDebugAdapterTracker(debugAdapter: string): void {
+        if (this.debugAdapterTrackerDisposablesByAdapter.has(debugAdapter)) {
+            return;
+        }
+
+        this.debugAdapterTrackerDisposablesByAdapter.set(debugAdapter, createDebugAdapterTracker(this, debugAdapter));
+    }
+
+    private closeLeaseNotificationConnections(lease: TestRunSessionLease): void {
+        const prefix = `${lease.sessionId}-`;
+        for (const [dcpId, ws] of this.wsBySession) {
+            if (dcpId.startsWith(prefix)) {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.close(1000, 'Test run session released');
+                }
+
+                this.wsBySession.delete(dcpId);
+            }
+        }
+
+        for (const dcpId of this.pendingNotificationQueueByDcpId.keys()) {
+            if (dcpId.startsWith(prefix)) {
+                this.pendingNotificationQueueByDcpId.delete(dcpId);
+            }
+        }
+    }
+
     public dispose(): void {
+        for (const runId of [...this.runsBySession.keys()]) {
+            void this.stopRunSession(runId);
+        }
+
+        this.testRunSessionLeaseIdByRunId.clear();
+        this.pendingNotificationQueueByDcpId.clear();
+        for (const disposable of this.debugAdapterTrackerDisposablesByAdapter.values()) {
+            disposable.dispose();
+        }
+
+        this.debugAdapterTrackerDisposablesByAdapter.clear();
+
         // Send WebSocket close message to all clients before shutting down
         if (this.wss) {
             this.wss.clients.forEach(client => {
@@ -340,6 +491,82 @@ export default class AspireDcpServer {
             this.server.close();
         }
     }
+}
+
+async function startAndGetDebugSession(debugConfig: vscode.DebugConfiguration, dcpServer: AspireDcpServer | undefined): Promise<AspireResourceDebugSession | undefined> {
+    dcpServer?.ensureDebugAdapterTracker(debugConfig.type);
+
+    return new Promise((resolve, reject) => {
+        let completed = false;
+        let timeout: NodeJS.Timeout | undefined;
+        let lateCleanupTimeout: NodeJS.Timeout | undefined;
+        const disposable = vscode.debug.onDidStartDebugSession(session => {
+            if (session.configuration.runId === debugConfig.runId) {
+                if (completed) {
+                    void vscode.debug.stopDebugging(session);
+                    cleanupRun(debugConfig.runId);
+                    disposable.dispose();
+                    if (lateCleanupTimeout) {
+                        clearTimeout(lateCleanupTimeout);
+                    }
+
+                    return;
+                }
+
+                complete({
+                    id: session.id,
+                    session,
+                    stopSession: async () => {
+                        await vscode.debug.stopDebugging(session);
+                        cleanupRun(debugConfig.runId);
+                    }
+                });
+            }
+        });
+
+        function complete(result: AspireResourceDebugSession | undefined): void {
+            if (completed) {
+                return;
+            }
+
+            completed = true;
+            if (timeout) {
+                clearTimeout(timeout);
+            }
+            if (lateCleanupTimeout) {
+                clearTimeout(lateCleanupTimeout);
+            }
+
+            disposable.dispose();
+            resolve(result);
+        }
+
+        timeout = setTimeout(() => {
+            completed = true;
+            resolve(undefined);
+            lateCleanupTimeout = setTimeout(() => {
+                disposable.dispose();
+            }, 60_000);
+        }, 10000);
+
+        vscode.debug.startDebugging(undefined, debugConfig).then(started => {
+            if (!started) {
+                complete(undefined);
+            }
+        }, err => {
+            if (completed) {
+                return;
+            }
+
+            completed = true;
+            if (timeout) {
+                clearTimeout(timeout);
+            }
+
+            disposable.dispose();
+            reject(err);
+        });
+    });
 }
 
 export function generateRunId(): string {
