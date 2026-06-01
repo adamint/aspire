@@ -838,6 +838,33 @@ namespace Aspire.Dashboard.Resources {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to Deselect all.
+        /// </summary>
+        public static string ManageDataDeselectAllButtonLabel {
+            get {
+                return ResourceManager.GetString("ManageDataDeselectAllButtonLabel", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Deselect {0}.
+        /// </summary>
+        public static string ManageDataDeselectItemButtonLabel {
+            get {
+                return ResourceManager.GetString("ManageDataDeselectItemButtonLabel", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Deselect {0} for {1}.
+        /// </summary>
+        public static string ManageDataDeselectDataTypeForResourceButtonLabel {
+            get {
+                return ResourceManager.GetString("ManageDataDeselectDataTypeForResourceButtonLabel", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to Manage logs and telemetry.
         /// </summary>
         public static string ManageDataDialogTitle {
@@ -927,6 +954,33 @@ namespace Aspire.Dashboard.Resources {
             }
         }
         
+        /// <summary>
+        ///   Looks up a localized string similar to Select all.
+        /// </summary>
+        public static string ManageDataSelectAllButtonLabel {
+            get {
+                return ResourceManager.GetString("ManageDataSelectAllButtonLabel", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Select {0}.
+        /// </summary>
+        public static string ManageDataSelectItemButtonLabel {
+            get {
+                return ResourceManager.GetString("ManageDataSelectItemButtonLabel", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Select {0} for {1}.
+        /// </summary>
+        public static string ManageDataSelectDataTypeForResourceButtonLabel {
+            get {
+                return ResourceManager.GetString("ManageDataSelectDataTypeForResourceButtonLabel", resourceCulture);
+            }
+        }
+
         /// <summary>
         ///   Looks up a localized string similar to Structured logs.
         /// </summary>

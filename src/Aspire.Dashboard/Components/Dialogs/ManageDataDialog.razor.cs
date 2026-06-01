@@ -343,6 +343,37 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
 
     private string GetOtlpResourceName(OtlpResource resource) => OtlpHelpers.GetResourceName(resource, TelemetryRepository.GetResources());
 
+    private string GetHeaderSelectionLabel() => AreAllSelected()
+        ? Loc[nameof(Resources.Dialogs.ManageDataDeselectAllButtonLabel)]
+        : Loc[nameof(Resources.Dialogs.ManageDataSelectAllButtonLabel)];
+
+    private string GetResourceDisplayName(ResourceDataRow row)
+    {
+        if (row.Resource is not null)
+        {
+            return GetResourceName(row.Resource);
+        }
+
+        if (row.OtlpResource is not null)
+        {
+            return GetOtlpResourceName(row.OtlpResource);
+        }
+
+        return row.Name;
+    }
+
+    private string GetResourceDisplayName(string resourceName) => _resourceDataRows.TryGetValue(resourceName, out var row) ? GetResourceDisplayName(row) : resourceName;
+
+    private string GetResourceSelectionLabel(ResourceDataRow row, string resourceDisplayName) => GetSelectionLabel(AreAllDataRowsSelected(row), resourceDisplayName);
+
+    private string GetDataRowSelectionLabel(string resourceName, AspireDataType dataType, string dataTypeDisplayName, string parentResourceDisplayName) => IsDataRowSelected(resourceName, dataType)
+        ? Loc[nameof(Resources.Dialogs.ManageDataDeselectDataTypeForResourceButtonLabel), dataTypeDisplayName, parentResourceDisplayName]
+        : Loc[nameof(Resources.Dialogs.ManageDataSelectDataTypeForResourceButtonLabel), dataTypeDisplayName, parentResourceDisplayName];
+
+    private string GetSelectionLabel(bool selected, string displayName) => selected
+        ? Loc[nameof(Resources.Dialogs.ManageDataDeselectItemButtonLabel), displayName]
+        : Loc[nameof(Resources.Dialogs.ManageDataSelectItemButtonLabel), displayName];
+
     private string GetDataTypeDisplayName(AspireDataType dataType) => dataType switch
     {
         AspireDataType.ResourceDetails => Loc[nameof(Resources.Dialogs.ManageDataResource)],
