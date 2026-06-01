@@ -4,12 +4,13 @@ import * as path from 'path';
 import { getCommandInvocationCount, isSamePath, waitForCommandOutcome, waitForExtensionState, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
 import { createAdditionalAppHostCandidate, executeE2eControlCommand, removeAdditionalAppHostCandidate, removeWorkspaceAppHostConfig, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, setCliUnavailableForE2E, writeWorkspaceCliPath } from './helpers/fixtures';
 import { getWorkspaceRoot } from './helpers/paths';
-import { executeCommandFromPalette, openAspireView, waitForEditorTitle, waitForNotificationMessage, waitForTerminalChannel } from './helpers/vscode';
+import { executeCommandFromPalette, openAspireView, waitForEditorTitle, waitForNotificationMessage, waitForTerminalChannel, waitForWorkbenchText } from './helpers/vscode';
 
 suite('Aspire command palette E2E', function () {
     this.timeout(180000);
 
     teardown(async () => {
+        await executeE2eControlCommand({ name: 'closeAllEditors' }).catch(() => undefined);
         await setCliUnavailableForE2E(false);
         await restoreWorkspaceCliPath();
         restoreWorkspaceAppHostConfig();
@@ -33,7 +34,6 @@ suite('Aspire command palette E2E', function () {
         const missingCliPath = path.join(getWorkspaceRoot(), 'missing cli folder', process.platform === 'win32' ? 'aspire.cmd' : 'aspire');
         await writeWorkspaceCliPath(missingCliPath);
         await setCliUnavailableForE2E(true);
-
         const before = getCommandInvocationCount('aspire-vscode.openTerminal');
         await executeCommandFromPalette('Aspire: Open Aspire terminal');
         await waitForNotificationMessage('Aspire CLI is not available');
@@ -44,7 +44,9 @@ suite('Aspire command palette E2E', function () {
         const settingsBefore = getCommandInvocationCount('aspire-vscode.settings');
         await executeCommandFromPalette('Aspire: Extension settings');
         await waitForCommandOutcome('aspire-vscode.settings', 'success', 60000, settingsBefore);
-        assert.ok((await waitForEditorTitle('Settings')).includes('Settings'));
+        await waitForWorkbenchText('Settings');
+        await waitForWorkbenchText('Aspire: App Host Discovery Timeout Ms');
+        await executeE2eControlCommand({ name: 'closeAllEditors' });
 
         const configureBefore = getCommandInvocationCount('aspire-vscode.configureLaunchJson');
         await executeCommandFromPalette('Aspire: Configure launch.json file');

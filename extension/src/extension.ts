@@ -530,7 +530,10 @@ function createE2eStateFileBridge(
         lastControlRevision = revision;
         try {
           if (typeof payload.aspireCliExecutablePath === 'string') {
-            await vscode.workspace.getConfiguration('aspire').update('aspireCliExecutablePath', payload.aspireCliExecutablePath, vscode.ConfigurationTarget.Workspace);
+            const target = vscode.workspace.workspaceFolders?.length
+              ? vscode.ConfigurationTarget.Workspace
+              : vscode.ConfigurationTarget.Global;
+            await vscode.workspace.getConfiguration('aspire').update('aspireCliExecutablePath', payload.aspireCliExecutablePath, target);
           }
           if (typeof payload.forceCliUnavailable === 'boolean') {
             process.env.ASPIRE_EXTENSION_E2E_FORCE_CLI_UNAVAILABLE = payload.forceCliUnavailable ? 'true' : 'false';
@@ -812,6 +815,16 @@ async function executeE2eControlCommand(
     case 'getBreakpoints': {
       markStarted();
       return getE2eBreakpoints();
+    }
+    case 'stopDebugging': {
+      markStarted();
+      await vscode.debug.stopDebugging();
+      return undefined;
+    }
+    case 'closeAllEditors': {
+      markStarted();
+      await vscode.commands.executeCommand('workbench.action.closeAllEditors');
+      return getActiveEditorInfo();
     }
     case 'getRegisteredAspireCommands': {
       markStarted();

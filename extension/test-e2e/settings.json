@@ -8,5 +8,7 @@
   "aspire.globalAppHostsPollingInterval": 1000,
   "telemetry.telemetryLevel": "off",
   "update.mode": "none",
-  "workbench.startupEditor": "none"
+  "workbench.startupEditor": "none",
+  "workbench.welcomePage.experimentalOnboarding": false,
+  "workbench.welcomePage.walkthroughs.openOnInstall": false
 }

@@ -3,6 +3,7 @@ const extester = require(extesterModulePath);
 
 export interface WebDriver {
     wait<T>(condition: () => Promise<T | boolean> | T | boolean, timeout?: number, message?: string): Promise<T>;
+    executeScript<T>(script: string, ...args: unknown[]): Promise<T>;
 }
 
 export interface VSBrowserInstance {
@@ -38,6 +39,7 @@ export interface TreeSection {
 export interface SideBarView {
     getContent(): {
         getSection(title: string): Promise<TreeSection>;
+        getSections(): Promise<TreeSection[]>;
     };
 }
 
@@ -91,6 +93,7 @@ export interface Workbench {
 
 export const VSBrowser = extester.VSBrowser as { readonly instance: VSBrowserInstance };
 export const ActivityBar = extester.ActivityBar as new () => ActivityBar;
+export const SideBarView = extester.SideBarView as new () => SideBarView;
 export const Workbench = extester.Workbench as new () => Workbench;
 export const InputBox = extester.InputBox as { create(timeout?: number): Promise<InputBox> };
 export const BottomBarPanel = extester.BottomBarPanel as new () => { openTerminalView(): Promise<TerminalView> };

@@ -1,14 +1,16 @@
-import { ActivityBar, BottomBarPanel, EditorView, InputBox, Notification, TreeItem, TreeSection, VSBrowser, Workbench } from './extester';
+import { BottomBarPanel, EditorView, InputBox, Notification, SideBarView, TreeItem, TreeSection, VSBrowser, Workbench } from './extester';
 
 export async function openAspireView(): Promise<TreeSection> {
-    const activityBar = new ActivityBar();
-    const aspireControl = await activityBar.getViewControl('Aspire');
-    if (!aspireControl) {
-        throw new Error('Aspire activity bar view control was not found.');
-    }
-
-    const sideBar = await aspireControl.openView();
-    return await sideBar.getContent().getSection('AppHosts');
+    await new Workbench().executeCommand('workbench.view.extension.aspire-panel');
+    return await VSBrowser.instance.driver.wait(async () => {
+        try {
+            const sections = await new SideBarView().getContent().getSections();
+            return sections[0] ?? false;
+        }
+        catch {
+            return false;
+        }
+    }, 30000, 'Timed out waiting for Aspire AppHost tree section.');
 }
 
 export async function waitForTreeItem(section: TreeSection, label: string, timeoutMs = 30000): Promise<TreeItem> {
@@ -81,6 +83,17 @@ export async function waitForNotificationMessage(expectedText: string, timeoutMs
     }, timeoutMs, `Timed out waiting for notification containing '${expectedText}'.`);
 }
 
+export async function getNotificationCount(): Promise<number> {
+    return (await new Workbench().getNotifications()).length;
+}
+
+export async function waitForNotificationCountGreaterThan(count: number, timeoutMs = 30000): Promise<void> {
+    await VSBrowser.instance.driver.wait(async () => {
+        const currentCount = await getNotificationCount();
+        return currentCount > count;
+    }, timeoutMs, `Timed out waiting for notification count to exceed ${count}.`);
+}
+
 export async function getCurrentTerminalChannel(): Promise<string> {
     return await (await new BottomBarPanel().openTerminalView()).getCurrentChannel();
 }
@@ -97,6 +110,13 @@ export async function waitForEditorTitle(expectedText: string, timeoutMs = 60000
         const titles = await new EditorView().getOpenEditorTitles();
         return titles.find(title => title.includes(expectedText)) ?? false;
     }, timeoutMs, `Timed out waiting for editor title containing '${expectedText}'.`);
+}
+
+export async function waitForWorkbenchText(expectedText: string, timeoutMs = 30000): Promise<string> {
+    return await VSBrowser.instance.driver.wait(async () => {
+        const text = await VSBrowser.instance.driver.executeScript<string>('return document.body?.innerText ?? "";');
+        return text.includes(expectedText) ? text : false;
+    }, timeoutMs, `Timed out waiting for workbench text containing '${expectedText}'.`);
 }
 
 export async function closeAllEditors(): Promise<void> {

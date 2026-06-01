@@ -293,8 +293,7 @@ jobs:
           # Linux E2E jobs run under Xvfb, so record by default but keep/upload videos only for failures.
           # Set ASPIRE_EXTENSION_E2E_RECORDING_MODE=always when manually rerunning to keep successful recordings too.
           ASPIRE_EXTENSION_E2E_RECORDING_MODE: ${{ matrix.useXvfb && 'failure' || 'off' }}
-          # vscode-extension-tester isn't mirrored to dotnet-public-npm yet; the runner keeps
-          # this explicit so the regular extension dependency restore still uses the internal feed.
+          # TODO: remove once vscode-extension-tester@8.23.0 and its transitive tarballs are seeded in dotnet-public-npm.
           ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY: https://registry.npmjs.org
         run: |
           if ('${{ matrix.useXvfb }}' -eq 'true') {
@@ -330,7 +329,8 @@ jobs:
           }
           $hasResults = Test-Path ".test-results"
           $hasStorage = Test-Path ".test-storage"
-          $recordings = Get-ChildItem -Path ".test-recordings" -Recurse -File -ErrorAction SilentlyContinue
+          $recordings = Get-ChildItem -Path ".test-recordings" -Recurse -File -Filter "*.mp4" -ErrorAction SilentlyContinue
+          $recordingLogs = Get-ChildItem -Path ".test-recordings" -Recurse -File -Filter "*.ffmpeg.log" -ErrorAction SilentlyContinue
           $screenshots = Get-ChildItem -Path ".test-storage" -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match "[/\\]screenshots[/\\]" }
 
           Write-Host "Extension E2E diagnostics artifact: $artifactName"
@@ -352,4 +352,8 @@ jobs:
             $recordings | ForEach-Object { Write-Host "  $($_.FullName.Replace((Get-Location).Path + [IO.Path]::DirectorySeparatorChar, ''))" }
           } else {
             Write-Host "No E2E recordings were kept for this shard. Linux CI keeps recordings on failure by default; set ASPIRE_EXTENSION_E2E_RECORDING_MODE=always for successful-run videos."
+          }
+          if ($recordingLogs) {
+            Write-Host "Recorder logs:"
+            $recordingLogs | ForEach-Object { Write-Host "  $($_.FullName.Replace((Get-Location).Path + [IO.Path]::DirectorySeparatorChar, ''))" }
           }

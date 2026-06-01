@@ -30,8 +30,9 @@ const defaultVsixPath = path.join(artifactsDir, 'aspire-extension-e2e.vsix');
 const stateFile = path.join(resultsDir, 'extension-state.json');
 const controlFile = path.join(resultsDir, 'extension-control.json');
 const testSpec = process.env.ASPIRE_EXTENSION_E2E_SPEC || 'out/test-e2e/**/*.e2e.test.js';
-const vscodeVersion = process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.98.2';
-const extesterVersion = process.env.ASPIRE_EXTENSION_E2E_EXTESTER_VERSION || '8.14.1';
+const vscodeVersion = process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.122.1';
+const extesterVersion = process.env.ASPIRE_EXTENSION_E2E_EXTESTER_VERSION || '8.23.0';
+const extesterNpmRegistry = process.env.ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY || 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/';
 const extesterInstallRoot = path.join(artifactsDir, 'extester-runner');
 const extesterNodeModules = path.join(extesterInstallRoot, 'node_modules');
 const extesterModule = path.join(extesterNodeModules, 'vscode-extension-tester');
@@ -147,6 +148,12 @@ function toPosixPath(value) {
   return path.resolve(value).replace(/^\\\\\?\\/, '').split(path.sep).join('/');
 }
 
+function writeVsCodeLocaleFile() {
+  const userDataDirectory = path.join(storageDir, 'settings', 'User');
+  fs.mkdirSync(userDataDirectory, { recursive: true });
+  fs.writeFileSync(path.join(userDataDirectory, 'locale.json'), JSON.stringify({ locale: 'en' }, undefined, 2));
+}
+
 function startRecording() {
   const mode = getRecordingMode();
   if (mode === 'off') {
@@ -176,7 +183,7 @@ function startRecording() {
   const args = [
     '-y',
     '-video_size',
-    process.env.ASPIRE_EXTENSION_E2E_RECORDING_SIZE || '1920x1080',
+    process.env.ASPIRE_EXTENSION_E2E_RECORDING_SIZE || '1280x1024',
     '-framerate',
     process.env.ASPIRE_EXTENSION_E2E_RECORDING_FRAMERATE || '15',
     '-f',
@@ -270,6 +277,7 @@ if (!fs.existsSync(vsixPath)) {
 validateVsix(vsixPath);
 
 ensureExtester();
+writeVsCodeLocaleFile();
 
 const extestEnv = getAspireCliEnvironment({
   ASPIRE_EXTENSION_E2E_CLI_PATH: cliPath,
@@ -284,6 +292,9 @@ const extestEnv = getAspireCliEnvironment({
   ASPIRE_EXTENSION_E2E_APPHOST_SDK_VERSION: appHostSdkVersion,
   ...(packageSource ? { ASPIRE_EXTENSION_E2E_PACKAGE_SOURCE: packageSource } : {}),
   ASPIRE_EXTENSION_E2E_EXTESTER_MODULE: extesterModule,
+  VSCODE_NLS_CONFIG: JSON.stringify({ locale: 'en', availableLanguages: {} }),
+  LANG: 'C.UTF-8',
+  LC_ALL: 'C.UTF-8',
   NODE_PATH: [extesterNodeModules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
 });
 
@@ -415,17 +426,29 @@ function ensureExtester() {
 
   fs.rmSync(extesterInstallRoot, { recursive: true, force: true });
   fs.mkdirSync(extesterInstallRoot, { recursive: true });
+  fs.writeFileSync(path.join(extesterInstallRoot, 'package.json'), JSON.stringify({
+    private: true,
+    dependencies: {
+      'vscode-extension-tester': extesterVersion,
+    },
+    // Keep the runtime ExTester install on versions already available from the
+    // public dnceng npm mirror. These are transitive-compatible with the ranges
+    // requested by vscode-extension-tester@8.23.0 and avoid first-read upstream
+    // cache misses on anonymous CI agents.
+    overrides: {
+      'js-yaml': '4.1.1',
+      'yauzl': '3.3.1',
+    },
+  }, undefined, 2));
   runWithRetry('npm', [
     'install',
     '--prefix',
     extesterInstallRoot,
-    '--no-save',
     '--no-package-lock',
     '--ignore-scripts',
-    `vscode-extension-tester@${extesterVersion}`,
-  ], process.env.ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY ? {
-    npm_config_registry: process.env.ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY,
-  } : {}, { attempts: 3, retryDelayMs: 5000 });
+  ], {
+    npm_config_registry: extesterNpmRegistry,
+  }, { attempts: 3, retryDelayMs: 5000 });
 }
 
 function prepareWorkspaceFixture(resolvedCliPath, resolvedAppHostSdkVersion) {
