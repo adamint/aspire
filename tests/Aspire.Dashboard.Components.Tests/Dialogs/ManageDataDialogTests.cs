@@ -2,17 +2,17 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Threading.Channels;
+using AngleSharp.Dom;
 using Aspire.Dashboard.Components.Dialogs;
 using Aspire.Dashboard.Components.Tests.Shared;
 using Aspire.Dashboard.Configuration;
 using Aspire.Dashboard.Model;
+using Aspire.Dashboard.Model.ManageData;
 using Aspire.Dashboard.Tests.Shared;
 using Aspire.Tests.Shared.DashboardModel;
-using AngleSharp.Dom;
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.FluentUI.AspNetCore.Components;
 using Xunit;
 
 namespace Aspire.Dashboard.Components.Tests.Dialogs;
@@ -21,7 +21,7 @@ namespace Aspire.Dashboard.Components.Tests.Dialogs;
 public sealed class ManageDataDialogTests : DashboardTestContext
 {
     [Fact]
-    public void Render_SelectionButtons_HaveAccessibleNames()
+    public void Render_SelectionControlsExposeAccessibleNamesCheckboxRoleAndState()
     {
         var basketResource = ModelTestHelpers.CreateResource(
             resourceName: "basket",
@@ -36,14 +36,16 @@ public sealed class ManageDataDialogTests : DashboardTestContext
             isEnabled: true,
             initialResources: [basketResource, catalogResource],
             resourceChannelProvider: () => resourcesChannel);
-
         SetupManageDataDialogServices(dashboardClient);
 
         var cut = RenderComponent<ManageDataDialog>();
 
         cut.WaitForAssertion(() =>
         {
-            AssertSelectionButtonHasAccessibleName(cut, "Deselect all");
+            AssertSelectionCheckboxCount(cut, 3);
+            AssertSelectionCheckbox(cut, "Deselect all", "true");
+            AssertSelectionCheckbox(cut, "Deselect Basket service", "true");
+            AssertSelectionCheckbox(cut, "Deselect Catalog service", "true");
             AssertNoButtonHasAccessibleName(cut, "Name");
         });
 
@@ -51,39 +53,48 @@ public sealed class ManageDataDialogTests : DashboardTestContext
 
         cut.WaitForAssertion(() =>
         {
-            AssertSelectionButtonInRowHasAccessibleName(cut, "Basket service", "Deselect Basket service");
-            AssertSelectionButtonInRowHasAccessibleName(cut, "Catalog service", "Deselect Catalog service");
-            AssertNestedRowSelectionLabels(
-                cut,
-                "Resource",
-                "Deselect Resource for Basket service",
-                "Deselect Resource for Catalog service");
-            AssertNestedRowSelectionLabels(
-                cut,
-                "Console logs",
-                "Deselect Console logs for Basket service",
-                "Deselect Console logs for Catalog service");
+            AssertAllSelectionControlsSelected(cut);
             AssertNoButtonHasAccessibleName(cut, "Deselect Console logs");
             AssertNoButtonHasAccessibleName(cut, "Name");
         });
 
-        cut.Find("fluent-button[aria-label='Deselect all']").Click();
+        AssertSelectionCheckbox(cut, "Deselect Console logs for Basket service", "true").Click();
 
         cut.WaitForAssertion(() =>
         {
-            AssertSelectionButtonHasAccessibleName(cut, "Select all");
-            AssertSelectionButtonInRowHasAccessibleName(cut, "Basket service", "Select Basket service");
-            AssertSelectionButtonInRowHasAccessibleName(cut, "Catalog service", "Select Catalog service");
-            AssertNestedRowSelectionLabels(
-                cut,
-                "Resource",
-                "Select Resource for Basket service",
-                "Select Resource for Catalog service");
-            AssertNestedRowSelectionLabels(
-                cut,
-                "Console logs",
-                "Select Console logs for Basket service",
-                "Select Console logs for Catalog service");
+            AssertSelectionCheckboxCount(cut, 7);
+            AssertSelectionCheckbox(cut, "Select all", "mixed");
+            AssertSelectionCheckbox(cut, "Select Basket service", "mixed");
+            AssertSelectionCheckbox(cut, "Deselect Catalog service", "true");
+            AssertSelectionCheckbox(cut, "Deselect Resource for Basket service", "true");
+            AssertSelectionCheckbox(cut, "Select Console logs for Basket service", "false");
+            AssertSelectionCheckbox(cut, "Deselect Resource for Catalog service", "true");
+            AssertSelectionCheckbox(cut, "Deselect Console logs for Catalog service", "true");
+            AssertNoButtonHasAccessibleName(cut, "Select Console logs");
+            AssertNoButtonHasAccessibleName(cut, "Name");
+        });
+
+        AssertSelectionCheckbox(cut, "Select all", "mixed").Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            AssertAllSelectionControlsSelected(cut);
+            AssertNoButtonHasAccessibleName(cut, "Deselect Console logs");
+            AssertNoButtonHasAccessibleName(cut, "Name");
+        });
+
+        AssertSelectionCheckbox(cut, "Deselect all", "true").Click();
+
+        cut.WaitForAssertion(() =>
+        {
+            AssertSelectionCheckboxCount(cut, 7);
+            AssertSelectionCheckbox(cut, "Select all", "false");
+            AssertSelectionCheckbox(cut, "Select Basket service", "false");
+            AssertSelectionCheckbox(cut, "Select Catalog service", "false");
+            AssertSelectionCheckbox(cut, "Select Resource for Basket service", "false");
+            AssertSelectionCheckbox(cut, "Select Console logs for Basket service", "false");
+            AssertSelectionCheckbox(cut, "Select Resource for Catalog service", "false");
+            AssertSelectionCheckbox(cut, "Select Console logs for Catalog service", "false");
             AssertNoButtonHasAccessibleName(cut, "Select Console logs");
             AssertNoButtonHasAccessibleName(cut, "Name");
         });
@@ -93,14 +104,13 @@ public sealed class ManageDataDialogTests : DashboardTestContext
     {
         FluentUISetupHelpers.AddCommonDashboardServices(this);
         Services.AddLogging();
-        Services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
         Services.AddOptions<DashboardOptions>().Configure(options => options.UI.DisableImport = true);
-        Services.AddSingleton<IDashboardClient>(dashboardClient);
         Services.AddSingleton<IconResolver>();
-        Services.AddSingleton<ConsoleLogsManager>();
-        Services.AddSingleton<ConsoleLogsFetcher>();
-        Services.AddSingleton<TelemetryExportService>();
-        Services.AddSingleton<TelemetryImportService>();
+        Services.AddSingleton<IDashboardClient>(dashboardClient);
+        Services.AddScoped<ConsoleLogsManager>();
+        Services.AddScoped<ConsoleLogsFetcher>();
+        Services.AddScoped<TelemetryExportService>();
+        Services.AddScoped<TelemetryImportService>();
 
         FluentUISetupHelpers.SetupFluentUIComponents(this);
         FluentUISetupHelpers.SetupFluentButton(this);
@@ -119,30 +129,30 @@ public sealed class ManageDataDialogTests : DashboardTestContext
         }
     }
 
-    private static void AssertSelectionButtonHasAccessibleName(IRenderedComponent<ManageDataDialog> cut, string accessibleName)
+    private static void AssertAllSelectionControlsSelected(IRenderedComponent<ManageDataDialog> cut)
     {
-        Assert.Contains(cut.FindAll("fluent-button"), button => ButtonHasAccessibleName(button, accessibleName));
+        AssertSelectionCheckboxCount(cut, 7);
+        AssertSelectionCheckbox(cut, "Deselect all", "true");
+        AssertSelectionCheckbox(cut, "Deselect Basket service", "true");
+        AssertSelectionCheckbox(cut, "Deselect Catalog service", "true");
+        AssertSelectionCheckbox(cut, "Deselect Resource for Basket service", "true");
+        AssertSelectionCheckbox(cut, "Deselect Console logs for Basket service", "true");
+        AssertSelectionCheckbox(cut, "Deselect Resource for Catalog service", "true");
+        AssertSelectionCheckbox(cut, "Deselect Console logs for Catalog service", "true");
     }
 
-    private static void AssertSelectionButtonInRowHasAccessibleName(IRenderedComponent<ManageDataDialog> cut, string visibleText, string accessibleName)
+    private static IElement AssertSelectionCheckbox(IRenderedComponent<ManageDataDialog> cut, string accessibleName, string ariaChecked)
     {
-        var row = Assert.Single(cut.FindAll(".fluent-data-grid-row"), row => row.TextContent.Contains(visibleText, StringComparison.Ordinal));
+        var button = Assert.Single(GetSelectionCheckboxes(cut), button => ButtonHasAccessibleName(button, accessibleName));
 
-        Assert.Contains(row.QuerySelectorAll("fluent-button"), button => ButtonHasAccessibleName(button, accessibleName));
+        Assert.Equal("checkbox", button.GetAttribute("role"));
+        Assert.Equal(ariaChecked, button.GetAttribute("aria-checked"));
+
+        return button;
     }
 
-    private static void AssertNestedRowSelectionLabels(IRenderedComponent<ManageDataDialog> cut, string visibleText, params string[] expectedAccessibleNames)
-    {
-        var accessibleNames = cut.FindAll(".fluent-data-grid-row")
-            .Where(row => row.TextContent.Contains(visibleText, StringComparison.Ordinal))
-            .Select(GetOnlySelectionButtonAccessibleName)
-            .ToArray();
-
-        Assert.Equal(
-            expectedAccessibleNames.OrderBy(name => name, StringComparer.Ordinal),
-            accessibleNames.OrderBy(name => name, StringComparer.Ordinal));
-        Assert.Equal(accessibleNames.Length, accessibleNames.Distinct(StringComparer.Ordinal).Count());
-    }
+    private static void AssertSelectionCheckboxCount(IRenderedComponent<ManageDataDialog> cut, int expectedCount) =>
+        Assert.Equal(expectedCount, GetSelectionCheckboxes(cut).Count);
 
     private static void AssertNoButtonHasAccessibleName(IRenderedComponent<ManageDataDialog> cut, string accessibleName) =>
         Assert.DoesNotContain(
@@ -155,14 +165,8 @@ public sealed class ManageDataDialogTests : DashboardTestContext
         string.Equals(button.GetAttribute("title"), accessibleName, StringComparison.Ordinal) &&
         string.Equals(button.GetAttribute("aria-label"), accessibleName, StringComparison.Ordinal);
 
-    private static string GetOnlySelectionButtonAccessibleName(IElement row)
+    private static IReadOnlyList<IElement> GetSelectionCheckboxes(IRenderedComponent<ManageDataDialog> cut)
     {
-        var button = Assert.Single(row.QuerySelectorAll("fluent-button"));
-        var title = button.GetAttribute("title");
-
-        Assert.False(string.IsNullOrEmpty(title));
-        Assert.Equal(title, button.GetAttribute("aria-label"));
-
-        return title;
+        return cut.FindComponent<FluentDataGrid<ManageDataGridItem>>().FindAll("[role='checkbox']");
     }
 }

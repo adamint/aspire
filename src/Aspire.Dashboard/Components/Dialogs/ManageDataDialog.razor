@@ -34,6 +34,8 @@
                                               Disabled="@(_resourceDataRows.Count == 0)"
                                               Title="@headerSelectionLabel"
                                               aria-label="@headerSelectionLabel"
+                                              role="checkbox"
+                                              aria-checked="@GetHeaderCheckboxAriaChecked()"
                                               style="margin-right: 8px;" />
                                 @ControlsStringsLoc[nameof(ControlsStrings.NameColumnHeader)]
                             </div>
@@ -68,6 +70,8 @@
                                               OnClick="@(() => OnSelectRowClicked(context.ResourceRow))"
                                               Title="@resourceSelectionLabel"
                                               aria-label="@resourceSelectionLabel"
+                                              role="checkbox"
+                                              aria-checked="@GetResourceCheckboxAriaChecked(context.ResourceRow)"
                                               style="margin-right: 8px;" />
                             </span>
                             @if (context.ResourceRow.Resource is not null)
@@ -102,6 +106,8 @@
                                               OnClick="@(() => OnSelectDataRowClicked(context.ParentResourceName, context.NestedRow.DataType))"
                                               Title="@dataTypeSelectionLabel"
                                               aria-label="@dataTypeSelectionLabel"
+                                              role="checkbox"
+                                              aria-checked="@GetDataRowCheckboxAriaChecked(context.ParentResourceName, context.NestedRow.DataType)"
                                               style="margin-right: 8px;" />
                             </span>
                             <span class="cellText">@dataTypeDisplayName</span>

@@ -512,6 +512,8 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
         return _iconIndeterminate;
     }
 
+    private string GetHeaderCheckboxAriaChecked() => GetCheckboxAriaChecked(AreAllSelected(), AreNoneSelected());
+
     private Icon GetResourceCheckboxIcon(ResourceDataRow row)
     {
         if (AreAllDataRowsSelected(row))
@@ -524,6 +526,17 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
         }
         return _iconIndeterminate;
     }
+
+    private string GetResourceCheckboxAriaChecked(ResourceDataRow row) => GetCheckboxAriaChecked(AreAllDataRowsSelected(row), AreNoDataRowsSelected(row));
+
+    private string GetDataRowCheckboxAriaChecked(string resourceName, AspireDataType dataType) => IsDataRowSelected(resourceName, dataType) ? "true" : "false";
+
+    private static string GetCheckboxAriaChecked(bool isChecked, bool isUnchecked) => (isChecked, isUnchecked) switch
+    {
+        (true, _) => "true",
+        (_, true) => "false",
+        _ => "mixed"
+    };
 
     private void NavigateToDataPage(TelemetryDataRow dataRow)
     {
