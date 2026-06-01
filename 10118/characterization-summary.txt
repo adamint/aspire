@@ -1,0 +1,17 @@
+Aspire issue 10118 accessibility characterization
+Worktree: /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118
+Branch: adamint/a11y-10118
+
+Current dashboard grid setup:
+- Resources grid sets HeaderCellAsButtonWithMenu="true", ResizableColumns="true", ResizeType="DataGridResizeType.Discrete".
+- Shared labels localize Sort, Resize, Grow column width, Shrink column width, Reset column widths.
+
+Playwright characterization:
+- Temporary targeted Playwright test focused the first Resources grid header button, pressed Enter, tabbed into the menu, pressed Enter on Sort, and observed aria-sort="ascending".
+- The same test opened the header menu, activated Resize with the keyboard, focused the Shrink column width button, pressed Enter, and observed gridTemplateColumns changed.
+- Command/result are in playwright-characterization.log; result: passed, 1 test, 0 failed, 0 skipped.
+
+Upstream/library evidence:
+- microsoft/aspire#10118 comments identify the root cause as Fluent UI and note fix microsoft/fluentui-blazor#4093.
+- Local Microsoft.FluentUI.AspNetCore.Components 4.14.1 static assets include FluentMenu keyboard navigation initialization and AnchoredRegion focusable fluent-component handling.
+- FluentDataGrid drag resize handles are div.resize-handle / JS-created div.actual-resize-handle with pointer event handlers; they are not keyboard focusable controls. Keyboard resize is exposed through the header menu ColumnResizeOptions buttons.

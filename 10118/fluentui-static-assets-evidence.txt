@@ -1,0 +1,34 @@
+--- Components/Menu/FluentMenu.razor.js keyboard navigation excerpt ---
+35:const menuState = new Map();
+57:    anchoredRegionModule.initializeKeyboardNavigation(anchorId, menuId, dotNetHelper, undefined, true);
+59:    menuState.set(anchorId, { anchoredRegionModule });
+64:    const state = menuState.get(anchorId);
+69:    state.anchoredRegionModule?.disposeKeyboardNavigation(anchorId);
+70:    menuState.delete(anchorId);
+
+--- Components/AnchoredRegion/FluentAnchoredRegion.razor.js focus handling excerpt ---
+1:export function goToNextFocusableElement(forContainer, toOriginal, delay) {
+9:        container.focusableElement = new FocusableElement(container);
+20:        const nextElement = container.focusableElement.findNextFocusableElement();
+55:export function initializeKeyboardNavigation(anchorId, popupId, dotNetHelper, closeKeyCodes = [27], tabExitsAlways = false) {
+94:                new FocusableElement(anchorElement.getRootNode()).findNextFocusableElement(startFrom)?.focus();
+103:            const focusables = new FocusableElement(popupElement).getFocusableElements();
+116:                new FocusableElement(anchorElement.getRootNode()).findNextFocusableElement(startFrom)?.focus();
+135:            const firstFocusable = new FocusableElement(popupElement).findNextFocusableElement();
+159: * Removes keyboard navigation listeners registered by initializeKeyboardNavigation.
+176:export class FocusableElement {
+182:     * Initializes a new instance of the FocusableElement class.
+200:    getFocusableElements() {
+202:            return el.matches(this.FOCUSABLE_SELECTORS) || el.tagName.toLowerCase().startsWith("fluent-");
+207:            if (el.tagName.toLowerCase().startsWith("fluent-") && el.tabIndex === -1 && !!el.shadowRoot) {
+227:    findNextFocusableElement(currentElement, reverse = false) {
+228:        const filteredElements = this.getFocusableElements();
+
+--- Components/DataGrid/FluentDataGrid.razor.js resize handle excerpt ---
+222:        const resizedivs = header.querySelectorAll(".actual-resize-handle");
+225:        // Get the top of the first resize-handle
+226:        const resizeTop = header.querySelector('.resize-handle').offsetTop;
+301:        div.addEventListener('pointerdown', function (e) {
+314:            e.target.style.borderInlineEnd = 'var(--fluent-data-grid-resize-handle-width) solid var(--fluent-data-grid-resize-handle-color)';
+325:        div.className = "actual-resize-handle";
+390:export function resizeColumnDiscrete(gridElement, column, change) {

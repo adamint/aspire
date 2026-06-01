@@ -1,0 +1,513 @@
+  Determining projects to restore...
+  Tool 'dotnet-coverage' (version '17.13.1') was restored. Available commands: dotnet-coverage
+  Tool 'powershell' (version '7.5.0') was restored. Available commands: pwsh
+  Tool 'hex1b.tool' (version '0.78.0') was restored. Available commands: hex1b
+  
+  Restore was successful.
+  Restored /Users/adamratzman/.nuget/packages/microsoft.dotnet.arcade.sdk/10.0.0-beta.26208.4/tools/Tools.proj (in 722 ms).
+Downloading 'https://builds.dotnet.microsoft.com/dotnet/scripts/v1/dotnet-install.sh'
+  Attempting to install runtime toolset 'dotnet/x64 v8.0.21' from public_location.
+dotnet-install: Attempting to download using primary link https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.21/dotnet-runtime-8.0.21-osx-x64.tar.gz
+dotnet-install: Remote file https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.21/dotnet-runtime-8.0.21-osx-x64.tar.gz size is 30725784 bytes.
+dotnet-install: Extracting archive from https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.21/dotnet-runtime-8.0.21-osx-x64.tar.gz
+dotnet-install: Downloaded file size is 30725784 bytes.
+dotnet-install: The remote and local file sizes are equal.
+dotnet-install: Installed version is 8.0.21
+dotnet-install: Adding to current process PATH: `/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/.dotnet/x64`. Note: This change will be visible only when sourcing script.
+dotnet-install: Note that the script does not resolve dependencies during installation.
+dotnet-install: To check the list of dependencies, go to https://learn.microsoft.com/dotnet/core/install, select your operating system and check the "Dependencies" section.
+dotnet-install: Installation finished successfully.
+  Attempting to install runtime toolset 'dotnet/x64 v9.0.10' from public_location.
+dotnet-install: Attempting to download using primary link https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.10/dotnet-runtime-9.0.10-osx-x64.tar.gz
+dotnet-install: Remote file https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.10/dotnet-runtime-9.0.10-osx-x64.tar.gz size is 32735094 bytes.
+dotnet-install: Extracting archive from https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.10/dotnet-runtime-9.0.10-osx-x64.tar.gz
+dotnet-install: Downloaded file size is 32735094 bytes.
+dotnet-install: The remote and local file sizes are equal.
+dotnet-install: Installed version is 9.0.10
+dotnet-install: Adding to current process PATH: `/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/.dotnet/x64`. Note: This change will be visible only when sourcing script.
+dotnet-install: Note that the script does not resolve dependencies during installation.
+dotnet-install: To check the list of dependencies, go to https://learn.microsoft.com/dotnet/core/install, select your operating system and check the "Dependencies" section.
+dotnet-install: Installation finished successfully.
+  Attempting to install runtime toolset 'dotnet/arm64 v8.0.21' from public_location.
+dotnet-install: Attempting to download using primary link https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.21/dotnet-runtime-8.0.21-osx-arm64.tar.gz
+dotnet-install: Remote file https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.21/dotnet-runtime-8.0.21-osx-arm64.tar.gz size is 29077023 bytes.
+dotnet-install: Extracting archive from https://builds.dotnet.microsoft.com/dotnet/Runtime/8.0.21/dotnet-runtime-8.0.21-osx-arm64.tar.gz
+dotnet-install: Downloaded file size is 29077023 bytes.
+dotnet-install: The remote and local file sizes are equal.
+dotnet-install: Installed version is 8.0.21
+dotnet-install: Adding to current process PATH: `/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/.dotnet`. Note: This change will be visible only when sourcing script.
+dotnet-install: Note that the script does not resolve dependencies during installation.
+dotnet-install: To check the list of dependencies, go to https://learn.microsoft.com/dotnet/core/install, select your operating system and check the "Dependencies" section.
+dotnet-install: Installation finished successfully.
+  Attempting to install runtime toolset 'dotnet/arm64 v9.0.10' from public_location.
+dotnet-install: Attempting to download using primary link https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.10/dotnet-runtime-9.0.10-osx-arm64.tar.gz
+dotnet-install: Remote file https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.10/dotnet-runtime-9.0.10-osx-arm64.tar.gz size is 30787420 bytes.
+dotnet-install: Extracting archive from https://builds.dotnet.microsoft.com/dotnet/Runtime/9.0.10/dotnet-runtime-9.0.10-osx-arm64.tar.gz
+dotnet-install: Downloaded file size is 30787420 bytes.
+dotnet-install: The remote and local file sizes are equal.
+dotnet-install: Installed version is 9.0.10
+dotnet-install: Adding to current process PATH: `/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/.dotnet`. Note: This change will be visible only when sourcing script.
+dotnet-install: Note that the script does not resolve dependencies during installation.
+dotnet-install: To check the list of dependencies, go to https://learn.microsoft.com/dotnet/core/install, select your operating system and check the "Dependencies" section.
+dotnet-install: Installation finished successfully.
+  Attempting to install runtime toolset 'aspnetcore/x64 v8.0.21' from public_location.
+dotnet-install: Attempting to download using primary link https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/8.0.21/aspnetcore-runtime-8.0.21-osx-x64.tar.gz
+dotnet-install: Remote file https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/8.0.21/aspnetcore-runtime-8.0.21-osx-x64.tar.gz size is 41370421 bytes.
+dotnet-install: Extracting archive from https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/8.0.21/aspnetcore-runtime-8.0.21-osx-x64.tar.gz
+dotnet-install: Downloaded file size is 41370421 bytes.
+dotnet-install: The remote and local file sizes are equal.
+dotnet-install: Installed version is 8.0.21
+dotnet-install: Adding to current process PATH: `/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/.dotnet/x64`. Note: This change will be visible only when sourcing script.
+dotnet-install: Note that the script does not resolve dependencies during installation.
+dotnet-install: To check the list of dependencies, go to https://learn.microsoft.com/dotnet/core/install, select your operating system and check the "Dependencies" section.
+dotnet-install: Installation finished successfully.
+  Attempting to install runtime toolset 'aspnetcore/x64 v9.0.10' from public_location.
+dotnet-install: Attempting to download using primary link https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/9.0.10/aspnetcore-runtime-9.0.10-osx-x64.tar.gz
+dotnet-install: Remote file https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/9.0.10/aspnetcore-runtime-9.0.10-osx-x64.tar.gz size is 43599511 bytes.
+dotnet-install: Extracting archive from https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/9.0.10/aspnetcore-runtime-9.0.10-osx-x64.tar.gz
+dotnet-install: Downloaded file size is 43599511 bytes.
+dotnet-install: The remote and local file sizes are equal.
+dotnet-install: Installed version is 9.0.10
+dotnet-install: Adding to current process PATH: `/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/.dotnet/x64`. Note: This change will be visible only when sourcing script.
+dotnet-install: Note that the script does not resolve dependencies during installation.
+dotnet-install: To check the list of dependencies, go to https://learn.microsoft.com/dotnet/core/install, select your operating system and check the "Dependencies" section.
+dotnet-install: Installation finished successfully.
+  Attempting to install runtime toolset 'aspnetcore/arm64 v8.0.21' from public_location.
+dotnet-install: Attempting to download using primary link https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/8.0.21/aspnetcore-runtime-8.0.21-osx-arm64.tar.gz
+dotnet-install: Remote file https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/8.0.21/aspnetcore-runtime-8.0.21-osx-arm64.tar.gz size is 39464490 bytes.
+dotnet-install: Extracting archive from https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/8.0.21/aspnetcore-runtime-8.0.21-osx-arm64.tar.gz
+dotnet-install: Downloaded file size is 39464490 bytes.
+dotnet-install: The remote and local file sizes are equal.
+dotnet-install: Installed version is 8.0.21
+dotnet-install: Adding to current process PATH: `/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/.dotnet`. Note: This change will be visible only when sourcing script.
+dotnet-install: Note that the script does not resolve dependencies during installation.
+dotnet-install: To check the list of dependencies, go to https://learn.microsoft.com/dotnet/core/install, select your operating system and check the "Dependencies" section.
+dotnet-install: Installation finished successfully.
+  Attempting to install runtime toolset 'aspnetcore/arm64 v9.0.10' from public_location.
+dotnet-install: Attempting to download using primary link https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/9.0.10/aspnetcore-runtime-9.0.10-osx-arm64.tar.gz
+dotnet-install: Remote file https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/9.0.10/aspnetcore-runtime-9.0.10-osx-arm64.tar.gz size is 41321193 bytes.
+dotnet-install: Extracting archive from https://builds.dotnet.microsoft.com/dotnet/aspnetcore/Runtime/9.0.10/aspnetcore-runtime-9.0.10-osx-arm64.tar.gz
+dotnet-install: Downloaded file size is 41321193 bytes.
+dotnet-install: The remote and local file sizes are equal.
+dotnet-install: Installed version is 9.0.10
+dotnet-install: Adding to current process PATH: `/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/.dotnet`. Note: This change will be visible only when sourcing script.
+dotnet-install: Note that the script does not resolve dependencies during installation.
+dotnet-install: To check the list of dependencies, go to https://learn.microsoft.com/dotnet/core/install, select your operating system and check the "Dependencies" section.
+dotnet-install: Installation finished successfully.
+  Determining projects to restore...
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/TestShop/CatalogDb/CatalogDb.csproj (in 13.51 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.KeyVault/Aspire.Hosting.Azure.KeyVault.csproj (in 13.89 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Maui/Aspire.Hosting.Maui.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Testing.Tests/Aspire.Hosting.Testing.Tests.csproj (in 326 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Keycloak.Authentication.Tests/Aspire.Keycloak.Authentication.Tests.csproj (in 13.99 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Microsoft.Azure.StackExchangeRedis.Tests/Aspire.Microsoft.Azure.StackExchangeRedis.Tests.csproj (in 13.99 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Microsoft.EntityFrameworkCore.Cosmos.Tests/Aspire.Microsoft.EntityFrameworkCore.Cosmos.Tests.csproj (in 14.2 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Microsoft.Azure.Cosmos.Tests/Aspire.Microsoft.Azure.Cosmos.Tests.csproj (in 14.2 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.ContainerRegistry/Aspire.Hosting.Azure.ContainerRegistry.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.FrontDoor/Aspire.Hosting.Azure.FrontDoor.csproj (in 124 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Tests/Aspire.Hosting.Tests.csproj (in 14.36 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Valkey.Tests/Aspire.Hosting.Valkey.Tests.csproj (in 14.37 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Yarp.Tests/Aspire.Hosting.Yarp.Tests.csproj (in 14.36 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.CosmosDB/Aspire.Hosting.Azure.CosmosDB.csproj (in 309 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.AppContainers/Aspire.Hosting.Azure.AppContainers.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.CognitiveServices/Aspire.Hosting.Azure.CognitiveServices.csproj (in 114 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests/Aspire.Microsoft.EntityFrameworkCore.SqlServer.Tests.csproj (in 14.73 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.AppHost/Aspire.Hosting.AppHost.csproj (in 26 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Managed.Tests/Aspire.Managed.Tests.csproj (in 14.74 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.ApplicationInsights/Aspire.Hosting.Azure.ApplicationInsights.csproj (in 135 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Microsoft.Data.SqlClient.Tests/Aspire.Microsoft.Data.SqlClient.Tests.csproj (in 14.73 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.AppConfiguration/Aspire.Hosting.Azure.AppConfiguration.csproj (in 136 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.AppService/Aspire.Hosting.Azure.AppService.csproj (in 345 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.AppHost.Sdk/Aspire.AppHost.Sdk.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.AppHost.Sdk/Aspire.RuntimeIdentifier.Tool/Aspire.RuntimeIdentifier.Tool.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.EventHubs/Aspire.Hosting.Azure.EventHubs.csproj (in 1.12 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/yarp/Yarp.Frontend/Yarp.Frontend.csproj (in 198 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/FileBasedApps/FileBasedApps.WebFrontEnd/FileBasedApps.WebFrontEnd.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/ExternalServices/WebFrontEnd/WebFrontEnd.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/ExternalServices/ExternalServices.AppHost/ExternalServices.AppHost.csproj (in 11 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/DotnetTool/DotnetTool.AppHost/DotnetTool.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/DevTunnels/DevTunnels.WebFrontEnd/DevTunnels.WebFrontEnd.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/DevTunnels/DevTunnels.AppHost/DevTunnels.AppHost.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/FoundryAgents/PromptAgentChat/PromptAgentChat.csproj (in 691 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/DevTunnels/DevTunnels.ApiService/DevTunnels.ApiService.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/yarp/Yarp.Backend/Yarp.Backend.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureContainerApps/AzureContainerApps.ApiService/AzureContainerApps.ApiService.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/yarp/Yarp.AppHost/Yarp.AppHost.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/withdockerfile/WithDockerfile.AppHost/WithDockerfile.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/FoundryAgentEnterprise/FoundryAgentEnterprise.AppHost/FoundryAgentEnterprise.AppHost.csproj (in 992 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Dashboard/Aspire.Dashboard.csproj (in 1.39 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/FoundryAgentBasic/FoundryAgentBasic.AppHost/FoundryAgentBasic.AppHost.csproj (in 944 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/FoundryAgents/FoundryAgents.AppHost/FoundryAgents.AppHost.csproj (in 1.07 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/webpubsub/WebPubSub.AppHost/WebPubSub.AppHost.csproj (in 188 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/webpubsub/WebPubSubWeb/WebPubSubWeb.csproj (in 179 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/waitfor/WaitForSandbox.ApiService/WaitForSandbox.ApiService.csproj (in 11 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/waitfor/WaitForSandbox.DbSetup/WaitForSandbox.DbSetup.csproj (in 31 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/waitfor/WaitFor.Frontend/WaitFor.Frontend.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/TestShop/TestShop.ServiceDefaults/TestShop.ServiceDefaults.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/waitfor/WaitForSandbox.AppHost/WaitForSandbox.AppHost.csproj (in 223 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/TestShop/CatalogService/CatalogService.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/TestShop/CatalogModel/CatalogModel.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/TestShop/ApiGateway/ApiGateway.csproj (in 12 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/TestShop/MyFrontend/MyFrontend.csproj (in 129 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/TestShop/BasketService/BasketService.csproj (in 189 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/TestShop/TestShop.AppHost/TestShop.AppHost.csproj (in 247 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/TestShop/OrderProcessor/OrderProcessor.csproj (in 259 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/waitfor/WaitForSandbox.Common/WaitForSandbox.Common.csproj (in 1.11 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/Testing/Testing.Tests/Testing.Tests.csproj (in 290 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/Stress/Stress.AppHost/Stress.AppHost.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/SqlServerScript/WebApplication2/WebApplication2.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/Stress/Stress.ApiService/Stress.ApiService.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/SqlServerScript/WebApplication1/WebApplication1.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/SimplePipelines/SimplePipelines.AppHost/SimplePipelines.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/SqlServerEndToEnd/SqlServerEndToEnd.ApiService/SqlServerEndToEnd.ApiService.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/Stress/Stress.Empty/Stress.Empty.csproj (in 727 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/Stress/Stress.TelemetryService/Stress.TelemetryService.csproj (in 1.14 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/SqlServerEndToEnd/SqlServerEndToEnd.Common/SqlServerEndToEnd.Common.csproj (in 494 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/SqlServerEndToEnd/SqlServerEndToEnd.AppHost/SqlServerEndToEnd.AppHost.csproj (in 613 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/signalr/SignalRWeb/SignalRWeb.csproj (in 503 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/SqlServerScript/AppHost1/AppHost1.csproj (in 771 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/seq/Seq.ServiceDefaults/Seq.ServiceDefaults.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/seq/Seq.AppHost/Seq.AppHost.csproj (in 7 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/seq/Seq.ApiService/Seq.ApiService.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/signalr/SignalR.AppHost/SignalR.AppHost.csproj (in 350 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/Redis/Redis.ApiService/Redis.ApiService.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/Redis/Redis.AppHost/Redis.AppHost.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/signalr/SignalRServerlessWeb/SignalRServerlessWeb.csproj (in 602 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/Qdrant/Qdrant.AppHost/Qdrant.AppHost.csproj (in 507 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/publishers/Publishers.Frontend/Publishers.Frontend.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/python/Python.AppHost/Python.AppHost.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/publishers/Publishers.AppHost/Publishers.AppHost.csproj (in 8 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/publishers/Publishers.DbSetup/Publishers.DbSetup.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/publishers/Publishers.Common/Publishers.Common.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/publishers/Publishers.ApiService/Publishers.ApiService.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/ProxylessEndToEnd/ProxylessEndToEnd.AppHost/ProxylessEndToEnd.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/ProxylessEndToEnd/ProxylessEndToEnd.ApiService/ProxylessEndToEnd.ApiService.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/ProjectResourceExtensions/StandardService/StandardService.csproj (in 0.8 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/ProjectResourceExtensions/ProjectResourceExtensions.AppHost/ProjectResourceExtensions.AppHost.csproj (in 10 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Docker.Tests/Aspire.Hosting.Docker.Tests.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.DevTunnels.Tests/Aspire.Hosting.DevTunnels.Tests.csproj (in 7 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Containers.Tests/Aspire.Hosting.Containers.Tests.csproj (in 11 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.CodeGeneration.Rust.Tests/Aspire.Hosting.CodeGeneration.Rust.Tests.csproj (in 7 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.CodeGeneration.Python.Tests/Aspire.Hosting.CodeGeneration.Python.Tests.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.CodeGeneration.Java.Tests/Aspire.Hosting.CodeGeneration.Java.Tests.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.CodeGeneration.Go.Tests/Aspire.Hosting.CodeGeneration.Go.Tests.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Browsers.Tests/Aspire.Hosting.Browsers.Tests.csproj (in 9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/BlazorStandalone/BlazorStandalone/BlazorStandalone.csproj (in 5.44 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Blazor.Tests/Aspire.Hosting.Blazor.Tests.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/Qdrant/Qdrant.ApiService/Qdrant.ApiService.csproj (in 1.23 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/FoundryAgents/DotNetHostedAgent/DotNetHostedAgent.csproj (in 6.69 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Azure.AI.OpenAI.Tests/Aspire.Azure.AI.OpenAI.Tests.csproj (in 51 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Azure.Data.Tables.Tests/Aspire.Azure.Data.Tables.Tests.csproj (in 119 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Acquisition.Tests/Aspire.Acquisition.Tests.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Azure.AI.Inference.Tests/Aspire.Azure.AI.Inference.Tests.csproj (in 185 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Deployment.EndToEnd.Tests/Aspire.Deployment.EndToEnd.Tests.csproj (in 435 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.EndToEnd.Tests/Aspire.EndToEnd.Tests.csproj (in 537 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.StackExchange.Redis/Aspire.StackExchange.Redis.csproj (in 217 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.StackExchange.Redis.OutputCaching/Aspire.StackExchange.Redis.OutputCaching.csproj (in 159 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Seq/Aspire.Seq.csproj (in 31 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Analyzers/Aspire.Hosting.Analyzers.csproj (in 7.9 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Cli/Aspire.Cli.csproj (in 7.57 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Qdrant.Client/Aspire.Qdrant.Client.csproj (in 8 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.RabbitMQ.Client/Aspire.RabbitMQ.Client.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Azure.Messaging.EventHubs.Tests/Aspire.Azure.Messaging.EventHubs.Tests.csproj (in 1.07 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.RabbitMQ.Client.v6/Aspire.RabbitMQ.Client.v6.csproj (in 221 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.OpenAI/Aspire.OpenAI.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.StackExchange.Redis.DistributedCaching/Aspire.StackExchange.Redis.DistributedCaching.csproj (in 776 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Azure.Tests/Aspire.Hosting.Azure.Tests.csproj (in 1.57 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Azure.Kubernetes.Tests/Aspire.Hosting.Azure.Kubernetes.Tests.csproj (in 1.49 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Npgsql/Aspire.Npgsql.csproj (in 271 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Azure.Kusto.Tests/Aspire.Hosting.Azure.Kusto.Tests.csproj (in 1.63 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Tools/ConfigurationSchemaGenerator/ConfigurationSchemaGenerator.csproj (in 1.34 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Pomelo.EntityFrameworkCore.MySql/Aspire.Pomelo.EntityFrameworkCore.MySql.csproj (in 696 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Npgsql.EntityFrameworkCore.PostgreSQL/Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.csproj (in 434 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.MySqlConnector/Aspire.MySqlConnector.csproj (in 437 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Microsoft.EntityFrameworkCore.Cosmos/Aspire.Microsoft.EntityFrameworkCore.Cosmos.csproj (in 10 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Microsoft.Azure.StackExchangeRedis/Aspire.Microsoft.Azure.StackExchangeRedis.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Microsoft.Data.SqlClient/Aspire.Microsoft.Data.SqlClient.csproj (in 81 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Analyzers.Tests/Aspire.Hosting.Analyzers.Tests.csproj (in 2.08 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Microsoft.EntityFrameworkCore.SqlServer/Aspire.Microsoft.EntityFrameworkCore.SqlServer.csproj (in 177 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Microsoft.Azure.Cosmos/Aspire.Microsoft.Azure.Cosmos.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Keycloak.Authentication/Aspire.Keycloak.Authentication.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Azure.Storage.Queues/Aspire.Azure.Storage.Queues.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Microsoft.Extensions.Configuration.AzureAppConfiguration/Aspire.Microsoft.Extensions.Configuration.AzureAppConfiguration.csproj (in 508 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Azure.Storage.Files.DataLake/Aspire.Azure.Storage.Files.DataLake.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Milvus.Client/Aspire.Milvus.Client.csproj (in 613 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/deployers/Deployers.AppHost/Deployers.AppHost.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/deployers/Deployers.ApiService/Deployers.ApiService.csproj (in 0.4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/DatabaseMigration/DatabaseMigration.MigrationService/DatabaseMigration.MigrationService.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/DatabaseMigration/DatabaseMigration.ApiService/DatabaseMigration.ApiService.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.MongoDB.EntityFrameworkCore/Aspire.MongoDB.EntityFrameworkCore.csproj (in 1.01 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.MongoDB.Driver/Aspire.MongoDB.Driver.csproj (in 907 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/CustomResources/CustomResources.AppHost/CustomResources.AppHost.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/DatabaseMigration/DatabaseMigration.ApiModel/DatabaseMigration.ApiModel.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.NATS.Net/Aspire.NATS.Net.csproj (in 1.3 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/CosmosEndToEnd/CosmosEndToEnd.AppHost/CosmosEndToEnd.AppHost.csproj (in 9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/DatabaseMigration/DatabaseMigration.AppHost/DatabaseMigration.AppHost.csproj (in 262 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.MongoDB.Driver.v2/Aspire.MongoDB.Driver.v2.csproj (in 1.13 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/CosmosEndToEnd/CosmosEndToEnd.ApiService/CosmosEndToEnd.ApiService.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/CertManagerDemo/CertManagerDemo.AppHost/CertManagerDemo.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/CertManagerDemo/CertManagerDemo.ApiService/CertManagerDemo.ApiService.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/BrowserTelemetry/BrowserTelemetry.Web/BrowserTelemetry.Web.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/cdk/CdkSample.AppHost/CdkSample.AppHost.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/BrowserTelemetry/BrowserTelemetry.AppHost/BrowserTelemetry.AppHost.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Kubernetes.Tests/Aspire.Hosting.Kubernetes.Tests.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Keycloak.Tests/Aspire.Hosting.Keycloak.Tests.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Confluent.Kafka/Aspire.Confluent.Kafka.csproj (in 900 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Kafka.Tests/Aspire.Hosting.Kafka.Tests.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.JavaScript.Tests/Aspire.Hosting.JavaScript.Tests.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Oracle.EntityFrameworkCore/Aspire.Oracle.EntityFrameworkCore.csproj (in 2.24 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Go.Tests/Aspire.Hosting.Go.Tests.csproj (in 11 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.GitHub.Models.Tests/Aspire.Hosting.GitHub.Models.Tests.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tools/TypeScriptApiCompat/TypeScriptApiCompat.csproj (in 0.5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Garnet.Tests/Aspire.Hosting.Garnet.Tests.csproj (in 8 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/testproject/TestProject.WorkerA/TestProject.WorkerA.csproj (in 0.8 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/testproject/TestProject.ServiceC/TestProject.ServiceC.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/testproject/TestProject.ServiceB/TestProject.ServiceB.csproj (in 0.5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/testproject/TestProject.ServiceA/TestProject.ServiceA.csproj (in 0.7 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Browsers/Aspire.Hosting.Browsers.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.CodeGeneration.Go/Aspire.Hosting.CodeGeneration.Go.csproj (in 0.6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Blazor/Aspire.Hosting.Blazor.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure/Aspire.Hosting.Azure.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.WebPubSub/Aspire.Hosting.Azure.WebPubSub.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.Storage/Aspire.Hosting.Azure.Storage.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.Sql/Aspire.Hosting.Azure.Sql.csproj (in 12 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.SignalR/Aspire.Hosting.Azure.SignalR.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.ServiceBus/Aspire.Hosting.Azure.ServiceBus.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.Search/Aspire.Hosting.Azure.Search.csproj (in 8 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.Redis/Aspire.Hosting.Azure.Redis.csproj (in 8 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.PostgreSQL/Aspire.Hosting.Azure.PostgreSQL.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.OperationalInsights/Aspire.Hosting.Azure.OperationalInsights.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.Kusto/Aspire.Hosting.Azure.Kusto.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.Network/Aspire.Hosting.Azure.Network.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.Kubernetes/Aspire.Hosting.Azure.Kubernetes.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/ProjectResourceExtensions/FakeIntegrationLibrary/FakeIntegrationLibrary.csproj (in 0.6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Azure.Functions/Aspire.Hosting.Azure.Functions.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/ProjectResourceExtensions/CustomDebugService/CustomDebugService.csproj (in 0.8 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/PostgresEndToEnd/PostgresEndToEnd.AppHost/PostgresEndToEnd.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/Playground.ServiceDefaults/Playground.ServiceDefaults.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/PostgresEndToEnd/PostgresEndToEnd.ApiService/PostgresEndToEnd.ApiService.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/pipelines/Pipelines.Library/Pipelines.Library.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/cdk/CdkSample.ApiService/CdkSample.ApiService.csproj (in 1.73 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/ParameterEndToEnd/ParameterEndToEnd.ApiService/ParameterEndToEnd.ApiService.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/ParameterEndToEnd/ParameterEndToEnd.AppHost/ParameterEndToEnd.AppHost.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/orleans/OrleansServiceDefaults/OrleansServiceDefaults.csproj (in 0.8 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/pipelines/Pipelines.AppHost/Pipelines.AppHost.csproj (in 259 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/orleans/Orleans.AppHost/Orleans.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/OracleEndToEnd/OracleEndToEnd.ApiService/OracleEndToEnd.ApiService.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/OpenAIEndToEnd/OpenAIEndToEnd.WebStory/OpenAIEndToEnd.WebStory.csproj (in 9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/nats/Nats.Common/Nats.Common.csproj (in 0.4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/OpenAIEndToEnd/OpenAIEndToEnd.AppHost/OpenAIEndToEnd.AppHost.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/nats/Nats.Backend/Nats.Backend.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/nats/Nats.AppHost/Nats.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/nats/Nats.ApiService/Nats.ApiService.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/mysql/MySqlDb.AppHost/MySqlDb.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/mongo/Mongo.AppHost/Mongo.AppHost.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/mongo/Mongo.ApiService/Mongo.ApiService.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/milvus/MilvusPlayground.AppHost/MilvusPlayground.AppHost.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/mysql/MySql.ApiService/MySql.ApiService.csproj (in 136 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/milvus/MilvusPlayground.ApiService/MilvusPlayground.ApiService.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/keycloak/Keycloak.Web/Keycloak.Web.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/keycloak/Keycloak.AppHost/Keycloak.AppHost.csproj (in 8 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/kafka/Producer/Producer.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/keycloak/Keycloak.ApiService/Keycloak.ApiService.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/kafka/KafkaBasic.AppHost/KafkaBasic.AppHost.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Components.Common.TestUtilities/Aspire.Components.Common.TestUtilities.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Cli.Tests/Aspire.Cli.Tests.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Cli.EndToEnd.Tests/Aspire.Cli.EndToEnd.Tests.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Azure.Storage.Queues.Tests/Aspire.Azure.Storage.Queues.Tests.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/ProjectResourceExtensions/AzureFunctionsService/AzureFunctionsService.csproj (in 1.84 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Azure.Storage.Files.DataLake.Tests/Aspire.Azure.Storage.Files.DataLake.Tests.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Confluent.Kafka.Tests/Aspire.Confluent.Kafka.Tests.csproj (in 288 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Azure.Storage.Blobs.Tests/Aspire.Azure.Storage.Blobs.Tests.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Azure.Security.KeyVault.Tests/Aspire.Azure.Security.KeyVault.Tests.csproj (in 10 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Azure.Search.Documents.Tests/Aspire.Azure.Search.Documents.Tests.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/OracleEndToEnd/OracleEndToEnd.AppHost/OracleEndToEnd.AppHost.csproj (in 1.57 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Azure.Messaging.WebPubSub.Tests/Aspire.Azure.Messaging.WebPubSub.Tests.csproj (in 9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Azure.Messaging.ServiceBus.Tests/Aspire.Azure.Messaging.ServiceBus.Tests.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/testproject/TestProject.IntegrationServiceA/TestProject.IntegrationServiceA.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests/Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.csproj (in 186 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Azure.Npgsql.Tests/Aspire.Azure.Npgsql.Tests.csproj (in 233 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/testproject/TestProject.AppHost/TestProject.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/TestingAppHost1/TestingAppHost1.ServiceDefaults/TestingAppHost1.ServiceDefaults.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Dashboard.Tests/Aspire.Dashboard.Tests.csproj (in 1.05 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/TestingAppHost1/TestingAppHost1.MyWorker/TestingAppHost1.MyWorker.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/TestingAppHost1/TestingAppHost1.MyWebApp/TestingAppHost1.MyWebApp.csproj (in 0.8 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/TestingAppHost1/TestingAppHost1.AppHost/TestingAppHost1.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Infrastructure.Tests/Infrastructure.Tests.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/QuarantineTools.Tests/QuarantineTools.Tests.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/ConfigurationSchemaGenerator.Tests/ConfigurationSchemaGenerator.Tests.csproj (in 8 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.TestUtilities/Aspire.TestUtilities.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Templates.Tests/Aspire.Templates.Tests.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Seq.Tests/Aspire.Seq.Tests.csproj (in 9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Keycloak/Aspire.Hosting.Keycloak.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.StackExchange.Redis.DistributedCaching.Tests/Aspire.StackExchange.Redis.DistributedCaching.Tests.csproj (in 110 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Kubernetes/Aspire.Hosting.Kubernetes.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.StackExchange.Redis.OutputCaching.Tests/Aspire.StackExchange.Redis.OutputCaching.Tests.csproj (in 210 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.StackExchange.Redis.Tests/Aspire.StackExchange.Redis.Tests.csproj (in 241 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Kafka/Aspire.Hosting.Kafka.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.RabbitMQ.Client.v6.Tests/Aspire.RabbitMQ.Client.v6.Tests.csproj (in 276 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.JavaScript/Aspire.Hosting.JavaScript.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Go/Aspire.Hosting.Go.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Integration.Analyzers/Aspire.Hosting.Integration.Analyzers.csproj (in 0.9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.GitHub.Models/Aspire.Hosting.GitHub.Models.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Garnet/Aspire.Hosting.Garnet.csproj (in 9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Foundry/Aspire.Hosting.Foundry.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.EntityFrameworkCore/Aspire.Hosting.EntityFrameworkCore.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Docker/Aspire.Hosting.Docker.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.DevTunnels/Aspire.Hosting.DevTunnels.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.CodeGeneration.TypeScript/Aspire.Hosting.CodeGeneration.TypeScript.csproj (in 0.9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.CodeGeneration.Rust/Aspire.Hosting.CodeGeneration.Rust.csproj (in 0.5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.CodeGeneration.Python/Aspire.Hosting.CodeGeneration.Python.csproj (in 0.6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.CodeGeneration.Java/Aspire.Hosting.CodeGeneration.Java.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/kafka/Consumer/Consumer.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/HealthChecks/HealthChecksSandbox.AppHost/HealthChecksSandbox.AppHost.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/GoDebugging/GoDebugging.AppHost/GoDebugging.AppHost.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/GitHubModelsEndToEnd/GitHubModelsEndToEnd.WebStory/GitHubModelsEndToEnd.WebStory.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/GitHubModelsEndToEnd/GitHubModelsEndToEnd.AppHost/GitHubModelsEndToEnd.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/FoundryEndToEnd/FoundryEndToEnd.WebStory/FoundryEndToEnd.WebStory.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/FoundryEndToEnd/FoundryEndToEnd.AppHost/FoundryEndToEnd.AppHost.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/BlazorStandalone/BlazorStandalone.WeatherApi/BlazorStandalone.WeatherApi.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/BlazorStandalone/BlazorStandalone.TimeApi/BlazorStandalone.TimeApi.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/BlazorStandalone/BlazorStandalone.ClientServiceDefaults/BlazorStandalone.ClientServiceDefaults.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Dashboard.Components.Tests/Aspire.Dashboard.Components.Tests.csproj (in 3.54 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/BlazorStandalone/BlazorStandalone.AppHost/BlazorStandalone.AppHost.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/BlazorHosted/BlazorHosted.WeatherApi/BlazorHosted.WeatherApi.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/BlazorHosted/BlazorHosted.TimeApi/BlazorHosted.TimeApi.csproj (in 0.9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/BlazorHosted/BlazorHosted.ClientServiceDefaults/BlazorHosted.ClientServiceDefaults.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/BlazorHosted/BlazorHosted.Client/BlazorHosted.Client.csproj (in 29 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/BlazorHosted/BlazorHosted.AppHost/BlazorHosted.AppHost.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/bicep/BicepSample.AppHost/BicepSample.AppHost.csproj (in 9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/bicep/BicepSample.ApiService/BicepSample.ApiService.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/BlazorHosted/BlazorHosted.Server/BlazorHosted.csproj (in 222 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureVirtualNetworkEndToEnd/AzureVirtualNetworkEndToEnd.AppHost/AzureVirtualNetworkEndToEnd.AppHost.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureVirtualNetworkEndToEnd/AzureVirtualNetworkEndToEnd.ApiService/AzureVirtualNetworkEndToEnd.ApiService.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureStorageEndToEnd/AzureStorageEndToEnd.AppHost/AzureStorageEndToEnd.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureStorageEndToEnd/AzureStorageEndToEnd.ApiService/AzureStorageEndToEnd.ApiService.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureServiceBus/ServiceBusWorker/ServiceBusWorker.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureServiceBus/ServiceBus.AppHost/ServiceBus.AppHost.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureSearchEndToEnd/AzureSearch.AppHost/AzureSearch.AppHost.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureOpenAIEndToEnd/AzureOpenAIEndToEnd.WebStory/AzureOpenAIEndToEnd.WebStory.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureSearchEndToEnd/AzureSearch.ApiService/AzureSearch.ApiService.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureOpenAIEndToEnd/AzureOpenAIEndToEnd.AppHost/AzureOpenAIEndToEnd.AppHost.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureKusto/AzureKusto.AppHost/AzureKusto.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureFunctionsWithDts/AzureFunctionsWithDts.AppHost/AzureFunctionsWithDts.AppHost.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureFunctionsEndToEnd/AzureFunctionsEndToEnd.AppHost/AzureFunctionsEndToEnd.AppHost.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureFunctionsEndToEnd/AzureFunctionsEndToEnd.ApiService/AzureFunctionsEndToEnd.ApiService.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureDataLakeEndToEnd/AzureDataLakeEndToEnd.WebApi/AzureDataLakeEndToEnd.WebApi.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureDataLakeEndToEnd/AzureDataLakeEndToEnd.AppHost/AzureDataLakeEndToEnd.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureContainerApps/AzureContainerApps.AppHost/AzureContainerApps.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureAppService/AzureAppService.AppHost/AzureAppService.AppHost.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureAppService/AzureAppService.ApiService/AzureAppService.ApiService.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureAppConfiguration/AzureAppConfiguration.AppHost/AzureAppConfiguration.AppHost.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AspireWithNode/AspireWithNode.ServiceDefaults/AspireWithNode.ServiceDefaults.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureAppConfiguration/AzureAppConfiguration.Web/AzureAppConfiguration.Web.csproj (in 140 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AspireWithNode/AspireWithNode.AppHost/AspireWithNode.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AspireWithNode/AspireWithNode.AspNetCoreApi/AspireWithNode.AspNetCoreApi.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AspireWithMaui/AspireWithMaui.WeatherApi/AspireWithMaui.WeatherApi.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AspireWithMaui/AspireWithMaui.ServiceDefaults/AspireWithMaui.ServiceDefaults.csproj (in 0.9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AspireWithJavaScript/AspireJavaScript.ServiceDefaults/AspireJavaScript.ServiceDefaults.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AspireWithMaui/AspireWithMaui.AppHost/AspireWithMaui.AppHost.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/orleans/OrleansClient/OrleansClient.csproj (in 6.96 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AspireWithJavaScript/AspireJavaScript.MinimalApi/AspireJavaScript.MinimalApi.csproj (in 378 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AspireWithJavaScript/AspireJavaScript.AppHost/AspireJavaScript.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/orleans/OrleansServer/OrleansServer.csproj (in 7.22 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AspireEventHub/EventHubsConsumer/EventHubsConsumer.csproj (in 10 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureFunctionsEndToEnd/AzureFunctionsEndToEnd.Functions/AzureFunctionsEndToEnd.Functions.csproj (in 1.81 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AspireEventHub/EventHubsApi/EventHubsApi.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AspireEventHub/EventHubs.AppHost/EventHubs.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/orleans/OrleansContracts/OrleansContracts.csproj (in 7.94 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/eng/dcppack/Aspire.Hosting.Orchestration.win-x64.csproj (in 0.5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/eng/dcppack/Aspire.Hosting.Orchestration.win-arm64.csproj (in 0.9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AksDemo/AksDemo.ApiService/AksDemo.ApiService.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AksDemo/AksDemo.AppHost/AksDemo.AppHost.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/eng/dcppack/Aspire.Hosting.Orchestration.osx-x64.csproj (in 0.8 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/eng/dcppack/Aspire.Hosting.Orchestration.osx-arm64.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/eng/dcppack/Aspire.Hosting.Orchestration.linux-musl-x64.csproj (in 0.5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/eng/dcppack/Aspire.Hosting.Orchestration.linux-x64.csproj (in 0.5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/eng/dcppack/Aspire.Hosting.Orchestration.linux-arm64.csproj (in 0.5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/eng/dashboardpack/Aspire.Dashboard.Sdk.win-arm64.csproj (in 0.4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/eng/dashboardpack/Aspire.Dashboard.Sdk.osx-x64.csproj (in 0.4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/eng/dashboardpack/Aspire.Dashboard.Sdk.win-x64.csproj (in 0.5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/eng/dashboardpack/Aspire.Dashboard.Sdk.osx-arm64.csproj (in 0.3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/eng/dashboardpack/Aspire.Dashboard.Sdk.linux-x64.csproj (in 0.6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/eng/dashboardpack/Aspire.Dashboard.Sdk.linux-musl-x64.csproj (in 0.4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/eng/dashboardpack/Aspire.Dashboard.Sdk.linux-arm64.csproj (in 0.5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.SqlServer.Tests/Aspire.Hosting.SqlServer.Tests.csproj (in 7 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/eng/clipack/Aspire.Cli.osx-arm64.csproj (in 152 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Seq.Tests/Aspire.Hosting.Seq.Tests.csproj (in 10 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Sdk.Tests/Aspire.Hosting.Sdk.Tests.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.RemoteHost.Tests/Aspire.Hosting.RemoteHost.Tests.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Redis.Tests/Aspire.Hosting.Redis.Tests.csproj (in 9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.RabbitMQ.Tests/Aspire.Hosting.RabbitMQ.Tests.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Qdrant.Tests/Aspire.Hosting.Qdrant.Tests.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Python.Tests/Aspire.Hosting.Python.Tests.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Oracle.Tests/Aspire.Hosting.Oracle.Tests.csproj (in 9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.PostgreSQL.Tests/Aspire.Hosting.PostgreSQL.Tests.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.OpenAI.Tests/Aspire.Hosting.OpenAI.Tests.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Nats.Tests/Aspire.Hosting.Nats.Tests.csproj (in 10 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.MySql.Tests/Aspire.Hosting.MySql.Tests.csproj (in 11 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Milvus.Tests/Aspire.Hosting.Milvus.Tests.csproj (in 11 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.MongoDB.Tests/Aspire.Hosting.MongoDB.Tests.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AspireWithMaui/AspireWithMaui.MauiServiceDefaults/AspireWithMaui.MauiServiceDefaults.csproj (in 3.01 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Maui.Tests/Aspire.Hosting.Maui.Tests.csproj (in 9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.Foundry.Tests/Aspire.Hosting.Foundry.Tests.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureKusto/AzureKusto.Worker/AzureKusto.Worker.csproj (in 4.77 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.EntityFrameworkCore.Tests/Aspire.Hosting.EntityFrameworkCore.Tests.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Hosting.DotnetTool.Tests/Aspire.Hosting.DotnetTool.Tests.csproj (in 10 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Azure.Security.KeyVault/Aspire.Azure.Security.KeyVault.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Azure.Storage.Blobs/Aspire.Azure.Storage.Blobs.csproj (in 7 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Azure.Npgsql/Aspire.Azure.Npgsql.csproj (in 9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Azure.Search.Documents/Aspire.Azure.Search.Documents.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL/Aspire.Azure.Npgsql.EntityFrameworkCore.PostgreSQL.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Azure.Messaging.WebPubSub/Aspire.Azure.Messaging.WebPubSub.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Azure.Messaging.ServiceBus/Aspire.Azure.Messaging.ServiceBus.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Azure.Messaging.EventHubs/Aspire.Azure.Messaging.EventHubs.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Azure.Data.Tables/Aspire.Azure.Data.Tables.csproj (in 7 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Azure.AI.OpenAI/Aspire.Azure.AI.OpenAI.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.TypeSystem/Aspire.TypeSystem.csproj (in 0.7 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Components/Aspire.Azure.AI.Inference/Aspire.Azure.AI.Inference.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/playground/AzureFunctionsWithDts/AzureFunctionsWithDts.Functions/AzureFunctionsWithDts.Functions.csproj (in 5.32 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting/Aspire.Hosting.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Yarp/Aspire.Hosting.Yarp.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Managed/Aspire.Managed.csproj (in 59 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Valkey/Aspire.Hosting.Valkey.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Testing/Aspire.Hosting.Testing.csproj (in 157 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.SqlServer/Aspire.Hosting.SqlServer.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.RemoteHost/Aspire.Hosting.RemoteHost.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Seq/Aspire.Hosting.Seq.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Redis/Aspire.Hosting.Redis.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.RabbitMQ/Aspire.Hosting.RabbitMQ.csproj (in 6 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Qdrant/Aspire.Hosting.Qdrant.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Python/Aspire.Hosting.Python.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.PostgreSQL/Aspire.Hosting.PostgreSQL.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Orleans/Aspire.Hosting.Orleans.csproj (in 1 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Oracle/Aspire.Hosting.Oracle.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.OpenAI/Aspire.Hosting.OpenAI.csproj (in 3 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Nats/Aspire.Hosting.Nats.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.MySql/Aspire.Hosting.MySql.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Milvus/Aspire.Hosting.Milvus.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.MongoDB/Aspire.Hosting.MongoDB.csproj (in 2 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.RabbitMQ.Client.Tests/Aspire.RabbitMQ.Client.Tests.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Playground.Tests/Aspire.Playground.Tests.csproj (in 11 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Qdrant.Client.Tests/Aspire.Qdrant.Client.Tests.csproj (in 9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Pomelo.EntityFrameworkCore.MySql.Tests/Aspire.Pomelo.EntityFrameworkCore.MySql.Tests.csproj (in 315 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.ProjectTemplates/Aspire.ProjectTemplates.csproj (in 1.9 sec).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.OpenAI.Tests/Aspire.OpenAI.Tests.csproj (in 4 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Npgsql.Tests/Aspire.Npgsql.Tests.csproj (in 10 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests/Aspire.Npgsql.EntityFrameworkCore.PostgreSQL.Tests.csproj (in 9 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.MySqlConnector.Tests/Aspire.MySqlConnector.Tests.csproj (in 12 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Oracle.EntityFrameworkCore.Tests/Aspire.Oracle.EntityFrameworkCore.Tests.csproj (in 306 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.MongoDB.EntityFrameworkCore.Tests/Aspire.MongoDB.EntityFrameworkCore.Tests.csproj (in 247 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.MongoDB.Driver.Tests/Aspire.MongoDB.Driver.Tests.csproj (in 166 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.NATS.Net.Tests/Aspire.NATS.Net.Tests.csproj (in 249 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.MongoDB.Driver.v2.Tests/Aspire.MongoDB.Driver.v2.Tests.csproj (in 167 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Microsoft.Extensions.Configuration.AzureAppConfiguration.Tests/Aspire.Microsoft.Extensions.Configuration.AzureAppConfiguration.Tests.csproj (in 5 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/tests/Aspire.Milvus.Client.Tests/Aspire.Milvus.Client.Tests.csproj (in 327 ms).
+  Restored /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-10118/src/Aspire.Hosting.Tasks/Aspire.Hosting.Tasks.csproj (in 2.19 sec).
+
+Build succeeded.
+    0 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:03:47.32

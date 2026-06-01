@@ -1,0 +1,121 @@
+{
+  "activeElement": {
+    "tag": "FLUENT-BUTTON",
+    "aria": "Name",
+    "text": "Name",
+    "cls": "col-sort-button stealth",
+    "id": "f2cb9a888"
+  },
+  "buttons": [
+    {
+      "aria": "Name",
+      "text": "Name",
+      "tag": "FLUENT-BUTTON",
+      "tabIndex": -1
+    },
+    {
+      "aria": "State",
+      "text": "State",
+      "tag": "FLUENT-BUTTON",
+      "tabIndex": -1
+    },
+    {
+      "aria": "Start time",
+      "text": "Start time",
+      "tag": "FLUENT-BUTTON",
+      "tabIndex": -1
+    },
+    {
+      "aria": "Source",
+      "text": "Source",
+      "tag": "FLUENT-BUTTON",
+      "tabIndex": -1
+    },
+    {
+      "aria": "URLs",
+      "text": "URLs",
+      "tag": "FLUENT-BUTTON",
+      "tabIndex": -1
+    },
+    {
+      "aria": "Actions",
+      "text": "Actions",
+      "tag": "FLUENT-BUTTON",
+      "tabIndex": -1
+    }
+  ],
+  "handles": [
+    {
+      "cls": "resize-handle",
+      "tabIndex": -1,
+      "role": null,
+      "aria": null
+    },
+    {
+      "cls": "actual-resize-handle",
+      "tabIndex": -1,
+      "role": null,
+      "aria": null
+    },
+    {
+      "cls": "resize-handle",
+      "tabIndex": -1,
+      "role": null,
+      "aria": null
+    },
+    {
+      "cls": "actual-resize-handle",
+      "tabIndex": -1,
+      "role": null,
+      "aria": null
+    },
+    {
+      "cls": "resize-handle",
+      "tabIndex": -1,
+      "role": null,
+      "aria": null
+    },
+    {
+      "cls": "actual-resize-handle",
+      "tabIndex": -1,
+      "role": null,
+      "aria": null
+    },
+    {
+      "cls": "resize-handle",
+      "tabIndex": -1,
+      "role": null,
+      "aria": null
+    },
+    {
+      "cls": "actual-resize-handle",
+      "tabIndex": -1,
+      "role": null,
+      "aria": null
+    },
+    {
+      "cls": "resize-handle",
+      "tabIndex": -1,
+      "role": null,
+      "aria": null
+    },
+    {
+      "cls": "actual-resize-handle",
+      "tabIndex": -1,
+      "role": null,
+      "aria": null
+    },
+    {
+      "cls": "resize-handle",
+      "tabIndex": -1,
+      "role": null,
+      "aria": null
+    },
+    {
+      "cls": "actual-resize-handle",
+      "tabIndex": -1,
+      "role": null,
+      "aria": null
+    }
+  ]
+}
