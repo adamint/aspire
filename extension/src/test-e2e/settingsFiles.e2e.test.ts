@@ -2,16 +2,12 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { getCommandInvocationCount, isSamePath, waitForCommandOutcome, waitForRepositoryIdle } from './helpers/assertions';
+import { getCommandInvocationCount, isSamePath, waitForCommandOutcome, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
 import { executeE2eControlCommand, restoreWorkspaceCliPath, setCliUnavailableForE2E } from './helpers/fixtures';
 import { getCliPath, getWorkspaceRoot } from './helpers/paths';
 import { closeAllEditors, openAspireView, waitForEditorTitle } from './helpers/vscode';
 
 interface ActiveEditorInfo {
-    fileName?: string;
-}
-
-interface WorkspaceFolderInfo {
     fileName?: string;
 }
 
@@ -25,7 +21,7 @@ suite('Aspire settings file command E2E', function () {
 
     test('creates and opens local and isolated global Aspire settings files', async () => {
         await openAspireView();
-        await waitForWorkspaceFolderPath(getWorkspaceRoot());
+        await waitForWorkspaceAppHost();
         await waitForRepositoryIdle();
 
         assertNoInstallRouteSidecar();
@@ -54,23 +50,6 @@ suite('Aspire settings file command E2E', function () {
         assert.strictEqual(fs.readFileSync(globalSettingsPath, 'utf8'), '{}');
     });
 });
-
-async function waitForWorkspaceFolderPath(expectedPath: string, timeoutMs = 60000): Promise<WorkspaceFolderInfo> {
-    const started = Date.now();
-    let lastFolders: WorkspaceFolderInfo[] | undefined;
-    while (Date.now() - started < timeoutMs) {
-        const result = (await executeE2eControlCommand({ name: 'getWorkspaceFolders' })).result as WorkspaceFolderInfo[];
-        lastFolders = result;
-        const folder = result.find(folder => folder.fileName && isSamePath(folder.fileName, expectedPath));
-        if (folder) {
-            return folder;
-        }
-
-        await delay(200);
-    }
-
-    throw new Error(`Timed out after ${timeoutMs}ms waiting for workspace folder '${expectedPath}'. Last workspace folders: ${JSON.stringify(lastFolders)}`);
-}
 
 async function waitForActiveEditorPath(expectedPath: string, timeoutMs = 60000): Promise<ActiveEditorInfo> {
     const started = Date.now();

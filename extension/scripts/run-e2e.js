@@ -326,7 +326,7 @@ let testFailure;
 const recording = startRecording();
 try {
   logStep('Running VS Code extension E2E tests');
-  run(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js'), '--open_resource', workspaceRoot], extestEnv);
+  run(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js')], extestEnv);
 }
 catch (error) {
   testFailure = error;
@@ -479,6 +479,7 @@ function ensureExtester() {
 function patchExtesterLaunchLocale() {
   const browserPath = path.join(extesterModule, 'out', 'browser.js');
   const source = fs.readFileSync(browserPath, 'utf8');
+  const workspaceArgument = JSON.stringify(workspaceRoot);
   const targets = [
     "const args = ['--no-sandbox', '--disable-dev-shm-usage', '--lang=en-US', '--disable-keytar', '--use-inmemory-secretstorage', '--password-store=basic', '--disable-extension', 'vscode.github-authentication', '--disable-extension', 'vscode.microsoft-authentication', `--user-data-dir=${path.join(this.storagePath, 'settings')}`];",
     "const args = ['--no-sandbox', '--disable-dev-shm-usage', '--lang=en-US', '--use-inmemory-secretstorage', '--password-store=basic', '--disable-extension', 'vscode.github-authentication', '--disable-extension', 'vscode.microsoft-authentication', `--user-data-dir=${path.join(this.storagePath, 'settings')}`];",
@@ -486,18 +487,21 @@ function patchExtesterLaunchLocale() {
     "const args = ['--no-sandbox', '--disable-dev-shm-usage', '--lang=en-US', `--user-data-dir=${path.join(this.storagePath, 'settings')}`];",
     "const args = ['--no-sandbox', '--disable-dev-shm-usage', `--user-data-dir=${path.join(this.storagePath, 'settings')}`];",
   ];
-  const replacement = "const args = ['--no-sandbox', '--disable-dev-shm-usage', '--lang=en-US', '--disable-keytar', '--use-inmemory-secretstorage', '--password-store=basic', '--disable-extension', 'vscode.github-authentication', '--disable-extension', 'vscode.microsoft-authentication', `--user-data-dir=${path.join(this.storagePath, 'settings')}`];";
+  const replacement = `const args = ['--no-sandbox', '--disable-dev-shm-usage', '--lang=en-US', '--disable-keytar', '--use-inmemory-secretstorage', '--password-store=basic', '--disable-extension', 'vscode.github-authentication', '--disable-extension', 'vscode.microsoft-authentication', \`--user-data-dir=\${path.join(this.storagePath, 'settings')}\`, ${workspaceArgument}];`;
 
   if (source.includes(replacement)) {
     return;
   }
 
   const target = targets.find(candidate => source.includes(candidate));
-  if (!target) {
+  const argsDeclarationPattern = /const args = \[[^\n]*`--user-data-dir=\$\{path\.join\(this\.storagePath, 'settings'\)\}`(?:, [^\n]+?)?\];/;
+  if (target) {
+    fs.writeFileSync(browserPath, source.replace(target, replacement));
+  } else if (argsDeclarationPattern.test(source)) {
+    fs.writeFileSync(browserPath, source.replace(argsDeclarationPattern, replacement));
+  } else {
     throw new Error(`Unable to patch ExTester VS Code launch arguments in ${browserPath} to force the E2E browser locale.`);
   }
-
-  fs.writeFileSync(browserPath, source.replace(target, replacement));
 }
 
 function prepareWorkspaceFixture(resolvedCliPath, resolvedAppHostSdkVersion) {

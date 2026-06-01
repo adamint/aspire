@@ -1,11 +1,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { AspireExtensionE2EControlCommand, AspireExtensionE2EControlStatus } from '../../types/extensionApi';
-import { waitForExtensionState } from './assertions';
-import { getCliPath, getControlFilePath, getPrimaryAppHostProjectPath, getRepoRoot, getWorkspaceRoot } from './paths';
+import { applyE2eControl, waitForExtensionState } from './assertions';
+import { getCliPath, getPrimaryAppHostProjectPath, getRepoRoot, getWorkspaceRoot } from './paths';
 import { runProcess } from './process';
 
-let controlRevision = Date.now();
 const csharpFileHeader = `// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
@@ -29,12 +28,7 @@ export async function writeWorkspaceCliPath(cliPath: string): Promise<void> {
     settings['aspire.aspireCliExecutablePath'] = cliPath;
     fs.writeFileSync(settingsPath, JSON.stringify(settings, undefined, 2));
 
-    const controlFilePath = getControlFilePath();
-    if (!controlFilePath) {
-        return;
-    }
-
-    await applyE2eControl({ aspireCliExecutablePath: cliPath }, controlFilePath);
+    await applyE2eControl({ aspireCliExecutablePath: cliPath });
 }
 
 export async function setCliUnavailableForE2E(forceCliUnavailable: boolean): Promise<void> {
@@ -50,7 +44,7 @@ export async function setDebugLaunchSuppressedForE2E(suppressDebugLaunch: boolea
 }
 
 export async function executeE2eControlCommand(command: AspireExtensionE2EControlCommand, options?: { waitFor?: 'started' | 'applied' }): Promise<AspireExtensionE2EControlStatus> {
-    return await applyE2eControl({ command }, getControlFilePath(), options?.waitFor ?? 'applied');
+    return await applyE2eControl({ command }, options?.waitFor ?? 'applied');
 }
 
 export async function createEmptyAppHostProject(projectName: string): Promise<string> {
@@ -110,29 +104,6 @@ export async function clearBreakpoints(): Promise<void> {
 
 export function removeGeneratedProject(projectName: string): void {
     fs.rmSync(getGeneratedProjectRoot(projectName), { recursive: true, force: true });
-}
-
-async function applyE2eControl(payload: Record<string, unknown>, controlFilePath = getControlFilePath(), waitFor: 'started' | 'applied' = 'applied'): Promise<AspireExtensionE2EControlStatus> {
-    if (!controlFilePath) {
-        return { revision: -1, status: 'applied' };
-    }
-
-    const revision = ++controlRevision;
-    fs.writeFileSync(controlFilePath, JSON.stringify({ revision, ...payload }, undefined, 2));
-    const stateFile = await waitForExtensionState(
-        file => file.control?.revision === revision && (file.control.status === 'error' || file.control.status === 'applied' || (waitFor === 'started' && file.control.status === 'started')),
-        `E2E control revision ${revision}`,
-        10000);
-
-    if (stateFile.control?.status === 'error') {
-        throw new Error(`Failed to apply E2E control revision ${revision}: ${stateFile.control?.errorMessage ?? '<unknown>'}`);
-    }
-
-    if (!stateFile.control) {
-        throw new Error(`E2E control revision ${revision} completed without reporting status.`);
-    }
-
-    return stateFile.control;
 }
 
 export async function restoreWorkspaceCliPath(): Promise<void> {

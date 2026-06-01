@@ -168,6 +168,8 @@ jobs:
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: '20.x'
+          cache: yarn
+          cache-dependency-path: extension/yarn.lock
 
       - name: Setup .NET
         uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
@@ -281,8 +283,12 @@ jobs:
       - name: Install E2E recorder
         if: ${{ matrix.useXvfb }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
+            ffmpeg -version | Select-Object -First 1
+          } else {
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          }
 
       - name: Run extension E2E tests
         working-directory: extension
@@ -297,9 +303,9 @@ jobs:
           ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY: https://registry.npmjs.org
         run: |
           if ('${{ matrix.useXvfb }}' -eq 'true') {
-            xvfb-run -a corepack yarn@1.22.22 test:e2e
+            xvfb-run -a node scripts/run-e2e.js
           } else {
-            corepack yarn@1.22.22 test:e2e
+            node scripts/run-e2e.js
           }
 
       - name: Upload E2E diagnostics

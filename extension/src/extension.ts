@@ -846,6 +846,13 @@ async function executeE2eControlCommand(
       markStarted();
       return await vscode.env.clipboard.readText();
     }
+    case 'openWorkspaceFolder': {
+      markStarted();
+      const folderPath = getE2eWorkspaceFolderPath(command.folderPath);
+      clearPendingE2eControlFile();
+      await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(folderPath), false);
+      return undefined;
+    }
     case 'getWorkspaceFolders': {
       markStarted();
       return vscode.workspace.workspaceFolders?.map(folder => ({
@@ -896,12 +903,36 @@ function getE2eWorkspacePath(filePath: unknown): string {
   return filePath;
 }
 
+function getE2eWorkspaceFolderPath(folderPath: unknown): string {
+  if (typeof folderPath !== 'string' || folderPath.length === 0 || !path.isAbsolute(folderPath)) {
+    throw new Error('Aspire extension E2E openWorkspaceFolder requires an absolute folder path.');
+  }
+
+  if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
+    throw new Error(`Aspire extension E2E openWorkspaceFolder requires an existing folder: ${folderPath}`);
+  }
+
+  const expectedWorkspaceRoot = process.env.ASPIRE_EXTENSION_E2E_WORKSPACE_ROOT;
+  if (typeof expectedWorkspaceRoot !== 'string' || expectedWorkspaceRoot.length === 0 || !isSamePath(folderPath, expectedWorkspaceRoot)) {
+    throw new Error('Aspire extension E2E openWorkspaceFolder can only open the configured E2E workspace root.');
+  }
+
+  return folderPath;
+}
+
 function getE2eBreakpointLine(line: unknown): number {
   if (typeof line !== 'number' || !Number.isInteger(line) || line < 0) {
     throw new Error('Aspire extension E2E setSourceBreakpoint requires a zero-based non-negative integer line.');
   }
 
   return line;
+}
+
+function clearPendingE2eControlFile(): void {
+  const controlFile = process.env.ASPIRE_EXTENSION_E2E_CONTROL_FILE;
+  if (controlFile) {
+    fs.rmSync(controlFile, { force: true });
+  }
 }
 
 function isPathWithinDirectory(candidatePath: string, directoryPath: string): boolean {

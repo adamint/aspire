@@ -1,19 +1,24 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import type { AspireAppHostState as AppHostState, AspireDebugSessionState, AspireExtensionE2EStateFile as ExtensionE2EStateFile, AspireExtensionStateSnapshot as ExtensionStateSnapshot, AspireResourceState as ResourceState } from '../../types/extensionApi';
-import { getPrimaryAppHostProjectPath, getStateFilePath } from './paths';
+import type { AspireAppHostState as AppHostState, AspireDebugSessionState, AspireExtensionE2EControlStatus as ExtensionE2EControlStatus, AspireExtensionE2EStateFile as ExtensionE2EStateFile, AspireExtensionStateSnapshot as ExtensionStateSnapshot, AspireResourceState as ResourceState } from '../../types/extensionApi';
+import { getControlFilePath, getPrimaryAppHostProjectPath, getStateFilePath, getWorkspaceRoot } from './paths';
 
 type CommandInvocation = ExtensionE2EStateFile['commandInvocations'][number];
+
+let controlRevision = Date.now();
+let workspaceFolderOpenPromise: Promise<void> | undefined;
 
 export async function waitForRepositoryIdle(timeoutMs = 120000): Promise<ExtensionE2EStateFile> {
     return await waitForExtensionState(file => file.state.isWorkspaceAppHostDiscoveryComplete && !file.state.isRepositoryLoading, 'repository to become idle', timeoutMs);
 }
 
 export async function waitForWorkspaceAppHost(timeoutMs = 120000): Promise<ExtensionE2EStateFile> {
+    await ensureWorkspaceFolderOpen();
     return await waitForExtensionState(file => file.state.workspaceAppHostCandidatePaths.some(candidate => isSamePath(candidate, getPrimaryAppHostProjectPath())), 'workspace AppHost candidate', timeoutMs);
 }
 
 export async function waitForSelectedWorkspaceAppHost(appHostPath = getPrimaryAppHostProjectPath(), timeoutMs = 120000): Promise<ExtensionE2EStateFile> {
+    await ensureWorkspaceFolderOpen();
     return await waitForExtensionState(
         file => file.state.workspaceAppHostPath !== undefined && isSamePath(file.state.workspaceAppHostPath, appHostPath),
         `selected workspace AppHost '${appHostPath}'`,
@@ -152,6 +157,73 @@ export async function waitForExtensionState(
 
 export function readStateFile(): ExtensionE2EStateFile {
     return JSON.parse(fs.readFileSync(getStateFilePath(), 'utf8')) as ExtensionE2EStateFile;
+}
+
+async function ensureWorkspaceFolderOpen(): Promise<void> {
+    workspaceFolderOpenPromise ??= ensureWorkspaceFolderOpenCore().catch(error => {
+        workspaceFolderOpenPromise = undefined;
+        throw error;
+    });
+
+    await workspaceFolderOpenPromise;
+}
+
+async function ensureWorkspaceFolderOpenCore(): Promise<void> {
+    const expectedPath = getWorkspaceRoot();
+    if (await tryWaitForWorkspaceFolder(expectedPath, 5000)) {
+        return;
+    }
+
+    await applyE2eControl({ command: { name: 'openWorkspaceFolder', folderPath: expectedPath } }, 'started', 10000);
+    if (await tryWaitForWorkspaceFolder(expectedPath, 120000)) {
+        return;
+    }
+
+    const folders = await getWorkspaceFolders().catch(error => `failed to query workspace folders: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Timed out after 120000ms waiting for VS Code to open E2E workspace '${expectedPath}'. Last workspace folders: ${JSON.stringify(folders)}`);
+}
+
+async function tryWaitForWorkspaceFolder(expectedPath: string, timeoutMs: number): Promise<boolean> {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+        const folders = await getWorkspaceFolders().catch(() => []);
+        if (folders.some(folder => folder.fileName && isSamePath(folder.fileName, expectedPath))) {
+            return true;
+        }
+
+        await delay(200);
+    }
+
+    return false;
+}
+
+async function getWorkspaceFolders(): Promise<Array<{ fileName?: string }>> {
+    const status = await applyE2eControl({ command: { name: 'getWorkspaceFolders' } }, 'applied', 10000);
+    return Array.isArray(status.result) ? status.result as Array<{ fileName?: string }> : [];
+}
+
+export async function applyE2eControl(payload: Record<string, unknown>, waitFor: 'started' | 'applied' = 'applied', timeoutMs = 10000): Promise<ExtensionE2EControlStatus> {
+    const controlFilePath = getControlFilePath();
+    if (!controlFilePath) {
+        return { revision: -1, status: 'applied' };
+    }
+
+    const revision = ++controlRevision;
+    fs.writeFileSync(controlFilePath, JSON.stringify({ revision, ...payload }, undefined, 2));
+    const stateFile = await waitForExtensionState(
+        file => file.control?.revision === revision && (file.control.status === 'error' || file.control.status === 'applied' || (waitFor === 'started' && file.control.status === 'started')),
+        `E2E control revision ${revision}`,
+        timeoutMs);
+
+    if (stateFile.control?.status === 'error') {
+        throw new Error(`Failed to apply E2E control revision ${revision}: ${stateFile.control.errorMessage ?? '<unknown>'}`);
+    }
+
+    if (!stateFile.control) {
+        throw new Error(`E2E control revision ${revision} completed without reporting status.`);
+    }
+
+    return stateFile.control;
 }
 
 function delay(ms: number): Promise<void> {
