@@ -1,0 +1,19 @@
+Issue: microsoft/aspire#17469
+Worktree: /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-17469
+
+Characterization:
+- Resources View options uses AspireMenuButton -> AspireMenu -> FluentMenu anchored to the FluentButton host.
+- Fluent UI 4.14.1 menu keyboard navigation calls initializeKeyboardNavigation(..., tabExitsAlways=true).
+- In /Users/adamratzman/.nuget/packages/microsoft.fluentui.aspnetcore.components/4.14.1/staticwebassets/Components/AnchoredRegion/FluentAnchoredRegion.razor.js, Tab from a popup calculates the next page focus target from anchorElement.shadowRoot.children[0] for FLUENT-* anchors.
+- That shadow child is not in the document-level focusable list, so currentIndex is -1 and findNextFocusableElement wraps to index 0: the first focusable control on the page. This matches the reported focus reset.
+
+Fix evidence:
+- Added Aspire-owned popup keyboard navigation for explicit menu/popover instances only.
+- The handler runs in capture phase before Fluent UI's helper, calculates next focus from the Fluent host element, excludes the open popup subtree, and closes via the component callback.
+- Applied to AspireMenu, Resources filter popover, and ChartFilters filter popovers.
+
+Validation:
+- dotnet test --project tests/Aspire.Dashboard.Components.Tests/Aspire.Dashboard.Components.Tests.csproj --no-launch-profile -- --filter-class "*.AspireMenuTests" --filter-class "*.AspirePopupFocusNavigationTests" --filter-class "*.ResourcesTests" --filter-class "*.ChartFiltersTests" --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"
+  Result: Passed. total: 22, failed: 0, succeeded: 22, skipped: 0.
+- node --check src/Aspire.Dashboard/wwwroot/js/app.js
+  Result: Passed (exit code 0).

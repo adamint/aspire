@@ -1,0 +1,27 @@
+{
+  "label": "AFTER FIX",
+  "beforeTab": {
+    "menuOpen": true,
+    "menuText": "Collapse child resources\n\tShow resource types\n\tShow hidden resources",
+    "active": {
+      "tag": "FLUENT-BUTTON",
+      "id": "f399038",
+      "className": "stealth",
+      "ariaLabel": "View options",
+      "title": "View options",
+      "text": ""
+    }
+  },
+  "afterTab": {
+    "menuOpen": true,
+    "menuText": "Collapse child resources\n\tShow resource types\n\tShow hidden resources",
+    "active": {
+      "tag": "FLUENT-MENU-ITEM",
+      "id": "f33116760",
+      "className": "indent-1",
+      "ariaLabel": null,
+      "title": "Collapse child resources",
+      "text": "Collapse child resources"
+    }
+  }
+}
