@@ -119,7 +119,7 @@ suite('configInfoProvider tests', () => {
         const configInfo = await getConfigInfo(terminalProvider);
 
         assert.ok(configInfo);
-        assert.strictEqual(workingDirectory, '/workspace');
+        assert.strictEqual(workingDirectory, workspaceFolder.uri.fsPath);
         assert.strictEqual(spawnStub.firstCall.args[3]?.noExtensionVariables, true);
     });
 });
