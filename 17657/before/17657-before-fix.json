@@ -1,0 +1,20 @@
+{
+  "label": "BEFORE FIX",
+  "state": {
+    "url": "https://testshop.dev.localhost:49661/",
+    "innerHeight": 384,
+    "menuStyle": "min-width: max-content; border-radius: calc(var(--layer-corner-radius) * 1px); z-index: 9999; width: unset; height: unset; grid-area: nav-menu; height: 100vh; margin-top: 2px; overflow-y: auto;",
+    "rect": {
+      "x": 0,
+      "y": 52,
+      "width": 650,
+      "height": 384,
+      "right": 650,
+      "bottom": 436
+    },
+    "bottomWithinViewport": false,
+    "computedMaxHeight": "none",
+    "computedHeight": "384px",
+    "overflowY": "auto"
+  }
+}

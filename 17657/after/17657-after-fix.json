@@ -1,0 +1,20 @@
+{
+  "label": "AFTER FIX",
+  "state": {
+    "url": "https://testshop.dev.localhost:57919/",
+    "innerHeight": 384,
+    "menuStyle": "min-width: max-content; border-radius: calc(var(--layer-corner-radius) * 1px); z-index: 9999; width: unset; height: unset; grid-area: nav-menu; max-height: calc(100dvh - var(--mobile-header-height) - var(--mobile-nav-menu-offset)); margin-top: var(--mobile-nav-menu-offset); overflow-y: auto;",
+    "rect": {
+      "x": 0,
+      "y": 54,
+      "width": 650,
+      "height": 329,
+      "right": 650,
+      "bottom": 383
+    },
+    "bottomWithinViewport": true,
+    "computedMaxHeight": "330px",
+    "computedHeight": "329px",
+    "overflowY": "auto"
+  }
+}
