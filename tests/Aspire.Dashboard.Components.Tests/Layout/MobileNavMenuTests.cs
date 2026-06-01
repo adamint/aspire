@@ -39,6 +39,19 @@ public class MobileNavMenuTests : DashboardTestContext
         AssertMenuItemIsActive(cut, Resources.Layout.NavMenuResourcesTab);
     }
 
+    [Fact]
+    public void MobileNavMenu_ConstrainedToRemainingViewport()
+    {
+        var cut = RenderMobileNavMenu(DashboardUrls.ResourcesUrl());
+
+        var style = cut.Find("fluent-menu").GetAttribute("style");
+
+        Assert.Contains("max-height: calc(100dvh - var(--mobile-header-height) - var(--mobile-nav-menu-offset))", style);
+        Assert.DoesNotContain("height: 100vh", style);
+        Assert.Contains("margin-top: var(--mobile-nav-menu-offset)", style);
+        Assert.Contains("overflow-y: auto", style);
+    }
+
     private IRenderedComponent<MobileNavMenu> RenderMobileNavMenu(string currentUrl)
     {
         FluentUISetupHelpers.AddCommonDashboardServices(this);

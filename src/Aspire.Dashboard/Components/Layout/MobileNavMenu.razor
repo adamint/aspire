@@ -1,4 +1,4 @@
-﻿<FluentMenu Class="aspire-menu-container" Open="@IsNavMenuOpen" Anchored="false" Style="grid-area: nav-menu; height: 100vh; margin-top: 2px; overflow-y: auto;">
+﻿<FluentMenu Class="aspire-menu-container" Open="@IsNavMenuOpen" Anchored="false" Style="grid-area: nav-menu; max-height: calc(100dvh - var(--mobile-header-height) - var(--mobile-nav-menu-offset)); margin-top: var(--mobile-nav-menu-offset); overflow-y: auto;">
     @foreach (var item in GetMobileNavMenuEntries())
     {
         var isActive = item.LinkMatchRegex is not null && item.LinkMatchRegex.IsMatch($"/{NavigationManager.ToBaseRelativePath(NavigationManager.Uri)}");
