@@ -847,8 +847,8 @@ async function executeE2eControlCommand(
       return await vscode.env.clipboard.readText();
     }
     case 'openWorkspaceFolder': {
-      markStarted();
       const folderPath = getE2eWorkspaceFolderPath(command.folderPath);
+      markStarted();
       clearPendingE2eControlFile();
       await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(folderPath), false);
       return undefined;

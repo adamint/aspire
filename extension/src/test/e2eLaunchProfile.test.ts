@@ -32,4 +32,21 @@ suite('E2E launch profile', () => {
         assert.ok(extension.includes('clearPendingE2eControlFile();'));
         assert.ok(extension.includes("vscode.commands.executeCommand('vscode.openFolder'"));
     });
+
+    test('validates explicit workspace folder before reporting bridge command start', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const extension = fs.readFileSync(path.join(extensionRoot, 'src', 'extension.ts'), 'utf8');
+        const openWorkspaceCase = extension.slice(extension.indexOf("case 'openWorkspaceFolder'"), extension.indexOf("case 'getWorkspaceFolders'"));
+
+        assert.ok(openWorkspaceCase.indexOf('getE2eWorkspaceFolderPath') < openWorkspaceCase.indexOf('markStarted();'));
+    });
+
+    test('uses a shared timeout budget for workspace recovery and AppHost discovery', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const assertions = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'helpers', 'assertions.ts'), 'utf8');
+
+        assert.ok(assertions.includes('const deadline = createDeadline(timeoutMs);'));
+        assert.ok(assertions.includes('getRemainingTimeout(deadline'));
+        assert.ok(assertions.includes('throwIfControlFailed(openWorkspaceRevision);'));
+    });
 });
