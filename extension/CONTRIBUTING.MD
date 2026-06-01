@@ -48,6 +48,16 @@ corepack yarn@1.22.22 test
 ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn@1.22.22 test:e2e
 ```
 
+To run a single unit-test file or a filtered subset, compile the tests first and pass Mocha selectors through `unit-test`:
+
+```bash
+corepack yarn@1.22.22 compile-tests
+corepack yarn@1.22.22 compile
+corepack yarn@1.22.22 unit-test --run out/test/configInfoProvider.test.js
+corepack yarn@1.22.22 unit-test --grep "parseConfigInfoOutput"
+corepack yarn@1.22.22 unit-test --run out/test/configInfoProvider.test.js --run out/test/extensionApi.test.js
+```
+
 On Linux, run the E2E command under `xvfb-run -a` when no desktop session is available. On Windows, `ASPIRE_EXTENSION_E2E_CLI_PATH` can point at an `.exe` or `.cmd` wrapper, including paths with spaces. Set `ASPIRE_EXTENSION_E2E_VSIX=/path/to/aspire-extension.vsix` to test an existing package instead of letting the runner create one.
 
 The suite can be sharded by running separate VS Code windows/processes, which is how CI keeps the long UI paths parallel instead of relying on Mocha-level parallelism inside one extension host:
@@ -62,6 +72,15 @@ ASPIRE_EXTENSION_E2E_SHARD=debug-dashboard ASPIRE_EXTENSION_E2E_SPEC=out/test-e2
 ASPIRE_EXTENSION_E2E_SHARD=zero-to-running ASPIRE_EXTENSION_E2E_SPEC=out/test-e2e/test-e2e/zeroToRunning.e2e.test.js ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn@1.22.22 test:e2e
 ASPIRE_EXTENSION_E2E_SHARD=package-surface ASPIRE_EXTENSION_E2E_SPEC=out/test-e2e/test-e2e/packageSurface.e2e.test.js ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn@1.22.22 test:e2e
 ASPIRE_EXTENSION_E2E_SHARD=edge-cases ASPIRE_EXTENSION_E2E_SPEC=out/test-e2e/test-e2e/edgeCases.e2e.test.js ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn@1.22.22 test:e2e
+```
+
+`ASPIRE_EXTENSION_E2E_SPEC` accepts either one compiled spec path or a glob, so local runs can target one spec or a small subset without editing the test runner:
+
+```bash
+corepack yarn@1.22.22 compile-e2e
+ASPIRE_EXTENSION_E2E_SHARD=debug-dashboard-local ASPIRE_EXTENSION_E2E_SPEC=out/test-e2e/test-e2e/debugDashboard.e2e.test.js ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn@1.22.22 test:e2e
+ASPIRE_EXTENSION_E2E_SHARD=fast-subset ASPIRE_EXTENSION_E2E_SPEC='out/test-e2e/test-e2e/{commandPalette,settingsFiles}.e2e.test.js' ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn@1.22.22 test:e2e
+ASPIRE_EXTENSION_E2E_SHARD=tree-subset ASPIRE_EXTENSION_E2E_SPEC='out/test-e2e/test-e2e/*Tree.e2e.test.js' ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn@1.22.22 test:e2e
 ```
 
 The current shards cover command palette and terminal routing, settings-file creation/opening with an isolated Aspire home, workspace AppHost discovery/configuration changes, AppHost run/stop/resource rendering, tree action commands for copy/open/log/resource operations, debug/dashboard lifecycle, a zero-to-running flow that creates a C# AppHost through the real Aspire terminal path, adds an integration package, registers a source breakpoint, and debugs the generated AppHost, the `package.json` contribution surface including exact activation events, command registration, menu/view/settings inventory, JSON validation, walkthrough command registration, CodeLens routing, and debug launch command routing, plus negative-path edge cases for invalid control payloads, missing tree targets, CLI-independent settings commands, and launch-state cleanup.
