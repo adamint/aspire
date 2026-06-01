@@ -419,16 +419,40 @@ public sealed class ReleasePublishNugetPipelineTests
 
         Assert.True(markerLineIndex >= 0, $"Expected to find '{marker}'.");
 
+        var markerIndent = CountLeadingWhitespace(lines[markerLineIndex]);
         for (var i = markerLineIndex + 1; i < lines.Length; i++)
         {
-            var line = lines[i].TrimEnd('\r').Trim();
-            if (line.StartsWith(valueKey, StringComparison.Ordinal))
+            var rawLine = lines[i].TrimEnd('\r');
+            var line = rawLine.Trim();
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            var indent = CountLeadingWhitespace(rawLine);
+            if (indent == markerIndent && line.StartsWith("- ", StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            if (indent > markerIndent && line.StartsWith(valueKey, StringComparison.Ordinal))
             {
                 return TrimYamlQuotes(line[valueKey.Length..].Trim());
             }
         }
 
         throw new Xunit.Sdk.XunitException($"Expected to find '{valueKey}' after '{marker}'.");
+    }
+
+    private static int CountLeadingWhitespace(string value)
+    {
+        var count = 0;
+        while (count < value.Length && char.IsWhiteSpace(value[count]))
+        {
+            count++;
+        }
+
+        return count;
     }
 
     private static string TrimYamlQuotes(string value)
