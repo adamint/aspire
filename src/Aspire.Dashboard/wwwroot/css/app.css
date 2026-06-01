@@ -937,6 +937,21 @@ fluent-tooltip[anchor="dialog_close"] > div {
     text-overflow: ellipsis;
 }
 
+.aspire-menu-container fluent-menu-item.mobile-nav-menu-item-active {
+    font-weight: 600;
+}
+
+.aspire-menu-container .mobile-nav-menu-selected-indicator {
+    color: var(--accent-foreground-active);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--type-ramp-plus-1-font-size);
+    font-weight: 700;
+    line-height: 1;
+    min-inline-size: 1.5rem;
+}
+
 .aspire-menu-container fluent-menu fluent-menu {
     max-width: var(--aspire-menu-max-width);
 }

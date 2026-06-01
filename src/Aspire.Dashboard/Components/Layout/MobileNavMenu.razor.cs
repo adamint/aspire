@@ -42,7 +42,7 @@ public partial class MobileNavMenu : ComponentBase
                 Loc[nameof(Resources.Layout.NavMenuResourcesTab)],
                 () => NavigateToAsync(DashboardUrls.ResourcesUrl()),
                 DesktopNavMenu.ResourcesIcon(),
-                LinkMatchRegex: new Regex($"^{DashboardUrls.ResourcesUrl()}(\\?.*)?$")
+                LinkMatchRegex: GetIndexPageRegex(DashboardUrls.ResourcesUrl())
             );
 
             yield return new MobileNavMenuEntry(
@@ -123,7 +123,14 @@ public partial class MobileNavMenu : ComponentBase
     private static Regex GetNonIndexPageRegex(string pageRelativeBasePath)
     {
         pageRelativeBasePath = Regex.Escape(pageRelativeBasePath);
-        return new Regex($"^({pageRelativeBasePath}|{pageRelativeBasePath}/.+)$", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        return new Regex($"^({pageRelativeBasePath}(\\?.*)?|{pageRelativeBasePath}/.+)$", LinkMatchRegexOptions);
     }
-}
 
+    private static Regex GetIndexPageRegex(string pageRelativeBasePath)
+    {
+        pageRelativeBasePath = Regex.Escape(pageRelativeBasePath);
+        return new Regex($"^{pageRelativeBasePath}(\\?.*)?$", LinkMatchRegexOptions);
+    }
+
+    private const RegexOptions LinkMatchRegexOptions = RegexOptions.CultureInvariant | RegexOptions.IgnoreCase;
+}
