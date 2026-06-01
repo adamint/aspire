@@ -1,0 +1,710 @@
+#!/usr/bin/env node
+'use strict';
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawnSync } = require('child_process');
+
+const extensionRoot = path.resolve(__dirname, '..');
+const repoRoot = path.resolve(extensionRoot, '..');
+const artifactsDir = path.join(extensionRoot, '.test-artifacts');
+const shardName = sanitizePathSegment(process.env.ASPIRE_EXTENSION_E2E_SHARD || 'all');
+const resultsDir = path.join(extensionRoot, '.test-results', 'e2e', shardName);
+const runId = `${process.pid}-${Date.now()}`;
+const diagnosticsStorageRoot = path.join(extensionRoot, '.test-storage');
+const requestedTempRoot = process.env.ASPIRE_EXTENSION_E2E_TEMP_ROOT || os.tmpdir();
+fs.mkdirSync(requestedTempRoot, { recursive: true });
+const tempRoot = fs.realpathSync.native(requestedTempRoot);
+const shortRunRoot = fs.mkdtempSync(path.join(tempRoot, 'aev-'));
+const isolatedAspireHome = path.join(shortRunRoot, 'aspire-home');
+const storageDir = path.join(shortRunRoot, 'storage');
+const extensionsDir = path.join(shortRunRoot, 'extensions');
+const workspaceRoot = process.env.ASPIRE_EXTENSION_E2E_WORKSPACE_ROOT
+  ? path.resolve(process.env.ASPIRE_EXTENSION_E2E_WORKSPACE_ROOT)
+  : path.join(shortRunRoot, 'workspace');
+const storageDiagnosticsDir = path.join(diagnosticsStorageRoot, shardName, runId);
+const workspaceDiagnosticsDir = path.join(extensionRoot, '.test-workspaces', shardName, runId);
+const defaultVsixPath = path.join(artifactsDir, 'aspire-extension-e2e.vsix');
+const stateFile = path.join(resultsDir, 'extension-state.json');
+const controlFile = path.join(resultsDir, 'extension-control.json');
+const testSpec = process.env.ASPIRE_EXTENSION_E2E_SPEC || 'out/test-e2e/**/*.e2e.test.js';
+const vscodeVersion = process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.98.2';
+const extesterVersion = process.env.ASPIRE_EXTENSION_E2E_EXTESTER_VERSION || '8.14.1';
+const extesterInstallRoot = path.join(artifactsDir, 'extester-runner');
+const extesterNodeModules = path.join(extesterInstallRoot, 'node_modules');
+const extesterModule = path.join(extesterNodeModules, 'vscode-extension-tester');
+const extesterCli = path.join(extesterModule, 'out', 'cli.js');
+const primaryAppHostProject = path.join(workspaceRoot, 'AspireE2E.AppHost', 'AspireE2E.AppHost.csproj');
+const workspaceNuGetConfigPath = path.join(workspaceRoot, 'NuGet.config');
+const csharpFileHeader = `// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+
+`;
+
+fs.rmSync(resultsDir, { recursive: true, force: true });
+for (const directory of [artifactsDir, resultsDir, diagnosticsStorageRoot, isolatedAspireHome, storageDir, extensionsDir, workspaceRoot]) {
+  fs.mkdirSync(directory, { recursive: true });
+}
+assertSpecMatches(testSpec);
+
+function shouldUseShellForCommand(command) {
+  // npm and corepack are .cmd shims on Windows. Node.js 20+ intentionally refuses
+  // to spawn .cmd/.bat files with shell:false, so use cmd.exe only for those tools.
+  return process.platform === 'win32' && (command === 'npm' || command === 'corepack');
+}
+
+function assertSpecMatches(spec) {
+  const matches = findSpecMatches(spec);
+  if (matches.length === 0) {
+    throw new Error(`E2E spec '${spec}' did not match any compiled test files under ${path.relative(extensionRoot, path.join(extensionRoot, 'out', 'test-e2e'))}. Run corepack yarn@1.22.22 compile-e2e and check ASPIRE_EXTENSION_E2E_SPEC.`);
+  }
+}
+
+function findSpecMatches(spec) {
+  const absolutePattern = path.resolve(extensionRoot, spec);
+  if (!hasGlobSyntax(spec)) {
+    return fs.existsSync(absolutePattern) ? [absolutePattern] : [];
+  }
+
+  const root = getGlobSearchRoot(absolutePattern);
+  if (!root || !fs.existsSync(root)) {
+    return [];
+  }
+
+  const patternRegex = globToRegExp(toPosixPath(absolutePattern));
+  return getFilesRecursive(root).filter(file => patternRegex.test(toPosixPath(file)));
+}
+
+function getGlobSearchRoot(pattern) {
+  const firstGlobIndex = pattern.search(/[*?\[\]{}]/);
+  if (firstGlobIndex === -1) {
+    return path.dirname(pattern);
+  }
+
+  const prefix = pattern.slice(0, firstGlobIndex);
+  const lastSeparator = Math.max(prefix.lastIndexOf(path.sep), prefix.lastIndexOf('/'), prefix.lastIndexOf('\\'));
+  return lastSeparator === -1 ? extensionRoot : prefix.slice(0, lastSeparator);
+}
+
+function getFilesRecursive(directory) {
+  const entries = fs.readdirSync(directory, { withFileTypes: true });
+  return entries.flatMap(entry => {
+    const entryPath = path.join(directory, entry.name);
+    return entry.isDirectory() ? getFilesRecursive(entryPath) : [entryPath];
+  });
+}
+
+function hasGlobSyntax(value) {
+  return /[*?\[\]{}]/.test(value);
+}
+
+function globToRegExp(pattern) {
+  let expression = '^';
+  for (let i = 0; i < pattern.length; i++) {
+    const character = pattern[i];
+    const nextCharacter = pattern[i + 1];
+    if (character === '*' && nextCharacter === '*' && pattern[i + 2] === '/') {
+      expression += '(?:.*/)?';
+      i += 2;
+    }
+    else if (character === '*' && nextCharacter === '*') {
+      expression += '.*';
+      i++;
+    }
+    else if (character === '*') {
+      expression += '[^/]*';
+    }
+    else if (character === '?') {
+      expression += '[^/]';
+    }
+    else if (character === '{') {
+      const endBrace = pattern.indexOf('}', i + 1);
+      if (endBrace !== -1) {
+        const alternatives = pattern.slice(i + 1, endBrace).split(',').map(escapeRegExp).join('|');
+        expression += `(?:${alternatives})`;
+        i = endBrace;
+      }
+      else {
+        expression += escapeRegExp(character);
+      }
+    }
+    else {
+      expression += escapeRegExp(character);
+    }
+  }
+
+  return new RegExp(`${expression}$`);
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function toPosixPath(value) {
+  return path.resolve(value).replace(/^\\\\\?\\/, '').split(path.sep).join('/');
+}
+
+const cliPath = isolateCliPath(resolveCliPath());
+validateCliPath(cliPath);
+const appHostSdkVersion = resolveAppHostSdkVersion(cliPath);
+const packageSource = getLocalPackageSourceDirectories()[0];
+prepareWorkspaceFixture(cliPath, appHostSdkVersion);
+restoreWorkspaceFixture();
+const vsixPath = process.env.ASPIRE_EXTENSION_E2E_VSIX
+  ? path.resolve(process.env.ASPIRE_EXTENSION_E2E_VSIX)
+  : packageVsix();
+
+if (!fs.existsSync(vsixPath)) {
+  throw new Error(`VSIX not found at ${vsixPath}`);
+}
+validateVsix(vsixPath);
+
+ensureExtester();
+
+const extestEnv = getAspireCliEnvironment({
+  ASPIRE_EXTENSION_E2E_CLI_PATH: cliPath,
+  ASPIRE_EXTENSION_E2E_EXTENSION_ROOT: extensionRoot,
+  ASPIRE_EXTENSION_E2E_REPO_ROOT: repoRoot,
+  ASPIRE_EXTENSION_E2E_RESULTS_DIR: resultsDir,
+  ASPIRE_EXTENSION_E2E_WORKSPACE_ROOT: workspaceRoot,
+  ASPIRE_EXTENSION_E2E_STATE_FILE: stateFile,
+  ASPIRE_EXTENSION_E2E_CONTROL_FILE: controlFile,
+  ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE: 'true',
+  ASPIRE_EXTENSION_E2E_PRIMARY_APPHOST: primaryAppHostProject,
+  ASPIRE_EXTENSION_E2E_APPHOST_SDK_VERSION: appHostSdkVersion,
+  ...(packageSource ? { ASPIRE_EXTENSION_E2E_PACKAGE_SOURCE: packageSource } : {}),
+  ASPIRE_EXTENSION_E2E_EXTESTER_MODULE: extesterModule,
+  NODE_PATH: [extesterNodeModules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
+});
+
+runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 3, retryDelayMs: 5000 });
+runWithRetry(process.execPath, [extesterCli, 'get-chromedriver', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 3, retryDelayMs: 5000 });
+run(process.execPath, [extesterCli, 'install-vsix', '--storage', storageDir, '--extensions_dir', extensionsDir, '--vsix_file', vsixPath], extestEnv);
+let testFailure;
+try {
+  run(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js'), '--open_resource', workspaceRoot], extestEnv);
+}
+catch (error) {
+  testFailure = error;
+}
+finally {
+  stopWorkspaceAppHost();
+  copyStorageDiagnostics();
+  copyWorkspaceDiagnostics();
+  cleanupTemporaryRunRoot();
+}
+
+if (testFailure) {
+  throw testFailure;
+}
+
+function resolveCliPath() {
+  if (process.env.ASPIRE_EXTENSION_E2E_CLI_PATH) {
+    const configuredPath = path.resolve(process.env.ASPIRE_EXTENSION_E2E_CLI_PATH);
+    if (!fs.existsSync(configuredPath)) {
+      throw new Error(`ASPIRE_EXTENSION_E2E_CLI_PATH points to a missing file: ${configuredPath}`);
+    }
+
+    return configuredPath;
+  }
+
+  if (process.env.CI) {
+    throw new Error('ASPIRE_EXTENSION_E2E_CLI_PATH is required in CI so E2E tests run against a known Aspire CLI build.');
+  }
+
+  const candidatePaths = process.platform === 'win32'
+    ? [
+      path.join(repoRoot, 'artifacts', 'bin', 'aspire', 'Debug', 'net10.0', 'aspire.exe'),
+      path.join(repoRoot, 'artifacts', 'bin', 'Aspire.Cli', 'Debug', 'net10.0', 'aspire.exe'),
+    ]
+    : [
+      path.join(repoRoot, 'artifacts', 'bin', 'aspire', 'Debug', 'net10.0', 'aspire'),
+      path.join(repoRoot, 'artifacts', 'bin', 'Aspire.Cli', 'Debug', 'net10.0', 'aspire'),
+    ];
+
+  const candidatePath = candidatePaths.find(p => fs.existsSync(p));
+  if (!candidatePath) {
+    throw new Error(`ASPIRE_EXTENSION_E2E_CLI_PATH is not set and no local Aspire CLI was found. Checked: ${candidatePaths.join(', ')}`);
+  }
+
+  return candidatePath;
+}
+
+function isolateCliPath(resolvedCliPath) {
+  const sourceDirectory = path.dirname(resolvedCliPath);
+  const isolatedDirectory = path.join(shortRunRoot, 'cli');
+  fs.rmSync(isolatedDirectory, { recursive: true, force: true });
+  fs.cpSync(sourceDirectory, isolatedDirectory, { recursive: true });
+  fs.rmSync(path.join(isolatedDirectory, '.aspire-install.json'), { force: true });
+
+  const isolatedCliPath = path.join(isolatedDirectory, path.basename(resolvedCliPath));
+  if (!fs.existsSync(isolatedCliPath)) {
+    throw new Error(`Isolated Aspire CLI copy did not contain ${path.basename(resolvedCliPath)} from ${sourceDirectory}.`);
+  }
+
+  if (process.platform !== 'win32') {
+    fs.chmodSync(isolatedCliPath, fs.statSync(isolatedCliPath).mode | 0o700);
+  }
+
+  return isolatedCliPath;
+}
+
+function validateCliPath(resolvedCliPath) {
+  const result = spawnSync(resolvedCliPath, ['--version'], {
+    cwd: extensionRoot,
+    env: getAspireCliEnvironment(),
+    shell: false,
+    encoding: 'utf8',
+    timeout: 60000,
+  });
+
+  if (result.error) {
+    throw new Error(`Unable to execute Aspire CLI at ${resolvedCliPath}: ${result.error.message}`);
+  }
+
+  if (result.status !== 0) {
+    throw new Error(`Aspire CLI at ${resolvedCliPath} failed --version with code ${result.status ?? `signal ${result.signal ?? 'unknown'}`}.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+  }
+}
+
+function packageVsix() {
+  run('corepack', ['yarn@1.22.22', 'run', 'vsce', 'package', '--pre-release', '-o', defaultVsixPath]);
+  return defaultVsixPath;
+}
+
+function validateVsix(resolvedVsixPath) {
+  const stat = fs.statSync(resolvedVsixPath);
+  if (stat.size < 100 * 1024) {
+    throw new Error(`VSIX at ${resolvedVsixPath} is unexpectedly small (${stat.size} bytes).`);
+  }
+
+  const header = Buffer.alloc(4);
+  const fd = fs.openSync(resolvedVsixPath, 'r');
+  try {
+    fs.readSync(fd, header, 0, header.length, 0);
+  }
+  finally {
+    fs.closeSync(fd);
+  }
+
+  if (header.toString('utf8') !== 'PK\u0003\u0004') {
+    throw new Error(`VSIX at ${resolvedVsixPath} does not look like a ZIP package.`);
+  }
+}
+
+function ensureExtester() {
+  const installedPackageJson = path.join(extesterModule, 'package.json');
+  if (fs.existsSync(installedPackageJson)) {
+    const installed = JSON.parse(fs.readFileSync(installedPackageJson, 'utf8'));
+    if (installed.version === extesterVersion && fs.existsSync(extesterCli)) {
+      return;
+    }
+  }
+
+  fs.rmSync(extesterInstallRoot, { recursive: true, force: true });
+  fs.mkdirSync(extesterInstallRoot, { recursive: true });
+  runWithRetry('npm', [
+    'install',
+    '--prefix',
+    extesterInstallRoot,
+    '--no-save',
+    '--no-package-lock',
+    '--ignore-scripts',
+    `vscode-extension-tester@${extesterVersion}`,
+  ], process.env.ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY ? {
+    npm_config_registry: process.env.ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY,
+  } : {}, { attempts: 3, retryDelayMs: 5000 });
+}
+
+function prepareWorkspaceFixture(resolvedCliPath, resolvedAppHostSdkVersion) {
+  fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  fs.mkdirSync(workspaceRoot, { recursive: true });
+  writeWorkerProject('AspireE2E.Worker');
+  writeAppHostProject('AspireE2E.AppHost', resolvedAppHostSdkVersion);
+  writeNuGetConfigIfLocalPackageSourcesExist();
+
+  const vscodeDirectory = path.join(workspaceRoot, '.vscode');
+  fs.mkdirSync(vscodeDirectory, { recursive: true });
+  fs.writeFileSync(path.join(vscodeDirectory, 'settings.json'), JSON.stringify({
+    'aspire.aspireCliExecutablePath': resolvedCliPath,
+    'aspire.closeDashboardOnDebugEnd': true,
+    'aspire.dashboardBrowser': 'integratedBrowser',
+    'aspire.enableAspireDashboardAutoLaunch': 'launch',
+    'aspire.enableAutoRestore': false,
+    'aspire.enableSettingsFileCreationPromptOnStartup': false,
+    'aspire.appHostDiscoveryTimeoutMs': 120000,
+    'aspire.globalAppHostsPollingInterval': 1000,
+  }, undefined, 2));
+
+  fs.writeFileSync(path.join(workspaceRoot, 'aspire.config.json'), JSON.stringify({
+    appHost: {
+      path: path.join('AspireE2E.AppHost', 'AspireE2E.AppHost.csproj'),
+    },
+  }, undefined, 2));
+}
+
+function restoreWorkspaceFixture() {
+  if (process.env.ASPIRE_EXTENSION_E2E_SKIP_RESTORE_PREWARM === 'true') {
+    return;
+  }
+
+  if (!fs.existsSync(workspaceNuGetConfigPath)) {
+    console.warn('Skipping Aspire E2E fixture restore prewarm because no local NuGet package source was found.');
+    return;
+  }
+
+  const result = spawnSync('dotnet', ['restore', primaryAppHostProject, '--configfile', workspaceNuGetConfigPath], {
+    cwd: workspaceRoot,
+    env: getAspireCliEnvironment(),
+    shell: false,
+    encoding: 'utf8',
+    timeout: Number(process.env.ASPIRE_EXTENSION_E2E_RESTORE_TIMEOUT_MS || 300000),
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    throw new Error(`Restoring the Aspire E2E fixture failed with code ${result.status ?? `signal ${result.signal ?? 'unknown'}`}.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+  }
+}
+
+function writeAppHostProject(projectName, resolvedAppHostSdkVersion) {
+  const projectDirectory = path.join(workspaceRoot, projectName);
+  fs.mkdirSync(projectDirectory, { recursive: true });
+  fs.writeFileSync(path.join(projectDirectory, `${projectName}.csproj`), `<Project Sdk="Aspire.AppHost.Sdk/${resolvedAppHostSdkVersion}">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../AspireE2E.Worker/AspireE2E.Worker.csproj" />
+  </ItemGroup>
+
+</Project>
+`);
+
+  fs.writeFileSync(path.join(projectDirectory, 'AppHost.cs'), `${csharpFileHeader}var builder = DistributedApplication.CreateBuilder(args);
+
+builder.AddProject<Projects.AspireE2E_Worker>("e2e-worker")
+    .WithHttpEndpoint(name: "http");
+
+builder.Build().Run();
+`);
+}
+
+function writeWorkerProject(projectName) {
+  const projectDirectory = path.join(workspaceRoot, projectName);
+  fs.mkdirSync(projectDirectory, { recursive: true });
+  fs.writeFileSync(path.join(projectDirectory, `${projectName}.csproj`), `<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
+`);
+
+  fs.writeFileSync(path.join(projectDirectory, 'Program.cs'), `${csharpFileHeader}var builder = WebApplication.CreateBuilder(args);
+var app = builder.Build();
+
+app.MapGet("/", () => "ok");
+
+app.Run();
+`);
+}
+
+function resolveAppHostSdkVersion(resolvedCliPath) {
+  if (process.env.ASPIRE_EXTENSION_E2E_APPHOST_SDK_VERSION) {
+    return process.env.ASPIRE_EXTENSION_E2E_APPHOST_SDK_VERSION;
+  }
+
+  const availablePackageVersions = getAvailableAppHostSdkVersions();
+  const versionResult = spawnSync(resolvedCliPath, ['--version'], {
+    cwd: extensionRoot,
+    env: getAspireCliEnvironment(),
+    shell: false,
+    encoding: 'utf8',
+  });
+  if (versionResult.status === 0) {
+    const version = versionResult.stdout.trim().split('+')[0];
+    if (/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+      if (availablePackageVersions.includes(version) || process.env.CI) {
+        return version;
+      }
+
+      const localVersion = availablePackageVersions[0];
+      if (localVersion) {
+        console.warn(`Using local Aspire.AppHost.Sdk ${localVersion} for E2E fixture restore because ${version} is not available in local package sources.`);
+        return localVersion;
+      }
+
+      return version;
+    }
+  }
+
+  const versionsProps = fs.readFileSync(path.join(repoRoot, 'eng', 'Versions.props'), 'utf8');
+  const major = getXmlProperty(versionsProps, 'MajorVersion');
+  const minor = getXmlProperty(versionsProps, 'MinorVersion');
+  const patch = getXmlProperty(versionsProps, 'PatchVersion');
+  const prerelease = getXmlProperty(versionsProps, 'PreReleaseVersionLabel');
+  return `${major}.${minor}.${patch}-${prerelease}`;
+}
+
+function getAspireCliEnvironment(extraEnv = {}) {
+  return {
+    ...process.env,
+    ASPIRE_HOME: process.env.ASPIRE_EXTENSION_E2E_ASPIRE_HOME || isolatedAspireHome,
+    ASPIRE_CLI_START_TIMEOUT: process.env.ASPIRE_EXTENSION_E2E_CLI_START_TIMEOUT || '300',
+    ASPIRE_VERSION_CHECK_DISABLED: 'true',
+    DOTNET_CLI_TELEMETRY_OPTOUT: '1',
+    DOTNET_CLI_WORKLOAD_UPDATE_NOTIFY_DISABLE: '1',
+    DOTNET_NOLOGO: '1',
+    MSBUILDTERMINALLOGGER: 'false',
+    features__updateNotificationsEnabled: 'false',
+    ...extraEnv,
+  };
+}
+
+function writeNuGetConfigIfLocalPackageSourcesExist() {
+  const packageSources = getLocalPackageSourceDirectories();
+  if (packageSources.length === 0) {
+    return;
+  }
+
+  const sourceEntries = packageSources
+    .map((source, index) => `    <add key="e2e-source-${index}" value="${escapeXml(source)}" />`)
+    .join('\n');
+  fs.writeFileSync(workspaceNuGetConfigPath, `<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+${sourceEntries}
+  </packageSources>
+</configuration>
+`);
+}
+
+function getAvailableAppHostSdkVersions() {
+  const versions = [];
+  for (const sourceDirectory of getLocalPackageSourceDirectories()) {
+    for (const packagePath of getFilesRecursive(sourceDirectory)) {
+      const packageName = path.basename(packagePath);
+      const match = packageName.match(/^Aspire\.AppHost\.Sdk\.(.+)\.nupkg$/);
+      if (match) {
+        versions.push(match[1]);
+      }
+    }
+  }
+
+  return Array.from(new Set(versions)).sort(comparePackageVersionsDescending);
+}
+
+function getLocalPackageSourceDirectories() {
+  const candidateRoots = [
+    path.join(repoRoot, 'artifacts', 'nugets'),
+    path.join(repoRoot, 'artifacts', 'nugets-rid'),
+    path.join(repoRoot, 'artifacts', 'packages'),
+    path.join(repoRoot, 'artifacts', 'nugets', 'Debug', 'Shipping'),
+    path.join(repoRoot, 'artifacts', 'nugets', 'Release', 'Shipping'),
+    path.join(repoRoot, 'artifacts', 'packages', 'Debug', 'Shipping'),
+    path.join(repoRoot, 'artifacts', 'packages', 'Release', 'Shipping'),
+    path.join(repoRoot, 'artifacts', 'packages', 'local'),
+  ];
+
+  const aspireHivesRoot = path.join(os.homedir(), '.aspire', 'hives');
+  if (fs.existsSync(aspireHivesRoot)) {
+    for (const hive of fs.readdirSync(aspireHivesRoot, { withFileTypes: true })) {
+      if (hive.isDirectory()) {
+        candidateRoots.push(path.join(aspireHivesRoot, hive.name, 'packages'));
+      }
+    }
+  }
+
+  const packageDirectories = [];
+  for (const root of candidateRoots) {
+    if (!fs.existsSync(root)) {
+      continue;
+    }
+
+    packageDirectories.push(...getDirectoriesContainingPackages(root));
+  }
+
+  return Array.from(new Set(packageDirectories));
+}
+
+function getDirectoriesContainingPackages(directory) {
+  const entries = fs.readdirSync(directory, { withFileTypes: true });
+  const directories = entries
+    .filter(entry => entry.isDirectory())
+    .flatMap(entry => getDirectoriesContainingPackages(path.join(directory, entry.name)));
+
+  if (entries.some(entry => entry.isFile() && entry.name.endsWith('.nupkg'))) {
+    directories.push(directory);
+  }
+
+  return directories;
+}
+
+function comparePackageVersionsDescending(left, right) {
+  return right.localeCompare(left, undefined, { numeric: true, sensitivity: 'base' });
+}
+
+function escapeXml(value) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function stopWorkspaceAppHost() {
+  const result = spawnSync(cliPath, ['stop', '--non-interactive', '--apphost', primaryAppHostProject], {
+    cwd: workspaceRoot,
+    env: getAspireCliEnvironment(),
+    shell: false,
+    encoding: 'utf8',
+    timeout: 60000,
+  });
+
+  if (result.error) {
+    console.warn(`Failed to stop Aspire E2E AppHost during cleanup: ${result.error.message}`);
+    return;
+  }
+
+  if (result.status !== 0 && !/not running|No running AppHost|No AppHost/i.test(`${result.stdout}\n${result.stderr}`)) {
+    console.warn(`Aspire E2E AppHost cleanup exited with code ${result.status ?? `signal ${result.signal ?? 'unknown'}`}.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
+  }
+}
+
+function getXmlProperty(xml, name) {
+  const match = xml.match(new RegExp(`<${name}>([^<]+)</${name}>`));
+  if (!match) {
+    throw new Error(`Unable to find ${name} in eng/Versions.props.`);
+  }
+
+  return match[1];
+}
+
+function run(command, args, extraEnv = {}) {
+  const useShell = shouldUseShellForCommand(command);
+  const result = useShell
+    ? spawnSync([command, ...args].map(quoteWindowsShellArgument).join(' '), [], {
+      cwd: extensionRoot,
+      env: { ...process.env, ...extraEnv },
+      shell: true,
+      stdio: 'inherit',
+    })
+    : spawnSync(command, args, {
+    cwd: extensionRoot,
+    env: { ...process.env, ...extraEnv },
+    shell: false,
+    stdio: 'inherit',
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    throw new Error(`${command} ${args.join(' ')} exited with code ${result.status ?? `signal ${result.signal ?? 'unknown'}`}. Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`);
+  }
+}
+
+function quoteWindowsShellArgument(value) {
+  if (!/[()\s!%&^<>"|]/.test(value)) {
+    return value;
+  }
+
+  return `"${value.replace(/(["^&<>|])/g, '^$1').replace(/%/g, '%%')}"`;
+}
+
+function runWithRetry(command, args, extraEnv = {}, options) {
+  let lastError;
+  for (let attempt = 1; attempt <= options.attempts; attempt++) {
+    try {
+      run(command, args, extraEnv);
+      return;
+    }
+    catch (error) {
+      lastError = error;
+      if (attempt === options.attempts) {
+        break;
+      }
+
+      console.warn(`${command} ${args.join(' ')} failed on attempt ${attempt}/${options.attempts}: ${error instanceof Error ? error.message : String(error)}`);
+      sleepSynchronously(options.retryDelayMs);
+    }
+  }
+
+  throw lastError;
+}
+
+function sleepSynchronously(milliseconds) {
+  const buffer = new SharedArrayBuffer(4);
+  Atomics.wait(new Int32Array(buffer), 0, 0, milliseconds);
+}
+
+function copyStorageDiagnostics() {
+  fs.rmSync(storageDiagnosticsDir, { recursive: true, force: true });
+  copyIfExists(isolatedAspireHome, path.join(storageDiagnosticsDir, 'aspire-home'));
+  copyIfExists(path.join(storageDir, 'screenshots'), path.join(storageDiagnosticsDir, 'screenshots'));
+  copyIfExists(path.join(storageDir, 'settings', 'CrashpadMetrics-active.pma'), path.join(storageDiagnosticsDir, 'settings', 'CrashpadMetrics-active.pma'));
+  copyIfExists(path.join(storageDir, 'settings', 'logs'), path.join(storageDiagnosticsDir, 'settings', 'logs'));
+  copyIfExists(path.join(storageDir, 'settings', 'User', 'settings.json'), path.join(storageDiagnosticsDir, 'settings', 'User', 'settings.json'));
+}
+
+function copyWorkspaceDiagnostics() {
+  fs.rmSync(workspaceDiagnosticsDir, { recursive: true, force: true });
+  copyIfExists(path.join(workspaceRoot, '.aspire'), path.join(workspaceDiagnosticsDir, '.aspire'));
+  copyIfExists(path.join(workspaceRoot, '.vscode', 'settings.json'), path.join(workspaceDiagnosticsDir, '.vscode', 'settings.json'));
+  copyWorkspaceProjectSources();
+}
+
+function copyIfExists(sourcePath, destinationPath) {
+  if (!fs.existsSync(sourcePath)) {
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+  fs.cpSync(sourcePath, destinationPath, { recursive: true, force: true });
+}
+
+function copyWorkspaceProjectSources() {
+  if (!fs.existsSync(workspaceRoot)) {
+    return;
+  }
+
+  for (const entry of fs.readdirSync(workspaceRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith('AspireE2E.')) {
+      continue;
+    }
+
+    const sourceDirectory = path.join(workspaceRoot, entry.name);
+    const destinationDirectory = path.join(workspaceDiagnosticsDir, entry.name);
+    copyIfExists(path.join(sourceDirectory, 'AppHost.cs'), path.join(destinationDirectory, 'AppHost.cs'));
+    copyIfExists(path.join(sourceDirectory, 'Program.cs'), path.join(destinationDirectory, 'Program.cs'));
+    copyIfExists(path.join(sourceDirectory, `${entry.name}.csproj`), path.join(destinationDirectory, `${entry.name}.csproj`));
+  }
+}
+
+function cleanupTemporaryRunRoot() {
+  if (process.env.ASPIRE_EXTENSION_E2E_KEEP_STORAGE === 'true') {
+    console.log(`Keeping Aspire VS Code E2E temporary root: ${shortRunRoot}`);
+    return;
+  }
+
+  fs.rmSync(shortRunRoot, { recursive: true, force: true });
+}
+
+function sanitizePathSegment(value) {
+  return value.replace(/[^A-Za-z0-9_.-]/g, '-');
+}

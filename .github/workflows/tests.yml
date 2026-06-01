@@ -339,6 +339,11 @@ jobs:
           name: aspire-extension
           path: extension/out/aspire-extension.vsix
 
+  extension_e2e_tests:
+    name: Run VS Code extension E2E tests
+    uses: ./.github/workflows/extension-e2e-tests.yml
+    needs: [build_packages, build_cli_archive_linux, build_cli_archive_windows, extension_tests_win]
+
   typescript_sdk_tests:
     name: TypeScript SDK Unit Tests
     uses: ./.github/workflows/typescript-sdk-tests.yml
@@ -364,6 +369,7 @@ jobs:
       prepare_homebrew_installer_artifacts,
       build_cli_e2e_image,
       extension_tests_win,
+      extension_e2e_tests,
       cli_starter_validation_windows,
       typescript_sdk_tests,
       typescript_api_compat,
@@ -452,6 +458,7 @@ jobs:
                contains(needs.*.result, 'cancelled') ||
                (github.event_name == 'pull_request' &&
                 (needs.extension_tests_win.result == 'skipped' ||
+                 needs.extension_e2e_tests.result == 'skipped' ||
                  needs.cli_starter_validation_windows.result == 'skipped' ||
                  needs.typescript_sdk_tests.result == 'skipped' ||
                  needs.typescript_api_compat.result == 'skipped' ||
@@ -469,6 +476,7 @@ jobs:
                  needs.polyglot_validation.result == 'skipped')) ||
                (github.event_name != 'pull_request' &&
                 (needs.extension_tests_win.result == 'skipped' ||
+                 needs.extension_e2e_tests.result == 'skipped' ||
                  needs.typescript_sdk_tests.result == 'skipped' ||
                  needs.build_cli_archive_macos_x64.result == 'skipped' ||
                  needs.prepare_winget_installer_artifacts.result == 'skipped' ||

@@ -58,6 +58,14 @@ function sortResources(resources: ResourceJson[]): ResourceJson[] {
     });
 }
 
+function getVisibleResourceUrls(resource: ResourceJson) {
+    return resource.urls?.filter(u => !u.isInternal && typeof u.url === 'string') ?? [];
+}
+
+function getLinkableResourceUrls(resource: ResourceJson) {
+    return getVisibleResourceUrls(resource).filter(u => isLinkableUrl(u.url));
+}
+
 function isSamePath(left: string, right: string): boolean {
     const resolvedLeft = path.resolve(left);
     const resolvedRight = path.resolve(right);
@@ -277,7 +285,7 @@ function getParentResourceName(resource: ResourceJson): string | null {
 class ResourceItem extends vscode.TreeItem {
     constructor(public readonly resource: ResourceJson, public readonly appHostPid: number | null, hasChildren: boolean, public readonly allResources?: readonly ResourceJson[]) {
         const label = resource.displayName ?? resource.name;
-        const hasUrls = resource.urls && resource.urls.filter(u => !u.isInternal).length > 0;
+        const hasUrls = getVisibleResourceUrls(resource).length > 0;
         const hasHealthReports = resource.healthReports && Object.keys(resource.healthReports).length > 0;
         const hasExpandableContent = hasChildren || hasUrls || hasHealthReports;
         const collapsible = hasChildren
@@ -424,7 +432,7 @@ function buildResourceTooltip(resource: ResourceJson): vscode.MarkdownString {
             }
         }
     }
-    const urls = resource.urls?.filter(u => !u.isInternal && typeof u.url === 'string' && isLinkableUrl(u.url)) ?? [];
+    const urls = getLinkableResourceUrls(resource);
     if (urls.length > 0) {
         md.appendMarkdown(`**${tooltipEndpoints}**\n\n`);
         for (const url of urls) {
@@ -538,6 +546,27 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         return this._findResourceInTree(allChildren, resourceName);
     }
 
+    findEndpointElement(options?: { appHostPath?: string; resourceName?: string; url?: string }): TreeElement | undefined {
+        const rootElements = options?.appHostPath
+            ? this._getElementsForAppHostPath(options.appHostPath)
+            : this.getChildren();
+
+        return this._findEndpointInTree(rootElements, options?.resourceName, options?.url);
+    }
+
+    findLogFileElement(appHostPath?: string): TreeElement | undefined {
+        const rootElements = appHostPath
+            ? this._getElementsForAppHostPath(appHostPath)
+            : this.getChildren();
+
+        return this._findLogFileInTree(rootElements);
+    }
+
+    private _getElementsForAppHostPath(appHostPath: string): TreeElement[] {
+        const appHostElement = this.findAppHostElement(appHostPath);
+        return appHostElement ? [appHostElement] : [];
+    }
+
     /**
      * Finds the {@link AppHostItem} (global mode) or {@link WorkspaceResourcesItem}
      * (workspace mode) that corresponds to the given AppHost path.
@@ -604,6 +633,46 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
                 }
             }
         }
+        return undefined;
+    }
+
+    private _findEndpointInTree(elements: TreeElement[], resourceName?: string, url?: string): TreeElement | undefined {
+        for (const element of elements) {
+            if (element instanceof EndpointUrlItem && !resourceName && (!url || element.url === url)) {
+                return element;
+            }
+
+            if (element instanceof ResourceItem) {
+                const name = element.resource.displayName ?? element.resource.name;
+                if (!resourceName || name === resourceName) {
+                    const endpoint = this._findEndpointInTree(this.getChildren(element), undefined, url);
+                    if (endpoint) {
+                        return endpoint;
+                    }
+                }
+            } else {
+                const endpoint = this._findEndpointInTree(this.getChildren(element), resourceName, url);
+                if (endpoint) {
+                    return endpoint;
+                }
+            }
+        }
+
+        return undefined;
+    }
+
+    private _findLogFileInTree(elements: TreeElement[]): TreeElement | undefined {
+        for (const element of elements) {
+            if (element instanceof LogFileItem) {
+                return element;
+            }
+
+            const logFile = this._findLogFileInTree(this.getChildren(element));
+            if (logFile) {
+                return logFile;
+            }
+        }
+
         return undefined;
     }
 
@@ -843,7 +912,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             items.push(new ResourceItem(child, element.appHostPid, hasChildren, allResources));
         }
 
-        const urls = element.resource.urls?.filter(u => !u.isInternal) ?? [];
+        const urls = getVisibleResourceUrls(element.resource);
         items.push(...urls.map(url => new EndpointUrlItem(url.url, url.displayName ?? url.url)));
 
         const reports = element.resource.healthReports;

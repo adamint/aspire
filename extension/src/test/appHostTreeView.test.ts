@@ -297,6 +297,33 @@ suite('AspireAppHostTreeProvider', () => {
             'samples/Store/AppHost.csproj',
         ]);
     });
+
+    test('non-http endpoints remain visible but are not clickable', () => {
+        const provider = makeTreeProvider([
+            makeAppHost({
+                resources: [
+                    makeResource({
+                        urls: [
+                            { name: 'http', displayName: 'HTTP', url: 'http://localhost:5000', isInternal: false },
+                            { name: 'tcp', displayName: 'TCP', url: 'tcp://localhost:1433', isInternal: false },
+                            { name: 'internal', displayName: 'Internal', url: 'http://127.0.0.1:1', isInternal: true },
+                        ],
+                    }),
+                ],
+            }),
+        ]);
+
+        const [appHost] = provider.getChildren();
+        const [resourcesGroup] = provider.getChildren(appHost);
+        const [resource] = provider.getChildren(resourcesGroup);
+        const endpoints = provider.getChildren(resource) as readonly vscode.TreeItem[];
+
+        assert.deepStrictEqual(endpoints.map(endpoint => endpoint.label), ['HTTP', 'TCP']);
+        assert.strictEqual(endpoints[0].contextValue, 'endpointUrl');
+        assert.strictEqual(endpoints[0].command?.command, 'vscode.open');
+        assert.strictEqual(endpoints[1].contextValue, 'endpointUrlNonHttp');
+        assert.strictEqual(endpoints[1].command, undefined);
+    });
 });
 
 suite('AppHostDataRepository', () => {

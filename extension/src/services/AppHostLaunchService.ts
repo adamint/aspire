@@ -6,6 +6,14 @@ function getComparisonKey(value: string): string {
     return process.platform === 'win32' ? value.toLowerCase() : value;
 }
 
+export interface AppHostLaunchRequestedEvent {
+    appHostPath: string;
+    command: AspireCommandType;
+    noDebug: boolean;
+    doStep?: string;
+    executionSuppressed: boolean;
+}
+
 /**
  * Centralizes all Aspire AppHost launch operations that require a resolved
  * AppHost path. Both the editor command provider (which discovers the path)
@@ -20,6 +28,9 @@ export class AppHostLaunchService implements vscode.Disposable {
 
     private readonly _onDidChangeLaunchingState = new vscode.EventEmitter<void>();
     readonly onDidChangeLaunchingState = this._onDidChangeLaunchingState.event;
+
+    private readonly _onDidRequestLaunch = new vscode.EventEmitter<AppHostLaunchRequestedEvent>();
+    readonly onDidRequestLaunch = this._onDidRequestLaunch.event;
 
     private readonly _debugSessionSubscription: vscode.Disposable;
 
@@ -40,11 +51,16 @@ export class AppHostLaunchService implements vscode.Disposable {
     dispose(): void {
         this._debugSessionSubscription.dispose();
         this._onDidChangeLaunchingState.dispose();
+        this._onDidRequestLaunch.dispose();
     }
 
     /**
      * Returns whether the given AppHost path is currently in a launching state.
      */
+    get launchingPaths(): readonly string[] {
+        return Array.from(this._launchingPaths);
+    }
+
     isLaunching(appHostPath: string): boolean {
         return this._launchingPaths.has(getComparisonKey(path.resolve(appHostPath)));
     }
@@ -91,6 +107,20 @@ export class AppHostLaunchService implements vscode.Disposable {
             config.step = doStep;
         }
 
+        const executionSuppressed = isE2eDebugLaunchSuppressed();
+        this._onDidRequestLaunch.fire({
+            appHostPath,
+            command,
+            noDebug,
+            doStep,
+            executionSuppressed,
+        });
+
+        if (executionSuppressed) {
+            this.clearLaunching(appHostPath);
+            return;
+        }
+
         try {
             const started = await vscode.debug.startDebugging(undefined, config);
             if (!started) {
@@ -101,4 +131,11 @@ export class AppHostLaunchService implements vscode.Disposable {
             throw err;
         }
     }
+}
+
+function isE2eDebugLaunchSuppressed(): boolean {
+    return process.env.ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE === 'true' &&
+        !!process.env.ASPIRE_EXTENSION_E2E_STATE_FILE &&
+        !!process.env.ASPIRE_EXTENSION_E2E_CONTROL_FILE &&
+        process.env.ASPIRE_EXTENSION_E2E_SUPPRESS_DEBUG_LAUNCH === 'true';
 }

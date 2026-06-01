@@ -1,0 +1,108 @@
+import * as assert from 'assert';
+import * as path from 'path';
+import { getCommandInvocationCount, isSamePath, waitForCommandOutcome, waitForExtensionState, waitForRepositoryIdle, waitForSelectedWorkspaceAppHost, waitForWorkspaceAppHost } from './helpers/assertions';
+import { createAdditionalAppHostCandidate, executeE2eControlCommand, removeAdditionalAppHostCandidate, removeLegacyAspireSettings, removeWorkspaceAppHostConfig, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, setCliUnavailableForE2E, stopPrimaryAppHostIfRunning, writeLegacyAspireSettings, writeWorkspaceAppHostConfig, writeWorkspaceAppHostConfigRaw } from './helpers/fixtures';
+import { getPrimaryAppHostProjectPath } from './helpers/paths';
+import { openAspireView } from './helpers/vscode';
+
+suite('Aspire workspace discovery and configuration E2E', function () {
+    this.timeout(180000);
+
+    teardown(async () => {
+        await setCliUnavailableForE2E(false);
+        await restoreWorkspaceCliPath();
+        restoreWorkspaceAppHostConfig();
+        removeLegacyAspireSettings();
+        removeAdditionalAppHostCandidate();
+        await stopPrimaryAppHostIfRunning();
+    });
+
+    test('rediscovers workspace AppHost candidates when config changes', async () => {
+        await openAspireView();
+        await waitForRepositoryIdle();
+        await waitForWorkspaceAppHost();
+
+        removeWorkspaceAppHostConfig();
+        const refreshWithoutConfigBefore = getCommandInvocationCount('aspire-vscode.refreshAppHosts');
+        await executeE2eControlCommand({ name: 'refreshAppHosts' });
+        await waitForCommandOutcome('aspire-vscode.refreshAppHosts', 'success', 60000, refreshWithoutConfigBefore);
+
+        const primaryCandidate = await waitForExtensionState(
+            file => file.state.workspaceAppHostCandidatePaths.some(candidate => isSamePath(candidate, getPrimaryAppHostProjectPath())) && !file.state.hasError,
+            'primary AppHost candidate after removing aspire.config.json',
+            60000);
+        assert.ok(primaryCandidate.state.workspaceAppHostCandidatePaths.length >= 1);
+
+        const secondaryAppHostPath = createAdditionalAppHostCandidate();
+        const refreshWithSecondCandidateBefore = getCommandInvocationCount('aspire-vscode.refreshAppHosts');
+        await executeE2eControlCommand({ name: 'refreshAppHosts' });
+        await waitForCommandOutcome('aspire-vscode.refreshAppHosts', 'success', 60000, refreshWithSecondCandidateBefore);
+
+        const multipleCandidates = await waitForExtensionState(
+            file => file.state.workspaceAppHostCandidatePaths.some(candidate => isSamePath(candidate, secondaryAppHostPath)),
+            'secondary AppHost candidate',
+            60000);
+        assert.ok(multipleCandidates.state.workspaceAppHostCandidatePaths.length >= 2);
+
+        restoreWorkspaceAppHostConfig();
+        removeAdditionalAppHostCandidate();
+        const refreshRestoredConfigBefore = getCommandInvocationCount('aspire-vscode.refreshAppHosts');
+        await executeE2eControlCommand({ name: 'refreshAppHosts' });
+        await waitForCommandOutcome('aspire-vscode.refreshAppHosts', 'success', 60000, refreshRestoredConfigBefore);
+
+        const restored = await waitForWorkspaceAppHost();
+        assert.ok(restored.state.workspaceAppHostCandidatePaths.some(candidate => isSamePath(candidate, getPrimaryAppHostProjectPath())));
+    });
+
+    test('handles malformed, JSONC, absolute, and legacy AppHost configuration files', async () => {
+        await openAspireView();
+        await waitForRepositoryIdle();
+        await waitForSelectedWorkspaceAppHost();
+
+        writeWorkspaceAppHostConfigRaw(`{
+  // The JSON language service should report this, but discovery must fall back to the CLI candidate.
+  "appHost": { "path":
+`);
+        let before = getCommandInvocationCount('aspire-vscode.refreshAppHosts');
+        await executeE2eControlCommand({ name: 'refreshAppHosts' });
+        await waitForCommandOutcome('aspire-vscode.refreshAppHosts', 'success', 60000, before);
+        const malformedFallback = await waitForExtensionState(
+            file => file.state.workspaceAppHostCandidatePaths.some(candidate => isSamePath(candidate, getPrimaryAppHostProjectPath())),
+            'CLI-discovered AppHost after malformed aspire.config.json',
+            60000);
+        assert.ok(malformedFallback.state.workspaceAppHostCandidatePaths.length >= 1);
+
+        writeWorkspaceAppHostConfigRaw(`{
+  // JSONC comments are supported by the shared config parser.
+  "appHost": {
+    "path": "AspireE2E.AppHost/AspireE2E.AppHost.csproj"
+  }
+}`);
+        before = getCommandInvocationCount('aspire-vscode.refreshAppHosts');
+        await executeE2eControlCommand({ name: 'refreshAppHosts' });
+        await waitForCommandOutcome('aspire-vscode.refreshAppHosts', 'success', 60000, before);
+        await waitForSelectedWorkspaceAppHost();
+
+        writeWorkspaceAppHostConfig({ appHost: { path: getPrimaryAppHostProjectPath() } });
+        before = getCommandInvocationCount('aspire-vscode.refreshAppHosts');
+        await executeE2eControlCommand({ name: 'refreshAppHosts' });
+        await waitForCommandOutcome('aspire-vscode.refreshAppHosts', 'success', 60000, before);
+        await waitForSelectedWorkspaceAppHost();
+
+        removeWorkspaceAppHostConfig();
+        writeLegacyAspireSettings();
+        before = getCommandInvocationCount('aspire-vscode.refreshAppHosts');
+        await executeE2eControlCommand({ name: 'refreshAppHosts' });
+        await waitForCommandOutcome('aspire-vscode.refreshAppHosts', 'success', 60000, before);
+        await waitForSelectedWorkspaceAppHost();
+
+        const secondaryAppHostPath = createAdditionalAppHostCandidate();
+        writeLegacyAspireSettings(path.join('..', 'AspireE2E.SecondAppHost', 'AspireE2E.SecondAppHost.csproj'));
+        restoreWorkspaceAppHostConfig();
+        before = getCommandInvocationCount('aspire-vscode.refreshAppHosts');
+        await executeE2eControlCommand({ name: 'refreshAppHosts' });
+        await waitForCommandOutcome('aspire-vscode.refreshAppHosts', 'success', 60000, before);
+        const selected = await waitForSelectedWorkspaceAppHost();
+        assert.ok(!isSamePath(selected.state.workspaceAppHostPath ?? '', secondaryAppHostPath));
+    });
+});

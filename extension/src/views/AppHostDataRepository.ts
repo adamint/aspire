@@ -232,6 +232,15 @@ export class AppHostDataRepository {
         return this._workspaceAppHostDescription;
     }
 
+    get isLoading(): boolean {
+        const isLoading = this._viewMode === 'workspace' ? this._loadingWorkspace : this._loadingGlobal;
+        return this._dataActive && isLoading;
+    }
+
+    get isWorkspaceAppHostDiscoveryComplete(): boolean {
+        return this._workspaceAppHostDiscoveryComplete;
+    }
+
     get errorMessage(): string | undefined {
         return this._errorMessage;
     }

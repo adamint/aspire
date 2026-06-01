@@ -39,6 +39,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private _trackedDebugAdapters: string[] = [];
   private _rpcClient?: ICliRpcClient;
   private _dashboardDebugSession: vscode.DebugSession | null = null;
+  private _dashboardUrl: string | undefined;
+  private _startupCompleted = false;
+  private readonly _onDidChangeState = new EventEmitter<void>();
   private readonly _disposables: vscode.Disposable[] = [];
   private _disposed = false;
   // Timestamp for the `debug/appHost/end` duration measurement. Captured the first
@@ -53,8 +56,21 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private _appHostModeAtLaunch: 'run' | 'debug' = 'run';
 
   public readonly onDidSendMessage = this._onDidSendMessage.event;
+  public readonly onDidChangeState = this._onDidChangeState.event;
   public readonly debugSessionId: string;
   public configuration: AspireExtendedDebugConfiguration;
+
+  get appHostPath(): string | undefined {
+    return typeof this.configuration.program === 'string' ? this.configuration.program : undefined;
+  }
+
+  get dashboardUrl(): string | undefined {
+    return this._dashboardUrl;
+  }
+
+  get startupCompleted(): boolean {
+    return this._startupCompleted;
+  }
 
   constructor(session: vscode.DebugSession, rpcServer: AspireRpcServer, dcpServer: AspireDcpServer, terminalProvider: AspireTerminalProvider, removeAspireDebugSession: (session: AspireDebugSession) => void) {
     this._session = session;
@@ -470,6 +486,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
    */
   async openDashboard(url: string, browserType: DashboardBrowserType): Promise<void> {
     extensionLogOutputChannel.info(`Opening dashboard in browser: ${browserType}, URL: ${url}`);
+    this._dashboardUrl = url;
+    this._onDidChangeState.fire();
 
     switch (browserType) {
       case 'debugChrome':
@@ -547,6 +565,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
     this._disposed = true;
     extensionLogOutputChannel.info('Stopping the Aspire debug session');
+    this._onDidChangeState.fire();
 
     // Snapshot start-event metadata before we run disposables so the deferred
     // `debug/appHost/end` callback has a stable view even if instance state
@@ -662,6 +681,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   }
 
   notifyAppHostStartupCompleted() {
+    this._startupCompleted = true;
+    this._onDidChangeState.fire();
     extensionLogOutputChannel.info(`AppHost startup completed and dashboard is running.`);
   }
 }
