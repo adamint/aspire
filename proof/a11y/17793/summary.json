@@ -18,8 +18,8 @@
       "label": "PR #17793 / after",
       "file": "/Users/adamratzman/.copilot/session-state/480af854-a97d-43a0-8f92-0131cf1a458c/files/visual-proof/17793/frame-pr.png",
       "lines": [
-        "After two Tabs, active element: Resources",
-        "Menu still present: no"
+        "After two Tabs, active element: Aspire",
+        "Menu still present: yes - Collapse child resources Show resource types Show hidden resources"
       ]
     }
   ]

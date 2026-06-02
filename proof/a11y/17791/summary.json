@@ -4,7 +4,7 @@
   "frames": [
     {
       "phase": "base",
-      "worktree": "/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-review-main",
+      "worktree": "/Users/adamratzman/.copilot/session-state/480af854-a97d-43a0-8f92-0131cf1a458c/files/active-work/aspire-main",
       "label": "main / before",
       "file": "/Users/adamratzman/.copilot/session-state/480af854-a97d-43a0-8f92-0131cf1a458c/files/visual-proof/17791/frame-base.png",
       "lines": [
@@ -13,7 +13,7 @@
     },
     {
       "phase": "pr",
-      "worktree": "/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/review-pr-17791",
+      "worktree": "/Users/adamratzman/.copilot/session-state/480af854-a97d-43a0-8f92-0131cf1a458c/files/active-work/proof-pr-17791",
       "label": "PR #17791 / after",
       "file": "/Users/adamratzman/.copilot/session-state/480af854-a97d-43a0-8f92-0131cf1a458c/files/visual-proof/17791/frame-pr.png",
       "lines": [
