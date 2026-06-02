@@ -141,18 +141,22 @@ suite('Aspire workspace discovery and configuration E2E', function () {
         } catch (error) {
             failures.push(error);
         } finally {
+            let appHostRestored = fs.existsSync(appHostDirectory);
             if (fs.existsSync(hiddenAppHostDirectory) && !fs.existsSync(appHostDirectory)) {
                 try {
                     fs.renameSync(hiddenAppHostDirectory, appHostDirectory);
+                    appHostRestored = true;
                 } catch (error) {
                     failures.push(error);
                 }
             }
 
-            try {
-                fs.rmSync(hiddenAppHostDirectory, { recursive: true, force: true });
-            } catch (error) {
-                failures.push(error);
+            if (appHostRestored) {
+                try {
+                    fs.rmSync(hiddenAppHostDirectory, { recursive: true, force: true });
+                } catch (error) {
+                    failures.push(error);
+                }
             }
 
             try {
