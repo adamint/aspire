@@ -1002,7 +1002,11 @@ suite('AppHostDataRepository', () => {
         };
         const firstAppHostPath = path.join(firstWorkspaceRoot, 'AppHost', 'AppHost.csproj');
         const secondAppHostPath = path.join(secondWorkspaceRoot, 'AppHost', 'AppHost.csproj');
-        let workspaceFolders: readonly vscode.WorkspaceFolder[] | undefined = [firstWorkspaceFolder];
+        fs.mkdirSync(path.dirname(firstAppHostPath), { recursive: true });
+        fs.mkdirSync(path.dirname(secondAppHostPath), { recursive: true });
+        fs.writeFileSync(firstAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        fs.writeFileSync(secondAppHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+        let workspaceFolders: readonly vscode.WorkspaceFolder[] | undefined;
         const workspaceFoldersChanged = new vscode.EventEmitter<vscode.WorkspaceFoldersChangeEvent>();
         const discoveryChanges = new vscode.EventEmitter<vscode.WorkspaceFolder>();
         const describeProcesses: TestChildProcess[] = [];
@@ -1036,6 +1040,11 @@ suite('AppHostDataRepository', () => {
         try {
             repository.activate();
             repository.setPanelVisible(true);
+            await waitForMicrotasks();
+
+            workspaceFolders = [firstWorkspaceFolder];
+            workspaceFoldersChanged.fire({ added: [firstWorkspaceFolder], removed: [] });
+
             await waitForCondition(
                 () => repository.workspaceAppHostPath === firstAppHostPath,
                 'initial workspace AppHost was not discovered');
