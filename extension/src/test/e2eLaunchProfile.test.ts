@@ -105,9 +105,9 @@ suite('E2E launch profile', () => {
         const internalFeed = 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/';
 
         assert.strictEqual(packageJson.devDependencies['vscode-extension-tester'], '8.23.0');
-        assert.strictEqual(packageJson.resolutions.undici, '8.3.0');
+        assert.strictEqual(packageJson.resolutions.undici, '7.21.0');
         assert.ok(lockfile.includes('vscode-extension-tester@8.23.0'));
-        assert.ok(lockfile.includes('undici@8.3.0'));
+        assert.ok(lockfile.includes('undici@7.21.0'));
         assert.ok(lockfile.split(/\r?\n/).filter(l => /^\s*resolved\s+"/.test(l)).every(l => l.includes(internalFeed)));
         assert.ok(workflow.includes('NPM_REGISTRY: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/'));
         assert.ok(workflow.includes('corepack yarn install --frozen-lockfile --non-interactive'));

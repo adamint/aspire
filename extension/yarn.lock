@@ -6325,10 +6325,10 @@ undici-types@~6.21.0:
   resolved "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/undici-types/-/undici-types-6.21.0.tgz"
   integrity sha1-aR0ArzkJvpOn+qE75hs6W1DvEss=
 
-undici@8.3.0, undici@^7.19.0:
-  version "8.3.0"
-  resolved "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/undici/-/undici-8.3.0.tgz#5086bf56cd2b28219500492d822df0d6c21f3b47"
-  integrity sha1-UIa/Vs0rKCGVAEktgi3w1sIfO0c=
+undici@7.21.0, undici@^7.19.0:
+  version "7.21.0"
+  resolved "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/undici/-/undici-7.21.0.tgz#b399c763368240d478f83740356836e945a258e0"
+  integrity sha1-s5nHYzaCQNR4+DdANWg26UWiWOA=
 
 unicorn-magic@^0.1.0:
   version "0.1.0"
