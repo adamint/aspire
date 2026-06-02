@@ -125,6 +125,9 @@ suite('E2E launch profile', () => {
 
         assert.ok(runner.includes('--verify-extester-feed'));
         assert.ok(runner.includes('Verifying vscode-extension-tester@'));
+        assert.ok(runner.indexOf('const verifyExtesterFeedOnly = process.argv.includes') < runner.indexOf('fs.mkdtempSync'));
+        assert.ok(runner.includes('if (!verifyExtesterFeedOnly)'));
+        assert.ok(runner.includes('const matchedTestSpecs = verifyExtesterFeedOnly ? [] : findSpecMatches(testSpec);'));
         assert.ok(!runner.includes('ASPIRE_EXTENSION_E2E_EXTESTER_VERSION'));
         assert.ok(workflow.includes('Verify locked ExTester'));
         assert.ok(workflow.includes('verify_extester_feed:'));
@@ -140,6 +143,17 @@ suite('E2E launch profile', () => {
 
         assert.ok(workflow.includes("ASPIRE_EXTENSION_E2E_RECORDING_MODE: ${{ matrix.useXvfb && 'always' || 'off' }}"));
         assert.ok(workflow.includes('Linux CI keeps recordings by default; Windows shards upload screenshots and logs only.'));
+    });
+
+    test('waits for ffmpeg to flush before reporting E2E recordings as saved', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+
+        assert.ok(runner.includes('ffmpeg.once(\'close\''));
+        assert.ok(runner.includes("await runCleanupStep('stop recording', () => stopRecording(recording, testFailure), cleanupErrors);"));
+        assert.ok(runner.includes("signalProcess(pid, 'SIGINT')"));
+        assert.ok(runner.includes('waitForProcessClose(recording.closed, 15000)'));
+        assert.ok(runner.includes('stoppedGracefully && fs.existsSync(recording.outputPath)'));
     });
 
     test('seeds Corepack from the internal npm feed before E2E workflow uses Yarn', () => {
@@ -165,7 +179,8 @@ suite('E2E launch profile', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
         const envConstruction = runner.slice(runner.indexOf('const extestEnv = getAspireCliEnvironment({'), runner.indexOf("logStep('Downloading VS Code');"));
-        const runTests = runner.slice(runner.indexOf("logStep('Running VS Code extension E2E tests');"), runner.indexOf('catch (error)'));
+        const runTestsStart = runner.indexOf("logStep('Running VS Code extension E2E tests');");
+        const runTests = runner.slice(runTestsStart, runner.indexOf('catch (error)', runTestsStart));
         const aspireCliEnvironmentStart = runner.indexOf('function getAspireCliEnvironment');
         const aspireCliEnvironmentEnd = runner.indexOf('function writeNuGetConfigIfLocalPackageSourcesExist');
         const aspireCliEnvironment = runner.slice(aspireCliEnvironmentStart, aspireCliEnvironmentEnd);

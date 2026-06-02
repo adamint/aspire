@@ -9,15 +9,18 @@ const { spawn, spawnSync } = require('child_process');
 const extensionRoot = path.resolve(__dirname, '..');
 const extensionPackageJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.json'), 'utf8'));
 const repoRoot = path.resolve(extensionRoot, '..');
+const verifyExtesterFeedOnly = process.argv.includes('--verify-extester-feed');
 const artifactsDir = path.join(extensionRoot, '.test-artifacts');
 const shardName = sanitizePathSegment(process.env.ASPIRE_EXTENSION_E2E_SHARD || 'all');
 const resultsDir = path.join(extensionRoot, '.test-results', 'e2e', shardName);
 const runId = `${process.pid}-${Date.now()}`;
 const diagnosticsStorageRoot = path.join(extensionRoot, '.test-storage');
-const requestedTempRoot = process.env.ASPIRE_EXTENSION_E2E_TEMP_ROOT || os.tmpdir();
-fs.mkdirSync(requestedTempRoot, { recursive: true });
-const tempRoot = fs.realpathSync.native(requestedTempRoot);
-const shortRunRoot = fs.mkdtempSync(path.join(tempRoot, 'aev-'));
+const requestedTempRoot = verifyExtesterFeedOnly ? '' : process.env.ASPIRE_EXTENSION_E2E_TEMP_ROOT || os.tmpdir();
+if (!verifyExtesterFeedOnly) {
+  fs.mkdirSync(requestedTempRoot, { recursive: true });
+}
+const tempRoot = verifyExtesterFeedOnly ? '' : fs.realpathSync.native(requestedTempRoot);
+const shortRunRoot = verifyExtesterFeedOnly ? '' : fs.mkdtempSync(path.join(tempRoot, 'aev-'));
 const isolatedAspireHome = path.join(shortRunRoot, 'aspire-home');
 const storageDir = path.join(shortRunRoot, 'storage');
 const extensionsDir = path.join(shortRunRoot, 'extensions');
@@ -32,13 +35,12 @@ const defaultVsixPath = path.join(artifactsDir, 'aspire-extension-e2e.vsix');
 const stateFile = path.join(resultsDir, 'extension-state.json');
 const controlFile = path.join(resultsDir, 'extension-control.json');
 const testSpec = process.env.ASPIRE_EXTENSION_E2E_SPEC || 'out/test-e2e/**/*.e2e.test.js';
-const matchedTestSpecs = findSpecMatches(testSpec);
+const matchedTestSpecs = verifyExtesterFeedOnly ? [] : findSpecMatches(testSpec);
 const vscodeVersion = process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.122.1';
 const extesterVersion = extensionPackageJson.devDependencies?.['vscode-extension-tester'];
 if (!extesterVersion) {
   throw new Error('vscode-extension-tester must be pinned in extension/package.json devDependencies.');
 }
-const verifyExtesterFeedOnly = process.argv.includes('--verify-extester-feed');
 const extesterNodeModules = path.join(extensionRoot, 'node_modules');
 const extesterModule = path.join(extesterNodeModules, 'vscode-extension-tester');
 const extesterCli = path.join(extesterModule, 'out', 'cli.js');
@@ -50,10 +52,12 @@ const csharpFileHeader = `// Licensed to the .NET Foundation under one or more a
 
 `;
 
-removePath(resultsDir, { recursive: true, force: true });
-removePath(recordingsDir, { recursive: true, force: true });
-for (const directory of [artifactsDir, resultsDir, diagnosticsStorageRoot, isolatedAspireHome, storageDir, extensionsDir]) {
-  fs.mkdirSync(directory, { recursive: true });
+if (!verifyExtesterFeedOnly) {
+  removePath(resultsDir, { recursive: true, force: true });
+  removePath(recordingsDir, { recursive: true, force: true });
+  for (const directory of [artifactsDir, resultsDir, diagnosticsStorageRoot, isolatedAspireHome, storageDir, extensionsDir]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
 }
 
 function runWithProcessTreeTimeout(command, args, extraEnv, timeout) {
@@ -377,12 +381,17 @@ function startRecording() {
   ffmpeg.on('error', error => {
     console.warn(`Aspire extension E2E recording failed to start: ${error.message}`);
   });
+  const closed = new Promise(resolve => {
+    ffmpeg.once('close', (exitCode, signal) => resolve({ exitCode, signal }));
+    ffmpeg.once('error', error => resolve({ error }));
+  });
 
   return {
     mode,
     outputPath,
     logPath,
     pid: ffmpeg.pid,
+    closed,
     closeLog: () => fs.closeSync(logFd),
   };
 }
@@ -396,17 +405,19 @@ function getRecordingMode() {
   throw new Error(`ASPIRE_EXTENSION_E2E_RECORDING_MODE must be 'off', 'failure', or 'always'. Got '${process.env.ASPIRE_EXTENSION_E2E_RECORDING_MODE}'.`);
 }
 
-function stopRecording(recording, testFailure) {
+async function stopRecording(recording, testFailure) {
   if (!recording) {
     return;
   }
 
+  let stoppedGracefully = false;
   try {
     if (recording.pid) {
-      spawnSync('bash', ['-lc', `kill -INT ${recording.pid} 2>/dev/null || true; sleep 2; kill -TERM ${recording.pid} 2>/dev/null || true`], {
-        stdio: 'ignore',
-        timeout: 15000,
-      });
+      stoppedGracefully = await stopRecordingProcess(recording.pid, recording.closed);
+    }
+    else {
+      await waitForProcessClose(recording.closed, 15000);
+      stoppedGracefully = true;
     }
   }
   finally {
@@ -420,12 +431,55 @@ function stopRecording(recording, testFailure) {
     return;
   }
 
-  if (fs.existsSync(recording.outputPath)) {
+  if (stoppedGracefully && fs.existsSync(recording.outputPath)) {
     console.log(`Aspire extension E2E recording saved to ${recording.outputPath}`);
   }
   else {
-    console.warn(`Aspire extension E2E recording was requested but no recording file was written. Check ${recording.logPath}.`);
+    console.warn(`Aspire extension E2E recording was requested but was not saved cleanly. Check ${recording.logPath}.`);
   }
+}
+
+async function stopRecordingProcess(pid, closed) {
+  signalProcess(pid, 'SIGINT');
+  if (await waitForProcessClose(closed, 15000)) {
+    return true;
+  }
+
+  signalProcess(pid, 'SIGTERM');
+  if (await waitForProcessClose(closed, 5000)) {
+    return false;
+  }
+
+  signalProcess(pid, 'SIGKILL');
+  if (await waitForProcessClose(closed, 5000)) {
+    return false;
+  }
+
+  throw new Error(`ffmpeg recording process ${pid} did not exit after SIGINT, SIGTERM, and SIGKILL.`);
+}
+
+function signalProcess(pid, signal) {
+  try {
+    process.kill(pid, signal);
+  }
+  catch (error) {
+    if (!error || error.code !== 'ESRCH') {
+      throw error;
+    }
+  }
+}
+
+function waitForProcessClose(closed, timeoutMs) {
+  return new Promise(resolve => {
+    const timeout = setTimeout(() => resolve(false), timeoutMs);
+    closed.then(() => {
+      clearTimeout(timeout);
+      resolve(true);
+    }, () => {
+      clearTimeout(timeout);
+      resolve(true);
+    });
+  });
 }
 
 async function main() {
@@ -499,13 +553,13 @@ async function main() {
   }
   finally {
     const cleanupErrors = [];
-    runCleanupStep('stop recording', () => stopRecording(recording, testFailure), cleanupErrors);
-    runCleanupStep('stop workspace AppHost', stopWorkspaceAppHost, cleanupErrors);
-    runCleanupStep('redact extension state', redactStateFileForArtifacts, cleanupErrors);
-    runCleanupStep('redact test results', () => redactTextFilesForArtifacts(resultsDir), cleanupErrors);
-    runCleanupStep('copy storage diagnostics', copyStorageDiagnostics, cleanupErrors);
-    runCleanupStep('copy workspace diagnostics', copyWorkspaceDiagnostics, cleanupErrors);
-    runCleanupStep('cleanup temporary run root', cleanupTemporaryRunRoot, cleanupErrors);
+    await runCleanupStep('stop recording', () => stopRecording(recording, testFailure), cleanupErrors);
+    await runCleanupStep('stop workspace AppHost', stopWorkspaceAppHost, cleanupErrors);
+    await runCleanupStep('redact extension state', redactStateFileForArtifacts, cleanupErrors);
+    await runCleanupStep('redact test results', () => redactTextFilesForArtifacts(resultsDir), cleanupErrors);
+    await runCleanupStep('copy storage diagnostics', copyStorageDiagnostics, cleanupErrors);
+    await runCleanupStep('copy workspace diagnostics', copyWorkspaceDiagnostics, cleanupErrors);
+    await runCleanupStep('cleanup temporary run root', cleanupTemporaryRunRoot, cleanupErrors);
 
     if (cleanupErrors.length > 0) {
       const cleanupFailure = new AggregateError(cleanupErrors, 'One or more E2E cleanup steps failed.');
@@ -528,9 +582,9 @@ async function main() {
   }
 }
 
-function runCleanupStep(name, action, cleanupErrors) {
+async function runCleanupStep(name, action, cleanupErrors) {
   try {
-    action();
+    await action();
   }
   catch (error) {
     const cleanupError = error instanceof Error ? error : new Error(String(error));
