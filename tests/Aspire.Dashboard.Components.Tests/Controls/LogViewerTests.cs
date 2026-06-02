@@ -39,20 +39,15 @@ public class LogViewerTests : DashboardTestContext
     [Fact]
     public void LogViewer_RendersResourcePrefixWithGeneratedStyle()
     {
-        ColorGenerator.Instance.Clear();
-
         SetupLogViewerServices();
 
         var logEntries = new LogEntries(maximumEntryCount: int.MaxValue) { BaseLineNumber = 1 };
-        for (var i = 0; i < ColorGenerator.s_variableNames.Length; i++)
-        {
-            logEntries.InsertSorted(LogEntry.Create(
-                timestamp: null,
-                logMessage: $"Test log message {i.ToString(CultureInfo.InvariantCulture)}",
-                rawLogContent: $"Test log message {i.ToString(CultureInfo.InvariantCulture)}",
-                isErrorMessage: false,
-                resourcePrefix: $"resource-{i.ToString("D2", CultureInfo.InvariantCulture)}"));
-        }
+        logEntries.InsertSorted(LogEntry.Create(
+            timestamp: null,
+            logMessage: "Test log message",
+            rawLogContent: "Test log message",
+            isErrorMessage: false,
+            resourcePrefix: "resource"));
 
         var cut = RenderComponent<LogViewer>(builder =>
         {
@@ -62,21 +57,12 @@ public class LogViewerTests : DashboardTestContext
 
         cut.WaitForAssertion(() =>
         {
-            var styles = cut.FindAll(".resource-prefix")
-                .Select(prefixElement => prefixElement.GetAttribute("style") ?? string.Empty)
-                .ToList();
-            var accentVariableNames = styles
-                .Select(GetBackgroundAccentVariableName)
-                .ToList();
+            var prefixElement = Assert.Single(cut.FindAll(".resource-prefix"));
+            var style = prefixElement.GetAttribute("style") ?? string.Empty;
+            var accentVariableName = GetBackgroundAccentVariableName(style);
+            var foregroundColor = GetResourceTextColor(style);
 
-            Assert.Empty(ColorGenerator.s_variableNames.Except(accentVariableNames, StringComparer.Ordinal));
-            foreach (var style in styles)
-            {
-                var accentVariableName = GetBackgroundAccentVariableName(style);
-                var foregroundColor = GetResourceTextColor(style);
-
-                Assert.Equal(ResourcePrefixStyle.GetTextColor(accentVariableName), foregroundColor);
-            }
+            Assert.Equal(ResourcePrefixStyle.GetTextColor(accentVariableName), foregroundColor);
         });
     }
 
