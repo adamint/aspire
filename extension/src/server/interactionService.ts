@@ -76,6 +76,14 @@ function getDashboardUrlProperty(urls: DashboardUrls, property: 'baseUrl' | 'cod
     }
 }
 
+function sanitizeDashboardUrlForLog(url: string): string {
+    try {
+        return new URL(url).origin;
+    } catch {
+        return '<redacted dashboard URL>';
+    }
+}
+
 // Support both PascalCase (old) and camelCase (new) for backwards compatibility.
 // DisplayLineState is serialized with ModelContextProtocol.McpJsonUtilities.DefaultOptions
 // which changed to camelCase in version 0.2.0+
@@ -330,12 +338,12 @@ export class InteractionService implements IInteractionService {
         const baseUrl = getDashboardUrlProperty(dashboardUrls, 'baseUrl');
         const codespacesUrl = getDashboardUrlProperty(dashboardUrls, 'codespacesUrl');
 
-        extensionLogOutputChannel.info(`${dashboard}: ${baseUrl}`);
+        extensionLogOutputChannel.info(`${dashboard}: ${sanitizeDashboardUrlForLog(baseUrl)}`);
         this.writeDebugSessionMessage(`${dashboard}: `, true, AnsiColors.Green, false);
         this.writeDebugSessionMessage(baseUrl, true, AnsiColors.Blue);
 
         if (codespacesUrl) {
-            extensionLogOutputChannel.info(`${codespaces}: ${codespacesUrl}`);
+            extensionLogOutputChannel.info(`${codespaces}: ${sanitizeDashboardUrlForLog(codespacesUrl)}`);
             this.writeDebugSessionMessage(`${codespaces}: `, true, AnsiColors.Green, false);
             this.writeDebugSessionMessage(codespacesUrl, true, AnsiColors.Blue);
         }

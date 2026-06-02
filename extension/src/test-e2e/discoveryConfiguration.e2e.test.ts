@@ -117,6 +117,7 @@ suite('Aspire workspace discovery and configuration E2E', function () {
         const hiddenAppHostDirectory = path.join(path.dirname(getWorkspaceRoot()), '.e2e-hidden-apphost');
         fs.rmSync(hiddenAppHostDirectory, { recursive: true, force: true });
 
+        const failures: unknown[] = [];
         try {
             fs.renameSync(appHostDirectory, hiddenAppHostDirectory);
             removeWorkspaceAppHostConfig();
@@ -137,12 +138,32 @@ suite('Aspire workspace discovery and configuration E2E', function () {
             assert.deepStrictEqual(emptyWorkspace.state.workspaceAppHostCandidatePaths, []);
 
             await waitForWorkbenchText('No Aspire AppHosts detected in this workspace.', 30000);
+        } catch (error) {
+            failures.push(error);
         } finally {
             if (fs.existsSync(hiddenAppHostDirectory) && !fs.existsSync(appHostDirectory)) {
-                fs.renameSync(hiddenAppHostDirectory, appHostDirectory);
+                try {
+                    fs.renameSync(hiddenAppHostDirectory, appHostDirectory);
+                } catch (error) {
+                    failures.push(error);
+                }
             }
-            fs.rmSync(hiddenAppHostDirectory, { recursive: true, force: true });
-            restoreWorkspaceAppHostConfig();
+
+            try {
+                fs.rmSync(hiddenAppHostDirectory, { recursive: true, force: true });
+            } catch (error) {
+                failures.push(error);
+            }
+
+            try {
+                restoreWorkspaceAppHostConfig();
+            } catch (error) {
+                failures.push(error);
+            }
+
+            if (failures.length > 0) {
+                throw new AggregateError(failures, 'Discovery configuration E2E test or cleanup failed.');
+            }
         }
     });
 });

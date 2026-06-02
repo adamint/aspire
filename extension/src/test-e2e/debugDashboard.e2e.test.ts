@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { getCommandInvocationCount, getTreeAppHostLabel, waitForAppHostLaunching, waitForCommandOutcome, waitForDebugDashboardUrl, waitForDebugSessionStartup, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
+import { getCommandInvocationCount, getTreeAppHostLabel, waitForAppHostLaunching, waitForCommandOutcome, waitForDebugDashboardUrl, waitForDebugSessionStartup, waitForHttpText, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
 import { executeE2eControlCommand, restoreWorkspaceCliPath, setCliUnavailableForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath } from './helpers/paths';
 import { openAspireView, waitForEditorTitle, waitForTreeItem, waitForWorkbenchTextAfterIntegratedBrowserNavigation } from './helpers/vscode';
@@ -49,11 +49,12 @@ suite('Aspire debug dashboard E2E', function () {
         const dashboardUrl = dashboard.state.debugSessions.find(session => session.dashboardUrl?.startsWith('http'))?.dashboardUrl;
         assert.ok(dashboardUrl);
 
+        await waitForHttpText(dashboardUrl, 'Aspire', 120000);
         assert.ok((await waitForEditorTitle(new URL(dashboardUrl).host, 120000, { matchCase: false })).toLowerCase().includes(new URL(dashboardUrl).host.toLowerCase()));
         if (process.platform !== 'win32') {
             // Chromium webview text extraction is unreliable on hosted Windows runners after
-            // integrated-browser navigation, but the editor title still proves VS Code opened
-            // the dashboard URL. Linux keeps the stronger rendered-content assertion.
+            // integrated-browser navigation. The HTTP probe above proves the dashboard rendered
+            // content, and Linux keeps the stronger webview text extraction assertion.
             const browserText = await waitForWorkbenchTextAfterIntegratedBrowserNavigation('Resources');
             assert.ok(browserText.includes('Resources'));
         }

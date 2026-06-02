@@ -672,9 +672,9 @@ function patchExtesterLaunchLocale() {
   const target = targets.find(candidate => source.includes(candidate));
   const argsDeclarationPattern = /const args = \[[^\n]*`--user-data-dir=\$\{path\.join\(this\.storagePath, 'settings'\)\}`(?:, [^\n]+?)?\];/;
   if (target) {
-    fs.writeFileSync(browserPath, source.replace(target, replacement));
+    fs.writeFileSync(browserPath, source.replace(target, () => replacement));
   } else if (argsDeclarationPattern.test(source)) {
-    fs.writeFileSync(browserPath, source.replace(argsDeclarationPattern, replacement));
+    fs.writeFileSync(browserPath, source.replace(argsDeclarationPattern, () => replacement));
   } else {
     throw new Error(`Unable to patch ExTester VS Code launch arguments in ${browserPath} to force the E2E browser locale.`);
   }

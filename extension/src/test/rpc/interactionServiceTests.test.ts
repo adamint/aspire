@@ -344,8 +344,8 @@ suite('InteractionService endpoints', () => {
 			} as any);
 			const testInfo = await createTestRpcServer();
 
-			const baseUrl = 'http://localhost';
-			const codespacesUrl = 'http://codespaces';
+			const baseUrl = 'http://localhost/login?t=base-secret';
+			const codespacesUrl = 'http://codespaces/login?t=codespaces-secret';
 
 			await testInfo.interactionService.displayDashboardUrls({
 				BaseUrlWithLoginToken: baseUrl,
@@ -356,8 +356,10 @@ suite('InteractionService endpoints', () => {
 
 			await new Promise(resolve => setTimeout(resolve, 2000));
 
-			assert.ok(outputLines.some(line => line.includes(baseUrl)), 'Output should contain base URL');
-			assert.ok(outputLines.some(line => line.includes(codespacesUrl)), 'Output should contain codespaces URL');
+			assert.ok(outputLines.some(line => line.includes('http://localhost')), 'Output should contain sanitized base URL origin');
+			assert.ok(outputLines.some(line => line.includes('http://codespaces')), 'Output should contain sanitized codespaces URL origin');
+			assert.ok(outputLines.every(line => !line.includes('base-secret')), 'Output should not contain base URL login token');
+			assert.ok(outputLines.every(line => !line.includes('codespaces-secret')), 'Output should not contain codespaces URL login token');
 			assert.equal(showInformationMessageStub.callCount, 1, 'Should show info message when autoLaunch is notification');
 		}
 		finally {
@@ -376,8 +378,8 @@ suite('InteractionService endpoints', () => {
 			} as any);
 			const testInfo = await createTestRpcServer();
 
-			const baseUrl = 'http://localhost';
-			const codespacesUrl = 'http://codespaces';
+			const baseUrl = 'http://localhost/login?t=base-secret';
+			const codespacesUrl = 'http://codespaces/login?t=codespaces-secret';
 
 			await testInfo.interactionService.displayDashboardUrls({
 				BaseUrlWithLoginToken: baseUrl,
@@ -386,8 +388,10 @@ suite('InteractionService endpoints', () => {
 
 			const outputLines = stub.getCalls().map(call => call.args[0]);
 
-			assert.ok(outputLines.some(line => line.includes(baseUrl)), 'Output should contain base URL');
-			assert.ok(outputLines.some(line => line.includes(codespacesUrl)), 'Output should contain codespaces URL');
+			assert.ok(outputLines.some(line => line.includes('http://localhost')), 'Output should contain sanitized base URL origin');
+			assert.ok(outputLines.some(line => line.includes('http://codespaces')), 'Output should contain sanitized codespaces URL origin');
+			assert.ok(outputLines.every(line => !line.includes('base-secret')), 'Output should not contain base URL login token');
+			assert.ok(outputLines.every(line => !line.includes('codespaces-secret')), 'Output should not contain codespaces URL login token');
 			assert.equal(showInformationMessageStub.callCount, 0, 'Should not show info message when autoLaunch is launch');
 		}
 		finally {

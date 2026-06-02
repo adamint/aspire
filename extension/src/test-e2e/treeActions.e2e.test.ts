@@ -1,8 +1,6 @@
 import * as assert from 'assert';
-import * as http from 'http';
-import * as https from 'https';
 import * as path from 'path';
-import { findResource, getCommandInvocationCount, getTerminalCommandCount, isSamePath, waitForAppHostLaunching, waitForCommandOutcome, waitForDashboardUrl, waitForExtensionState, waitForNoRunningAppHost, waitForRepositoryIdle, waitForResource, waitForResourceState, waitForRunningAppHost, waitForTerminalCommand, waitForWorkspaceAppHost } from './helpers/assertions';
+import { findResource, getCommandInvocationCount, getTerminalCommandCount, isSamePath, waitForAppHostLaunching, waitForCommandOutcome, waitForDashboardUrl, waitForExtensionState, waitForHttpText, waitForNoRunningAppHost, waitForRepositoryIdle, waitForResource, waitForResourceState, waitForRunningAppHost, waitForTerminalCommand, waitForWorkspaceAppHost } from './helpers/assertions';
 import { executeE2eControlCommand, restoreWorkspaceCliPath, setCliUnavailableForE2E, setTerminalCommandExecutionSuppressedForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath } from './helpers/paths';
 import { answerActiveInput, chooseActiveQuickPick, openAspireView, waitForEditorTitle } from './helpers/vscode';
@@ -138,54 +136,4 @@ async function waitForResourceTerminalCommand(resourceName: string, command: str
         `${command} terminal command for ${resourceName}`,
         60000,
         afterCommandSequence);
-}
-
-async function waitForHttpText(url: string, expectedText: string, timeoutMs = 120000): Promise<string> {
-    const started = Date.now();
-    let lastError: string | undefined;
-
-    while (Date.now() - started < timeoutMs) {
-        try {
-            const body = await getUrlText(url);
-            if (body.includes(expectedText)) {
-                return expectedText;
-            }
-
-            lastError = `response did not contain '${expectedText}': ${body}`;
-        }
-        catch (error) {
-            lastError = error instanceof Error ? error.message : String(error);
-        }
-
-        await new Promise(resolve => setTimeout(resolve, 500));
-    }
-
-    throw new Error(`Timed out waiting for ${url} to return '${expectedText}'. Last error: ${lastError ?? '<none>'}`);
-}
-
-function getUrlText(url: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-        const parsed = new URL(url);
-        const handleResponse = (response: http.IncomingMessage): void => {
-            const chunks: Buffer[] = [];
-            response.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-            response.on('end', () => {
-                const body = Buffer.concat(chunks).toString('utf8');
-                if (response.statusCode && response.statusCode >= 400) {
-                    reject(new Error(`${url} returned HTTP ${response.statusCode}: ${body}`));
-                    return;
-                }
-
-                resolve(body);
-            });
-        };
-        const request = parsed.protocol === 'https:'
-            ? https.get(parsed, { rejectUnauthorized: false }, handleResponse)
-            : http.get(parsed, handleResponse);
-
-        request.on('error', reject);
-        request.setTimeout(10000, () => {
-            request.destroy(new Error(`${url} timed out`));
-        });
-    });
 }

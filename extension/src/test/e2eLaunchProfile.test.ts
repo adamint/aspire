@@ -111,6 +111,8 @@ suite('E2E launch profile', () => {
         assert.ok(lockfile.includes('undici@7.21.0'));
         assert.ok(lockfile.split(/\r?\n/).filter(l => /^\s*resolved\s+"/.test(l)).every(l => l.includes(internalFeed)));
         assert.ok(workflow.includes('NPM_REGISTRY: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/'));
+        assert.ok(fs.existsSync(path.join(extensionRoot, 'scripts', 'validate-lockfile-registry.cjs')));
+        assert.ok(workflow.includes('run: node scripts/validate-lockfile-registry.cjs'));
         assert.ok(workflow.includes('corepack yarn install --frozen-lockfile --non-interactive'));
         assert.ok(!workflow.includes('ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY'));
         assert.ok(!workflow.includes('registry=https://'));
@@ -176,6 +178,14 @@ suite('E2E launch profile', () => {
         assert.ok(envConstruction.includes("ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE: 'true'"));
         assert.ok(runTests.includes('runWithProcessTreeTimeout(process.execPath'));
         assert.ok(runTests.includes('extestEnv'));
+    });
+
+    test('patches ExTester launch arguments without replacement-token expansion', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+
+        assert.ok(runner.includes('source.replace(target, () => replacement)'));
+        assert.ok(runner.includes('source.replace(argsDeclarationPattern, () => replacement)'));
     });
 
     test('keeps the slow zero-to-running shard timeout above its composed wait budgets', () => {

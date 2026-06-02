@@ -1,4 +1,6 @@
 import * as fs from 'fs';
+import * as http from 'http';
+import * as https from 'https';
 import * as path from 'path';
 import type { AspireAppHostState as AppHostState, AspireDebugSessionState, AspireExtensionE2EControlStatus as ExtensionE2EControlStatus, AspireExtensionE2EStateFile as ExtensionE2EStateFile, AspireExtensionStateSnapshot as ExtensionStateSnapshot, AspireResourceState as ResourceState } from '../../types/extensionApi';
 import { getControlFilePath, getPrimaryAppHostProjectPath, getStateFilePath, getWorkspaceRoot } from './paths';
@@ -67,6 +69,29 @@ export async function waitForDebugSessionStartup(appHostPath = getPrimaryAppHost
 
 export async function waitForDebugDashboardUrl(appHostPath = getPrimaryAppHostProjectPath(), timeoutMs = 120000): Promise<ExtensionE2EStateFile> {
     return await waitForExtensionState(file => file.state.debugSessions.some(session => isDebugSessionForAppHost(session, appHostPath) && typeof session.dashboardUrl === 'string' && session.dashboardUrl.length > 0), 'debug dashboard URL', timeoutMs);
+}
+
+export async function waitForHttpText(url: string, expectedText: string, timeoutMs = 120000): Promise<string> {
+    const started = Date.now();
+    let lastError: string | undefined;
+
+    while (Date.now() - started < timeoutMs) {
+        try {
+            const body = await getUrlText(url);
+            if (body.includes(expectedText)) {
+                return expectedText;
+            }
+
+            lastError = `response did not contain '${expectedText}': ${body}`;
+        }
+        catch (error) {
+            lastError = error instanceof Error ? error.message : String(error);
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    throw new Error(`Timed out waiting for ${url} to return '${expectedText}'. Last error: ${lastError ?? '<none>'}`);
 }
 
 export async function waitForNoDebugSessions(timeoutMs = 90000): Promise<ExtensionE2EStateFile> {
@@ -330,6 +355,33 @@ function isDebugSessionForAppHost(session: AspireDebugSessionState, appHostPath:
 
 function isResourceMatch(resource: ResourceState, resourceName: string): boolean {
     return resource.name === resourceName || resource.displayName === resourceName;
+}
+
+function getUrlText(url: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const parsed = new URL(url);
+        const handleResponse = (response: http.IncomingMessage): void => {
+            const chunks: Buffer[] = [];
+            response.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+            response.on('end', () => {
+                const body = Buffer.concat(chunks).toString('utf8');
+                if (response.statusCode && response.statusCode >= 400) {
+                    reject(new Error(`${url} returned HTTP ${response.statusCode}: ${body}`));
+                    return;
+                }
+
+                resolve(body);
+            });
+        };
+        const request = parsed.protocol === 'https:'
+            ? https.get(parsed, { rejectUnauthorized: false }, handleResponse)
+            : http.get(parsed, handleResponse);
+
+        request.on('error', reject);
+        request.setTimeout(10000, () => {
+            request.destroy(new Error(`${url} timed out`));
+        });
+    });
 }
 
 function sleepSynchronously(milliseconds: number): void {

@@ -45,7 +45,7 @@ jobs:
 
       - name: Validate lockfile registries
         working-directory: extension
-        run: node -e "const fs = require('fs'); const allow = 'pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm'; const bad = fs.readFileSync('yarn.lock', 'utf8').split(/\r?\n/).filter(l => /^\s*resolved\s+\x22/.test(l)).filter(l => !l.includes(allow)); if (bad.length) { throw new Error('extension/yarn.lock contains resolved entries outside the internal dotnet-public-npm feed. Regenerate it through the internal feed before restoring. First offender -> ' + bad[0]); }"
+        run: node scripts/validate-lockfile-registry.cjs
 
       - name: Install extension dependencies
         working-directory: extension
@@ -294,7 +294,7 @@ jobs:
 
       - name: Validate lockfile registries
         working-directory: extension
-        run: node -e "const fs = require('fs'); const allow = 'pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm'; const bad = fs.readFileSync('yarn.lock', 'utf8').split(/\\r?\\n/).filter(l => /^\\s*resolved\\s+\\x22/.test(l)).filter(l => !l.includes(allow)); if (bad.length) { throw new Error('extension/yarn.lock contains resolved entries outside the internal dotnet-public-npm feed. Regenerate it through the internal feed before restoring. First offender -> ' + bad[0]); }"
+        run: node scripts/validate-lockfile-registry.cjs
 
       - name: Install extension dependencies
         working-directory: extension

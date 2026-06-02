@@ -10,13 +10,36 @@ suite('Aspire command palette E2E', function () {
     this.timeout(180000);
 
     teardown(async () => {
-        await executeE2eControlCommand({ name: 'closeAllEditors' }).catch(() => undefined);
-        await setCliUnavailableForE2E(false);
-        await setTerminalCommandExecutionSuppressedForE2E(false);
-        await restoreE2eCliPathForE2E();
-        await restoreWorkspaceCliPath();
-        restoreWorkspaceAppHostConfig();
-        removeAdditionalAppHostCandidate();
+        const failures: unknown[] = [];
+        for (const cleanup of [
+            () => executeE2eControlCommand({ name: 'closeAllEditors' }),
+            () => setCliUnavailableForE2E(false),
+            () => setTerminalCommandExecutionSuppressedForE2E(false),
+            () => restoreE2eCliPathForE2E(),
+            () => restoreWorkspaceCliPath(),
+        ]) {
+            try {
+                await cleanup();
+            } catch (error) {
+                failures.push(error);
+            }
+        }
+
+        try {
+            restoreWorkspaceAppHostConfig();
+        } catch (error) {
+            failures.push(error);
+        }
+
+        try {
+            removeAdditionalAppHostCandidate();
+        } catch (error) {
+            failures.push(error);
+        }
+
+        if (failures.length > 0) {
+            throw new AggregateError(failures, 'Command palette E2E teardown failed.');
+        }
     });
 
     test('opens an Aspire terminal through the command palette with the configured CLI path', async () => {
