@@ -56,7 +56,11 @@ suite('Aspire debug dashboard E2E', function () {
         await waitForNoDebugSessions();
     });
 
-    test('keeps AppHost build diagnostics in the debug console when the CLI exits after a build failure', async () => {
+    test('keeps AppHost build diagnostics in the debug console when the CLI exits after a build failure', async function () {
+        if (process.env.ASPIRE_EXTENSION_E2E_INCLUDE_CURRENT_CLI_REGRESSIONS === 'false') {
+            this.skip();
+        }
+
         await openAspireView();
         await waitForRepositoryIdle();
         const discovered = await waitForWorkspaceAppHost();
