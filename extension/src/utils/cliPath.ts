@@ -49,7 +49,10 @@ async function fileExists(filePath: string): Promise<boolean> {
 export async function tryExecuteCli(cliPath: string): Promise<boolean> {
     try {
         if (shouldUseCmdForCliPath(cliPath)) {
-            await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"${cliPath}" --version`], { timeout: 5000 });
+            // .cmd/.bat files are interpreted by cmd.exe. Passing the wrapper path as a
+            // separate argument lets Node quote paths with spaces instead of relying on
+            // fragile hand-built cmd.exe command strings.
+            await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/c', 'call', cliPath, '--version'], { timeout: 5000 });
         }
         else {
             await execFileAsync(cliPath, ['--version'], { timeout: 5000 });
