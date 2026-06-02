@@ -7,6 +7,7 @@ const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
 const extensionRoot = path.resolve(__dirname, '..');
+const extensionPackageJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.json'), 'utf8'));
 const repoRoot = path.resolve(extensionRoot, '..');
 const artifactsDir = path.join(extensionRoot, '.test-artifacts');
 const shardName = sanitizePathSegment(process.env.ASPIRE_EXTENSION_E2E_SHARD || 'all');
@@ -33,11 +34,12 @@ const controlFile = path.join(resultsDir, 'extension-control.json');
 const testSpec = process.env.ASPIRE_EXTENSION_E2E_SPEC || 'out/test-e2e/**/*.e2e.test.js';
 const matchedTestSpecs = findSpecMatches(testSpec);
 const vscodeVersion = process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.122.1';
-const extesterVersion = process.env.ASPIRE_EXTENSION_E2E_EXTESTER_VERSION || '8.23.0';
-const extesterNpmRegistry = process.env.ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY || 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/';
+const extesterVersion = extensionPackageJson.devDependencies?.['vscode-extension-tester'];
+if (!extesterVersion) {
+  throw new Error('vscode-extension-tester must be pinned in extension/package.json devDependencies.');
+}
 const verifyExtesterFeedOnly = process.argv.includes('--verify-extester-feed');
-const extesterInstallRoot = path.join(artifactsDir, 'extester-runner');
-const extesterNodeModules = path.join(extesterInstallRoot, 'node_modules');
+const extesterNodeModules = path.join(extensionRoot, 'node_modules');
 const extesterModule = path.join(extesterNodeModules, 'vscode-extension-tester');
 const extesterCli = path.join(extesterModule, 'out', 'cli.js');
 const primaryAppHostProject = path.join(workspaceRoot, 'AspireE2E.AppHost', 'AspireE2E.AppHost.csproj');
@@ -638,42 +640,15 @@ function ensureExtester() {
     if (installed.version === extesterVersion && fs.existsSync(extesterCli)) {
       return;
     }
+
+    throw new Error(`Expected vscode-extension-tester@${extesterVersion} from the locked extension dependencies, but found ${installed.version}. Run corepack yarn install --frozen-lockfile after updating package.json/yarn.lock.`);
   }
 
-  fs.rmSync(extesterInstallRoot, { recursive: true, force: true });
-  fs.mkdirSync(extesterInstallRoot, { recursive: true });
-  fs.writeFileSync(path.join(extesterInstallRoot, 'package.json'), JSON.stringify({
-    private: true,
-    dependencies: {
-      'vscode-extension-tester': extesterVersion,
-    },
-    // Keep the runtime ExTester install on versions already available from the
-    // internal dnceng npm feed. These are transitive-compatible with the ranges
-    // requested by vscode-extension-tester@8.23.0 and avoid first-read cache
-    // misses on anonymous CI agents.
-    overrides: {
-      'js-yaml': '4.1.1',
-      'yauzl': '3.3.1',
-    },
-  }, undefined, 2));
-  try {
-    runWithRetry('npm', [
-      'install',
-      '--prefix',
-      extesterInstallRoot,
-      '--no-package-lock',
-      '--ignore-scripts',
-      '--no-audit',
-    ], {
-      npm_config_registry: extesterNpmRegistry,
-    }, { attempts: 3, retryDelayMs: 5000, timeout: 300000 });
-  } catch (error) {
-    throw new Error(`${error.message}\nUnable to install vscode-extension-tester@${extesterVersion} from ${extesterNpmRegistry}. If this is running in CI, pre-seed vscode-extension-tester and its locked transitive packages into the internal dotnet-public-npm feed before enabling the E2E matrix.`);
-  }
+  throw new Error(`vscode-extension-tester@${extesterVersion} is missing from extension/node_modules. Run corepack yarn install --frozen-lockfile so the E2E runner uses the pinned dependency graph from extension/yarn.lock.`);
 }
 
 function verifyExtesterFeed() {
-  console.log(`Verifying vscode-extension-tester@${extesterVersion} can be installed from ${extesterNpmRegistry}`);
+  console.log(`Verifying vscode-extension-tester@${extesterVersion} from the locked extension dependency graph.`);
   ensureExtester();
 }
 

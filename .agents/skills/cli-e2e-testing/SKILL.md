@@ -611,6 +611,35 @@ When CLI E2E tests fail in CI, follow these steps to diagnose the issue:
 
 > **Flaky test investigation:** for recurring/intermittent failures, see [`troubleshooting.md`](./troubleshooting.md) for a catalog of known flake classes (Y/n input race, prompt-counter desync, etc.) and the recipes to identify them from `.cast` recordings.
 
+### VS Code Extension E2E Diagnostics
+
+VS Code extension E2E jobs upload shard-specific diagnostics as `extension-e2e-diagnostics-<rid>-<shard>-attempt<N>` artifacts. Linux shards include `.mp4` display recordings from Xvfb by default; Windows shards do not record video and instead rely on screenshots, VS Code logs, state files, and workspace diagnostics.
+
+```bash
+# List VS Code extension E2E diagnostic artifacts for a run.
+gh api "repos/microsoft/aspire/actions/runs/<run-id>/artifacts?per_page=100" --paginate \
+  --jq '.artifacts[] | select(.name | startswith("extension-e2e-diagnostics")) | "\(.size_in_bytes)\t\(.name)"'
+
+# Download one shard's diagnostics. The artifact contains .mp4 recordings
+# on Linux, .ffmpeg.log files, screenshots, VS Code logs, state files, and
+# captured workspace diagnostics.
+mkdir -p ./e2e-diagnostics && cd ./e2e-diagnostics
+gh run download <run-id> --repo microsoft/aspire \
+  -n extension-e2e-diagnostics-linux-x64-<shard>-attempt<N> \
+  -D <shard>
+```
+
+Important paths inside the downloaded shard:
+
+```text
+<shard>/.test-recordings/<shard>/<runId>.mp4
+<shard>/.test-recordings/<shard>/<runId>.ffmpeg.log
+<shard>/.test-storage/**/screenshots/
+<shard>/.test-results/e2e/<shard>/extension-state.json
+```
+
+The workflow keeps Linux recordings by default with `ASPIRE_EXTENSION_E2E_RECORDING_MODE=always`. Use `failure` to keep only failed-run videos or `off` to disable recording for local runs.
+
 ### Quick Start: Download and Play Recordings
 
 The fastest way to debug a CLI E2E test failure is to download and play the asciinema recording.

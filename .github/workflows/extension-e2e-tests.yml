@@ -7,54 +7,57 @@ jobs:
   verify_extester_feed:
     name: Verify ExTester internal feed availability
     runs-on: ubuntu-latest
-    outputs:
-      available: ${{ steps.verify.outputs.available }}
+    env:
+      NPM_REGISTRY: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Verify ExTester can install from dotnet-public-npm
-        id: verify
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: '20.x'
+
+      - name: Install Corepack
         working-directory: extension
         run: |
-          set +e
-          node scripts/run-e2e.js --verify-extester-feed
-          exit_code=$?
-          set -e
-          if [ "$exit_code" -eq 0 ]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            {
-              echo "### VS Code extension E2E matrix skipped"
-              echo
-              echo "The E2E runner could not install vscode-extension-tester from the internal dotnet-public-npm feed."
-              echo "Pre-seed vscode-extension-tester and its transitive packages into dotnet-public-npm, then rerun CI."
-            } >> "$GITHUB_STEP_SUMMARY"
-            echo "::notice::vscode-extension-tester is not available from dotnet-public-npm; marking the feed unavailable and skipping the VS Code extension E2E matrix."
+          CorepackHome="$RUNNER_TEMP/corepack"
+          export COREPACK_HOME="$CorepackHome"
+          echo "COREPACK_HOME=$CorepackHome" >> "$GITHUB_ENV"
+
+          CorepackVersion="$(cat scripts/corepack-version.txt)"
+          npm install --global --force --registry "$NPM_REGISTRY" "corepack@$CorepackVersion"
+
+          npmGlobalBin="$(npm prefix --global)/bin"
+          export PATH="$npmGlobalBin:$PATH"
+          echo "$npmGlobalBin" >> "$GITHUB_PATH"
+
+          installed="$(corepack --version)"
+          if [ "$installed" != "$CorepackVersion" ]; then
+            echo "::error::corepack version mismatch: expected $CorepackVersion, got '$installed'."
+            exit 1
           fi
 
-  extester_feed_unavailable:
-    name: VS Code extension E2E dependency unavailable
-    needs: verify_extester_feed
-    if: ${{ needs.verify_extester_feed.outputs.available != 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Report skipped E2E matrix
-        run: |
-          {
-            echo "### VS Code extension E2E matrix skipped"
-            echo
-            echo "The workflow is configured to use only the internal dotnet-public-npm feed."
-            echo "vscode-extension-tester is not currently installable from that feed without authentication."
-            echo "Pre-seed vscode-extension-tester and its transitive packages into dotnet-public-npm, then rerun CI to execute the matrix."
-          } >> "$GITHUB_STEP_SUMMARY"
-          echo "::notice::Skipping the VS Code extension E2E matrix until vscode-extension-tester is available from dotnet-public-npm."
+          corepack enable
+          node ./scripts/prepareCorepackYarn.mjs
+          corepack yarn --version
+
+      - name: Validate lockfile registries
+        working-directory: extension
+        run: node -e "const fs = require('fs'); const allow = 'pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm'; const bad = fs.readFileSync('yarn.lock', 'utf8').split(/\r?\n/).filter(l => /^\s*resolved\s+\x22/.test(l)).filter(l => !l.includes(allow)); if (bad.length) { throw new Error('extension/yarn.lock contains resolved entries outside the internal dotnet-public-npm feed. Regenerate it through the internal feed before restoring. First offender -> ' + bad[0]); }"
+
+      - name: Install extension dependencies
+        working-directory: extension
+        run: corepack yarn install --frozen-lockfile --non-interactive
+
+      - name: Verify locked ExTester
+        working-directory: extension
+        run: node scripts/run-e2e.js --verify-extester-feed
 
   extension_e2e:
     name: VS Code extension E2E (${{ matrix.name }}, ${{ matrix.shardName }})
     needs: verify_extester_feed
-    if: ${{ needs.verify_extester_feed.outputs.available == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
@@ -385,9 +388,9 @@ jobs:
           ASPIRE_EXTENSION_E2E_VSIX: ${{ github.workspace }}/extension/out/aspire-extension.vsix
           ASPIRE_EXTENSION_E2E_SHARD: ${{ matrix.shardName }}
           ASPIRE_EXTENSION_E2E_SPEC: ${{ matrix.spec }}
-          # Linux E2E jobs run under Xvfb, so record by default but keep/upload videos only for failures.
-          # Set ASPIRE_EXTENSION_E2E_RECORDING_MODE=always when manually rerunning to keep successful recordings too.
-          ASPIRE_EXTENSION_E2E_RECORDING_MODE: ${{ matrix.useXvfb && 'failure' || 'off' }}
+          # Linux E2E jobs run under Xvfb, where ffmpeg recordings are compact
+          # and useful for diagnosing timing-sensitive flakes after the fact.
+          ASPIRE_EXTENSION_E2E_RECORDING_MODE: ${{ matrix.useXvfb && 'always' || 'off' }}
         run: |
           if ('${{ matrix.useXvfb }}' -eq 'true') {
             xvfb-run -a node scripts/run-e2e.js
@@ -444,7 +447,7 @@ jobs:
             Write-Host "E2E recordings:"
             $recordings | ForEach-Object { Write-Host "  $($_.FullName.Replace((Get-Location).Path + [IO.Path]::DirectorySeparatorChar, ''))" }
           } else {
-            Write-Host "No E2E recordings were kept for this shard. Linux CI keeps recordings on failure by default; set ASPIRE_EXTENSION_E2E_RECORDING_MODE=always for successful-run videos."
+            Write-Host "No E2E recordings were kept for this shard. Linux CI keeps recordings by default; Windows shards upload screenshots and logs only."
           }
           if ($recordingLogs) {
             Write-Host "Recorder logs:"

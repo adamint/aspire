@@ -99,43 +99,60 @@ suite('E2E launch profile', () => {
 
     test('installs the E2E runner dependencies from the internal npm feed', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const packageJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.json'), 'utf8'));
+        const lockfile = fs.readFileSync(path.join(extensionRoot, 'yarn.lock'), 'utf8');
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
         const internalFeed = 'https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/';
 
-        assert.ok(runner.includes(internalFeed));
+        assert.strictEqual(packageJson.devDependencies['vscode-extension-tester'], '8.23.0');
+        assert.strictEqual(packageJson.resolutions.undici, '8.3.0');
+        assert.ok(lockfile.includes('vscode-extension-tester@8.23.0'));
+        assert.ok(lockfile.includes('undici@8.3.0'));
+        assert.ok(lockfile.split(/\r?\n/).filter(l => /^\s*resolved\s+"/.test(l)).every(l => l.includes(internalFeed)));
+        assert.ok(workflow.includes('NPM_REGISTRY: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/'));
+        assert.ok(workflow.includes('corepack yarn install --frozen-lockfile --non-interactive'));
         assert.ok(!workflow.includes('ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY'));
-        assert.ok(!runner.includes('registry=https://'));
         assert.ok(!workflow.includes('registry=https://'));
     });
 
-    test('preflights ExTester internal feed availability before starting the E2E matrix', () => {
+    test('preflights locked ExTester dependency graph before starting the E2E matrix', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
-        const unavailableJob = workflow.slice(workflow.indexOf('extester_feed_unavailable:'), workflow.indexOf('extension_e2e:'));
 
         assert.ok(runner.includes('--verify-extester-feed'));
-        assert.ok(runner.includes('pre-seed vscode-extension-tester'));
+        assert.ok(runner.includes('Verifying vscode-extension-tester@'));
+        assert.ok(!runner.includes('ASPIRE_EXTENSION_E2E_EXTESTER_VERSION'));
+        assert.ok(workflow.includes('Verify locked ExTester'));
         assert.ok(workflow.includes('verify_extester_feed:'));
-        assert.ok(workflow.includes("needs.verify_extester_feed.outputs.available == 'true'"));
-        assert.ok(workflow.includes('extester_feed_unavailable:'));
-        assert.ok(unavailableJob.includes('Skipping the VS Code extension E2E matrix until vscode-extension-tester is available from dotnet-public-npm.'));
-        assert.ok(!unavailableJob.includes('exit 1'));
+        assert.ok(workflow.includes('run: node scripts/run-e2e.js --verify-extester-feed'));
+        assert.ok(workflow.includes('needs: verify_extester_feed'));
+        assert.ok(!workflow.includes('extester_feed_unavailable:'));
+        assert.ok(!workflow.includes('VS Code extension E2E matrix skipped'));
+    });
+
+    test('keeps Linux E2E recordings for successful runs by default', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
+
+        assert.ok(workflow.includes("ASPIRE_EXTENSION_E2E_RECORDING_MODE: ${{ matrix.useXvfb && 'always' || 'off' }}"));
+        assert.ok(workflow.includes('Linux CI keeps recordings by default; Windows shards upload screenshots and logs only.'));
     });
 
     test('seeds Corepack from the internal npm feed before E2E workflow uses Yarn', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
-        const corepackInstallIndex = workflow.indexOf('npm install --global --force --registry "$env:NPM_REGISTRY" "corepack@$CorepackVersion"');
+        const bashCorepackInstallIndex = workflow.indexOf('npm install --global --force --registry "$NPM_REGISTRY" "corepack@$CorepackVersion"');
+        const pwshCorepackInstallIndex = workflow.indexOf('npm install --global --force --registry "$env:NPM_REGISTRY" "corepack@$CorepackVersion"');
         const yarnSeedIndex = workflow.indexOf('node ./scripts/prepareCorepackYarn.mjs');
         const yarnInstallIndex = workflow.indexOf('run: corepack yarn install');
         const yarnCompileIndex = workflow.indexOf('corepack yarn compile');
 
         assert.ok(workflow.includes('NPM_REGISTRY: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/'));
         assert.ok(workflow.includes('COREPACK_ENABLE_DOWNLOAD_PROMPT: 0'));
-        assert.ok(corepackInstallIndex >= 0);
-        assert.ok(yarnSeedIndex > corepackInstallIndex);
+        assert.ok(bashCorepackInstallIndex >= 0);
+        assert.ok(pwshCorepackInstallIndex >= 0);
+        assert.ok(yarnSeedIndex > bashCorepackInstallIndex);
         assert.ok(yarnInstallIndex > yarnSeedIndex);
         assert.ok(yarnCompileIndex > yarnSeedIndex);
         assert.ok(!workflow.includes('cache: yarn'));
