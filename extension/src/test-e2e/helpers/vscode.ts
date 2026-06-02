@@ -203,8 +203,13 @@ export async function getCurrentTerminalChannel(): Promise<string> {
 
 export async function waitForTerminalChannel(expectedText: string, timeoutMs = 30000): Promise<string> {
     return await VSBrowser.instance.driver.wait(async () => {
-        const channel = await getCurrentTerminalChannel();
-        return channel.includes(expectedText) ? channel : false;
+        try {
+            const channel = await getCurrentTerminalChannel();
+            return channel.includes(expectedText) ? channel : false;
+        }
+        catch {
+            return false;
+        }
     }, timeoutMs, `Timed out waiting for terminal channel containing '${expectedText}'.`);
 }
 
