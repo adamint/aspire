@@ -1,8 +1,9 @@
 import * as assert from 'assert';
 import * as sinon from 'sinon';
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { getDefaultCliInstallPaths, resolveCliPath, CliPathDependencies } from '../utils/cliPath';
+import { getDefaultCliInstallPaths, resolveCliPath, CliPathDependencies, tryExecuteCli } from '../utils/cliPath';
 
 const bundlePath = '/home/user/.aspire/bin/aspire';
 const globalToolPath = '/home/user/.dotnet/tools/aspire';
@@ -241,6 +242,25 @@ suite('utils/cliPath tests', () => {
 
             assert.strictEqual(result.source, 'default-install');
             assert.ok(setConfiguredPath.notCalled, 'should not re-set the path if it already matches');
+        });
+    });
+
+    suite('tryExecuteCli', () => {
+        test('validates Windows cmd wrappers', async function () {
+            if (process.platform !== 'win32') {
+                this.skip();
+            }
+
+            const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-cli-path-test with spaces-'));
+            try {
+                const wrapperPath = path.join(tempDirectory, 'aspire.cmd');
+                fs.writeFileSync(wrapperPath, '@echo off\r\nif "%~1"=="--version" (\r\n  echo 13.5.0-pr.e2e\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n');
+
+                assert.strictEqual(await tryExecuteCli(wrapperPath), true);
+            }
+            finally {
+                fs.rmSync(tempDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+            }
         });
     });
 });

@@ -301,15 +301,28 @@ suite('Aspire package contribution surface E2E', function () {
             }
         }
         finally {
-            fs.rmSync(probeDirectory, {
-                recursive: true,
-                force: true,
-                maxRetries: process.platform === 'win32' ? 20 : 0,
-                retryDelay: 250,
-            });
+            removeProbeDirectory(probeDirectory);
         }
     });
 });
+
+function removeProbeDirectory(probeDirectory: string): void {
+    try {
+        fs.rmSync(probeDirectory, {
+            recursive: true,
+            force: true,
+            maxRetries: process.platform === 'win32' ? 20 : 0,
+            retryDelay: 250,
+        });
+    }
+    catch (error) {
+        if (process.platform === 'win32' && error && typeof error === 'object' && 'code' in error && error.code === 'EBUSY') {
+            return;
+        }
+
+        throw error;
+    }
+}
 
 function readSourcePackageJson(): PackageJson {
     return JSON.parse(fs.readFileSync(path.join(getExtensionRoot(), 'package.json'), 'utf8')) as PackageJson;

@@ -46,14 +46,18 @@ async function fileExists(filePath: string): Promise<boolean> {
 /**
  * Tries to execute the CLI at the given path to verify it works.
  */
-async function tryExecuteCli(cliPath: string): Promise<boolean> {
+export async function tryExecuteCli(cliPath: string): Promise<boolean> {
     try {
-        await execFileAsync(cliPath, ['--version'], { timeout: 5000 });
+        await execFileAsync(cliPath, ['--version'], { timeout: 5000, shell: shouldUseShellForCliPath(cliPath) });
         return true;
     }
     catch {
         return false;
     }
+}
+
+function shouldUseShellForCliPath(cliPath: string): boolean {
+    return process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(cliPath);
 }
 
 /**
