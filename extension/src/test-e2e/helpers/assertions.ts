@@ -71,7 +71,7 @@ export async function waitForDebugDashboardUrl(appHostPath = getPrimaryAppHostPr
     return await waitForExtensionState(file => file.state.debugSessions.some(session => isDebugSessionForAppHost(session, appHostPath) && typeof session.dashboardUrl === 'string' && session.dashboardUrl.length > 0), 'debug dashboard URL', timeoutMs);
 }
 
-export async function waitForHttpText(url: string, expectedText: string, timeoutMs = 120000): Promise<string> {
+export async function waitForHttpText(url: string, expectedText: string, timeoutMs = 120000, descriptionUrl = sanitizeUrlForDiagnostics(url)): Promise<string> {
     const started = Date.now();
     let lastError: string | undefined;
 
@@ -91,7 +91,7 @@ export async function waitForHttpText(url: string, expectedText: string, timeout
         await new Promise(resolve => setTimeout(resolve, 500));
     }
 
-    throw new Error(`Timed out waiting for ${url} to return '${expectedText}'. Last error: ${lastError ?? '<none>'}`);
+    throw new Error(`Timed out waiting for ${descriptionUrl} to return '${expectedText}'. Last error: ${lastError ?? '<none>'}`);
 }
 
 export async function waitForNoDebugSessions(timeoutMs = 90000): Promise<ExtensionE2EStateFile> {
@@ -357,16 +357,38 @@ function isResourceMatch(resource: ResourceState, resourceName: string): boolean
     return resource.name === resourceName || resource.displayName === resourceName;
 }
 
-function getUrlText(url: string): Promise<string> {
+function getUrlText(url: string, redirectLimit = 5, cookies: string[] = []): Promise<string> {
     return new Promise((resolve, reject) => {
         const parsed = new URL(url);
+        const headers: Record<string, string> = {
+            'accept-encoding': 'identity',
+        };
+        if (cookies.length > 0) {
+            headers.cookie = cookies.join('; ');
+        }
+
         const handleResponse = (response: http.IncomingMessage): void => {
+            const setCookie = response.headers['set-cookie'] ?? [];
+            const nextCookies = [...cookies, ...setCookie.map(cookie => cookie.split(';', 1)[0])];
+            if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                if (redirectLimit === 0) {
+                    reject(new Error('too many redirects'));
+                    return;
+                }
+
+                response.resume();
+                response.on('end', () => {
+                    getUrlText(new URL(response.headers.location!, parsed).toString(), redirectLimit - 1, nextCookies).then(resolve, reject);
+                });
+                return;
+            }
+
             const chunks: Buffer[] = [];
             response.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
             response.on('end', () => {
                 const body = Buffer.concat(chunks).toString('utf8');
                 if (response.statusCode && response.statusCode >= 400) {
-                    reject(new Error(`${url} returned HTTP ${response.statusCode}: ${body}`));
+                    reject(new Error(`HTTP ${response.statusCode}: ${body}`));
                     return;
                 }
 
@@ -374,14 +396,27 @@ function getUrlText(url: string): Promise<string> {
             });
         };
         const request = parsed.protocol === 'https:'
-            ? https.get(parsed, { rejectUnauthorized: false }, handleResponse)
-            : http.get(parsed, handleResponse);
+            ? https.get(parsed, { headers, rejectUnauthorized: false }, handleResponse)
+            : http.get(parsed, { headers }, handleResponse);
 
         request.on('error', reject);
         request.setTimeout(10000, () => {
-            request.destroy(new Error(`${url} timed out`));
+            request.destroy(new Error('request timed out'));
         });
     });
+}
+
+function sanitizeUrlForDiagnostics(url: string): string {
+    try {
+        const parsed = new URL(url);
+        if (parsed.searchParams.has('t')) {
+            parsed.searchParams.set('t', '<redacted>');
+        }
+
+        return parsed.toString();
+    } catch {
+        return '<invalid URL>';
+    }
 }
 
 function sleepSynchronously(milliseconds: number): void {

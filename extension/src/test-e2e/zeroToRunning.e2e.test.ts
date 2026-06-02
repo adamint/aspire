@@ -90,7 +90,7 @@ suite('Aspire zero-to-running E2E', function () {
         const dashboardUrl = dashboard.state.debugSessions.find(session => session.dashboardUrl?.startsWith('http'))?.dashboardUrl;
         assert.ok(dashboardUrl);
 
-        await waitForHttpText(new URL(dashboardUrl).origin, 'Aspire', 180000);
+        await waitForHttpText(dashboardUrl, 'Aspire', 180000, new URL(dashboardUrl).origin);
         assert.ok((await waitForEditorTitle(new URL(dashboardUrl).host, 180000, { matchCase: false })).toLowerCase().includes(new URL(dashboardUrl).host.toLowerCase()));
         if (process.platform !== 'win32') {
             // Chromium webview text extraction is unreliable on hosted Windows runners after
