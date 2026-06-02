@@ -723,7 +723,7 @@ function patchExtesterLaunchLocale() {
     "const args = ['--no-sandbox', '--disable-dev-shm-usage', '--lang=en-US', `--user-data-dir=${path.join(this.storagePath, 'settings')}`];",
     "const args = ['--no-sandbox', '--disable-dev-shm-usage', `--user-data-dir=${path.join(this.storagePath, 'settings')}`];",
   ];
-  const replacement = `const args = ['--no-sandbox', '--disable-dev-shm-usage', '--lang=en-US', '--disable-keytar', '--use-inmemory-secretstorage', '--password-store=basic', '--disable-extension', 'vscode.github-authentication', '--disable-extension', 'vscode.microsoft-authentication', \`--user-data-dir=\${path.join(this.storagePath, 'settings')}\`, ${workspaceArgument}];`;
+  const replacement = `const args = ['--no-sandbox', '--disable-dev-shm-usage', '--disable-telemetry', '--lang=en-US', '--disable-keytar', '--use-inmemory-secretstorage', '--password-store=basic', '--disable-extension', 'vscode.github-authentication', '--disable-extension', 'vscode.microsoft-authentication', \`--user-data-dir=\${path.join(this.storagePath, 'settings')}\`, ${workspaceArgument}];`;
 
   if (source.includes(replacement)) {
     return;

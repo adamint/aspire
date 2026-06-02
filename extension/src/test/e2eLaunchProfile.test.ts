@@ -199,6 +199,15 @@ suite('E2E launch profile', () => {
         assert.ok(runTests.includes('extestEnv'));
     });
 
+    test('launches VS Code E2E tests with telemetry disabled before extension activation', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const settings = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'test-e2e', 'settings.json'), 'utf8'));
+
+        assert.strictEqual(settings['telemetry.telemetryLevel'], 'off');
+        assert.ok(runner.includes("'--disable-telemetry'"));
+    });
+
     test('patches ExTester launch arguments without replacement-token expansion', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
