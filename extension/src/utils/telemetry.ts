@@ -24,7 +24,8 @@ export type {
 // the command wrapper, the engagement reporter, the tree view, the debug
 // session, and the dashboard telemetry passthrough server.
 let reporter: TelemetryReporter | undefined;
-let telemetryReporterFactory = (aiKey: string): TelemetryReporter => new TelemetryReporter(aiKey);
+const defaultTelemetryReporterFactory = (aiKey: string): TelemetryReporter => new TelemetryReporter(aiKey);
+let telemetryReporterFactory = defaultTelemetryReporterFactory;
 
 // Common properties merged into every event we emit. The TelemetryReporter
 // already injects extension version, OS, machine id, etc., so this map is
@@ -261,6 +262,11 @@ export function __setTelemetryReporterFactoryForTests(factory: (aiKey: string) =
     const previous = telemetryReporterFactory;
     telemetryReporterFactory = factory;
     return () => { telemetryReporterFactory = previous; };
+}
+
+/** Test seam: reset TelemetryReporter construction so tests don't bleed into each other. */
+export function __resetTelemetryReporterFactoryForTests(): void {
+    telemetryReporterFactory = defaultTelemetryReporterFactory;
 }
 
 /** Test seam: clear common properties so tests don't bleed into each other. */

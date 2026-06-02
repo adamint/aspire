@@ -1,6 +1,7 @@
 import * as assert from 'assert';
+import type { TelemetryReporter } from '@vscode/extension-telemetry';
 import * as vscode from 'vscode';
-import { __resetCommonPropertiesForTests, __setReporterForTests, __setTelemetryReporterFactoryForTests, initializeTelemetry, isCommandCancellation, sendTelemetryEvent, setCommandInvocationListener, setCommonTelemetryProperties, withCommandTelemetry } from '../utils/telemetry';
+import { __resetCommonPropertiesForTests, __resetTelemetryReporterFactoryForTests, __setReporterForTests, __setTelemetryReporterFactoryForTests, initializeTelemetry, isCommandCancellation, sendTelemetryEvent, setCommandInvocationListener, setCommonTelemetryProperties, withCommandTelemetry } from '../utils/telemetry';
 
 interface RecordedEvent {
     name: string;
@@ -45,6 +46,7 @@ suite('telemetry utilities', () => {
     teardown(() => {
         setCommandInvocationListener(undefined);
         restore();
+        __resetTelemetryReporterFactoryForTests();
         __resetCommonPropertiesForTests();
     });
 
@@ -79,7 +81,7 @@ suite('telemetry utilities', () => {
         let createdWithKey: string | undefined;
         const restoreFactory = __setTelemetryReporterFactoryForTests((aiKey) => {
             createdWithKey = aiKey;
-            return fake as unknown as ReturnType<Parameters<typeof __setTelemetryReporterFactoryForTests>[0]>;
+            return fake as unknown as TelemetryReporter;
         });
 
         try {
