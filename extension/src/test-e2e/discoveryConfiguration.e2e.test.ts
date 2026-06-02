@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getCommandInvocationCount, isSamePath, waitForCommandOutcome, waitForExtensionState, waitForRepositoryIdle, waitForSelectedWorkspaceAppHost, waitForWorkspaceAppHost } from './helpers/assertions';
 import { createAdditionalAppHostCandidate, executeE2eControlCommand, removeAdditionalAppHostCandidate, removeLegacyAspireSettings, removeWorkspaceAppHostConfig, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, stopPrimaryAppHostIfRunning, writeLegacyAspireSettings, writeWorkspaceAppHostConfig, writeWorkspaceAppHostConfigRaw } from './helpers/fixtures';
-import { getPrimaryAppHostProjectPath, getWorkspaceRoot } from './helpers/paths';
+import { getPrimaryAppHostProjectPath, getRunRoot, getWorkspaceRoot } from './helpers/paths';
 import { openAspireView, waitForWorkbenchText } from './helpers/vscode';
 
 suite('Aspire workspace discovery and configuration E2E', function () {
@@ -116,7 +116,7 @@ suite('Aspire workspace discovery and configuration E2E', function () {
         await stopPrimaryAppHostIfRunning();
 
         const appHostDirectory = path.dirname(getPrimaryAppHostProjectPath());
-        const hiddenAppHostDirectory = path.join(getWorkspaceRoot(), '.e2e-hidden-apphost');
+        const hiddenAppHostDirectory = getHiddenAppHostDirectory(appHostDirectory);
         fs.rmSync(hiddenAppHostDirectory, { recursive: true, force: true });
 
         const failures: unknown[] = [];
@@ -173,3 +173,14 @@ suite('Aspire workspace discovery and configuration E2E', function () {
         }
     });
 });
+
+function getHiddenAppHostDirectory(appHostDirectory: string): string {
+    const runRoot = getRunRoot();
+    if (runRoot && path.parse(runRoot).root === path.parse(appHostDirectory).root) {
+        // The AppHost must move outside the workspace so recursive discovery cannot find it,
+        // but staying under the runner root lets the outer E2E cleanup remove it after crashes.
+        return path.join(runRoot, '.e2e-hidden-apphost');
+    }
+
+    return path.join(path.dirname(getWorkspaceRoot()), `.e2e-hidden-apphost-${process.pid}`);
+}

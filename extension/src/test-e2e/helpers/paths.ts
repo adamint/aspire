@@ -17,6 +17,10 @@ export function getWorkspaceRoot(): string {
     return getRequiredPathFromEnvironment('ASPIRE_EXTENSION_E2E_WORKSPACE_ROOT');
 }
 
+export function getRunRoot(): string | undefined {
+    return process.env.ASPIRE_EXTENSION_E2E_RUN_ROOT ? path.resolve(process.env.ASPIRE_EXTENSION_E2E_RUN_ROOT) : undefined;
+}
+
 export function getPrimaryAppHostProjectPath(): string {
     return getRequiredPathFromEnvironment('ASPIRE_EXTENSION_E2E_PRIMARY_APPHOST');
 }
