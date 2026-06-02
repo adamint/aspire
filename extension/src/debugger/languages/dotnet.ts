@@ -8,7 +8,7 @@ import * as readline from 'readline';
 import * as os from 'os';
 import * as fs from 'fs';
 import { doesFileExist } from '../../utils/io';
-import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, isProjectLaunchConfiguration, ProjectLaunchConfiguration } from '../../dcp/types';
+import { AspireResourceExtendedDebugConfiguration, EnvVar, ExecutableLaunchConfiguration, isProjectLaunchConfiguration, ProjectLaunchConfiguration } from '../../dcp/types';
 import { ResourceDebuggerExtension } from '../debuggerExtensions';
 import {
     readLaunchSettings,
@@ -262,6 +262,24 @@ function createDotNetSdkRunArguments(projectPath: string, runSessionArgs: string
     return dotnetRunArgs;
 }
 
+function configureDotNetRunDebugConfiguration(
+    debugConfiguration: AspireResourceExtendedDebugConfiguration,
+    projectPath: string,
+    args: string[] | string,
+    baseProfileEnvironmentVariables: { [key: string]: string } | undefined,
+    runSessionEnvironmentVariables: EnvVar[]): void {
+    debugConfiguration.program = 'dotnet';
+    debugConfiguration.args = args;
+    debugConfiguration.cwd = path.dirname(projectPath);
+    debugConfiguration.executablePath = undefined;
+    debugConfiguration.noDebug = true;
+    debugConfiguration.env = Object.fromEntries(mergeEnvironmentVariables(
+        baseProfileEnvironmentVariables,
+        debugConfiguration.env,
+        runSessionEnvironmentVariables
+    ));
+}
+
 function shouldLaunchProjectWithSdkRun(launchConfig: ProjectLaunchConfiguration, runSessionArgs: string[] | undefined): boolean {
     return launchConfig.mode?.toLowerCase() === 'nodebug' && hasMauiIosSdkRunArguments(runSessionArgs);
 }
@@ -372,16 +390,7 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 // Some project-shaped resources, such as MAUI iOS simulator launches, must run
                 // through the SDK's `dotnet run` target rather than the compiled DLL. Launching
                 // the DLL with the CoreCLR adapter skips the platform-specific MSBuild run target.
-                debugConfiguration.program = 'dotnet';
-                debugConfiguration.args = createDotNetSdkRunArguments(projectPath, args);
-                debugConfiguration.cwd = path.dirname(projectPath);
-                debugConfiguration.executablePath = undefined;
-                debugConfiguration.noDebug = true;
-                debugConfiguration.env = Object.fromEntries(mergeEnvironmentVariables(
-                    baseProfile?.environmentVariables,
-                    debugConfiguration.env,
-                    env
-                ));
+                configureDotNetRunDebugConfiguration(debugConfiguration, projectPath, createDotNetSdkRunArguments(projectPath, args), baseProfile?.environmentVariables, env);
             }
             else if (baseProfile?.commandName?.toLowerCase() === LaunchProfileCommandName.executable && baseProfile.executablePath) {
                 const dotNetService: IDotNetService = dotNetServiceProducer(launchOptions.debugSession);
@@ -421,19 +430,15 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                         vscode.window.showInformationMessage(fallbackMessage);
                     }
 
-                    debugConfiguration.program = 'dotnet';
-                    debugConfiguration.args = createDotNetRunArguments(projectPath, baseProfile?.commandLineArgs, args);
-                    debugConfiguration.cwd = path.dirname(projectPath);
-                    debugConfiguration.executablePath = undefined;
-                    debugConfiguration.noDebug = true;
+                    configureDotNetRunDebugConfiguration(debugConfiguration, projectPath, createDotNetRunArguments(projectPath, baseProfile?.commandLineArgs, args), baseProfile?.environmentVariables, env);
                 } else {
                     debugConfiguration.program = outputPath;
+                    debugConfiguration.env = Object.fromEntries(mergeEnvironmentVariables(
+                        baseProfile?.environmentVariables,
+                        debugConfiguration.env,
+                        env
+                    ));
                 }
-                debugConfiguration.env = Object.fromEntries(mergeEnvironmentVariables(
-                    baseProfile?.environmentVariables,
-                    debugConfiguration.env,
-                    env
-                ));
             }
             else {
                 const dotNetService: IDotNetService = dotNetServiceProducer(launchOptions.debugSession);
