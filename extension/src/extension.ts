@@ -938,7 +938,6 @@ async function createNoDebugProjectDebugConfiguration(command: Extract<AspireExt
     project_path: projectPath,
     disable_launch_profile: true,
     mode: 'NoDebug',
-    use_sdk_run: true,
   };
   const debugSessionConfig: AspireExtendedDebugConfiguration = {
     type: 'aspire',

@@ -2042,8 +2042,7 @@ public class DcpExecutorTests
         projectBuilder.WithDebugSupport(_ => new ProjectLaunchConfiguration
         {
             Mode = ExecutableLaunchMode.NoDebug,
-            DisableLaunchProfile = true,
-            UseSdkRun = true
+            DisableLaunchProfile = true
         }, "project");
 
         using var app = builder.Build();
@@ -2068,7 +2067,6 @@ public class DcpExecutorTests
         Assert.Equal("TestProject", plc!.ProjectPath);
         Assert.Equal(ExecutableLaunchMode.NoDebug, plc.Mode);
         Assert.True(plc.DisableLaunchProfile);
-        Assert.True(plc.UseSdkRun);
     }
 
     [Fact]

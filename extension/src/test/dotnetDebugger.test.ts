@@ -268,7 +268,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(dotNetService.buildDotNetProjectStub.notCalled, true);
     });
 
-    test('uses dotnet run when project launch configuration requests NoDebug', async () => {
+    test('uses dotnet run when NoDebug project launch has MAUI iOS SDK run arguments', async () => {
         const outputPath = '/tmp/bin/Debug/net10.0-ios/MauiApp.dll';
         const { extension } = createDebuggerExtension(outputPath, null, true, true);
 
@@ -276,7 +276,6 @@ suite('Dotnet Debugger Extension Tests', () => {
         const launchConfig: ProjectLaunchConfiguration = {
             type: 'project',
             mode: 'NoDebug',
-            use_sdk_run: true,
             project_path: projectPath
         };
 
@@ -296,6 +295,35 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(debugConfig.program, 'dotnet');
         assert.deepStrictEqual(debugConfig.args, ['run', '--project', projectPath, '--no-launch-profile', '-f', 'net10.0-ios', '-p:RuntimeIdentifier=iossimulator-x64']);
         assert.strictEqual(debugConfig.cwd, '/tmp');
+        assert.strictEqual(debugConfig.noDebug, true);
+    });
+
+    test('uses dotnet run when NoDebug project launch has MAUI iOS simulator device arguments', async () => {
+        const outputPath = '/tmp/bin/Debug/net10.0-ios/MauiApp.dll';
+        const { extension } = createDebuggerExtension(outputPath, null, true, true);
+
+        const projectPath = '/tmp/MauiApp.csproj';
+        const launchConfig: ProjectLaunchConfiguration = {
+            type: 'project',
+            mode: 'NoDebug',
+            project_path: projectPath
+        };
+
+        const debugConfig: AspireResourceExtendedDebugConfiguration = {
+            runId: '1',
+            debugSessionId: '1',
+            type: 'coreclr',
+            name: 'Test Debug Config',
+            request: 'launch',
+            noDebug: false
+        };
+
+        const fakeAspireDebugSession = sinon.createStubInstance(AspireDebugSession);
+
+        await extension.createDebugSessionConfigurationCallback!(launchConfig, ['run', '-p:_DeviceName=:v2:udid=E25BBE37-69BA-4720-B6FD-D54C97791E79'], [], { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession }, debugConfig);
+
+        assert.strictEqual(debugConfig.program, 'dotnet');
+        assert.deepStrictEqual(debugConfig.args, ['run', '--project', projectPath, '--no-launch-profile', '-p:_DeviceName=:v2:udid=E25BBE37-69BA-4720-B6FD-D54C97791E79']);
         assert.strictEqual(debugConfig.noDebug, true);
     });
 
@@ -324,6 +352,64 @@ suite('Dotnet Debugger Extension Tests', () => {
         await extension.createDebugSessionConfigurationCallback!(launchConfig, [], [], { debug: false, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession }, debugConfig);
 
         assert.strictEqual(debugConfig.program, outputPath);
+        assert.strictEqual(debugConfig.noDebug, true);
+    });
+
+    test('does not use dotnet run when ordinary NoDebug project app arguments start with run', async () => {
+        const outputPath = '/tmp/bin/Debug/net10.0/Worker.dll';
+        const { extension } = createDebuggerExtension(outputPath, null, true, true);
+
+        const projectPath = '/tmp/Worker.csproj';
+        const launchConfig: ProjectLaunchConfiguration = {
+            type: 'project',
+            mode: 'NoDebug',
+            project_path: projectPath
+        };
+
+        const debugConfig: AspireResourceExtendedDebugConfiguration = {
+            runId: '1',
+            debugSessionId: '1',
+            type: 'coreclr',
+            name: 'Test Debug Config',
+            request: 'launch',
+            noDebug: true
+        };
+
+        const fakeAspireDebugSession = sinon.createStubInstance(AspireDebugSession);
+
+        await extension.createDebugSessionConfigurationCallback!(launchConfig, ['run', '--ordinary-app-argument'], [], { debug: false, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession }, debugConfig);
+
+        assert.strictEqual(debugConfig.program, outputPath);
+        assert.strictEqual(debugConfig.args, 'run --ordinary-app-argument');
+        assert.strictEqual(debugConfig.noDebug, true);
+    });
+
+    test('does not use dotnet run when ordinary NoDebug project app arguments include non-iOS framework', async () => {
+        const outputPath = '/tmp/bin/Debug/net10.0/Worker.dll';
+        const { extension } = createDebuggerExtension(outputPath, null, true, true);
+
+        const projectPath = '/tmp/Worker.csproj';
+        const launchConfig: ProjectLaunchConfiguration = {
+            type: 'project',
+            mode: 'NoDebug',
+            project_path: projectPath
+        };
+
+        const debugConfig: AspireResourceExtendedDebugConfiguration = {
+            runId: '1',
+            debugSessionId: '1',
+            type: 'coreclr',
+            name: 'Test Debug Config',
+            request: 'launch',
+            noDebug: true
+        };
+
+        const fakeAspireDebugSession = sinon.createStubInstance(AspireDebugSession);
+
+        await extension.createDebugSessionConfigurationCallback!(launchConfig, ['run', '-f', 'net10.0-android', '--ordinary-app-argument'], [], { debug: false, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession }, debugConfig);
+
+        assert.strictEqual(debugConfig.program, outputPath);
+        assert.strictEqual(debugConfig.args, 'run -f net10.0-android --ordinary-app-argument');
         assert.strictEqual(debugConfig.noDebug, true);
     });
 

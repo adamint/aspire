@@ -425,7 +425,7 @@ public class MauiPlatformExtensionsTests
     }
 
     [Fact]
-    public void AddiOSSimulator_ConfiguresProjectLaunchAsNoDebug()
+    public async Task AddiOSSimulator_ConfiguresProjectLaunchAsNoDebug()
     {
         var projectContent = CreateProjectContent("net10.0-ios");
         var tempFile = CreateTempProjectFile(projectContent);
@@ -452,7 +452,20 @@ public class MauiPlatformExtensionsTests
             Assert.Equal("project", launchConfiguration.GetProperty("type").GetString());
             Assert.Equal(tempFile, launchConfiguration.GetProperty("project_path").GetString());
             Assert.Equal("NoDebug", launchConfiguration.GetProperty("mode").GetString());
-            Assert.True(launchConfiguration.GetProperty("use_sdk_run").GetBoolean());
+            Assert.False(launchConfiguration.TryGetProperty("use_sdk_run", out _));
+
+            var args = new List<object>();
+            var argsContext = new CommandLineArgsCallbackContext(args, simulator.Resource);
+            foreach (var argsAnnotation in simulator.Resource.Annotations.OfType<CommandLineArgsCallbackAnnotation>())
+            {
+                await argsAnnotation.Callback(argsContext);
+            }
+
+            Assert.Collection(args,
+                arg => Assert.Equal("run", Assert.IsType<string>(arg)),
+                arg => Assert.Equal("-f", Assert.IsType<string>(arg)),
+                arg => Assert.Equal("net10.0-ios", Assert.IsType<string>(arg)),
+                arg => Assert.Equal("-p:_DeviceName=:v2:udid=E25BBE37-69BA-4720-B6FD-D54C97791E79", Assert.IsType<string>(arg)));
         }
         finally
         {

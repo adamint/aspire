@@ -369,7 +369,7 @@ public static class MauiiOSExtensions
                 Command = "dotnet",
                 WorkingDirectory = workingDirectory
             })
-            .WithDebugSupport(_ => new { type = "project", project_path = projectPath, mode = "NoDebug", use_sdk_run = true }, "project");
+            .WithDebugSupport(_ => new { type = "project", project_path = projectPath, mode = "NoDebug" }, "project");
 #pragma warning restore ASPIREEXTENSION001
 
         // Build additional arguments for simulator UDID if specified

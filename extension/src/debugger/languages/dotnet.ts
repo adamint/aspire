@@ -262,8 +262,48 @@ function createDotNetSdkRunArguments(projectPath: string, runSessionArgs: string
     return dotnetRunArgs;
 }
 
-function shouldLaunchProjectWithSdkRun(launchConfig: ProjectLaunchConfiguration): boolean {
-    return launchConfig.mode?.toLowerCase() === 'nodebug' && launchConfig.use_sdk_run === true;
+function shouldLaunchProjectWithSdkRun(launchConfig: ProjectLaunchConfiguration, runSessionArgs: string[] | undefined): boolean {
+    return launchConfig.mode?.toLowerCase() === 'nodebug' && hasMauiIosSdkRunArguments(runSessionArgs);
+}
+
+function hasMauiIosSdkRunArguments(runSessionArgs: string[] | undefined): boolean {
+    if (runSessionArgs?.[0]?.toLowerCase() !== 'run') {
+        return false;
+    }
+
+    // MAUI iOS platform resources pass SDK arguments as:
+    //   run -f net10.0-ios -p:_DeviceName=:v2:udid=<UDID>
+    // or with MSBuild properties such as:
+    //   run -p:TargetFramework=net10.0-ios -p:RuntimeIdentifier=iossimulator-x64
+    // Ordinary app arguments can also start with "run", so require an iOS TFM
+    // or iOS simulator MSBuild property before treating the payload as SDK args.
+    for (let i = 1; i < runSessionArgs.length; i++) {
+        const argument = runSessionArgs[i];
+        const normalizedArgument = argument.toLowerCase();
+        if ((normalizedArgument === '-f' || normalizedArgument === '--framework') &&
+            i + 1 < runSessionArgs.length &&
+            isIosTargetFramework(runSessionArgs[i + 1])) {
+            return true;
+        }
+
+        if (isIosTargetFramework(getMsBuildPropertyValue(argument, 'TargetFramework')) ||
+            getMsBuildPropertyValue(argument, 'RuntimeIdentifier')?.toLowerCase().startsWith('iossimulator-') === true ||
+            getMsBuildPropertyValue(argument, '_DeviceName')?.toLowerCase().startsWith(':v2:udid=') === true) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function isIosTargetFramework(value: string | undefined): boolean {
+    return value !== undefined && /^net\d+(?:\.\d+)?-ios/.test(value.toLowerCase());
+}
+
+function getMsBuildPropertyValue(argument: string, propertyName: string): string | undefined {
+    const prefixes = [`-p:${propertyName}=`, `/p:${propertyName}=`];
+    const matchingPrefix = prefixes.find(prefix => argument.toLowerCase().startsWith(prefix.toLowerCase()));
+    return matchingPrefix ? argument.substring(matchingPrefix.length) : undefined;
 }
 
 export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSession: AspireDebugSession) => IDotNetService): ResourceDebuggerExtension {
@@ -328,7 +368,7 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 env.push({ name: "ASPIRE_DASHBOARD_AI_DISABLED", value: "true" });
             }
 
-            if (!launchOptions.isApphost && shouldLaunchProjectWithSdkRun(launchConfig)) {
+            if (!launchOptions.isApphost && shouldLaunchProjectWithSdkRun(launchConfig, args)) {
                 // Some project-shaped resources, such as MAUI iOS simulator launches, must run
                 // through the SDK's `dotnet run` target rather than the compiled DLL. Launching
                 // the DLL with the CoreCLR adapter skips the platform-specific MSBuild run target.

@@ -40,7 +40,4 @@ internal sealed class ProjectLaunchConfiguration() : ExecutableLaunchConfigurati
 
     [JsonPropertyName("project_path")]
     public string ProjectPath { get; set; } = string.Empty;
-
-    [JsonPropertyName("use_sdk_run")]
-    public bool UseSdkRun { get; set; }
 }

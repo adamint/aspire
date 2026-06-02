@@ -31,7 +31,7 @@ suite('Aspire debug configuration E2E', function () {
         const status = await executeE2eControlCommand({
             name: 'createNoDebugProjectDebugConfiguration',
             projectPath,
-            args: ['-p:TargetFramework=net10.0-ios', '-p:RuntimeIdentifier=iossimulator-x64'],
+            args: ['run', '-p:TargetFramework=net10.0-ios', '-p:RuntimeIdentifier=iossimulator-x64'],
         });
 
         assert.strictEqual(status.status, 'applied');
