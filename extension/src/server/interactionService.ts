@@ -330,10 +330,12 @@ export class InteractionService implements IInteractionService {
         const baseUrl = getDashboardUrlProperty(dashboardUrls, 'baseUrl');
         const codespacesUrl = getDashboardUrlProperty(dashboardUrls, 'codespacesUrl');
 
+        extensionLogOutputChannel.info(`${dashboard}: ${baseUrl}`);
         this.writeDebugSessionMessage(`${dashboard}: `, true, AnsiColors.Green, false);
         this.writeDebugSessionMessage(baseUrl, true, AnsiColors.Blue);
 
         if (codespacesUrl) {
+            extensionLogOutputChannel.info(`${codespaces}: ${codespacesUrl}`);
             this.writeDebugSessionMessage(`${codespaces}: `, true, AnsiColors.Green, false);
             this.writeDebugSessionMessage(codespacesUrl, true, AnsiColors.Blue);
         }
