@@ -127,7 +127,7 @@ class WorkspaceAppHostItem extends vscode.TreeItem {
         appHostName?: string,
         appHostDescription?: string,
         public readonly launching?: boolean,
-        stopping = false
+        public readonly stopping = false
     ) {
         super(appHostName ?? workspaceAppHostLabel, vscode.TreeItemCollapsibleState.Collapsed);
         this.id = `workspace-apphost:${getComparisonKey(path.resolve(appHostPath))}`;
@@ -460,6 +460,9 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     private readonly _onDidChangeTreeData = new vscode.EventEmitter<TreeElement | undefined | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
+    private readonly _onDidChangeStoppingState = new vscode.EventEmitter<void>();
+    readonly onDidChangeStoppingState = this._onDidChangeStoppingState.event;
+
     private readonly _onDidChangeContent = new vscode.EventEmitter<vscode.Uri>();
     readonly onDidChange = this._onDidChangeContent.event;
 
@@ -527,6 +530,10 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         return this._repository.viewMode;
     }
 
+    get stoppingPaths(): readonly string[] {
+        return Array.from(this._stoppingAppHostTimeouts.keys());
+    }
+
     dispose(): void {
         this._dataSubscription.dispose();
         this._launchingSubscription.dispose();
@@ -537,6 +544,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         this._contentProviderRegistration?.dispose();
         this._documentCloseSubscription?.dispose();
         this._onDidChangeTreeData.dispose();
+        this._onDidChangeStoppingState.dispose();
         this._onDidChangeContent.dispose();
     }
 
@@ -567,6 +575,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         (timeout as { unref?: () => void }).unref?.();
 
         this._stoppingAppHostTimeouts.set(key, timeout);
+        this._onDidChangeStoppingState.fire();
     }
 
     private _isStoppingAppHost(appHostPath: string | undefined): boolean {
@@ -589,6 +598,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
 
         clearTimeout(timeout);
         this._stoppingAppHostTimeouts.delete(key);
+        this._onDidChangeStoppingState.fire();
 
         if (fireChangeEvent) {
             this._onDidChangeTreeData.fire();
@@ -892,7 +902,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
 
         if (element instanceof WorkspaceAppHostItem) {
             const items: TreeElement[] = [new WorkspaceAppHostActionItem(element, 'openSource')];
-            if (!element.launching) {
+            if (!element.launching && !element.stopping) {
                 items.push(new WorkspaceAppHostActionItem(element, 'run'));
                 items.push(new WorkspaceAppHostActionItem(element, 'debug'));
             }
@@ -1091,15 +1101,15 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         }
     }
 
-    stopAppHost(element: AppHostItem | WorkspaceResourcesItem | WorkspaceAppHostItem): void {
+    async stopAppHost(element: AppHostItem | WorkspaceResourcesItem | WorkspaceAppHostItem): Promise<void> {
         const appHostPath = element instanceof AppHostItem ? element.appHost.appHostPath : element.appHostPath;
         if (!appHostPath) {
             vscode.window.showWarningMessage(appHostSourceNotFound);
             return;
         }
+        await this._terminalProvider.sendAspireCommandToAspireTerminal(`stop --apphost "${appHostPath}"`);
         this._trackStoppingAppHost(appHostPath);
         this._onDidChangeTreeData.fire();
-        this._terminalProvider.sendAspireCommandToAspireTerminal(`stop --apphost "${appHostPath}"`);
     }
 
     async openAppHostSource(element?: AppHostItem | WorkspaceResourcesItem | WorkspaceAppHostItem): Promise<void> {
@@ -1128,32 +1138,32 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         }
     }
 
-    stopResource(element: ResourceItem): void {
-        this._runResourceCommand(element, 'stop');
+    async stopResource(element: ResourceItem): Promise<void> {
+        await this._runResourceCommand(element, 'stop');
     }
 
-    startResource(element: ResourceItem): void {
-        this._runResourceCommand(element, 'start');
+    async startResource(element: ResourceItem): Promise<void> {
+        await this._runResourceCommand(element, 'start');
     }
 
-    restartResource(element: ResourceItem): void {
-        this._runResourceCommand(element, 'restart');
+    async restartResource(element: ResourceItem): Promise<void> {
+        await this._runResourceCommand(element, 'restart');
     }
 
-    viewResourceLogs(element: ResourceItem): void {
+    async viewResourceLogs(element: ResourceItem): Promise<void> {
         // aspire logs accepts the resource display name, not the internal name
         const resourceName = element.resource.displayName ?? element.resource.name;
         if (this._repository.viewMode === 'workspace') {
             const appHostPath = this._getAppHostPathForResource(element);
             const appHostFlag = appHostPath ? ` --apphost "${appHostPath}"` : '';
-            this._terminalProvider.sendAspireCommandToAspireTerminal(`logs "${resourceName}"${appHostFlag}`);
+            await this._terminalProvider.sendAspireCommandToAspireTerminal(`logs "${resourceName}"${appHostFlag}`);
             return;
         }
         const appHost = this._findAppHostForResource(element);
         if (!appHost) {
             return;
         }
-        this._terminalProvider.sendAspireCommandToAspireTerminal(`logs "${resourceName}" --apphost "${appHost.appHostPath}"`);
+        await this._terminalProvider.sendAspireCommandToAspireTerminal(`logs "${resourceName}" --apphost "${appHost.appHostPath}"`);
     }
 
     async executeResourceCommand(element: ResourceItem): Promise<void> {
@@ -1185,7 +1195,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             throw new vscode.CancellationError();
         }
 
-        this._runResourceCommand(element, `"${selected.label}"`, commandArguments.args, commandArguments.containsSecret);
+        await this._runResourceCommand(element, `"${selected.label}"`, commandArguments.args, commandArguments.containsSecret);
     }
 
     async copyAppHostPath(element: AppHostItem | WorkspaceResourcesItem | WorkspaceAppHostItem): Promise<void> {
@@ -1253,11 +1263,11 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         vscode.commands.executeCommand('simpleBrowser.show', element.url);
     }
 
-    private _runResourceCommand(element: ResourceItem, command: string, additionalArgs?: string[], redactAdditionalArgs = false): void {
+    private async _runResourceCommand(element: ResourceItem, command: string, additionalArgs?: string[], redactAdditionalArgs = false): Promise<void> {
         if (this._repository.viewMode === 'workspace') {
             const appHostPath = this._getAppHostPathForResource(element);
             const appHostFlag = appHostPath ? ` --apphost "${appHostPath}"` : '';
-            this._terminalProvider.sendAspireCommandToAspireTerminal(`resource "${element.resource.name}" ${command}${appHostFlag}`, true, additionalArgs, { redactAdditionalArgs });
+            await this._terminalProvider.sendAspireCommandToAspireTerminal(`resource "${element.resource.name}" ${command}${appHostFlag}`, true, additionalArgs, { redactAdditionalArgs });
             return;
         }
 
@@ -1265,7 +1275,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         if (!appHost) {
             return;
         }
-        this._terminalProvider.sendAspireCommandToAspireTerminal(`resource "${element.resource.name}" ${command} --apphost "${appHost.appHostPath}"`, true, additionalArgs, { redactAdditionalArgs });
+        await this._terminalProvider.sendAspireCommandToAspireTerminal(`resource "${element.resource.name}" ${command} --apphost "${appHost.appHostPath}"`, true, additionalArgs, { redactAdditionalArgs });
     }
 
     private async _loadResourceCommandArguments(element: ResourceItem, commandName: string, values: readonly ResourceCommandArgumentValue[]): Promise<ResourceCommandArgumentInputJson[] | undefined> {

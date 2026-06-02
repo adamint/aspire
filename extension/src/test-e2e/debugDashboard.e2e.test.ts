@@ -16,8 +16,8 @@ suite('Aspire debug dashboard E2E', function () {
             () => restoreWorkspaceCliPath(),
             () => executeE2eControlCommand({ name: 'stopDebugging' }),
             () => stopPrimaryAppHostIfRunning(),
-            () => waitForNoDebugSessions().catch(() => undefined),
-            () => waitForNoRunningAppHost().catch(() => undefined),
+            () => waitForNoDebugSessions(),
+            () => waitForNoRunningAppHost(),
         ], 'Debug dashboard E2E teardown failed.');
     });
 
@@ -86,7 +86,7 @@ suite('Aspire debug dashboard E2E', function () {
             await setShowStatusDelayForE2E(undefined);
             fs.writeFileSync(appHostSourcePath, originalSource);
             await executeE2eControlCommand({ name: 'stopDebugging' });
-            await waitForNoDebugSessions().catch(() => undefined);
+            await waitForNoDebugSessions();
         }
     });
 });

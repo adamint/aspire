@@ -18,7 +18,7 @@ suite('Aspire zero-to-running E2E', function () {
             () => clearBreakpoints(),
             () => executeE2eControlCommand({ name: 'stopDebugging' }),
             () => stopAppHostIfRunning(appHostPath),
-            () => waitForNoDebugSessions().catch(() => undefined),
+            () => waitForNoDebugSessions(),
             () => restoreWorkspaceAppHostConfig(),
             () => removeGeneratedProject(projectName),
         ], 'Zero-to-running E2E teardown failed.');

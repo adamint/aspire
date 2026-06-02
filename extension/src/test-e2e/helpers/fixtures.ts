@@ -3,12 +3,13 @@ import * as path from 'path';
 import type { AspireExtensionE2EControlCommand, AspireExtensionE2EControlStatus } from '../../types/extensionApi';
 import { applyE2eControl, waitForExtensionState, waitForNoRunningAppHost } from './assertions';
 import { getCliPath, getPrimaryAppHostProjectPath, getRepoRoot, getWorkspaceRoot } from './paths';
-import { runProcess } from './process';
+import { ProcessError, runProcess } from './process';
 
 const csharpFileHeader = `// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
 `;
+let atomicWriteSequence = 0;
 
 export function getWorkspaceSettingsPath(): string {
     return path.join(getWorkspaceRoot(), '.vscode', 'settings.json');
@@ -33,7 +34,7 @@ export async function writeWorkspaceCliPath(cliPath: string): Promise<void> {
     const settingsPath = getWorkspaceSettingsPath();
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
     settings['aspire.aspireCliExecutablePath'] = cliPath;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, undefined, 2));
+    writeFileAtomically(settingsPath, JSON.stringify(settings, undefined, 2));
 
     await applyE2eControl({ aspireCliExecutablePath: cliPath });
 }
@@ -149,11 +150,11 @@ export function removeWorkspaceAppHostConfig(): void {
 }
 
 export function writeWorkspaceAppHostConfig(value: unknown): void {
-    fs.writeFileSync(getWorkspaceAppHostConfigPath(), JSON.stringify(value, undefined, 2));
+    writeFileAtomically(getWorkspaceAppHostConfigPath(), JSON.stringify(value, undefined, 2));
 }
 
 export function writeWorkspaceAppHostConfigRaw(value: string): void {
-    fs.writeFileSync(getWorkspaceAppHostConfigPath(), value);
+    writeFileAtomically(getWorkspaceAppHostConfigPath(), value);
 }
 
 export function restoreWorkspaceAppHostConfig(): void {
@@ -177,13 +178,12 @@ export function writeWorkspaceSetting(key: string, value: unknown): void {
     const settingsPath = getWorkspaceSettingsPath();
     const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8')) as Record<string, unknown>;
     settings[key] = value;
-    fs.writeFileSync(settingsPath, JSON.stringify(settings, undefined, 2));
+    writeFileAtomically(settingsPath, JSON.stringify(settings, undefined, 2));
 }
 
 export function writeLegacyAspireSettings(appHostPath = path.join('..', 'AspireE2E.AppHost', 'AspireE2E.AppHost.csproj')): void {
     const settingsPath = getLegacyAspireSettingsPath();
-    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-    fs.writeFileSync(settingsPath, JSON.stringify({ appHostPath }, undefined, 2));
+    writeFileAtomically(settingsPath, JSON.stringify({ appHostPath }, undefined, 2));
 }
 
 export function removeLegacyAspireSettings(): void {
@@ -234,11 +234,12 @@ export async function stopAppHostIfRunning(appHostPath: string): Promise<void> {
             throw error;
         }
 
-        if (/not running|No running AppHost|No AppHost/i.test(error.message)) {
+        const stopErrorText = error instanceof ProcessError ? error.result.stderr : error.message;
+        if (/not running|No running AppHost|No AppHost/i.test(stopErrorText)) {
             return;
         }
 
-        if (/Failed to stop/i.test(error.message)) {
+        if (/Failed to stop/i.test(stopErrorText)) {
             try {
                 // Debug-session shutdown can race with the CLI's fallback stop command. If the CLI
                 // had to force-terminate the AppHost it exits non-zero, but teardown should only fail
@@ -350,4 +351,46 @@ function removePath(targetPath: string, options: fs.RmOptions): void {
         retryDelay: 250,
         ...options,
     });
+}
+
+function writeFileAtomically(filePath: string, content: string): void {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const temporaryPath = `${filePath}.${process.pid}.${atomicWriteSequence++}.tmp`;
+    fs.writeFileSync(temporaryPath, content);
+    try {
+        renameFileWithRetry(temporaryPath, filePath);
+    }
+    finally {
+        fs.rmSync(temporaryPath, { force: true });
+    }
+}
+
+function renameFileWithRetry(sourcePath: string, destinationPath: string): void {
+    const maxAttempts = process.platform === 'win32' ? 10 : 1;
+    for (let attempt = 1; ; attempt++) {
+        try {
+            fs.renameSync(sourcePath, destinationPath);
+            return;
+        }
+        catch (error) {
+            if (attempt >= maxAttempts || !isRetryableRenameError(error)) {
+                throw error;
+            }
+
+            sleepSynchronously(25);
+        }
+    }
+}
+
+function isRetryableRenameError(error: unknown): boolean {
+    if (process.platform !== 'win32' || !error || typeof error !== 'object' || !('code' in error)) {
+        return false;
+    }
+
+    return error.code === 'EPERM' || error.code === 'EACCES' || error.code === 'EEXIST';
+}
+
+function sleepSynchronously(milliseconds: number): void {
+    const buffer = new SharedArrayBuffer(4);
+    Atomics.wait(new Int32Array(buffer), 0, 0, milliseconds);
 }

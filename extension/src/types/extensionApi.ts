@@ -18,6 +18,7 @@ export interface AspireExtensionStateSnapshot {
     workspaceResources: readonly AspireResourceState[];
     appHosts: readonly AspireAppHostState[];
     launchingPaths: readonly string[];
+    stoppingPaths: readonly string[];
     debugSessions: readonly AspireDebugSessionState[];
 }
 

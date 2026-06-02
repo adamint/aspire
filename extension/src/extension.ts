@@ -325,15 +325,16 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(restoreCommandRegistration);
 
   const onDidChangeStateEmitter = new vscode.EventEmitter<AspireExtensionStateSnapshot>();
-  const fireStateChanged = () => onDidChangeStateEmitter.fire(createStateSnapshot(dataRepository, appHostLaunchService, aspireExtensionContext));
+  const fireStateChanged = () => onDidChangeStateEmitter.fire(createStateSnapshot(dataRepository, appHostLaunchService, appHostTreeProvider, aspireExtensionContext));
   context.subscriptions.push(onDidChangeStateEmitter);
   context.subscriptions.push(dataRepository.onDidChangeData(fireStateChanged));
   context.subscriptions.push(appHostLaunchService.onDidChangeLaunchingState(fireStateChanged));
+  context.subscriptions.push(appHostTreeProvider.onDidChangeStoppingState(fireStateChanged));
   context.subscriptions.push(aspireExtensionContext.onDidChangeDebugSessions(fireStateChanged));
   const e2eStateFileBridge = createE2eStateFileBridge(context, dataRepository, appHostLaunchService, appHostTreeProvider, terminalProvider, onDidChangeStateEmitter.event);
   context.subscriptions.push(e2eStateFileBridge);
 
-  const api = createExtensionApi(context, rpcServer, dcpServer, dataRepository, appHostLaunchService, onDidChangeStateEmitter.event);
+  const api = createExtensionApi(context, rpcServer, dcpServer, dataRepository, appHostLaunchService, appHostTreeProvider, onDidChangeStateEmitter.event);
 
   return Object.freeze(api);
 }
@@ -384,13 +385,14 @@ function createExtensionApi(
   dcpServer: AspireDcpServer,
   dataRepository: AppHostDataRepository,
   appHostLaunchService: AppHostLaunchService,
+  appHostTreeProvider: AspireAppHostTreeProvider,
   onDidChangeState: vscode.Event<AspireExtensionStateSnapshot>,
 ): AspireExtensionApi {
   const waitForState = (
     predicate: (state: AspireExtensionStateSnapshot) => boolean,
     options?: WaitForStateOptions
   ): Promise<AspireExtensionStateSnapshot> => {
-    const currentState = createStateSnapshot(dataRepository, appHostLaunchService, aspireExtensionContext);
+    const currentState = createStateSnapshot(dataRepository, appHostLaunchService, appHostTreeProvider, aspireExtensionContext);
     if (predicate(currentState)) {
       return Promise.resolve(currentState);
     }
@@ -399,7 +401,7 @@ function createExtensionApi(
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         subscription.dispose();
-        reject(new Error(`Timed out after ${timeoutMs}ms waiting for Aspire extension state. Last state: ${JSON.stringify(createStateSnapshot(dataRepository, appHostLaunchService, aspireExtensionContext))}`));
+        reject(new Error(`Timed out after ${timeoutMs}ms waiting for Aspire extension state. Last state: ${JSON.stringify(createStateSnapshot(dataRepository, appHostLaunchService, appHostTreeProvider, aspireExtensionContext))}`));
       }, timeoutMs);
 
       const subscription = onDidChangeState(state => {
@@ -418,7 +420,7 @@ function createExtensionApi(
     dcpServerInfo: { address: dcpServer.connectionInfo.address },
     logDirectory: context.logUri.fsPath,
     get state() {
-      return createStateSnapshot(dataRepository, appHostLaunchService, aspireExtensionContext);
+      return createStateSnapshot(dataRepository, appHostLaunchService, appHostTreeProvider, aspireExtensionContext);
     },
     onDidChangeState,
     waitForState,
@@ -435,6 +437,7 @@ function createExtensionApi(
 function createStateSnapshot(
   dataRepository: AppHostDataRepository,
   appHostLaunchService: AppHostLaunchService,
+  appHostTreeProvider: AspireAppHostTreeProvider,
   extensionContext: AspireExtensionContext,
   includeSensitiveDashboardUrls = false,
 ): AspireExtensionStateSnapshot {
@@ -452,6 +455,7 @@ function createStateSnapshot(
     workspaceResources: dataRepository.workspaceResources.map(resource => cloneResourceState(resource, includeSensitiveDashboardUrls)),
     appHosts: dataRepository.appHosts.map(appHost => cloneAppHostState(appHost, includeSensitiveDashboardUrls)),
     launchingPaths: [...appHostLaunchService.launchingPaths],
+    stoppingPaths: [...appHostTreeProvider.stoppingPaths],
     debugSessions: extensionContext.aspireDebugSessions.map(session => ({
       appHostPath: session.appHostPath,
       dashboardUrl: session.dashboardUrl && includeSensitiveDashboardUrls ? stripResourceSuffix(session.dashboardUrl) : sanitizeDashboardUrl(session.dashboardUrl),
@@ -487,7 +491,7 @@ function createE2eStateFileBridge(
   const writeStateFile = () => {
     writeJsonFileAtomic(stateFile, {
       updatedAt: new Date().toISOString(),
-      state: createStateSnapshot(dataRepository, appHostLaunchService, aspireExtensionContext, true),
+      state: createStateSnapshot(dataRepository, appHostLaunchService, appHostTreeProvider, aspireExtensionContext, true),
       dashboardUrl: getSensitiveDashboardUrl(dataRepository),
       commandInvocations,
       terminalCommands,
@@ -1065,6 +1069,7 @@ function cloneTerminalCommandEvent(event: AspireTerminalCommandEvent, sequence: 
     additionalArgs: event.additionalArgs ? [...event.additionalArgs] : undefined,
     containsRedactedArgs: event.containsRedactedArgs,
     executionSuppressed: event.executionSuppressed,
+    executionMode: event.executionMode,
   };
 }
 

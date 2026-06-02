@@ -79,17 +79,24 @@ suite('Aspire tree action command E2E', function () {
         const copiedLogPath = await executeE2eControlCommand({ name: 'copyLogFilePath', appHostPath });
         assert.ok(path.isAbsolute(String(copiedLogPath.result)));
 
+        let terminalBefore: number;
         await setTerminalCommandExecutionSuppressedForE2E(true);
         before = getCommandInvocationCount('aspire-vscode.viewResourceLogs');
+        terminalBefore = getTerminalCommandCount();
         await executeE2eControlCommand({ name: 'viewResourceLogs', appHostPath, resourceName: 'e2e-worker' });
         await waitForCommandOutcome('aspire-vscode.viewResourceLogs', 'success', 60000, before);
+        await waitForTerminalCommand(
+            event => event.subcommand.includes('logs "e2e-worker"') && event.executionSuppressed,
+            'suppressed logs terminal command',
+            60000,
+            terminalBefore);
         await setTerminalCommandExecutionSuppressedForE2E(false);
 
         await waitForResource('e2e-worker');
         await waitForResourceState('e2e-worker', ['Running'], 90000);
 
         before = getCommandInvocationCount('aspire-vscode.stopResource');
-        let terminalBefore = getTerminalCommandCount();
+        terminalBefore = getTerminalCommandCount();
         await executeE2eControlCommand({ name: 'stopResource', appHostPath, resourceName: workerResourceName });
         await waitForCommandOutcome('aspire-vscode.stopResource', 'success', 60000, before);
         await waitForResourceTerminalCommand(workerResourceName, 'stop', terminalBefore);

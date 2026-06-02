@@ -12,7 +12,6 @@ interface Deadline {
 }
 
 let controlRevision = Date.now();
-let workspaceFolderOpened = false;
 
 export async function waitForRepositoryIdle(timeoutMs = 120000): Promise<ExtensionE2EStateFile> {
     return await waitForExtensionState(file => file.state.isWorkspaceAppHostDiscoveryComplete && !file.state.isRepositoryLoading, 'repository to become idle', timeoutMs);
@@ -48,7 +47,14 @@ export async function waitForAppHostLaunching(appHostPath = getPrimaryAppHostPro
 }
 
 export async function waitForNoRunningAppHost(timeoutMs = 90000): Promise<ExtensionE2EStateFile> {
-    return await waitForExtensionState(file => findRunningAppHost(file.state) === undefined && file.state.launchingPaths.length === 0, 'AppHost to stop', timeoutMs);
+    return await waitForExtensionState(file => findRunningAppHost(file.state) === undefined && file.state.launchingPaths.length === 0 && file.state.stoppingPaths.length === 0, 'AppHost to stop', timeoutMs);
+}
+
+export async function waitForStoppingAppHost(appHostPath = getPrimaryAppHostProjectPath(), timeoutMs = 30000): Promise<ExtensionE2EStateFile> {
+    return await waitForExtensionState(
+        file => file.state.stoppingPaths.some(stoppingPath => isSamePath(stoppingPath, appHostPath)),
+        `AppHost '${appHostPath}' to enter stopping state`,
+        timeoutMs);
 }
 
 export async function waitForResource(resourceName: string, timeoutMs = 120000): Promise<ExtensionE2EStateFile> {
@@ -238,13 +244,8 @@ export function readStateFile(): ExtensionE2EStateFile {
 }
 
 async function ensureWorkspaceFolderOpen(deadline: Deadline): Promise<void> {
-    if (workspaceFolderOpened) {
-        return;
-    }
-
     const expectedPath = getWorkspaceRoot();
     if (await tryWaitForWorkspaceFolder(expectedPath, deadline, 5000)) {
-        workspaceFolderOpened = true;
         return;
     }
 
@@ -254,7 +255,6 @@ async function ensureWorkspaceFolderOpen(deadline: Deadline): Promise<void> {
         getRemainingTimeout(deadline, 'openWorkspaceFolder control to start', 10000));
     const openWorkspaceRevision = openWorkspaceStatus.revision;
     if (await tryWaitForWorkspaceFolder(expectedPath, deadline, 120000, openWorkspaceRevision)) {
-        workspaceFolderOpened = true;
         return;
     }
 
@@ -373,6 +373,8 @@ function isDebugSessionForAppHost(session: AspireDebugSessionState, appHostPath:
 }
 
 function isResourceMatch(resource: ResourceState, resourceName: string): boolean {
+    // Match the stable name first. Display names are convenient for UI assertions
+    // but are not guaranteed to be unique across resources or AppHosts.
     return resource.name === resourceName || resource.displayName === resourceName;
 }
 

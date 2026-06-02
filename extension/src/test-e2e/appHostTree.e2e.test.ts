@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { getResources, getTreeAppHostLabel, waitForCommandOutcome, waitForDashboardUrl, waitForNoRunningAppHost, waitForRepositoryIdle, waitForResource, waitForRunningAppHost, waitForWorkspaceAppHost } from './helpers/assertions';
+import { getResources, getTerminalCommandCount, getTreeAppHostLabel, waitForCommandOutcome, waitForDashboardUrl, waitForNoRunningAppHost, waitForRepositoryIdle, waitForResource, waitForRunningAppHost, waitForStoppingAppHost, waitForTerminalCommand, waitForWorkspaceAppHost } from './helpers/assertions';
 import { executeE2eControlCommand, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setTerminalCommandExecutionSuppressedForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath } from './helpers/paths';
 import { cancelActiveInput, clickTreeItem, openAspireView, waitForTreeItem, waitForTreeItemDescription } from './helpers/vscode';
@@ -13,7 +13,7 @@ suite('Aspire AppHost tree E2E', function () {
             () => setTerminalCommandExecutionSuppressedForE2E(false),
             () => restoreWorkspaceCliPath(),
             () => stopPrimaryAppHostIfRunning(),
-            () => waitForNoRunningAppHost().catch(() => undefined),
+            () => waitForNoRunningAppHost(),
         ], 'AppHost tree E2E teardown failed.');
     });
 
@@ -61,8 +61,16 @@ suite('Aspire AppHost tree E2E', function () {
 
         await setTerminalCommandExecutionSuppressedForE2E(true);
         try {
-            await executeE2eControlCommand({ name: 'stopAppHost', appHostPath: discovered.state.workspaceAppHostPath ?? getPrimaryAppHostProjectPath() });
+            const stopAppHostPath = discovered.state.workspaceAppHostPath ?? getPrimaryAppHostProjectPath();
+            const terminalBefore = getTerminalCommandCount();
+            await executeE2eControlCommand({ name: 'stopAppHost', appHostPath: stopAppHostPath });
             await waitForCommandOutcome('aspire-vscode.stopAppHost', 'success');
+            await waitForTerminalCommand(
+                event => event.subcommand.includes('stop') && event.executionSuppressed,
+                'suppressed stop AppHost terminal command',
+                60000,
+                terminalBefore);
+            await waitForStoppingAppHost(stopAppHostPath);
 
             section = await openAspireView();
             await waitForTreeItemDescription(section, appHostLabel, 'Stopping...');
