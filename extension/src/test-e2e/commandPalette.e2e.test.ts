@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getCommandInvocationCount, getTerminalCommandCount, isSamePath, waitForCommandOutcome, waitForExtensionState, waitForRepositoryIdle, waitForTerminalCommand, waitForWorkspaceAppHost } from './helpers/assertions';
-import { createAdditionalAppHostCandidate, executeE2eControlCommand, removeAdditionalAppHostCandidate, removeWorkspaceAppHostConfig, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, setCliUnavailableForE2E, setTerminalCommandExecutionSuppressedForE2E, writeWorkspaceCliPath } from './helpers/fixtures';
+import { createAdditionalAppHostCandidate, executeE2eControlCommand, removeAdditionalAppHostCandidate, removeWorkspaceAppHostConfig, restoreE2eCliPathForE2E, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, setCliUnavailableForE2E, setE2eCliPathForE2E, setTerminalCommandExecutionSuppressedForE2E, writeWorkspaceCliPath } from './helpers/fixtures';
 import { getWorkspaceRoot } from './helpers/paths';
 import { executeCommandFromPalette, openAspireView, waitForEditorTitle, waitForNotificationMessage, waitForTerminalChannel, waitForWorkbenchText } from './helpers/vscode';
 
@@ -13,6 +13,7 @@ suite('Aspire command palette E2E', function () {
         await executeE2eControlCommand({ name: 'closeAllEditors' }).catch(() => undefined);
         await setCliUnavailableForE2E(false);
         await setTerminalCommandExecutionSuppressedForE2E(false);
+        await restoreE2eCliPathForE2E();
         await restoreWorkspaceCliPath();
         restoreWorkspaceAppHostConfig();
         removeAdditionalAppHostCandidate();
@@ -54,6 +55,7 @@ suite('Aspire command palette E2E', function () {
         const wrapperPath = path.join(wrapperDirectory, 'aspire.cmd');
         fs.mkdirSync(wrapperDirectory, { recursive: true });
         fs.writeFileSync(wrapperPath, '@echo off\r\nexit /b 0\r\n');
+        await setE2eCliPathForE2E(undefined);
         await writeWorkspaceCliPath(wrapperPath);
         await setTerminalCommandExecutionSuppressedForE2E(true);
 

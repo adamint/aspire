@@ -540,6 +540,12 @@ function createE2eStateFileBridge(
               : vscode.ConfigurationTarget.Global;
             await vscode.workspace.getConfiguration('aspire').update('aspireCliExecutablePath', payload.aspireCliExecutablePath, target);
           }
+          if (payload.e2eCliExecutablePath === null) {
+            delete process.env.ASPIRE_EXTENSION_E2E_CLI_PATH;
+          }
+          else if (typeof payload.e2eCliExecutablePath === 'string') {
+            process.env.ASPIRE_EXTENSION_E2E_CLI_PATH = payload.e2eCliExecutablePath;
+          }
           if (typeof payload.forceCliUnavailable === 'boolean') {
             process.env.ASPIRE_EXTENSION_E2E_FORCE_CLI_UNAVAILABLE = payload.forceCliUnavailable ? 'true' : 'false';
           }

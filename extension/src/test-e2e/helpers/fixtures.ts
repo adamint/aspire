@@ -38,6 +38,14 @@ export async function writeWorkspaceCliPath(cliPath: string): Promise<void> {
     await applyE2eControl({ aspireCliExecutablePath: cliPath });
 }
 
+export async function setE2eCliPathForE2E(cliPath: string | undefined): Promise<void> {
+    await applyE2eControl({ e2eCliExecutablePath: cliPath ?? null });
+}
+
+export async function restoreE2eCliPathForE2E(): Promise<void> {
+    await setE2eCliPathForE2E(getCliPath());
+}
+
 export async function setCliUnavailableForE2E(forceCliUnavailable: boolean): Promise<void> {
     await applyE2eControl({ forceCliUnavailable });
 }

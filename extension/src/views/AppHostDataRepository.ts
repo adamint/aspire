@@ -193,6 +193,9 @@ export class AppHostDataRepository {
             }
         });
         this._workspaceFoldersChangeDisposable = vscode.workspace.onDidChangeWorkspaceFolders(() => {
+            this._stopDescribeWatch({ clearWorkspaceResources: true });
+            this._stopAllGlobalDescribes();
+            this._stopPolling();
             this._workspaceAppHostDiscoveryComplete = false;
             this._clearWorkspaceAppHostDiscovery();
             this._clearWorkspaceAppHostData();

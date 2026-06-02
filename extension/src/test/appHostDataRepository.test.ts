@@ -987,6 +987,83 @@ suite('AppHostDataRepository', () => {
         }
     });
 
+    test('workspace folder change stops stale workspace processes before rediscovery', async () => {
+        const firstWorkspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-extension-workspace-'));
+        const secondWorkspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-extension-workspace-'));
+        const firstWorkspaceFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(firstWorkspaceRoot),
+            name: 'first',
+            index: 0,
+        };
+        const secondWorkspaceFolder: vscode.WorkspaceFolder = {
+            uri: vscode.Uri.file(secondWorkspaceRoot),
+            name: 'second',
+            index: 0,
+        };
+        const firstAppHostPath = path.join(firstWorkspaceRoot, 'AppHost', 'AppHost.csproj');
+        const secondAppHostPath = path.join(secondWorkspaceRoot, 'AppHost', 'AppHost.csproj');
+        let workspaceFolders: readonly vscode.WorkspaceFolder[] | undefined = [firstWorkspaceFolder];
+        const workspaceFoldersChanged = new vscode.EventEmitter<vscode.WorkspaceFoldersChangeEvent>();
+        const discoveryChanges = new vscode.EventEmitter<vscode.WorkspaceFolder>();
+        const describeProcesses: TestChildProcess[] = [];
+        const psProcesses: TestChildProcess[] = [];
+        const discoveryService = {
+            discover: async (folder: vscode.WorkspaceFolder) => [{
+                path: folder.uri.fsPath === firstWorkspaceRoot ? firstAppHostPath : secondAppHostPath,
+                language: 'csharp',
+                status: 'buildable',
+                selected: true,
+            }],
+            onDidChangeCandidates: discoveryChanges.event,
+            dispose: () => {
+                discoveryChanges.dispose();
+            },
+        } as unknown as AppHostDiscoveryService;
+
+        spawnStub.callsFake((_terminalProvider, _command, args) => {
+            const process = new TestChildProcess();
+            if (args[0] === 'describe') {
+                describeProcesses.push(process);
+            }
+            if (args[0] === 'ps') {
+                psProcesses.push(process);
+            }
+            return process;
+        });
+
+        defaultWorkspaceFoldersStub.restore();
+        defaultWorkspaceFoldersStub = { restore: () => { } } as sinon.SinonStub;
+        const workspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').get(() => workspaceFolders);
+        const workspaceFoldersChangedStub = sinon.stub(vscode.workspace, 'onDidChangeWorkspaceFolders').callsFake(listener => workspaceFoldersChanged.event(listener));
+        const repository = new AppHostDataRepository(terminalProvider, discoveryService);
+
+        try {
+            repository.activate();
+            repository.setPanelVisible(true);
+            await waitForCondition(
+                () => repository.workspaceAppHostPath === firstAppHostPath && describeProcesses.length >= 1 && psProcesses.length >= 1,
+                'initial workspace processes did not start');
+
+            workspaceFolders = [secondWorkspaceFolder];
+            workspaceFoldersChanged.fire({ added: [secondWorkspaceFolder], removed: [firstWorkspaceFolder] });
+
+            assert.strictEqual(describeProcesses[0].killed, true);
+            assert.strictEqual(psProcesses[0].killed, true);
+
+            await waitForCondition(
+                () => repository.workspaceAppHostPath === secondAppHostPath && describeProcesses.length >= 2 && psProcesses.length >= 2,
+                'new workspace processes did not start');
+            assert.deepStrictEqual(spawnStub.getCalls().filter(call => call.args[2][0] === 'describe').at(-1)?.args[2], ['describe', '--follow', '--format', 'json', '--apphost', secondAppHostPath]);
+        } finally {
+            repository.dispose();
+            workspaceFoldersChanged.dispose();
+            workspaceFoldersChangedStub.restore();
+            workspaceFoldersStub.restore();
+            fs.rmSync(firstWorkspaceRoot, { recursive: true, force: true });
+            fs.rmSync(secondWorkspaceRoot, { recursive: true, force: true });
+        }
+    });
+
     test('possibly unbuildable AppHost candidates do not force global mode', async () => {
         let getAppHostsLineCallback: ((line: string) => void) | undefined;
         spawnStub.onFirstCall().callsFake((_terminalProvider, _command, _args, options) => {

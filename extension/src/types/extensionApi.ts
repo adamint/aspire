@@ -107,6 +107,7 @@ export interface AspireExtensionE2EControlStatus {
 export interface AspireExtensionE2EControlPayload {
     revision: number;
     aspireCliExecutablePath?: string;
+    e2eCliExecutablePath?: string | null;
     forceCliUnavailable?: boolean;
     suppressTerminalCommandExecution?: boolean;
     suppressDebugLaunch?: boolean;
