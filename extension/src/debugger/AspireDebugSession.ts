@@ -489,7 +489,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
    * For debugChrome/debugEdge/debugFirefox, launches as a child debug session that auto-closes with the Aspire debug session.
    */
   async openDashboard(url: string, browserType: DashboardBrowserType): Promise<void> {
-    extensionLogOutputChannel.info(`Opening dashboard in browser: ${browserType}, URL: ${url}`);
+    extensionLogOutputChannel.info(`Opening dashboard in browser: ${browserType}.`);
     this._dashboardUrl = url;
     this._onDidChangeState.fire();
 

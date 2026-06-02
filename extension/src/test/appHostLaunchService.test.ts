@@ -86,6 +86,24 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(fired, false);
     });
 
+    test('clearMatchingLaunching matches project paths to AppHost source files in the same directory', async () => {
+        await service.launch('/repo/AppHost/AppHost.csproj', 'run', true);
+
+        service.clearMatchingLaunching('/repo/AppHost/Program.cs');
+
+        assert.strictEqual(service.isLaunching('/repo/AppHost/AppHost.csproj'), false);
+    });
+
+    test('clearMatchingLaunching does not clear unrelated paths in the same directory', async () => {
+        await service.launch('/repo/AppHost/First.csproj', 'run', true);
+        await service.launch('/repo/AppHost/Second.csproj', 'run', true);
+
+        service.clearMatchingLaunching('/repo/AppHost/Program.cs');
+
+        assert.strictEqual(service.isLaunching('/repo/AppHost/First.csproj'), true);
+        assert.strictEqual(service.isLaunching('/repo/AppHost/Second.csproj'), true);
+    });
+
     test('multiple paths can be tracked independently', async () => {
         await service.launch('/repo/AppHost1.csproj', 'run', true);
         await service.launch('/repo/AppHost2.csproj', 'run', true);

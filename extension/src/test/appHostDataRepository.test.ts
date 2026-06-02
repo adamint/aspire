@@ -6,7 +6,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
-import { AppHostDataRepository } from '../views/AppHostDataRepository';
+import { AppHostDataRepository, isMatchingAppHostPath } from '../views/AppHostDataRepository';
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import * as cliModule from '../debugger/languages/cli';
 import type { AppHostDiscoveryService, CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
@@ -61,6 +61,15 @@ suite('AppHostDataRepository', () => {
         spawnStub.callsFake(() => new TestChildProcess());
         defaultWorkspaceFoldersStub = sinon.stub(vscode.workspace, 'workspaceFolders').value(undefined);
         findFilesStub = sinon.stub(vscode.workspace, 'findFiles').resolves([]);
+    });
+
+    test('matches C# project and AppHost source files in the same directory', () => {
+        assert.strictEqual(isMatchingAppHostPath('/workspace/AppHost/AppHost.csproj', '/workspace/AppHost/Program.cs'), true);
+        assert.strictEqual(isMatchingAppHostPath('/workspace/AppHost/apphost.cs', '/workspace/AppHost/AppHost.csproj'), true);
+    });
+
+    test('does not match sibling AppHost projects in the same directory', () => {
+        assert.strictEqual(isMatchingAppHostPath('/workspace/AppHost/First.csproj', '/workspace/AppHost/Second.csproj'), false);
     });
 
     teardown(() => {

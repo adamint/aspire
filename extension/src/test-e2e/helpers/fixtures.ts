@@ -15,7 +15,14 @@ export function getWorkspaceSettingsPath(): string {
 }
 
 export function getGeneratedProjectRoot(projectName: string): string {
-    return path.join(getWorkspaceRoot(), projectName);
+    const workspaceRoot = path.resolve(getWorkspaceRoot());
+    const projectRoot = path.resolve(workspaceRoot, projectName);
+    const relativePath = path.relative(workspaceRoot, projectRoot);
+    if (relativePath === '' || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+        throw new Error(`Generated E2E project path must stay under the workspace root. Project name: ${projectName}`);
+    }
+
+    return projectRoot;
 }
 
 export function getGeneratedAppHostPath(projectName: string): string {

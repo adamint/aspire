@@ -116,7 +116,7 @@ function terminateProcessTree(pid: number | undefined, signal: NodeJS.Signals): 
     }
 
     if (process.platform === 'win32') {
-        spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore' });
+        spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore', timeout: 15000 });
         return;
     }
 

@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as http from 'http';
 import * as https from 'https';
 import * as path from 'path';
-import { getCommandInvocationCount, getTerminalCommandCount, isSamePath, waitForAppHostLaunching, waitForCommandOutcome, waitForDashboardUrl, waitForExtensionState, waitForRepositoryIdle, waitForResource, waitForResourceState, waitForRunningAppHost, waitForTerminalCommand, waitForWorkspaceAppHost } from './helpers/assertions';
+import { getCommandInvocationCount, getTerminalCommandCount, isSamePath, waitForAppHostLaunching, waitForCommandOutcome, waitForDashboardUrl, waitForExtensionState, waitForNoRunningAppHost, waitForRepositoryIdle, waitForResource, waitForResourceState, waitForRunningAppHost, waitForTerminalCommand, waitForWorkspaceAppHost } from './helpers/assertions';
 import { executeE2eControlCommand, restoreWorkspaceCliPath, setCliUnavailableForE2E, setTerminalCommandExecutionSuppressedForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath } from './helpers/paths';
 import { answerActiveInput, chooseActiveQuickPick, openAspireView, waitForEditorTitle } from './helpers/vscode';
@@ -15,6 +15,7 @@ suite('Aspire tree action command E2E', function () {
         await setTerminalCommandExecutionSuppressedForE2E(false);
         await restoreWorkspaceCliPath();
         await stopPrimaryAppHostIfRunning();
+        await waitForNoRunningAppHost();
     });
 
     test('routes view, copy, endpoint, log, and resource commands through tree handlers', async () => {

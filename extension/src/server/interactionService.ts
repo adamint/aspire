@@ -325,7 +325,7 @@ export class InteractionService implements IInteractionService {
     }
 
     async displayDashboardUrls(dashboardUrls: DashboardUrls) {
-        extensionLogOutputChannel.info(`Displaying dashboard URLs: ${JSON.stringify(dashboardUrls)}`);
+        extensionLogOutputChannel.info('Displaying dashboard URLs.');
 
         const baseUrl = getDashboardUrlProperty(dashboardUrls, 'baseUrl');
         const codespacesUrl = getDashboardUrlProperty(dashboardUrls, 'codespacesUrl');

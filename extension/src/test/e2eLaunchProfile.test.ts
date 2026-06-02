@@ -57,8 +57,10 @@ suite('E2E launch profile', () => {
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
 
         assert.ok(runner.includes('ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS'));
-        assert.ok(runner.includes('timeout: getRunTestsTimeoutMs()'));
-        assert.ok(runner.includes('killProcessTreeOnTimeout: true'));
+        assert.ok(runner.includes('await runWithProcessTreeTimeout(process.execPath'));
+        assert.ok(runner.includes('getRunTestsTimeoutMs()'));
+        assert.ok(runner.includes('did not exit after process-tree termination'));
+        assert.ok(runner.includes('child.unref()'));
         assert.ok(runner.includes("spawnSync('taskkill'"));
         assert.ok(runner.includes("process.kill(-pid, 'SIGKILL')"));
     });
@@ -89,6 +91,8 @@ suite('E2E launch profile', () => {
 
         assert.ok(runner.includes('debugSessions: state.state.debugSessions?.map(redactDebugSessionForDiagnostics)'));
         assert.ok(runner.includes('sanitizeDashboardUrlForDiagnostics'));
+        assert.ok(runner.includes('redactTextFilesForArtifacts(storageDiagnosticsDir)'));
+        assert.ok(runner.includes('/login?t=<redacted>'));
         assert.ok(runner.includes('new URL(stripResourceSuffix(url)).origin'));
     });
 
@@ -150,7 +154,7 @@ suite('E2E launch profile', () => {
         assert.ok(aspireCliEnvironment.includes("DOTNET_CLI_TELEMETRY_OPTOUT: '1'"));
         assert.ok(envConstruction.includes('const extestEnv = getAspireCliEnvironment({'));
         assert.ok(envConstruction.includes("ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE: 'true'"));
-        assert.ok(runTests.includes('run(process.execPath'));
+        assert.ok(runTests.includes('runWithProcessTreeTimeout(process.execPath'));
         assert.ok(runTests.includes('extestEnv'));
     });
 

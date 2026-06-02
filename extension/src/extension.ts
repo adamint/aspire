@@ -1067,8 +1067,16 @@ function getSensitiveDashboardUrl(dataRepository: AppHostDataRepository, appHost
     return matchingAppHost?.dashboardUrl ? stripResourceSuffix(matchingAppHost.dashboardUrl) : undefined;
   }
 
-  const matchingAppHost = dataRepository.workspaceAppHost ?? dataRepository.appHosts.find(appHost => appHost.dashboardUrl);
-  const dashboardUrl = matchingAppHost?.dashboardUrl ?? dataRepository.workspaceResources.find(resource => resource.dashboardUrl)?.dashboardUrl;
+  if (dataRepository.workspaceAppHost?.dashboardUrl) {
+    return stripResourceSuffix(dataRepository.workspaceAppHost.dashboardUrl);
+  }
+
+  const appHostsWithDashboard = dataRepository.appHosts.filter(appHost => appHost.dashboardUrl);
+  if (appHostsWithDashboard.length > 1) {
+    return undefined;
+  }
+
+  const dashboardUrl = appHostsWithDashboard[0]?.dashboardUrl ?? dataRepository.workspaceResources.find(resource => resource.dashboardUrl)?.dashboardUrl;
 
   return dashboardUrl ? stripResourceSuffix(dashboardUrl) : undefined;
 }

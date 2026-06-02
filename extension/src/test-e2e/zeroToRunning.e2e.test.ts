@@ -11,17 +11,27 @@ suite('Aspire zero-to-running E2E', function () {
     const appHostPath = getGeneratedAppHostPath(projectName);
 
     teardown(async () => {
-        await Promise.allSettled([
-            setCliUnavailableForE2E(false),
-            setTerminalCommandExecutionSuppressedForE2E(false),
-            restoreWorkspaceCliPath(),
-            clearBreakpoints(),
-            executeE2eControlCommand({ name: 'stopDebugging' }),
-            stopAppHostIfRunning(appHostPath),
-        ]);
+        const failures: unknown[] = [];
+        for (const cleanup of [
+            () => setCliUnavailableForE2E(false),
+            () => setTerminalCommandExecutionSuppressedForE2E(false),
+            () => restoreWorkspaceCliPath(),
+            () => clearBreakpoints(),
+            () => executeE2eControlCommand({ name: 'stopDebugging' }),
+            () => stopAppHostIfRunning(appHostPath),
+        ]) {
+            try {
+                await cleanup();
+            } catch (error) {
+                failures.push(error);
+            }
+        }
         await waitForNoDebugSessions().catch(() => undefined);
         restoreWorkspaceAppHostConfig();
         removeGeneratedProject(projectName);
+        if (failures.length > 0) {
+            throw new AggregateError(failures, 'Zero-to-running E2E teardown failed.');
+        }
     });
 
     test('creates a new AppHost, adds a package, and debugs to the dashboard', async () => {

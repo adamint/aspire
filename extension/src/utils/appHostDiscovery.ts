@@ -547,7 +547,7 @@ async function discoverCSharpAppHostProjectsFromWorkspaceFiles(workspaceFolder: 
     for (const uri of projectUris.sort((left, right) => left.fsPath.localeCompare(right.fsPath))) {
         let projectContents: string;
         try {
-            projectContents = await fs.promises.readFile(uri.fsPath, 'utf8');
+            projectContents = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
         }
         catch (error) {
             extensionLogOutputChannel.warn(`Failed to read possible AppHost project ${uri.fsPath}: ${formatErrorMessage(error)}`);

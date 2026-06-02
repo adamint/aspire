@@ -78,13 +78,19 @@ export class AppHostLaunchService implements vscode.Disposable {
 
     clearMatchingLaunching(appHostPath: string): void {
         const resolvedAppHostPath = path.resolve(appHostPath);
-        for (const launchingPath of this._launchingPaths) {
-            if (isMatchingAppHostPath(launchingPath, resolvedAppHostPath)) {
-                this._launchingPaths.delete(launchingPath);
-                this._onDidChangeLaunchingState.fire();
-                return;
-            }
+        const exactKey = getComparisonKey(path.normalize(resolvedAppHostPath));
+        if (this._launchingPaths.delete(exactKey)) {
+            this._onDidChangeLaunchingState.fire();
+            return;
         }
+
+        const matchingPaths = Array.from(this._launchingPaths).filter(launchingPath => isMatchingAppHostPath(launchingPath, resolvedAppHostPath));
+        if (matchingPaths.length !== 1) {
+            return;
+        }
+
+        this._launchingPaths.delete(matchingPaths[0]);
+        this._onDidChangeLaunchingState.fire();
     }
 
     /**
@@ -152,9 +158,25 @@ function isE2eDebugLaunchSuppressed(): boolean {
 }
 
 function isMatchingAppHostPath(left: string, right: string): boolean {
-    if (getComparisonKey(path.normalize(left)) === getComparisonKey(path.normalize(right))) {
+    const normalizedLeft = path.normalize(left);
+    const normalizedRight = path.normalize(right);
+    if (getComparisonKey(normalizedLeft) === getComparisonKey(normalizedRight)) {
         return true;
     }
 
-    return getComparisonKey(path.dirname(left)) === getComparisonKey(path.dirname(right));
+    return getComparisonKey(path.dirname(normalizedLeft)) === getComparisonKey(path.dirname(normalizedRight)) &&
+        isProjectFileToSourceFileMatch(normalizedLeft, normalizedRight);
+}
+
+function isProjectFileToSourceFileMatch(left: string, right: string): boolean {
+    return (isProjectFile(left) && isSourceFile(right)) || (isSourceFile(left) && isProjectFile(right));
+}
+
+function isProjectFile(value: string): boolean {
+    return path.extname(value).toLowerCase() === '.csproj';
+}
+
+function isSourceFile(value: string): boolean {
+    const fileName = path.basename(value).toLowerCase();
+    return fileName === 'apphost.cs' || fileName === 'program.cs';
 }

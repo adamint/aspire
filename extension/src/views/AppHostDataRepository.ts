@@ -1523,9 +1523,24 @@ export function isMatchingAppHostPath(left: string | undefined, right: string | 
     }
 
     // `aspire extension get-apphosts` resolves a project file while `aspire ps`
-    // can report the AppHost source file. Match by directory as a fallback to
-    // mirror the CodeLens AppHost resolution strategy.
-    return getComparisonKey(path.dirname(normalizedLeft)) === getComparisonKey(path.dirname(normalizedRight));
+    // can report the AppHost source file. Match by directory only for that
+    // project/source-file shape so sibling AppHost projects don't collapse into
+    // the same workspace AppHost.
+    return getComparisonKey(path.dirname(normalizedLeft)) === getComparisonKey(path.dirname(normalizedRight))
+        && isProjectFileToSourceFileMatch(normalizedLeft, normalizedRight);
+}
+
+function isProjectFileToSourceFileMatch(left: string, right: string): boolean {
+    return (isProjectFile(left) && isAppHostSourceFile(right)) || (isAppHostSourceFile(left) && isProjectFile(right));
+}
+
+function isProjectFile(value: string): boolean {
+    return path.extname(value).toLowerCase() === '.csproj';
+}
+
+function isAppHostSourceFile(value: string): boolean {
+    const fileName = path.basename(value).toLowerCase();
+    return fileName === 'apphost.cs' || fileName === 'program.cs';
 }
 
 function isSameAppHostPath(left: string | undefined, right: string | undefined): boolean {

@@ -54,6 +54,81 @@ for (const directory of [artifactsDir, resultsDir, diagnosticsStorageRoot, isola
   fs.mkdirSync(directory, { recursive: true });
 }
 
+function runWithProcessTreeTimeout(command, args, extraEnv, timeout) {
+  return new Promise((resolve, reject) => {
+    const useShell = shouldUseShellForCommand(command);
+    const child = useShell
+      ? spawn([command, ...args].map(quoteWindowsShellArgument).join(' '), [], {
+        cwd: extensionRoot,
+        env: { ...process.env, ...extraEnv },
+        shell: true,
+        stdio: 'inherit',
+        detached: process.platform !== 'win32',
+      })
+      : spawn(command, args, {
+        cwd: extensionRoot,
+        env: { ...process.env, ...extraEnv },
+        shell: false,
+        stdio: 'inherit',
+        detached: process.platform !== 'win32',
+      });
+
+    let timedOut = false;
+    let settled = false;
+    let forceTimeout;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      terminateProcessTree(child.pid);
+      forceTimeout = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+
+        child.removeAllListeners();
+        child.unref();
+        settle();
+        reject(new Error(`${command} ${args.join(' ')} timed out after ${timeout}ms and did not exit after process-tree termination. Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`));
+      }, 15000);
+    }, timeout);
+
+    child.on('error', error => {
+      if (settled) {
+        return;
+      }
+
+      settle();
+      reject(error);
+    });
+
+    child.on('close', (exitCode, signal) => {
+      if (settled) {
+        return;
+      }
+
+      settle();
+      if (timedOut) {
+        reject(new Error(`${command} ${args.join(' ')} timed out after ${timeout}ms. Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`));
+        return;
+      }
+
+      if (exitCode !== 0) {
+        reject(new Error(`${command} ${args.join(' ')} exited with code ${exitCode ?? `signal ${signal ?? 'unknown'}`}. Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`));
+        return;
+      }
+
+      resolve();
+    });
+
+    function settle() {
+      settled = true;
+      clearTimeout(timer);
+      if (forceTimeout) {
+        clearTimeout(forceTimeout);
+      }
+    }
+  });
+}
+
 function getRunTestsTimeoutMs() {
   const configured = Number(process.env.ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS || 1800000);
   if (!Number.isFinite(configured) || configured <= 0) {
@@ -62,7 +137,68 @@ function getRunTestsTimeoutMs() {
 
   return configured;
 }
-main();
+
+function redactStateFileForArtifacts() {
+  const state = readJsonIfExists(stateFile);
+  if (!state) {
+    return;
+  }
+
+  redactDashboardUrls(state);
+  fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
+}
+
+function redactDashboardUrls(value) {
+  if (!value || typeof value !== 'object') {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      redactDashboardUrls(item);
+    }
+    return;
+  }
+
+  for (const [key, item] of Object.entries(value)) {
+    if (key === 'dashboardUrl' && typeof item === 'string') {
+      value[key] = sanitizeDashboardUrlForDiagnostics(item);
+    }
+    else {
+      redactDashboardUrls(item);
+    }
+  }
+}
+
+function redactDebugSessionForDiagnostics(session) {
+  return {
+    ...session,
+    dashboardUrl: sanitizeDashboardUrlForDiagnostics(session.dashboardUrl),
+  };
+}
+
+function sanitizeDashboardUrlForDiagnostics(url) {
+  if (!url) {
+    return url;
+  }
+
+  try {
+    return new URL(stripResourceSuffix(url)).origin;
+  }
+  catch {
+    return '<redacted>';
+  }
+}
+
+function stripResourceSuffix(url) {
+  const idx = url.indexOf('/?resource=');
+  return idx !== -1 ? url.substring(0, idx) : url;
+}
+
+main().catch(error => {
+  console.error(error instanceof Error ? error.stack ?? error.message : String(error));
+  process.exitCode = 1;
+});
 
 function shouldUseShellForCommand(command) {
   // npm and corepack are .cmd shims on Windows. Node.js 20+ intentionally refuses
@@ -199,7 +335,7 @@ function startRecording() {
     return undefined;
   }
 
-  const ffmpegCheck = spawnSync('ffmpeg', ['-version'], { encoding: 'utf8', stdio: 'ignore' });
+  const ffmpegCheck = spawnSync('ffmpeg', ['-version'], { encoding: 'utf8', stdio: 'ignore', timeout: 15000 });
   if (ffmpegCheck.error || ffmpegCheck.status !== 0) {
     console.warn('Skipping Aspire extension E2E recording because ffmpeg is not available.');
     return undefined;
@@ -267,6 +403,7 @@ function stopRecording(recording, testFailure) {
     if (recording.pid) {
       spawnSync('bash', ['-lc', `kill -INT ${recording.pid} 2>/dev/null || true; sleep 2; kill -TERM ${recording.pid} 2>/dev/null || true`], {
         stdio: 'ignore',
+        timeout: 15000,
       });
     }
   }
@@ -289,7 +426,7 @@ function stopRecording(recording, testFailure) {
   }
 }
 
-function main() {
+async function main() {
   let recording;
   let testFailure;
   let completedTests = false;
@@ -351,7 +488,7 @@ function main() {
     recording = startRecording();
     try {
       logStep('Running VS Code extension E2E tests');
-      run(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js')], extestEnv, { timeout: getRunTestsTimeoutMs(), killProcessTreeOnTimeout: true });
+      await runWithProcessTreeTimeout(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js')], extestEnv, getRunTestsTimeoutMs());
     }
     catch (error) {
       testFailure = error;
@@ -359,11 +496,23 @@ function main() {
     completedTests = true;
   }
   finally {
-    stopRecording(recording, testFailure);
-    stopWorkspaceAppHost();
-    copyStorageDiagnostics();
-    copyWorkspaceDiagnostics();
-    cleanupTemporaryRunRoot();
+    const cleanupErrors = [];
+    runCleanupStep('stop recording', () => stopRecording(recording, testFailure), cleanupErrors);
+    runCleanupStep('stop workspace AppHost', stopWorkspaceAppHost, cleanupErrors);
+    runCleanupStep('redact extension state', redactStateFileForArtifacts, cleanupErrors);
+    runCleanupStep('copy storage diagnostics', copyStorageDiagnostics, cleanupErrors);
+    runCleanupStep('copy workspace diagnostics', copyWorkspaceDiagnostics, cleanupErrors);
+    runCleanupStep('cleanup temporary run root', cleanupTemporaryRunRoot, cleanupErrors);
+
+    if (cleanupErrors.length > 0) {
+      const cleanupFailure = new AggregateError(cleanupErrors, 'One or more E2E cleanup steps failed.');
+      if (testFailure) {
+        console.error(cleanupFailure);
+      }
+      else {
+        testFailure = cleanupFailure;
+      }
+    }
   }
 
   if (testFailure) {
@@ -373,6 +522,17 @@ function main() {
 
   if (completedTests) {
     printSuccessDiagnosticsSummary();
+  }
+}
+
+function runCleanupStep(name, action, cleanupErrors) {
+  try {
+    action();
+  }
+  catch (error) {
+    const cleanupError = error instanceof Error ? error : new Error(String(error));
+    cleanupError.message = `${name}: ${cleanupError.message}`;
+    cleanupErrors.push(cleanupError);
   }
 }
 
@@ -446,7 +606,7 @@ function validateCliPath(resolvedCliPath) {
 }
 
 function packageVsix() {
-  run('corepack', ['yarn@1.22.22', 'run', 'vsce', 'package', '--pre-release', '-o', defaultVsixPath]);
+  run('corepack', ['yarn@1.22.22', 'run', 'vsce', 'package', '--pre-release', '-o', defaultVsixPath], {}, { timeout: 300000 });
   return defaultVsixPath;
 }
 
@@ -505,7 +665,7 @@ function ensureExtester() {
       '--no-audit',
     ], {
       npm_config_registry: extesterNpmRegistry,
-    }, { attempts: 3, retryDelayMs: 5000 });
+    }, { attempts: 3, retryDelayMs: 5000, timeout: 300000 });
   } catch (error) {
     throw new Error(`${error.message}\nUnable to install vscode-extension-tester@${extesterVersion} from ${extesterNpmRegistry}. If this is running in CI, pre-seed vscode-extension-tester and its locked transitive packages into the internal dotnet-public-npm feed before enabling the E2E matrix.`);
   }
@@ -876,7 +1036,6 @@ function run(command, args, extraEnv = {}, options = {}) {
     env: { ...process.env, ...extraEnv },
     stdio: 'inherit',
     timeout: options.timeout,
-    detached: options.killProcessTreeOnTimeout && process.platform !== 'win32',
   };
   const result = useShell
     ? spawnSync([command, ...args].map(quoteWindowsShellArgument).join(' '), [], {
@@ -889,9 +1048,6 @@ function run(command, args, extraEnv = {}, options = {}) {
   });
 
   if (result.error) {
-    if (options.killProcessTreeOnTimeout && result.error.code === 'ETIMEDOUT') {
-      terminateProcessTree(result.pid);
-    }
     throw result.error;
   }
 
@@ -982,7 +1138,7 @@ function terminateProcessTree(pid) {
   }
 
   if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore' });
+    spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore', timeout: 15000 });
     return;
   }
 
@@ -1001,7 +1157,7 @@ function terminateProcessTree(pid) {
 
 function cleanPartialExtesterDownloads() {
   for (const file of getFilesRecursive(storageDir)) {
-    if (file.endsWith('.zip')) {
+    if (file.endsWith('.zip') || file.endsWith('.tar.gz') || file.endsWith('.tgz') || file.endsWith('.gz')) {
       fs.rmSync(file, { force: true });
     }
   }
@@ -1019,6 +1175,7 @@ function copyStorageDiagnostics() {
   copyIfExists(path.join(storageDir, 'settings', 'CrashpadMetrics-active.pma'), path.join(storageDiagnosticsDir, 'settings', 'CrashpadMetrics-active.pma'));
   copyIfExists(path.join(storageDir, 'settings', 'logs'), path.join(storageDiagnosticsDir, 'settings', 'logs'));
   copyIfExists(path.join(storageDir, 'settings', 'User', 'settings.json'), path.join(storageDiagnosticsDir, 'settings', 'User', 'settings.json'));
+  redactTextFilesForArtifacts(storageDiagnosticsDir);
 }
 
 function copyWorkspaceDiagnostics() {
@@ -1026,6 +1183,7 @@ function copyWorkspaceDiagnostics() {
   copyIfExists(path.join(workspaceRoot, '.aspire'), path.join(workspaceDiagnosticsDir, '.aspire'));
   copyIfExists(path.join(workspaceRoot, '.vscode', 'settings.json'), path.join(workspaceDiagnosticsDir, '.vscode', 'settings.json'));
   copyWorkspaceProjectSources();
+  redactTextFilesForArtifacts(workspaceDiagnosticsDir);
 }
 
 function copyIfExists(sourcePath, destinationPath) {
@@ -1040,6 +1198,43 @@ function copyIfExists(sourcePath, destinationPath) {
 function copyWorkspaceProjectSources() {
   if (!fs.existsSync(workspaceRoot)) {
     return;
+  }
+
+  function redactTextFilesForArtifacts(directory) {
+    if (!fs.existsSync(directory)) {
+      return;
+    }
+
+    for (const file of getFilesRecursive(directory)) {
+      if (!isTextArtifact(file)) {
+        continue;
+      }
+
+      let contents;
+      try {
+        contents = fs.readFileSync(file, 'utf8');
+      }
+      catch {
+        continue;
+      }
+
+      const redacted = redactSensitiveArtifactText(contents);
+      if (redacted !== contents) {
+        fs.writeFileSync(file, redacted);
+      }
+    }
+  }
+
+  function isTextArtifact(file) {
+    return /\.(log|txt|json|jsonl|xml|config|cs|ts|js|md)$/i.test(file) || path.basename(file).toLowerCase() === 'settings';
+  }
+
+  function redactSensitiveArtifactText(value) {
+    return value
+      .replace(/\/login\?t=[^"'\s<>\\)]+/gi, '/login?t=<redacted>')
+      .replace(/([?&]t=)[^"'\s<>\\)&]+/gi, '$1<redacted>')
+      .replace(/(Setting up RPC server with token: )[^\r\n]+/gi, '$1<redacted>')
+      .replace(/(token["']?\s*[:=]\s*["']?)[A-Za-z0-9+/=._-]{16,}/gi, '$1<redacted>');
   }
 
   for (const entry of fs.readdirSync(workspaceRoot, { withFileTypes: true })) {
@@ -1108,32 +1303,7 @@ function printFailureDiagnosticsSummary() {
   const extensionLogPath = findLatestExtensionLogPath();
   if (extensionLogPath) {
     console.error(`Last Aspire extension log lines (${path.relative(extensionRoot, extensionLogPath)}):`);
-    console.error(indentBlock(tailLines(fs.readFileSync(extensionLogPath, 'utf8'), 120), '  '));
-  }
-
-  function redactDebugSessionForDiagnostics(session) {
-    return {
-      ...session,
-      dashboardUrl: sanitizeDashboardUrlForDiagnostics(session.dashboardUrl),
-    };
-  }
-
-  function sanitizeDashboardUrlForDiagnostics(url) {
-    if (!url) {
-      return url;
-    }
-
-    try {
-      return new URL(stripResourceSuffix(url)).origin;
-    }
-    catch {
-      return '<redacted>';
-    }
-  }
-
-  function stripResourceSuffix(url) {
-    const idx = url.indexOf('/?resource=');
-    return idx !== -1 ? url.substring(0, idx) : url;
+    console.error(indentBlock(redactSensitiveArtifactText(tailLines(fs.readFileSync(extensionLogPath, 'utf8'), 120)), '  '));
   }
 }
 
