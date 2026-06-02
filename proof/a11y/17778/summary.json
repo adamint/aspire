@@ -1,0 +1,25 @@
+{
+  "pr": "17778",
+  "description": "Help shortcuts use a semantic description list.",
+  "frames": [
+    {
+      "phase": "base",
+      "worktree": "/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-review-main",
+      "label": "main / before",
+      "file": "/Users/adamratzman/.copilot/session-state/480af854-a97d-43a0-8f92-0131cf1a458c/files/visual-proof/17778/frame-base.png",
+      "lines": [
+        "Semantic list: no <dl> found"
+      ]
+    },
+    {
+      "phase": "pr",
+      "worktree": "/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/review-pr-17778",
+      "label": "PR #17778 / after",
+      "file": "/Users/adamratzman/.copilot/session-state/480af854-a97d-43a0-8f92-0131cf1a458c/files/visual-proof/17778/frame-pr.png",
+      "lines": [
+        "Semantic list: DL with 5 terms / 5 descriptions",
+        "Increase panel size +Decrease panel size -Reset panel sizes shift+rToggle panel orientation shift+tClose panel shift+x"
+      ]
+    }
+  ]
+}

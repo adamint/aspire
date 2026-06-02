@@ -1,0 +1,24 @@
+{
+  "pr": "17792",
+  "description": "Closing Settings restores focus to the Settings button.",
+  "frames": [
+    {
+      "phase": "base",
+      "worktree": "/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-review-main",
+      "label": "main / before",
+      "file": "/Users/adamratzman/.copilot/session-state/480af854-a97d-43a0-8f92-0131cf1a458c/files/visual-proof/17792/frame-base.png",
+      "lines": [
+        "After closing Settings, focus is on: Settings"
+      ]
+    },
+    {
+      "phase": "pr",
+      "worktree": "/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/review-pr-17792",
+      "label": "PR #17792 / after",
+      "file": "/Users/adamratzman/.copilot/session-state/480af854-a97d-43a0-8f92-0131cf1a458c/files/visual-proof/17792/frame-pr.png",
+      "lines": [
+        "After closing Settings, focus is on: Settings"
+      ]
+    }
+  ]
+}
