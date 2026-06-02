@@ -120,7 +120,8 @@ suite('E2E launch profile', () => {
         assert.ok(workflow.includes('verify_extester_feed:'));
         assert.ok(workflow.includes("needs.verify_extester_feed.outputs.available == 'true'"));
         assert.ok(workflow.includes('extester_feed_unavailable:'));
-        assert.ok(unavailableJob.includes('exit 1'));
+        assert.ok(unavailableJob.includes('Skipping the VS Code extension E2E matrix until vscode-extension-tester is available from dotnet-public-npm.'));
+        assert.ok(!unavailableJob.includes('exit 1'));
     });
 
     test('seeds Corepack from the internal npm feed before E2E workflow uses Yarn', () => {
