@@ -1062,6 +1062,35 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         provider.dispose();
     });
 
+    test('workspace resource children use the AppHost resource set that owns the parent', () => {
+        const selectedHostPath = '/repo/apps/Store/AppHost.csproj';
+        const otherHostPath = '/repo/samples/Store/AppHost.csproj';
+        const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+        const repository = {
+            viewMode: 'workspace' as ViewMode,
+            appHosts: [
+                makeAppHost({ appHostPath: selectedHostPath, appHostPid: 1234, resources: [makeResource({ name: 'api' }), makeResource({ name: 'selected-child', properties: { 'resource.parentName': 'api' } })] }),
+                makeAppHost({ appHostPath: otherHostPath, appHostPid: 5678, resources: [makeResource({ name: 'api' }), makeResource({ name: 'other-child', properties: { 'resource.parentName': 'api' } })] }),
+            ],
+            workspaceResources: [makeResource({ name: 'api' }), makeResource({ name: 'selected-child', properties: { 'resource.parentName': 'api' } })],
+            workspaceAppHost: makeAppHost({ appHostPath: selectedHostPath, appHostPid: 1234, resources: [] }),
+            workspaceAppHostPath: selectedHostPath,
+            workspaceAppHostName: 'apps/Store/AppHost.csproj',
+            workspaceAppHostCandidatePaths: [selectedHostPath, otherHostPath],
+            workspaceAppHostDescription: 'Workspace view selected because aspire ls found 2 buildable AppHosts.',
+            onDidChangeData,
+        } as unknown as AppHostDataRepository;
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+
+        const otherAppHostItem = provider.getChildren()[1];
+        const resourcesGroup = provider.getChildren(otherAppHostItem).find(child => child.label === 'Resources');
+        assert.ok(resourcesGroup, 'Expected resources group for second AppHost');
+        const parentResource = provider.getChildren(resourcesGroup)[0];
+
+        assert.deepStrictEqual(provider.getChildren(parentResource).map(child => child.label), ['other-child']);
+        provider.dispose();
+    });
+
     test('workspace mode uses describe resources for selected AppHost when ps has no resources', () => {
         const selectedHostPath = '/repo/apps/Store/AppHost.csproj';
         const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
