@@ -360,6 +360,7 @@ public static class MauiiOSExtensions
 
         var iOSSimulatorResource = new MauiiOSSimulatorResource(name, builder.Resource);
 
+#pragma warning disable ASPIREEXTENSION001 // WithDebugSupport is experimental
         var resourceBuilder = builder.ApplicationBuilder.AddResource(iOSSimulatorResource)
             .WithAnnotation(new MauiProjectMetadata(projectPath))
             .WithAnnotation(new MauiiOSEnvironmentAnnotation()) // Enable environment variable support via targets file
@@ -367,7 +368,9 @@ public static class MauiiOSExtensions
             {
                 Command = "dotnet",
                 WorkingDirectory = workingDirectory
-            });
+            })
+            .WithDebugSupport(_ => new { type = "project", project_path = projectPath, mode = "NoDebug", use_sdk_run = true }, "project");
+#pragma warning restore ASPIREEXTENSION001
 
         // Build additional arguments for simulator UDID if specified
         // For iOS simulators, we need to use the MSBuild property _DeviceName with the :v2:udid= prefix

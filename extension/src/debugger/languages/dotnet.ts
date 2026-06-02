@@ -253,6 +253,19 @@ function createDotNetRunArguments(projectPath: string, baseProfileArgs: string |
     return dotnetRunArgs;
 }
 
+function createDotNetSdkRunArguments(projectPath: string, runSessionArgs: string[] | undefined): string[] {
+    const dotnetRunArgs = ['run', '--project', projectPath, '--no-launch-profile'];
+    if (runSessionArgs !== undefined) {
+        dotnetRunArgs.push(...(runSessionArgs[0]?.toLowerCase() === 'run' ? runSessionArgs.slice(1) : runSessionArgs));
+    }
+
+    return dotnetRunArgs;
+}
+
+function shouldLaunchProjectWithSdkRun(launchConfig: ProjectLaunchConfiguration): boolean {
+    return launchConfig.mode?.toLowerCase() === 'nodebug' && launchConfig.use_sdk_run === true;
+}
+
 export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSession: AspireDebugSession) => IDotNetService): ResourceDebuggerExtension {
     return {
         resourceType: 'project',
@@ -268,8 +281,6 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
             throw new Error(invalidLaunchConfiguration(JSON.stringify(launchConfig)));
         },
         createDebugSessionConfigurationCallback: async (launchConfig, args, env, launchOptions, debugConfiguration: AspireResourceExtendedDebugConfiguration): Promise<void> => {
-            const dotNetService: IDotNetService = dotNetServiceProducer(launchOptions.debugSession);
-
             if (!isProjectLaunchConfiguration(launchConfig)) {
                 extensionLogOutputChannel.info(`The resource type was not project for ${JSON.stringify(launchConfig)}`);
                 throw new Error(invalidLaunchConfiguration(JSON.stringify(launchConfig)));
@@ -317,7 +328,24 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 env.push({ name: "ASPIRE_DASHBOARD_AI_DISABLED", value: "true" });
             }
 
-            if (baseProfile?.commandName?.toLowerCase() === LaunchProfileCommandName.executable && baseProfile.executablePath) {
+            if (!launchOptions.isApphost && shouldLaunchProjectWithSdkRun(launchConfig)) {
+                // Some project-shaped resources, such as MAUI iOS simulator launches, must run
+                // through the SDK's `dotnet run` target rather than the compiled DLL. Launching
+                // the DLL with the CoreCLR adapter skips the platform-specific MSBuild run target.
+                debugConfiguration.program = 'dotnet';
+                debugConfiguration.args = createDotNetSdkRunArguments(projectPath, args);
+                debugConfiguration.cwd = path.dirname(projectPath);
+                debugConfiguration.executablePath = undefined;
+                debugConfiguration.noDebug = true;
+                debugConfiguration.env = Object.fromEntries(mergeEnvironmentVariables(
+                    baseProfile?.environmentVariables,
+                    debugConfiguration.env,
+                    env
+                ));
+            }
+            else if (baseProfile?.commandName?.toLowerCase() === LaunchProfileCommandName.executable && baseProfile.executablePath) {
+                const dotNetService: IDotNetService = dotNetServiceProducer(launchOptions.debugSession);
+
                 // For Executable command profiles (e.g., class library integrations), the launch profile
                 // specifies an external executable to run instead of the project output.
                 // Build the project to ensure dependencies are compiled, then launch
@@ -340,6 +368,7 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 ));
             }
             else if (!isFileBasedApp(projectPath)) {
+                const dotNetService: IDotNetService = dotNetServiceProducer(launchOptions.debugSession);
                 const outputPath = await dotNetService.getDotNetTargetPath(projectPath);
                 if ((!(await doesFileExist(outputPath)) || launchOptions.forceBuild)) {
                     await dotNetService.buildDotNetProject(projectPath);
@@ -367,6 +396,8 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 ));
             }
             else {
+                const dotNetService: IDotNetService = dotNetServiceProducer(launchOptions.debugSession);
+
                 // For file-based apps, get the dotnet run-api output first to determine the executable path
                 const runApiOutput = await dotNetService.getDotNetRunApiOutput(projectPath);
                 const runApiConfig = getRunApiConfigFromOutput(runApiOutput);

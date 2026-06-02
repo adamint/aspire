@@ -185,7 +185,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
                     if (supportsDebuggingAnnotation.LaunchConfigurationType is "project")
                     {
                         // We want this annotation even if we are not using IDE execution; see ToSnapshot() for details.
-                        exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, CreateProjectLaunchConfiguration(project, projectMetadata));
+                        ApplyProjectLaunchConfiguration(exe, project, projectMetadata, supportsDebuggingAnnotation);
                     }
                     // Non-project launch types (e.g. azure-functions) have their launch configuration
                     // applied later in CreateExecutableAsync() after endpoints are allocated,
@@ -225,7 +225,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
                     exe.Spec.ExecutionType = ExecutionType.IDE;
                     exe.Spec.FallbackExecutionTypes = [ExecutionType.Process];
 
-                    exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, CreateProjectLaunchConfiguration(project, projectMetadata));
+                    ApplyProjectLaunchConfiguration(exe, project, projectMetadata);
                 }
                 else
                 {
@@ -547,21 +547,59 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         return true;
     }
 
+    private void ApplyProjectLaunchConfiguration(Executable exe, ProjectResource project, IProjectMetadata projectMetadata, SupportsDebuggingAnnotation? supportsDebuggingAnnotation = null)
+    {
+        if (supportsDebuggingAnnotation?.LaunchConfigurationType is "project")
+        {
+            var mode = GetProjectLaunchConfigurationMode();
+            exe.Annotate(Executable.LaunchConfigurationsAnnotation, string.Empty);
+            supportsDebuggingAnnotation.LaunchConfigurationAnnotator(exe, mode);
+
+            if (!exe.TryGetProjectLaunchConfiguration(out var projectLaunchConfiguration))
+            {
+                throw new InvalidOperationException($"Project resource '{project.Name}' produced an invalid project launch configuration.");
+            }
+
+            ApplyProjectLaunchConfigurationDefaults(projectLaunchConfiguration, project, projectMetadata);
+            exe.SetProjectLaunchConfiguration(projectLaunchConfiguration);
+            return;
+        }
+
+        exe.SetProjectLaunchConfiguration(CreateProjectLaunchConfiguration(project, projectMetadata));
+    }
+
     private ProjectLaunchConfiguration CreateProjectLaunchConfiguration(ProjectResource project, IProjectMetadata projectMetadata)
     {
         var projectLaunchConfiguration = new ProjectLaunchConfiguration();
         projectLaunchConfiguration.ProjectPath = projectMetadata.ProjectPath;
-        projectLaunchConfiguration.Mode = _configuration[KnownConfigNames.DebugSessionRunMode]
-            ?? (Debugger.IsAttached ? ExecutableLaunchMode.Debug : ExecutableLaunchMode.NoDebug);
+        projectLaunchConfiguration.Mode = GetProjectLaunchConfigurationMode();
 
-        projectLaunchConfiguration.DisableLaunchProfile = project.TryGetLastAnnotation<ExcludeLaunchProfileAnnotation>(out _);
+        ApplyProjectLaunchConfigurationDefaults(projectLaunchConfiguration, project, projectMetadata);
+
+        return projectLaunchConfiguration;
+    }
+
+    private static void ApplyProjectLaunchConfigurationDefaults(ProjectLaunchConfiguration projectLaunchConfiguration, ProjectResource project, IProjectMetadata projectMetadata)
+    {
+        if (string.IsNullOrEmpty(projectLaunchConfiguration.ProjectPath))
+        {
+            projectLaunchConfiguration.ProjectPath = projectMetadata.ProjectPath;
+        }
+
+        projectLaunchConfiguration.DisableLaunchProfile |= project.TryGetLastAnnotation<ExcludeLaunchProfileAnnotation>(out _);
         // Use the effective launch profile which has fallback logic
-        if (!projectLaunchConfiguration.DisableLaunchProfile && project.GetEffectiveLaunchProfile() is NamedLaunchProfile namedLaunchProfile)
+        if (!projectLaunchConfiguration.DisableLaunchProfile &&
+            string.IsNullOrEmpty(projectLaunchConfiguration.LaunchProfile) &&
+            project.GetEffectiveLaunchProfile() is NamedLaunchProfile namedLaunchProfile)
         {
             projectLaunchConfiguration.LaunchProfile = namedLaunchProfile.Name;
         }
+    }
 
-        return projectLaunchConfiguration;
+    private string GetProjectLaunchConfigurationMode()
+    {
+        return _configuration[KnownConfigNames.DebugSessionRunMode]
+            ?? (Debugger.IsAttached ? ExecutableLaunchMode.Debug : ExecutableLaunchMode.NoDebug);
     }
 
     private static List<string> GetLaunchProfileArgs(LaunchProfile? launchProfile)

@@ -23,6 +23,7 @@ export interface ProjectLaunchConfiguration extends ExecutableLaunchConfiguratio
     launch_profile?: string;
     disable_launch_profile?: boolean;
     project_path: string;
+    use_sdk_run?: boolean;
 }
 
 export function isProjectLaunchConfiguration(obj: any): obj is ProjectLaunchConfiguration {

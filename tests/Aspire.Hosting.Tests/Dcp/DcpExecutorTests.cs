@@ -2029,6 +2029,49 @@ public class DcpExecutorTests
     }
 
     [Fact]
+    public async Task ProjectLaunchConfiguration_UsesProjectDebugSupportProducer_InDebugSession()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var projectBuilder = builder.AddProject<TestProject>("proj", launchProfileName: null);
+        var annotationToRemove = projectBuilder.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().FirstOrDefault();
+        if (annotationToRemove is not null)
+        {
+            projectBuilder.Resource.Annotations.Remove(annotationToRemove);
+        }
+
+        projectBuilder.WithDebugSupport(_ => new ProjectLaunchConfiguration
+        {
+            Mode = ExecutableLaunchMode.NoDebug,
+            DisableLaunchProfile = true,
+            UseSdkRun = true
+        }, "project");
+
+        using var app = builder.Build();
+        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
+
+        var kubernetes = new TestKubernetesService();
+        var configBuilder = new ConfigurationBuilder();
+        configBuilder.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [DcpExecutor.DebugSessionPortVar] = "12345",
+            [KnownConfigNames.DebugSessionRunMode] = ExecutableLaunchMode.Debug
+        });
+        var configuration = configBuilder.Build();
+
+        var executor = CreateAppExecutor(model, configuration: configuration, kubernetesService: kubernetes);
+
+        await executor.RunApplicationAsync();
+
+        var exe = GetCreatedExecutableForResource(kubernetes, "proj");
+        Assert.True(exe.TryGetProjectLaunchConfiguration(out var plc));
+        Assert.NotNull(plc);
+        Assert.Equal("TestProject", plc!.ProjectPath);
+        Assert.Equal(ExecutableLaunchMode.NoDebug, plc.Mode);
+        Assert.True(plc.DisableLaunchProfile);
+        Assert.True(plc.UseSdkRun);
+    }
+
+    [Fact]
     public async Task ProjectLaunchConfiguration_Disabled_WhenLaunchProfileExcluded_InDebugSession()
     {
         // Arrange

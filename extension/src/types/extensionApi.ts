@@ -158,6 +158,7 @@ export type AspireExtensionE2EControlCommand =
     | { name: 'getExtensionPackageJson' }
     | { name: 'getExtensionFileStatus'; relativePaths: readonly string[] }
     | { name: 'getDiagnostics'; filePath: string }
+    | { name: 'createNoDebugProjectDebugConfiguration'; projectPath: string; args?: readonly string[] }
     | { name: 'readClipboard' }
     | { name: 'openWorkspaceFolder'; folderPath: string }
     | { name: 'getWorkspaceFolders' }

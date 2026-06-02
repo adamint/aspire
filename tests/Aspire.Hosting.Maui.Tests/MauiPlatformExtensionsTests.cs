@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text.Json;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Eventing;
 using Aspire.Hosting.Maui;
@@ -424,6 +425,42 @@ public class MauiPlatformExtensionsTests
     }
 
     [Fact]
+    public void AddiOSSimulator_ConfiguresProjectLaunchAsNoDebug()
+    {
+        var projectContent = CreateProjectContent("net10.0-ios");
+        var tempFile = CreateTempProjectFile(projectContent);
+
+        try
+        {
+            var appBuilder = DistributedApplication.CreateBuilder();
+            var maui = appBuilder.AddMauiProject("mauiapp", tempFile);
+            var simulator = maui.AddiOSSimulator("my-simulator", "E25BBE37-69BA-4720-B6FD-D54C97791E79");
+
+            var debugSupport = Assert.Single(simulator.Resource.Annotations, annotation => annotation.GetType().FullName == "Aspire.Hosting.ApplicationModel.SupportsDebuggingAnnotation");
+            Assert.Equal("project", GetPropertyValue(debugSupport, "LaunchConfigurationType"));
+
+            var executableType = typeof(DistributedApplication).Assembly.GetType("Aspire.Hosting.Dcp.Model.Executable", throwOnError: true)!;
+            var executable = executableType.GetMethod("Create")!.Invoke(null, ["my-simulator", "dotnet"])!;
+            var annotator = (Delegate)GetPropertyValue(debugSupport, "LaunchConfigurationAnnotator")!;
+            annotator.DynamicInvoke(executable, "Debug");
+
+            var metadata = GetPropertyValue(executable, "Metadata")!;
+            var annotations = Assert.IsAssignableFrom<IDictionary<string, string>>(GetPropertyValue(metadata, "Annotations"));
+            var launchConfigurationsJson = annotations["executable.usvc-dev.developer.microsoft.com/launch-configurations"];
+            using var launchConfigurations = JsonDocument.Parse(launchConfigurationsJson);
+            var launchConfiguration = Assert.Single(launchConfigurations.RootElement.EnumerateArray());
+            Assert.Equal("project", launchConfiguration.GetProperty("type").GetString());
+            Assert.Equal(tempFile, launchConfiguration.GetProperty("project_path").GetString());
+            Assert.Equal("NoDebug", launchConfiguration.GetProperty("mode").GetString());
+            Assert.True(launchConfiguration.GetProperty("use_sdk_run").GetBoolean());
+        }
+        finally
+        {
+            CleanupTempFile(tempFile);
+        }
+    }
+
+    [Fact]
     public void AddiOSDeviceAndSimulator_CanCoexist()
     {
         // Arrange
@@ -707,6 +744,14 @@ public class MauiPlatformExtensionsTests
         {
             File.Delete(filePath);
         }
+    }
+
+    private static object? GetPropertyValue(object target, string propertyName)
+    {
+        var property = target.GetType().GetProperty(propertyName);
+        Assert.NotNull(property);
+
+        return property.GetValue(target);
     }
 
     // Configuration class for platform-specific test data
