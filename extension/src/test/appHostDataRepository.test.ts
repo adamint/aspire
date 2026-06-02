@@ -1037,8 +1037,9 @@ suite('AppHostDataRepository', () => {
             repository.activate();
             repository.setPanelVisible(true);
             await waitForCondition(
-                () => repository.workspaceAppHostPath === firstAppHostPath && describeProcesses.length >= 1,
-                'initial workspace describe did not start');
+                () => repository.workspaceAppHostPath === firstAppHostPath,
+                'initial workspace AppHost was not discovered');
+            await waitForTimedCondition(() => describeProcesses.length >= 1, 'initial workspace describe did not start');
 
             workspaceFolders = [secondWorkspaceFolder];
             workspaceFoldersChanged.fire({ added: [secondWorkspaceFolder], removed: [firstWorkspaceFolder] });
@@ -1046,8 +1047,9 @@ suite('AppHostDataRepository', () => {
             assert.strictEqual(describeProcesses[0].killed, true);
 
             await waitForCondition(
-                () => repository.workspaceAppHostPath === secondAppHostPath && describeProcesses.length >= 2,
-                'new workspace describe did not start');
+                () => repository.workspaceAppHostPath === secondAppHostPath,
+                'new workspace AppHost was not discovered');
+            await waitForTimedCondition(() => describeProcesses.length >= 2, 'new workspace describe did not start');
             assert.deepStrictEqual(spawnStub.getCalls().filter(call => call.args[2][0] === 'describe').at(-1)?.args[2], ['describe', '--follow', '--format', 'json', '--apphost', secondAppHostPath]);
         } finally {
             repository.dispose();
@@ -2548,6 +2550,19 @@ async function waitForCondition(condition: () => boolean, message: string): Prom
         }
 
         await waitForAppHostDiscovery();
+    }
+
+    assert.ok(condition(), message);
+}
+
+async function waitForTimedCondition(condition: () => boolean, message: string): Promise<void> {
+    for (let i = 0; i < 100; i++) {
+        if (condition()) {
+            return;
+        }
+
+        await waitForAppHostDiscovery();
+        await new Promise(resolve => setTimeout(resolve, 50));
     }
 
     assert.ok(condition(), message);
