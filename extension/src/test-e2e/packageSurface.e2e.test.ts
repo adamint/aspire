@@ -301,7 +301,12 @@ suite('Aspire package contribution surface E2E', function () {
             }
         }
         finally {
-            fs.rmSync(probeDirectory, { recursive: true, force: true });
+            fs.rmSync(probeDirectory, {
+                recursive: true,
+                force: true,
+                maxRetries: process.platform === 'win32' ? 20 : 0,
+                retryDelay: 250,
+            });
         }
     });
 });

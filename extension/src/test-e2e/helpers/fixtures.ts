@@ -64,7 +64,7 @@ export async function executeE2eControlCommand(command: AspireExtensionE2EContro
 
 export async function createEmptyAppHostProject(projectName: string): Promise<string> {
     const outputPath = getGeneratedProjectRoot(projectName);
-    fs.rmSync(outputPath, { recursive: true, force: true });
+    removePath(outputPath, { recursive: true, force: true });
     await runProcess(getCliPath(), [
         'new',
         'aspire-empty',
@@ -118,7 +118,7 @@ export async function clearBreakpoints(): Promise<void> {
 }
 
 export function removeGeneratedProject(projectName: string): void {
-    fs.rmSync(getGeneratedProjectRoot(projectName), { recursive: true, force: true });
+    removePath(getGeneratedProjectRoot(projectName), { recursive: true, force: true });
 }
 
 export async function restoreWorkspaceCliPath(): Promise<void> {
@@ -196,7 +196,7 @@ builder.Build().Run();
 }
 
 export function removeAdditionalAppHostCandidate(projectName = 'AspireE2E.SecondAppHost'): void {
-    fs.rmSync(path.join(getWorkspaceRoot(), projectName), { recursive: true, force: true });
+    removePath(path.join(getWorkspaceRoot(), projectName), { recursive: true, force: true });
 }
 
 export async function stopPrimaryAppHostIfRunning(): Promise<void> {
@@ -304,4 +304,12 @@ function isBreakpointAt(value: unknown, filePath: string, line: number): boolean
 
 function delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function removePath(targetPath: string, options: fs.RmOptions): void {
+    fs.rmSync(targetPath, {
+        maxRetries: process.platform === 'win32' ? 20 : 0,
+        retryDelay: 250,
+        ...options,
+    });
 }

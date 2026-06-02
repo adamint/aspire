@@ -114,7 +114,7 @@ suite('Aspire workspace discovery and configuration E2E', function () {
         await stopPrimaryAppHostIfRunning();
 
         const appHostDirectory = path.dirname(getPrimaryAppHostProjectPath());
-        const hiddenAppHostDirectory = path.join(getWorkspaceRoot(), '.e2e-hidden-apphost');
+        const hiddenAppHostDirectory = path.join(path.dirname(getWorkspaceRoot()), '.e2e-hidden-apphost');
         fs.rmSync(hiddenAppHostDirectory, { recursive: true, force: true });
 
         try {

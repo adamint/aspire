@@ -50,8 +50,8 @@ const csharpFileHeader = `// Licensed to the .NET Foundation under one or more a
 
 `;
 
-fs.rmSync(resultsDir, { recursive: true, force: true });
-fs.rmSync(recordingsDir, { recursive: true, force: true });
+removePath(resultsDir, { recursive: true, force: true });
+removePath(recordingsDir, { recursive: true, force: true });
 for (const directory of [artifactsDir, resultsDir, diagnosticsStorageRoot, isolatedAspireHome, storageDir, extensionsDir]) {
   fs.mkdirSync(directory, { recursive: true });
 }
@@ -1145,8 +1145,8 @@ function sleepSynchronously(milliseconds) {
 }
 
 function copyStorageDiagnostics() {
-  fs.rmSync(storageDiagnosticsDir, { recursive: true, force: true });
-  copyIfExists(isolatedAspireHome, path.join(storageDiagnosticsDir, 'aspire-home'));
+  removePath(storageDiagnosticsDir, { recursive: true, force: true });
+  copyIfExists(isolatedAspireHome, path.join(storageDiagnosticsDir, 'aspire-home'), skipAspireLeaseFiles);
   copyIfExists(path.join(storageDir, 'screenshots'), path.join(storageDiagnosticsDir, 'screenshots'));
   copyIfExists(path.join(storageDir, 'settings', 'CrashpadMetrics-active.pma'), path.join(storageDiagnosticsDir, 'settings', 'CrashpadMetrics-active.pma'));
   copyIfExists(path.join(storageDir, 'settings', 'logs'), path.join(storageDiagnosticsDir, 'settings', 'logs'));
@@ -1155,20 +1155,27 @@ function copyStorageDiagnostics() {
 }
 
 function copyWorkspaceDiagnostics() {
-  fs.rmSync(workspaceDiagnosticsDir, { recursive: true, force: true });
+  removePath(workspaceDiagnosticsDir, { recursive: true, force: true });
   copyIfExists(path.join(workspaceRoot, '.aspire'), path.join(workspaceDiagnosticsDir, '.aspire'));
   copyIfExists(path.join(workspaceRoot, '.vscode', 'settings.json'), path.join(workspaceDiagnosticsDir, '.vscode', 'settings.json'));
   copyWorkspaceProjectSources();
   redactTextFilesForArtifacts(workspaceDiagnosticsDir);
 }
 
-function copyIfExists(sourcePath, destinationPath) {
+function copyIfExists(sourcePath, destinationPath, filter) {
   if (!fs.existsSync(sourcePath)) {
     return;
   }
 
   fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
-  fs.cpSync(sourcePath, destinationPath, { recursive: true, force: true });
+  fs.cpSync(sourcePath, destinationPath, { recursive: true, force: true, filter });
+}
+
+function skipAspireLeaseFiles(sourcePath) {
+  // Aspire CLI lease files can remain locked briefly on Windows after the test
+  // process exits. They are not useful diagnostics, and failing to copy them can
+  // mask the actual E2E failure or prevent artifact upload.
+  return !sourcePath.split(/[\\/]/).includes('.leases') && !sourcePath.endsWith('.lease');
 }
 
 function copyWorkspaceProjectSources() {
@@ -1327,9 +1334,32 @@ function cleanupTemporaryRunRoot() {
     return;
   }
 
-  fs.rmSync(shortRunRoot, { recursive: true, force: true });
+  removePath(shortRunRoot, { recursive: true, force: true, warnOnWindowsLock: true });
 }
 
 function sanitizePathSegment(value) {
   return value.replace(/[^A-Za-z0-9_.-]/g, '-');
+}
+
+function removePath(targetPath, options = {}) {
+  const { warnOnWindowsLock, ...rmOptions } = options;
+  try {
+    fs.rmSync(targetPath, {
+      maxRetries: process.platform === 'win32' ? 20 : 0,
+      retryDelay: 250,
+      ...rmOptions,
+    });
+  }
+  catch (error) {
+    if (warnOnWindowsLock && process.platform === 'win32' && isRetryableWindowsFileLock(error)) {
+      console.warn(`Warning: unable to remove locked E2E path '${targetPath}': ${error.message}`);
+      return;
+    }
+
+    throw error;
+  }
+}
+
+function isRetryableWindowsFileLock(error) {
+  return error && typeof error === 'object' && ['EBUSY', 'EPERM', 'ENOTEMPTY'].includes(error.code);
 }

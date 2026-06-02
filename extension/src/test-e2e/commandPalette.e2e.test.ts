@@ -54,7 +54,7 @@ suite('Aspire command palette E2E', function () {
         const wrapperDirectory = path.join(getWorkspaceRoot(), 'cli wrapper with spaces');
         const wrapperPath = path.join(wrapperDirectory, 'aspire.cmd');
         fs.mkdirSync(wrapperDirectory, { recursive: true });
-        fs.writeFileSync(wrapperPath, '@echo off\r\nexit /b 0\r\n');
+        fs.writeFileSync(wrapperPath, '@echo off\r\nif "%~1"=="--version" (\r\n  echo 13.5.0-pr.e2e\r\n  exit /b 0\r\n)\r\nexit /b 0\r\n');
         await setE2eCliPathForE2E(undefined);
         await writeWorkspaceCliPath(wrapperPath);
         await setTerminalCommandExecutionSuppressedForE2E(true);

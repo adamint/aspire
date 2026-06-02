@@ -93,6 +93,7 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes('sanitizeDashboardUrlForDiagnostics'));
         assert.ok(runner.includes('redactTextFilesForArtifacts(resultsDir)'));
         assert.ok(runner.includes('redactTextFilesForArtifacts(storageDiagnosticsDir)'));
+        assert.ok(runner.includes('skipAspireLeaseFiles'));
         assert.ok(runner.includes('/login?t=<redacted>'));
         assert.ok(runner.includes('new URL(stripResourceSuffix(url)).origin'));
     });
@@ -184,7 +185,8 @@ suite('E2E launch profile', () => {
         assert.ok(zeroToRunning.includes('this.timeout(1200000);'));
         assert.ok(zeroToRunning.includes('waitForDebugSessionStartup(appHostPath, 300000)'));
         assert.ok(zeroToRunning.includes('waitForDebugDashboardUrl(appHostPath, 180000)'));
-        assert.ok(zeroToRunning.includes("waitForWorkbenchTextAfterIntegratedBrowserNavigation('Resources', 180000)"));
+        assert.ok(zeroToRunning.includes("waitForEditorTitle(new URL(dashboardUrl).host, 180000"));
+        assert.ok(zeroToRunning.includes("process.platform !== 'win32'"));
     });
 
     test('uses monotonic E2E event sequences instead of positional slices over capped buffers', () => {
