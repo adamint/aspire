@@ -174,7 +174,19 @@ export async function waitForExtensionState(
 }
 
 export function readStateFile(): ExtensionE2EStateFile {
-    return JSON.parse(fs.readFileSync(getStateFilePath(), 'utf8')) as ExtensionE2EStateFile;
+    const maxAttempts = process.platform === 'win32' ? 10 : 1;
+    for (let attempt = 1; ; attempt++) {
+        try {
+            return JSON.parse(fs.readFileSync(getStateFilePath(), 'utf8')) as ExtensionE2EStateFile;
+        }
+        catch (error) {
+            if (attempt >= maxAttempts || !isRetryableStateFileReadError(error)) {
+                throw error;
+            }
+
+            sleepSynchronously(25);
+        }
+    }
 }
 
 async function ensureWorkspaceFolderOpen(deadline: Deadline): Promise<void> {
@@ -292,6 +304,27 @@ function canonicalizePath(value: string): string {
     return fs.existsSync(resolved) ? fs.realpathSync.native(resolved) : resolved;
 }
 
+function isRetryableStateFileReadError(error: unknown): boolean {
+    if (process.platform !== 'win32') {
+        return false;
+    }
+
+    if (error instanceof SyntaxError) {
+        return true;
+    }
+
+    if (!error || typeof error !== 'object' || !('code' in error)) {
+        return false;
+    }
+
+    return error.code === 'EPERM' || error.code === 'EACCES' || error.code === 'EBUSY' || error.code === 'ENOENT';
+}
+
 function isDebugSessionForAppHost(session: AspireDebugSessionState, appHostPath: string): boolean {
     return session.appHostPath !== undefined && isSamePath(session.appHostPath, appHostPath);
+}
+
+function sleepSynchronously(milliseconds: number): void {
+    const buffer = new SharedArrayBuffer(4);
+    Atomics.wait(new Int32Array(buffer), 0, 0, milliseconds);
 }

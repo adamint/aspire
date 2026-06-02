@@ -1200,43 +1200,6 @@ function copyWorkspaceProjectSources() {
     return;
   }
 
-  function redactTextFilesForArtifacts(directory) {
-    if (!fs.existsSync(directory)) {
-      return;
-    }
-
-    for (const file of getFilesRecursive(directory)) {
-      if (!isTextArtifact(file)) {
-        continue;
-      }
-
-      let contents;
-      try {
-        contents = fs.readFileSync(file, 'utf8');
-      }
-      catch {
-        continue;
-      }
-
-      const redacted = redactSensitiveArtifactText(contents);
-      if (redacted !== contents) {
-        fs.writeFileSync(file, redacted);
-      }
-    }
-  }
-
-  function isTextArtifact(file) {
-    return /\.(log|txt|json|jsonl|xml|config|cs|ts|js|md)$/i.test(file) || path.basename(file).toLowerCase() === 'settings';
-  }
-
-  function redactSensitiveArtifactText(value) {
-    return value
-      .replace(/\/login\?t=[^"'\s<>\\)]+/gi, '/login?t=<redacted>')
-      .replace(/([?&]t=)[^"'\s<>\\)&]+/gi, '$1<redacted>')
-      .replace(/(Setting up RPC server with token: )[^\r\n]+/gi, '$1<redacted>')
-      .replace(/(token["']?\s*[:=]\s*["']?)[A-Za-z0-9+/=._-]{16,}/gi, '$1<redacted>');
-  }
-
   for (const entry of fs.readdirSync(workspaceRoot, { withFileTypes: true })) {
     if (!entry.isDirectory() || !entry.name.startsWith('AspireE2E.')) {
       continue;
@@ -1248,6 +1211,43 @@ function copyWorkspaceProjectSources() {
     copyIfExists(path.join(sourceDirectory, 'Program.cs'), path.join(destinationDirectory, 'Program.cs'));
     copyIfExists(path.join(sourceDirectory, `${entry.name}.csproj`), path.join(destinationDirectory, `${entry.name}.csproj`));
   }
+}
+
+function redactTextFilesForArtifacts(directory) {
+  if (!fs.existsSync(directory)) {
+    return;
+  }
+
+  for (const file of getFilesRecursive(directory)) {
+    if (!isTextArtifact(file)) {
+      continue;
+    }
+
+    let contents;
+    try {
+      contents = fs.readFileSync(file, 'utf8');
+    }
+    catch {
+      continue;
+    }
+
+    const redacted = redactSensitiveArtifactText(contents);
+    if (redacted !== contents) {
+      fs.writeFileSync(file, redacted);
+    }
+  }
+}
+
+function isTextArtifact(file) {
+  return /\.(log|txt|json|jsonl|xml|config|cs|ts|js|md)$/i.test(file) || path.basename(file).toLowerCase() === 'settings';
+}
+
+function redactSensitiveArtifactText(value) {
+  return value
+    .replace(/\/login\?t=[^"'\s<>\\)]+/gi, '/login?t=<redacted>')
+    .replace(/([?&]t=)[^"'\s<>\\)&]+/gi, '$1<redacted>')
+    .replace(/(Setting up RPC server with token: )[^\r\n]+/gi, '$1<redacted>')
+    .replace(/(token["']?\s*[:=]\s*["']?)[A-Za-z0-9+/=._-]{16,}/gi, '$1<redacted>');
 }
 
 function printSuccessDiagnosticsSummary() {
