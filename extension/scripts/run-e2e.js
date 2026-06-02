@@ -500,6 +500,7 @@ async function main() {
     runCleanupStep('stop recording', () => stopRecording(recording, testFailure), cleanupErrors);
     runCleanupStep('stop workspace AppHost', stopWorkspaceAppHost, cleanupErrors);
     runCleanupStep('redact extension state', redactStateFileForArtifacts, cleanupErrors);
+    runCleanupStep('redact test results', () => redactTextFilesForArtifacts(resultsDir), cleanupErrors);
     runCleanupStep('copy storage diagnostics', copyStorageDiagnostics, cleanupErrors);
     runCleanupStep('copy workspace diagnostics', copyWorkspaceDiagnostics, cleanupErrors);
     runCleanupStep('cleanup temporary run root', cleanupTemporaryRunRoot, cleanupErrors);
