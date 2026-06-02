@@ -118,8 +118,9 @@ suite('Aspire command palette E2E', function () {
         await waitForRepositoryIdle();
         removeWorkspaceAppHostConfig();
         const secondaryAppHostPath = createAdditionalAppHostCandidate();
+        const beforeRefresh = getCommandInvocationCount('aspire-vscode.refreshAppHosts');
         await executeE2eControlCommand({ name: 'refreshAppHosts' });
-        await waitForCommandOutcome('aspire-vscode.refreshAppHosts', 'success');
+        await waitForCommandOutcome('aspire-vscode.refreshAppHosts', 'success', 60000, beforeRefresh);
 
         const stateFile = await waitForExtensionState(
             file => file.state.workspaceAppHostCandidatePaths.some(candidate => isSamePath(candidate, secondaryAppHostPath)),

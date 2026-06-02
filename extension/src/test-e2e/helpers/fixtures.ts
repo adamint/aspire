@@ -62,6 +62,21 @@ export async function executeE2eControlCommand(command: AspireExtensionE2EContro
     return await applyE2eControl({ command }, options?.waitFor ?? 'applied');
 }
 
+export async function runE2eTeardown(cleanups: ReadonlyArray<() => unknown | Promise<unknown>>, failureMessage: string): Promise<void> {
+    const failures: unknown[] = [];
+    for (const cleanup of cleanups) {
+        try {
+            await cleanup();
+        } catch (error) {
+            failures.push(error);
+        }
+    }
+
+    if (failures.length > 0) {
+        throw new AggregateError(failures, failureMessage);
+    }
+}
+
 export async function createEmptyAppHostProject(projectName: string): Promise<string> {
     const outputPath = getGeneratedProjectRoot(projectName);
     removePath(outputPath, { recursive: true, force: true });

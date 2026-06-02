@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import type { AspireExtensionE2EControlCommand } from '../types/extensionApi';
 import { getCommandInvocationCount, getDebugLaunchCount, isSamePath, waitForCommandOutcome, waitForDebugLaunch, waitForExtensionState, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
-import { executeE2eControlCommand, restoreWorkspaceCliPath, setCliUnavailableForE2E, setDebugLaunchSuppressedForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
+import { executeE2eControlCommand, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setDebugLaunchSuppressedForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath, getWorkspaceRoot } from './helpers/paths';
 import { openAspireView } from './helpers/vscode';
 
@@ -11,10 +11,12 @@ suite('Aspire extension edge case E2E', function () {
     this.timeout(180000);
 
     teardown(async () => {
-        await setCliUnavailableForE2E(false);
-        await setDebugLaunchSuppressedForE2E(false);
-        await restoreWorkspaceCliPath();
-        await stopPrimaryAppHostIfRunning();
+        await runE2eTeardown([
+            () => setCliUnavailableForE2E(false),
+            () => setDebugLaunchSuppressedForE2E(false),
+            () => restoreWorkspaceCliPath(),
+            () => stopPrimaryAppHostIfRunning(),
+        ], 'Edge case E2E teardown failed.');
     });
 
     test('rejects invalid E2E control payloads and missing tree targets without side effects', async () => {

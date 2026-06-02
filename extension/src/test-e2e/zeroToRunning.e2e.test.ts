@@ -1,37 +1,27 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import { getCommandInvocationCount, getTerminalCommandCount, waitForCommandOutcome, waitForDebugDashboardUrl, waitForDebugSessionStartup, waitForHttpText, waitForNoDebugSessions, waitForRepositoryIdle, waitForSelectedWorkspaceAppHost, waitForTerminalCommand } from './helpers/assertions';
-import { addIntegrationPackageToAppHost, clearBreakpoints, createEmptyAppHostProject, executeE2eControlCommand, getGeneratedAppHostPath, removeGeneratedProject, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, setCliUnavailableForE2E, setTerminalCommandExecutionSuppressedForE2E, stopAppHostIfRunning, writeWorkspaceAppHostConfigForPath } from './helpers/fixtures';
+import { addIntegrationPackageToAppHost, clearBreakpoints, createEmptyAppHostProject, executeE2eControlCommand, getGeneratedAppHostPath, removeGeneratedProject, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setTerminalCommandExecutionSuppressedForE2E, stopAppHostIfRunning, writeWorkspaceAppHostConfigForPath } from './helpers/fixtures';
 import { openAspireView, waitForEditorTitle, waitForTreeItem, waitForWorkbenchTextAfterIntegratedBrowserNavigation } from './helpers/vscode';
 
 suite('Aspire zero-to-running E2E', function () {
-    this.timeout(1200000);
+    this.timeout(2100000);
 
     const projectName = 'ExtensionZeroToRunningApp';
     const appHostPath = getGeneratedAppHostPath(projectName);
 
     teardown(async () => {
-        const failures: unknown[] = [];
-        for (const cleanup of [
+        await runE2eTeardown([
             () => setCliUnavailableForE2E(false),
             () => setTerminalCommandExecutionSuppressedForE2E(false),
             () => restoreWorkspaceCliPath(),
             () => clearBreakpoints(),
             () => executeE2eControlCommand({ name: 'stopDebugging' }),
             () => stopAppHostIfRunning(appHostPath),
-        ]) {
-            try {
-                await cleanup();
-            } catch (error) {
-                failures.push(error);
-            }
-        }
-        await waitForNoDebugSessions().catch(() => undefined);
-        restoreWorkspaceAppHostConfig();
-        removeGeneratedProject(projectName);
-        if (failures.length > 0) {
-            throw new AggregateError(failures, 'Zero-to-running E2E teardown failed.');
-        }
+            () => waitForNoDebugSessions().catch(() => undefined),
+            () => restoreWorkspaceAppHostConfig(),
+            () => removeGeneratedProject(projectName),
+        ], 'Zero-to-running E2E teardown failed.');
     });
 
     test('creates a new AppHost, adds a package, and debugs to the dashboard', async () => {

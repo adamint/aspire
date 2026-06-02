@@ -141,7 +141,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         try {
             const started = await vscode.debug.startDebugging(undefined, config);
             if (!started) {
-                this.clearLaunching(appHostPath);
+                throw new Error(`VS Code did not start the Aspire ${command} session for ${vscode.workspace.asRelativePath(appHostPath)}.`);
             }
         } catch (err) {
             this.clearLaunching(appHostPath);

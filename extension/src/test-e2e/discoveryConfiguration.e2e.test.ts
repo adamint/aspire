@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getCommandInvocationCount, isSamePath, waitForCommandOutcome, waitForExtensionState, waitForRepositoryIdle, waitForSelectedWorkspaceAppHost, waitForWorkspaceAppHost } from './helpers/assertions';
-import { createAdditionalAppHostCandidate, executeE2eControlCommand, removeAdditionalAppHostCandidate, removeLegacyAspireSettings, removeWorkspaceAppHostConfig, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, setCliUnavailableForE2E, stopPrimaryAppHostIfRunning, writeLegacyAspireSettings, writeWorkspaceAppHostConfig, writeWorkspaceAppHostConfigRaw } from './helpers/fixtures';
+import { createAdditionalAppHostCandidate, executeE2eControlCommand, removeAdditionalAppHostCandidate, removeLegacyAspireSettings, removeWorkspaceAppHostConfig, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, stopPrimaryAppHostIfRunning, writeLegacyAspireSettings, writeWorkspaceAppHostConfig, writeWorkspaceAppHostConfigRaw } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath, getWorkspaceRoot } from './helpers/paths';
 import { openAspireView, waitForWorkbenchText } from './helpers/vscode';
 
@@ -10,12 +10,14 @@ suite('Aspire workspace discovery and configuration E2E', function () {
     this.timeout(180000);
 
     teardown(async () => {
-        await setCliUnavailableForE2E(false);
-        await restoreWorkspaceCliPath();
-        restoreWorkspaceAppHostConfig();
-        removeLegacyAspireSettings();
-        removeAdditionalAppHostCandidate();
-        await stopPrimaryAppHostIfRunning();
+        await runE2eTeardown([
+            () => setCliUnavailableForE2E(false),
+            () => restoreWorkspaceCliPath(),
+            () => restoreWorkspaceAppHostConfig(),
+            () => removeLegacyAspireSettings(),
+            () => removeAdditionalAppHostCandidate(),
+            () => stopPrimaryAppHostIfRunning(),
+        ], 'Discovery configuration E2E teardown failed.');
     });
 
     test('rediscovers workspace AppHost candidates when config changes', async () => {
@@ -114,7 +116,7 @@ suite('Aspire workspace discovery and configuration E2E', function () {
         await stopPrimaryAppHostIfRunning();
 
         const appHostDirectory = path.dirname(getPrimaryAppHostProjectPath());
-        const hiddenAppHostDirectory = path.join(path.dirname(getWorkspaceRoot()), '.e2e-hidden-apphost');
+        const hiddenAppHostDirectory = path.join(getWorkspaceRoot(), '.e2e-hidden-apphost');
         fs.rmSync(hiddenAppHostDirectory, { recursive: true, force: true });
 
         const failures: unknown[] = [];

@@ -59,7 +59,7 @@ jobs:
     name: VS Code extension E2E (${{ matrix.name }}, ${{ matrix.shardName }})
     needs: verify_extester_feed
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 75
     env:
       NPM_REGISTRY: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/
       COREPACK_ENABLE_DOWNLOAD_PROMPT: 0

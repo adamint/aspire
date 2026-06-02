@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as path from 'path';
 import { findResource, getCommandInvocationCount, getTerminalCommandCount, isSamePath, waitForAppHostLaunching, waitForCommandOutcome, waitForDashboardUrl, waitForExtensionState, waitForHttpText, waitForNoRunningAppHost, waitForRepositoryIdle, waitForResource, waitForResourceState, waitForRunningAppHost, waitForTerminalCommand, waitForWorkspaceAppHost } from './helpers/assertions';
-import { executeE2eControlCommand, restoreWorkspaceCliPath, setCliUnavailableForE2E, setTerminalCommandExecutionSuppressedForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
+import { executeE2eControlCommand, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setTerminalCommandExecutionSuppressedForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath } from './helpers/paths';
 import { answerActiveInput, chooseActiveQuickPick, openAspireView, waitForEditorTitle } from './helpers/vscode';
 
@@ -9,11 +9,13 @@ suite('Aspire tree action command E2E', function () {
     this.timeout(300000);
 
     teardown(async () => {
-        await setCliUnavailableForE2E(false);
-        await setTerminalCommandExecutionSuppressedForE2E(false);
-        await restoreWorkspaceCliPath();
-        await stopPrimaryAppHostIfRunning();
-        await waitForNoRunningAppHost();
+        await runE2eTeardown([
+            () => setCliUnavailableForE2E(false),
+            () => setTerminalCommandExecutionSuppressedForE2E(false),
+            () => restoreWorkspaceCliPath(),
+            () => stopPrimaryAppHostIfRunning(),
+            () => waitForNoRunningAppHost(),
+        ], 'Tree action E2E teardown failed.');
     });
 
     test('routes view, copy, endpoint, log, and resource commands through tree handlers', async () => {

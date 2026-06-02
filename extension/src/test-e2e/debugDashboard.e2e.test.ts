@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { getCommandInvocationCount, getTreeAppHostLabel, waitForAppHostLaunching, waitForCommandOutcome, waitForDebugDashboardUrl, waitForDebugSessionStartup, waitForHttpText, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
-import { executeE2eControlCommand, restoreWorkspaceCliPath, setCliUnavailableForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
+import { executeE2eControlCommand, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath } from './helpers/paths';
 import { openAspireView, waitForEditorTitle, waitForTreeItem, waitForWorkbenchTextAfterIntegratedBrowserNavigation } from './helpers/vscode';
 
@@ -8,24 +8,14 @@ suite('Aspire debug dashboard E2E', function () {
     this.timeout(240000);
 
     teardown(async () => {
-        const failures: unknown[] = [];
-        for (const cleanup of [
+        await runE2eTeardown([
             () => setCliUnavailableForE2E(false),
             () => restoreWorkspaceCliPath(),
             () => executeE2eControlCommand({ name: 'stopDebugging' }),
             () => stopPrimaryAppHostIfRunning(),
-        ]) {
-            try {
-                await cleanup();
-            } catch (error) {
-                failures.push(error);
-            }
-        }
-        await waitForNoDebugSessions().catch(() => undefined);
-        await waitForNoRunningAppHost().catch(() => undefined);
-        if (failures.length > 0) {
-            throw new AggregateError(failures, 'Debug dashboard E2E teardown failed.');
-        }
+            () => waitForNoDebugSessions().catch(() => undefined),
+            () => waitForNoRunningAppHost().catch(() => undefined),
+        ], 'Debug dashboard E2E teardown failed.');
     });
 
     test('debugs the AppHost and opens the dashboard in the integrated browser', async () => {

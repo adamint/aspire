@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { getResources, getTreeAppHostLabel, waitForCommandOutcome, waitForDashboardUrl, waitForNoRunningAppHost, waitForRepositoryIdle, waitForResource, waitForRunningAppHost, waitForWorkspaceAppHost } from './helpers/assertions';
-import { executeE2eControlCommand, restoreWorkspaceCliPath, setCliUnavailableForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
+import { executeE2eControlCommand, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath } from './helpers/paths';
 import { cancelActiveInput, clickTreeItem, openAspireView, waitForTreeItem } from './helpers/vscode';
 
@@ -8,10 +8,12 @@ suite('Aspire AppHost tree E2E', function () {
     this.timeout(240000);
 
     teardown(async () => {
-        await setCliUnavailableForE2E(false);
-        await restoreWorkspaceCliPath();
-        await stopPrimaryAppHostIfRunning();
-        await waitForNoRunningAppHost().catch(() => undefined);
+        await runE2eTeardown([
+            () => setCliUnavailableForE2E(false),
+            () => restoreWorkspaceCliPath(),
+            () => stopPrimaryAppHostIfRunning(),
+            () => waitForNoRunningAppHost().catch(() => undefined),
+        ], 'AppHost tree E2E teardown failed.');
     });
 
     test('discovers the workspace AppHost and renders it in the Aspire view', async () => {

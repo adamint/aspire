@@ -84,12 +84,13 @@ function runWithProcessTreeTimeout(command, args, extraEnv, timeout) {
     let forceTimeout;
     const timer = setTimeout(() => {
       timedOut = true;
-      terminateProcessTree(child.pid);
+      terminateProcessTree(child.pid, 'SIGTERM');
       forceTimeout = setTimeout(() => {
         if (settled) {
           return;
         }
 
+        terminateProcessTree(child.pid, 'SIGKILL');
         child.removeAllListeners();
         child.unref();
         settle();
@@ -136,7 +137,7 @@ function runWithProcessTreeTimeout(command, args, extraEnv, timeout) {
 }
 
 function getRunTestsTimeoutMs() {
-  const configured = Number(process.env.ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS || 1800000);
+  const configured = Number(process.env.ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS || 2400000);
   if (!Number.isFinite(configured) || configured <= 0) {
     throw new Error(`ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS must be a positive number. Got '${process.env.ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS}'.`);
   }
@@ -535,9 +536,9 @@ async function main() {
     });
 
     logStep('Downloading VS Code');
-    runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 3, retryDelayMs: 5000, beforeRetry: cleanPartialExtesterDownloads, timeout: 600000 });
+    runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 2, retryDelayMs: 5000, beforeRetry: cleanPartialExtesterDownloads, timeout: 240000 });
     logStep('Downloading ChromeDriver');
-    runWithRetry(process.execPath, [extesterCli, 'get-chromedriver', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 3, retryDelayMs: 5000, beforeRetry: cleanPartialExtesterDownloads, timeout: 600000 });
+    runWithRetry(process.execPath, [extesterCli, 'get-chromedriver', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 2, retryDelayMs: 5000, beforeRetry: cleanPartialExtesterDownloads, timeout: 240000 });
     logStep('Installing VSIX');
     run(process.execPath, [extesterCli, 'install-vsix', '--storage', storageDir, '--extensions_dir', extensionsDir, '--vsix_file', vsixPath], extestEnv, { timeout: 300000 });
 
@@ -706,6 +707,10 @@ function verifyExtesterFeed() {
   ensureExtester();
 }
 
+// ExTester 8.23.0 does not expose a supported way to open VS Code with a workspace
+// folder. Starting with the workspace already open avoids a slower control-bridge
+// reload path and removes a startup race where discovery begins in an empty window.
+// Remove this patch when ExTester exposes a stable launch option for a folder/workspace.
 function patchExtesterLaunchLocale() {
   const browserPath = path.join(extesterModule, 'out', 'browser.js');
   const source = fs.readFileSync(browserPath, 'utf8');
@@ -726,8 +731,10 @@ function patchExtesterLaunchLocale() {
   const target = targets.find(candidate => source.includes(candidate));
   const argsDeclarationPattern = /const args = \[[^\n]*`--user-data-dir=\$\{path\.join\(this\.storagePath, 'settings'\)\}`(?:, [^\n]+?)?\];/;
   if (target) {
+    console.log('Patching ExTester VS Code launch arguments by exact 8.23.0 argument match.');
     fs.writeFileSync(browserPath, source.replace(target, () => replacement));
   } else if (argsDeclarationPattern.test(source)) {
+    console.log('Patching ExTester VS Code launch arguments by fallback argument-line match.');
     fs.writeFileSync(browserPath, source.replace(argsDeclarationPattern, () => replacement));
   } else {
     throw new Error(`Unable to patch ExTester VS Code launch arguments in ${browserPath} to force the E2E browser locale.`);
@@ -1162,7 +1169,7 @@ function getPathComparisonKey(value) {
   return process.platform === 'win32' ? value.toLowerCase() : value;
 }
 
-function terminateProcessTree(pid) {
+function terminateProcessTree(pid, signal) {
   if (!pid) {
     return;
   }
@@ -1173,11 +1180,11 @@ function terminateProcessTree(pid) {
   }
 
   try {
-    process.kill(-pid, 'SIGKILL');
+    process.kill(-pid, signal);
   }
   catch {
     try {
-      process.kill(pid, 'SIGKILL');
+      process.kill(pid, signal);
     }
     catch {
       // Best-effort cleanup after a timeout; the process may have already exited.

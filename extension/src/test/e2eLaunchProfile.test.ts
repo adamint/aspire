@@ -59,10 +59,13 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes('ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS'));
         assert.ok(runner.includes('await runWithProcessTreeTimeout(process.execPath'));
         assert.ok(runner.includes('getRunTestsTimeoutMs()'));
+        assert.ok(runner.includes('2400000'));
         assert.ok(runner.includes('did not exit after process-tree termination'));
         assert.ok(runner.includes('child.unref()'));
         assert.ok(runner.includes("spawnSync('taskkill'"));
-        assert.ok(runner.includes("process.kill(-pid, 'SIGKILL')"));
+        assert.ok(runner.includes("terminateProcessTree(child.pid, 'SIGTERM')"));
+        assert.ok(runner.includes("terminateProcessTree(child.pid, 'SIGKILL')"));
+        assert.ok(runner.includes('process.kill(-pid, signal)'));
     });
 
     test('bounds retryable runner setup steps so setup failures still collect diagnostics', () => {
@@ -70,7 +73,8 @@ suite('E2E launch profile', () => {
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
 
         assert.ok(runner.includes("'get-vscode'"));
-        assert.ok(runner.includes('timeout: 600000'));
+        assert.ok(runner.includes('attempts: 2'));
+        assert.ok(runner.includes('timeout: 240000'));
         assert.ok(runner.includes("'get-chromedriver'"));
         assert.ok(runner.includes('run(command, args, extraEnv, options);'));
     });
@@ -199,6 +203,8 @@ suite('E2E launch profile', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
 
+        assert.ok(runner.includes('ExTester 8.23.0 does not expose a supported way to open VS Code with a workspace'));
+        assert.ok(runner.includes('Patching ExTester VS Code launch arguments by exact 8.23.0 argument match.'));
         assert.ok(runner.includes('source.replace(target, () => replacement)'));
         assert.ok(runner.includes('source.replace(argsDeclarationPattern, () => replacement)'));
     });
@@ -207,7 +213,7 @@ suite('E2E launch profile', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const zeroToRunning = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'zeroToRunning.e2e.test.ts'), 'utf8');
 
-        assert.ok(zeroToRunning.includes('this.timeout(1200000);'));
+        assert.ok(zeroToRunning.includes('this.timeout(2100000);'));
         assert.ok(zeroToRunning.includes('waitForDebugSessionStartup(appHostPath, 300000)'));
         assert.ok(zeroToRunning.includes('waitForDebugDashboardUrl(appHostPath, 180000)'));
         assert.ok(zeroToRunning.includes("waitForEditorTitle(new URL(dashboardUrl).host, 180000"));
