@@ -406,8 +406,11 @@ jobs:
           name: extension-e2e-diagnostics-${{ matrix.rid }}-${{ matrix.shardName }}-attempt${{ github.run_attempt }}
           path: |
             extension/.test-results/**
-            extension/.test-storage/**
-            extension/.test-storage/**/logs/**
+            extension/.test-storage/**/settings/User/**
+            extension/.test-storage/**/settings/logs/**
+            extension/.test-storage/**/screenshots/**
+            extension/.test-storage/**/aspire-home/logs/**
+            extension/.test-storage/**/aspire-home/cache/apphost-info/**
             extension/.test-workspaces/**/.aspire/**
             extension/.test-workspaces/**/*.log
             extension/.test-recordings/**

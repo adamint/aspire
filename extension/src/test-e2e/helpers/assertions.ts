@@ -50,11 +50,11 @@ export async function waitForNoRunningAppHost(timeoutMs = 90000): Promise<Extens
 }
 
 export async function waitForResource(resourceName: string, timeoutMs = 120000): Promise<ExtensionE2EStateFile> {
-    return await waitForExtensionState(file => getResources(file.state).some(resource => (resource.displayName ?? resource.name) === resourceName), `resource '${resourceName}'`, timeoutMs);
+    return await waitForExtensionState(file => getResources(file.state).some(resource => isResourceMatch(resource, resourceName)), `resource '${resourceName}'`, timeoutMs);
 }
 
 export async function waitForResourceState(resourceName: string, states: readonly string[], timeoutMs = 120000): Promise<ExtensionE2EStateFile> {
-    return await waitForExtensionState(file => getResources(file.state).some(resource => (resource.displayName ?? resource.name) === resourceName && resource.state !== null && states.includes(resource.state)), `resource '${resourceName}' state ${states.join(' or ')}`, timeoutMs);
+    return await waitForExtensionState(file => getResources(file.state).some(resource => isResourceMatch(resource, resourceName) && resource.state !== null && states.includes(resource.state)), `resource '${resourceName}' state ${states.join(' or ')}`, timeoutMs);
 }
 
 export async function waitForDashboardUrl(timeoutMs = 120000): Promise<ExtensionE2EStateFile> {
@@ -137,6 +137,10 @@ export function getTreeAppHostLabel(state: ExtensionStateSnapshot): string {
 export function getResources(state: ExtensionStateSnapshot): readonly ResourceState[] {
     const runningAppHost = findRunningAppHost(state);
     return state.workspaceResources.length > 0 ? state.workspaceResources : runningAppHost?.resources ?? [];
+}
+
+export function findResource(state: ExtensionStateSnapshot, resourceName: string): ResourceState | undefined {
+    return getResources(state).find(resource => isResourceMatch(resource, resourceName));
 }
 
 export function findRunningAppHost(state: ExtensionStateSnapshot): AppHostState | undefined {
@@ -322,6 +326,10 @@ function isRetryableStateFileReadError(error: unknown): boolean {
 
 function isDebugSessionForAppHost(session: AspireDebugSessionState, appHostPath: string): boolean {
     return session.appHostPath !== undefined && isSamePath(session.appHostPath, appHostPath);
+}
+
+function isResourceMatch(resource: ResourceState, resourceName: string): boolean {
+    return resource.name === resourceName || resource.displayName === resourceName;
 }
 
 function sleepSynchronously(milliseconds: number): void {

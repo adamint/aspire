@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as http from 'http';
 import * as https from 'https';
 import * as path from 'path';
-import { getCommandInvocationCount, getTerminalCommandCount, isSamePath, waitForAppHostLaunching, waitForCommandOutcome, waitForDashboardUrl, waitForExtensionState, waitForNoRunningAppHost, waitForRepositoryIdle, waitForResource, waitForResourceState, waitForRunningAppHost, waitForTerminalCommand, waitForWorkspaceAppHost } from './helpers/assertions';
+import { findResource, getCommandInvocationCount, getTerminalCommandCount, isSamePath, waitForAppHostLaunching, waitForCommandOutcome, waitForDashboardUrl, waitForExtensionState, waitForNoRunningAppHost, waitForRepositoryIdle, waitForResource, waitForResourceState, waitForRunningAppHost, waitForTerminalCommand, waitForWorkspaceAppHost } from './helpers/assertions';
 import { executeE2eControlCommand, restoreWorkspaceCliPath, setCliUnavailableForE2E, setTerminalCommandExecutionSuppressedForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath } from './helpers/paths';
 import { answerActiveInput, chooseActiveQuickPick, openAspireView, waitForEditorTitle } from './helpers/vscode';
@@ -44,7 +44,10 @@ suite('Aspire tree action command E2E', function () {
         await waitForAppHostLaunching(appHostPath);
         await waitForCommandOutcome('aspire-vscode.runAppHost', 'success', 120000, before);
         await waitForRunningAppHost();
-        await waitForResourceState('e2e-worker', ['Running'], 180000);
+        const runningResources = await waitForResourceState('e2e-worker', ['Running'], 180000);
+        const workerResource = findResource(runningResources.state, 'e2e-worker');
+        assert.ok(workerResource, 'Expected e2e-worker to be present after AppHost startup.');
+        const workerResourceName = workerResource.name;
         await waitForDashboardUrl();
 
         const copiedAppHost = await executeE2eControlCommand({ name: 'copyAppHostPath', appHostPath });
@@ -86,24 +89,28 @@ suite('Aspire tree action command E2E', function () {
         await waitForResourceState('e2e-worker', ['Running'], 90000);
 
         before = getCommandInvocationCount('aspire-vscode.stopResource');
-        await executeE2eControlCommand({ name: 'stopResource', appHostPath, resourceName: 'e2e-worker' });
+        let terminalBefore = getTerminalCommandCount();
+        await executeE2eControlCommand({ name: 'stopResource', appHostPath, resourceName: workerResourceName });
         await waitForCommandOutcome('aspire-vscode.stopResource', 'success', 60000, before);
-        await waitForResourceState('e2e-worker', ['Stopped', 'Finished', 'Exited'], 90000);
+        await waitForResourceTerminalCommand(workerResourceName, 'stop', terminalBefore);
+        await waitForResourceState(workerResourceName, ['Stopped', 'Finished', 'Exited'], 90000);
 
         before = getCommandInvocationCount('aspire-vscode.startResource');
-        await executeE2eControlCommand({ name: 'startResource', appHostPath, resourceName: 'e2e-worker' });
+        terminalBefore = getTerminalCommandCount();
+        await executeE2eControlCommand({ name: 'startResource', appHostPath, resourceName: workerResourceName });
         await waitForCommandOutcome('aspire-vscode.startResource', 'success', 60000, before);
-        await waitForResourceState('e2e-worker', ['Running'], 90000);
+        await waitForResourceTerminalCommand(workerResourceName, 'start', terminalBefore);
 
         before = getCommandInvocationCount('aspire-vscode.restartResource');
-        await executeE2eControlCommand({ name: 'restartResource', appHostPath, resourceName: 'e2e-worker' });
+        terminalBefore = getTerminalCommandCount();
+        await executeE2eControlCommand({ name: 'restartResource', appHostPath, resourceName: workerResourceName });
         await waitForCommandOutcome('aspire-vscode.restartResource', 'success', 60000, before);
-        await waitForResourceState('e2e-worker', ['Running'], 120000);
+        await waitForResourceTerminalCommand(workerResourceName, 'restart', terminalBefore);
 
         await setTerminalCommandExecutionSuppressedForE2E(true);
         before = getCommandInvocationCount('aspire-vscode.executeResourceCommand');
-        const terminalBefore = getTerminalCommandCount();
-        await executeE2eControlCommand({ name: 'executeResourceCommand', appHostPath, resourceName: 'e2e-worker' }, { waitFor: 'started' });
+        terminalBefore = getTerminalCommandCount();
+        await executeE2eControlCommand({ name: 'executeResourceCommand', appHostPath, resourceName: workerResourceName }, { waitFor: 'started' });
         await chooseActiveQuickPick('echo-arguments');
         await chooseActiveQuickPick('Continue');
         await answerActiveInput('hello from e2e', 'Message');
@@ -124,6 +131,14 @@ suite('Aspire tree action command E2E', function () {
         assert.ok(!resourceCommand.commandLine.includes('secret-from-e2e'));
     });
 });
+
+async function waitForResourceTerminalCommand(resourceName: string, command: string, afterCommandSequence: number): Promise<void> {
+    await waitForTerminalCommand(
+        event => event.subcommand.includes(`resource "${resourceName}"`) && event.subcommand.includes(` ${command}`),
+        `${command} terminal command for ${resourceName}`,
+        60000,
+        afterCommandSequence);
+}
 
 async function waitForHttpText(url: string, expectedText: string, timeoutMs = 120000): Promise<string> {
     const started = Date.now();
