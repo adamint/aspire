@@ -9,7 +9,8 @@
       "file": "/Users/adamratzman/.copilot/session-state/480af854-a97d-43a0-8f92-0131cf1a458c/files/visual-proof/17774/frame-base.png",
       "lines": [
         "Before opening: aria-expanded=(missing)",
-        "After opening: aria-expanded="
+        "After opening: aria-expanded=",
+        "After choosing a menu item: aria-expanded=(missing)"
       ]
     },
     {
@@ -19,7 +20,8 @@
       "file": "/Users/adamratzman/.copilot/session-state/480af854-a97d-43a0-8f92-0131cf1a458c/files/visual-proof/17774/frame-pr.png",
       "lines": [
         "Before opening: aria-expanded=false",
-        "After opening: aria-expanded=true"
+        "After opening: aria-expanded=true",
+        "After choosing a menu item: aria-expanded=false"
       ]
     }
   ]
