@@ -48,7 +48,13 @@ async function fileExists(filePath: string): Promise<boolean> {
  */
 export async function tryExecuteCli(cliPath: string): Promise<boolean> {
     try {
-        await execFileAsync(cliPath, ['--version'], { timeout: 5000, shell: shouldUseShellForCliPath(cliPath) });
+        if (shouldUseCmdForCliPath(cliPath)) {
+            await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', `"${cliPath}" --version`], { timeout: 5000 });
+        }
+        else {
+            await execFileAsync(cliPath, ['--version'], { timeout: 5000 });
+        }
+
         return true;
     }
     catch {
@@ -56,7 +62,7 @@ export async function tryExecuteCli(cliPath: string): Promise<boolean> {
     }
 }
 
-function shouldUseShellForCliPath(cliPath: string): boolean {
+function shouldUseCmdForCliPath(cliPath: string): boolean {
     return process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(cliPath);
 }
 
