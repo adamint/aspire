@@ -32,6 +32,7 @@ import {
     resourceDescriptionExitCode,
     logFileLabel,
     appHostStartingDescription,
+    appHostStoppingDescription,
     errorMessage,
 } from '../loc/strings';
 import { isLinkableUrl } from '../utils/urlSchemes';
@@ -91,12 +92,12 @@ function stripResourceSuffix(url: string): string {
 }
 
 class AppHostItem extends vscode.TreeItem {
-    constructor(public readonly appHost: AppHostDisplayInfo, label: string, appHostDescription?: string) {
+    constructor(public readonly appHost: AppHostDisplayInfo, label: string, appHostDescription?: string, stopping = false) {
         super(label, vscode.TreeItemCollapsibleState.Expanded);
         this.id = `apphost:${appHost.appHostPid}`;
-        this.description = pidDescription(appHost.appHostPid);
-        this.iconPath = appHostIcon(appHost.appHostPath);
-        this.contextValue = 'appHost';
+        this.description = stopping ? appHostStoppingDescription : pidDescription(appHost.appHostPid);
+        this.iconPath = stopping ? new vscode.ThemeIcon('loading~spin') : appHostIcon(appHost.appHostPath);
+        this.contextValue = stopping ? 'appHost:stopping' : 'appHost';
         this.tooltip = appHostDescription ? `${appHostDescription}\n${appHost.appHostPath}` : appHost.appHostPath;
     }
 }
@@ -108,13 +109,14 @@ class WorkspaceResourcesItem extends vscode.TreeItem {
         public readonly appHostPath: string | undefined,
         public readonly appHost: AppHostDisplayInfo | undefined,
         appHostName?: string,
-        appHostDescription?: string
+        appHostDescription?: string,
+        stopping = false
     ) {
         super(appHostName ?? workspaceAppHostLabel, vscode.TreeItemCollapsibleState.Expanded);
         this.id = 'workspace-resources';
-        this.iconPath = appHostIcon(appHostPath);
-        this.contextValue = appHost ? 'workspaceResources:hasAppHost' : 'workspaceResources';
-        this.description = resourceCountDescription(resources.length);
+        this.iconPath = stopping ? new vscode.ThemeIcon('loading~spin') : appHostIcon(appHostPath);
+        this.contextValue = stopping ? 'workspaceResources:stopping' : appHost ? 'workspaceResources:hasAppHost' : 'workspaceResources';
+        this.description = stopping ? appHostStoppingDescription : resourceCountDescription(resources.length);
         this.tooltip = appHostDescription;
     }
 }
@@ -448,6 +450,8 @@ function buildResourceTooltip(resource: ResourceJson): vscode.MarkdownString {
  * this class handles only tree rendering and resource command execution.
  */
 export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeElement>, vscode.TextDocumentContentProvider {
+    private static readonly _stoppingStateSafetyTimeoutMs = 120000;
+
     private readonly _onDidChangeTreeData = new vscode.EventEmitter<TreeElement | undefined | void>();
     readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
@@ -456,6 +460,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
 
     private readonly _dataSubscription: vscode.Disposable;
     private readonly _launchingSubscription: vscode.Disposable;
+    private readonly _stoppingAppHostTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
     private _contentProviderRegistration: vscode.Disposable | undefined;
     private readonly _appHostSourceContents = new Map<string, string>();
     private _treeView: vscode.TreeView<TreeElement> | undefined;
@@ -470,6 +475,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     ) {
         this._dataSubscription = this._repository.onDidChangeData(() => {
             this._clearLaunchingPathsForRunningAppHosts();
+            this._clearStoppingPathsForStoppedAppHosts();
             this._onDidChangeTreeData.fire();
         });
 
@@ -519,6 +525,10 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     dispose(): void {
         this._dataSubscription.dispose();
         this._launchingSubscription.dispose();
+        for (const timeout of this._stoppingAppHostTimeouts.values()) {
+            clearTimeout(timeout);
+        }
+        this._stoppingAppHostTimeouts.clear();
         this._contentProviderRegistration?.dispose();
         this._documentCloseSubscription?.dispose();
         this._onDidChangeTreeData.dispose();
@@ -533,6 +543,63 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     private _clearLaunchingPathsForRunningAppHosts(): void {
         for (const appHost of this._repository.appHosts) {
             this._launchService.clearMatchingLaunching(appHost.appHostPath);
+        }
+    }
+
+    private _trackStoppingAppHost(appHostPath: string): void {
+        const existingKey = this._findStoppingAppHostKey(appHostPath);
+        const key = existingKey ?? getComparisonKey(path.normalize(path.resolve(appHostPath)));
+        const existingTimeout = this._stoppingAppHostTimeouts.get(key);
+        if (existingTimeout) {
+            clearTimeout(existingTimeout);
+        }
+
+        // The terminal command does not expose completion/failure, so clear the optimistic
+        // UI state eventually even if no repository refresh arrives after a failed stop.
+        const timeout = setTimeout(() => {
+            this._clearStoppingAppHost(key, true);
+        }, AspireAppHostTreeProvider._stoppingStateSafetyTimeoutMs);
+        (timeout as { unref?: () => void }).unref?.();
+
+        this._stoppingAppHostTimeouts.set(key, timeout);
+    }
+
+    private _isStoppingAppHost(appHostPath: string | undefined): boolean {
+        return this._findStoppingAppHostKey(appHostPath) !== undefined;
+    }
+
+    private _findStoppingAppHostKey(appHostPath: string | undefined): string | undefined {
+        if (!appHostPath) {
+            return undefined;
+        }
+
+        return Array.from(this._stoppingAppHostTimeouts.keys()).find(stoppingPath => isMatchingAppHostPath(stoppingPath, appHostPath));
+    }
+
+    private _clearStoppingAppHost(key: string, fireChangeEvent: boolean): void {
+        const timeout = this._stoppingAppHostTimeouts.get(key);
+        if (!timeout) {
+            return;
+        }
+
+        clearTimeout(timeout);
+        this._stoppingAppHostTimeouts.delete(key);
+
+        if (fireChangeEvent) {
+            this._onDidChangeTreeData.fire();
+        }
+    }
+
+    private _clearStoppingPathsForStoppedAppHosts(): void {
+        const runningAppHostPaths = [
+            ...this._repository.appHosts.map(appHost => appHost.appHostPath),
+            this._repository.workspaceAppHost?.appHostPath,
+        ].filter(path => path !== undefined);
+
+        for (const stoppingPath of Array.from(this._stoppingAppHostTimeouts.keys())) {
+            if (!runningAppHostPaths.some(runningPath => isMatchingAppHostPath(stoppingPath, runningPath))) {
+                this._clearStoppingAppHost(stoppingPath, false);
+            }
         }
     }
 
@@ -765,12 +832,12 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
 
                     if (runningItems.length > 0) {
                         // Multiple running — use global-style AppHostItem (nested view)
-                        runningItems.push(new AppHostItem(appHost, labels[i], this._repository.workspaceAppHostDescription));
+                        runningItems.push(new AppHostItem(appHost, labels[i], this._repository.workspaceAppHostDescription, this._isStoppingAppHost(appHost.appHostPath)));
                     } else {
                         const resources = [...appHost.resources ?? []];
                         const rawDashboardUrl = appHost.dashboardUrl ?? resources.find(r => r.dashboardUrl)?.dashboardUrl ?? null;
                         const dashboardUrl = rawDashboardUrl ? stripResourceSuffix(rawDashboardUrl) : null;
-                        runningItems.push(new WorkspaceResourcesItem(resources, dashboardUrl, appHost.appHostPath, appHost, labels[i], this._repository.workspaceAppHostDescription));
+                        runningItems.push(new WorkspaceResourcesItem(resources, dashboardUrl, appHost.appHostPath, appHost, labels[i], this._repository.workspaceAppHostDescription, this._isStoppingAppHost(appHost.appHostPath)));
                     }
                 }
 
@@ -778,7 +845,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
                 if (runningItems.length > 1 && runningItems[0] instanceof WorkspaceResourcesItem) {
                     const first = runningItems[0];
                     const appHost = first.appHost!;
-                    runningItems[0] = new AppHostItem(appHost, first.label as string, this._repository.workspaceAppHostDescription);
+                    runningItems[0] = new AppHostItem(appHost, first.label as string, this._repository.workspaceAppHostDescription, this._isStoppingAppHost(appHost.appHostPath));
                 }
 
                 if (workspaceItems.length > 0 && runningItems.length > 0) {
@@ -802,7 +869,8 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
                 : [...workspaceAppHost?.resources ?? []];
             const rawDashboardUrl = workspaceAppHost?.dashboardUrl ?? resources.find(r => r.dashboardUrl)?.dashboardUrl ?? null;
             const dashboardUrl = rawDashboardUrl ? stripResourceSuffix(rawDashboardUrl) : null;
-            return [new WorkspaceResourcesItem(resources, dashboardUrl, workspaceAppHost?.appHostPath ?? this._repository.workspaceAppHostPath, workspaceAppHost, this._repository.workspaceAppHostName, this._repository.workspaceAppHostDescription)];
+            const appHostPath = workspaceAppHost?.appHostPath ?? this._repository.workspaceAppHostPath;
+            return [new WorkspaceResourcesItem(resources, dashboardUrl, appHostPath, workspaceAppHost, this._repository.workspaceAppHostName, this._repository.workspaceAppHostDescription, this._isStoppingAppHost(appHostPath))];
         }
 
         if (element instanceof AppHostItem || element instanceof ResourcesGroupItem) {
@@ -873,7 +941,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         if (!element) {
             const appHosts = this._repository.appHosts;
             const labels = shortenPaths(appHosts.map(appHost => appHost.appHostPath));
-            return appHosts.map((appHost, index) => new AppHostItem(appHost, labels[index], this._repository.workspaceAppHostDescription));
+            return appHosts.map((appHost, index) => new AppHostItem(appHost, labels[index], this._repository.workspaceAppHostDescription, this._isStoppingAppHost(appHost.appHostPath)));
         }
 
         if (element instanceof AppHostItem) {
@@ -1024,6 +1092,8 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             vscode.window.showWarningMessage(appHostSourceNotFound);
             return;
         }
+        this._trackStoppingAppHost(appHostPath);
+        this._onDidChangeTreeData.fire();
         this._terminalProvider.sendAspireCommandToAspireTerminal(`stop --apphost "${appHostPath}"`);
     }
 

@@ -226,6 +226,7 @@ function logE2eConfiguration() {
   console.log(`  matched specs: ${matchedTestSpecs.map(file => path.relative(extensionRoot, file)).join(', ')}`);
   console.log(`  VS Code: ${vscodeVersion}`);
   console.log(`  ExTester: ${extesterVersion}`);
+  console.log(`  current CLI regressions: ${process.env.ASPIRE_EXTENSION_E2E_SKIP_CURRENT_CLI_REGRESSIONS === 'true' ? 'skipped' : 'included'}`);
   console.log(`  results: ${path.relative(extensionRoot, resultsDir)}`);
   console.log(`  storage diagnostics: ${path.relative(extensionRoot, storageDiagnosticsDir)}`);
   console.log(`  workspace diagnostics: ${path.relative(extensionRoot, workspaceDiagnosticsDir)}`);
@@ -526,6 +527,7 @@ async function main() {
       ASPIRE_EXTENSION_E2E_STATE_FILE: stateFile,
       ASPIRE_EXTENSION_E2E_CONTROL_FILE: controlFile,
       ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE: 'true',
+      ASPIRE_EXTENSION_E2E_SKIP_CURRENT_CLI_REGRESSIONS: process.env.ASPIRE_EXTENSION_E2E_SKIP_CURRENT_CLI_REGRESSIONS === 'true' ? 'true' : 'false',
       ASPIRE_EXTENSION_E2E_PRIMARY_APPHOST: primaryAppHostProject,
       ASPIRE_EXTENSION_E2E_APPHOST_SDK_VERSION: appHostSdkVersion,
       ...(packageSource ? { ASPIRE_EXTENSION_E2E_PACKAGE_SOURCE: packageSource } : {}),
