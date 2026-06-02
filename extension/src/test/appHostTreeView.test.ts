@@ -275,7 +275,7 @@ suite('AspireAppHostTreeProvider', () => {
 
     test('global AppHost shows stopping state immediately after stop command', () => {
         const commands: string[] = [];
-        const appHostPath = '/workspace/apps/Store/AppHost.csproj';
+        const appHostPath = path.resolve('workspace', 'apps', 'Store', 'AppHost.csproj');
         const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
         const repository = {
             viewMode: 'global' as ViewMode,
@@ -307,7 +307,7 @@ suite('AspireAppHostTreeProvider', () => {
 
     test('workspace AppHost shows stopping state immediately after stop command', () => {
         const commands: string[] = [];
-        const appHostPath = '/workspace/apps/Store/AppHost.csproj';
+        const appHostPath = path.resolve('workspace', 'apps', 'Store', 'AppHost.csproj');
         const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
         const repository = {
             viewMode: 'workspace' as ViewMode,
@@ -339,7 +339,7 @@ suite('AspireAppHostTreeProvider', () => {
     });
 
     test('stopping state clears when AppHost leaves the running list', () => {
-        const appHostPath = '/workspace/apps/Store/AppHost.csproj';
+        const appHostPath = path.resolve('workspace', 'apps', 'Store', 'AppHost.csproj');
         const changeEmitter = new vscode.EventEmitter<void>();
         let appHosts = [makeAppHost({ appHostPath })];
         const repository = {
