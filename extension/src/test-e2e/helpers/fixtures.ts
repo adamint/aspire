@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { AspireExtensionE2EControlCommand, AspireExtensionE2EControlStatus } from '../../types/extensionApi';
-import { applyE2eControl, waitForExtensionState } from './assertions';
+import { applyE2eControl, waitForExtensionState, waitForNoRunningAppHost } from './assertions';
 import { getCliPath, getPrimaryAppHostProjectPath, getRepoRoot, getWorkspaceRoot } from './paths';
 import { runProcess } from './process';
 
@@ -211,9 +211,28 @@ export async function stopAppHostIfRunning(appHostPath: string): Promise<void> {
         });
     }
     catch (error) {
-        if (!(error instanceof Error) || !/not running|No running AppHost|No AppHost/i.test(error.message)) {
+        if (!(error instanceof Error)) {
             throw error;
         }
+
+        if (/not running|No running AppHost|No AppHost/i.test(error.message)) {
+            return;
+        }
+
+        if (/Failed to stop/i.test(error.message)) {
+            try {
+                // Debug-session shutdown can race with the CLI's fallback stop command. If the CLI
+                // had to force-terminate the AppHost it exits non-zero, but teardown should only fail
+                // when the extension still observes a running or launching AppHost afterward.
+                await waitForNoRunningAppHost(30000);
+                return;
+            }
+            catch {
+                throw error;
+            }
+        }
+
+        throw error;
     }
 }
 
