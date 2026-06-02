@@ -23,6 +23,7 @@ const extensionsDir = path.join(shortRunRoot, 'extensions');
 const workspaceRoot = process.env.ASPIRE_EXTENSION_E2E_WORKSPACE_ROOT
   ? path.resolve(process.env.ASPIRE_EXTENSION_E2E_WORKSPACE_ROOT)
   : path.join(shortRunRoot, 'workspace');
+const workspaceMarkerFile = path.join(workspaceRoot, '.aspire-extension-e2e-workspace');
 const storageDiagnosticsDir = path.join(diagnosticsStorageRoot, shardName, runId);
 const workspaceDiagnosticsDir = path.join(extensionRoot, '.test-workspaces', shardName, runId);
 const recordingsDir = path.join(extensionRoot, '.test-recordings', shardName);
@@ -41,6 +42,7 @@ const extesterModule = path.join(extesterNodeModules, 'vscode-extension-tester')
 const extesterCli = path.join(extesterModule, 'out', 'cli.js');
 const primaryAppHostProject = path.join(workspaceRoot, 'AspireE2E.AppHost', 'AspireE2E.AppHost.csproj');
 const workspaceNuGetConfigPath = path.join(workspaceRoot, 'NuGet.config');
+let cliPathForCleanup;
 const csharpFileHeader = `// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
@@ -48,7 +50,7 @@ const csharpFileHeader = `// Licensed to the .NET Foundation under one or more a
 
 fs.rmSync(resultsDir, { recursive: true, force: true });
 fs.rmSync(recordingsDir, { recursive: true, force: true });
-for (const directory of [artifactsDir, resultsDir, diagnosticsStorageRoot, isolatedAspireHome, storageDir, extensionsDir, workspaceRoot]) {
+for (const directory of [artifactsDir, resultsDir, diagnosticsStorageRoot, isolatedAspireHome, storageDir, extensionsDir]) {
   fs.mkdirSync(directory, { recursive: true });
 }
 
@@ -60,13 +62,7 @@ function getRunTestsTimeoutMs() {
 
   return configured;
 }
-if (verifyExtesterFeedOnly) {
-  verifyExtesterFeed();
-  process.exit(0);
-}
-
-assertSpecMatches(testSpec);
-logE2eConfiguration();
+main();
 
 function shouldUseShellForCommand(command) {
   // npm and corepack are .cmd shims on Windows. Node.js 20+ intentionally refuses
@@ -293,73 +289,92 @@ function stopRecording(recording, testFailure) {
   }
 }
 
-const cliPath = isolateCliPath(resolveCliPath());
-validateCliPath(cliPath);
-const appHostSdkVersion = resolveAppHostSdkVersion(cliPath);
-const packageSource = getLocalPackageSourceDirectories()[0];
-prepareWorkspaceFixture(cliPath, appHostSdkVersion);
-restoreWorkspaceFixture();
-const vsixPath = process.env.ASPIRE_EXTENSION_E2E_VSIX
-  ? path.resolve(process.env.ASPIRE_EXTENSION_E2E_VSIX)
-  : packageVsix();
+function main() {
+  let recording;
+  let testFailure;
+  let completedTests = false;
+  try {
+    if (verifyExtesterFeedOnly) {
+      verifyExtesterFeed();
+      return;
+    }
 
-if (!fs.existsSync(vsixPath)) {
-  throw new Error(`VSIX not found at ${vsixPath}`);
+    assertSpecMatches(testSpec);
+    logE2eConfiguration();
+
+    const cliPath = isolateCliPath(resolveCliPath());
+    cliPathForCleanup = cliPath;
+    validateCliPath(cliPath);
+    const appHostSdkVersion = resolveAppHostSdkVersion(cliPath);
+    const packageSource = getLocalPackageSourceDirectories()[0];
+    prepareWorkspaceFixture(cliPath, appHostSdkVersion);
+    restoreWorkspaceFixture();
+    const vsixPath = process.env.ASPIRE_EXTENSION_E2E_VSIX
+      ? path.resolve(process.env.ASPIRE_EXTENSION_E2E_VSIX)
+      : packageVsix();
+
+    if (!fs.existsSync(vsixPath)) {
+      throw new Error(`VSIX not found at ${vsixPath}`);
+    }
+    validateVsix(vsixPath);
+
+    ensureExtester();
+    patchExtesterLaunchLocale();
+    writeVsCodeLocaleFile();
+
+    const extestEnv = getAspireCliEnvironment({
+      ASPIRE_EXTENSION_E2E_CLI_PATH: cliPath,
+      ASPIRE_EXTENSION_E2E_EXTENSION_ROOT: extensionRoot,
+      ASPIRE_EXTENSION_E2E_REPO_ROOT: repoRoot,
+      ASPIRE_EXTENSION_E2E_RESULTS_DIR: resultsDir,
+      ASPIRE_EXTENSION_E2E_WORKSPACE_ROOT: workspaceRoot,
+      ASPIRE_EXTENSION_E2E_STATE_FILE: stateFile,
+      ASPIRE_EXTENSION_E2E_CONTROL_FILE: controlFile,
+      ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE: 'true',
+      ASPIRE_EXTENSION_E2E_PRIMARY_APPHOST: primaryAppHostProject,
+      ASPIRE_EXTENSION_E2E_APPHOST_SDK_VERSION: appHostSdkVersion,
+      ...(packageSource ? { ASPIRE_EXTENSION_E2E_PACKAGE_SOURCE: packageSource } : {}),
+      ASPIRE_EXTENSION_E2E_EXTESTER_MODULE: extesterModule,
+      VSCODE_NLS_CONFIG: JSON.stringify({ locale: 'en', availableLanguages: {} }),
+      LANG: 'C.UTF-8',
+      LC_ALL: 'C.UTF-8',
+      NODE_PATH: [extesterNodeModules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
+    });
+
+    logStep('Downloading VS Code');
+    runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 3, retryDelayMs: 5000, beforeRetry: cleanPartialExtesterDownloads, timeout: 600000 });
+    logStep('Downloading ChromeDriver');
+    runWithRetry(process.execPath, [extesterCli, 'get-chromedriver', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 3, retryDelayMs: 5000, beforeRetry: cleanPartialExtesterDownloads, timeout: 600000 });
+    logStep('Installing VSIX');
+    run(process.execPath, [extesterCli, 'install-vsix', '--storage', storageDir, '--extensions_dir', extensionsDir, '--vsix_file', vsixPath], extestEnv, { timeout: 300000 });
+
+    recording = startRecording();
+    try {
+      logStep('Running VS Code extension E2E tests');
+      run(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js')], extestEnv, { timeout: getRunTestsTimeoutMs(), killProcessTreeOnTimeout: true });
+    }
+    catch (error) {
+      testFailure = error;
+    }
+    completedTests = true;
+  }
+  finally {
+    stopRecording(recording, testFailure);
+    stopWorkspaceAppHost();
+    copyStorageDiagnostics();
+    copyWorkspaceDiagnostics();
+    cleanupTemporaryRunRoot();
+  }
+
+  if (testFailure) {
+    printFailureDiagnosticsSummary();
+    throw testFailure;
+  }
+
+  if (completedTests) {
+    printSuccessDiagnosticsSummary();
+  }
 }
-validateVsix(vsixPath);
-
-ensureExtester();
-patchExtesterLaunchLocale();
-writeVsCodeLocaleFile();
-
-const extestEnv = getAspireCliEnvironment({
-  ASPIRE_EXTENSION_E2E_CLI_PATH: cliPath,
-  ASPIRE_EXTENSION_E2E_EXTENSION_ROOT: extensionRoot,
-  ASPIRE_EXTENSION_E2E_REPO_ROOT: repoRoot,
-  ASPIRE_EXTENSION_E2E_RESULTS_DIR: resultsDir,
-  ASPIRE_EXTENSION_E2E_WORKSPACE_ROOT: workspaceRoot,
-  ASPIRE_EXTENSION_E2E_STATE_FILE: stateFile,
-  ASPIRE_EXTENSION_E2E_CONTROL_FILE: controlFile,
-  ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE: 'true',
-  ASPIRE_EXTENSION_E2E_PRIMARY_APPHOST: primaryAppHostProject,
-  ASPIRE_EXTENSION_E2E_APPHOST_SDK_VERSION: appHostSdkVersion,
-  ...(packageSource ? { ASPIRE_EXTENSION_E2E_PACKAGE_SOURCE: packageSource } : {}),
-  ASPIRE_EXTENSION_E2E_EXTESTER_MODULE: extesterModule,
-  VSCODE_NLS_CONFIG: JSON.stringify({ locale: 'en', availableLanguages: {} }),
-  LANG: 'C.UTF-8',
-  LC_ALL: 'C.UTF-8',
-  NODE_PATH: [extesterNodeModules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
-});
-
-logStep('Downloading VS Code');
-runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 3, retryDelayMs: 5000, beforeRetry: cleanPartialExtesterDownloads });
-logStep('Downloading ChromeDriver');
-runWithRetry(process.execPath, [extesterCli, 'get-chromedriver', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, { attempts: 3, retryDelayMs: 5000, beforeRetry: cleanPartialExtesterDownloads });
-logStep('Installing VSIX');
-run(process.execPath, [extesterCli, 'install-vsix', '--storage', storageDir, '--extensions_dir', extensionsDir, '--vsix_file', vsixPath], extestEnv);
-let testFailure;
-const recording = startRecording();
-try {
-  logStep('Running VS Code extension E2E tests');
-  run(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js')], extestEnv, { timeout: getRunTestsTimeoutMs() });
-}
-catch (error) {
-  testFailure = error;
-}
-finally {
-  stopRecording(recording, testFailure);
-  stopWorkspaceAppHost();
-  copyStorageDiagnostics();
-  copyWorkspaceDiagnostics();
-  cleanupTemporaryRunRoot();
-}
-
-if (testFailure) {
-  printFailureDiagnosticsSummary();
-  throw testFailure;
-}
-
-printSuccessDiagnosticsSummary();
 
 function resolveCliPath() {
   if (process.env.ASPIRE_EXTENSION_E2E_CLI_PATH) {
@@ -530,8 +545,10 @@ function patchExtesterLaunchLocale() {
 }
 
 function prepareWorkspaceFixture(resolvedCliPath, resolvedAppHostSdkVersion) {
+  assertWorkspaceRootSafeForDeletion();
   fs.rmSync(workspaceRoot, { recursive: true, force: true });
   fs.mkdirSync(workspaceRoot, { recursive: true });
+  fs.writeFileSync(workspaceMarkerFile, `${runId}\n`);
   writeWorkerProject('AspireE2E.Worker');
   writeAppHostProject('AspireE2E.AppHost', resolvedAppHostSdkVersion);
   writeNuGetConfigIfLocalPackageSourcesExist();
@@ -821,7 +838,11 @@ function escapeXml(value) {
 }
 
 function stopWorkspaceAppHost() {
-  const result = spawnSync(cliPath, ['stop', '--non-interactive', '--apphost', primaryAppHostProject], {
+  if (!cliPathForCleanup || !fs.existsSync(primaryAppHostProject)) {
+    return;
+  }
+
+  const result = spawnSync(cliPathForCleanup, ['stop', '--non-interactive', '--apphost', primaryAppHostProject], {
     cwd: workspaceRoot,
     env: getAspireCliEnvironment(),
     shell: false,
@@ -850,23 +871,27 @@ function getXmlProperty(xml, name) {
 
 function run(command, args, extraEnv = {}, options = {}) {
   const useShell = shouldUseShellForCommand(command);
-  const result = useShell
-    ? spawnSync([command, ...args].map(quoteWindowsShellArgument).join(' '), [], {
-      cwd: extensionRoot,
-      env: { ...process.env, ...extraEnv },
-      shell: true,
-      stdio: 'inherit',
-      timeout: options.timeout,
-    })
-    : spawnSync(command, args, {
+  const spawnOptions = {
     cwd: extensionRoot,
     env: { ...process.env, ...extraEnv },
-    shell: false,
     stdio: 'inherit',
     timeout: options.timeout,
+    detached: options.killProcessTreeOnTimeout && process.platform !== 'win32',
+  };
+  const result = useShell
+    ? spawnSync([command, ...args].map(quoteWindowsShellArgument).join(' '), [], {
+      ...spawnOptions,
+      shell: true,
+    })
+    : spawnSync(command, args, {
+    ...spawnOptions,
+    shell: false,
   });
 
   if (result.error) {
+    if (options.killProcessTreeOnTimeout && result.error.code === 'ETIMEDOUT') {
+      terminateProcessTree(result.pid);
+    }
     throw result.error;
   }
 
@@ -887,7 +912,7 @@ function runWithRetry(command, args, extraEnv = {}, options) {
   let lastError;
   for (let attempt = 1; attempt <= options.attempts; attempt++) {
     try {
-      run(command, args, extraEnv);
+      run(command, args, extraEnv, options);
       return;
     }
     catch (error) {
@@ -903,6 +928,75 @@ function runWithRetry(command, args, extraEnv = {}, options) {
   }
 
   throw lastError;
+}
+
+function assertWorkspaceRootSafeForDeletion() {
+  const resolvedWorkspaceRoot = resolveExistingPathForSafety(workspaceRoot);
+  const resolvedShortRunRoot = fs.realpathSync.native(shortRunRoot);
+  const dangerousRoots = [
+    repoRoot,
+    extensionRoot,
+    os.homedir(),
+    path.parse(resolvedWorkspaceRoot).root,
+  ].map(resolveExistingPathForSafety);
+
+  if (dangerousRoots.some(dangerousRoot => isSamePath(resolvedWorkspaceRoot, dangerousRoot))) {
+    throw new Error(`Refusing to delete dangerous E2E workspace root: ${workspaceRoot}`);
+  }
+
+  if (isPathInside(resolvedWorkspaceRoot, resolvedShortRunRoot)) {
+    return;
+  }
+
+  if (process.env.ASPIRE_EXTENSION_E2E_ALLOW_EXTERNAL_WORKSPACE_ROOT_CLEANUP !== 'true') {
+    throw new Error(`ASPIRE_EXTENSION_E2E_WORKSPACE_ROOT must be under the runner temp root unless ASPIRE_EXTENSION_E2E_ALLOW_EXTERNAL_WORKSPACE_ROOT_CLEANUP=true is set. Refusing to delete ${workspaceRoot}.`);
+  }
+
+  if (fs.existsSync(workspaceRoot) && !fs.existsSync(workspaceMarkerFile)) {
+    throw new Error(`Refusing to delete external E2E workspace root without marker file ${workspaceMarkerFile}.`);
+  }
+}
+
+function resolveExistingPathForSafety(value) {
+  return fs.existsSync(value)
+    ? fs.realpathSync.native(value)
+    : path.resolve(value);
+}
+
+function isSamePath(left, right) {
+  return getPathComparisonKey(path.resolve(left)) === getPathComparisonKey(path.resolve(right));
+}
+
+function isPathInside(candidate, parent) {
+  const relative = path.relative(parent, candidate);
+  return relative === '' || (!!relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function getPathComparisonKey(value) {
+  return process.platform === 'win32' ? value.toLowerCase() : value;
+}
+
+function terminateProcessTree(pid) {
+  if (!pid) {
+    return;
+  }
+
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore' });
+    return;
+  }
+
+  try {
+    process.kill(-pid, 'SIGKILL');
+  }
+  catch {
+    try {
+      process.kill(pid, 'SIGKILL');
+    }
+    catch {
+      // Best-effort cleanup after a timeout; the process may have already exited.
+    }
+  }
 }
 
 function cleanPartialExtesterDownloads() {
@@ -1007,7 +1101,7 @@ function printFailureDiagnosticsSummary() {
       workspaceResources: state.state.workspaceResources?.map(resource => `${resource.name}:${resource.state}`),
       appHosts: state.state.appHosts?.map(appHost => appHost.appHostPath),
       launchingPaths: state.state.launchingPaths,
-      debugSessions: state.state.debugSessions,
+      debugSessions: state.state.debugSessions?.map(redactDebugSessionForDiagnostics),
     }, null, 2), '  '));
   }
 
@@ -1015,6 +1109,31 @@ function printFailureDiagnosticsSummary() {
   if (extensionLogPath) {
     console.error(`Last Aspire extension log lines (${path.relative(extensionRoot, extensionLogPath)}):`);
     console.error(indentBlock(tailLines(fs.readFileSync(extensionLogPath, 'utf8'), 120), '  '));
+  }
+
+  function redactDebugSessionForDiagnostics(session) {
+    return {
+      ...session,
+      dashboardUrl: sanitizeDashboardUrlForDiagnostics(session.dashboardUrl),
+    };
+  }
+
+  function sanitizeDashboardUrlForDiagnostics(url) {
+    if (!url) {
+      return url;
+    }
+
+    try {
+      return new URL(stripResourceSuffix(url)).origin;
+    }
+    catch {
+      return '<redacted>';
+    }
+  }
+
+  function stripResourceSuffix(url) {
+    const idx = url.indexOf('/?resource=');
+    return idx !== -1 ? url.substring(0, idx) : url;
   }
 }
 

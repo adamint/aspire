@@ -76,6 +76,17 @@ export class AppHostLaunchService implements vscode.Disposable {
         }
     }
 
+    clearMatchingLaunching(appHostPath: string): void {
+        const resolvedAppHostPath = path.resolve(appHostPath);
+        for (const launchingPath of this._launchingPaths) {
+            if (isMatchingAppHostPath(launchingPath, resolvedAppHostPath)) {
+                this._launchingPaths.delete(launchingPath);
+                this._onDidChangeLaunchingState.fire();
+                return;
+            }
+        }
+    }
+
     /**
      * Launches an Aspire debug session for the given AppHost path.
      * Automatically marks the path as "launching" until it either appears
@@ -138,4 +149,12 @@ function isE2eDebugLaunchSuppressed(): boolean {
         !!process.env.ASPIRE_EXTENSION_E2E_STATE_FILE &&
         !!process.env.ASPIRE_EXTENSION_E2E_CONTROL_FILE &&
         process.env.ASPIRE_EXTENSION_E2E_SUPPRESS_DEBUG_LAUNCH === 'true';
+}
+
+function isMatchingAppHostPath(left: string, right: string): boolean {
+    if (getComparisonKey(path.normalize(left)) === getComparisonKey(path.normalize(right))) {
+        return true;
+    }
+
+    return getComparisonKey(path.dirname(left)) === getComparisonKey(path.dirname(right));
 }

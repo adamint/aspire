@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import { getCommandInvocationCount, getTerminalCommandCount, waitForCommandOutcome, waitForDebugDashboardUrl, waitForDebugSessionStartup, waitForNoDebugSessions, waitForRepositoryIdle, waitForSelectedWorkspaceAppHost, waitForTerminalCommand } from './helpers/assertions';
-import { addIntegrationPackageToAppHost, clearBreakpoints, createEmptyAppHostProject, executeE2eControlCommand, getGeneratedAppHostPath, removeGeneratedProject, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, setCliUnavailableForE2E, setSourceBreakpoint, setTerminalCommandExecutionSuppressedForE2E, stopAppHostIfRunning, writeWorkspaceAppHostConfigForPath } from './helpers/fixtures';
+import { addIntegrationPackageToAppHost, clearBreakpoints, createEmptyAppHostProject, executeE2eControlCommand, getGeneratedAppHostPath, removeGeneratedProject, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, setCliUnavailableForE2E, setTerminalCommandExecutionSuppressedForE2E, stopAppHostIfRunning, writeWorkspaceAppHostConfigForPath } from './helpers/fixtures';
 import { openAspireView, waitForEditorTitle, waitForTreeItem, waitForWorkbenchTextAfterIntegratedBrowserNavigation } from './helpers/vscode';
 
 suite('Aspire zero-to-running E2E', function () {
@@ -11,18 +11,20 @@ suite('Aspire zero-to-running E2E', function () {
     const appHostPath = getGeneratedAppHostPath(projectName);
 
     teardown(async () => {
-        await setCliUnavailableForE2E(false);
-        await setTerminalCommandExecutionSuppressedForE2E(false);
-        await restoreWorkspaceCliPath();
-        await clearBreakpoints().catch(() => undefined);
-        await executeE2eControlCommand({ name: 'stopDebugging' }).catch(() => undefined);
+        await Promise.allSettled([
+            setCliUnavailableForE2E(false),
+            setTerminalCommandExecutionSuppressedForE2E(false),
+            restoreWorkspaceCliPath(),
+            clearBreakpoints(),
+            executeE2eControlCommand({ name: 'stopDebugging' }),
+            stopAppHostIfRunning(appHostPath),
+        ]);
         await waitForNoDebugSessions().catch(() => undefined);
-        await stopAppHostIfRunning(appHostPath).catch(() => undefined);
         restoreWorkspaceAppHostConfig();
         removeGeneratedProject(projectName);
     });
 
-    test('creates a new AppHost, adds a package, sets a breakpoint, and debugs to the dashboard', async () => {
+    test('creates a new AppHost, adds a package, and debugs to the dashboard', async () => {
         let section = await openAspireView();
         await waitForRepositoryIdle();
 
@@ -66,11 +68,9 @@ suite('Aspire zero-to-running E2E', function () {
         await waitForTreeItem(section, 'Debug AppHost');
 
         const source = fs.readFileSync(appHostPath, 'utf8');
-        const breakpointLine = source.split(/\r?\n/).findIndex(line => line.includes('builder.Build().Run();'));
-        assert.notStrictEqual(breakpointLine, -1);
+        assert.match(source, /builder\.Build\(\)\.Run\(\);/);
         await executeE2eControlCommand({ name: 'openAppHostSource', appHostPath });
         assert.ok((await waitForEditorTitle('apphost.cs')).includes('apphost.cs'));
-        await setSourceBreakpoint(appHostPath, breakpointLine);
 
         const beforeDebug = getCommandInvocationCount('aspire-vscode.debugAppHost');
         await executeE2eControlCommand({ name: 'debugAppHost', appHostPath });

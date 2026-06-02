@@ -26,11 +26,13 @@ suite('E2E launch profile', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const apiTypes = fs.readFileSync(path.join(extensionRoot, 'src', 'types', 'extensionApi.ts'), 'utf8');
         const extension = fs.readFileSync(path.join(extensionRoot, 'src', 'extension.ts'), 'utf8');
+        const openWorkspaceCase = extension.slice(extension.indexOf("case 'openWorkspaceFolder'"), extension.indexOf("case 'getWorkspaceFolders'"));
+        const clearControlFileIndex = openWorkspaceCase.indexOf('clearPendingE2eControlFile();');
+        const openFolderIndex = openWorkspaceCase.indexOf("vscode.commands.executeCommand('vscode.openFolder'");
 
         assert.ok(apiTypes.includes("{ name: 'openWorkspaceFolder'; folderPath: string }"));
-        assert.ok(extension.includes("case 'openWorkspaceFolder'"));
-        assert.ok(extension.includes('clearPendingE2eControlFile();'));
-        assert.ok(extension.includes("vscode.commands.executeCommand('vscode.openFolder'"));
+        assert.ok(clearControlFileIndex >= 0);
+        assert.ok(openFolderIndex > clearControlFileIndex);
     });
 
     test('validates explicit workspace folder before reporting bridge command start', () => {
@@ -56,6 +58,38 @@ suite('E2E launch profile', () => {
 
         assert.ok(runner.includes('ASPIRE_EXTENSION_E2E_RUN_TESTS_TIMEOUT_MS'));
         assert.ok(runner.includes('timeout: getRunTestsTimeoutMs()'));
+        assert.ok(runner.includes('killProcessTreeOnTimeout: true'));
+        assert.ok(runner.includes("spawnSync('taskkill'"));
+        assert.ok(runner.includes("process.kill(-pid, 'SIGKILL')"));
+    });
+
+    test('bounds retryable runner setup steps so setup failures still collect diagnostics', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+
+        assert.ok(runner.includes("'get-vscode'"));
+        assert.ok(runner.includes('timeout: 600000'));
+        assert.ok(runner.includes("'get-chromedriver'"));
+        assert.ok(runner.includes('run(command, args, extraEnv, options);'));
+    });
+
+    test('guards destructive E2E workspace cleanup', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+
+        assert.ok(runner.includes('assertWorkspaceRootSafeForDeletion();'));
+        assert.ok(runner.includes('ASPIRE_EXTENSION_E2E_ALLOW_EXTERNAL_WORKSPACE_ROOT_CLEANUP'));
+        assert.ok(runner.includes('.aspire-extension-e2e-workspace'));
+        assert.ok(runner.includes('Refusing to delete dangerous E2E workspace root'));
+    });
+
+    test('redacts sensitive dashboard URLs from runner failure diagnostics', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+
+        assert.ok(runner.includes('debugSessions: state.state.debugSessions?.map(redactDebugSessionForDiagnostics)'));
+        assert.ok(runner.includes('sanitizeDashboardUrlForDiagnostics'));
+        assert.ok(runner.includes('new URL(stripResourceSuffix(url)).origin'));
     });
 
     test('installs the E2E runner dependencies from the internal npm feed', () => {
@@ -74,12 +108,14 @@ suite('E2E launch profile', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
+        const unavailableJob = workflow.slice(workflow.indexOf('extester_feed_unavailable:'), workflow.indexOf('extension_e2e:'));
 
         assert.ok(runner.includes('--verify-extester-feed'));
         assert.ok(runner.includes('pre-seed vscode-extension-tester'));
         assert.ok(workflow.includes('verify_extester_feed:'));
         assert.ok(workflow.includes("needs.verify_extester_feed.outputs.available == 'true'"));
         assert.ok(workflow.includes('extester_feed_unavailable:'));
+        assert.ok(unavailableJob.includes('exit 1'));
     });
 
     test('seeds Corepack from the internal npm feed before E2E workflow uses Yarn', () => {
@@ -102,9 +138,20 @@ suite('E2E launch profile', () => {
     test('opts out of telemetry for all CLI processes spawned by E2E tests', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const envConstruction = runner.slice(runner.indexOf('const extestEnv = getAspireCliEnvironment({'), runner.indexOf("logStep('Downloading VS Code');"));
+        const runTests = runner.slice(runner.indexOf("logStep('Running VS Code extension E2E tests');"), runner.indexOf('catch (error)'));
+        const aspireCliEnvironmentStart = runner.indexOf('function getAspireCliEnvironment');
+        const aspireCliEnvironmentEnd = runner.indexOf('function writeNuGetConfigIfLocalPackageSourcesExist');
+        const aspireCliEnvironment = runner.slice(aspireCliEnvironmentStart, aspireCliEnvironmentEnd);
 
-        assert.ok(runner.includes("ASPIRE_CLI_TELEMETRY_OPTOUT: '1'"));
-        assert.ok(runner.includes("DOTNET_CLI_TELEMETRY_OPTOUT: '1'"));
+        assert.ok(aspireCliEnvironmentStart >= 0);
+        assert.ok(aspireCliEnvironmentEnd > aspireCliEnvironmentStart);
+        assert.ok(aspireCliEnvironment.includes("ASPIRE_CLI_TELEMETRY_OPTOUT: '1'"));
+        assert.ok(aspireCliEnvironment.includes("DOTNET_CLI_TELEMETRY_OPTOUT: '1'"));
+        assert.ok(envConstruction.includes('const extestEnv = getAspireCliEnvironment({'));
+        assert.ok(envConstruction.includes("ASPIRE_EXTENSION_E2E_ENABLE_BRIDGE: 'true'"));
+        assert.ok(runTests.includes('run(process.execPath'));
+        assert.ok(runTests.includes('extestEnv'));
     });
 
     test('keeps the slow zero-to-running shard timeout above its composed wait budgets', () => {

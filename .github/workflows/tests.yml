@@ -264,7 +264,7 @@ jobs:
           changed_files="$(git diff --name-only "$base" "$head")"
           echo "$changed_files"
 
-          if echo "$changed_files" | grep -E -q '^(extension/|src/Aspire\.Cli/|src/Aspire/Cli/|src/Aspire\.Hosting/Cli/|tests/Aspire\.Cli\.Tests/|tests/Aspire\.Cli\.EndToEnd\.Tests/|tests/Aspire\.Hosting\.Tests/Cli/|eng/scripts/get-aspire-cli|\.github/workflows/(tests|extension-e2e-tests)\.yml$)'; then
+          if echo "$changed_files" | grep -E -q '^(extension/|src/Aspire\.Cli/|src/Aspire/Cli/|src/Aspire\.Hosting/Cli/|tests/Aspire\.Cli\.Tests/|tests/Aspire\.Cli\.EndToEnd\.Tests/|tests/Aspire\.Hosting\.Tests/Cli/|eng/scripts/get-aspire-cli|\.github/workflows/(tests|extension-e2e-tests|build-packages|build-cli-native-archives)\.yml$)'; then
             echo "run_extension_e2e=true" >> "$GITHUB_OUTPUT"
           else
             echo "run_extension_e2e=false" >> "$GITHUB_OUTPUT"

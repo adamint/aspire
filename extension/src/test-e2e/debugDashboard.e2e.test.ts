@@ -8,9 +8,13 @@ suite('Aspire debug dashboard E2E', function () {
     this.timeout(240000);
 
     teardown(async () => {
-        await setCliUnavailableForE2E(false);
-        await restoreWorkspaceCliPath();
-        await stopPrimaryAppHostIfRunning();
+        await Promise.allSettled([
+            setCliUnavailableForE2E(false),
+            restoreWorkspaceCliPath(),
+            executeE2eControlCommand({ name: 'stopDebugging' }),
+            stopPrimaryAppHostIfRunning(),
+        ]);
+        await waitForNoDebugSessions().catch(() => undefined);
         await waitForNoRunningAppHost().catch(() => undefined);
     });
 

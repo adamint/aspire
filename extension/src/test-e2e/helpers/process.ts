@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 
 export interface RunProcessOptions {
     cwd?: string;
@@ -28,6 +28,7 @@ export function runProcess(file: string, args: readonly string[], options: RunPr
             cwd: options.cwd,
             env: { ...process.env, ...options.env },
             shell: false,
+            detached: process.platform !== 'win32',
         });
 
         const stdout: string[] = [];
@@ -39,10 +40,10 @@ export function runProcess(file: string, args: readonly string[], options: RunPr
         const timeout = setTimeout(() => {
             if (!settled) {
                 timedOut = true;
-                child.kill();
+                terminateProcessTree(child.pid, 'SIGTERM');
                 forceKillTimeout = setTimeout(() => {
                     if (!settled) {
-                        child.kill('SIGKILL');
+                        terminateProcessTree(child.pid, 'SIGKILL');
                         rejectWithResult(`${file} ${args.join(' ')} timed out after ${timeoutMs}ms.`, null, 'SIGKILL');
                     }
                 }, 5000);
@@ -107,4 +108,25 @@ export function runProcess(file: string, args: readonly string[], options: RunPr
             }
         }
     });
+}
+
+function terminateProcessTree(pid: number | undefined, signal: NodeJS.Signals): void {
+    if (pid === undefined) {
+        return;
+    }
+
+    if (process.platform === 'win32') {
+        spawnSync('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore' });
+        return;
+    }
+
+    try {
+        process.kill(-pid, signal);
+    } catch {
+        try {
+            process.kill(pid, signal);
+        } catch {
+            // The process may have exited between timeout detection and cleanup.
+        }
+    }
 }

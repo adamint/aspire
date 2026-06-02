@@ -49,6 +49,7 @@ jobs:
             echo "vscode-extension-tester is not currently installable from that feed without authentication."
             echo "Pre-seed vscode-extension-tester and its transitive packages into dotnet-public-npm, then rerun CI to execute the matrix."
           } >> "$GITHUB_STEP_SUMMARY"
+          exit 1
 
   extension_e2e:
     name: VS Code extension E2E (${{ matrix.name }}, ${{ matrix.shardName }})
