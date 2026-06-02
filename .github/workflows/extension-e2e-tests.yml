@@ -31,7 +31,7 @@ jobs:
               echo "The E2E runner could not install vscode-extension-tester from the internal dotnet-public-npm feed."
               echo "Pre-seed vscode-extension-tester and its transitive packages into dotnet-public-npm, then rerun CI."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::vscode-extension-tester is not available from dotnet-public-npm; skipping the VS Code extension E2E matrix."
+            echo "::error::vscode-extension-tester is not available from dotnet-public-npm; failing before the VS Code extension E2E matrix."
           fi
 
   extester_feed_unavailable:
