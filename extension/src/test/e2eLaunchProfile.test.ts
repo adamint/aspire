@@ -82,6 +82,23 @@ suite('E2E launch profile', () => {
         assert.ok(workflow.includes('extester_feed_unavailable:'));
     });
 
+    test('seeds Corepack from the internal npm feed before E2E workflow uses Yarn', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
+        const corepackInstallIndex = workflow.indexOf('npm install --global --force --registry "$env:NPM_REGISTRY" "corepack@$CorepackVersion"');
+        const yarnSeedIndex = workflow.indexOf('node ./scripts/prepareCorepackYarn.mjs');
+        const yarnInstallIndex = workflow.indexOf('run: corepack yarn install');
+        const yarnCompileIndex = workflow.indexOf('corepack yarn compile');
+
+        assert.ok(workflow.includes('NPM_REGISTRY: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/'));
+        assert.ok(workflow.includes('COREPACK_ENABLE_DOWNLOAD_PROMPT: 0'));
+        assert.ok(corepackInstallIndex >= 0);
+        assert.ok(yarnSeedIndex > corepackInstallIndex);
+        assert.ok(yarnInstallIndex > yarnSeedIndex);
+        assert.ok(yarnCompileIndex > yarnSeedIndex);
+        assert.ok(!workflow.includes('cache: yarn'));
+    });
+
     test('opts out of telemetry for all CLI processes spawned by E2E tests', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');

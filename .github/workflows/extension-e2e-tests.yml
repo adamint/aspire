@@ -56,6 +56,9 @@ jobs:
     if: ${{ needs.verify_extester_feed.outputs.available == 'true' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    env:
+      NPM_REGISTRY: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: 0
     strategy:
       fail-fast: false
       matrix:
@@ -216,8 +219,45 @@ jobs:
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: '20.x'
-          cache: yarn
-          cache-dependency-path: extension/yarn.lock
+
+      - name: Install Corepack
+        working-directory: extension
+        run: |
+          # Scope Corepack's cache to this job so prepareCorepackYarn.mjs cannot
+          # collide with any other build sharing the runner's user profile.
+          # Cannot be set at job-level env: the `runner` context is unavailable
+          # in job env evaluation, so we forward it through $GITHUB_ENV instead.
+          $CorepackHome = Join-Path $env:RUNNER_TEMP 'corepack'
+          $env:COREPACK_HOME = $CorepackHome
+          "COREPACK_HOME=$CorepackHome" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          $CorepackVersion = (Get-Content -Raw -Path 'scripts/corepack-version.txt').Trim()
+          # The hosted Windows image already has a yarn shim in npm's global
+          # prefix. The npm Corepack package owns that shim too, so force only
+          # in CI where the tool install is isolated to this ephemeral job.
+          npm install --global --force --registry "$env:NPM_REGISTRY" "corepack@$CorepackVersion"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $npmGlobalBin = (npm prefix --global).Trim()
+          $env:PATH = "$npmGlobalBin$([IO.Path]::PathSeparator)$env:PATH"
+          $npmGlobalBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+          $installed = (corepack --version).Trim()
+          if ($installed -ne $CorepackVersion) {
+            Write-Error "corepack version mismatch: expected $CorepackVersion, got '$installed'. The bundled Corepack on PATH may be taking precedence over the npm-global install."
+            exit 1
+          }
+
+          corepack enable
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          # Seed Corepack's cache from the internal dnceng npm feed. Corepack's
+          # built-in prepare path can bypass the configured internal feed, so use
+          # the shared cache seeding script before any `corepack yarn` invocation.
+          node ./scripts/prepareCorepackYarn.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          corepack yarn --version
 
       - name: Setup .NET
         uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
@@ -254,7 +294,7 @@ jobs:
 
       - name: Install extension dependencies
         working-directory: extension
-        run: corepack yarn@1.22.22 install --frozen-lockfile --non-interactive
+        run: corepack yarn install --frozen-lockfile --non-interactive
 
       - name: Prepare Aspire CLI and package hive
         id: prepare_cli
@@ -322,8 +362,8 @@ jobs:
       - name: Compile extension E2E tests
         working-directory: extension
         run: |
-          corepack yarn@1.22.22 compile
-          corepack yarn@1.22.22 compile-e2e
+          corepack yarn compile
+          corepack yarn compile-e2e
           if (-not (Test-Path '${{ matrix.spec }}')) {
             throw "Compiled E2E shard spec was not found: ${{ matrix.spec }}"
           }
