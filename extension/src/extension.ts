@@ -164,6 +164,7 @@ export async function activate(context: vscode.ExtensionContext) {
   appHostTreeView.onDidChangeVisibility(e => {
     dataRepository.setPanelVisible(e.visible);
   });
+  const debugSessionRefreshRegistration = appHostLaunchService.onDidTerminateAppHostDebugSession(() => dataRepository.refresh());
 
   // Also drive data sources based on whether an AppHost file is currently visible in any editor.
   // This makes resource code-lens decorations on a fresh AppHost file work without first opening the panel.
@@ -207,7 +208,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // Activate the data repository. Workspace describe watching and global polling begin when the panel is visible.
   dataRepository.activate();
 
-  context.subscriptions.push(appHostTreeView, globalRefreshAppHostsRegistration, refreshAppHostsRegistration, switchToGlobalViewRegistration, switchToWorkspaceViewRegistration, openDashboardRegistration, openAppHostSourceRegistration, stopAppHostRegistration, runAppHostRegistration, debugAppHostRegistration, stopResourceRegistration, startResourceRegistration, restartResourceRegistration, viewResourceLogsRegistration, executeResourceCommandRegistration, copyEndpointUrlRegistration, openInExternalBrowserRegistration, openInIntegratedBrowserRegistration, copyResourceNameRegistration, copyAppHostPathRegistration, viewAppHostSourceRegistration, viewAppHostLogFileRegistration, copyLogFilePathRegistration, expandAllRegistration, { dispose: () => { appHostTreeProvider.dispose(); dataRepository.dispose(); } });
+  context.subscriptions.push(appHostTreeView, globalRefreshAppHostsRegistration, refreshAppHostsRegistration, switchToGlobalViewRegistration, switchToWorkspaceViewRegistration, openDashboardRegistration, openAppHostSourceRegistration, stopAppHostRegistration, runAppHostRegistration, debugAppHostRegistration, stopResourceRegistration, startResourceRegistration, restartResourceRegistration, viewResourceLogsRegistration, executeResourceCommandRegistration, copyEndpointUrlRegistration, openInExternalBrowserRegistration, openInIntegratedBrowserRegistration, copyResourceNameRegistration, copyAppHostPathRegistration, viewAppHostSourceRegistration, viewAppHostLogFileRegistration, copyLogFilePathRegistration, expandAllRegistration, debugSessionRefreshRegistration, { dispose: () => { appHostTreeProvider.dispose(); dataRepository.dispose(); } });
 
   // CodeLens provider — shows Debug on pipeline steps, resource state on resources
   const codeLensProvider = new AspireCodeLensProvider(appHostTreeProvider, dataRepository);

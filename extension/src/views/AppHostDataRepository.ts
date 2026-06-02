@@ -308,6 +308,7 @@ export class AppHostDataRepository {
         // even when the file watcher has not delivered an invalidation event yet.
         this._workspaceAppHostDiscoveryComplete = false;
         this._clearWorkspaceAppHostDiscovery();
+        this._clearWorkspaceAppHostData();
         this._updateWorkspaceContext();
         this._describeRestartDelay = 5000;
         this._fetchWorkspaceAppHost({ forceRefresh: true });

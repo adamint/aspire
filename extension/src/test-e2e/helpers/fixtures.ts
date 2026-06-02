@@ -1,9 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { AspireExtensionE2EControlCommand, AspireExtensionE2EControlStatus } from '../../types/extensionApi';
-import { applyE2eControl, waitForExtensionState, waitForNoRunningAppHost } from './assertions';
+import { applyE2eControl, findRunningAppHostByPath, isSamePath, readStateFile, waitForExtensionState, waitForNoRunningAppHost } from './assertions';
 import { getCliPath, getPrimaryAppHostProjectPath, getRepoRoot, getWorkspaceRoot } from './paths';
-import { ProcessError, runProcess } from './process';
+import { ProcessError, runProcess, terminateProcessTree } from './process';
 
 const csharpFileHeader = `// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
@@ -224,6 +224,7 @@ export async function stopPrimaryAppHostIfRunning(): Promise<void> {
 }
 
 export async function stopAppHostIfRunning(appHostPath: string): Promise<void> {
+    const appHostBeforeStop = findRunningAppHostByPathInState(appHostPath) ?? await findRunningAppHostByPathFromCli(appHostPath);
     try {
         await runProcess(getCliPath(), ['stop', '--non-interactive', '--apphost', appHostPath], {
             cwd: getWorkspaceRoot(),
@@ -235,9 +236,20 @@ export async function stopAppHostIfRunning(appHostPath: string): Promise<void> {
             throw error;
         }
 
-        const stopErrorText = error instanceof ProcessError ? error.result.stderr : error.message;
+        const stopErrorText = error.message;
         if (/not running|No running AppHost|No AppHost/i.test(stopErrorText)) {
             return;
+        }
+
+        if (/timed out after \d+ms/i.test(stopErrorText)) {
+            await forceTerminateRunningAppHost(appHostPath, appHostBeforeStop?.appHostPid);
+            try {
+                await waitForNoRunningAppHost(appHostPath, 30000);
+                return;
+            }
+            catch {
+                throw error;
+            }
         }
 
         if (/Failed to stop/i.test(stopErrorText)) {
@@ -245,7 +257,7 @@ export async function stopAppHostIfRunning(appHostPath: string): Promise<void> {
                 // Debug-session shutdown can race with the CLI's fallback stop command. If the CLI
                 // had to force-terminate the AppHost it exits non-zero, but teardown should only fail
                 // when the extension still observes a running or launching AppHost afterward.
-                await waitForNoRunningAppHost(30000);
+                await waitForNoRunningAppHost(appHostPath, 30000);
                 return;
             }
             catch {
@@ -255,6 +267,51 @@ export async function stopAppHostIfRunning(appHostPath: string): Promise<void> {
 
         throw error;
     }
+}
+
+async function forceTerminateRunningAppHost(appHostPath: string, fallbackPid?: number): Promise<void> {
+    const runningAppHost = findRunningAppHostByPathInState(appHostPath);
+    const appHostPid = runningAppHost?.appHostPid ?? fallbackPid;
+    if (appHostPid === undefined) {
+        return;
+    }
+
+    terminateProcessTree(appHostPid, 'SIGTERM');
+    await delay(5000);
+    terminateProcessTree(appHostPid, 'SIGKILL');
+}
+
+function findRunningAppHostByPathInState(appHostPath: string): RunningAppHostProcess | undefined {
+    return findRunningAppHostByPath(readStateFile().state, appHostPath);
+}
+
+async function findRunningAppHostByPathFromCli(appHostPath: string): Promise<RunningAppHostProcess | undefined> {
+    try {
+        const result = await runProcess(getCliPath(), ['ps', '--format', 'json'], {
+            cwd: getWorkspaceRoot(),
+            timeoutMs: 30000,
+            rejectOnNonZeroExit: false,
+        });
+        if (result.exitCode !== 0) {
+            return undefined;
+        }
+
+        const parsed = JSON.parse(result.stdout) as unknown;
+        const appHosts = Array.isArray(parsed) ? parsed : [parsed];
+        return appHosts
+            .filter(isRunningAppHostProcess)
+            .find(appHost => isSamePath(appHost.appHostPath, appHostPath));
+    }
+    catch {
+        return undefined;
+    }
+}
+
+function isRunningAppHostProcess(value: unknown): value is RunningAppHostProcess {
+    return typeof value === 'object'
+        && value !== null
+        && typeof (value as RunningAppHostProcess).appHostPath === 'string'
+        && typeof (value as RunningAppHostProcess).appHostPid === 'number';
 }
 
 function getAppHostSdkVersion(): string {
@@ -360,6 +417,11 @@ function removePath(targetPath: string, options: fs.RmOptions): void {
         retryDelay: 250,
         ...options,
     });
+}
+
+interface RunningAppHostProcess {
+    readonly appHostPath: string;
+    readonly appHostPid: number;
 }
 
 function writeFileAtomically(filePath: string, content: string): void {

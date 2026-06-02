@@ -46,8 +46,15 @@ export async function waitForAppHostLaunching(appHostPath = getPrimaryAppHostPro
         timeoutMs);
 }
 
-export async function waitForNoRunningAppHost(timeoutMs = 90000): Promise<ExtensionE2EStateFile> {
-    return await waitForExtensionState(file => findRunningAppHost(file.state) === undefined && file.state.launchingPaths.length === 0 && file.state.stoppingPaths.length === 0, 'AppHost to stop', timeoutMs);
+export async function waitForNoRunningAppHost(timeoutMs?: number): Promise<ExtensionE2EStateFile>;
+export async function waitForNoRunningAppHost(appHostPath: string, timeoutMs?: number): Promise<ExtensionE2EStateFile>;
+export async function waitForNoRunningAppHost(appHostPathOrTimeoutMs: string | number = getPrimaryAppHostProjectPath(), timeoutMs = 90000): Promise<ExtensionE2EStateFile> {
+    const appHostPath = typeof appHostPathOrTimeoutMs === 'string' ? appHostPathOrTimeoutMs : getPrimaryAppHostProjectPath();
+    const effectiveTimeoutMs = typeof appHostPathOrTimeoutMs === 'number' ? appHostPathOrTimeoutMs : timeoutMs;
+    return await waitForExtensionState(
+        file => findRunningAppHostByPath(file.state, appHostPath) === undefined && file.state.launchingPaths.length === 0 && file.state.stoppingPaths.length === 0,
+        `AppHost '${appHostPath}' to stop`,
+        effectiveTimeoutMs);
 }
 
 export async function waitForStoppingAppHost(appHostPath = getPrimaryAppHostProjectPath(), timeoutMs = 30000): Promise<ExtensionE2EStateFile> {
@@ -194,10 +201,13 @@ export function findResource(state: ExtensionStateSnapshot, resourceName: string
 }
 
 export function findRunningAppHost(state: ExtensionStateSnapshot): AppHostState | undefined {
-    const primaryAppHost = getPrimaryAppHostProjectPath();
-    return state.workspaceAppHost && isSamePath(state.workspaceAppHost.appHostPath, primaryAppHost)
+    return findRunningAppHostByPath(state, getPrimaryAppHostProjectPath());
+}
+
+export function findRunningAppHostByPath(state: ExtensionStateSnapshot, appHostPath: string): AppHostState | undefined {
+    return state.workspaceAppHost && isSamePath(state.workspaceAppHost.appHostPath, appHostPath)
         ? state.workspaceAppHost
-        : state.appHosts.find(appHost => isSamePath(appHost.appHostPath, primaryAppHost));
+        : state.appHosts.find(appHost => isSamePath(appHost.appHostPath, appHostPath));
 }
 
 export async function waitForExtensionState(

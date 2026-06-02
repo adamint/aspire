@@ -29,6 +29,9 @@ export class AppHostLaunchService implements vscode.Disposable {
     private readonly _onDidChangeLaunchingState = new vscode.EventEmitter<void>();
     readonly onDidChangeLaunchingState = this._onDidChangeLaunchingState.event;
 
+    private readonly _onDidTerminateAppHostDebugSession = new vscode.EventEmitter<string>();
+    readonly onDidTerminateAppHostDebugSession = this._onDidTerminateAppHostDebugSession.event;
+
     private readonly _onDidRequestLaunch = new vscode.EventEmitter<AppHostLaunchRequestedEvent>();
     readonly onDidRequestLaunch = this._onDidRequestLaunch.event;
 
@@ -44,6 +47,7 @@ export class AppHostLaunchService implements vscode.Disposable {
                 if (this._launchingPaths.delete(key)) {
                     this._onDidChangeLaunchingState.fire();
                 }
+                this._onDidTerminateAppHostDebugSession.fire(appHostPath);
             }
         });
     }
@@ -51,6 +55,7 @@ export class AppHostLaunchService implements vscode.Disposable {
     dispose(): void {
         this._debugSessionSubscription.dispose();
         this._onDidChangeLaunchingState.dispose();
+        this._onDidTerminateAppHostDebugSession.dispose();
         this._onDidRequestLaunch.dispose();
     }
 

@@ -635,6 +635,72 @@ suite('AppHostDataRepository', () => {
             repository.dispose();
         }
     });
+
+    test('refresh clears stale workspace running AppHost state immediately', () => {
+        const appHostPath = '/workspace/AppHost/AppHost.csproj';
+        sandbox.stub(vscode.workspace, 'workspaceFolders').value([{
+            uri: vscode.Uri.file('/workspace'),
+            name: 'workspace',
+            index: 0,
+        }]);
+        const discoveryService = {
+            onDidChangeCandidates: () => ({ dispose: () => { } }),
+            discover: sandbox.stub().resolves([{ path: appHostPath, language: 'csharp', status: 'buildable' }]),
+            dispose: () => { },
+        };
+        const repository = new AppHostDataRepository(makeTerminalProvider(), discoveryService as any);
+
+        try {
+            (repository as any)._appHosts = [makeAppHost({ appHostPath })];
+            (repository as any)._workspaceAppHost = makeAppHost({ appHostPath });
+            (repository as any)._workspaceResources.set('service', makeResource());
+
+            repository.refresh();
+
+            assert.deepStrictEqual(repository.appHosts, []);
+            assert.strictEqual(repository.workspaceAppHost, undefined);
+            assert.deepStrictEqual(repository.workspaceResources, []);
+        } finally {
+            repository.dispose();
+        }
+    });
+});
+
+suite('AppHostLaunchService', () => {
+    let sandbox: sinon.SinonSandbox;
+
+    setup(() => {
+        sandbox = sinon.createSandbox();
+    });
+
+    teardown(() => {
+        sandbox.restore();
+    });
+
+    test('fires AppHost debug termination event for Aspire debug sessions', () => {
+        let terminateHandler: ((session: vscode.DebugSession) => void) | undefined;
+        sandbox.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(handler => {
+            terminateHandler = handler;
+            return { dispose: () => { } };
+        });
+        const service = new AppHostLaunchService();
+        const terminatedAppHostPaths: string[] = [];
+
+        try {
+            service.onDidTerminateAppHostDebugSession(appHostPath => terminatedAppHostPaths.push(appHostPath));
+
+            terminateHandler?.({
+                configuration: {
+                    type: 'aspire',
+                    program: '/workspace/AppHost/AppHost.csproj',
+                },
+            } as unknown as vscode.DebugSession);
+
+            assert.deepStrictEqual(terminatedAppHostPaths, ['/workspace/AppHost/AppHost.csproj']);
+        } finally {
+            service.dispose();
+        }
+    });
 });
 
 suite('resolveAppHostSourcePath', () => {
