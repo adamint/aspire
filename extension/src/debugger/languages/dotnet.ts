@@ -232,8 +232,12 @@ function quoteCommandLineArgument(argument: string): string {
     return `"${argument.replace(/"/g, '\\"')}"`;
 }
 
+function createDotNetRunBaseArguments(projectPath: string): string[] {
+    return ['run', '--project', projectPath, '--no-launch-profile'];
+}
+
 function createDotNetRunArguments(projectPath: string, baseProfileArgs: string | undefined, runSessionArgs: string[] | undefined): string[] | string {
-    const dotnetRunArgs = ['run', '--project', projectPath, '--no-launch-profile'];
+    const dotnetRunArgs = createDotNetRunBaseArguments(projectPath);
     if (runSessionArgs !== undefined) {
         if (runSessionArgs.length > 0) {
             dotnetRunArgs.push('--', ...runSessionArgs);
@@ -254,7 +258,7 @@ function createDotNetRunArguments(projectPath: string, baseProfileArgs: string |
 }
 
 function createDotNetSdkRunArguments(projectPath: string, runSessionArgs: string[] | undefined): string[] {
-    const dotnetRunArgs = ['run', '--project', projectPath, '--no-launch-profile'];
+    const dotnetRunArgs = createDotNetRunBaseArguments(projectPath);
     if (runSessionArgs !== undefined) {
         dotnetRunArgs.push(...(runSessionArgs[0]?.toLowerCase() === 'run' ? runSessionArgs.slice(1) : runSessionArgs));
     }
@@ -304,9 +308,12 @@ function hasMauiIosSdkRunArguments(runSessionArgs: string[] | undefined): boolea
             return true;
         }
 
-        if (isIosTargetFramework(getMsBuildPropertyValue(argument, 'TargetFramework')) ||
-            getMsBuildPropertyValue(argument, 'RuntimeIdentifier')?.toLowerCase().startsWith('iossimulator-') === true ||
-            getMsBuildPropertyValue(argument, '_DeviceName')?.toLowerCase().startsWith(':v2:udid=') === true) {
+        const targetFramework = getMsBuildPropertyValue(argument, 'TargetFramework');
+        const runtimeIdentifier = getMsBuildPropertyValue(argument, 'RuntimeIdentifier');
+        const deviceName = getMsBuildPropertyValue(argument, '_DeviceName');
+        if (isIosTargetFramework(targetFramework) ||
+            runtimeIdentifier?.toLowerCase().startsWith('iossimulator-') === true ||
+            deviceName?.toLowerCase().startsWith(':v2:udid=') === true) {
             return true;
         }
     }
