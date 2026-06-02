@@ -84,6 +84,7 @@ export interface AspireExtensionE2EStateFile {
     commandInvocations: readonly AspireExtensionE2ECommandInvocation[];
     terminalCommands: readonly AspireExtensionE2ETerminalCommand[];
     debugLaunches: readonly AspireExtensionE2EDebugLaunch[];
+    debugConsoleOutputs: readonly AspireExtensionE2EDebugConsoleOutput[];
     control?: AspireExtensionE2EControlStatus;
 }
 
@@ -96,6 +97,15 @@ export type AspireExtensionE2ECommandInvocation = CommandInvocationEvent & Aspir
 export type AspireExtensionE2ETerminalCommand = AspireTerminalCommandEvent & AspireExtensionE2ESequence;
 
 export type AspireExtensionE2EDebugLaunch = AppHostLaunchRequestedEvent & AspireExtensionE2ESequence;
+
+export type AspireExtensionE2EDebugConsoleOutput = AspireDebugConsoleOutputEvent & AspireExtensionE2ESequence;
+
+export interface AspireDebugConsoleOutputEvent {
+    debugSessionId: string;
+    appHostPath: string | undefined;
+    category: 'stdout' | 'stderr';
+    output: string;
+}
 
 export interface AspireExtensionE2EControlStatus {
     revision: number;
@@ -111,6 +121,7 @@ export interface AspireExtensionE2EControlPayload {
     forceCliUnavailable?: boolean;
     suppressTerminalCommandExecution?: boolean;
     suppressDebugLaunch?: boolean;
+    showStatusDelayMs?: number | null;
     command?: AspireExtensionE2EControlCommand;
 }
 

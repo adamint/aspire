@@ -6,6 +6,7 @@ import AspireRpcServer from './server/AspireRpcServer';
 import AspireDcpServer from './dcp/AspireDcpServer';
 import { AspireTerminalProvider } from './utils/AspireTerminalProvider';
 import { AspireEditorCommandProvider } from './editor/AspireEditorCommandProvider';
+import type { AspireDebugConsoleOutputEvent } from './types/extensionApi';
 
 export class AspireExtensionContext implements vscode.Disposable {
     private _rpcServer?: AspireRpcServer;
@@ -17,8 +18,11 @@ export class AspireExtensionContext implements vscode.Disposable {
 
     private _aspireDebugSessions: AspireDebugSession[] = [];
     private readonly _debugSessionStateSubscriptions = new Map<string, vscode.Disposable>();
+    private readonly _debugSessionOutputSubscriptions = new Map<string, vscode.Disposable>();
     private readonly _onDidChangeDebugSessions = new vscode.EventEmitter<void>();
+    private readonly _onDidReceiveDebugConsoleOutput = new vscode.EventEmitter<AspireDebugConsoleOutputEvent>();
     readonly onDidChangeDebugSessions = this._onDidChangeDebugSessions.event;
+    readonly onDidReceiveDebugConsoleOutput = this._onDidReceiveDebugConsoleOutput.event;
 
     initialize(rpcServer: AspireRpcServer, extensionContext: vscode.ExtensionContext, debugConfigProvider: AspireDebugConfigurationProvider, dcpServer: AspireDcpServer, terminalProvider: AspireTerminalProvider, editorCommandProvider: AspireEditorCommandProvider): void {
         this._rpcServer = rpcServer;
@@ -69,6 +73,7 @@ export class AspireExtensionContext implements vscode.Disposable {
 
         this._aspireDebugSessions.push(debugSession);
         this._debugSessionStateSubscriptions.set(debugSession.debugSessionId, debugSession.onDidChangeState(() => this._onDidChangeDebugSessions.fire()));
+        this._debugSessionOutputSubscriptions.set(debugSession.debugSessionId, debugSession.onDidSendDebugConsoleOutput(event => this._onDidReceiveDebugConsoleOutput.fire(event)));
         this._onDidChangeDebugSessions.fire();
     }
 
@@ -76,6 +81,8 @@ export class AspireExtensionContext implements vscode.Disposable {
         this._aspireDebugSessions = this._aspireDebugSessions.filter(session => session.debugSessionId !== debugSession.debugSessionId);
         this._debugSessionStateSubscriptions.get(debugSession.debugSessionId)?.dispose();
         this._debugSessionStateSubscriptions.delete(debugSession.debugSessionId);
+        this._debugSessionOutputSubscriptions.get(debugSession.debugSessionId)?.dispose();
+        this._debugSessionOutputSubscriptions.delete(debugSession.debugSessionId);
         this._onDidChangeDebugSessions.fire();
     }
 
@@ -92,9 +99,12 @@ export class AspireExtensionContext implements vscode.Disposable {
         this._dcpServer?.dispose();
         this._debugSessionStateSubscriptions.forEach(disposable => disposable.dispose());
         this._debugSessionStateSubscriptions.clear();
+        this._debugSessionOutputSubscriptions.forEach(disposable => disposable.dispose());
+        this._debugSessionOutputSubscriptions.clear();
         this._aspireDebugSessions.forEach(session => session.dispose());
         this._terminalProvider?.dispose();
         this._editorCommandProvider?.dispose();
         this._onDidChangeDebugSessions.dispose();
+        this._onDidReceiveDebugConsoleOutput.dispose();
     }
 }

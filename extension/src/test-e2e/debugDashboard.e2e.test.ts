@@ -1,6 +1,8 @@
 import * as assert from 'assert';
-import { getCommandInvocationCount, getTreeAppHostLabel, waitForAppHostLaunching, waitForCommandOutcome, waitForDebugDashboardUrl, waitForDebugSessionStartup, waitForHttpText, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
-import { executeE2eControlCommand, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
+import * as fs from 'fs';
+import * as path from 'path';
+import { getCommandInvocationCount, getTreeAppHostLabel, waitForAppHostLaunching, waitForCommandOutcome, waitForDebugConsoleOutput, waitForDebugDashboardUrl, waitForDebugSessionStartup, waitForHttpText, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
+import { executeE2eControlCommand, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setShowStatusDelayForE2E, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath } from './helpers/paths';
 import { openAspireView, waitForEditorTitle, waitForTreeItem, waitForWorkbenchTextAfterIntegratedBrowserNavigation } from './helpers/vscode';
 
@@ -10,6 +12,7 @@ suite('Aspire debug dashboard E2E', function () {
     teardown(async () => {
         await runE2eTeardown([
             () => setCliUnavailableForE2E(false),
+            () => setShowStatusDelayForE2E(undefined),
             () => restoreWorkspaceCliPath(),
             () => executeE2eControlCommand({ name: 'stopDebugging' }),
             () => stopPrimaryAppHostIfRunning(),
@@ -51,5 +54,32 @@ suite('Aspire debug dashboard E2E', function () {
 
         await executeE2eControlCommand({ name: 'stopDebugging' });
         await waitForNoDebugSessions();
+    });
+
+    test('keeps AppHost build diagnostics in the debug console when the CLI exits after a build failure', async () => {
+        await openAspireView();
+        await waitForRepositoryIdle();
+        const discovered = await waitForWorkspaceAppHost();
+        const appHostPath = discovered.state.workspaceAppHostPath ?? getPrimaryAppHostProjectPath();
+        const appHostSourcePath = path.join(path.dirname(appHostPath), 'AppHost.cs');
+        const originalSource = fs.readFileSync(appHostSourcePath, 'utf8');
+
+        try {
+            fs.writeFileSync(appHostSourcePath, `${originalSource}\n__AspireE2EFlushRegressionMissingSymbol__();\n`);
+            await setShowStatusDelayForE2E(2500);
+
+            const before = getCommandInvocationCount('aspire-vscode.debugAppHost');
+            await executeE2eControlCommand({ name: 'debugAppHost', appHostPath }, { waitFor: 'started' });
+            await waitForCommandOutcome('aspire-vscode.debugAppHost', 'success', 60000, before);
+            await waitForDebugConsoleOutput('__AspireE2EFlushRegressionMissingSymbol__', appHostPath, 120000);
+            const logOutput = await waitForDebugConsoleOutput('See logs at', appHostPath, 120000);
+            assert.ok(!logOutput.output.includes('\u001b]8;'), `Expected debug console log output to omit terminal hyperlinks: ${JSON.stringify(logOutput.output)}`);
+        }
+        finally {
+            await setShowStatusDelayForE2E(undefined);
+            fs.writeFileSync(appHostSourcePath, originalSource);
+            await executeE2eControlCommand({ name: 'stopDebugging' });
+            await waitForNoDebugSessions().catch(() => undefined);
+        }
     });
 });

@@ -155,6 +155,25 @@ export function getDebugLaunchCount(): number {
     return Math.max(0, ...readStateFile().debugLaunches.map(event => event.sequence));
 }
 
+export async function waitForDebugConsoleOutput(expectedText: string, appHostPath = getPrimaryAppHostProjectPath(), timeoutMs = 60000): Promise<ExtensionE2EStateFile['debugConsoleOutputs'][number]> {
+    const file = await waitForExtensionState(
+        stateFile => stateFile.debugConsoleOutputs.some(event =>
+            event.appHostPath !== undefined &&
+            isSamePath(event.appHostPath, appHostPath) &&
+            event.output.includes(expectedText)),
+        `debug console output containing '${expectedText}'`,
+        timeoutMs);
+    const event = file.debugConsoleOutputs.find(candidate =>
+        candidate.appHostPath !== undefined &&
+        isSamePath(candidate.appHostPath, appHostPath) &&
+        candidate.output.includes(expectedText));
+    if (!event) {
+        throw new Error(`Debug console output containing '${expectedText}' was not found even though the state predicate matched.`);
+    }
+
+    return event;
+}
+
 export function getTreeAppHostLabel(state: ExtensionStateSnapshot): string {
     return state.workspaceAppHostName ?? path.basename(getPrimaryAppHostProjectPath());
 }

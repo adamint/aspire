@@ -58,6 +58,10 @@ export async function setDebugLaunchSuppressedForE2E(suppressDebugLaunch: boolea
     await applyE2eControl({ suppressDebugLaunch });
 }
 
+export async function setShowStatusDelayForE2E(delayMs: number | undefined): Promise<void> {
+    await applyE2eControl({ showStatusDelayMs: delayMs ?? null });
+}
+
 export async function executeE2eControlCommand(command: AspireExtensionE2EControlCommand, options?: { waitFor?: 'started' | 'applied' }): Promise<AspireExtensionE2EControlStatus> {
     return await applyE2eControl({ command }, options?.waitFor ?? 'applied');
 }

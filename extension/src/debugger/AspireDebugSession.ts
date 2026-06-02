@@ -21,11 +21,13 @@ import os from "os";
 import { EnvironmentVariables } from "../utils/environment";
 import { sendTelemetryEvent } from "../utils/telemetry";
 import { classifyAppHostPath, classifyAppHostDirectory } from "../utils/appHostLanguage";
+import type { AspireDebugConsoleOutputEvent } from "../types/extensionApi";
 
 export type DashboardBrowserType = 'openExternalBrowser' | 'integratedBrowser' | 'debugChrome' | 'debugEdge' | 'debugFirefox';
 
 export class AspireDebugSession implements vscode.DebugAdapter {
   private readonly _onDidSendMessage = new EventEmitter<any>();
+  private readonly _onDidSendDebugConsoleOutput = new EventEmitter<AspireDebugConsoleOutputEvent>();
   private _messageSeq = 1;
   private readonly _appHostParentOutputFilter = new AppHostParentOutputFilter();
 
@@ -56,6 +58,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private _appHostModeAtLaunch: 'run' | 'debug' = 'run';
 
   public readonly onDidSendMessage = this._onDidSendMessage.event;
+  public readonly onDidSendDebugConsoleOutput = this._onDidSendDebugConsoleOutput.event;
   public readonly onDidChangeState = this._onDidChangeState.event;
   public readonly debugSessionId: string;
   public configuration: AspireExtendedDebugConfiguration;
@@ -590,6 +593,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     this._disposables.forEach(disposable => disposable.dispose());
     this._trackedDebugAdapters = [];
     vscode.debug.stopDebugging(this._session);
+    this._onDidSendDebugConsoleOutput.dispose();
 
     // Telemetry: emit `debug/appHost/end` after a short grace window so any
     // pending `sessionTerminated` notifications kicked off by the child-stop
@@ -673,14 +677,21 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   }
 
   sendMessage(message: string, addNewLine: boolean = true, category: 'stdout' | 'stderr' = 'stdout') {
+    const output = `${message}${addNewLine ? '\n' : ''}`;
     this.sendEvent({
       type: 'event',
       seq: this._messageSeq++,
       event: 'output',
       body: {
         category: category,
-        output: `${message}${addNewLine ? '\n' : ''}`
+        output
       }
+    });
+    this._onDidSendDebugConsoleOutput.fire({
+      debugSessionId: this.debugSessionId,
+      appHostPath: this.appHostPath,
+      category,
+      output,
     });
   }
 

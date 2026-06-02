@@ -122,6 +122,7 @@ export class InteractionService implements IInteractionService {
     }
 
     showStatus(statusText: string | null) {
+        delayStatusForE2E();
         this._progressNotifier.show(statusText);
     }
 
@@ -608,4 +609,23 @@ export function addInteractionServiceEndpoints(connection: MessageConnection, in
     connection.onRequest("notifyAppHostStartupCompleted", middleware('notifyAppHostStartupCompleted', interactionService.notifyAppHostStartupCompleted.bind(interactionService)));
     connection.onRequest("startDebugSession", middleware('startDebugSession', async (workingDirectory: string, projectFile: string | null, debug: boolean, options?: DebugSessionOptions) => interactionService.startDebugSession(workingDirectory, projectFile, debug, options)));
     connection.onRequest("writeDebugSessionMessage", middleware('writeDebugSessionMessage', interactionService.writeDebugSessionMessage.bind(interactionService)));
+}
+
+function delayStatusForE2E(): void {
+    const rawDelayMs = process.env.ASPIRE_EXTENSION_E2E_SHOW_STATUS_DELAY_MS;
+    if (!rawDelayMs) {
+        return;
+    }
+
+    const delayMs = Number(rawDelayMs);
+    if (!Number.isFinite(delayMs) || delayMs <= 0) {
+        return;
+    }
+
+    // This is intentionally synchronous and E2E-only. The regression test needs to
+    // block the JSON-RPC response that the CLI queued before build diagnostics, so
+    // a timer-based delay would let the request return and fail to exercise the
+    // CLI-side flush path.
+    const buffer = new SharedArrayBuffer(4);
+    Atomics.wait(new Int32Array(buffer), 0, 0, Math.min(delayMs, 10000));
 }
