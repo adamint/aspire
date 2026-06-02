@@ -1107,9 +1107,19 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             vscode.window.showWarningMessage(appHostSourceNotFound);
             return;
         }
-        await this._terminalProvider.sendAspireCommandToAspireTerminal(`stop --apphost "${appHostPath}"`);
+
         this._trackStoppingAppHost(appHostPath);
         this._onDidChangeTreeData.fire();
+        try {
+            await this._terminalProvider.sendAspireCommandToAspireTerminal(`stop --apphost "${appHostPath}"`);
+        } catch (err) {
+            const stoppingKey = this._findStoppingAppHostKey(appHostPath);
+            if (stoppingKey) {
+                this._clearStoppingAppHost(stoppingKey, true);
+            }
+
+            throw err;
+        }
     }
 
     async openAppHostSource(element?: AppHostItem | WorkspaceResourcesItem | WorkspaceAppHostItem): Promise<void> {

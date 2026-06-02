@@ -69,16 +69,17 @@ export async function executeE2eControlCommand(command: AspireExtensionE2EContro
 
 export async function runE2eTeardown(cleanups: ReadonlyArray<() => unknown | Promise<unknown>>, failureMessage: string): Promise<void> {
     const failures: unknown[] = [];
-    for (const cleanup of cleanups) {
+    for (let i = 0; i < cleanups.length; i++) {
+        const cleanup = cleanups[i];
         try {
             await cleanup();
         } catch (error) {
-            failures.push(error);
+            failures.push(new Error(`Cleanup ${i + 1} failed: ${formatErrorForDiagnostics(error)}`, { cause: error }));
         }
     }
 
     if (failures.length > 0) {
-        throw new AggregateError(failures, failureMessage);
+        throw new AggregateError(failures, `${failureMessage}\n\n${failures.map(formatErrorForDiagnostics).join('\n\n')}`);
     }
 }
 
@@ -343,6 +344,14 @@ function isBreakpointAt(value: unknown, filePath: string, line: number): boolean
 
 function delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function formatErrorForDiagnostics(error: unknown): string {
+    if (error instanceof Error) {
+        return error.stack ?? error.message;
+    }
+
+    return String(error);
 }
 
 function removePath(targetPath: string, options: fs.RmOptions): void {

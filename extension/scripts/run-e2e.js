@@ -1343,7 +1343,16 @@ function printFailureDiagnosticsSummary() {
       workspaceResources: state.state.workspaceResources?.map(resource => `${resource.name}:${resource.state}`),
       appHosts: state.state.appHosts?.map(appHost => appHost.appHostPath),
       launchingPaths: state.state.launchingPaths,
+      stoppingPaths: state.state.stoppingPaths,
       debugSessions: state.state.debugSessions?.map(redactDebugSessionForDiagnostics),
+      commandInvocations: takeLast(state.commandInvocations, 10),
+      terminalCommands: takeLast(state.terminalCommands, 10),
+      debugLaunches: takeLast(state.debugLaunches, 10),
+      debugConsoleOutputs: takeLast(state.debugConsoleOutputs, 10).map(output => ({
+        ...output,
+        output: tailLines(output.output, 5),
+      })),
+      control: state.control,
     }, null, 2), '  '));
   }
 
@@ -1386,6 +1395,10 @@ function findLatestExtensionLogPath() {
 function tailLines(value, lineCount) {
   const lines = value.split(/\r?\n/);
   return lines.slice(Math.max(0, lines.length - lineCount)).join('\n');
+}
+
+function takeLast(value, count) {
+  return Array.isArray(value) ? value.slice(Math.max(0, value.length - count)) : [];
 }
 
 function indentBlock(value, prefix) {

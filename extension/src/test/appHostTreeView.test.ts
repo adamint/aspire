@@ -408,11 +408,44 @@ suite('AspireAppHostTreeProvider', () => {
 
         assert.strictEqual(completed, false);
         assert.ok(finishTerminalDispatch, 'Expected terminal dispatch to start.');
+        const [stoppingItem] = provider.getChildren();
+        assert.strictEqual(stoppingItem.contextValue, 'appHost:stopping');
+        assert.strictEqual(stoppingItem.description, 'Stopping...');
 
         finishTerminalDispatch();
         await commandPromise;
 
         assert.strictEqual(completed, true);
+        provider.dispose();
+    });
+
+    test('stop AppHost clears stopping state when terminal dispatch fails', async () => {
+        const appHostPath = path.resolve('workspace', 'apps', 'Store', 'AppHost.csproj');
+        const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+        const repository = {
+            viewMode: 'global' as ViewMode,
+            appHosts: [makeAppHost({ appHostPath })],
+            workspaceResources: [],
+            workspaceAppHostPath: undefined,
+            workspaceAppHostCandidatePaths: [],
+            workspaceAppHostName: undefined,
+            workspaceAppHostDescription: undefined,
+            onDidChangeData,
+        } as unknown as AppHostDataRepository;
+        const terminalProvider = {
+            getAspireCliExecutablePath: async () => 'aspire',
+            createEnvironment: () => ({}),
+            sendAspireCommandToAspireTerminal: async () => {
+                throw new Error('terminal failed');
+            },
+        } as unknown as AspireTerminalProvider;
+        const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService());
+        const [item] = provider.getChildren();
+
+        await assert.rejects(provider.stopAppHost(item as any), /terminal failed/);
+
+        const [restoredItem] = provider.getChildren();
+        assert.strictEqual(restoredItem.contextValue, 'appHost');
         provider.dispose();
     });
 

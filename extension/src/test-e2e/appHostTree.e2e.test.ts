@@ -63,6 +63,10 @@ suite('Aspire AppHost tree E2E', function () {
         try {
             const stopAppHostPath = discovered.state.workspaceAppHostPath ?? getPrimaryAppHostProjectPath();
             const terminalBefore = getTerminalCommandCount();
+            const stoppingTreeItem = waitForTreeItemDescription(section, appHostLabel, 'Stopping...', 60000);
+            // Start polling before issuing the stop command so the test can observe the
+            // transient UI state, but mark the promise handled in case an earlier wait fails.
+            void stoppingTreeItem.catch(() => undefined);
             await executeE2eControlCommand({ name: 'stopAppHost', appHostPath: stopAppHostPath });
             await waitForCommandOutcome('aspire-vscode.stopAppHost', 'success');
             await waitForTerminalCommand(
@@ -71,9 +75,7 @@ suite('Aspire AppHost tree E2E', function () {
                 60000,
                 terminalBefore);
             await waitForStoppingAppHost(stopAppHostPath);
-
-            section = await openAspireView();
-            await waitForTreeItemDescription(section, appHostLabel, 'Stopping...');
+            await stoppingTreeItem;
         } finally {
             await setTerminalCommandExecutionSuppressedForE2E(false);
         }
