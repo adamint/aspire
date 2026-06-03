@@ -155,8 +155,10 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             for (var i = 0; i < replicas; i++)
             {
                 var exeInstance = DcpExecutor.GetDcpInstance(project, instanceIndex: i);
-                var exe = Executable.Create(exeInstance.Name, "dotnet");
-                exe.Spec.WorkingDirectory = Path.GetDirectoryName(projectMetadata.ProjectPath);
+                project.TryGetLastAnnotation<ExecutableAnnotation>(out var executableAnnotation);
+
+                var exe = Executable.Create(exeInstance.Name, executableAnnotation?.Command ?? "dotnet");
+                exe.Spec.WorkingDirectory = executableAnnotation?.WorkingDirectory ?? Path.GetDirectoryName(projectMetadata.ProjectPath);
 
                 exe.Annotate(CustomResource.OtelServiceNameAnnotation, project.Name);
                 exe.Annotate(CustomResource.OtelServiceInstanceIdAnnotation, project.GetOtelServiceInstanceId(exeInstance));
@@ -231,49 +233,55 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
                 {
                     exe.Spec.ExecutionType = ExecutionType.Process;
 
-                    var projectLaunchConfiguration = new ProjectLaunchConfiguration();
-                    projectLaunchConfiguration.ProjectPath = projectMetadata.ProjectPath;
-
-                    // `dotnet watch` does not work with file-based apps yet, so we have to use `dotnet run` in that case
-                    if (_configuration.GetBool("DOTNET_WATCH") is not true || projectMetadata.IsFileBasedApp)
+                    // Some ProjectResource subtypes, such as MAUI platform resources, intentionally
+                    // provide their own executable command and SDK-shaped app host args. Do not prefix
+                    // those args with Aspire's default `dotnet run --project ...` wrapper.
+                    if (executableAnnotation is null)
                     {
-                        projectArgs.Add("run");
-                        projectArgs.Add(projectMetadata.IsFileBasedApp ? "--file" : "--project");
-                        projectArgs.Add(projectMetadata.ProjectPath);
-                        if (projectMetadata.IsFileBasedApp)
+                        var projectLaunchConfiguration = new ProjectLaunchConfiguration();
+                        projectLaunchConfiguration.ProjectPath = projectMetadata.ProjectPath;
+
+                        // `dotnet watch` does not work with file-based apps yet, so we have to use `dotnet run` in that case
+                        if (_configuration.GetBool("DOTNET_WATCH") is not true || projectMetadata.IsFileBasedApp)
                         {
-                            projectArgs.Add("--no-cache");
+                            projectArgs.Add("run");
+                            projectArgs.Add(projectMetadata.IsFileBasedApp ? "--file" : "--project");
+                            projectArgs.Add(projectMetadata.ProjectPath);
+                            if (projectMetadata.IsFileBasedApp)
+                            {
+                                projectArgs.Add("--no-cache");
+                            }
+                            if (projectMetadata.SuppressBuild)
+                            {
+                                projectArgs.Add("--no-build");
+                            }
                         }
-                        if (projectMetadata.SuppressBuild)
+                        else
                         {
-                            projectArgs.Add("--no-build");
+                            projectArgs.AddRange([
+                                "watch",
+                                "--non-interactive",
+                                "--no-hot-reload",
+                                "--project",
+                                projectMetadata.ProjectPath
+                            ]);
                         }
-                    }
-                    else
-                    {
-                        projectArgs.AddRange([
-                            "watch",
-                            "--non-interactive",
-                            "--no-hot-reload",
-                            "--project",
-                            projectMetadata.ProjectPath
-                        ]);
-                    }
 
-                    if (!string.IsNullOrEmpty(_distributedApplicationOptions.Configuration))
-                    {
-                        projectArgs.AddRange(new[] { "--configuration", _distributedApplicationOptions.Configuration });
+                        if (!string.IsNullOrEmpty(_distributedApplicationOptions.Configuration))
+                        {
+                            projectArgs.AddRange(new[] { "--configuration", _distributedApplicationOptions.Configuration });
+                        }
+
+                        // We pretty much always want to suppress the normal launch profile handling
+                        // because the settings from the profile will override the ambient environment settings, which is not what we want
+                        // (the ambient environment settings for service processes come from the application model
+                        // and should be HIGHER priority than the launch profile settings).
+                        // This means we need to apply the launch profile settings manually inside CreateExecutableAsync().
+                        projectArgs.Add("--no-launch-profile");
+
+                        // We want this annotation even if we are not using IDE execution; see ToSnapshot() for details.
+                        exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, projectLaunchConfiguration);
                     }
-
-                    // We pretty much always want to suppress the normal launch profile handling
-                    // because the settings from the profile will override the ambient environment settings, which is not what we want
-                    // (the ambient environment settings for service processes come from the application model
-                    // and should be HIGHER priority than the launch profile settings).
-                    // This means we need to apply the launch profile settings manually inside CreateExecutableAsync().
-                    projectArgs.Add("--no-launch-profile");
-
-                    // We want this annotation even if we are not using IDE execution; see ToSnapshot() for details.
-                    exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, projectLaunchConfiguration);
                 }
 
                 exe.SetAnnotationAsObjectList(CustomResource.ResourceProjectArgsAnnotation, projectArgs);

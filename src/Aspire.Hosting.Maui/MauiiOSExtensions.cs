@@ -369,7 +369,10 @@ public static class MauiiOSExtensions
                 Command = "dotnet",
                 WorkingDirectory = workingDirectory
             })
-            .WithDebugSupport(_ => new { type = "project", project_path = projectPath, mode = "NoDebug" }, "project");
+            // VS Code does not advertise this launch type, so DCP runs the simulator
+            // resource as the executable below. That keeps the MAUI SDK `dotnet run`
+            // target in control instead of launching the compiled DLL directly.
+            .WithDebugSupport(_ => new { type = "maui-ios-simulator" }, "maui-ios-simulator");
 #pragma warning restore ASPIREEXTENSION001
 
         // Build additional arguments for simulator UDID if specified

@@ -16,9 +16,6 @@ import { CommandInvocationEvent, initializeTelemetry, isCommandCancellation, onD
 import { MeaningfulEngagementReporter } from './utils/meaningfulEngagement';
 import { AspireDebugAdapterDescriptorFactory } from './debugger/AspireDebugAdapterDescriptorFactory';
 import { AspireDebugConfigurationProvider } from './debugger/AspireDebugConfigurationProvider';
-import type { AspireDebugSession } from './debugger/AspireDebugSession';
-import { createDebugSessionConfiguration } from './debugger/debuggerExtensions';
-import { createProjectDebuggerExtension } from './debugger/languages/dotnet';
 import { AspireExtensionContext } from './AspireExtensionContext';
 import AspireRpcServer, { RpcServerConnectionInfo } from './server/AspireRpcServer';
 import AspireDcpServer from './dcp/AspireDcpServer';
@@ -47,7 +44,6 @@ import { AppHostDisplayInfo, ResourceCommandJson, ResourceJson, isMatchingAppHos
 import { AppHostDiscoveryService } from './utils/appHostDiscovery';
 import { AppHostLaunchRequestedEvent, AppHostLaunchService } from './services/AppHostLaunchService';
 import type { AspireAppHostState, AspireDebugConsoleOutputEvent, AspireExtensionApi, AspireExtensionE2ECommandInvocation, AspireExtensionE2EControlCommand, AspireExtensionE2EControlPayload, AspireExtensionE2EControlStatus, AspireExtensionE2EDebugConsoleOutput, AspireExtensionE2EDebugLaunch, AspireExtensionE2ETerminalCommand, AspireExtensionStateSnapshot, AspireResourceCommandState, AspireResourceState, AspireResourceUrlState, WaitForStateOptions } from './types/extensionApi';
-import type { AspireExtendedDebugConfiguration, AspireResourceExtendedDebugConfiguration, ProjectLaunchConfiguration } from './dcp/types';
 import { AppHostsViewTelemetry } from './views/AppHostsViewTelemetry';
 
 let aspireExtensionContext = new AspireExtensionContext();
@@ -879,10 +875,6 @@ async function executeE2eControlCommand(
       markStarted();
       return await getDiagnosticsForFile(command.filePath);
     }
-    case 'createNoDebugProjectDebugConfiguration': {
-      markStarted();
-      return await createNoDebugProjectDebugConfiguration(command);
-    }
     case 'readClipboard': {
       markStarted();
       return await vscode.env.clipboard.readText();
@@ -929,60 +921,6 @@ function getE2eCommandArguments(args: unknown): readonly unknown[] {
   }
 
   return args;
-}
-
-async function createNoDebugProjectDebugConfiguration(command: Extract<AspireExtensionE2EControlCommand, { name: 'createNoDebugProjectDebugConfiguration' }>): Promise<Pick<AspireResourceExtendedDebugConfiguration, 'type' | 'program' | 'args' | 'cwd' | 'noDebug' | 'executablePath'>> {
-  const projectPath = getE2eWorkspacePath(command.projectPath);
-  const launchConfig: ProjectLaunchConfiguration = {
-    type: 'project',
-    project_path: projectPath,
-    disable_launch_profile: true,
-    mode: 'NoDebug',
-  };
-  const debugSessionConfig: AspireExtendedDebugConfiguration = {
-    type: 'aspire',
-    request: 'launch',
-    name: 'Aspire',
-    program: projectPath,
-  };
-  const debuggerExtension = createProjectDebuggerExtension(() => {
-    throw new Error('NoDebug project E2E launch configuration should not require the .NET build service.');
-  });
-
-  const configuration = await createDebugSessionConfiguration(
-    debugSessionConfig,
-    launchConfig,
-    getE2eStringArray(command.args, 'createNoDebugProjectDebugConfiguration args'),
-    [],
-    {
-      debug: true,
-      runId: 'e2e-run',
-      debugSessionId: 'e2e-debug-session',
-      isApphost: false,
-      debugSession: {} as AspireDebugSession,
-    },
-    debuggerExtension);
-
-  return {
-    type: configuration.type,
-    program: configuration.program,
-    args: configuration.args,
-    cwd: configuration.cwd,
-    noDebug: configuration.noDebug,
-    executablePath: configuration.executablePath,
-  };
-}
-
-function getE2eStringArray(value: unknown, description: string): string[] | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-
-  if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) {
-    throw new Error(`Aspire extension E2E ${description} must be an array of strings when provided.`);
-  }
-
-  return value;
 }
 
 function getE2eWorkspacePath(filePath: unknown): string {
