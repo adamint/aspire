@@ -109,7 +109,6 @@ internal static class ResourceSnapshotMapper
         // Only include enabled commands
         var commands = snapshot.Commands
             .Where(IsCommandAvailableToApi)
-            .OrderBy(c => c.Name)
             .ToDistinctDictionary(
                 c => c.Name,
                 c => new ResourceCommandJson

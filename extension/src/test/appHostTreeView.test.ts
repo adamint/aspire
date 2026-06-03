@@ -6,6 +6,7 @@ import * as cliModule from '../debugger/languages/cli';
 import { AppHostDataRepository, shortenPath, shortenPaths } from '../views/AppHostDataRepository';
 import { AspireAppHostTreeProvider, getResourceContextValue, getResourceIcon, resolveAppHostSourcePath, buildResourceDescription } from '../views/AspireAppHostTreeProvider';
 import type { AppHostDisplayInfo, ResourceJson, ViewMode } from '../views/AppHostDataRepository';
+import { ResourceCommandInputType } from '../views/AppHostDataRepository';
 import { ResourceState, HealthStatus, StateStyle } from '../editor/resourceConstants';
 import type { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import { AppHostLaunchService } from '../services/AppHostLaunchService';
@@ -890,6 +891,15 @@ suite('getResourceIcon', () => {
         const icon = getResourceIcon(makeResource({ state: 'SomeUnknownState' }));
         assert.strictEqual(icon.id, 'circle-filled');
     });
+
+    test('ValueMissing parameter shows warning icon', () => {
+        const icon = getResourceIcon(makeResource({
+            resourceType: 'Parameter',
+            state: 'ValueMissing',
+        }));
+
+        assert.strictEqual(icon.id, 'warning');
+    });
 });
 
 suite('buildResourceDescription', () => {
@@ -929,6 +939,86 @@ suite('buildResourceDescription', () => {
 
     test('empty health reports returns resource type', () => {
         assert.strictEqual(buildResourceDescription(makeResource({ healthReports: {} })), 'Project');
+    });
+
+    test('parameter with missing value shows humanized state and no stale value', () => {
+        const desc = buildResourceDescription(makeResource({
+            resourceType: 'Parameter',
+            state: ResourceState.ValueMissing,
+            properties: { Value: 'Parameter value has been deleted' },
+        }));
+
+        assert.strictEqual(desc, 'Parameter · Value missing');
+    });
+
+    test('parameter with non-secret value shows value text', () => {
+        const desc = buildResourceDescription(makeResource({
+            resourceType: 'Parameter',
+            state: ResourceState.Running,
+            properties: { Value: 'The value' },
+        }));
+
+        assert.strictEqual(desc, 'Parameter · Running · The value');
+    });
+
+    test('parameter with secret value shows masked value', () => {
+        const desc = buildResourceDescription(makeResource({
+            resourceType: 'Parameter',
+            state: ResourceState.Running,
+            properties: { Value: 'super-secret-value' },
+            commands: {
+                'set-parameter': {
+                    displayName: 'Set parameter',
+                    description: null,
+                    argumentInputs: [
+                        {
+                            name: 'Value',
+                            label: null,
+                            description: null,
+                            inputType: ResourceCommandInputType.SecretText,
+                            placeholder: null,
+                            value: null,
+                            options: null,
+                            maxLength: null,
+                        },
+                    ],
+                },
+            },
+        }));
+
+        assert.strictEqual(desc, 'Parameter · Running · ●●●●●●●●');
+        assert.ok(!desc.includes('super-secret-value'), 'Expected secret value to be masked');
+    });
+
+    test('parameter value at display limit is not truncated', () => {
+        const value = 'x'.repeat(80);
+        const desc = buildResourceDescription(makeResource({
+            resourceType: 'Parameter',
+            state: ResourceState.Running,
+            properties: { Value: value },
+        }));
+
+        assert.strictEqual(desc, `Parameter · Running · ${value}`);
+    });
+
+    test('parameter value over display limit is truncated with ellipsis', () => {
+        const desc = buildResourceDescription(makeResource({
+            resourceType: 'Parameter',
+            state: ResourceState.Running,
+            properties: { Value: `${'x'.repeat(80)}y` },
+        }));
+
+        assert.strictEqual(desc, `Parameter · Running · ${'x'.repeat(79)}…`);
+    });
+
+    test('parameter with empty value does not add a blank value segment', () => {
+        const desc = buildResourceDescription(makeResource({
+            resourceType: 'Parameter',
+            state: ResourceState.Running,
+            properties: { Value: '' },
+        }));
+
+        assert.strictEqual(desc, 'Parameter · Running');
     });
 });
 
@@ -1701,6 +1791,60 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         assert.ok(resultA);
         assert.ok(resultB);
         assert.notStrictEqual(resultA, resultB, 'Expected distinct items for distinct AppHosts');
+        provider.dispose();
+    });
+
+    test('resource command quick pick preserves command order from resource data', async () => {
+        const sandbox = sinon.createSandbox();
+        const resource = makeResource({
+            commands: {
+                'set-parameter': { displayName: 'Set parameter', description: null },
+                'custom-action': { displayName: 'Custom action', description: null },
+                'delete-parameter': { displayName: 'Delete parameter', description: null },
+            },
+        });
+        const provider = makeTreeProvider([
+            makeAppHost({
+                resources: [resource],
+            }),
+        ]);
+
+        try {
+            const showQuickPickStub = sandbox.stub(vscode.window, 'showQuickPick').resolves(undefined);
+            const element = provider.findResourceElement('my-service');
+            assert.ok(element, 'Expected to find resource element');
+
+            await provider.executeResourceCommand(element as never);
+
+            const items = showQuickPickStub.getCall(0).args[0] as readonly vscode.QuickPickItem[];
+            assert.deepStrictEqual(items.map(item => item.label), [
+                'set-parameter',
+                'custom-action',
+                'delete-parameter',
+            ]);
+        } finally {
+            sandbox.restore();
+            provider.dispose();
+        }
+    });
+
+    test('parameter missing value tooltip uses humanized state', () => {
+        const resource = makeResource({
+            resourceType: 'Parameter',
+            state: ResourceState.ValueMissing,
+        });
+        const provider = makeTreeProvider([
+            makeAppHost({
+                resources: [resource],
+            }),
+        ]);
+        const [appHostItem] = provider.getChildren();
+        const resourcesGroup = provider.getChildren(appHostItem).find(child => child.label === 'Resources');
+        assert.ok(resourcesGroup, 'Expected resources group');
+        const [resourceItem] = provider.getChildren(resourcesGroup);
+        const tooltip = resourceItem.tooltip as vscode.MarkdownString;
+
+        assert.ok(tooltip.value.includes('State: Value missing'), tooltip.value);
         provider.dispose();
     });
 });

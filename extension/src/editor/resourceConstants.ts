@@ -12,6 +12,7 @@ export const ResourceState = {
     Exited: 'Exited',
     FailedToStart: 'FailedToStart',
     RuntimeUnhealthy: 'RuntimeUnhealthy',
+    ValueMissing: 'ValueMissing',
 } as const;
 
 // Health status values returned by the Aspire runtime

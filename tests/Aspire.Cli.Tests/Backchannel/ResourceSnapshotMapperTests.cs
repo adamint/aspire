@@ -152,6 +152,30 @@ public class ResourceSnapshotMapperTests
     }
 
     [Fact]
+    public void MapToResourceJson_PreservesCommandSnapshotOrder()
+    {
+        var snapshot = new ResourceSnapshot
+        {
+            Name = "parameter",
+            DisplayName = "parameter",
+            ResourceType = "Parameter",
+            State = "Running",
+            Commands =
+            [
+                new ResourceSnapshotCommand { Name = "set-parameter", State = "Enabled", Description = "Set", Visibility = KnownCommandVisibility.Api },
+                new ResourceSnapshotCommand { Name = "custom-action", State = "Enabled", Description = "Custom", Visibility = KnownCommandVisibility.Api },
+                new ResourceSnapshotCommand { Name = "delete-parameter", State = "Enabled", Description = "Delete", Visibility = KnownCommandVisibility.Api }
+            ]
+        };
+
+        var result = ResourceSnapshotMapper.MapToResourceJson(snapshot, [snapshot]);
+
+        Assert.Equal(
+            ["set-parameter", "custom-action", "delete-parameter"],
+            result.Commands!.Keys);
+    }
+
+    [Fact]
     public void MapToResourceJson_ResolvesWaitingForDependencies()
     {
         var dependency = new ResourceSnapshot
