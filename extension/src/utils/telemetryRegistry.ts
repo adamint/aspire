@@ -49,8 +49,28 @@ export type CommonTelemetryProperty = 'apphost_languages' | 'apphost_present';
  */
 export interface TelemetryEventSchema {
     // ── Extension-emitted events ────────────────────────────────────────────
+    'extension/activated': {
+        properties: 'workspace_open' | 'extension_mode';
+        measurements: 'workspace_folders';
+    };
     'command/invoked': {
         properties: 'command' | 'outcome' | 'source' | 'error_kind';
+        measurements: 'duration_ms';
+    };
+    'cli/availability': {
+        properties: 'available' | 'source' | 'operation';
+        measurements: 'duration_ms';
+    };
+    'apphost/discovery/result': {
+        properties: 'outcome' | 'source' | 'apphost_languages';
+        measurements: 'duration_ms' | 'candidate_count' | 'buildable_candidate_count';
+    };
+    'apphost/launch/requested': {
+        properties: 'mode' | 'command' | 'apphost_language' | 'execution_suppressed';
+        measurements: never;
+    };
+    'apphost/launch/result': {
+        properties: 'mode' | 'command' | 'apphost_language' | 'outcome' | 'execution_suppressed' | 'error_kind';
         measurements: 'duration_ms';
     };
     'engagement/active': {
@@ -58,8 +78,8 @@ export interface TelemetryEventSchema {
         measurements: 'workspace_folders';
     };
     'runningapphostsview/shown': {
-        properties: 'view_mode' | 'initial_visibility';
-        measurements: 'running_apphosts' | 'total_resources';
+        properties: 'view_mode' | 'initial_visibility' | 'workspace_apphost_state' | 'has_error';
+        measurements: 'running_apphosts' | 'total_resources' | 'workspace_apphost_candidates';
     };
     'debug/apphost/start': {
         properties: 'mode' | 'apphost_language' | 'apphost_is_directory' | 'command';

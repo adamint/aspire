@@ -8,6 +8,8 @@ import { aspireConfigFileName, getAppHostPathFromConfig, readJsonFile } from './
 import { EnvironmentVariables } from './environment';
 import { extensionLogOutputChannel } from './logging';
 import { getAppHostDiscoveryTimeoutMs } from './settings';
+import { summarizeAppHostLanguages } from './appHostLanguage';
+import { sendTelemetryEvent } from './telemetry';
 
 // Mirrors the `aspire ls --format json` candidate shape documented in
 // docs/specs/cli-output-formats.md. Older CLI fallback results are adapted into
@@ -37,6 +39,13 @@ interface LegacyAppHostProjectSearchResult {
     all_project_file_candidates: string[];
 }
 
+type AppHostDiscoverySource = 'ls' | 'legacy-get-apphosts' | 'workspace-files' | 'all';
+
+interface AppHostDiscoveryResult {
+    source: Exclude<AppHostDiscoverySource, 'all'>;
+    candidates: CandidateAppHostDisplayInfo[];
+}
+
 const discoveryExcludePattern = '{**/artifacts/**,**/[Bb]in/**,**/[Oo]bj/**,**/node_modules/**,**/.git/**,**/.vs/**,**/.vscode-test/**,**/.worktrees/**,**/.idea/**,**/.aspire/modules/**}';
 
 export class AppHostDiscoveryService implements vscode.Disposable {
@@ -63,8 +72,13 @@ export class AppHostDiscoveryService implements vscode.Disposable {
 
         let resultPromise = this._cache.get(key);
         if (!resultPromise) {
-            resultPromise = this._discoverCore(workspaceFolder)
-                .then(candidates => this._includeConfiguredAppHostCandidate(workspaceFolder, candidates))
+            const startTime = Date.now();
+            resultPromise = this._discoverCore(workspaceFolder, startTime)
+                .then(async discovery => {
+                    const candidates = await this._includeConfiguredAppHostCandidate(workspaceFolder, discovery.candidates);
+                    emitAppHostDiscoveryTelemetry(discovery.source, 'success', candidates, startTime);
+                    return candidates;
+                })
                 .catch(error => {
                     this._cache.delete(key);
                     throw error;
@@ -113,11 +127,11 @@ export class AppHostDiscoveryService implements vscode.Disposable {
         this._onDidChangeCandidates.dispose();
     }
 
-    private async _discoverCore(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
+    private async _discoverCore(workspaceFolder: vscode.WorkspaceFolder, startTime: number): Promise<AppHostDiscoveryResult> {
         try {
             const appHosts = await this._discoverWithLs(workspaceFolder);
             extensionLogOutputChannel.info(`Discovered ${appHosts.length} AppHost candidate(s) via aspire ls`);
-            return appHosts;
+            return { source: 'ls', candidates: appHosts };
         }
         catch (error) {
             this._throwIfDisposed();
@@ -125,7 +139,7 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             try {
                 const appHosts = await this._discoverWithLegacyGetAppHosts(workspaceFolder);
                 extensionLogOutputChannel.info(`Discovered ${appHosts.length} AppHost candidate(s) via aspire extension get-apphosts`);
-                return appHosts;
+                return { source: 'legacy-get-apphosts', candidates: appHosts };
             }
             catch (fallbackError) {
                 this._throwIfDisposed();
@@ -134,7 +148,7 @@ export class AppHostDiscoveryService implements vscode.Disposable {
                     const appHosts = await discoverCSharpAppHostProjectsFromWorkspaceFiles(workspaceFolder);
                     if (appHosts.length > 0) {
                         extensionLogOutputChannel.warn(`CLI AppHost discovery failed; using ${appHosts.length} C# AppHost project candidate(s) found in the workspace.`);
-                        return appHosts;
+                        return { source: 'workspace-files', candidates: appHosts };
                     }
                 }
                 catch (error) {
@@ -144,6 +158,7 @@ export class AppHostDiscoveryService implements vscode.Disposable {
                 const fileFallbackMessage = fileFallbackError
                     ? `\nworkspace file fallback failed: ${formatErrorMessage(fileFallbackError)}`
                     : '';
+                emitAppHostDiscoveryTelemetry('all', 'error', [], startTime);
                 throw new Error(`aspire ls discovery failed: ${formatErrorMessage(error)}\naspire extension get-apphosts fallback failed: ${formatErrorMessage(fallbackError)}${fileFallbackMessage}`);
             }
         }
@@ -330,6 +345,23 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             }, timeoutMs);
         });
     }
+}
+
+function emitAppHostDiscoveryTelemetry(
+    source: AppHostDiscoverySource,
+    outcome: 'success' | 'error',
+    candidates: readonly CandidateAppHostDisplayInfo[],
+    startTime: number,
+): void {
+    sendTelemetryEvent('apphost/discovery/result', {
+        outcome,
+        source,
+        apphost_languages: summarizeAppHostLanguages(candidates),
+    }, {
+        duration_ms: Date.now() - startTime,
+        candidate_count: candidates.length,
+        buildable_candidate_count: candidates.filter(candidate => candidate.status === 'buildable').length,
+    });
 }
 
 export function findCandidateForEditorFile(filePath: string, candidates: readonly CandidateAppHostDisplayInfo[]): CandidateAppHostDisplayInfo | undefined {

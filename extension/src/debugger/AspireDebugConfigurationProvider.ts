@@ -39,7 +39,7 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
 
     async resolveDebugConfiguration(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration, token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration | null | undefined> {
          // Check if CLI is available before starting debug session
-        const result = await checkCliAvailableOrRedirect();
+        const result = await checkCliAvailableOrRedirect('debug_gate');
         if (!result.available) {
             return undefined; // Cancel the debug session
         }

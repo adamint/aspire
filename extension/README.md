@@ -27,6 +27,7 @@ Aspire helps you build distributed apps — things like microservices, databases
 
 | Feature | Description |
 |---------|-------------|
+| **AppHost discovery** | Open a repo and let the extension find project-based C# AppHosts and TypeScript AppHosts |
 | **Run & debug** | Start your whole app and attach debuggers to every service with F5 |
 | **Dashboard** | See your resources, endpoints, logs, traces, and metrics while your app runs |
 | **Sidebar** | Browse running apphosts and resources in the Activity Bar |
@@ -60,6 +61,17 @@ Open your Aspire project in VS Code, or create one with **Aspire: New Aspire pro
 
 There's also a built-in walkthrough at **Help → Get Started → Get started with Aspire** that covers the basics step by step.
 
+![Animated walkthrough of the Aspire VS Code extension happy path: create or open an Aspire app, discover the AppHost, run and debug, then inspect the dashboard.](https://raw.githubusercontent.com/microsoft/aspire/main/extension/resources/vscode-extension-happy-path.gif)
+
+The core flow is:
+
+1. Open an Aspire repo or create a starter with **Aspire: New Aspire project**.
+2. Let the Aspire view discover the AppHost.
+3. Press **F5**, or use **Run Aspire apphost** / **Debug Aspire apphost** from the editor.
+4. Inspect resources in the Aspire view and open the dashboard when you need logs, traces, metrics, or endpoint URLs.
+
+Want the same demo with video controls? See the [Aspire VS Code extension guide](https://aspire.dev/get-started/aspire-vscode-extension/).
+
 ---
 
 ## Running and Debugging
@@ -80,6 +92,8 @@ Add an entry to `.vscode/launch.json` pointing at your apphost project:
 When you hit **F5**, the extension builds the apphost, starts all the resources (services, containers, databases) in the right order, hooks up debuggers based on each service's language, and opens the dashboard.
 
 You can also right-click an `apphost.cs`, `apphost.ts`, or `apphost.js` file in the Explorer and pick **Run Aspire apphost** or **Debug Aspire apphost**.
+
+![VS Code running and debugging an Aspire AppHost with resource debug sessions.](https://raw.githubusercontent.com/microsoft/aspire/main/extension/resources/vscode-extension-debug-session.png)
 
 ### Deploy, publish, and pipeline steps
 
@@ -129,6 +143,8 @@ The extension adds an **Aspire** panel to the Activity Bar. It shows a live tree
 
 Right-click a resource to start, stop, or restart it, view its logs, run resource-specific commands, or open the dashboard.
 
+![Aspire view discovering a workspace AppHost and showing resources with live state.](https://raw.githubusercontent.com/microsoft/aspire/main/extension/resources/vscode-extension-apphost-view.png)
+
 ---
 
 ## The Aspire Dashboard
@@ -137,7 +153,7 @@ The dashboard gives you a live view of your running app — all your resources a
 
 ![Aspire Dashboard showing running resources](https://raw.githubusercontent.com/microsoft/aspire/main/extension/resources/aspire-dashboard-dark.png)
 
-It opens automatically when you start your app. You can pick which browser it uses with the `aspire.dashboardBrowser` setting — system default browser, or Chrome, Edge, or Firefox as a debug session. When using a debug browser, the `aspire.closeDashboardOnDebugEnd` setting controls whether it closes automatically when you stop debugging. Firefox also requires the [Firefox Debugger](https://marketplace.visualstudio.com/items?itemName=firefox-devtools.vscode-firefox-debug) extension.
+It opens automatically when you start your app. You can also open it from the Aspire view or CodeLens if you closed the tab. Pick which browser it uses with the `aspire.dashboardBrowser` setting — system default browser, or Chrome, Edge, or Firefox as a debug session. When using a debug browser, the `aspire.closeDashboardOnDebugEnd` setting controls whether it closes automatically when you stop debugging. Firefox also requires the [Firefox Debugger](https://marketplace.visualstudio.com/items?itemName=firefox-devtools.vscode-firefox-debug) extension.
 
 ---
 

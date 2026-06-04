@@ -1,6 +1,9 @@
 import * as path from 'path';
+import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration } from '../dcp/types';
+import { classifyAppHostDirectory, classifyAppHostPath } from '../utils/appHostLanguage';
+import { sendTelemetryEvent } from '../utils/telemetry';
 
 function getComparisonKey(value: string): string {
     return process.platform === 'win32' ? value.toLowerCase() : value;
@@ -108,6 +111,10 @@ export class AppHostLaunchService implements vscode.Disposable {
      * @param doStep Optional step name for the 'do' command.
      */
     async launch(appHostPath: string, command: AspireCommandType, noDebug: boolean, doStep?: string): Promise<void> {
+        const startTime = Date.now();
+        const executionSuppressed = isE2eDebugLaunchSuppressed();
+        const telemetryProperties = getLaunchTelemetryProperties(appHostPath, command, noDebug, executionSuppressed);
+
         // Track launching state before awaiting startDebugging so the tree shows "Starting..."
         // immediately. We must clear this state if startDebugging returns false (debug adapter
         // rejected, no provider matched, user cancelled) or throws — otherwise no terminate
@@ -129,7 +136,6 @@ export class AppHostLaunchService implements vscode.Disposable {
             config.step = doStep;
         }
 
-        const executionSuppressed = isE2eDebugLaunchSuppressed();
         this._onDidRequestLaunch.fire({
             appHostPath,
             command,
@@ -137,9 +143,16 @@ export class AppHostLaunchService implements vscode.Disposable {
             doStep,
             executionSuppressed,
         });
+        sendTelemetryEvent('apphost/launch/requested', telemetryProperties);
 
         if (executionSuppressed) {
             this.clearLaunching(appHostPath);
+            sendTelemetryEvent('apphost/launch/result', {
+                ...telemetryProperties,
+                outcome: 'suppressed',
+            }, {
+                duration_ms: Date.now() - startTime,
+            });
             return;
         }
 
@@ -148,11 +161,48 @@ export class AppHostLaunchService implements vscode.Disposable {
             if (!started) {
                 throw new Error(`VS Code did not start the Aspire ${command} session for ${vscode.workspace.asRelativePath(appHostPath)}.`);
             }
+            sendTelemetryEvent('apphost/launch/result', {
+                ...telemetryProperties,
+                outcome: 'success',
+            }, {
+                duration_ms: Date.now() - startTime,
+            });
         } catch (err) {
             this.clearLaunching(appHostPath);
+            sendTelemetryEvent('apphost/launch/result', {
+                ...telemetryProperties,
+                outcome: 'error',
+                error_kind: classifyLaunchError(err),
+            }, {
+                duration_ms: Date.now() - startTime,
+            });
             throw err;
         }
     }
+}
+
+function getLaunchTelemetryProperties(appHostPath: string, command: AspireCommandType, noDebug: boolean, executionSuppressed: boolean) {
+    const isDirectory = fs.statSync(appHostPath, { throwIfNoEntry: false })?.isDirectory() === true;
+    return {
+        mode: noDebug ? 'run' : 'debug',
+        command: getTelemetryCommand(command),
+        apphost_language: isDirectory ? classifyAppHostDirectory(appHostPath) : classifyAppHostPath(appHostPath),
+        execution_suppressed: executionSuppressed ? 'true' : 'false',
+    };
+}
+
+function getTelemetryCommand(command: string): string {
+    return command === 'run' || command === 'deploy' || command === 'publish' || command === 'do'
+        ? command
+        : 'other';
+}
+
+function classifyLaunchError(error: unknown): string {
+    if (error instanceof Error) {
+        return error.name || error.constructor.name || 'Error';
+    }
+
+    return typeof error;
 }
 
 function isE2eDebugLaunchSuppressed(): boolean {
