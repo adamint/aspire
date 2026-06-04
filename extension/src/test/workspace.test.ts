@@ -72,6 +72,7 @@ suite('utils/workspace tests', () => {
         assert.ok(glob.includes('**/.vs/**'), 'Should exclude .vs');
         assert.ok(glob.includes('**/.vscode-test/**'), 'Should exclude .vscode-test');
         assert.ok(glob.includes('**/.worktrees/**'), 'Should exclude git worktrees');
+        assert.ok(glob.includes('**/.claude/**'), 'Should exclude agent worktrees');
         assert.ok(glob.includes('**/.idea/**'), 'Should exclude .idea');
         assert.ok(glob.includes('**/.git/**'), 'Should exclude .git');
     });

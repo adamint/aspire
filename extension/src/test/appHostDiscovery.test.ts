@@ -141,6 +141,7 @@ suite('AppHost discovery', () => {
 
         test('fires change event and invalidates cache when watched files change', async () => {
             const watcherCallbacks = stubFileSystemWatchers(sandbox);
+            const clock = sandbox.useFakeTimers();
             const spawnStub = sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, options) => {
                 options?.stdoutCallback?.('[]');
                 options?.exitCallback?.(0);
@@ -158,6 +159,8 @@ suite('AppHost discovery', () => {
                 assert.strictEqual(spawnStub.callCount, 1);
 
                 watcherCallbacks[0]();
+                assert.strictEqual(changedWorkspaceFolder, undefined);
+                await clock.tickAsync(250);
                 assert.strictEqual(changedWorkspaceFolder, workspaceFolder);
 
                 await service.discover(workspaceFolder);
@@ -190,6 +193,8 @@ suite('AppHost discovery', () => {
                 watcherCallbacks[0](vscode.Uri.file(buildPath('workspace', 'AppHost', 'bin', 'Debug', 'Generated.csproj')));
                 assert.strictEqual(changeCount, 0);
                 watcherCallbacks[0](vscode.Uri.file(buildPath('workspace', '.worktrees', 'feature', 'AppHost', 'AppHost.csproj')));
+                assert.strictEqual(changeCount, 0);
+                watcherCallbacks[0](vscode.Uri.file(buildPath('workspace', '.claude', 'worktrees', 'feature', 'AppHost', 'AppHost.csproj')));
                 assert.strictEqual(changeCount, 0);
 
                 await service.discover(workspaceFolder);
@@ -415,12 +420,36 @@ suite('AppHost discovery', () => {
             }
         });
 
-        test('configured AppHost path search excludes git worktree folders', async () => {
-            await findConfiguredAppHostPaths(makeWorkspaceFolder(buildPath('workspace')));
+        test('configured AppHost path search excludes nested worktrees and user excluded folders', async () => {
+            sandbox.stub(vscode.workspace, 'getConfiguration').callsFake((section?: string) => {
+                const values: Record<string, Record<string, boolean>> = {
+                    files: {
+                        '**/private-checkouts/**': true,
+                        '**/generated-but-enabled/**': false,
+                    },
+                    search: {
+                        '**/scratch-worktrees/**': true,
+                    },
+                };
 
-            const excludePatterns = findFilesStub.getCalls().map(call => String(call.args[1]));
-            assert.ok(excludePatterns.length > 0);
-            assert.ok(excludePatterns.every(pattern => pattern.includes('**/.worktrees/**')));
+                return {
+                    get: <T>(key: string, defaultValue: T) => key === 'exclude' && section ? values[section] as T : defaultValue,
+                } as vscode.WorkspaceConfiguration;
+            });
+            const cancellationToken = makeCancellationToken();
+
+            await findConfiguredAppHostPaths(makeWorkspaceFolder(buildPath('workspace')), cancellationToken);
+
+            for (const call of findFilesStub.getCalls()) {
+                const excludePattern = String(call.args[1]);
+                assert.ok(excludePattern.includes('**/.worktrees/**'));
+                assert.ok(excludePattern.includes('**/.claude/**'));
+                assert.ok(excludePattern.includes('**/private-checkouts/**'));
+                assert.ok(excludePattern.includes('**/scratch-worktrees/**'));
+                assert.ok(!excludePattern.includes('**/generated-but-enabled/**'));
+                assert.strictEqual(call.args[2], 512);
+                assert.strictEqual(call.args[3], cancellationToken);
+            }
         });
 
         test('selects configured path from recursive config during service discovery', async () => {
@@ -539,6 +568,13 @@ function makeTerminalProvider(): AspireTerminalProvider {
         getAspireCliExecutablePath: async () => 'aspire',
         createEnvironment: () => ({}),
     } as unknown as AspireTerminalProvider;
+}
+
+function makeCancellationToken(): vscode.CancellationToken {
+    return {
+        isCancellationRequested: false,
+        onCancellationRequested: () => ({ dispose: () => { } }),
+    };
 }
 
 async function waitForMicrotasks(): Promise<void> {

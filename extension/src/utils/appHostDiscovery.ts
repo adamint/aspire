@@ -8,6 +8,7 @@ import { aspireConfigFileName, getAppHostPathFromConfig, readJsonFile } from './
 import { EnvironmentVariables } from './environment';
 import { extensionLogOutputChannel } from './logging';
 import { getAppHostDiscoveryTimeoutMs } from './settings';
+import { appHostDiscoveryFindFilesMaxResults, getAppHostDiscoveryExcludeGlob, isExcludedDiscoveryUri } from './workspaceFileSearch';
 
 // Mirrors the `aspire ls --format json` candidate shape documented in
 // docs/specs/cli-output-formats.md. Older CLI fallback results are adapted into
@@ -37,12 +38,13 @@ interface LegacyAppHostProjectSearchResult {
     all_project_file_candidates: string[];
 }
 
-const discoveryExcludePattern = '{**/artifacts/**,**/[Bb]in/**,**/[Oo]bj/**,**/node_modules/**,**/.git/**,**/.vs/**,**/.vscode-test/**,**/.worktrees/**,**/.idea/**,**/.aspire/modules/**}';
-
 export class AppHostDiscoveryService implements vscode.Disposable {
+    private static readonly _candidateChangeDebounceMs = 250;
+
     private readonly _onDidChangeCandidates = new vscode.EventEmitter<vscode.WorkspaceFolder>();
     private readonly _cache = new Map<string, Promise<CandidateAppHostDisplayInfo[]>>();
     private readonly _watchers = new Map<string, vscode.Disposable[]>();
+    private readonly _pendingInvalidationTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private readonly _activeCliProcesses = new Set<ChildProcessWithoutNullStreams>();
     private readonly _cancelActiveCliProcesses = new Set<(error: Error) => void>();
     private _disposed = false;
@@ -51,7 +53,7 @@ export class AppHostDiscoveryService implements vscode.Disposable {
     constructor(private readonly _terminalProvider: AspireTerminalProvider) {
     }
 
-    async discover(workspaceFolder: vscode.WorkspaceFolder, forceRefresh = false): Promise<CandidateAppHostDisplayInfo[]> {
+    async discover(workspaceFolder: vscode.WorkspaceFolder, forceRefresh = false, cancellationToken?: vscode.CancellationToken): Promise<CandidateAppHostDisplayInfo[]> {
         this._throwIfDisposed();
 
         const key = path.resolve(workspaceFolder.uri.fsPath);
@@ -63,8 +65,8 @@ export class AppHostDiscoveryService implements vscode.Disposable {
 
         let resultPromise = this._cache.get(key);
         if (!resultPromise) {
-            resultPromise = this._discoverCore(workspaceFolder)
-                .then(candidates => this._includeConfiguredAppHostCandidate(workspaceFolder, candidates))
+            resultPromise = this._discoverCore(workspaceFolder, cancellationToken)
+                .then(candidates => this._includeConfiguredAppHostCandidate(workspaceFolder, candidates, cancellationToken))
                 .catch(error => {
                     this._cache.delete(key);
                     throw error;
@@ -105,6 +107,10 @@ export class AppHostDiscoveryService implements vscode.Disposable {
         }
         this._watchers.clear();
         this._cache.clear();
+        for (const timer of this._pendingInvalidationTimers.values()) {
+            clearTimeout(timer);
+        }
+        this._pendingInvalidationTimers.clear();
         for (const cancel of [...this._cancelActiveCliProcesses]) {
             cancel(new Error('AppHost discovery service was disposed.'));
         }
@@ -113,25 +119,27 @@ export class AppHostDiscoveryService implements vscode.Disposable {
         this._onDidChangeCandidates.dispose();
     }
 
-    private async _discoverCore(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
+    private async _discoverCore(workspaceFolder: vscode.WorkspaceFolder, cancellationToken?: vscode.CancellationToken): Promise<CandidateAppHostDisplayInfo[]> {
         try {
-            const appHosts = await this._discoverWithLs(workspaceFolder);
+            const appHosts = await this._discoverWithLs(workspaceFolder, cancellationToken);
             extensionLogOutputChannel.info(`Discovered ${appHosts.length} AppHost candidate(s) via aspire ls`);
             return appHosts;
         }
         catch (error) {
             this._throwIfDisposed();
+            throwIfCancellationRequested(cancellationToken);
             extensionLogOutputChannel.warn(`aspire ls discovery failed, falling back to aspire extension get-apphosts: ${formatErrorMessage(error)}`);
             try {
-                const appHosts = await this._discoverWithLegacyGetAppHosts(workspaceFolder);
+                const appHosts = await this._discoverWithLegacyGetAppHosts(workspaceFolder, cancellationToken);
                 extensionLogOutputChannel.info(`Discovered ${appHosts.length} AppHost candidate(s) via aspire extension get-apphosts`);
                 return appHosts;
             }
             catch (fallbackError) {
                 this._throwIfDisposed();
+                throwIfCancellationRequested(cancellationToken);
                 let fileFallbackError: unknown;
                 try {
-                    const appHosts = await discoverCSharpAppHostProjectsFromWorkspaceFiles(workspaceFolder);
+                    const appHosts = await discoverCSharpAppHostProjectsFromWorkspaceFiles(workspaceFolder, cancellationToken);
                     if (appHosts.length > 0) {
                         extensionLogOutputChannel.warn(`CLI AppHost discovery failed; using ${appHosts.length} C# AppHost project candidate(s) found in the workspace.`);
                         return appHosts;
@@ -149,8 +157,9 @@ export class AppHostDiscoveryService implements vscode.Disposable {
         }
     }
 
-    private async _discoverWithLs(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
+    private async _discoverWithLs(workspaceFolder: vscode.WorkspaceFolder, cancellationToken?: vscode.CancellationToken): Promise<CandidateAppHostDisplayInfo[]> {
         this._throwIfDisposed();
+        throwIfCancellationRequested(cancellationToken);
 
         const cliPath = await this._terminalProvider.getAspireCliExecutablePath();
         const args = ['ls', '--format', 'json'];
@@ -158,12 +167,13 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             args.push('--cli-wait-for-debugger');
         }
 
-        const output = await this._runCliForStdout(cliPath, args, workspaceFolder.uri.fsPath);
+        const output = await this._runCliForStdout(cliPath, args, workspaceFolder.uri.fsPath, cancellationToken);
         return parseCandidateOutput(output, 'aspire ls');
     }
 
-    private async _discoverWithLegacyGetAppHosts(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
+    private async _discoverWithLegacyGetAppHosts(workspaceFolder: vscode.WorkspaceFolder, cancellationToken?: vscode.CancellationToken): Promise<CandidateAppHostDisplayInfo[]> {
         this._throwIfDisposed();
+        throwIfCancellationRequested(cancellationToken);
 
         const cliPath = await this._terminalProvider.getAspireCliExecutablePath();
         const args = ['extension', 'get-apphosts'];
@@ -171,7 +181,7 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             args.push('--cli-wait-for-debugger');
         }
 
-        const output = await this._runCliForStdout(cliPath, args, workspaceFolder.uri.fsPath);
+        const output = await this._runCliForStdout(cliPath, args, workspaceFolder.uri.fsPath, cancellationToken);
         const parsed = parseLegacyGetAppHostsOutput(output);
         return toCandidatesFromLegacySearchResult(parsed);
     }
@@ -186,8 +196,21 @@ export class AppHostDiscoveryService implements vscode.Disposable {
                 return;
             }
 
-            this._cache.delete(key);
-            this._onDidChangeCandidates.fire(workspaceFolder);
+            const existingTimer = this._pendingInvalidationTimers.get(key);
+            if (existingTimer) {
+                clearTimeout(existingTimer);
+            }
+
+            const timer = setTimeout(() => {
+                this._pendingInvalidationTimers.delete(key);
+                if (this._disposed) {
+                    return;
+                }
+
+                this._cache.delete(key);
+                this._onDidChangeCandidates.fire(workspaceFolder);
+            }, AppHostDiscoveryService._candidateChangeDebounceMs);
+            this._pendingInvalidationTimers.set(key, timer);
         };
         const patterns = [
             '**/*.csproj',
@@ -218,12 +241,12 @@ export class AppHostDiscoveryService implements vscode.Disposable {
         }
     }
 
-    private async _includeConfiguredAppHostCandidate(workspaceFolder: vscode.WorkspaceFolder, candidates: CandidateAppHostDisplayInfo[]): Promise<CandidateAppHostDisplayInfo[]> {
+    private async _includeConfiguredAppHostCandidate(workspaceFolder: vscode.WorkspaceFolder, candidates: CandidateAppHostDisplayInfo[], cancellationToken?: vscode.CancellationToken): Promise<CandidateAppHostDisplayInfo[]> {
         if (candidates.some(candidate => candidate.selected)) {
             return candidates;
         }
 
-        const configuredPaths = await findConfiguredAppHostPaths(workspaceFolder);
+        const configuredPaths = await findConfiguredAppHostPaths(workspaceFolder, cancellationToken);
         const configuredPath = configuredPaths.find(configuredPath => candidates.some(candidate => isSamePath(candidate.path, configuredPath)))
             ?? configuredPaths[0];
         if (!configuredPath) {
@@ -249,15 +272,17 @@ export class AppHostDiscoveryService implements vscode.Disposable {
         ];
     }
 
-    private _runCliForStdout(cliPath: string, args: string[], workingDirectory: string): Promise<string> {
+    private _runCliForStdout(cliPath: string, args: string[], workingDirectory: string, cancellationToken?: vscode.CancellationToken): Promise<string> {
         return new Promise((resolve, reject) => {
             this._throwIfDisposed();
+            throwIfCancellationRequested(cancellationToken);
 
             let stdout = '';
             let stderr = '';
             let settled = false;
             let childProcess: ChildProcessWithoutNullStreams | undefined;
             let timeout: ReturnType<typeof setTimeout> | undefined;
+            let cancellationDisposable: vscode.Disposable | undefined;
             const cancel = (error: Error) => {
                 if (childProcess && !childProcess.killed) {
                     try {
@@ -281,6 +306,8 @@ export class AppHostDiscoveryService implements vscode.Disposable {
                     this._activeCliProcesses.delete(childProcess);
                 }
                 this._cancelActiveCliProcesses.delete(cancel);
+                cancellationDisposable?.dispose();
+                cancellationDisposable = undefined;
             };
             const settle = (complete: () => void) => {
                 if (settled) {
@@ -293,6 +320,13 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             };
 
             this._cancelActiveCliProcesses.add(cancel);
+            cancellationDisposable = cancellationToken?.onCancellationRequested(() => {
+                cancel(new Error('AppHost discovery was cancelled.'));
+            });
+            if (settled) {
+                return;
+            }
+
             try {
                 childProcess = spawnCliProcess(this._terminalProvider, cliPath, args, {
                     noExtensionVariables: true,
@@ -425,13 +459,14 @@ export async function selectWorkspaceAppHostPath(workspaceFolder: vscode.Workspa
     return candidates.length === 1 ? candidates[0].path : undefined;
 }
 
-export async function findConfiguredAppHostPaths(workspaceFolder: vscode.WorkspaceFolder): Promise<string[]> {
+export async function findConfiguredAppHostPaths(workspaceFolder: vscode.WorkspaceFolder, cancellationToken?: vscode.CancellationToken): Promise<string[]> {
     let newConfigFiles: vscode.Uri[];
     let legacySettingsFiles: vscode.Uri[];
     try {
+        const excludePattern = getAppHostDiscoveryExcludeGlob();
         [newConfigFiles, legacySettingsFiles] = await Promise.all([
-            vscode.workspace.findFiles(new vscode.RelativePattern(workspaceFolder, `**/${aspireConfigFileName}`), discoveryExcludePattern),
-            vscode.workspace.findFiles(new vscode.RelativePattern(workspaceFolder, '**/.aspire/settings.json'), discoveryExcludePattern),
+            vscode.workspace.findFiles(new vscode.RelativePattern(workspaceFolder, `**/${aspireConfigFileName}`), excludePattern, appHostDiscoveryFindFilesMaxResults, cancellationToken),
+            vscode.workspace.findFiles(new vscode.RelativePattern(workspaceFolder, '**/.aspire/settings.json'), excludePattern, appHostDiscoveryFindFilesMaxResults, cancellationToken),
         ]);
     }
     catch (error) {
@@ -459,28 +494,6 @@ export async function findConfiguredAppHostPaths(workspaceFolder: vscode.Workspa
     }
 
     return configuredPaths;
-}
-
-function isExcludedDiscoveryUri(workspaceFolder: vscode.WorkspaceFolder, uri: vscode.Uri): boolean {
-    const relativePath = path.relative(workspaceFolder.uri.fsPath, uri.fsPath);
-    if (relativePath === '' || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
-        return true;
-    }
-
-    const segments = relativePath.split(/[\\/]+/);
-    return segments.some((segment, index) => {
-        const lowerSegment = segment.toLowerCase();
-        return lowerSegment === 'artifacts'
-            || lowerSegment === 'bin'
-            || lowerSegment === 'obj'
-            || lowerSegment === 'node_modules'
-            || lowerSegment === '.git'
-            || lowerSegment === '.vs'
-            || lowerSegment === '.vscode-test'
-            || lowerSegment === '.worktrees'
-            || lowerSegment === '.idea'
-            || (lowerSegment === '.aspire' && segments[index + 1]?.toLowerCase() === 'modules');
-    });
 }
 
 function toAppHostCandidate(workspaceFolder: vscode.WorkspaceFolder, candidate: CandidateAppHostDisplayInfo): AppHostCandidate {
@@ -541,8 +554,8 @@ function parseCandidateOutput(output: string, commandName: string): CandidateApp
     throw new Error(`${commandName} returned an unexpected output shape.`);
 }
 
-async function discoverCSharpAppHostProjectsFromWorkspaceFiles(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
-    const projectUris = await vscode.workspace.findFiles(new vscode.RelativePattern(workspaceFolder, '**/*.csproj'), discoveryExcludePattern);
+async function discoverCSharpAppHostProjectsFromWorkspaceFiles(workspaceFolder: vscode.WorkspaceFolder, cancellationToken?: vscode.CancellationToken): Promise<CandidateAppHostDisplayInfo[]> {
+    const projectUris = await vscode.workspace.findFiles(new vscode.RelativePattern(workspaceFolder, '**/*.csproj'), getAppHostDiscoveryExcludeGlob(), appHostDiscoveryFindFilesMaxResults, cancellationToken);
     const candidates: CandidateAppHostDisplayInfo[] = [];
     for (const uri of projectUris.sort((left, right) => left.fsPath.localeCompare(right.fsPath))) {
         let projectContents: string;
@@ -603,6 +616,12 @@ function isLsCandidate(obj: unknown): obj is CandidateAppHostDisplayInfo {
 
 function formatErrorMessage(error: unknown): string {
     return error instanceof Error ? error.message : String(error);
+}
+
+function throwIfCancellationRequested(cancellationToken?: vscode.CancellationToken): void {
+    if (cancellationToken?.isCancellationRequested) {
+        throw new Error('AppHost discovery was cancelled.');
+    }
 }
 
 function isLegacyAppHostProjectSearchResult(obj: unknown): obj is LegacyAppHostProjectSearchResult {
