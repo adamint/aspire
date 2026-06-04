@@ -116,6 +116,10 @@ function matchesSafeWorkspaceExcludePattern(relativePath: string, pattern: strin
     // The second form excludes the directory in VS Code, so watcher events under that
     // directory need to match against ancestor paths too.
     const regex = safeGlobToRegExp(pattern.replace(/\\/g, '/'));
+    if (regex === null) {
+        return false;
+    }
+
     return getPathAndAncestorPaths(relativePath).some(candidate => regex.test(candidate));
 }
 
@@ -128,7 +132,7 @@ function getPathAndAncestorPaths(relativePath: string): string[] {
     return candidates;
 }
 
-function safeGlobToRegExp(pattern: string): RegExp {
+function safeGlobToRegExp(pattern: string): RegExp | null {
     let expression = '^';
     for (let i = 0; i < pattern.length;) {
         const char = pattern[i];
@@ -163,7 +167,15 @@ function safeGlobToRegExp(pattern: string): RegExp {
         }
     }
 
-    return new RegExp(`${expression}$`);
+    try {
+        return new RegExp(`${expression}$`);
+    } catch (error) {
+        if (error instanceof SyntaxError) {
+            return null;
+        }
+
+        throw error;
+    }
 }
 
 function escapeRegExp(value: string): string {
@@ -174,5 +186,5 @@ function toRegexCharacterClass(value: string): string {
     const negated = value[0] === '!' || value[0] === '^';
     const content = negated ? value.substring(1) : value;
     const escapedContent = content.replace(/\\/g, '\\\\').replace(/\]/g, '\\]');
-    return `[${negated ? '^' : ''}${escapedContent}]`;
+    return `[${negated ? '^/' : ''}${escapedContent}]`;
 }

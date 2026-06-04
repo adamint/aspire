@@ -280,6 +280,80 @@ suite('AppHost discovery', () => {
             }
         });
 
+        test('malformed bracket user exclude patterns do not break watcher invalidation', async () => {
+            const watcherCallbacks = stubFileSystemWatchers(sandbox);
+            const clock = sandbox.useFakeTimers();
+            sandbox.stub(vscode.workspace, 'getConfiguration').callsFake((section?: string) => ({
+                get: () => section === 'files'
+                    ? { '**/[z-a]/**': true }
+                    : {},
+            } as unknown as vscode.WorkspaceConfiguration));
+            const spawnStub = sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, options) => {
+                options?.stdoutCallback?.('[]');
+                options?.exitCallback?.(0);
+                return { kill: () => { } } as any;
+            });
+            const service = new AppHostDiscoveryService(makeTerminalProvider());
+            const workspaceFolder = makeWorkspaceFolder(buildPath('workspace'));
+            let changeCount = 0;
+            const subscription = service.onDidChangeCandidates(() => {
+                changeCount++;
+            });
+
+            try {
+                await service.discover(workspaceFolder);
+                assert.strictEqual(spawnStub.callCount, 1);
+
+                watcherCallbacks[0](vscode.Uri.file(buildPath('workspace', 'AppHost', 'AppHost.csproj')));
+                await clock.tickAsync(250);
+
+                assert.strictEqual(changeCount, 1);
+                await service.discover(workspaceFolder);
+                assert.strictEqual(spawnStub.callCount, 2);
+            }
+            finally {
+                subscription.dispose();
+                service.dispose();
+            }
+        });
+
+        test('negated bracket user exclude patterns do not match path separators', async () => {
+            const watcherCallbacks = stubFileSystemWatchers(sandbox);
+            const clock = sandbox.useFakeTimers();
+            sandbox.stub(vscode.workspace, 'getConfiguration').callsFake((section?: string) => ({
+                get: () => section === 'files'
+                    ? { '**[!x]AppHost.csproj': true }
+                    : {},
+            } as unknown as vscode.WorkspaceConfiguration));
+            const spawnStub = sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, options) => {
+                options?.stdoutCallback?.('[]');
+                options?.exitCallback?.(0);
+                return { kill: () => { } } as any;
+            });
+            const service = new AppHostDiscoveryService(makeTerminalProvider());
+            const workspaceFolder = makeWorkspaceFolder(buildPath('workspace'));
+            let changeCount = 0;
+            const subscription = service.onDidChangeCandidates(() => {
+                changeCount++;
+            });
+
+            try {
+                await service.discover(workspaceFolder);
+                assert.strictEqual(spawnStub.callCount, 1);
+
+                watcherCallbacks[0](vscode.Uri.file(buildPath('workspace', 'x', 'AppHost.csproj')));
+                await clock.tickAsync(250);
+
+                assert.strictEqual(changeCount, 1);
+                await service.discover(workspaceFolder);
+                assert.strictEqual(spawnStub.callCount, 2);
+            }
+            finally {
+                subscription.dispose();
+                service.dispose();
+            }
+        });
+
         test('kills in-flight CLI process when disposed', async () => {
             stubFileSystemWatchers(sandbox);
             const childProcess = {
