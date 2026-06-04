@@ -196,9 +196,13 @@ public sealed class NpmCliPackageTests
         Assert.DoesNotContain("artifact: npm-validation-summary-win-x64", releasePipeline);
         Assert.DoesNotContain("artifact: npm-validation-summary-linux-x64", releasePipeline);
         Assert.DoesNotContain("artifact: npm-validation-summary-osx", releasePipeline);
-        Assert.Contains("$(NPM_VALIDATION_SUMMARY_WIN_X64_ARTIFACT)", releasePipeline);
-        Assert.Contains("$(NPM_VALIDATION_SUMMARY_LINUX_X64_ARTIFACT)", releasePipeline);
-        Assert.Contains("$(NPM_VALIDATION_SUMMARY_OSX_ARTIFACT)", releasePipeline);
+        Assert.DoesNotContain("artifact: $(NPM_VALIDATION_SUMMARY", releasePipeline);
+        Assert.Equal(3, CountOccurrences(releasePipeline, "task: DownloadBuildArtifacts@1"));
+        Assert.Equal(3, CountOccurrences(releasePipeline, "buildId: $(resources.pipeline.aspire-build.runID)"));
+        Assert.Equal(3, CountOccurrences(releasePipeline, "downloadPath: '$(Pipeline.Workspace)/aspire-build'"));
+        Assert.Contains("artifactName: $(NPM_VALIDATION_SUMMARY_WIN_X64_ARTIFACT)", releasePipeline);
+        Assert.Contains("artifactName: $(NPM_VALIDATION_SUMMARY_LINUX_X64_ARTIFACT)", releasePipeline);
+        Assert.Contains("artifactName: $(NPM_VALIDATION_SUMMARY_OSX_ARTIFACT)", releasePipeline);
     }
 
     [Fact]

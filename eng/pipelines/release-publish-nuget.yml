@@ -355,17 +355,44 @@ extends:
                     **/microsoft-aspire-cli*.tgz
                     **/microsoft-aspire-cli*.tgz.sig
 
-                - download: aspire-build
+                - task: DownloadBuildArtifacts@1
                   displayName: 'Download npm validation summary from Source Build (win-x64)'
-                  artifact: $(NPM_VALIDATION_SUMMARY_WIN_X64_ARTIFACT)
+                  inputs:
+                    buildType: specific
+                    project: internal
+                    pipeline: microsoft-aspire
+                    buildVersionToDownload: specific
+                    buildId: $(resources.pipeline.aspire-build.runID)
+                    downloadType: single
+                    artifactName: $(NPM_VALIDATION_SUMMARY_WIN_X64_ARTIFACT)
+                    downloadPath: '$(Pipeline.Workspace)/aspire-build'
+                    checkDownloadedFiles: true
 
-                - download: aspire-build
+                - task: DownloadBuildArtifacts@1
                   displayName: 'Download npm validation summary from Source Build (linux-x64)'
-                  artifact: $(NPM_VALIDATION_SUMMARY_LINUX_X64_ARTIFACT)
+                  inputs:
+                    buildType: specific
+                    project: internal
+                    pipeline: microsoft-aspire
+                    buildVersionToDownload: specific
+                    buildId: $(resources.pipeline.aspire-build.runID)
+                    downloadType: single
+                    artifactName: $(NPM_VALIDATION_SUMMARY_LINUX_X64_ARTIFACT)
+                    downloadPath: '$(Pipeline.Workspace)/aspire-build'
+                    checkDownloadedFiles: true
 
-                - download: aspire-build
+                - task: DownloadBuildArtifacts@1
                   displayName: 'Download npm validation summary from Source Build (macOS)'
-                  artifact: $(NPM_VALIDATION_SUMMARY_OSX_ARTIFACT)
+                  inputs:
+                    buildType: specific
+                    project: internal
+                    pipeline: microsoft-aspire
+                    buildVersionToDownload: specific
+                    buildId: $(resources.pipeline.aspire-build.runID)
+                    downloadType: single
+                    artifactName: $(NPM_VALIDATION_SUMMARY_OSX_ARTIFACT)
+                    downloadPath: '$(Pipeline.Workspace)/aspire-build'
+                    checkDownloadedFiles: true
 
               - ${{ if eq(parameters.SkipWinGetPublish, false) }}:
                 - download: aspire-build
