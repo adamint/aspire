@@ -419,6 +419,9 @@ export class AppHostDataRepository {
     private _fetchWorkspaceAppHost(options?: { forceRefresh?: boolean }): void {
         if (this._workspaceAppHostDiscoveryInProgress) {
             this._workspaceAppHostDiscoveryRefreshQueued = true;
+            // Let the current discovery finish so we don't start overlapping CLI work, but
+            // prevent its now-stale result from briefly restoring old AppHost candidates.
+            this._workspaceAppHostDiscoveryVersion++;
             return;
         }
 

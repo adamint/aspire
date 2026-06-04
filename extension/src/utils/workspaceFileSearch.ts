@@ -145,6 +145,15 @@ function safeGlobToRegExp(pattern: string): RegExp {
                 expression += '[^/]*';
                 i++;
             }
+        } else if (char === '[') {
+            const closingBracketIndex = pattern.indexOf(']', i + 1);
+            if (closingBracketIndex > i + 1) {
+                expression += toRegexCharacterClass(pattern.substring(i + 1, closingBracketIndex));
+                i = closingBracketIndex + 1;
+            } else {
+                expression += escapeRegExp(char);
+                i++;
+            }
         } else if (char === '?') {
             expression += '[^/]';
             i++;
@@ -159,4 +168,11 @@ function safeGlobToRegExp(pattern: string): RegExp {
 
 function escapeRegExp(value: string): string {
     return value.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
+}
+
+function toRegexCharacterClass(value: string): string {
+    const negated = value[0] === '!' || value[0] === '^';
+    const content = negated ? value.substring(1) : value;
+    const escapedContent = content.replace(/\\/g, '\\\\').replace(/\]/g, '\\]');
+    return `[${negated ? '^' : ''}${escapedContent}]`;
 }
