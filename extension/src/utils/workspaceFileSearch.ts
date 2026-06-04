@@ -90,9 +90,16 @@ function getEnabledWorkspaceExcludePatterns(): string[] {
 function getEnabledExcludePatterns(excludes: Record<string, unknown>): string[] {
     return Object.entries(excludes)
         .filter(([, value]) => isExcludeEnabled(value))
+        // VS Code's glob parser doesn't support nested brace expressions. Since we combine
+        // patterns into one outer brace group, skip user patterns that would split it incorrectly.
+        .filter(([pattern]) => canComposeIntoBraceGlob(pattern))
         .map(([pattern]) => pattern);
 }
 
 function isExcludeEnabled(value: unknown): boolean {
     return value === true;
+}
+
+function canComposeIntoBraceGlob(pattern: string): boolean {
+    return !/[{},]/.test(pattern);
 }
