@@ -1,15 +1,19 @@
 import * as assert from 'assert';
+import * as childProcess from 'child_process';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import * as cliModule from '../debugger/languages/cli';
+import * as cliPathModule from '../utils/cliPath';
 import * as configInfoProvider from '../utils/configInfoProvider';
 import { AppHostDataRepository, shortenPath, shortenPaths } from '../views/AppHostDataRepository';
 import { AspireAppHostTreeProvider, getResourceContextValue, getResourceIcon, getResourceCommandIcon, resolveAppHostSourcePath, buildResourceDescription } from '../views/AspireAppHostTreeProvider';
 import type { AppHostDisplayInfo, ResourceJson, ViewMode } from '../views/AppHostDataRepository';
 import { ResourceState, HealthStatus, StateStyle } from '../editor/resourceConstants';
-import type { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
-import { quoteShellArg } from '../utils/AspireTerminalProvider';
+import type { AspireSubcommand } from '../utils/AspireTerminalProvider';
+import { AspireTerminalProvider, shellArg } from '../utils/AspireTerminalProvider';
 import { AppHostLaunchService } from '../services/AppHostLaunchService';
 
 function makeResource(overrides: Partial<ResourceJson> = {}): ResourceJson {
@@ -114,6 +118,75 @@ function makeWorkspaceTreeProvider(workspaceAppHostDescription: string): AspireA
     } as unknown as AppHostDataRepository;
 
     return new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+}
+
+interface ShellProof {
+    readonly directory: string;
+    readonly cliPath: string;
+    readonly appHostMarkerPath: string;
+    readonly resourceMarkerPath: string;
+    run(commandLine: string, expectedArgs: readonly string[]): void;
+    dispose(): void;
+}
+
+function createShellProof(): ShellProof {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-tree-rce-proof-'));
+    const cliPath = path.join(directory, 'aspire');
+    const argvPath = path.join(directory, 'argv.txt');
+    const appHostMarkerPath = path.join(directory, 'apphost-pwned');
+    const resourceMarkerPath = path.join(directory, 'resource-pwned');
+
+    fs.writeFileSync(cliPath, '#!/bin/sh\nprintf "%s\\n" "$@" > "$PROOF_ARGV"\n');
+    fs.chmodSync(cliPath, 0o700);
+
+    return {
+        directory,
+        cliPath,
+        appHostMarkerPath,
+        resourceMarkerPath,
+        run(commandLine: string, expectedArgs: readonly string[]): void {
+            childProcess.execFileSync('/bin/sh', ['-c', commandLine], {
+                env: { ...process.env, PROOF_ARGV: argvPath },
+                stdio: 'ignore',
+            });
+
+            const actualArgs = fs.readFileSync(argvPath, 'utf8').trimEnd().split('\n');
+            assert.deepStrictEqual(actualArgs, expectedArgs);
+            assert.strictEqual(fs.existsSync(appHostMarkerPath), false, 'AppHost path payload should not execute');
+            assert.strictEqual(fs.existsSync(resourceMarkerPath), false, 'resource payload should not execute');
+        },
+        dispose(): void {
+            fs.rmSync(directory, { recursive: true, force: true });
+        },
+    };
+}
+
+function makeProofTerminalProvider(sandbox: sinon.SinonSandbox, proof: ShellProof, commandLines: string[]): { terminalProvider: AspireTerminalProvider; dispose: () => void } {
+    const subscriptions: vscode.Disposable[] = [];
+    const terminalProvider = new AspireTerminalProvider(subscriptions);
+    sandbox.stub(cliPathModule, 'resolveCliPath').resolves({ cliPath: proof.cliPath, available: true, source: 'configured' });
+    sandbox.stub(terminalProvider, 'isCliDebugLoggingEnabled').returns(false);
+    sandbox.stub(terminalProvider, 'getAspireTerminal').returns({
+        terminal: {
+            shellIntegration: {
+                executeCommand: (commandLine: string) => {
+                    commandLines.push(commandLine);
+                    return {} as vscode.TerminalShellExecution;
+                }
+            },
+            sendText: () => assert.fail('expected shell integration to execute the command'),
+            show: () => { }
+        } as unknown as vscode.Terminal,
+        dispose: () => { },
+    });
+
+    return {
+        terminalProvider,
+        dispose: () => {
+            terminalProvider.dispose();
+            subscriptions.forEach(subscription => subscription.dispose());
+        },
+    };
 }
 
 async function flushPromises(): Promise<void> {
@@ -287,7 +360,7 @@ suite('AspireAppHostTreeProvider', () => {
     });
 
     test('global AppHost shows stopping state immediately after stop command', () => {
-        const commands: string[] = [];
+        const commands: AspireSubcommand[] = [];
         const appHostPath = path.resolve('workspace', 'apps', 'Store', 'AppHost.csproj');
         const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
         const repository = {
@@ -303,7 +376,7 @@ suite('AspireAppHostTreeProvider', () => {
         const terminalProvider = {
             getAspireCliExecutablePath: async () => 'aspire',
             createEnvironment: () => ({}),
-            sendAspireCommandToAspireTerminal: (command: string) => commands.push(command),
+            sendAspireCommandToAspireTerminal: (command: AspireSubcommand) => commands.push(command),
         } as unknown as AspireTerminalProvider;
         const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService());
         const [item] = provider.getChildren();
@@ -314,12 +387,12 @@ suite('AspireAppHostTreeProvider', () => {
         assert.strictEqual(stoppingItem.contextValue, 'appHost:stopping');
         assert.strictEqual(stoppingItem.description, 'Stopping...');
         assert.strictEqual((stoppingItem.iconPath as vscode.ThemeIcon).id, 'loading~spin');
-        assert.deepStrictEqual(commands, [`stop --apphost ${quoteShellArg(appHostPath)}`]);
+        assert.deepStrictEqual(commands, [['stop', '--apphost', shellArg(appHostPath)]]);
         provider.dispose();
     });
 
     test('workspace AppHost shows stopping state immediately after stop command', () => {
-        const commands: string[] = [];
+        const commands: AspireSubcommand[] = [];
         const appHostPath = path.resolve('workspace', 'apps', 'Store', 'AppHost.csproj');
         const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
         const repository = {
@@ -336,7 +409,7 @@ suite('AspireAppHostTreeProvider', () => {
         const terminalProvider = {
             getAspireCliExecutablePath: async () => 'aspire',
             createEnvironment: () => ({}),
-            sendAspireCommandToAspireTerminal: (command: string) => commands.push(command),
+            sendAspireCommandToAspireTerminal: (command: AspireSubcommand) => commands.push(command),
         } as unknown as AspireTerminalProvider;
         const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService());
         const [item] = provider.getChildren();
@@ -347,12 +420,12 @@ suite('AspireAppHostTreeProvider', () => {
         assert.strictEqual(stoppingItem.contextValue, 'workspaceResources:stopping');
         assert.strictEqual(stoppingItem.description, 'Stopping...');
         assert.strictEqual((stoppingItem.iconPath as vscode.ThemeIcon).id, 'loading~spin');
-        assert.deepStrictEqual(commands, [`stop --apphost ${quoteShellArg(appHostPath)}`]);
+        assert.deepStrictEqual(commands, [['stop', '--apphost', shellArg(appHostPath)]]);
         provider.dispose();
     });
 
     test('workspace AppHost candidate shows stopping state immediately after stop command', () => {
-        const commands: string[] = [];
+        const commands: AspireSubcommand[] = [];
         const appHostPath = path.resolve('workspace', 'apps', 'Store', 'AppHost.csproj');
         const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
         const repository = {
@@ -369,7 +442,7 @@ suite('AspireAppHostTreeProvider', () => {
         const terminalProvider = {
             getAspireCliExecutablePath: async () => 'aspire',
             createEnvironment: () => ({}),
-            sendAspireCommandToAspireTerminal: (command: string) => commands.push(command),
+            sendAspireCommandToAspireTerminal: (command: AspireSubcommand) => commands.push(command),
         } as unknown as AspireTerminalProvider;
         const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService());
         const [groupItem] = provider.getChildren();
@@ -382,8 +455,53 @@ suite('AspireAppHostTreeProvider', () => {
         assert.strictEqual(stoppingItem.contextValue, 'workspaceAppHostStopping');
         assert.strictEqual(stoppingItem.description, 'Stopping...');
         assert.strictEqual((stoppingItem.iconPath as vscode.ThemeIcon).id, 'loading~spin');
-        assert.deepStrictEqual(commands, [`stop --apphost ${quoteShellArg(appHostPath)}`]);
+        assert.deepStrictEqual(commands, [['stop', '--apphost', shellArg(appHostPath)]]);
         provider.dispose();
+    });
+
+    test('workspace tree terminal actions pass hostile paths as inert shell arguments', async function () {
+        if (process.platform === 'win32') {
+            this.skip();
+        }
+
+        const proof = createShellProof();
+        const commandLines: string[] = [];
+        const proofTerminalProvider = makeProofTerminalProvider(sandbox, proof, commandLines);
+        const appHostPath = path.join(proof.directory, 'workspace') + `'; touch ${proof.appHostMarkerPath} #/$(whoami)/"bad"/AppHost.csproj`;
+        const resourceName = `cache'; touch ${proof.resourceMarkerPath} #`;
+        const resource = makeResource({ name: resourceName, displayName: resourceName });
+        const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+        const repository = {
+            viewMode: 'workspace' as ViewMode,
+            appHosts: [],
+            workspaceResources: [resource],
+            workspaceAppHost: makeAppHost({ appHostPath, resources: [resource] }),
+            workspaceAppHostPath: appHostPath,
+            workspaceAppHostCandidatePaths: [appHostPath],
+            workspaceAppHostName: 'AppHost.csproj',
+            workspaceAppHostDescription: undefined,
+            onDidChangeData,
+        } as unknown as AppHostDataRepository;
+        const provider = new AspireAppHostTreeProvider(repository, proofTerminalProvider.terminalProvider, makeLaunchService());
+
+        try {
+            const [workspaceItem] = provider.getChildren();
+            const [resourceItem] = provider.getChildren(workspaceItem);
+
+            await provider.stopAppHost(workspaceItem as any);
+            proof.run(commandLines[0], ['stop', '--apphost', appHostPath]);
+
+            await provider.viewResourceLogs(resourceItem as any);
+            proof.run(commandLines[1], ['logs', resourceName, '--apphost', appHostPath]);
+
+            await provider.restartResource(resourceItem as any);
+            proof.run(commandLines[2], ['resource', resourceName, 'restart', '--apphost', appHostPath]);
+        }
+        finally {
+            provider.dispose();
+            proofTerminalProvider.dispose();
+            proof.dispose();
+        }
     });
 
     test('stopping state clears when AppHost leaves the running list', () => {
@@ -571,11 +689,11 @@ suite('AspireAppHostTreeProvider', () => {
     });
 
     test('legacy command item without state executes from context menu', async () => {
-        const sentCommands: string[] = [];
+        const sentCommands: AspireSubcommand[] = [];
         const terminalProvider = {
             getAspireCliExecutablePath: async () => 'aspire',
             createEnvironment: () => ({}),
-            sendAspireCommandToAspireTerminal: (command: string) => sentCommands.push(command),
+            sendAspireCommandToAspireTerminal: (command: AspireSubcommand) => sentCommands.push(command),
         } as unknown as AspireTerminalProvider;
         const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
         const repository = {
@@ -604,7 +722,7 @@ suite('AspireAppHostTreeProvider', () => {
         await provider.executeResourceCommandItem(commandItem as any);
 
         assert.strictEqual(infoStub.called, false);
-        assert.deepStrictEqual(sentCommands, [`resource ${quoteShellArg('my-service')} ${quoteShellArg('$(legacy)')} --apphost ${quoteShellArg('/test/AppHost.csproj')}`]);
+        assert.deepStrictEqual(sentCommands, [['resource', shellArg('my-service'), shellArg('$(legacy)'), '--apphost', shellArg('/test/AppHost.csproj')]]);
     });
 
     test('resource with commands is expandable even without URLs, health checks, or child resources', () => {
@@ -1478,7 +1596,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
     });
 
     test('workspace resource commands use the AppHost that owns the resource', () => {
-        const commands: string[] = [];
+        const commands: AspireSubcommand[] = [];
         const selectedHostPath = '/repo/apps/Store/AppHost.csproj';
         const otherHostPath = '/repo/samples/Store/AppHost.csproj';
         const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
@@ -1499,7 +1617,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         const terminalProvider = {
             getAspireCliExecutablePath: async () => 'aspire',
             createEnvironment: () => ({}),
-            sendAspireCommandToAspireTerminal: (command: string) => commands.push(command),
+            sendAspireCommandToAspireTerminal: (command: AspireSubcommand) => commands.push(command),
         } as unknown as AspireTerminalProvider;
         const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService());
 
@@ -1512,14 +1630,14 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         provider.restartResource(resourceItem as any);
 
         assert.deepStrictEqual(commands, [
-            `logs ${quoteShellArg('cache')} --apphost ${quoteShellArg(otherHostPath)}`,
-            `resource ${quoteShellArg('cache-b')} ${quoteShellArg('restart')} --apphost ${quoteShellArg(otherHostPath)}`,
+            ['logs', shellArg('cache'), '--apphost', shellArg(otherHostPath)],
+            ['resource', shellArg('cache-b'), shellArg('restart'), '--apphost', shellArg(otherHostPath)],
         ]);
         provider.dispose();
     });
 
     test('workspace resource commands use the running AppHost path when no workspace AppHost is selected', () => {
-        const commands: string[] = [];
+        const commands: AspireSubcommand[] = [];
         const runningHostPath = '/repo/apps/Store/AppHost.csproj';
         const idleHostPath = '/repo/samples/Store/AppHost.csproj';
         const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
@@ -1539,7 +1657,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         const terminalProvider = {
             getAspireCliExecutablePath: async () => 'aspire',
             createEnvironment: () => ({}),
-            sendAspireCommandToAspireTerminal: (command: string) => commands.push(command),
+            sendAspireCommandToAspireTerminal: (command: AspireSubcommand) => commands.push(command),
         } as unknown as AspireTerminalProvider;
         const provider = new AspireAppHostTreeProvider(repository, terminalProvider, makeLaunchService());
 
@@ -1551,8 +1669,8 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         provider.restartResource(resourceItem as any);
 
         assert.deepStrictEqual(commands, [
-            `logs ${quoteShellArg('cache')} --apphost ${quoteShellArg(runningHostPath)}`,
-            `resource ${quoteShellArg('cache')} ${quoteShellArg('restart')} --apphost ${quoteShellArg(runningHostPath)}`,
+            ['logs', shellArg('cache'), '--apphost', shellArg(runningHostPath)],
+            ['resource', shellArg('cache'), shellArg('restart'), '--apphost', shellArg(runningHostPath)],
         ]);
         provider.dispose();
     });

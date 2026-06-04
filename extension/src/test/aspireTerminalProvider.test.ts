@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
 import * as sinon from 'sinon';
-import { AspireTerminalProvider, quoteShellArg } from '../utils/AspireTerminalProvider';
+import { AspireTerminalProvider, quoteShellArg, shellArg } from '../utils/AspireTerminalProvider';
 import * as cliPathModule from '../utils/cliPath';
 import { EnvironmentVariables } from '../utils/environment';
 import { extensionLogOutputChannel } from '../utils/logging';
@@ -161,6 +161,40 @@ suite('AspireTerminalProvider tests', () => {
             }
             finally {
                 platformStub.restore();
+                getAspireTerminalStub.restore();
+            }
+        });
+
+        test('quotes structured subcommand arguments with shell metacharacters', async () => {
+            resolveCliPathStub.resolves({ cliPath: 'aspire', available: true, source: 'path' });
+            const appHostPath = `/workspace/'; touch /tmp/aspire-rce #/$(whoami)/"bad"/AppHost.csproj`;
+            let executedCommand: string | undefined;
+            const terminal = {
+                shellIntegration: {
+                    executeCommand: (commandLine: string) => {
+                        executedCommand = commandLine;
+                        return {} as vscode.TerminalShellExecution;
+                    }
+                },
+                sendText: () => { },
+                show: () => { }
+            } as unknown as vscode.Terminal;
+            const getAspireTerminalStub = sinon.stub(terminalProvider, 'getAspireTerminal').returns({
+                terminal,
+                dispose: () => { }
+            });
+
+            try {
+                await terminalProvider.sendAspireCommandToAspireTerminal(['stop', '--apphost', shellArg(appHostPath)]);
+
+                const expectedSubcommand = `stop --apphost ${quoteShellArg(appHostPath)}`;
+                const expectedCommand = process.platform === 'win32'
+                    ? `& "aspire" ${expectedSubcommand}`
+                    : `aspire ${expectedSubcommand}`;
+                assert.strictEqual(executedCommand, expectedCommand);
+                assert.strictEqual(executedCommand.includes(`--apphost ${appHostPath}`), false);
+            }
+            finally {
                 getAspireTerminalStub.restore();
             }
         });

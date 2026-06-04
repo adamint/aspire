@@ -23,6 +23,15 @@ export interface SendAspireCommandOptions {
     redactAdditionalArgs?: boolean;
 }
 
+// String parts are fixed CLI syntax. ShellArg parts are workspace/user data that
+// must be shell-quoted at the terminal boundary before interpolation.
+export interface ShellArg {
+    readonly quote: true;
+    readonly value: string;
+}
+
+export type AspireSubcommand = string | readonly (string | ShellArg)[];
+
 export interface AspireTerminalCommandEvent {
     subcommand: string;
     commandLine: string;
@@ -61,6 +70,10 @@ export function quoteShellArg(arg: string, platform: NodeJS.Platform = process.p
     }
 
     return `'${arg.replace(/'/g, "'\"'\"'")}'`;
+}
+
+export function shellArg(value: string): ShellArg {
+    return { quote: true, value };
 }
 
 export class AspireTerminalProvider implements vscode.Disposable {
@@ -106,18 +119,19 @@ export class AspireTerminalProvider implements vscode.Disposable {
         this._dcpServerConnectionInfo = value;
     }
 
-    async sendAspireCommandToAspireTerminal(subcommand: string, showTerminal: boolean = true, additionalArgs?: string[], options?: SendAspireCommandOptions) {
+    async sendAspireCommandToAspireTerminal(subcommand: AspireSubcommand, showTerminal: boolean = true, additionalArgs?: string[], options?: SendAspireCommandOptions) {
         const cliPath = await this.getAspireCliExecutablePath();
+        const subcommandLine = formatSubcommand(subcommand);
 
         // On Windows, use & to execute paths, especially those with special characters
         // On Unix, just use the path directly
         let command: string;
         if (process.platform === 'win32') {
-            command = `& ${quoteShellArg(cliPath)} ${subcommand}`;
+            command = `& ${quoteShellArg(cliPath)} ${subcommandLine}`;
         } else {
             // For Unix-like systems, quote only if needed
             const quotedPath = /[\s"'`$!*?()&|<>;]/.test(cliPath) ? `'${cliPath.replace(/'/g, `'\"'\"'`)}'` : cliPath;
-            command = `${quotedPath} ${subcommand}`;
+            command = `${quotedPath} ${subcommandLine}`;
         }
         const baseCommand = command;
 
@@ -153,7 +167,7 @@ export class AspireTerminalProvider implements vscode.Disposable {
                 ? 'shellIntegration'
                 : 'sendText';
         this._onDidSendAspireCommand.fire({
-            subcommand,
+            subcommand: subcommandLine,
             commandLine: logCommand,
             showTerminal,
             additionalArgs: options?.redactAdditionalArgs ? undefined : cliArgs,
@@ -320,4 +334,12 @@ function isE2eTerminalCommandExecutionSuppressed(): boolean {
         !!process.env.ASPIRE_EXTENSION_E2E_STATE_FILE &&
         !!process.env.ASPIRE_EXTENSION_E2E_CONTROL_FILE &&
         process.env.ASPIRE_EXTENSION_E2E_SUPPRESS_TERMINAL_COMMAND_EXECUTION === 'true';
+}
+
+function formatSubcommand(subcommand: AspireSubcommand): string {
+    if (typeof subcommand === 'string') {
+        return subcommand;
+    }
+
+    return subcommand.map(part => typeof part === 'string' ? part : quoteShellArg(part.value)).join(' ');
 }
