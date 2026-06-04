@@ -22,9 +22,8 @@ export function initializeSelectionCheckboxKeyboard(container) {
             return;
         }
 
-        // Blazor's preventDefault event modifier applies to every key. Handle Space here
-        // so Tab/Shift+Tab keep their native focus behavior while Space cannot scroll or
-        // bubble to the grid.
+        // Handle Space here so Tab/Shift+Tab keep their native focus behavior while Space
+        // cannot scroll the page or bubble to the grid.
         event.preventDefault();
         event.stopPropagation();
         checkbox.click();
