@@ -68,7 +68,12 @@ export function isExcludedDiscoveryUri(workspaceFolder: vscode.WorkspaceFolder, 
     }
 
     const segments = relativePath.split(/[\\/]+/).map(segment => segment.toLowerCase());
-    return appHostDiscoveryExcludeRules.some(rule => containsSegments(segments, rule.segments));
+    if (appHostDiscoveryExcludeRules.some(rule => containsSegments(segments, rule.segments))) {
+        return true;
+    }
+
+    const normalizedRelativePath = relativePath.replace(/\\/g, '/');
+    return getEnabledWorkspaceExcludePatterns().some(pattern => matchesSafeWorkspaceExcludePattern(normalizedRelativePath, pattern));
 }
 
 function toBraceGlob(patterns: readonly string[]): string {
@@ -102,4 +107,56 @@ function isExcludeEnabled(value: unknown): boolean {
 
 function canComposeIntoBraceGlob(pattern: string): boolean {
     return !/[{},]/.test(pattern);
+}
+
+function matchesSafeWorkspaceExcludePattern(relativePath: string, pattern: string): boolean {
+    // User excludes come from VS Code settings, for example:
+    //   "**/private-checkouts/**": true
+    //   "**/private-checkouts": true
+    // The second form excludes the directory in VS Code, so watcher events under that
+    // directory need to match against ancestor paths too.
+    const regex = safeGlobToRegExp(pattern.replace(/\\/g, '/'));
+    return getPathAndAncestorPaths(relativePath).some(candidate => regex.test(candidate));
+}
+
+function getPathAndAncestorPaths(relativePath: string): string[] {
+    const candidates = [relativePath];
+    for (let slashIndex = relativePath.lastIndexOf('/'); slashIndex > 0; slashIndex = relativePath.lastIndexOf('/', slashIndex - 1)) {
+        candidates.push(relativePath.substring(0, slashIndex));
+    }
+
+    return candidates;
+}
+
+function safeGlobToRegExp(pattern: string): RegExp {
+    let expression = '^';
+    for (let i = 0; i < pattern.length;) {
+        const char = pattern[i];
+        if (char === '*') {
+            if (pattern[i + 1] === '*') {
+                if (pattern[i + 2] === '/') {
+                    expression += '(?:.*/)?';
+                    i += 3;
+                } else {
+                    expression += '.*';
+                    i += 2;
+                }
+            } else {
+                expression += '[^/]*';
+                i++;
+            }
+        } else if (char === '?') {
+            expression += '[^/]';
+            i++;
+        } else {
+            expression += escapeRegExp(char);
+            i++;
+        }
+    }
+
+    return new RegExp(`${expression}$`);
+}
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
 }

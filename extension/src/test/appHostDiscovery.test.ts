@@ -206,6 +206,43 @@ suite('AppHost discovery', () => {
             }
         });
 
+        test('ignores watched files matched by user exclude patterns', async () => {
+            const watcherCallbacks = stubFileSystemWatchers(sandbox);
+            const clock = sandbox.useFakeTimers();
+            sandbox.stub(vscode.workspace, 'getConfiguration').callsFake((section?: string) => ({
+                get: () => section === 'files'
+                    ? { '**/private-checkouts/**': true }
+                    : {},
+            } as unknown as vscode.WorkspaceConfiguration));
+            const spawnStub = sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, options) => {
+                options?.stdoutCallback?.('[]');
+                options?.exitCallback?.(0);
+                return { kill: () => { } } as any;
+            });
+            const service = new AppHostDiscoveryService(makeTerminalProvider());
+            const workspaceFolder = makeWorkspaceFolder(buildPath('workspace'));
+            let changeCount = 0;
+            const subscription = service.onDidChangeCandidates(() => {
+                changeCount++;
+            });
+
+            try {
+                await service.discover(workspaceFolder);
+                assert.strictEqual(spawnStub.callCount, 1);
+
+                watcherCallbacks[0](vscode.Uri.file(buildPath('workspace', 'private-checkouts', 'feature', 'AppHost', 'AppHost.csproj')));
+                await clock.tickAsync(250);
+
+                assert.strictEqual(changeCount, 0);
+                await service.discover(workspaceFolder);
+                assert.strictEqual(spawnStub.callCount, 1);
+            }
+            finally {
+                subscription.dispose();
+                service.dispose();
+            }
+        });
+
         test('kills in-flight CLI process when disposed', async () => {
             stubFileSystemWatchers(sandbox);
             const childProcess = {
