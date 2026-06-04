@@ -45,13 +45,10 @@ export interface AspireTerminalCommandEvent {
 /**
  * Quotes a single argument for safe interpolation into a shell command line.
  *
- * Windows: The output targets PowerShell (powershell.exe / pwsh.exe), which is
- * VS Code's default integrated terminal on Windows. The argument is wrapped in
- * double quotes and the interpolation-significant characters (backtick, double
- * quote, dollar sign) are backtick-escaped. This form is NOT safe for cmd.exe;
- * users who have configured cmd.exe as their default terminal may see
- * unexpected behavior. End-to-end coverage through a real child process is
- * out of scope for this helper.
+ * Windows: The output targets the PowerShell terminal created by
+ * getAspireTerminal(). The argument is wrapped in double quotes and the
+ * interpolation-significant characters (backtick, double quote, dollar sign)
+ * are backtick-escaped.
  *
  * Unix: The output uses POSIX single-quote quoting, which is interpreted the
  * same way by bash, zsh, dash, sh, and fish. Embedded single quotes are split
@@ -211,10 +208,19 @@ export class AspireTerminalProvider implements vscode.Disposable {
         }
 
         extensionLogOutputChannel.info(`Creating new Aspire terminal`);
-        const terminal = vscode.window.createTerminal({
+        const terminalOptions: vscode.TerminalOptions = {
             name: terminalName,
             env: this.createEnvironment(),
-        });
+        };
+        if (process.platform === 'win32') {
+            // quoteShellArg uses PowerShell escaping on Windows. Do not rely on
+            // the user's default terminal profile because cmd.exe treats
+            // backticks as ordinary characters and would make quoted values
+            // containing " shell-sensitive again.
+            terminalOptions.shellPath = 'powershell.exe';
+        }
+
+        const terminal = vscode.window.createTerminal(terminalOptions);
 
         const aspireTerminal: AspireTerminal = {
             terminal,

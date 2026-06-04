@@ -68,6 +68,53 @@ suite('AspireTerminalProvider tests', () => {
         process.env[name] = value;
     }
 
+    suite('getAspireTerminal', () => {
+        test('creates Windows terminal with PowerShell so Windows quoting matches the shell', () => {
+            const platformStub = sinon.stub(process, 'platform').value('win32');
+            const createEnvironmentStub = sinon.stub(terminalProvider, 'createEnvironment').returns({});
+            const terminal = {
+                dispose: () => { }
+            } as unknown as vscode.Terminal;
+            const createTerminalStub = sinon.stub(vscode.window, 'createTerminal').returns(terminal);
+
+            try {
+                const result = terminalProvider.getAspireTerminal(true);
+
+                assert.strictEqual(result.terminal, terminal);
+                assert.strictEqual(createTerminalStub.calledOnce, true);
+                assert.strictEqual((createTerminalStub.firstCall.args[0] as vscode.TerminalOptions).shellPath, 'powershell.exe');
+            }
+            finally {
+                terminalProvider.dispose();
+                createTerminalStub.restore();
+                createEnvironmentStub.restore();
+                platformStub.restore();
+            }
+        });
+
+        test('uses default terminal profile on non-Windows hosts', () => {
+            const platformStub = sinon.stub(process, 'platform').value('darwin');
+            const createEnvironmentStub = sinon.stub(terminalProvider, 'createEnvironment').returns({});
+            const terminal = {
+                dispose: () => { }
+            } as unknown as vscode.Terminal;
+            const createTerminalStub = sinon.stub(vscode.window, 'createTerminal').returns(terminal);
+
+            try {
+                terminalProvider.getAspireTerminal(true);
+
+                assert.strictEqual(createTerminalStub.calledOnce, true);
+                assert.strictEqual((createTerminalStub.firstCall.args[0] as vscode.TerminalOptions).shellPath, undefined);
+            }
+            finally {
+                terminalProvider.dispose();
+                createTerminalStub.restore();
+                createEnvironmentStub.restore();
+                platformStub.restore();
+            }
+        });
+    });
+
     suite('sendAspireCommandToAspireTerminal', () => {
         const expectedCommand = process.platform === 'win32' ? '& "aspire" logs' : 'aspire logs';
         let originalStopOnEntry: string | undefined;
