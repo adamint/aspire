@@ -64,6 +64,9 @@
     <trans-unit id="aspire-vscode.strings.aspireTerminalName">
       <source xml:lang="en">Aspire terminal</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.terminalCommandArgumentControlCharacters">
+      <source xml:lang="en">Aspire terminal command arguments cannot contain control characters.</source>
+    </trans-unit>
     <trans-unit id="extension.debug.defaultConfiguration.name">
       <source xml:lang="en">Aspire: Launch default AppHost</source>
     </trans-unit>

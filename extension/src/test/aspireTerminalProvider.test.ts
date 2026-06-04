@@ -5,6 +5,7 @@ import { AspireTerminalProvider, quoteShellArg, shellArg } from '../utils/Aspire
 import * as cliPathModule from '../utils/cliPath';
 import { EnvironmentVariables } from '../utils/environment';
 import { extensionLogOutputChannel } from '../utils/logging';
+import { terminalCommandArgumentControlCharacters } from '../loc/strings';
 
 suite('AspireTerminalProvider tests', () => {
     let terminalProvider: AspireTerminalProvider;
@@ -240,6 +241,24 @@ suite('AspireTerminalProvider tests', () => {
                     : `aspire ${expectedSubcommand}`;
                 assert.strictEqual(executedCommand, expectedCommand);
                 assert.strictEqual(executedCommand.includes(`--apphost ${appHostPath}`), false);
+            }
+            finally {
+                getAspireTerminalStub.restore();
+            }
+        });
+
+        test('rejects terminal control characters before falling back to sendText', async () => {
+            resolveCliPathStub.resolves({ cliPath: 'aspire', available: true, source: 'path' });
+            const getAspireTerminalStub = sinon.stub(terminalProvider, 'getAspireTerminal').throws(new Error('Terminal should not be created'));
+
+            try {
+                await assert.rejects(
+                    () => terminalProvider.sendAspireCommandToAspireTerminal(['stop', '--apphost', shellArg('/workspace/AppHost.csproj\x03\necho pwned')]),
+                    { message: terminalCommandArgumentControlCharacters });
+                await assert.rejects(
+                    () => terminalProvider.sendAspireCommandToAspireTerminal('resource "web" "restart"', true, ['--', 'safe\r\necho pwned']),
+                    { message: terminalCommandArgumentControlCharacters });
+                assert.strictEqual(getAspireTerminalStub.called, false);
             }
             finally {
                 getAspireTerminalStub.restore();
@@ -486,7 +505,6 @@ suite('AspireTerminalProvider tests', () => {
                 { name: 'backslash followed by quote', input: 'a\\"b', expected: '"a\\`"b"' },
                 { name: 'pipe and chaining', input: 'a | b; c && d', expected: '"a | b; c && d"' },
                 { name: 'redirection', input: '> out.txt < in.txt', expected: '"> out.txt < in.txt"' },
-                { name: 'newline', input: 'line1\nline2', expected: '"line1\nline2"' },
                 { name: 'mixed dollar quote backtick', input: '`$x"y"`', expected: '"```$x`"y`"``"' },
                 { name: 'attempted PowerShell break-out', input: '"; Remove-Item C:\\ -Recurse #', expected: '"`"; Remove-Item C:\\ -Recurse #"' },
                 { name: 'subshell with backticks and dollar', input: '`echo $(rm -rf /)`', expected: '"``echo `$(rm -rf /)``"' },
@@ -514,7 +532,6 @@ suite('AspireTerminalProvider tests', () => {
                 { name: 'glob characters', input: '* ? [a-z]', expected: `'* ? [a-z]'` },
                 { name: 'pipe and chaining', input: 'a | b; c && d', expected: `'a | b; c && d'` },
                 { name: 'redirection', input: '> out.txt < in.txt', expected: `'> out.txt < in.txt'` },
-                { name: 'newline', input: 'line1\nline2', expected: `'line1\nline2'` },
                 { name: 'attempted bash break-out', input: `'; rm -rf / #`, expected: `''"'"'; rm -rf / #'` },
                 { name: 'backslash', input: 'a\\b', expected: `'a\\b'` },
                 { name: 'empty string', input: '', expected: `''` },
@@ -529,6 +546,15 @@ suite('AspireTerminalProvider tests', () => {
             test('darwin uses identical posix quoting', () => {
                 assert.strictEqual(quoteShellArg(`it's fine`, 'darwin'), `'it'"'"'s fine'`);
             });
+        });
+
+        test('rejects terminal control characters on every platform', () => {
+            const cases = ['line1\nline2', 'line1\rline2', 'prefix\x03suffix', 'prefix\x1bsuffix', 'prefix\x7fsuffix'];
+
+            for (const value of cases) {
+                assert.throws(() => quoteShellArg(value, 'linux'), { message: terminalCommandArgumentControlCharacters });
+                assert.throws(() => quoteShellArg(value, 'win32'), { message: terminalCommandArgumentControlCharacters });
+            }
         });
     });
 });

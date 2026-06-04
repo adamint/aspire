@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { aspireTerminalName, dcpServerNotInitialized, rpcServerNotInitialized } from '../loc/strings';
+import { aspireTerminalName, dcpServerNotInitialized, rpcServerNotInitialized, terminalCommandArgumentControlCharacters } from '../loc/strings';
 import { extensionLogOutputChannel } from './logging';
 import { RpcServerConnectionInfo } from '../server/AspireRpcServer';
 import { DcpServerConnectionInfo } from '../dcp/types';
@@ -60,6 +60,8 @@ export interface AspireTerminalCommandEvent {
  * branches regardless of the host OS.
  */
 export function quoteShellArg(arg: string, platform: NodeJS.Platform = process.platform): string {
+    assertNoTerminalControlCharacters(arg);
+
     if (platform === 'win32') {
         // Order matters: escape backticks first so that the backticks we
         // introduce when escaping " and $ are not themselves re-escaped.
@@ -119,6 +121,7 @@ export class AspireTerminalProvider implements vscode.Disposable {
     async sendAspireCommandToAspireTerminal(subcommand: AspireSubcommand, showTerminal: boolean = true, additionalArgs?: string[], options?: SendAspireCommandOptions) {
         const cliPath = await this.getAspireCliExecutablePath();
         const subcommandLine = formatSubcommand(subcommand);
+        assertNoTerminalControlCharacters(cliPath);
 
         // On Windows, use & to execute paths, especially those with special characters
         // On Unix, just use the path directly
@@ -149,6 +152,7 @@ export class AspireTerminalProvider implements vscode.Disposable {
             const quotedArgs = cliArgs.map(arg => quoteShellArg(arg));
             command += ' ' + quotedArgs.join(' ');
         }
+        assertNoTerminalControlCharacters(command);
 
         const aspireTerminal = this.getAspireTerminal();
         let logCommand = command;
@@ -340,6 +344,16 @@ function isE2eTerminalCommandExecutionSuppressed(): boolean {
         !!process.env.ASPIRE_EXTENSION_E2E_STATE_FILE &&
         !!process.env.ASPIRE_EXTENSION_E2E_CONTROL_FILE &&
         process.env.ASPIRE_EXTENSION_E2E_SUPPRESS_TERMINAL_COMMAND_EXECUTION === 'true';
+}
+
+function assertNoTerminalControlCharacters(value: string): void {
+    // Shell quoting protects shell metacharacters after the command reaches the
+    // shell. C0 controls are terminal input first: in sendText fallback, ETX can
+    // abort the current line and CR/LF can submit following text as another
+    // command before shell parsing can make those bytes inert.
+    if (/[\x00-\x1F\x7F]/.test(value)) {
+        throw new Error(terminalCommandArgumentControlCharacters);
+    }
 }
 
 function formatSubcommand(subcommand: AspireSubcommand): string {

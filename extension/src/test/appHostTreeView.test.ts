@@ -15,6 +15,7 @@ import { ResourceState, HealthStatus, StateStyle } from '../editor/resourceConst
 import type { AspireSubcommand } from '../utils/AspireTerminalProvider';
 import { AspireTerminalProvider, shellArg } from '../utils/AspireTerminalProvider';
 import { AppHostLaunchService } from '../services/AppHostLaunchService';
+import { terminalCommandArgumentControlCharacters } from '../loc/strings';
 
 function makeResource(overrides: Partial<ResourceJson> = {}): ResourceJson {
     const base: ResourceJson = {
@@ -496,6 +497,46 @@ suite('AspireAppHostTreeProvider', () => {
 
             await provider.restartResource(resourceItem as any);
             proof.run(commandLines[2], ['resource', resourceName, 'restart', '--apphost', appHostPath]);
+        }
+        finally {
+            provider.dispose();
+            proofTerminalProvider.dispose();
+            proof.dispose();
+        }
+    });
+
+    test('workspace tree terminal actions reject control characters before terminal input', async () => {
+        const proof = createShellProof();
+        const commandLines: string[] = [];
+        const proofTerminalProvider = makeProofTerminalProvider(sandbox, proof, commandLines);
+        const appHostPath = path.join(proof.directory, 'workspace') + `\x03\ntouch ${proof.appHostMarkerPath}\n#`;
+        const resourceName = `cache\x03\ntouch ${proof.resourceMarkerPath}\n#`;
+        const resource = makeResource({ name: resourceName, displayName: resourceName });
+        const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+        const repository = {
+            viewMode: 'workspace' as ViewMode,
+            appHosts: [],
+            workspaceResources: [resource],
+            workspaceAppHost: makeAppHost({ appHostPath, resources: [resource] }),
+            workspaceAppHostPath: appHostPath,
+            workspaceAppHostCandidatePaths: [appHostPath],
+            workspaceAppHostName: 'AppHost.csproj',
+            workspaceAppHostDescription: undefined,
+            onDidChangeData,
+        } as unknown as AppHostDataRepository;
+        const provider = new AspireAppHostTreeProvider(repository, proofTerminalProvider.terminalProvider, makeLaunchService());
+
+        try {
+            const [workspaceItem] = provider.getChildren();
+            const [resourceItem] = provider.getChildren(workspaceItem);
+
+            await assert.rejects(() => provider.stopAppHost(workspaceItem as any), { message: terminalCommandArgumentControlCharacters });
+            await assert.rejects(() => provider.viewResourceLogs(resourceItem as any), { message: terminalCommandArgumentControlCharacters });
+            await assert.rejects(() => provider.restartResource(resourceItem as any), { message: terminalCommandArgumentControlCharacters });
+
+            assert.deepStrictEqual(commandLines, []);
+            assert.strictEqual(fs.existsSync(proof.appHostMarkerPath), false, 'AppHost control-character payload should not execute');
+            assert.strictEqual(fs.existsSync(proof.resourceMarkerPath), false, 'resource control-character payload should not execute');
         }
         finally {
             provider.dispose();
