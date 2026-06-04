@@ -182,13 +182,22 @@ export class AppHostLaunchService implements vscode.Disposable {
 }
 
 function getLaunchTelemetryProperties(appHostPath: string, command: AspireCommandType, noDebug: boolean, executionSuppressed: boolean) {
-    const isDirectory = fs.statSync(appHostPath, { throwIfNoEntry: false })?.isDirectory() === true;
+    const isDirectory = isDirectoryForTelemetry(appHostPath);
     return {
         mode: noDebug ? 'run' : 'debug',
         command: getTelemetryCommand(command),
         apphost_language: isDirectory ? classifyAppHostDirectory(appHostPath) : classifyAppHostPath(appHostPath),
         execution_suppressed: executionSuppressed ? 'true' : 'false',
     };
+}
+
+function isDirectoryForTelemetry(appHostPath: string): boolean {
+    try {
+        return fs.statSync(appHostPath, { throwIfNoEntry: false })?.isDirectory() === true;
+    }
+    catch {
+        return false;
+    }
 }
 
 function getTelemetryCommand(command: string): string {
