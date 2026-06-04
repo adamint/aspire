@@ -9,5 +9,5 @@ public sealed class AssistantDialogViewModel
 
     public bool OpenedForMobileView { get; set; }
 
-    public string? ReturnFocusElementId { get; set; }
+    internal string? ReturnFocusElementId { get; set; }
 }

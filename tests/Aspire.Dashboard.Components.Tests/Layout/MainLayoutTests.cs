@@ -297,7 +297,7 @@ public partial class MainLayoutTests : DashboardTestContext
             .GetField("_assistantSidebarWasVisible", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .SetValue(cut.Instance, true);
 
-        Func<Task> hideAssistantSidebarAsync = () => aiContextProvider.HideAssistantSidebarAsync();
+        Func<Task> hideAssistantSidebarAsync = aiContextProvider.HideAssistantSidebarAsync;
         await cut.InvokeAsync(hideAssistantSidebarAsync);
 
         cut.WaitForAssertion(() =>
@@ -331,7 +331,7 @@ public partial class MainLayoutTests : DashboardTestContext
         Func<Task> launchPromptSidebarAsync = () => aiContextProvider.LaunchAssistantSidebarAsync(_ => Task.CompletedTask);
         await cut.InvokeAsync(launchPromptSidebarAsync);
 
-        Func<Task> hideAssistantSidebarAsync = () => aiContextProvider.HideAssistantSidebarAsync();
+        Func<Task> hideAssistantSidebarAsync = aiContextProvider.HideAssistantSidebarAsync;
         await cut.InvokeAsync(hideAssistantSidebarAsync);
 
         Assert.DoesNotContain(JSInterop.Invocations, invocation => invocation.Identifier == "focusElement");
@@ -398,6 +398,10 @@ public partial class MainLayoutTests : DashboardTestContext
         if (aiContextProvider is not null)
         {
             Services.AddSingleton(aiContextProvider);
+            if (aiContextProvider is IAssistantDisplayContext assistantDisplayContext)
+            {
+                Services.AddSingleton(assistantDisplayContext);
+            }
         }
 
         Services.AddOptions();

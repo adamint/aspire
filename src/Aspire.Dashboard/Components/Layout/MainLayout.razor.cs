@@ -86,6 +86,9 @@ public partial class MainLayout : IGlobalKeydownListener, IAsyncDisposable
     [Inject]
     public required IAIContextProvider AIContextProvider { get; init; }
 
+    [Inject]
+    private IAssistantDisplayContext AssistantDisplayContext { get; init; } = null!;
+
     [CascadingParameter]
     public required ViewportInformation ViewportInformation { get; set; }
 
@@ -136,7 +139,7 @@ public partial class MainLayout : IGlobalKeydownListener, IAsyncDisposable
         {
             if (!AIContextProvider.ShowAssistantSidebarDialog)
             {
-                if (_assistantSidebarWasVisible && AIContextProvider.RestoreFocusOnAssistantSidebarHidden)
+                if (_assistantSidebarWasVisible && AssistantDisplayContext.RestoreFocusOnAssistantSidebarHidden)
                 {
                     _pendingReturnFocusElementId = _assistantReturnFocusElementId;
                 }
@@ -146,7 +149,7 @@ public partial class MainLayout : IGlobalKeydownListener, IAsyncDisposable
             }
             else
             {
-                _assistantReturnFocusElementId = AIContextProvider.AssistantReturnFocusElementId;
+                _assistantReturnFocusElementId = AssistantDisplayContext.AssistantReturnFocusElementId;
                 _assistantSidebarWasVisible = true;
             }
 
@@ -408,7 +411,7 @@ public partial class MainLayout : IGlobalKeydownListener, IAsyncDisposable
     {
         if (AIContextProvider.AssistantChatViewModel != null && AIContextProvider.ShowAssistantSidebarDialog)
         {
-            await AIContextProvider.HideAssistantSidebarAsync();
+            await AssistantDisplayContext.HideAssistantSidebarAsync();
         }
         else
         {
@@ -420,12 +423,12 @@ public partial class MainLayout : IGlobalKeydownListener, IAsyncDisposable
             if (ViewportInformation.IsDesktop)
             {
                 _assistantReturnFocusElementId = returnFocusElementId;
-                await AIContextProvider.LaunchAssistantSidebarAsync(viewModel, returnFocusElementId);
+                await AssistantDisplayContext.LaunchAssistantSidebarAsync(viewModel, returnFocusElementId);
             }
             else
             {
                 _assistantReturnFocusElementId = null;
-                await AIContextProvider.LaunchAssistantModelDialogAsync(viewModel, returnFocusElementId: returnFocusElementId);
+                await AssistantDisplayContext.LaunchAssistantModelDialogAsync(viewModel, returnFocusElementId: returnFocusElementId);
             }
 
             await initializeTask;

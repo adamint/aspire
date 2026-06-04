@@ -24,6 +24,9 @@ public partial class AssistantSidebarDialog : IAsyncDisposable
     public required IAIContextProvider AIContextProvider { get; init; }
 
     [Inject]
+    private IAssistantDisplayContext AssistantDisplayContext { get; init; } = null!;
+
+    [Inject]
     public required IDialogService DialogService { get; init; }
 
     [Inject]
@@ -57,21 +60,21 @@ public partial class AssistantSidebarDialog : IAsyncDisposable
 
     public async Task CloseDialogAsync()
     {
-        await AIContextProvider.HideAssistantSidebarAsync();
+        await AssistantDisplayContext.HideAssistantSidebarAsync();
     }
 
     public async Task ExpandDialogAsync(bool openedForMobileView)
     {
         Content.Chat.DisplayContainer = AssistantChatDisplayContainer.Switching;
-        await AIContextProvider.HideAssistantSidebarAsync(restoreFocus: false);
+        await AssistantDisplayContext.HideAssistantSidebarAsync(restoreFocus: false);
 
         // The viewport switch changes which launcher is visible. Keep focus restoration
         // pointed at the control users can actually reach after the switch completes.
         var returnFocusElementId = GetReturnFocusElementId(openedForMobileView, Content.ReturnFocusElementId);
-        await AIContextProvider.LaunchAssistantModelDialogAsync(Content.Chat, openedForMobileView, returnFocusElementId);
+        await AssistantDisplayContext.LaunchAssistantModelDialogAsync(Content.Chat, openedForMobileView, returnFocusElementId);
     }
 
-    public static string? GetReturnFocusElementId(bool openedForMobileView, string? returnFocusElementId)
+    internal static string? GetReturnFocusElementId(bool openedForMobileView, string? returnFocusElementId)
     {
         return openedForMobileView
             ? MainLayout.NavigationButtonId

@@ -8,7 +8,7 @@ using Aspire.Dashboard.Resources;
 
 namespace Aspire.Dashboard.Tests;
 
-public class TestAIContextProvider : IAIContextProvider
+public class TestAIContextProvider : IAIContextProvider, IAssistantDisplayContext
 {
     private readonly object _lock = new();
     private readonly List<Func<Task>> _displayChangedCallbacks = [];
@@ -37,7 +37,9 @@ public class TestAIContextProvider : IAIContextProvider
         throw new NotImplementedException();
     }
 
-    public async Task HideAssistantSidebarAsync(bool restoreFocus = true)
+    public Task HideAssistantSidebarAsync() => HideAssistantSidebarAsync(restoreFocus: true);
+
+    public async Task HideAssistantSidebarAsync(bool restoreFocus)
     {
         AssistantChatViewModel = null;
         ShowAssistantSidebarDialog = false;
@@ -45,14 +47,24 @@ public class TestAIContextProvider : IAIContextProvider
         await ExecuteDisplayChangedCallbacksAsync();
     }
 
-    public async Task LaunchAssistantModelDialogAsync(AssistantChatViewModel viewModel, bool openedForMobileView = false, string? returnFocusElementId = null)
+    public Task LaunchAssistantModelDialogAsync(AssistantChatViewModel viewModel, bool openedForMobileView = false)
+    {
+        return LaunchAssistantModelDialogAsync(viewModel, openedForMobileView, returnFocusElementId: null);
+    }
+
+    public async Task LaunchAssistantModelDialogAsync(AssistantChatViewModel viewModel, bool openedForMobileView, string? returnFocusElementId)
     {
         AssistantReturnFocusElementId = returnFocusElementId;
         LastAssistantModelDialogReturnFocusElementId = returnFocusElementId;
         await ExecuteDisplayChangedCallbacksAsync();
     }
 
-    public async Task LaunchAssistantSidebarAsync(AssistantChatViewModel viewModel, string? returnFocusElementId = null)
+    public Task LaunchAssistantSidebarAsync(AssistantChatViewModel viewModel)
+    {
+        return LaunchAssistantSidebarAsync(viewModel, returnFocusElementId: null);
+    }
+
+    public async Task LaunchAssistantSidebarAsync(AssistantChatViewModel viewModel, string? returnFocusElementId)
     {
         AssistantChatViewModel = viewModel;
         ShowAssistantSidebarDialog = true;

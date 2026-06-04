@@ -15,20 +15,18 @@ internal static class ResourcePrefixStyle
     {
         var colorIndex = ColorGenerator.Instance.GetColorIndex(resourcePrefix);
         var accentVariableName = ColorGenerator.s_variableNames[colorIndex];
-        var textColor = GetTextColor(accentVariableName);
+        var textColor = GetTextColorValue(accentVariableName);
 
         return $"background: var({accentVariableName}); --resource-text-color: {textColor};";
     }
 
-    internal static string GetTextColor(string accentVariableName)
+    internal static string GetTextColorValue(string accentVariableName)
     {
-        // The log viewer uses the dashboard dark accent palette for resource prefixes.
-        // Most accents meet WCAG AA contrast with black text, but these dark accents do not.
+        // Some accent variables need different foreground colors in light and dark themes.
+        // Resolve through a CSS variable so each theme can keep WCAG AA contrast.
         // See https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html
-        return accentVariableName switch
-        {
-            "--accent-bronze" or "--accent-navy" or "--accent-ocean" => LightTextColor,
-            _ => DarkTextColor
-        };
+        return $"var({GetTextColorVariableName(accentVariableName)}, {DarkTextColor})";
     }
+
+    internal static string GetTextColorVariableName(string accentVariableName) => accentVariableName + "-text";
 }

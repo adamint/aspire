@@ -14,25 +14,28 @@ namespace Aspire.Dashboard.Components.Tests.Controls;
 public class LogViewerTests : DashboardTestContext
 {
     private const string AppCssRelativePath = "src/Aspire.Dashboard/wwwroot/css/app.css";
+    private const string LightThemeSelector = ":root";
     private const string DarkThemeSelector = "[data-theme=\"dark\"]";
 
-    [Fact]
-    public void ResourcePrefixStyle_UsesTextColorWithWcagContrastForDarkAccentPalette()
+    [Theory]
+    [InlineData(LightThemeSelector)]
+    [InlineData(DarkThemeSelector)]
+    public void ResourcePrefixStyle_UsesTextColorWithWcagContrastForAccentPalette(string themeSelector)
     {
-        var darkAccentColors = ParseDarkAccentPalette();
+        var themeVariables = ParseThemeVariables(themeSelector);
 
         foreach (var accentVariableName in ColorGenerator.s_variableNames)
         {
             Assert.True(
-                darkAccentColors.TryGetValue(accentVariableName, out var backgroundColor),
-                $"{DarkThemeSelector} in {AppCssRelativePath} is missing ColorGenerator variable '{accentVariableName}'. Add it to the dark accent palette or update {nameof(ColorGenerator.s_variableNames)}. Parsed variables: {string.Join(", ", darkAccentColors.Keys.OrderBy(k => k, StringComparer.Ordinal))}.");
+                themeVariables.TryGetValue(accentVariableName, out var backgroundColor),
+                $"{themeSelector} in {AppCssRelativePath} is missing ColorGenerator variable '{accentVariableName}'. Add it to the accent palette or update {nameof(ColorGenerator.s_variableNames)}. Parsed variables: {string.Join(", ", themeVariables.Keys.OrderBy(k => k, StringComparer.Ordinal))}.");
 
-            var foregroundColor = ResourcePrefixStyle.GetTextColor(accentVariableName);
+            var foregroundColor = ResolveCssColor(ResourcePrefixStyle.GetTextColorValue(accentVariableName), themeVariables);
             var contrastRatio = GetContrastRatio(foregroundColor, backgroundColor);
 
             Assert.True(
                 contrastRatio >= 4.5,
-                $"{accentVariableName} resource prefix uses {foregroundColor} text on {backgroundColor} from {AppCssRelativePath} with {contrastRatio.ToString("0.##", CultureInfo.InvariantCulture)}:1 contrast.");
+                $"{accentVariableName} resource prefix uses {foregroundColor} text on {backgroundColor} from {themeSelector} in {AppCssRelativePath} with {contrastRatio.ToString("0.##", CultureInfo.InvariantCulture)}:1 contrast.");
         }
     }
 
@@ -62,7 +65,7 @@ public class LogViewerTests : DashboardTestContext
             var accentVariableName = GetBackgroundAccentVariableName(style);
             var foregroundColor = GetResourceTextColor(style);
 
-            Assert.Equal(ResourcePrefixStyle.GetTextColor(accentVariableName), foregroundColor);
+            Assert.Equal(ResourcePrefixStyle.GetTextColorValue(accentVariableName), foregroundColor);
         });
     }
 
@@ -101,24 +104,55 @@ public class LogViewerTests : DashboardTestContext
         return string.Empty;
     }
 
-    private static Dictionary<string, string> ParseDarkAccentPalette()
+    private static Dictionary<string, string> ParseThemeVariables(string themeSelector)
     {
         var appCssPath = FindAppCssPath();
         var css = File.ReadAllText(appCssPath);
-        var darkThemeBlock = GetCssRuleBlock(css, DarkThemeSelector, appCssPath);
-        var declarations = ParseCssDeclarations(darkThemeBlock);
         var palette = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        AddVariablesFromRule(css, LightThemeSelector, appCssPath, palette);
+
+        if (themeSelector != LightThemeSelector)
+        {
+            AddVariablesFromRule(css, themeSelector, appCssPath, palette);
+        }
+
+        Assert.NotEmpty(palette);
+        return palette;
+    }
+
+    private static void AddVariablesFromRule(string css, string selector, string appCssPath, Dictionary<string, string> variables)
+    {
+        var block = GetCssRuleBlock(css, selector, appCssPath);
+        var declarations = ParseCssDeclarations(block);
 
         foreach (var (propertyName, value) in declarations)
         {
             if (propertyName.StartsWith("--accent-", StringComparison.Ordinal))
             {
-                palette[propertyName] = value;
+                variables[propertyName] = value;
             }
         }
+    }
 
-        Assert.NotEmpty(palette);
-        return palette;
+    private static string ResolveCssColor(string value, IReadOnlyDictionary<string, string> variables)
+    {
+        if (!value.StartsWith("var(", StringComparison.Ordinal) || !value.EndsWith(')'))
+        {
+            return value;
+        }
+
+        var variableReference = value[4..^1];
+        var parts = variableReference.Split(',', 2, StringSplitOptions.TrimEntries);
+        Assert.True(parts.Length > 0 && parts[0].StartsWith("--", StringComparison.Ordinal), $"Unexpected CSS variable reference: {value}");
+
+        if (variables.TryGetValue(parts[0], out var resolvedValue))
+        {
+            return resolvedValue;
+        }
+
+        Assert.True(parts.Length == 2, $"CSS variable reference has no resolved value or fallback: {value}");
+        return parts[1];
     }
 
     private static string FindAppCssPath()
@@ -171,8 +205,8 @@ public class LogViewerTests : DashboardTestContext
 
     private static List<(string PropertyName, string Value)> ParseCssDeclarations(string cssBlock)
     {
-        // The dark theme rule in app.css is a flat declaration block:
-        //   [data-theme="dark"] {
+        // Theme rules in app.css are flat declaration blocks:
+        //   :root {
         //       --accent-teal: #2CB7BD;
         //       --accent-marigold: #F3D58E;
         //   }
