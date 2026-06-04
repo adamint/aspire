@@ -278,6 +278,32 @@ suite('AppHost discovery', () => {
             }
         });
 
+        test('already cancelled caller token does not start discovery on cache miss', async () => {
+            stubFileSystemWatchers(sandbox);
+            const spawnStub = sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, options) => {
+                options?.stdoutCallback?.('[]');
+                options?.exitCallback?.(0);
+                return { kill: () => { } } as any;
+            });
+            const service = new AppHostDiscoveryService(makeTerminalProvider());
+            const workspaceFolder = makeWorkspaceFolder(buildPath('workspace'));
+            const cancellationSource = new vscode.CancellationTokenSource();
+            cancellationSource.cancel();
+
+            try {
+                await assert.rejects(service.discover(workspaceFolder, false, cancellationSource.token), /cancelled/);
+                assert.strictEqual(spawnStub.callCount, 0);
+
+                const result = await service.discover(workspaceFolder);
+                assert.deepStrictEqual(result, []);
+                assert.strictEqual(spawnStub.callCount, 1);
+            }
+            finally {
+                cancellationSource.dispose();
+                service.dispose();
+            }
+        });
+
         test('times out hung CLI process and allows retry', async () => {
             stubFileSystemWatchers(sandbox);
             sandbox.stub(vscode.workspace, 'getConfiguration').returns({

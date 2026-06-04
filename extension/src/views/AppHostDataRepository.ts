@@ -419,9 +419,6 @@ export class AppHostDataRepository {
     private _fetchWorkspaceAppHost(options?: { forceRefresh?: boolean }): void {
         if (this._workspaceAppHostDiscoveryInProgress) {
             this._workspaceAppHostDiscoveryRefreshQueued = true;
-            if (options?.forceRefresh) {
-                this._workspaceAppHostDiscoveryCancellationSource?.cancel();
-            }
             return;
         }
 

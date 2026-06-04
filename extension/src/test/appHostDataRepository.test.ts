@@ -1113,6 +1113,56 @@ suite('AppHostDataRepository', () => {
         }
     });
 
+    test('queues forced workspace discovery refresh without starting overlapping discovery', async () => {
+        const workspaceFolder = {
+            uri: vscode.Uri.file('/workspace'),
+            name: 'workspace',
+            index: 0,
+        };
+        const workspaceFoldersStub = stubWorkspaceFolders([workspaceFolder]);
+        const firstDiscovery = createDeferred<CandidateAppHostDisplayInfo[]>();
+        const secondDiscovery = createDeferred<CandidateAppHostDisplayInfo[]>();
+        let firstTokenCancelled = false;
+        const discoverStub = sinon.stub();
+        discoverStub.onFirstCall().callsFake((_folder: vscode.WorkspaceFolder, _forceRefresh?: boolean, cancellationToken?: vscode.CancellationToken) => {
+            cancellationToken?.onCancellationRequested(() => {
+                firstTokenCancelled = true;
+            });
+            return firstDiscovery.promise;
+        });
+        discoverStub.onSecondCall().callsFake((_folder: vscode.WorkspaceFolder, forceRefresh?: boolean) => {
+            assert.strictEqual(forceRefresh, true);
+            return secondDiscovery.promise;
+        });
+        const appHostDiscoveryService = {
+            onDidChangeCandidates: () => ({ dispose: () => { } }),
+            discover: discoverStub,
+            dispose: () => { },
+        };
+        const repository = new AppHostDataRepository(terminalProvider, appHostDiscoveryService as unknown as AppHostDiscoveryService);
+
+        try {
+            await waitForMicrotasks();
+            assert.strictEqual(discoverStub.callCount, 1);
+
+            repository.refresh();
+            await waitForMicrotasks();
+
+            assert.strictEqual(firstTokenCancelled, false);
+            assert.strictEqual(discoverStub.callCount, 1);
+
+            firstDiscovery.resolve([]);
+            await waitForCondition(() => discoverStub.callCount === 2, 'queued forced workspace discovery did not run');
+            secondDiscovery.resolve([]);
+            await waitForAppHostDiscovery();
+
+            assert.strictEqual(discoverStub.callCount, 2);
+        } finally {
+            repository.dispose();
+            workspaceFoldersStub.restore();
+        }
+    });
+
     test('workspace ps failure clears loading context and shows error welcome', async () => {
         const workspaceFoldersStub = stubWorkspaceFolders([{
             uri: vscode.Uri.file('/workspace'),

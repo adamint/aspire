@@ -55,6 +55,7 @@ export class AppHostDiscoveryService implements vscode.Disposable {
 
     async discover(workspaceFolder: vscode.WorkspaceFolder, forceRefresh = false, cancellationToken?: vscode.CancellationToken): Promise<CandidateAppHostDisplayInfo[]> {
         this._throwIfDisposed();
+        throwIfCancellationRequested(cancellationToken);
 
         const key = path.resolve(workspaceFolder.uri.fsPath);
         if (forceRefresh) {
