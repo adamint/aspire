@@ -9,6 +9,7 @@ import * as vscode from 'vscode';
 import * as cliModule from '../debugger/languages/cli';
 import { AppHostDiscoveryService, findCandidateForEditorFile, findConfiguredAppHostPaths, getDebugTargetForCandidate, selectWorkspaceAppHostPath } from '../utils/appHostDiscovery';
 import type { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
+import { appHostDiscoveryFindFilesMaxResults } from '../utils/workspaceFileSearch';
 
 suite('AppHost discovery', () => {
     test('resolves SDK-style C# AppHost source file to discovered project candidate', () => {
@@ -645,6 +646,52 @@ suite('AppHost discovery', () => {
             }
         });
 
+        test('workspace project fallback checks projects beyond bounded file-search batch', async () => {
+            const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-apphost-discovery-'));
+            try {
+                stubFileSystemWatchers(sandbox);
+                const projectPaths = Array.from({ length: appHostDiscoveryFindFilesMaxResults + 1 }, (_, index) => path.join(tempDir, 'Project' + index, 'Project' + index + '.csproj'));
+                const appHostProjectPath = projectPaths[projectPaths.length - 1];
+                for (const projectPath of projectPaths) {
+                    fs.mkdirSync(path.dirname(projectPath), { recursive: true });
+                    fs.writeFileSync(projectPath, projectPath === appHostProjectPath
+                        ? '<Project Sdk="Aspire.AppHost.Sdk/13.5.0" />'
+                        : '<Project Sdk="Microsoft.NET.Sdk" />');
+                }
+                findFilesStub.callsFake(async (include: vscode.GlobPattern, _exclude?: vscode.GlobPattern | null, maxResults?: number) => {
+                    const pattern = typeof include === 'string' ? include : include.pattern;
+                    if (!pattern.endsWith('*.csproj')) {
+                        return [];
+                    }
+
+                    const uris = projectPaths.map(vscode.Uri.file);
+                    return typeof maxResults === 'number' ? uris.slice(0, maxResults) : uris;
+                });
+                sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, args = [], options) => {
+                    options?.stderrCallback?.(`${args.join(' ')} failed`);
+                    options?.exitCallback?.(1);
+                    return { kill: () => { } } as any;
+                });
+                const service = new AppHostDiscoveryService(makeTerminalProvider());
+
+                try {
+                    const result = await service.discover(makeWorkspaceFolder(tempDir));
+
+                    assert.deepStrictEqual(result, [{
+                        path: appHostProjectPath,
+                        language: 'csharp',
+                        status: 'buildable',
+                    }]);
+                }
+                finally {
+                    service.dispose();
+                }
+            }
+            finally {
+                fs.rmSync(tempDir, { recursive: true, force: true });
+            }
+        });
+
         test('configured AppHost path search excludes nested worktrees and user excluded folders', async () => {
             sandbox.stub(vscode.workspace, 'getConfiguration').callsFake((section?: string) => {
                 const values: Record<string, Record<string, boolean>> = {
@@ -672,8 +719,31 @@ suite('AppHost discovery', () => {
                 assert.ok(excludePattern.includes('**/private-checkouts/**'));
                 assert.ok(excludePattern.includes('**/scratch-worktrees/**'));
                 assert.ok(!excludePattern.includes('**/generated-but-enabled/**'));
-                assert.strictEqual(call.args[2], 512);
+                assert.strictEqual(call.args[2], appHostDiscoveryFindFilesMaxResults);
                 assert.strictEqual(call.args[3], cancellationToken);
+            }
+        });
+
+        test('service discovery forwards caller cancellation token to configured AppHost path search', async () => {
+            stubFileSystemWatchers(sandbox);
+            sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, options) => {
+                options?.stdoutCallback?.('[]');
+                options?.exitCallback?.(0);
+                return { kill: () => { } } as any;
+            });
+            const cancellationToken = makeCancellationToken();
+            const service = new AppHostDiscoveryService(makeTerminalProvider());
+
+            try {
+                await service.discover(makeWorkspaceFolder(buildPath('workspace')), false, cancellationToken);
+
+                assert.strictEqual(findFilesStub.callCount, 2);
+                for (const call of findFilesStub.getCalls()) {
+                    assert.strictEqual(call.args[3], cancellationToken);
+                }
+            }
+            finally {
+                service.dispose();
             }
         });
 

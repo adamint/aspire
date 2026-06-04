@@ -69,8 +69,7 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             // The cached discovery promise is shared across extension features. Keep caller
             // cancellation outside the cached operation so one cancelled refresh doesn't reject
             // unrelated callers that are awaiting the same workspace discovery.
-            const discoveryPromise = this._discoverCore(workspaceFolder)
-                .then(candidates => this._includeConfiguredAppHostCandidate(workspaceFolder, candidates));
+            const discoveryPromise = this._discoverCore(workspaceFolder);
             let cachedPromise: Promise<CandidateAppHostDisplayInfo[]>;
             cachedPromise = discoveryPromise.catch(error => {
                 if (this._cache.get(key) === cachedPromise) {
@@ -82,7 +81,8 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             this._cache.set(key, resultPromise);
         }
 
-        return withCancellation(resultPromise, cancellationToken);
+        const candidates = await withCancellation(resultPromise, cancellationToken);
+        return await this._includeConfiguredAppHostCandidate(workspaceFolder, candidates, cancellationToken);
     }
 
     async resolveDebugTarget(filePath: string, workspaceFolder?: vscode.WorkspaceFolder): Promise<string> {
@@ -246,12 +246,14 @@ export class AppHostDiscoveryService implements vscode.Disposable {
         }
     }
 
-    private async _includeConfiguredAppHostCandidate(workspaceFolder: vscode.WorkspaceFolder, candidates: CandidateAppHostDisplayInfo[]): Promise<CandidateAppHostDisplayInfo[]> {
+    private async _includeConfiguredAppHostCandidate(workspaceFolder: vscode.WorkspaceFolder, candidates: CandidateAppHostDisplayInfo[], cancellationToken?: vscode.CancellationToken): Promise<CandidateAppHostDisplayInfo[]> {
+        throwIfCancellationRequested(cancellationToken);
         if (candidates.some(candidate => candidate.selected)) {
             return candidates;
         }
 
-        const configuredPaths = await findConfiguredAppHostPaths(workspaceFolder);
+        const configuredPaths = await findConfiguredAppHostPaths(workspaceFolder, cancellationToken);
+        throwIfCancellationRequested(cancellationToken);
         const configuredPath = configuredPaths.find(configuredPath => candidates.some(candidate => isSamePath(candidate.path, configuredPath)))
             ?? configuredPaths[0];
         if (!configuredPath) {
@@ -549,7 +551,10 @@ function parseCandidateOutput(output: string, commandName: string): CandidateApp
 }
 
 async function discoverCSharpAppHostProjectsFromWorkspaceFiles(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
-    const projectUris = await vscode.workspace.findFiles(new vscode.RelativePattern(workspaceFolder, '**/*.csproj'), getAppHostDiscoveryExcludeGlob(), appHostDiscoveryFindFilesMaxResults);
+    // This is the final fallback after both CLI discovery paths fail. Do not cap the
+    // project scan here: VS Code returns only the first maxResults matches, which can
+    // hide the only AppHost in a large workspace.
+    const projectUris = await vscode.workspace.findFiles(new vscode.RelativePattern(workspaceFolder, '**/*.csproj'), getAppHostDiscoveryExcludeGlob());
     const candidates: CandidateAppHostDisplayInfo[] = [];
     for (const uri of projectUris.sort((left, right) => left.fsPath.localeCompare(right.fsPath))) {
         let projectContents: string;
