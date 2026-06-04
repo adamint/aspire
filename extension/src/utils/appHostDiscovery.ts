@@ -205,13 +205,14 @@ export class AppHostDiscoveryService implements vscode.Disposable {
                 clearTimeout(existingTimer);
             }
 
+            this._cache.delete(key);
+
             const timer = setTimeout(() => {
                 this._pendingInvalidationTimers.delete(key);
                 if (this._disposed) {
                     return;
                 }
 
-                this._cache.delete(key);
                 this._onDidChangeCandidates.fire(workspaceFolder);
             }, AppHostDiscoveryService._candidateChangeDebounceMs);
             this._pendingInvalidationTimers.set(key, timer);

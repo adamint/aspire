@@ -160,6 +160,9 @@ suite('AppHost discovery', () => {
 
                 watcherCallbacks[0]();
                 assert.strictEqual(changedWorkspaceFolder, undefined);
+                await service.discover(workspaceFolder);
+                assert.strictEqual(spawnStub.callCount, 2);
+
                 await clock.tickAsync(250);
                 assert.strictEqual(changedWorkspaceFolder, workspaceFolder);
 
