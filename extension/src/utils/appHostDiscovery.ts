@@ -65,16 +65,23 @@ export class AppHostDiscoveryService implements vscode.Disposable {
 
         let resultPromise = this._cache.get(key);
         if (!resultPromise) {
-            resultPromise = this._discoverCore(workspaceFolder, cancellationToken)
-                .then(candidates => this._includeConfiguredAppHostCandidate(workspaceFolder, candidates, cancellationToken))
-                .catch(error => {
+            // The cached discovery promise is shared across extension features. Keep caller
+            // cancellation outside the cached operation so one cancelled refresh doesn't reject
+            // unrelated callers that are awaiting the same workspace discovery.
+            const discoveryPromise = this._discoverCore(workspaceFolder)
+                .then(candidates => this._includeConfiguredAppHostCandidate(workspaceFolder, candidates));
+            let cachedPromise: Promise<CandidateAppHostDisplayInfo[]>;
+            cachedPromise = discoveryPromise.catch(error => {
+                if (this._cache.get(key) === cachedPromise) {
                     this._cache.delete(key);
-                    throw error;
-                });
+                }
+                throw error;
+            });
+            resultPromise = cachedPromise;
             this._cache.set(key, resultPromise);
         }
 
-        return resultPromise;
+        return withCancellation(resultPromise, cancellationToken);
     }
 
     async resolveDebugTarget(filePath: string, workspaceFolder?: vscode.WorkspaceFolder): Promise<string> {
@@ -119,27 +126,25 @@ export class AppHostDiscoveryService implements vscode.Disposable {
         this._onDidChangeCandidates.dispose();
     }
 
-    private async _discoverCore(workspaceFolder: vscode.WorkspaceFolder, cancellationToken?: vscode.CancellationToken): Promise<CandidateAppHostDisplayInfo[]> {
+    private async _discoverCore(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
         try {
-            const appHosts = await this._discoverWithLs(workspaceFolder, cancellationToken);
+            const appHosts = await this._discoverWithLs(workspaceFolder);
             extensionLogOutputChannel.info(`Discovered ${appHosts.length} AppHost candidate(s) via aspire ls`);
             return appHosts;
         }
         catch (error) {
             this._throwIfDisposed();
-            throwIfCancellationRequested(cancellationToken);
             extensionLogOutputChannel.warn(`aspire ls discovery failed, falling back to aspire extension get-apphosts: ${formatErrorMessage(error)}`);
             try {
-                const appHosts = await this._discoverWithLegacyGetAppHosts(workspaceFolder, cancellationToken);
+                const appHosts = await this._discoverWithLegacyGetAppHosts(workspaceFolder);
                 extensionLogOutputChannel.info(`Discovered ${appHosts.length} AppHost candidate(s) via aspire extension get-apphosts`);
                 return appHosts;
             }
             catch (fallbackError) {
                 this._throwIfDisposed();
-                throwIfCancellationRequested(cancellationToken);
                 let fileFallbackError: unknown;
                 try {
-                    const appHosts = await discoverCSharpAppHostProjectsFromWorkspaceFiles(workspaceFolder, cancellationToken);
+                    const appHosts = await discoverCSharpAppHostProjectsFromWorkspaceFiles(workspaceFolder);
                     if (appHosts.length > 0) {
                         extensionLogOutputChannel.warn(`CLI AppHost discovery failed; using ${appHosts.length} C# AppHost project candidate(s) found in the workspace.`);
                         return appHosts;
@@ -157,9 +162,8 @@ export class AppHostDiscoveryService implements vscode.Disposable {
         }
     }
 
-    private async _discoverWithLs(workspaceFolder: vscode.WorkspaceFolder, cancellationToken?: vscode.CancellationToken): Promise<CandidateAppHostDisplayInfo[]> {
+    private async _discoverWithLs(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
         this._throwIfDisposed();
-        throwIfCancellationRequested(cancellationToken);
 
         const cliPath = await this._terminalProvider.getAspireCliExecutablePath();
         const args = ['ls', '--format', 'json'];
@@ -167,13 +171,12 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             args.push('--cli-wait-for-debugger');
         }
 
-        const output = await this._runCliForStdout(cliPath, args, workspaceFolder.uri.fsPath, cancellationToken);
+        const output = await this._runCliForStdout(cliPath, args, workspaceFolder.uri.fsPath);
         return parseCandidateOutput(output, 'aspire ls');
     }
 
-    private async _discoverWithLegacyGetAppHosts(workspaceFolder: vscode.WorkspaceFolder, cancellationToken?: vscode.CancellationToken): Promise<CandidateAppHostDisplayInfo[]> {
+    private async _discoverWithLegacyGetAppHosts(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
         this._throwIfDisposed();
-        throwIfCancellationRequested(cancellationToken);
 
         const cliPath = await this._terminalProvider.getAspireCliExecutablePath();
         const args = ['extension', 'get-apphosts'];
@@ -181,7 +184,7 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             args.push('--cli-wait-for-debugger');
         }
 
-        const output = await this._runCliForStdout(cliPath, args, workspaceFolder.uri.fsPath, cancellationToken);
+        const output = await this._runCliForStdout(cliPath, args, workspaceFolder.uri.fsPath);
         const parsed = parseLegacyGetAppHostsOutput(output);
         return toCandidatesFromLegacySearchResult(parsed);
     }
@@ -241,12 +244,12 @@ export class AppHostDiscoveryService implements vscode.Disposable {
         }
     }
 
-    private async _includeConfiguredAppHostCandidate(workspaceFolder: vscode.WorkspaceFolder, candidates: CandidateAppHostDisplayInfo[], cancellationToken?: vscode.CancellationToken): Promise<CandidateAppHostDisplayInfo[]> {
+    private async _includeConfiguredAppHostCandidate(workspaceFolder: vscode.WorkspaceFolder, candidates: CandidateAppHostDisplayInfo[]): Promise<CandidateAppHostDisplayInfo[]> {
         if (candidates.some(candidate => candidate.selected)) {
             return candidates;
         }
 
-        const configuredPaths = await findConfiguredAppHostPaths(workspaceFolder, cancellationToken);
+        const configuredPaths = await findConfiguredAppHostPaths(workspaceFolder);
         const configuredPath = configuredPaths.find(configuredPath => candidates.some(candidate => isSamePath(candidate.path, configuredPath)))
             ?? configuredPaths[0];
         if (!configuredPath) {
@@ -272,17 +275,15 @@ export class AppHostDiscoveryService implements vscode.Disposable {
         ];
     }
 
-    private _runCliForStdout(cliPath: string, args: string[], workingDirectory: string, cancellationToken?: vscode.CancellationToken): Promise<string> {
+    private _runCliForStdout(cliPath: string, args: string[], workingDirectory: string): Promise<string> {
         return new Promise((resolve, reject) => {
             this._throwIfDisposed();
-            throwIfCancellationRequested(cancellationToken);
 
             let stdout = '';
             let stderr = '';
             let settled = false;
             let childProcess: ChildProcessWithoutNullStreams | undefined;
             let timeout: ReturnType<typeof setTimeout> | undefined;
-            let cancellationDisposable: vscode.Disposable | undefined;
             const cancel = (error: Error) => {
                 if (childProcess && !childProcess.killed) {
                     try {
@@ -306,8 +307,6 @@ export class AppHostDiscoveryService implements vscode.Disposable {
                     this._activeCliProcesses.delete(childProcess);
                 }
                 this._cancelActiveCliProcesses.delete(cancel);
-                cancellationDisposable?.dispose();
-                cancellationDisposable = undefined;
             };
             const settle = (complete: () => void) => {
                 if (settled) {
@@ -320,13 +319,6 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             };
 
             this._cancelActiveCliProcesses.add(cancel);
-            cancellationDisposable = cancellationToken?.onCancellationRequested(() => {
-                cancel(new Error('AppHost discovery was cancelled.'));
-            });
-            if (settled) {
-                return;
-            }
-
             try {
                 childProcess = spawnCliProcess(this._terminalProvider, cliPath, args, {
                     noExtensionVariables: true,
@@ -554,8 +546,8 @@ function parseCandidateOutput(output: string, commandName: string): CandidateApp
     throw new Error(`${commandName} returned an unexpected output shape.`);
 }
 
-async function discoverCSharpAppHostProjectsFromWorkspaceFiles(workspaceFolder: vscode.WorkspaceFolder, cancellationToken?: vscode.CancellationToken): Promise<CandidateAppHostDisplayInfo[]> {
-    const projectUris = await vscode.workspace.findFiles(new vscode.RelativePattern(workspaceFolder, '**/*.csproj'), getAppHostDiscoveryExcludeGlob(), appHostDiscoveryFindFilesMaxResults, cancellationToken);
+async function discoverCSharpAppHostProjectsFromWorkspaceFiles(workspaceFolder: vscode.WorkspaceFolder): Promise<CandidateAppHostDisplayInfo[]> {
+    const projectUris = await vscode.workspace.findFiles(new vscode.RelativePattern(workspaceFolder, '**/*.csproj'), getAppHostDiscoveryExcludeGlob(), appHostDiscoveryFindFilesMaxResults);
     const candidates: CandidateAppHostDisplayInfo[] = [];
     for (const uri of projectUris.sort((left, right) => left.fsPath.localeCompare(right.fsPath))) {
         let projectContents: string;
@@ -622,6 +614,36 @@ function throwIfCancellationRequested(cancellationToken?: vscode.CancellationTok
     if (cancellationToken?.isCancellationRequested) {
         throw new Error('AppHost discovery was cancelled.');
     }
+}
+
+function withCancellation<T>(promise: Promise<T>, cancellationToken?: vscode.CancellationToken): Promise<T> {
+    if (!cancellationToken) {
+        return promise;
+    }
+
+    try {
+        throwIfCancellationRequested(cancellationToken);
+    }
+    catch (error) {
+        return Promise.reject(error);
+    }
+
+    return new Promise<T>((resolve, reject) => {
+        const disposable = cancellationToken.onCancellationRequested(() => {
+            disposable.dispose();
+            reject(new Error('AppHost discovery was cancelled.'));
+        });
+
+        promise.then(
+            value => {
+                disposable.dispose();
+                resolve(value);
+            },
+            error => {
+                disposable.dispose();
+                reject(error);
+            });
+    });
 }
 
 function isLegacyAppHostProjectSearchResult(obj: unknown): obj is LegacyAppHostProjectSearchResult {

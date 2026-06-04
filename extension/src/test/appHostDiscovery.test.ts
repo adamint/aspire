@@ -230,6 +230,54 @@ suite('AppHost discovery', () => {
             assert.strictEqual(childProcess.killed, true);
         });
 
+        test('caller cancellation does not reject shared discovery for other callers', async () => {
+            stubFileSystemWatchers(sandbox);
+            let options: cliModule.SpawnProcessOptions | undefined;
+            const childProcess = {
+                killed: false,
+                kill: sandbox.stub().callsFake(() => {
+                    childProcess.killed = true;
+                    return true;
+                }),
+            };
+            sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, spawnOptions) => {
+                options = spawnOptions;
+                return childProcess as any;
+            });
+            const service = new AppHostDiscoveryService(makeTerminalProvider());
+            const workspaceFolder = makeWorkspaceFolder(buildPath('workspace'));
+            const cancellationSource = new vscode.CancellationTokenSource();
+
+            try {
+                const cancelledDiscovery = service.discover(workspaceFolder, false, cancellationSource.token);
+                const sharedDiscovery = service.discover(workspaceFolder);
+                await waitForMicrotasks();
+                assert.ok(options);
+
+                cancellationSource.cancel();
+
+                await assert.rejects(cancelledDiscovery, /cancelled/);
+                assert.strictEqual(childProcess.kill.callCount, 0);
+
+                options.stdoutCallback?.(JSON.stringify([{
+                    path: buildPath('workspace', 'AppHost', 'AppHost.csproj'),
+                    language: 'csharp',
+                    status: 'buildable',
+                }]));
+                options.exitCallback?.(0);
+
+                assert.deepStrictEqual(await sharedDiscovery, [{
+                    path: buildPath('workspace', 'AppHost', 'AppHost.csproj'),
+                    language: 'csharp',
+                    status: 'buildable',
+                }]);
+            }
+            finally {
+                cancellationSource.dispose();
+                service.dispose();
+            }
+        });
+
         test('times out hung CLI process and allows retry', async () => {
             stubFileSystemWatchers(sandbox);
             sandbox.stub(vscode.workspace, 'getConfiguration').returns({
