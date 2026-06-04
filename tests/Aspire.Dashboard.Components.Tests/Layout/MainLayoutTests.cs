@@ -19,6 +19,7 @@ using Microsoft.FluentUI.AspNetCore.Components.Components.Tooltip;
 using Microsoft.JSInterop;
 using Xunit;
 using AssistantModalDialog = Aspire.Dashboard.Components.Dialogs.AssistantModalDialog;
+using AssistantSidebarDialog = Aspire.Dashboard.Components.Dialogs.AssistantSidebarDialog;
 
 namespace Aspire.Dashboard.Components.Tests.Layout;
 
@@ -360,6 +361,24 @@ public partial class MainLayoutTests : DashboardTestContext
                 Assert.Equal("focusElement", invocation.Identifier);
                 Assert.Collection(invocation.Arguments, argument => Assert.Equal("dashboard-assistant-button", argument));
             });
+    }
+
+    [Theory]
+    [InlineData(true, "dashboard-assistant-button", "dashboard-navigation-button")]
+    [InlineData(false, "dashboard-assistant-button", "dashboard-assistant-button")]
+    [InlineData(false, null, null)]
+    public void AssistantSidebarSwitchToModal_UsesVisibleLauncherAsReturnFocusTarget(bool openedForMobileView, string? returnFocusElementId, string? expectedReturnFocusElementId)
+    {
+        Assert.Equal(expectedReturnFocusElementId, AssistantSidebarDialog.GetReturnFocusElementId(openedForMobileView, returnFocusElementId));
+    }
+
+    [Theory]
+    [InlineData(true, "dashboard-navigation-button", "dashboard-assistant-button")]
+    [InlineData(false, "dashboard-navigation-button", "dashboard-navigation-button")]
+    [InlineData(false, null, null)]
+    public void AssistantModalSwitchToSidebar_UsesVisibleLauncherAsReturnFocusTarget(bool openedForMobileView, string? returnFocusElementId, string? expectedReturnFocusElementId)
+    {
+        Assert.Equal(expectedReturnFocusElementId, AssistantModalDialog.GetSidebarReturnFocusElementId(openedForMobileView, returnFocusElementId));
     }
 
     private void SetupMainLayoutServices(

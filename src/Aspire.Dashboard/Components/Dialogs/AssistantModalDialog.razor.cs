@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using Aspire.Dashboard.Components.Layout;
 using Aspire.Dashboard.Model.Assistant;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
@@ -124,7 +125,15 @@ public partial class AssistantModalDialog : IAsyncDisposable
 
     private async Task DisplaySidebarViewAsync()
     {
-        await AIContextProvider.LaunchAssistantSidebarAsync(Content.Chat, Content.ReturnFocusElementId);
+        var returnFocusElementId = GetSidebarReturnFocusElementId(Content.OpenedForMobileView, Content.ReturnFocusElementId);
+        await AIContextProvider.LaunchAssistantSidebarAsync(Content.Chat, returnFocusElementId);
+    }
+
+    public static string? GetSidebarReturnFocusElementId(bool openedForMobileView, string? returnFocusElementId)
+    {
+        return openedForMobileView
+            ? MainLayout.AssistantButtonId
+            : returnFocusElementId;
     }
 
     public async Task StartNewChatAsync()

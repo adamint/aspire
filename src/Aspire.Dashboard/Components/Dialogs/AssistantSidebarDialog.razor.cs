@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Dashboard.Components.CustomIcons;
+using Aspire.Dashboard.Components.Layout;
 using Aspire.Dashboard.Model.Assistant;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
@@ -63,7 +64,18 @@ public partial class AssistantSidebarDialog : IAsyncDisposable
     {
         Content.Chat.DisplayContainer = AssistantChatDisplayContainer.Switching;
         await AIContextProvider.HideAssistantSidebarAsync(restoreFocus: false);
-        await AIContextProvider.LaunchAssistantModelDialogAsync(Content.Chat, openedForMobileView, Content.ReturnFocusElementId);
+
+        // The viewport switch changes which launcher is visible. Keep focus restoration
+        // pointed at the control users can actually reach after the switch completes.
+        var returnFocusElementId = GetReturnFocusElementId(openedForMobileView, Content.ReturnFocusElementId);
+        await AIContextProvider.LaunchAssistantModelDialogAsync(Content.Chat, openedForMobileView, returnFocusElementId);
+    }
+
+    public static string? GetReturnFocusElementId(bool openedForMobileView, string? returnFocusElementId)
+    {
+        return openedForMobileView
+            ? MainLayout.NavigationButtonId
+            : returnFocusElementId;
     }
 
     public async Task StartNewChatAsync()
