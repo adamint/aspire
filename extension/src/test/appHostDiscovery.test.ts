@@ -678,7 +678,7 @@ suite('AppHost discovery', () => {
                     const result = await service.discover(makeWorkspaceFolder(tempDir));
 
                     assert.deepStrictEqual(result, [{
-                        path: appHostProjectPath,
+                        path: vscode.Uri.file(appHostProjectPath).fsPath,
                         language: 'csharp',
                         status: 'buildable',
                     }]);
