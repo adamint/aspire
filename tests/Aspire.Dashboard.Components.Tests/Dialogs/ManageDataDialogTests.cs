@@ -24,7 +24,7 @@ namespace Aspire.Dashboard.Components.Tests.Dialogs;
 public sealed class ManageDataDialogTests : DashboardTestContext
 {
     [Fact]
-    public void Render_SelectionControlsExposeAccessibleNamesCheckboxRoleAndState()
+    public async Task Render_SelectionControlsExposeAccessibleNamesCheckboxRoleAndState()
     {
         var basketResource = ModelTestHelpers.CreateResource(
             resourceName: "basket",
@@ -53,16 +53,16 @@ public sealed class ManageDataDialogTests : DashboardTestContext
             AssertNoButtonHasAccessibleName(cut, "Name");
         });
 
-        PressKey(AssertSelectionCheckbox(cut, "Basket service", "true"), "Tab");
+        await PressSelectionKeyAsync(cut, "Basket service", "true", "Tab");
         AssertSelectionCheckbox(cut, "Basket service", "true");
 
-        PressKey(AssertSelectionCheckbox(cut, "Basket service", "true"), "Tab", shiftKey: true);
+        await PressSelectionKeyAsync(cut, "Basket service", "true", "Tab", shiftKey: true);
         AssertSelectionCheckbox(cut, "Basket service", "true");
 
-        PressKey(AssertSelectionCheckbox(cut, "Basket service", "true"), "Enter");
+        await PressSelectionKeyAsync(cut, "Basket service", "true", "Enter");
         AssertSelectionCheckbox(cut, "Basket service", "true");
 
-        PressSpace(AssertSelectionCheckbox(cut, "Basket service", "true"));
+        await PressSelectionSpaceAsync(cut, "Basket service", "true");
 
         cut.WaitForAssertion(() =>
         {
@@ -72,7 +72,7 @@ public sealed class ManageDataDialogTests : DashboardTestContext
             AssertSelectionCheckbox(cut, "Catalog service", "true");
         });
 
-        PressSpace(AssertSelectionCheckbox(cut, "Basket service", "false"));
+        await PressSelectionSpaceAsync(cut, "Basket service", "false");
 
         cut.WaitForAssertion(() =>
         {
@@ -82,7 +82,7 @@ public sealed class ManageDataDialogTests : DashboardTestContext
             AssertSelectionCheckbox(cut, "Catalog service", "true");
         });
 
-        ExpandResourceRows(cut, expectedCount: 2);
+        await ExpandResourceRowsAsync(cut, expectedCount: 2);
 
         cut.WaitForAssertion(() =>
         {
@@ -91,7 +91,7 @@ public sealed class ManageDataDialogTests : DashboardTestContext
             AssertNoButtonHasAccessibleName(cut, "Name");
         });
 
-        AssertSelectionCheckbox(cut, "Console logs for Basket service", "true").Click();
+        await ClickSelectionCheckboxAsync(cut, "Console logs for Basket service", "true");
 
         cut.WaitForAssertion(() =>
         {
@@ -108,7 +108,7 @@ public sealed class ManageDataDialogTests : DashboardTestContext
             AssertNoButtonHasAccessibleName(cut, "Name");
         });
 
-        AssertSelectionCheckbox(cut, "All data", "mixed").Click();
+        await ClickSelectionCheckboxAsync(cut, "All data", "mixed");
 
         cut.WaitForAssertion(() =>
         {
@@ -117,7 +117,7 @@ public sealed class ManageDataDialogTests : DashboardTestContext
             AssertNoButtonHasAccessibleName(cut, "Name");
         });
 
-        AssertSelectionCheckbox(cut, "All data", "true").Click();
+        await ClickSelectionCheckboxAsync(cut, "All data", "true");
 
         cut.WaitForAssertion(() =>
         {
@@ -156,15 +156,18 @@ public sealed class ManageDataDialogTests : DashboardTestContext
         module.SetupVoid("disposeSelectionCheckboxKeyboard", _ => true);
     }
 
-    private static void ExpandResourceRows(IRenderedComponent<ManageDataDialog> cut, int expectedCount)
+    private static async Task ExpandResourceRowsAsync(IRenderedComponent<ManageDataDialog> cut, int expectedCount)
     {
         for (var i = 0; i < expectedCount; i++)
         {
-            var toggleButtons = cut.FindAll("fluent-button[aria-label='Toggle nesting']");
+            await cut.InvokeAsync(() =>
+            {
+                var toggleButtons = cut.FindAll("fluent-button[aria-label='Toggle nesting']");
 
-            Assert.Equal(expectedCount, toggleButtons.Count);
+                Assert.Equal(expectedCount, toggleButtons.Count);
 
-            toggleButtons[i].Click();
+                toggleButtons[i].Click();
+            });
         }
     }
 
@@ -226,11 +229,14 @@ public sealed class ManageDataDialogTests : DashboardTestContext
         string.Equals(element.GetAttribute("title"), accessibleName, StringComparison.Ordinal) &&
         string.Equals(element.GetAttribute("aria-label"), accessibleName, StringComparison.Ordinal);
 
-    private static void PressSpace(IElement element) =>
-        PressKey(element, " ", code: "Space");
+    private static Task ClickSelectionCheckboxAsync(IRenderedComponent<ManageDataDialog> cut, string accessibleName, string ariaChecked) =>
+        cut.InvokeAsync(() => AssertSelectionCheckbox(cut, accessibleName, ariaChecked).Click());
 
-    private static void PressKey(IElement element, string key, string? code = null, bool shiftKey = false) =>
-        element.TriggerEvent("onkeydown", new KeyboardEventArgs { Key = key, Code = code ?? string.Empty, ShiftKey = shiftKey });
+    private static Task PressSelectionSpaceAsync(IRenderedComponent<ManageDataDialog> cut, string accessibleName, string ariaChecked) =>
+        PressSelectionKeyAsync(cut, accessibleName, ariaChecked, " ", code: "Space");
+
+    private static Task PressSelectionKeyAsync(IRenderedComponent<ManageDataDialog> cut, string accessibleName, string ariaChecked, string key, string? code = null, bool shiftKey = false) =>
+        cut.InvokeAsync(() => AssertSelectionCheckbox(cut, accessibleName, ariaChecked).TriggerEvent("onkeydown", new KeyboardEventArgs { Key = key, Code = code ?? string.Empty, ShiftKey = shiftKey }));
 
     private static IReadOnlyList<IElement> GetSelectionCheckboxes(IRenderedComponent<ManageDataDialog> cut)
     {
