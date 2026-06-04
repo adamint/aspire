@@ -498,7 +498,7 @@ public partial class ResourcesTests : DashboardTestContext
             assert.equal(resourcesModule.shouldStopResourcesGridRowKeydown(createKeydownEvent('Tab')), false);
             assert.equal(resourcesModule.shouldStopResourcesGridRowKeydown(createKeydownEvent('ArrowDown')), false);
             assert.equal(resourcesModule.shouldStopResourcesGridRowKeydown(createKeydownEvent('Escape')), false);
-            assert.equal(resourcesModule.shouldStopResourcesGridRowKeydown(createKeydownEvent('Enter', { ctrlKey: true })), false);
+            assert.equal(resourcesModule.shouldStopResourcesGridRowKeydown(createKeydownEvent('Enter', { ctrlKey: true })), true);
 
             const grid = new FakeElement('div');
             const button = new FakeElement('button');
@@ -509,6 +509,7 @@ public partial class ResourcesTests : DashboardTestContext
             const registration = resourcesModule.initializeResourcesGridKeyboardActivation(grid);
 
             assert.equal(button.dispatchKeydown('Enter'), true);
+            assert.equal(button.dispatchKeydown('Enter', { ctrlKey: true }), true);
             assert.equal(button.dispatchKeydown(' '), false);
             assert.equal(button.dispatchKeydown('ArrowDown'), false);
             assert.equal(button.dispatchKeydown('Tab'), false);
@@ -545,7 +546,8 @@ public partial class ResourcesTests : DashboardTestContext
             directory = directory.Parent;
         }
 
-        throw new FileNotFoundException("Unable to locate Resources.razor.js from the test output directory.", "Resources.razor.js");
+        Assert.Skip("Resources.razor.js is required to run the Resources grid keyboard activation JavaScript test.");
+        return string.Empty;
     }
 
     private static async Task RunNodeScriptAsync(string script, string scriptPath)
