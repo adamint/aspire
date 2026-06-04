@@ -119,7 +119,7 @@ public partial class AspireMenu : FluentComponentBase
         {
             await onClick();
         }
-        Open = false;
+        await OnOpenChanged(false);
 
         if (RestoreFocusOnItemClick && !string.IsNullOrEmpty(Anchor))
         {
