@@ -69,7 +69,7 @@ The core flow is:
 3. Press **F5**, or use **Run Aspire apphost** / **Debug Aspire apphost** from the editor.
 4. Inspect resources in the Aspire view and open the dashboard when you need logs, traces, metrics, or endpoint URLs.
 
-Learn more [here](https://aspire.dev/get-started/aspire-vscode-extension/).
+Learn more in the [Aspire VS Code extension documentation](https://aspire.dev/get-started/aspire-vscode-extension/).
 
 ---
 
