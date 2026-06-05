@@ -520,6 +520,85 @@ Use the following structure:
 - [Any recommendations based on test results]
 ```
 
+For a VS Code extension PR, the report should look more like this example than a CLI-only report:
+
+```markdown
+# PR Testing Report
+
+## PR Information
+- **PR Number:** #17864
+- **Title:** Add "Open Dashboard to the Side" command
+- **Head Commit:** 37c5f909120ec79d44d6e8306d3ab5cc79f7e554
+- **Tested At:** 2026-06-05T18:30:00Z
+
+## Artifact Version Verification
+- **Expected Commit:** 37c5f909120ec79d44d6e8306d3ab5cc79f7e554
+- **Installed Version:** N/A - tested source checkout at head commit and VSIX built from that checkout
+- **Status:** ✅ Verified
+
+## Changes Analyzed
+### Files Changed
+- `extension/src/...` - VS Code extension command/view behavior
+
+### Change Categories
+- [ ] CLI changes detected
+- [ ] Hosting integration changes
+- [ ] Dashboard changes
+- [x] VS Code extension changes
+
+## Test Scenarios Executed
+
+### Scenario 1: Extension build and unit validation
+**Objective:** Verify the PR extension source compiles, lints, and passes VS Code unit tests.
+**Coverage Type:** Build/unit validation
+**Status:** ✅ Passed
+
+**Steps:**
+1. Checked out the PR at `/tmp/aspire-pr17864-test` to avoid VS Code IPC path-length issues.
+2. Ran `./build.sh` from `extension/` to build the extension and repo Aspire CLI.
+3. Ran `corepack yarn run test`.
+
+**Evidence:**
+- Source checkout: `/tmp/aspire-pr17864-test`
+- CLI path: `/tmp/aspire-pr17864-test/artifacts/bin/Aspire.Cli/Debug/net10.0/aspire`
+- Command output: build and unit test logs captured in the test workspace
+
+**Observations:**
+- Extension compile, lint, and VS Code unit tests completed successfully.
+
+---
+
+### Scenario 2: Open Dashboard to the Side in a real Extension Host
+**Objective:** Verify the command works in VS Code with a running AppHost, not just by reading source.
+**Coverage Type:** User-visible E2E
+**Status:** ✅ Passed
+
+**Steps:**
+1. Built the PR VSIX/source from the PR checkout.
+2. Started the E2E Extension Host with `ASPIRE_EXTENSION_E2E_CLI_PATH=/tmp/aspire-pr17864-test/artifacts/bin/Aspire.Cli/Debug/net10.0/aspire`.
+3. Started the fixture AppHost.
+4. Invoked `aspire-vscode.openDashboardToSide`.
+5. Verified the dashboard opened in the side editor group.
+
+**Evidence:**
+- E2E command: `corepack yarn run test:e2e` with a focused `ASPIRE_EXTENSION_E2E_SPEC`
+- E2E state: `extension/.test-results/e2e/<shard>/extension-state.json`
+- VS Code diagnostics: `extension/.test-storage/<shard>/...`
+
+**Observations:**
+- The Extension Host launched the PR extension and used the expected repo-built CLI.
+- The command opened the Aspire dashboard beside the current editor.
+
+## Summary
+| Scenario | Status | Notes |
+|----------|--------|-------|
+| Extension build and unit validation | ✅ Passed | Source checkout at PR head |
+| Open Dashboard to the Side E2E | ✅ Passed | Real VS Code Extension Host with repo-built CLI |
+
+## Overall Result
+**✅ PR VERIFIED**
+```
+
 ### 11. Ask Whether to Post the Report
 
 After the test run finishes and the detailed report is generated, ask the user whether to post the report as a PR comment when the run is associated with a GitHub PR (`prNumber` is known). Default the prompt to **Yes**, but do not post anything without explicit user confirmation.
