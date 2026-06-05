@@ -27,7 +27,6 @@ Aspire helps you build distributed apps — things like microservices, databases
 
 | Feature | Description |
 |---------|-------------|
-| **AppHost discovery** | Open a repo and let the extension find project-based C# AppHosts and TypeScript AppHosts |
 | **Run & debug** | Start your whole app and attach debuggers to every service with F5 |
 | **Dashboard** | See your resources, endpoints, logs, traces, and metrics while your app runs |
 | **Sidebar** | Browse running apphosts and resources in the Activity Bar |

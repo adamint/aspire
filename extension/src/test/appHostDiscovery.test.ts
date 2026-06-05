@@ -311,6 +311,40 @@ suite('AppHost discovery', () => {
             }
         });
 
+        test('adapts legacy get-apphosts candidates as buildable C# AppHosts', async () => {
+            stubFileSystemWatchers(sandbox);
+            const appHostPath = buildPath('workspace', 'AppHost', 'AppHost.csproj');
+            sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, args = [], options) => {
+                if (args[0] === 'ls') {
+                    options?.stderrCallback?.('aspire ls unavailable');
+                    options?.exitCallback?.(1);
+                }
+                else {
+                    options?.stdoutCallback?.(JSON.stringify({
+                        selected_project_file: appHostPath,
+                        all_project_file_candidates: [appHostPath],
+                    }));
+                    options?.exitCallback?.(0);
+                }
+                return { kill: () => { } } as any;
+            });
+            const service = new AppHostDiscoveryService(makeTerminalProvider());
+
+            try {
+                const result = await service.discover(makeWorkspaceFolder(buildPath('workspace')));
+
+                assert.deepStrictEqual(result, [{
+                    path: appHostPath,
+                    language: 'csharp',
+                    status: 'buildable',
+                    selected: true,
+                }]);
+            }
+            finally {
+                service.dispose();
+            }
+        });
+
         test('reports both aspire ls and legacy fallback errors when discovery fails', async () => {
             stubFileSystemWatchers(sandbox);
             sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, args = [], options) => {
@@ -421,6 +455,50 @@ suite('AppHost discovery', () => {
             const excludePatterns = findFilesStub.getCalls().map(call => String(call.args[1]));
             assert.ok(excludePatterns.length > 0);
             assert.ok(excludePatterns.every(pattern => pattern.includes('**/.worktrees/**')));
+        });
+
+        test('configured C# AppHost candidate resolves editor source file', async () => {
+            const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-apphost-discovery-'));
+            try {
+                stubFileSystemWatchers(sandbox);
+                const configPath = path.join(tempDir, 'aspire.config.json');
+                const appHostProjectPath = path.join(tempDir, 'AppHost', 'AppHost.csproj');
+                const appHostProgramPath = path.join(tempDir, 'AppHost', 'Program.cs');
+
+                fs.mkdirSync(path.dirname(appHostProjectPath), { recursive: true });
+                fs.writeFileSync(configPath, JSON.stringify({ appHost: { path: 'AppHost/AppHost.csproj' } }));
+                findFilesStub.callsFake(async (include: vscode.GlobPattern) => {
+                    const pattern = typeof include === 'string' ? include : include.pattern;
+                    return pattern.endsWith('aspire.config.json')
+                        ? [vscode.Uri.file(configPath)]
+                        : [];
+                });
+                sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, options) => {
+                    options?.stdoutCallback?.('[]');
+                    options?.exitCallback?.(0);
+                    return { kill: () => { } } as any;
+                });
+                const service = new AppHostDiscoveryService(makeTerminalProvider());
+
+                try {
+                    const result = await service.discover(makeWorkspaceFolder(tempDir));
+                    const sourceFileCandidate = await service.tryFindCandidateForEditorFile(appHostProgramPath, makeWorkspaceFolder(tempDir));
+
+                    assert.deepStrictEqual(result, [{
+                        path: appHostProjectPath,
+                        language: 'csharp',
+                        status: 'buildable',
+                        selected: true,
+                    }]);
+                    assert.strictEqual(sourceFileCandidate?.path, appHostProjectPath);
+                }
+                finally {
+                    service.dispose();
+                }
+            }
+            finally {
+                fs.rmSync(tempDir, { recursive: true, force: true });
+            }
         });
 
         test('selects configured path from recursive config during service discovery', async () => {

@@ -8,7 +8,7 @@ import { aspireConfigFileName, getAppHostPathFromConfig, readJsonFile } from './
 import { EnvironmentVariables } from './environment';
 import { extensionLogOutputChannel } from './logging';
 import { getAppHostDiscoveryTimeoutMs } from './settings';
-import { summarizeAppHostLanguages } from './appHostLanguage';
+import { classifyAppHostPath, summarizeAppHostLanguages } from './appHostLanguage';
 import { sendTelemetryEvent } from './telemetry';
 
 // Mirrors the `aspire ls --format json` candidate shape documented in
@@ -253,11 +253,12 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             }));
         }
 
+        const configuredLanguage = classifyAppHostPath(configuredPath);
         return [
             ...candidates,
             {
                 path: configuredPath,
-                language: null,
+                language: configuredLanguage === 'unknown' ? null : configuredLanguage,
                 status: 'buildable',
                 selected: true,
             },
@@ -660,8 +661,8 @@ function isAppHostProjectSearchResult(obj: unknown): obj is AppHostProjectSearch
 function toCandidatesFromLegacySearchResult(parsed: LegacyAppHostProjectSearchResult): CandidateAppHostDisplayInfo[] {
     return parsed.all_project_file_candidates.filter(candidate => typeof candidate === 'string').map(candidatePath => ({
         path: candidatePath,
-        language: null,
-        status: null,
+        language: 'csharp',
+        status: 'buildable',
         selected: typeof parsed.selected_project_file === 'string' && isSamePath(parsed.selected_project_file, candidatePath),
     }));
 }
@@ -669,12 +670,12 @@ function toCandidatesFromLegacySearchResult(parsed: LegacyAppHostProjectSearchRe
 function isCSharpProjectCandidate(candidate: CandidateAppHostDisplayInfo): boolean {
     // Only `.csproj` candidates can own nearby C# source files for the editor alias
     // heuristic above. Modern `aspire ls` candidates include the CLI language id
-    // (`language: "csharp"`); legacy `aspire extension get-apphosts` fallback
-    // candidates do not have a language, so `null` is treated as C# here to
-    // preserve old CLI support while keeping the compatibility gap local to
+    // (`language: "csharp"`). Legacy `aspire extension get-apphosts` fallback
+    // candidates are adapted to that modern C# shape before reaching here. That
+    // preserves old CLI support while keeping the compatibility gap local to
     // candidate adaptation/matching.
     return path.extname(candidate.path).toLowerCase() === '.csproj'
-        && (candidate.language === null || candidate.language.toLowerCase() === 'csharp');
+        && candidate.language?.toLowerCase() === 'csharp';
 }
 
 function isCSharpSourceFileForProjectCandidate(filePath: string, projectPath: string): boolean {
