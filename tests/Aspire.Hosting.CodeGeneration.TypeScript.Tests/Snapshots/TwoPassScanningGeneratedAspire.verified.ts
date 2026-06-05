@@ -722,6 +722,16 @@ export interface CommandResultData {
     displayImmediately?: boolean;
 }
 
+/** Options for creating or updating files and directories in a container from polyglot apphosts. */
+export interface ContainerFilesOptions {
+    /** The default owner UID for the created or updated file system entries. Defaults to 0 for root if not set. */
+    defaultOwner?: number | null;
+    /** The default group ID for the created or updated file system entries. Defaults to 0 for root if not set. */
+    defaultGroup?: number | null;
+    /** The Unix umask to apply to files or directories without explicit permissions. Use octal literals in JavaScript or TypeScript, for example `0o022`. */
+    umask?: number | null;
+}
+
 /** Options for creating a distributed application builder from polyglot apphosts. */
 export interface CreateBuilderOptions {
     /** The command line arguments. */
@@ -803,6 +813,16 @@ export interface GenerateParameterDefault {
     minNumeric?: number;
     /** Gets or sets the minimum number of special characters in the result. */
     minSpecial?: number;
+}
+
+/** ATS-friendly custom health check result. */
+export interface HealthCheckResult {
+    /** Gets the health status returned by the health check. */
+    status?: HealthStatus;
+    /** Gets an optional description for the health check result. */
+    description?: string | null;
+    /** Gets optional string data for the health check result. */
+    data?: Record<string, string>;
 }
 
 /** ATS-friendly configuration for resource HTTP commands. */
@@ -8761,6 +8781,12 @@ export interface DistributedApplicationBuilder {
      */
     tryAddEventingSubscriber(subscribe: (arg: EventingSubscriberRegistrationContext) => Promise<void>): DistributedApplicationBuilderPromise;
     /**
+     * Adds a custom health check callback to the distributed-application builder.
+     * @param name The health check registration name.
+     * @param check The callback that evaluates the health check.
+     */
+    addHealthCheck(name: string, check: () => Promise<HealthCheckResult>): DistributedApplicationBuilderPromise;
+    /**
      * Adds a test Redis resource from ATS documentation.
      * @param name The ATS resource name.
      * @param options Additional options.
@@ -8975,6 +9001,12 @@ export interface DistributedApplicationBuilderPromise extends PromiseLike<Distri
      * @param subscribe The callback that registers the event subscriptions.
      */
     tryAddEventingSubscriber(subscribe: (arg: EventingSubscriberRegistrationContext) => Promise<void>): DistributedApplicationBuilderPromise;
+    /**
+     * Adds a custom health check callback to the distributed-application builder.
+     * @param name The health check registration name.
+     * @param check The callback that evaluates the health check.
+     */
+    addHealthCheck(name: string, check: () => Promise<HealthCheckResult>): DistributedApplicationBuilderPromise;
     /**
      * Adds a test Redis resource from ATS documentation.
      * @param name The ATS resource name.
@@ -9572,6 +9604,28 @@ class DistributedApplicationBuilderImpl implements DistributedApplicationBuilder
     }
 
     /** @internal */
+    async _addHealthCheckInternal(name: string, check: () => Promise<HealthCheckResult>): Promise<DistributedApplicationBuilder> {
+        const checkId = registerCallback(async () => {
+            return await check();
+        });
+        const rpcArgs: Record<string, unknown> = { builder: this._handle, name, check: checkId };
+        await this._client.invokeCapability<void>(
+            'Aspire.Hosting/addHealthCheck',
+            rpcArgs
+        );
+        return this;
+    }
+
+    /**
+     * Adds a custom health check callback to the distributed-application builder.
+     * @param name The health check registration name.
+     * @param check The callback that evaluates the health check.
+     */
+    addHealthCheck(name: string, check: () => Promise<HealthCheckResult>): DistributedApplicationBuilderPromise {
+        return new DistributedApplicationBuilderPromiseImpl(this._addHealthCheckInternal(name, check), this._client);
+    }
+
+    /** @internal */
     async _addTestRedisInternal(name: string, port?: number): Promise<TestRedisResource> {
         const rpcArgs: Record<string, unknown> = { builder: this._handle, name };
         if (port !== undefined) rpcArgs.port = port;
@@ -9735,6 +9789,10 @@ class DistributedApplicationBuilderPromiseImpl implements DistributedApplication
 
     tryAddEventingSubscriber(subscribe: (arg: EventingSubscriberRegistrationContext) => Promise<void>): DistributedApplicationBuilderPromise {
         return new DistributedApplicationBuilderPromiseImpl(this._promise.then(obj => obj.tryAddEventingSubscriber(subscribe)), this._client);
+    }
+
+    addHealthCheck(name: string, check: () => Promise<HealthCheckResult>): DistributedApplicationBuilderPromise {
+        return new DistributedApplicationBuilderPromiseImpl(this._promise.then(obj => obj.addHealthCheck(name, check)), this._client);
     }
 
     addTestRedis(name: string, options?: AddTestRedisOptions): TestRedisResourcePromise {
@@ -11173,6 +11231,11 @@ class ReportingTaskPromiseImpl implements ReportingTaskPromise {
 export interface ServiceProvider {
     toJSON(): MarshalledHandle;
     /**
+     * Gets the Aspire store from the service provider.
+     * @returns The Aspire store.
+     */
+    getAspireStore(): AspireStorePromise;
+    /**
      * Gets the distributed application eventing service from the service provider.
      * @returns The distributed application eventing handle.
      */
@@ -11202,11 +11265,6 @@ export interface ServiceProvider {
      * @returns A resource command service handle.
      */
     getResourceCommandService(): ResourceCommandServicePromise;
-    /**
-     * Gets the Aspire store from the service provider.
-     * @returns The Aspire store.
-     */
-    getAspireStore(): AspireStorePromise;
     /**
      * Gets the user secrets manager from the service provider.
      * @returns A user secrets manager handle.
@@ -11216,6 +11274,11 @@ export interface ServiceProvider {
 
 export interface ServiceProviderPromise extends PromiseLike<ServiceProvider> {
     /**
+     * Gets the Aspire store from the service provider.
+     * @returns The Aspire store.
+     */
+    getAspireStore(): AspireStorePromise;
+    /**
      * Gets the distributed application eventing service from the service provider.
      * @returns The distributed application eventing handle.
      */
@@ -11245,11 +11308,6 @@ export interface ServiceProviderPromise extends PromiseLike<ServiceProvider> {
      * @returns A resource command service handle.
      */
     getResourceCommandService(): ResourceCommandServicePromise;
-    /**
-     * Gets the Aspire store from the service provider.
-     * @returns The Aspire store.
-     */
-    getAspireStore(): AspireStorePromise;
     /**
      * Gets the user secrets manager from the service provider.
      * @returns A user secrets manager handle.
@@ -11267,6 +11325,24 @@ class ServiceProviderImpl implements ServiceProvider {
 
     /** Serialize for JSON-RPC transport */
     toJSON(): MarshalledHandle { return this._handle.toJSON(); }
+
+    /** @internal */
+    async _getAspireStoreInternal(): Promise<AspireStore> {
+        const rpcArgs: Record<string, unknown> = { serviceProvider: this._handle };
+        const result = await this._client.invokeCapability<IAspireStoreHandle>(
+            'Aspire.Hosting/getAspireStore',
+            rpcArgs
+        );
+        return new AspireStoreImpl(result, this._client);
+    }
+
+    /**
+     * Gets the Aspire store from the service provider.
+     * @returns The Aspire store.
+     */
+    getAspireStore(): AspireStorePromise {
+        return new AspireStorePromiseImpl(this._getAspireStoreInternal(), this._client);
+    }
 
     /** @internal */
     async _getEventingInternal(): Promise<DistributedApplicationEventing> {
@@ -11377,24 +11453,6 @@ class ServiceProviderImpl implements ServiceProvider {
     }
 
     /** @internal */
-    async _getAspireStoreInternal(): Promise<AspireStore> {
-        const rpcArgs: Record<string, unknown> = { serviceProvider: this._handle };
-        const result = await this._client.invokeCapability<IAspireStoreHandle>(
-            'Aspire.Hosting/getAspireStore',
-            rpcArgs
-        );
-        return new AspireStoreImpl(result, this._client);
-    }
-
-    /**
-     * Gets the Aspire store from the service provider.
-     * @returns The Aspire store.
-     */
-    getAspireStore(): AspireStorePromise {
-        return new AspireStorePromiseImpl(this._getAspireStoreInternal(), this._client);
-    }
-
-    /** @internal */
     async _getUserSecretsManagerInternal(): Promise<UserSecretsManager> {
         const rpcArgs: Record<string, unknown> = { serviceProvider: this._handle };
         const result = await this._client.invokeCapability<IUserSecretsManagerHandle>(
@@ -11429,6 +11487,10 @@ class ServiceProviderPromiseImpl implements ServiceProviderPromise {
         return this._promise.then(onfulfilled, onrejected);
     }
 
+    getAspireStore(): AspireStorePromise {
+        return new AspireStorePromiseImpl(this._promise.then(obj => obj.getAspireStore()), this._client);
+    }
+
     getEventing(): DistributedApplicationEventingPromise {
         return new DistributedApplicationEventingPromiseImpl(this._promise.then(obj => obj.getEventing()), this._client);
     }
@@ -11451,10 +11513,6 @@ class ServiceProviderPromiseImpl implements ServiceProviderPromise {
 
     getResourceCommandService(): ResourceCommandServicePromise {
         return new ResourceCommandServicePromiseImpl(this._promise.then(obj => obj.getResourceCommandService()), this._client);
-    }
-
-    getAspireStore(): AspireStorePromise {
-        return new AspireStorePromiseImpl(this._promise.then(obj => obj.getAspireStore()), this._client);
     }
 
     getUserSecretsManager(): UserSecretsManagerPromise {
@@ -13706,6 +13764,19 @@ export interface ContainerResource {
      */
     withContainerCertificatePaths(options?: WithContainerCertificatePathsOptions): ContainerResourcePromise;
     /**
+     * Creates or updates files and folders in a container by copying them from a source path on the host.
+     *
+     * In run mode, Aspire copies the files into the container and applies owner, group, and umask options.
+     * In publish mode, Aspire creates a read-only bind mount and ignores those options.
+     * Inline file entries and callbacks are only available in .NET apphosts because ATS does not support the recursive,
+     * polymorphic `ContainerFileSystemItem` hierarchy or callbacks that use .NET services.
+     * @param destinationPath The destination absolute path in the container.
+     * @param sourcePath The source path on the host to copy files from.
+     * @param options Additional options.
+     * @returns The resource builder.
+     */
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): ContainerResourcePromise;
+    /**
      * Configures the resource to use a programmatically generated Dockerfile
      *
      * This method provides a programmatic way to build Dockerfiles using the `DockerfileBuilder` API
@@ -14432,6 +14503,19 @@ export interface ContainerResourcePromise extends PromiseLike<ContainerResource>
      * @returns The updated resource builder.
      */
     withContainerCertificatePaths(options?: WithContainerCertificatePathsOptions): ContainerResourcePromise;
+    /**
+     * Creates or updates files and folders in a container by copying them from a source path on the host.
+     *
+     * In run mode, Aspire copies the files into the container and applies owner, group, and umask options.
+     * In publish mode, Aspire creates a read-only bind mount and ignores those options.
+     * Inline file entries and callbacks are only available in .NET apphosts because ATS does not support the recursive,
+     * polymorphic `ContainerFileSystemItem` hierarchy or callbacks that use .NET services.
+     * @param destinationPath The destination absolute path in the container.
+     * @param sourcePath The source path on the host to copy files from.
+     * @param options Additional options.
+     * @returns The resource builder.
+     */
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): ContainerResourcePromise;
     /**
      * Configures the resource to use a programmatically generated Dockerfile
      *
@@ -15411,6 +15495,33 @@ class ContainerResourceImpl extends ResourceBuilderBase<ContainerResourceHandle>
         const defaultCertificateBundlePaths = options?.defaultCertificateBundlePaths;
         const defaultCertificateDirectoryPaths = options?.defaultCertificateDirectoryPaths;
         return new ContainerResourcePromiseImpl(this._withContainerCertificatePathsInternal(customCertificatesDestination, defaultCertificateBundlePaths, defaultCertificateDirectoryPaths), this._client);
+    }
+
+    /** @internal */
+    private async _withContainerFilesInternal(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): Promise<ContainerResource> {
+        const rpcArgs: Record<string, unknown> = { builder: this._handle, destinationPath, sourcePath };
+        if (options !== undefined) rpcArgs.options = options;
+        const result = await this._client.invokeCapability<ContainerResourceHandle>(
+            'Aspire.Hosting/withContainerFiles',
+            rpcArgs
+        );
+        return new ContainerResourceImpl(result, this._client);
+    }
+
+    /**
+     * Creates or updates files and folders in a container by copying them from a source path on the host.
+     *
+     * In run mode, Aspire copies the files into the container and applies owner, group, and umask options.
+     * In publish mode, Aspire creates a read-only bind mount and ignores those options.
+     * Inline file entries and callbacks are only available in .NET apphosts because ATS does not support the recursive,
+     * polymorphic `ContainerFileSystemItem` hierarchy or callbacks that use .NET services.
+     * @param destinationPath The destination absolute path in the container.
+     * @param sourcePath The source path on the host to copy files from.
+     * @param options Additional options.
+     * @returns The resource builder.
+     */
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): ContainerResourcePromise {
+        return new ContainerResourcePromiseImpl(this._withContainerFilesInternal(destinationPath, sourcePath, options), this._client);
     }
 
     /** @internal */
@@ -17508,6 +17619,10 @@ class ContainerResourcePromiseImpl implements ContainerResourcePromise {
         return new ContainerResourcePromiseImpl(this._promise.then(obj => obj.withContainerCertificatePaths(options)), this._client);
     }
 
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): ContainerResourcePromise {
+        return new ContainerResourcePromiseImpl(this._promise.then(obj => obj.withContainerFiles(destinationPath, sourcePath, options)), this._client);
+    }
+
     withDockerfileBuilder(contextPath: string, callback: (arg: DockerfileBuilderCallbackContext) => Promise<void>, options?: WithDockerfileBuilderOptions): ContainerResourcePromise {
         return new ContainerResourcePromiseImpl(this._promise.then(obj => obj.withDockerfileBuilder(contextPath, callback, options)), this._client);
     }
@@ -18345,6 +18460,12 @@ export interface CSharpAppResource {
      */
     getResourceName(): Promise<string>;
     /**
+     * Includes only the specified project endpoint names in environment-variable injection.
+     * @param endpointNames The endpoint names to include in environment variables.
+     * @returns The same project resource builder handle for chaining.
+     */
+    withEndpointsInEnvironment(endpointNames: string[]): CSharpAppResourcePromise;
+    /**
      * Subscribes to the BeforeResourceStarted event.
      * @param callback The callback to invoke when the event fires.
      * @returns The resource builder.
@@ -18906,6 +19027,12 @@ export interface CSharpAppResourcePromise extends PromiseLike<CSharpAppResource>
      * @returns The resource name.
      */
     getResourceName(): Promise<string>;
+    /**
+     * Includes only the specified project endpoint names in environment-variable injection.
+     * @param endpointNames The endpoint names to include in environment variables.
+     * @returns The same project resource builder handle for chaining.
+     */
+    withEndpointsInEnvironment(endpointNames: string[]): CSharpAppResourcePromise;
     /**
      * Subscribes to the BeforeResourceStarted event.
      * @param callback The callback to invoke when the event fires.
@@ -20466,6 +20593,25 @@ class CSharpAppResourceImpl extends ResourceBuilderBase<CSharpAppResourceHandle>
     }
 
     /** @internal */
+    private async _withEndpointsInEnvironmentInternal(endpointNames: string[]): Promise<CSharpAppResource> {
+        const rpcArgs: Record<string, unknown> = { resource: this._handle, endpointNames };
+        const result = await this._client.invokeCapability<CSharpAppResourceHandle>(
+            'Aspire.Hosting/withEndpointsInEnvironment',
+            rpcArgs
+        );
+        return new CSharpAppResourceImpl(result, this._client);
+    }
+
+    /**
+     * Includes only the specified project endpoint names in environment-variable injection.
+     * @param endpointNames The endpoint names to include in environment variables.
+     * @returns The same project resource builder handle for chaining.
+     */
+    withEndpointsInEnvironment(endpointNames: string[]): CSharpAppResourcePromise {
+        return new CSharpAppResourcePromiseImpl(this._withEndpointsInEnvironmentInternal(endpointNames), this._client);
+    }
+
+    /** @internal */
     private async _onBeforeResourceStartedInternal(callback: (arg: BeforeResourceStartedEvent) => Promise<void>): Promise<CSharpAppResource> {
         const callbackId = registerCallback(async (argData: unknown) => {
             const argHandle = wrapIfHandle(argData) as BeforeResourceStartedEventHandle;
@@ -21274,6 +21420,10 @@ class CSharpAppResourcePromiseImpl implements CSharpAppResourcePromise {
 
     getResourceName(): Promise<string> {
         return this._promise.then(obj => obj.getResourceName());
+    }
+
+    withEndpointsInEnvironment(endpointNames: string[]): CSharpAppResourcePromise {
+        return new CSharpAppResourcePromiseImpl(this._promise.then(obj => obj.withEndpointsInEnvironment(endpointNames)), this._client);
     }
 
     onBeforeResourceStarted(callback: (arg: BeforeResourceStartedEvent) => Promise<void>): CSharpAppResourcePromise {
@@ -32916,6 +33066,12 @@ export interface ProjectResource {
      */
     getResourceName(): Promise<string>;
     /**
+     * Includes only the specified project endpoint names in environment-variable injection.
+     * @param endpointNames The endpoint names to include in environment variables.
+     * @returns The same project resource builder handle for chaining.
+     */
+    withEndpointsInEnvironment(endpointNames: string[]): ProjectResourcePromise;
+    /**
      * Subscribes to the BeforeResourceStarted event.
      * @param callback The callback to invoke when the event fires.
      * @returns The resource builder.
@@ -33477,6 +33633,12 @@ export interface ProjectResourcePromise extends PromiseLike<ProjectResource> {
      * @returns The resource name.
      */
     getResourceName(): Promise<string>;
+    /**
+     * Includes only the specified project endpoint names in environment-variable injection.
+     * @param endpointNames The endpoint names to include in environment variables.
+     * @returns The same project resource builder handle for chaining.
+     */
+    withEndpointsInEnvironment(endpointNames: string[]): ProjectResourcePromise;
     /**
      * Subscribes to the BeforeResourceStarted event.
      * @param callback The callback to invoke when the event fires.
@@ -35038,6 +35200,25 @@ class ProjectResourceImpl extends ResourceBuilderBase<ProjectResourceHandle> imp
     }
 
     /** @internal */
+    private async _withEndpointsInEnvironmentInternal(endpointNames: string[]): Promise<ProjectResource> {
+        const rpcArgs: Record<string, unknown> = { resource: this._handle, endpointNames };
+        const result = await this._client.invokeCapability<ProjectResourceHandle>(
+            'Aspire.Hosting/withEndpointsInEnvironment',
+            rpcArgs
+        );
+        return new ProjectResourceImpl(result, this._client);
+    }
+
+    /**
+     * Includes only the specified project endpoint names in environment-variable injection.
+     * @param endpointNames The endpoint names to include in environment variables.
+     * @returns The same project resource builder handle for chaining.
+     */
+    withEndpointsInEnvironment(endpointNames: string[]): ProjectResourcePromise {
+        return new ProjectResourcePromiseImpl(this._withEndpointsInEnvironmentInternal(endpointNames), this._client);
+    }
+
+    /** @internal */
     private async _onBeforeResourceStartedInternal(callback: (arg: BeforeResourceStartedEvent) => Promise<void>): Promise<ProjectResource> {
         const callbackId = registerCallback(async (argData: unknown) => {
             const argHandle = wrapIfHandle(argData) as BeforeResourceStartedEventHandle;
@@ -35848,6 +36029,10 @@ class ProjectResourcePromiseImpl implements ProjectResourcePromise {
         return this._promise.then(obj => obj.getResourceName());
     }
 
+    withEndpointsInEnvironment(endpointNames: string[]): ProjectResourcePromise {
+        return new ProjectResourcePromiseImpl(this._promise.then(obj => obj.withEndpointsInEnvironment(endpointNames)), this._client);
+    }
+
     onBeforeResourceStarted(callback: (arg: BeforeResourceStartedEvent) => Promise<void>): ProjectResourcePromise {
         return new ProjectResourcePromiseImpl(this._promise.then(obj => obj.onBeforeResourceStarted(callback)), this._client);
     }
@@ -36119,6 +36304,19 @@ export interface TestDatabaseResource {
      * @returns The updated resource builder.
      */
     withContainerCertificatePaths(options?: WithContainerCertificatePathsOptions): TestDatabaseResourcePromise;
+    /**
+     * Creates or updates files and folders in a container by copying them from a source path on the host.
+     *
+     * In run mode, Aspire copies the files into the container and applies owner, group, and umask options.
+     * In publish mode, Aspire creates a read-only bind mount and ignores those options.
+     * Inline file entries and callbacks are only available in .NET apphosts because ATS does not support the recursive,
+     * polymorphic `ContainerFileSystemItem` hierarchy or callbacks that use .NET services.
+     * @param destinationPath The destination absolute path in the container.
+     * @param sourcePath The source path on the host to copy files from.
+     * @param options Additional options.
+     * @returns The resource builder.
+     */
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): TestDatabaseResourcePromise;
     /**
      * Configures the resource to use a programmatically generated Dockerfile
      *
@@ -36846,6 +37044,19 @@ export interface TestDatabaseResourcePromise extends PromiseLike<TestDatabaseRes
      * @returns The updated resource builder.
      */
     withContainerCertificatePaths(options?: WithContainerCertificatePathsOptions): TestDatabaseResourcePromise;
+    /**
+     * Creates or updates files and folders in a container by copying them from a source path on the host.
+     *
+     * In run mode, Aspire copies the files into the container and applies owner, group, and umask options.
+     * In publish mode, Aspire creates a read-only bind mount and ignores those options.
+     * Inline file entries and callbacks are only available in .NET apphosts because ATS does not support the recursive,
+     * polymorphic `ContainerFileSystemItem` hierarchy or callbacks that use .NET services.
+     * @param destinationPath The destination absolute path in the container.
+     * @param sourcePath The source path on the host to copy files from.
+     * @param options Additional options.
+     * @returns The resource builder.
+     */
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): TestDatabaseResourcePromise;
     /**
      * Configures the resource to use a programmatically generated Dockerfile
      *
@@ -37824,6 +38035,33 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
         const defaultCertificateBundlePaths = options?.defaultCertificateBundlePaths;
         const defaultCertificateDirectoryPaths = options?.defaultCertificateDirectoryPaths;
         return new TestDatabaseResourcePromiseImpl(this._withContainerCertificatePathsInternal(customCertificatesDestination, defaultCertificateBundlePaths, defaultCertificateDirectoryPaths), this._client);
+    }
+
+    /** @internal */
+    private async _withContainerFilesInternal(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): Promise<TestDatabaseResource> {
+        const rpcArgs: Record<string, unknown> = { builder: this._handle, destinationPath, sourcePath };
+        if (options !== undefined) rpcArgs.options = options;
+        const result = await this._client.invokeCapability<TestDatabaseResourceHandle>(
+            'Aspire.Hosting/withContainerFiles',
+            rpcArgs
+        );
+        return new TestDatabaseResourceImpl(result, this._client);
+    }
+
+    /**
+     * Creates or updates files and folders in a container by copying them from a source path on the host.
+     *
+     * In run mode, Aspire copies the files into the container and applies owner, group, and umask options.
+     * In publish mode, Aspire creates a read-only bind mount and ignores those options.
+     * Inline file entries and callbacks are only available in .NET apphosts because ATS does not support the recursive,
+     * polymorphic `ContainerFileSystemItem` hierarchy or callbacks that use .NET services.
+     * @param destinationPath The destination absolute path in the container.
+     * @param sourcePath The source path on the host to copy files from.
+     * @param options Additional options.
+     * @returns The resource builder.
+     */
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): TestDatabaseResourcePromise {
+        return new TestDatabaseResourcePromiseImpl(this._withContainerFilesInternal(destinationPath, sourcePath, options), this._client);
     }
 
     /** @internal */
@@ -39921,6 +40159,10 @@ class TestDatabaseResourcePromiseImpl implements TestDatabaseResourcePromise {
         return new TestDatabaseResourcePromiseImpl(this._promise.then(obj => obj.withContainerCertificatePaths(options)), this._client);
     }
 
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): TestDatabaseResourcePromise {
+        return new TestDatabaseResourcePromiseImpl(this._promise.then(obj => obj.withContainerFiles(destinationPath, sourcePath, options)), this._client);
+    }
+
     withDockerfileBuilder(contextPath: string, callback: (arg: DockerfileBuilderCallbackContext) => Promise<void>, options?: WithDockerfileBuilderOptions): TestDatabaseResourcePromise {
         return new TestDatabaseResourcePromiseImpl(this._promise.then(obj => obj.withDockerfileBuilder(contextPath, callback, options)), this._client);
     }
@@ -40436,6 +40678,19 @@ export interface TestRedisResource {
      * @returns The updated resource builder.
      */
     withContainerCertificatePaths(options?: WithContainerCertificatePathsOptions): TestRedisResourcePromise;
+    /**
+     * Creates or updates files and folders in a container by copying them from a source path on the host.
+     *
+     * In run mode, Aspire copies the files into the container and applies owner, group, and umask options.
+     * In publish mode, Aspire creates a read-only bind mount and ignores those options.
+     * Inline file entries and callbacks are only available in .NET apphosts because ATS does not support the recursive,
+     * polymorphic `ContainerFileSystemItem` hierarchy or callbacks that use .NET services.
+     * @param destinationPath The destination absolute path in the container.
+     * @param sourcePath The source path on the host to copy files from.
+     * @param options Additional options.
+     * @returns The resource builder.
+     */
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): TestRedisResourcePromise;
     /**
      * Configures the resource to use a programmatically generated Dockerfile
      *
@@ -41227,6 +41482,19 @@ export interface TestRedisResourcePromise extends PromiseLike<TestRedisResource>
      * @returns The updated resource builder.
      */
     withContainerCertificatePaths(options?: WithContainerCertificatePathsOptions): TestRedisResourcePromise;
+    /**
+     * Creates or updates files and folders in a container by copying them from a source path on the host.
+     *
+     * In run mode, Aspire copies the files into the container and applies owner, group, and umask options.
+     * In publish mode, Aspire creates a read-only bind mount and ignores those options.
+     * Inline file entries and callbacks are only available in .NET apphosts because ATS does not support the recursive,
+     * polymorphic `ContainerFileSystemItem` hierarchy or callbacks that use .NET services.
+     * @param destinationPath The destination absolute path in the container.
+     * @param sourcePath The source path on the host to copy files from.
+     * @param options Additional options.
+     * @returns The resource builder.
+     */
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): TestRedisResourcePromise;
     /**
      * Configures the resource to use a programmatically generated Dockerfile
      *
@@ -42269,6 +42537,33 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
         const defaultCertificateBundlePaths = options?.defaultCertificateBundlePaths;
         const defaultCertificateDirectoryPaths = options?.defaultCertificateDirectoryPaths;
         return new TestRedisResourcePromiseImpl(this._withContainerCertificatePathsInternal(customCertificatesDestination, defaultCertificateBundlePaths, defaultCertificateDirectoryPaths), this._client);
+    }
+
+    /** @internal */
+    private async _withContainerFilesInternal(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): Promise<TestRedisResource> {
+        const rpcArgs: Record<string, unknown> = { builder: this._handle, destinationPath, sourcePath };
+        if (options !== undefined) rpcArgs.options = options;
+        const result = await this._client.invokeCapability<TestRedisResourceHandle>(
+            'Aspire.Hosting/withContainerFiles',
+            rpcArgs
+        );
+        return new TestRedisResourceImpl(result, this._client);
+    }
+
+    /**
+     * Creates or updates files and folders in a container by copying them from a source path on the host.
+     *
+     * In run mode, Aspire copies the files into the container and applies owner, group, and umask options.
+     * In publish mode, Aspire creates a read-only bind mount and ignores those options.
+     * Inline file entries and callbacks are only available in .NET apphosts because ATS does not support the recursive,
+     * polymorphic `ContainerFileSystemItem` hierarchy or callbacks that use .NET services.
+     * @param destinationPath The destination absolute path in the container.
+     * @param sourcePath The source path on the host to copy files from.
+     * @param options Additional options.
+     * @returns The resource builder.
+     */
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): TestRedisResourcePromise {
+        return new TestRedisResourcePromiseImpl(this._withContainerFilesInternal(destinationPath, sourcePath, options), this._client);
     }
 
     /** @internal */
@@ -44613,6 +44908,10 @@ class TestRedisResourcePromiseImpl implements TestRedisResourcePromise {
         return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.withContainerCertificatePaths(options)), this._client);
     }
 
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): TestRedisResourcePromise {
+        return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.withContainerFiles(destinationPath, sourcePath, options)), this._client);
+    }
+
     withDockerfileBuilder(contextPath: string, callback: (arg: DockerfileBuilderCallbackContext) => Promise<void>, options?: WithDockerfileBuilderOptions): TestRedisResourcePromise {
         return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.withDockerfileBuilder(contextPath, callback, options)), this._client);
     }
@@ -45188,6 +45487,19 @@ export interface TestVaultResource {
      * @returns The updated resource builder.
      */
     withContainerCertificatePaths(options?: WithContainerCertificatePathsOptions): TestVaultResourcePromise;
+    /**
+     * Creates or updates files and folders in a container by copying them from a source path on the host.
+     *
+     * In run mode, Aspire copies the files into the container and applies owner, group, and umask options.
+     * In publish mode, Aspire creates a read-only bind mount and ignores those options.
+     * Inline file entries and callbacks are only available in .NET apphosts because ATS does not support the recursive,
+     * polymorphic `ContainerFileSystemItem` hierarchy or callbacks that use .NET services.
+     * @param destinationPath The destination absolute path in the container.
+     * @param sourcePath The source path on the host to copy files from.
+     * @param options Additional options.
+     * @returns The resource builder.
+     */
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): TestVaultResourcePromise;
     /**
      * Configures the resource to use a programmatically generated Dockerfile
      *
@@ -45917,6 +46229,19 @@ export interface TestVaultResourcePromise extends PromiseLike<TestVaultResource>
      * @returns The updated resource builder.
      */
     withContainerCertificatePaths(options?: WithContainerCertificatePathsOptions): TestVaultResourcePromise;
+    /**
+     * Creates or updates files and folders in a container by copying them from a source path on the host.
+     *
+     * In run mode, Aspire copies the files into the container and applies owner, group, and umask options.
+     * In publish mode, Aspire creates a read-only bind mount and ignores those options.
+     * Inline file entries and callbacks are only available in .NET apphosts because ATS does not support the recursive,
+     * polymorphic `ContainerFileSystemItem` hierarchy or callbacks that use .NET services.
+     * @param destinationPath The destination absolute path in the container.
+     * @param sourcePath The source path on the host to copy files from.
+     * @param options Additional options.
+     * @returns The resource builder.
+     */
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): TestVaultResourcePromise;
     /**
      * Configures the resource to use a programmatically generated Dockerfile
      *
@@ -46897,6 +47222,33 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
         const defaultCertificateBundlePaths = options?.defaultCertificateBundlePaths;
         const defaultCertificateDirectoryPaths = options?.defaultCertificateDirectoryPaths;
         return new TestVaultResourcePromiseImpl(this._withContainerCertificatePathsInternal(customCertificatesDestination, defaultCertificateBundlePaths, defaultCertificateDirectoryPaths), this._client);
+    }
+
+    /** @internal */
+    private async _withContainerFilesInternal(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): Promise<TestVaultResource> {
+        const rpcArgs: Record<string, unknown> = { builder: this._handle, destinationPath, sourcePath };
+        if (options !== undefined) rpcArgs.options = options;
+        const result = await this._client.invokeCapability<TestVaultResourceHandle>(
+            'Aspire.Hosting/withContainerFiles',
+            rpcArgs
+        );
+        return new TestVaultResourceImpl(result, this._client);
+    }
+
+    /**
+     * Creates or updates files and folders in a container by copying them from a source path on the host.
+     *
+     * In run mode, Aspire copies the files into the container and applies owner, group, and umask options.
+     * In publish mode, Aspire creates a read-only bind mount and ignores those options.
+     * Inline file entries and callbacks are only available in .NET apphosts because ATS does not support the recursive,
+     * polymorphic `ContainerFileSystemItem` hierarchy or callbacks that use .NET services.
+     * @param destinationPath The destination absolute path in the container.
+     * @param sourcePath The source path on the host to copy files from.
+     * @param options Additional options.
+     * @returns The resource builder.
+     */
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): TestVaultResourcePromise {
+        return new TestVaultResourcePromiseImpl(this._withContainerFilesInternal(destinationPath, sourcePath, options), this._client);
     }
 
     /** @internal */
@@ -49007,6 +49359,10 @@ class TestVaultResourcePromiseImpl implements TestVaultResourcePromise {
 
     withContainerCertificatePaths(options?: WithContainerCertificatePathsOptions): TestVaultResourcePromise {
         return new TestVaultResourcePromiseImpl(this._promise.then(obj => obj.withContainerCertificatePaths(options)), this._client);
+    }
+
+    withContainerFiles(destinationPath: string, sourcePath: string, options?: ContainerFilesOptions): TestVaultResourcePromise {
+        return new TestVaultResourcePromiseImpl(this._promise.then(obj => obj.withContainerFiles(destinationPath, sourcePath, options)), this._client);
     }
 
     withDockerfileBuilder(contextPath: string, callback: (arg: DockerfileBuilderCallbackContext) => Promise<void>, options?: WithDockerfileBuilderOptions): TestVaultResourcePromise {
