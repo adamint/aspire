@@ -11,7 +11,6 @@ using Aspire.Dashboard.Resources;
 using Aspire.Dashboard.Telemetry;
 using Aspire.Dashboard.Utils;
 using Microsoft.AspNetCore.Components;
-using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.Localization;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
@@ -549,26 +548,6 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
         (_, true) => "false",
         _ => "mixed"
     };
-
-    private void OnSelectAllCheckboxKeyDown(KeyboardEventArgs args) => OnSelectionCheckboxKeyDown(args, OnSelectAllClicked);
-
-    private void OnResourceCheckboxKeyDown(KeyboardEventArgs args, ResourceDataRow row) =>
-        OnSelectionCheckboxKeyDown(args, () => OnSelectRowClicked(row));
-
-    private void OnDataRowCheckboxKeyDown(KeyboardEventArgs args, string resourceName, AspireDataType dataType) =>
-        OnSelectionCheckboxKeyDown(args, () => OnSelectDataRowClicked(resourceName, dataType));
-
-    private static void OnSelectionCheckboxKeyDown(KeyboardEventArgs args, Action toggle)
-    {
-        if (!args.Repeat && IsSpaceKey(args))
-        {
-            toggle();
-        }
-    }
-
-    private static bool IsSpaceKey(KeyboardEventArgs args) =>
-        args.Key is " " or "Spacebar" ||
-        string.Equals(args.Code, "Space", StringComparison.Ordinal);
 
     private void NavigateToDataPage(TelemetryDataRow dataRow)
     {

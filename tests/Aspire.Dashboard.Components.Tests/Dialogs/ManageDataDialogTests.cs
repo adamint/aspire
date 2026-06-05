@@ -11,7 +11,6 @@ using Aspire.Dashboard.Model.ManageData;
 using Aspire.Dashboard.Tests.Shared;
 using Aspire.Tests.Shared.DashboardModel;
 using Bunit;
-using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -45,6 +44,7 @@ public sealed class ManageDataDialogTests : DashboardTestContext
 
         cut.WaitForAssertion(() =>
         {
+            Assert.Contains(JSInterop.Invocations, invocation => invocation.Identifier == "initializeSelectionCheckboxKeyboard");
             AssertSelectionCheckboxCount(cut, 3);
             AssertSelectionCheckbox(cut, "All data", "true");
             AssertSelectionCheckbox(cut, "Basket service", "true");
@@ -53,16 +53,7 @@ public sealed class ManageDataDialogTests : DashboardTestContext
             AssertNoButtonHasAccessibleName(cut, "Name");
         });
 
-        await PressSelectionKeyAsync(cut, "Basket service", "true", "Tab");
-        AssertSelectionCheckbox(cut, "Basket service", "true");
-
-        await PressSelectionKeyAsync(cut, "Basket service", "true", "Tab", shiftKey: true);
-        AssertSelectionCheckbox(cut, "Basket service", "true");
-
-        await PressSelectionKeyAsync(cut, "Basket service", "true", "Enter");
-        AssertSelectionCheckbox(cut, "Basket service", "true");
-
-        await PressSelectionSpaceAsync(cut, "Basket service", "true");
+        await ClickSelectionCheckboxAsync(cut, "Basket service", "true");
 
         cut.WaitForAssertion(() =>
         {
@@ -72,7 +63,7 @@ public sealed class ManageDataDialogTests : DashboardTestContext
             AssertSelectionCheckbox(cut, "Catalog service", "true");
         });
 
-        await PressSelectionSpaceAsync(cut, "Basket service", "false");
+        await ClickSelectionCheckboxAsync(cut, "Basket service", "false");
 
         cut.WaitForAssertion(() =>
         {
@@ -231,12 +222,6 @@ public sealed class ManageDataDialogTests : DashboardTestContext
 
     private static Task ClickSelectionCheckboxAsync(IRenderedComponent<ManageDataDialog> cut, string accessibleName, string ariaChecked) =>
         cut.InvokeAsync(() => AssertSelectionCheckbox(cut, accessibleName, ariaChecked).Click());
-
-    private static Task PressSelectionSpaceAsync(IRenderedComponent<ManageDataDialog> cut, string accessibleName, string ariaChecked) =>
-        PressSelectionKeyAsync(cut, accessibleName, ariaChecked, " ", code: "Space");
-
-    private static Task PressSelectionKeyAsync(IRenderedComponent<ManageDataDialog> cut, string accessibleName, string ariaChecked, string key, string? code = null, bool shiftKey = false) =>
-        cut.InvokeAsync(() => AssertSelectionCheckbox(cut, accessibleName, ariaChecked).TriggerEvent("onkeydown", new KeyboardEventArgs { Key = key, Code = code ?? string.Empty, ShiftKey = shiftKey }));
 
     private static IReadOnlyList<IElement> GetSelectionCheckboxes(IRenderedComponent<ManageDataDialog> cut)
     {

@@ -37,8 +37,7 @@
                                       aria-disabled="@GetHeaderSelectionCheckboxAriaDisabled()"
                                       title="@headerSelectionLabel"
                                       aria-label="@headerSelectionLabel"
-                                      @onclick="OnSelectAllClicked"
-                                      @onkeydown="OnSelectAllCheckboxKeyDown">
+                                      @onclick="OnSelectAllClicked">
                                     <FluentIcon Value="@GetHeaderCheckboxIcon()" aria-hidden="true" />
                                 </span>
                                 @ControlsStringsLoc[nameof(ControlsStrings.NameColumnHeader)]
@@ -75,8 +74,7 @@
                                       aria-checked="@GetResourceCheckboxAriaChecked(context.ResourceRow)"
                                       title="@resourceSelectionLabel"
                                       aria-label="@resourceSelectionLabel"
-                                      @onclick="@(() => OnSelectRowClicked(context.ResourceRow))"
-                                      @onkeydown="@((KeyboardEventArgs args) => OnResourceCheckboxKeyDown(args, context.ResourceRow))">
+                                      @onclick="@(() => OnSelectRowClicked(context.ResourceRow))">
                                     <FluentIcon Value="@GetResourceCheckboxIcon(context.ResourceRow)" aria-hidden="true" />
                                 </span>
                             </span>
@@ -113,8 +111,7 @@
                                       aria-checked="@GetDataRowCheckboxAriaChecked(context.ParentResourceName, context.NestedRow.DataType)"
                                       title="@dataTypeSelectionLabel"
                                       aria-label="@dataTypeSelectionLabel"
-                                      @onclick="@(() => OnSelectDataRowClicked(context.ParentResourceName, context.NestedRow.DataType))"
-                                      @onkeydown="@((KeyboardEventArgs args) => OnDataRowCheckboxKeyDown(args, context.ParentResourceName, context.NestedRow.DataType))">
+                                      @onclick="@(() => OnSelectDataRowClicked(context.ParentResourceName, context.NestedRow.DataType))">
                                     <FluentIcon Value="@(IsDataRowSelected(context.ParentResourceName, context.NestedRow.DataType) ? _iconSelectedMultiple : _iconUnselectedMultiple)" aria-hidden="true" />
                                 </span>
                             </span>
