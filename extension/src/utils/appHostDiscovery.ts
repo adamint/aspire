@@ -69,7 +69,8 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             // The cached discovery promise is shared across extension features. Keep caller
             // cancellation outside the cached operation so one cancelled refresh doesn't reject
             // unrelated callers that are awaiting the same workspace discovery.
-            const discoveryPromise = this._discoverCore(workspaceFolder);
+            const discoveryPromise = this._discoverCore(workspaceFolder)
+                .then(candidates => this._includeConfiguredAppHostCandidate(workspaceFolder, candidates));
             let cachedPromise: Promise<CandidateAppHostDisplayInfo[]>;
             cachedPromise = discoveryPromise.catch(error => {
                 if (this._cache.get(key) === cachedPromise) {
@@ -81,8 +82,7 @@ export class AppHostDiscoveryService implements vscode.Disposable {
             this._cache.set(key, resultPromise);
         }
 
-        const candidates = await withCancellation(resultPromise, cancellationToken);
-        return await this._includeConfiguredAppHostCandidate(workspaceFolder, candidates, cancellationToken);
+        return await withCancellation(resultPromise, cancellationToken);
     }
 
     async resolveDebugTarget(filePath: string, workspaceFolder?: vscode.WorkspaceFolder): Promise<string> {
@@ -246,14 +246,12 @@ export class AppHostDiscoveryService implements vscode.Disposable {
         }
     }
 
-    private async _includeConfiguredAppHostCandidate(workspaceFolder: vscode.WorkspaceFolder, candidates: CandidateAppHostDisplayInfo[], cancellationToken?: vscode.CancellationToken): Promise<CandidateAppHostDisplayInfo[]> {
-        throwIfCancellationRequested(cancellationToken);
+    private async _includeConfiguredAppHostCandidate(workspaceFolder: vscode.WorkspaceFolder, candidates: CandidateAppHostDisplayInfo[]): Promise<CandidateAppHostDisplayInfo[]> {
         if (candidates.some(candidate => candidate.selected)) {
             return candidates;
         }
 
-        const configuredPaths = await findConfiguredAppHostPaths(workspaceFolder, cancellationToken);
-        throwIfCancellationRequested(cancellationToken);
+        const configuredPaths = await findConfiguredAppHostPaths(workspaceFolder);
         const configuredPath = configuredPaths.find(configuredPath => candidates.some(candidate => isSamePath(candidate.path, configuredPath)))
             ?? configuredPaths[0];
         if (!configuredPath) {

@@ -724,23 +724,64 @@ suite('AppHost discovery', () => {
             }
         });
 
-        test('service discovery forwards caller cancellation token to configured AppHost path search', async () => {
+        test('caller cancellation does not reject shared configured AppHost path search for other callers', async () => {
             stubFileSystemWatchers(sandbox);
             sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, options) => {
                 options?.stdoutCallback?.('[]');
                 options?.exitCallback?.(0);
                 return { kill: () => { } } as any;
             });
-            const cancellationToken = makeCancellationToken();
+            let resolveFindFiles: ((uris: vscode.Uri[]) => void) | undefined;
+            const findFilesPromise = new Promise<vscode.Uri[]>(resolve => {
+                resolveFindFiles = resolve;
+            });
+            findFilesStub.callsFake(() => findFilesPromise);
+            const cancellationSource = new vscode.CancellationTokenSource();
             const service = new AppHostDiscoveryService(makeTerminalProvider());
+            const workspaceFolder = makeWorkspaceFolder(buildPath('workspace'));
 
             try {
-                await service.discover(makeWorkspaceFolder(buildPath('workspace')), false, cancellationToken);
+                const cancelledDiscovery = service.discover(workspaceFolder, false, cancellationSource.token);
+                const sharedDiscovery = service.discover(workspaceFolder);
+                await waitForMicrotasks();
+                assert.ok(resolveFindFiles);
+
+                cancellationSource.cancel();
+                const cancelledResult = assert.rejects(cancelledDiscovery, /cancelled/);
+                resolveFindFiles([]);
+                await cancelledResult;
+
+                assert.deepStrictEqual(await sharedDiscovery, []);
+                assert.strictEqual(findFilesStub.callCount, 2);
+            }
+            finally {
+                cancellationSource.dispose();
+                service.dispose();
+            }
+        });
+
+        test('service discovery shares configured AppHost path search between concurrent callers', async () => {
+            stubFileSystemWatchers(sandbox);
+            let options: cliModule.SpawnProcessOptions | undefined;
+            sandbox.stub(cliModule, 'spawnCliProcess').callsFake((_terminalProvider, _command, _args, spawnOptions) => {
+                options = spawnOptions;
+                return { kill: () => { } } as any;
+            });
+            const service = new AppHostDiscoveryService(makeTerminalProvider());
+            const workspaceFolder = makeWorkspaceFolder(buildPath('workspace'));
+
+            try {
+                const firstDiscovery = service.discover(workspaceFolder);
+                const secondDiscovery = service.discover(workspaceFolder);
+                await waitForMicrotasks();
+                assert.ok(options);
+
+                options.stdoutCallback?.('[]');
+                options.exitCallback?.(0);
+
+                await Promise.all([firstDiscovery, secondDiscovery]);
 
                 assert.strictEqual(findFilesStub.callCount, 2);
-                for (const call of findFilesStub.getCalls()) {
-                    assert.strictEqual(call.args[3], cancellationToken);
-                }
             }
             finally {
                 service.dispose();
