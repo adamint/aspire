@@ -5,7 +5,7 @@ import { AspireTerminalProvider, quoteShellArg, shellArg } from '../utils/Aspire
 import * as cliPathModule from '../utils/cliPath';
 import { EnvironmentVariables } from '../utils/environment';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { terminalCommandArgumentControlCharacters } from '../loc/strings';
+import { terminalCommandArgumentControlCharacters, terminalCommandUnsafeLiteral } from '../loc/strings';
 
 suite('AspireTerminalProvider tests', () => {
     let terminalProvider: AspireTerminalProvider;
@@ -70,8 +70,13 @@ suite('AspireTerminalProvider tests', () => {
     }
 
     suite('getAspireTerminal', () => {
-        test('creates Windows terminal with PowerShell so Windows quoting matches the shell', () => {
+        test('creates Windows terminal with PowerShell 7 when it is available', () => {
             const platformStub = sinon.stub(process, 'platform').value('win32');
+            let probeCount = 0;
+            terminalProvider = new AspireTerminalProvider(subscriptions, () => {
+                probeCount++;
+                return true;
+            });
             const createEnvironmentStub = sinon.stub(terminalProvider, 'createEnvironment').returns({});
             const terminal = {
                 dispose: () => { }
@@ -83,7 +88,35 @@ suite('AspireTerminalProvider tests', () => {
 
                 assert.strictEqual(result.terminal, terminal);
                 assert.strictEqual(createTerminalStub.calledOnce, true);
+                assert.strictEqual((createTerminalStub.firstCall.args[0] as vscode.TerminalOptions).shellPath, 'pwsh.exe');
+                assert.strictEqual(probeCount, 1);
+            }
+            finally {
+                terminalProvider.dispose();
+                createTerminalStub.restore();
+                createEnvironmentStub.restore();
+                platformStub.restore();
+            }
+        });
+
+        test('falls back to Windows PowerShell when PowerShell 7 is unavailable', () => {
+            const platformStub = sinon.stub(process, 'platform').value('win32');
+            let probeCount = 0;
+            terminalProvider = new AspireTerminalProvider(subscriptions, () => {
+                probeCount++;
+                return false;
+            });
+            const createEnvironmentStub = sinon.stub(terminalProvider, 'createEnvironment').returns({});
+            const terminal = {
+                dispose: () => { }
+            } as unknown as vscode.Terminal;
+            const createTerminalStub = sinon.stub(vscode.window, 'createTerminal').returns(terminal);
+
+            try {
+                terminalProvider.getAspireTerminal(true);
+                assert.strictEqual(createTerminalStub.calledOnce, true);
                 assert.strictEqual((createTerminalStub.firstCall.args[0] as vscode.TerminalOptions).shellPath, 'powershell.exe');
+                assert.strictEqual(probeCount, 1);
             }
             finally {
                 terminalProvider.dispose();
@@ -258,6 +291,58 @@ suite('AspireTerminalProvider tests', () => {
                 await assert.rejects(
                     () => terminalProvider.sendAspireCommandToAspireTerminal('resource "web" "restart"', true, ['--', 'safe\r\necho pwned']),
                     { message: terminalCommandArgumentControlCharacters });
+                assert.strictEqual(getAspireTerminalStub.called, false);
+            }
+            finally {
+                getAspireTerminalStub.restore();
+            }
+        });
+
+        test('allows tabs inside quoted structured arguments', async () => {
+            resolveCliPathStub.resolves({ cliPath: 'aspire', available: true, source: 'path' });
+            const appHostPath = '/workspace/apps/Store\tTabbed/AppHost.csproj';
+            let executedCommand: string | undefined;
+            const terminal = {
+                shellIntegration: {
+                    executeCommand: (commandLine: string) => {
+                        executedCommand = commandLine;
+                        return {} as vscode.TerminalShellExecution;
+                    }
+                },
+                sendText: () => { },
+                show: () => { }
+            } as unknown as vscode.Terminal;
+            const getAspireTerminalStub = sinon.stub(terminalProvider, 'getAspireTerminal').returns({
+                terminal,
+                dispose: () => { }
+            });
+
+            try {
+                await terminalProvider.sendAspireCommandToAspireTerminal(['stop', '--apphost', shellArg(appHostPath)]);
+
+                const expectedSubcommand = `stop --apphost ${quoteShellArg(appHostPath)}`;
+                const expectedCommand = process.platform === 'win32'
+                    ? `& "aspire" ${expectedSubcommand}`
+                    : `aspire ${expectedSubcommand}`;
+                assert.strictEqual(executedCommand, expectedCommand);
+            }
+            finally {
+                getAspireTerminalStub.restore();
+            }
+        });
+
+        test('rejects unsafe bare structured subcommand literals before creating a terminal', async () => {
+            resolveCliPathStub.resolves({ cliPath: 'aspire', available: true, source: 'path' });
+            const getAspireTerminalStub = sinon.stub(terminalProvider, 'getAspireTerminal').throws(new Error('Terminal should not be created'));
+            const unsafeLiterals = ['resource; touch /tmp/pwned', '$(whoami)', '`whoami`', '--apphost=/tmp/AppHost.csproj', 'logs --follow'];
+
+            try {
+                for (const unsafeLiteral of unsafeLiterals) {
+                    await assert.rejects(
+                        () => terminalProvider.sendAspireCommandToAspireTerminal(['resource', unsafeLiteral, shellArg('web')]),
+                        { message: terminalCommandUnsafeLiteral });
+                }
+
                 assert.strictEqual(getAspireTerminalStub.called, false);
             }
             finally {
@@ -505,8 +590,11 @@ suite('AspireTerminalProvider tests', () => {
                 { name: 'backslash followed by quote', input: 'a\\"b', expected: '"a\\`"b"' },
                 { name: 'pipe and chaining', input: 'a | b; c && d', expected: '"a | b; c && d"' },
                 { name: 'redirection', input: '> out.txt < in.txt', expected: '"> out.txt < in.txt"' },
+                { name: 'tab', input: 'hello\tworld', expected: '"hello\tworld"' },
                 { name: 'mixed dollar quote backtick', input: '`$x"y"`', expected: '"```$x`"y`"``"' },
                 { name: 'attempted PowerShell break-out', input: '"; Remove-Item C:\\ -Recurse #', expected: '"`"; Remove-Item C:\\ -Recurse #"' },
+                { name: 'attempted smart double quote break-out', input: 'safe\u201C; Remove-Item C:\\ -Recurse #', expected: '"safe`\u201C; Remove-Item C:\\ -Recurse #"' },
+                { name: 'attempted smart single quote break-out', input: 'safe\u2018; Remove-Item C:\\ -Recurse #', expected: '"safe`\u2018; Remove-Item C:\\ -Recurse #"' },
                 { name: 'subshell with backticks and dollar', input: '`echo $(rm -rf /)`', expected: '"``echo `$(rm -rf /)``"' },
                 { name: 'empty string', input: '', expected: '""' },
                 { name: 'only special characters', input: '`$"', expected: '"```$`""' },
@@ -532,6 +620,7 @@ suite('AspireTerminalProvider tests', () => {
                 { name: 'glob characters', input: '* ? [a-z]', expected: `'* ? [a-z]'` },
                 { name: 'pipe and chaining', input: 'a | b; c && d', expected: `'a | b; c && d'` },
                 { name: 'redirection', input: '> out.txt < in.txt', expected: `'> out.txt < in.txt'` },
+                { name: 'tab', input: 'hello\tworld', expected: `'hello\tworld'` },
                 { name: 'attempted bash break-out', input: `'; rm -rf / #`, expected: `''"'"'; rm -rf / #'` },
                 { name: 'backslash', input: 'a\\b', expected: `'a\\b'` },
                 { name: 'empty string', input: '', expected: `''` },

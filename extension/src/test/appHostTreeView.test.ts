@@ -127,6 +127,7 @@ interface ShellProof {
     readonly appHostMarkerPath: string;
     readonly resourceMarkerPath: string;
     run(commandLine: string, expectedArgs: readonly string[]): void;
+    runPowerShell(commandLine: string, expectedArgs: readonly string[], shellPath: string): void;
     dispose(): void;
 }
 
@@ -156,10 +157,41 @@ function createShellProof(): ShellProof {
             assert.strictEqual(fs.existsSync(appHostMarkerPath), false, 'AppHost path payload should not execute');
             assert.strictEqual(fs.existsSync(resourceMarkerPath), false, 'resource payload should not execute');
         },
+        runPowerShell(commandLine: string, expectedArgs: readonly string[], shellPath: string): void {
+            childProcess.execFileSync(shellPath, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', commandLine], {
+                env: { ...process.env, PROOF_ARGV: argvPath },
+                stdio: 'ignore',
+            });
+
+            const actualArgs = fs.readFileSync(argvPath, 'utf8').trimEnd().split('\n');
+            assert.deepStrictEqual(actualArgs, expectedArgs);
+            assert.strictEqual(fs.existsSync(appHostMarkerPath), false, 'AppHost path payload should not execute');
+            assert.strictEqual(fs.existsSync(resourceMarkerPath), false, 'resource payload should not execute');
+        },
         dispose(): void {
             fs.rmSync(directory, { recursive: true, force: true });
         },
     };
+}
+
+function getPowerShellForShellProof(): string | undefined {
+    if (process.platform === 'win32') {
+        // The proof CLI is a shebang script so PowerShell invokes it as a native
+        // command on Unix hosts. Windows coverage would need a compiled shim to
+        // exercise the same native-executable boundary.
+        return undefined;
+    }
+
+    for (const candidate of ['pwsh', 'pwsh.exe']) {
+        const result = childProcess.spawnSync(candidate, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.Major'], {
+            stdio: 'ignore',
+        });
+        if (result.status === 0 && result.error === undefined) {
+            return candidate;
+        }
+    }
+
+    return undefined;
 }
 
 function makeProofTerminalProvider(sandbox: sinon.SinonSandbox, proof: ShellProof, commandLines: string[]): { terminalProvider: AspireTerminalProvider; dispose: () => void } {
@@ -499,6 +531,54 @@ suite('AspireAppHostTreeProvider', () => {
             proof.run(commandLines[2], ['resource', resourceName, 'restart', '--apphost', appHostPath]);
         }
         finally {
+            provider.dispose();
+            proofTerminalProvider.dispose();
+            proof.dispose();
+        }
+    });
+
+    test('workspace tree terminal actions pass hostile paths as inert PowerShell arguments', async function () {
+        const powerShellPath = getPowerShellForShellProof();
+        if (powerShellPath === undefined) {
+            this.skip();
+        }
+
+        const platformStub = sandbox.stub(process, 'platform').value('win32');
+        const proof = createShellProof();
+        const commandLines: string[] = [];
+        const proofTerminalProvider = makeProofTerminalProvider(sandbox, proof, commandLines);
+        const appHostPath = path.join(proof.directory, 'workspace') + `"\u201C; touch ${proof.appHostMarkerPath} #/$(whoami)/\`whoami\`/AppHost.csproj`;
+        const resourceName = `cache"\u201C; touch ${proof.resourceMarkerPath} # $(whoami) \`whoami\``;
+        const resource = makeResource({ name: resourceName, displayName: resourceName });
+        const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+        const repository = {
+            viewMode: 'workspace' as ViewMode,
+            appHosts: [],
+            workspaceResources: [resource],
+            workspaceAppHost: makeAppHost({ appHostPath, resources: [resource] }),
+            workspaceAppHostPath: appHostPath,
+            workspaceAppHostCandidatePaths: [appHostPath],
+            workspaceAppHostName: 'AppHost.csproj',
+            workspaceAppHostDescription: undefined,
+            onDidChangeData,
+        } as unknown as AppHostDataRepository;
+        const provider = new AspireAppHostTreeProvider(repository, proofTerminalProvider.terminalProvider, makeLaunchService());
+
+        try {
+            const [workspaceItem] = provider.getChildren();
+            const [resourceItem] = provider.getChildren(workspaceItem);
+
+            await provider.stopAppHost(workspaceItem as any);
+            proof.runPowerShell(commandLines[0], ['stop', '--apphost', appHostPath], powerShellPath);
+
+            await provider.viewResourceLogs(resourceItem as any);
+            proof.runPowerShell(commandLines[1], ['logs', resourceName, '--apphost', appHostPath], powerShellPath);
+
+            await provider.restartResource(resourceItem as any);
+            proof.runPowerShell(commandLines[2], ['resource', resourceName, 'restart', '--apphost', appHostPath], powerShellPath);
+        }
+        finally {
+            platformStub.restore();
             provider.dispose();
             proofTerminalProvider.dispose();
             proof.dispose();
