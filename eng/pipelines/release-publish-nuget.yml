@@ -197,6 +197,7 @@ extends:
               os: windows
             variables:
               SourceBuildId: $(resources.pipeline.aspire-build.runID)
+              SourceBuildPipeline: microsoft-aspire
             templateContext:
               # Disable the auto-injected MicroBuildAuthorizePublishPlugin@0 task for jobs
               # that do not perform an ESRP publish. PrepareJob only downloads artifacts
@@ -355,17 +356,48 @@ extends:
                     **/microsoft-aspire-cli*.tgz
                     **/microsoft-aspire-cli*.tgz.sig
 
-                - download: aspire-build
+                # The source build publishes npm validation summaries with 1ES.PublishBuildArtifacts,
+                # so they are build/container artifacts. Use DownloadBuildArtifacts explicitly instead
+                # of the `download:` shortcut, which selects the pipeline-artifact downloader here and
+                # cannot read container artifact metadata such as #/<containerId>/<artifactName>.
+                - task: DownloadBuildArtifacts@0
                   displayName: 'Download npm validation summary from Source Build (win-x64)'
-                  artifact: $(NPM_VALIDATION_SUMMARY_WIN_X64_ARTIFACT)
+                  inputs:
+                    buildType: specific
+                    project: internal
+                    pipeline: $(SourceBuildPipeline)
+                    buildVersionToDownload: specific
+                    buildId: $(SourceBuildId)
+                    downloadType: single
+                    artifactName: $(NPM_VALIDATION_SUMMARY_WIN_X64_ARTIFACT)
+                    downloadPath: '$(Pipeline.Workspace)/aspire-build'
+                    checkDownloadedFiles: true
 
-                - download: aspire-build
+                - task: DownloadBuildArtifacts@0
                   displayName: 'Download npm validation summary from Source Build (linux-x64)'
-                  artifact: $(NPM_VALIDATION_SUMMARY_LINUX_X64_ARTIFACT)
+                  inputs:
+                    buildType: specific
+                    project: internal
+                    pipeline: $(SourceBuildPipeline)
+                    buildVersionToDownload: specific
+                    buildId: $(SourceBuildId)
+                    downloadType: single
+                    artifactName: $(NPM_VALIDATION_SUMMARY_LINUX_X64_ARTIFACT)
+                    downloadPath: '$(Pipeline.Workspace)/aspire-build'
+                    checkDownloadedFiles: true
 
-                - download: aspire-build
+                - task: DownloadBuildArtifacts@0
                   displayName: 'Download npm validation summary from Source Build (macOS)'
-                  artifact: $(NPM_VALIDATION_SUMMARY_OSX_ARTIFACT)
+                  inputs:
+                    buildType: specific
+                    project: internal
+                    pipeline: $(SourceBuildPipeline)
+                    buildVersionToDownload: specific
+                    buildId: $(SourceBuildId)
+                    downloadType: single
+                    artifactName: $(NPM_VALIDATION_SUMMARY_OSX_ARTIFACT)
+                    downloadPath: '$(Pipeline.Workspace)/aspire-build'
+                    checkDownloadedFiles: true
 
               - ${{ if eq(parameters.SkipWinGetPublish, false) }}:
                 - download: aspire-build
