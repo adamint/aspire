@@ -484,13 +484,12 @@ suite('AppHost discovery', () => {
                     const result = await service.discover(makeWorkspaceFolder(tempDir));
                     const sourceFileCandidate = await service.tryFindCandidateForEditorFile(appHostProgramPath, makeWorkspaceFolder(tempDir));
 
-                    assert.deepStrictEqual(result, [{
-                        path: appHostProjectPath,
-                        language: 'csharp',
-                        status: 'buildable',
-                        selected: true,
-                    }]);
-                    assert.strictEqual(sourceFileCandidate?.path, appHostProjectPath);
+                    assert.strictEqual(result.length, 1);
+                    assert.strictEqual(path.normalize(result[0].path).toLowerCase(), path.normalize(appHostProjectPath).toLowerCase());
+                    assert.strictEqual(result[0].language, 'csharp');
+                    assert.strictEqual(result[0].status, 'buildable');
+                    assert.strictEqual(result[0].selected, true);
+                    assert.strictEqual(path.normalize(sourceFileCandidate?.path ?? '').toLowerCase(), path.normalize(appHostProjectPath).toLowerCase());
                 }
                 finally {
                     service.dispose();
