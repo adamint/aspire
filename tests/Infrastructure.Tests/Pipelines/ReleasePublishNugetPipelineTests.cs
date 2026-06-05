@@ -89,6 +89,21 @@ public sealed class ReleasePublishNugetPipelineTests
     }
 
     [Fact]
+    public async Task AlreadyPublishedNpmPreflightExitsZeroAfterHandledRegistryMisses()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        var successIndex = FindRequiredText(pipeline, "No scheduled npm package versions already exist on npm.");
+        var displayNameIndex = FindRequiredText(pipeline, "displayName: 'Verify npm Packages Are Not Already Published'");
+        var successTail = pipeline[successIndex..displayNameIndex];
+
+        // Azure Pipelines' PowerShell task exits with $LASTEXITCODE after the inline script.
+        // `npm view` returns 1 for E404, which this script handles as success, so the success
+        // path must override that stale native exit code.
+        Assert.Contains("exit 0", successTail);
+    }
+
+    [Fact]
     public async Task UsesRequiredNpmEsrpOwnersAndApprover()
     {
         var commonVariables = await ReadRepoFileAsync("eng/pipelines/common-variables.yml");

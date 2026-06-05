@@ -1487,6 +1487,7 @@ extends:
                     }
 
                     Write-Host "No scheduled npm package versions already exist on npm."
+                    exit 0
                   displayName: 'Verify npm Packages Are Not Already Published'
 
                 - ${{ if eq(parameters.SkipNpmRidPublish, false) }}:
