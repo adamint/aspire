@@ -30,9 +30,6 @@ public partial class AssistantModalDialog : IAsyncDisposable
     public required IJSRuntime JS { get; init; }
 
     [Inject]
-    public required IAIContextProvider AIContextProvider { get; init; }
-
-    [Inject]
     private IAssistantDisplayContext AssistantDisplayContext { get; init; } = null!;
 
     [Inject]

@@ -6,7 +6,6 @@ using Aspire.Dashboard.Components.Layout;
 using Aspire.Dashboard.Model.Assistant;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
-using Microsoft.JSInterop;
 
 namespace Aspire.Dashboard.Components.Dialogs;
 
@@ -31,9 +30,6 @@ public partial class AssistantSidebarDialog : IAsyncDisposable
 
     [Inject]
     public required IServiceProvider ServiceProvider { get; init; }
-
-    [Inject]
-    public required IJSRuntime JS { get; init; }
 
     protected override void OnInitialized()
     {
