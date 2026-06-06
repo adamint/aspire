@@ -123,6 +123,16 @@ public sealed class ReleasePublishNugetPipelineTests
     }
 
     [Fact]
+    public async Task NpmEsrpOwnersRequireAnyConfiguredOwnerAlias()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        Assert.Contains("Assert-ContainsAnyRequiredNpmAlias $normalizedOwners $requiredNpmOwners 'NpmPublishOwners'", pipeline);
+        Assert.DoesNotContain("Assert-ContainsRequiredNpmAliases $normalizedOwners $requiredNpmOwners 'NpmPublishOwners'", pipeline);
+        Assert.Contains("Assert-ContainsRequiredNpmAliases $normalizedApprovers $requiredNpmApprovers 'NpmPublishApprovers'", pipeline);
+    }
+
+    [Fact]
     public async Task ValidatesPublishedNpmPackageFromRegistryAfterPublish()
     {
         var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
