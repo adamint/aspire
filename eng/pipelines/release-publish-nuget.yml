@@ -748,13 +748,16 @@ extends:
                       [System.Collections.Generic.HashSet[string]] $actualAliases,
                       [System.Collections.Generic.HashSet[string]] $requiredAliases,
                       [string] $parameterName) {
+                      if ($requiredAliases.Count -eq 0) {
+                        return
+                      }
+
                       $matches = @($requiredAliases | Where-Object { $actualAliases.Contains($_) })
                       if ($matches.Count -eq 0) {
                         $requiredAliasList = ($requiredAliases | Sort-Object) -join ', '
                         Write-Error "$parameterName must include at least one required ESRP owner alias: $requiredAliasList."
                         exit 1
                       }
-                    }
 
                     $owners = "${{ parameters.NpmPublishOwners }}"
                     $approvers = "${{ parameters.NpmPublishApprovers }}"
