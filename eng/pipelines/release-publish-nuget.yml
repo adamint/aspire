@@ -820,8 +820,8 @@ extends:
                       [System.Collections.Generic.HashSet[string]] $actualAliases,
                       [System.Collections.Generic.HashSet[string]] $requiredAliases,
                       [string] $parameterName) {
-                      $matches = @($requiredAliases | Where-Object { $actualAliases.Contains($_) })
-                      if ($matches.Count -eq 0) {
+                      $matchingAliases = @($requiredAliases | Where-Object { $actualAliases.Contains($_) })
+                      if ($matchingAliases.Count -eq 0) {
                         $requiredAliasList = ($requiredAliases | Sort-Object) -join ', '
                         Write-Error "$parameterName must include at least one required ESRP owner alias: $requiredAliasList."
                         exit 1
