@@ -113,10 +113,13 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.Contains("- name: NPM_PUBLISH_REQUIRED_OWNERS", pipeline);
         Assert.Contains("value: joperezr,ankj", pipeline);
         Assert.DoesNotContain("NPM_PUBLISH_DEFAULT_APPROVER", commonVariables);
+        Assert.DoesNotContain("NPM_PUBLISH_REQUIRED_APPROVERS", commonVariables);
         Assert.Contains("displayName: 'npm ESRP owners (comma-separated Microsoft aliases or emails; must include joperezr or ankj)'", pipeline);
         Assert.Contains("displayName: 'npm ESRP approver (single Microsoft alias or email; required)'", pipeline);
         Assert.Contains("$requiredNpmOwnersValue = \"$(NPM_PUBLISH_REQUIRED_OWNERS)\"", pipeline);
         Assert.DoesNotContain("NPM_PUBLISH_DEFAULT_APPROVER", pipeline);
+        Assert.DoesNotContain("NPM_PUBLISH_REQUIRED_APPROVERS", pipeline);
+        Assert.DoesNotContain("requiredNpmApprovers", pipeline);
         Assert.Contains("owners: '$(NpmPublishOwnersEffective)'", pipeline);
         Assert.Contains("approvers: '$(NpmPublishApproversEffective)'", pipeline);
         Assert.Contains("NpmPublishOwners and NpmPublishApprovers must not contain the same alias(es)", pipeline);

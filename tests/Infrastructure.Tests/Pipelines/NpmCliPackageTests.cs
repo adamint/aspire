@@ -241,6 +241,17 @@ public sealed class NpmCliPackageTests
         Assert.DoesNotContain("artifact: npm-validation-summary-win-x64", releasePipeline);
         Assert.DoesNotContain("artifact: npm-validation-summary-linux-x64", releasePipeline);
         Assert.DoesNotContain("artifact: npm-validation-summary-osx", releasePipeline);
+        Assert.DoesNotContain("artifact: $(NPM_VALIDATION_SUMMARY_WIN_X64_ARTIFACT)", releasePipeline);
+        Assert.DoesNotContain("artifact: $(NPM_VALIDATION_SUMMARY_LINUX_X64_ARTIFACT)", releasePipeline);
+        Assert.DoesNotContain("artifact: $(NPM_VALIDATION_SUMMARY_OSX_ARTIFACT)", releasePipeline);
+        Assert.Equal(3, CountOccurrences(releasePipeline, "task: DownloadBuildArtifacts@0"));
+        Assert.Equal(3, CountOccurrences(releasePipeline, "pipeline: $(SourceBuildPipeline)"));
+        Assert.Equal(3, CountOccurrences(releasePipeline, "buildId: $(SourceBuildId)"));
+        Assert.Equal(3, CountOccurrences(releasePipeline, "downloadPath: '$(Pipeline.Workspace)/aspire-build'"));
+        Assert.Contains("SourceBuildPipeline: microsoft-aspire", releasePipeline);
+        Assert.Contains("artifactName: $(NPM_VALIDATION_SUMMARY_WIN_X64_ARTIFACT)", releasePipeline);
+        Assert.Contains("artifactName: $(NPM_VALIDATION_SUMMARY_LINUX_X64_ARTIFACT)", releasePipeline);
+        Assert.Contains("artifactName: $(NPM_VALIDATION_SUMMARY_OSX_ARTIFACT)", releasePipeline);
         Assert.Contains("$(NPM_VALIDATION_SUMMARY_WIN_X64_ARTIFACT)", releasePipeline);
         Assert.Contains("$(NPM_VALIDATION_SUMMARY_LINUX_X64_ARTIFACT)", releasePipeline);
         Assert.Contains("$(NPM_VALIDATION_SUMMARY_OSX_ARTIFACT)", releasePipeline);
@@ -301,6 +312,9 @@ public sealed class NpmCliPackageTests
 
         Assert.DoesNotContain("NPM_PUBLISH_REQUIRED_OWNERS", commonVariables);
         Assert.Contains("NPM_PUBLISH_REQUIRED_OWNERS", releasePipeline);
+        Assert.DoesNotContain("NPM_PUBLISH_REQUIRED_APPROVERS", commonVariables);
+        Assert.DoesNotContain("NPM_PUBLISH_REQUIRED_APPROVERS", releasePipeline);
+        Assert.DoesNotContain("requiredNpmApprovers", releasePipeline);
         Assert.Contains("default: ''", releasePipeline);
         Assert.Contains("NpmPublishOwnersEffective", releasePipeline);
         Assert.Contains("NpmPublishApproversEffective", releasePipeline);
