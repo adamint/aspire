@@ -78,7 +78,7 @@ parameters:
     default: ''
 
   - name: NpmPublishApprovers
-    displayName: 'npm ESRP approvers (comma-separated Microsoft aliases or emails; leave blank for repo default)'
+    displayName: 'npm ESRP approver (single Microsoft alias or email; leave blank for repo default)'
     type: string
     default: ''
 
@@ -765,18 +765,16 @@ extends:
                       return ,$aliases
                     }
 
-                    function Assert-ContainsRequiredNpmAliases(
+                    function Assert-SingleNpmReleaseAlias(
                       [System.Collections.Generic.HashSet[string]] $actualAliases,
-                      [System.Collections.Generic.HashSet[string]] $requiredAliases,
                       [string] $parameterName) {
-                      $missing = @($requiredAliases | Where-Object { -not $actualAliases.Contains($_) })
-                      if ($missing.Count -gt 0) {
-                        Write-Error "$parameterName must include required ESRP alias(es): $($missing -join ', ')."
+                      if ($actualAliases.Count -ne 1) {
+                        Write-Error "$parameterName must contain exactly one Microsoft alias or @microsoft.com email address."
                         exit 1
                       }
                     }
 
-                    function Assert-ContainsAnyRequiredNpmAlias(
+                    function Assert-ContainsAnyRequiredNpmOwnerAlias(
                       [System.Collections.Generic.HashSet[string]] $actualAliases,
                       [System.Collections.Generic.HashSet[string]] $requiredAliases,
                       [string] $parameterName) {
@@ -791,7 +789,7 @@ extends:
                     $owners = "${{ parameters.NpmPublishOwners }}"
                     $approvers = "${{ parameters.NpmPublishApprovers }}"
                     $requiredNpmOwnersValue = "$(NPM_PUBLISH_REQUIRED_OWNERS)"
-                    $requiredNpmApproversValue = "$(NPM_PUBLISH_REQUIRED_APPROVERS)"
+                    $defaultNpmApproverValue = "$(NPM_PUBLISH_DEFAULT_APPROVER)"
 
                     if ([string]::IsNullOrWhiteSpace($owners)) {
                       $owners = $requiredNpmOwnersValue
@@ -799,12 +797,11 @@ extends:
                     }
 
                     if ([string]::IsNullOrWhiteSpace($approvers)) {
-                      $approvers = $requiredNpmApproversValue
-                      Write-Host "NpmPublishApprovers not provided; using NPM_PUBLISH_REQUIRED_APPROVERS."
+                      $approvers = $defaultNpmApproverValue
+                      Write-Host "NpmPublishApprovers not provided; using NPM_PUBLISH_DEFAULT_APPROVER."
                     }
 
                     $requiredNpmOwners = ConvertTo-NpmReleaseAliasSet $requiredNpmOwnersValue 'NPM_PUBLISH_REQUIRED_OWNERS'
-                    $requiredNpmApprovers = ConvertTo-NpmReleaseAliasSet $requiredNpmApproversValue 'NPM_PUBLISH_REQUIRED_APPROVERS'
                     $normalizedOwners = ConvertTo-NpmReleaseAliasSet $owners 'NpmPublishOwners'
                     $normalizedApprovers = ConvertTo-NpmReleaseAliasSet $approvers 'NpmPublishApprovers'
 
@@ -818,8 +815,8 @@ extends:
                       exit 1
                     }
 
-                    Assert-ContainsAnyRequiredNpmAlias $normalizedOwners $requiredNpmOwners 'NpmPublishOwners'
-                    Assert-ContainsRequiredNpmAliases $normalizedApprovers $requiredNpmApprovers 'NpmPublishApprovers'
+                    Assert-ContainsAnyRequiredNpmOwnerAlias $normalizedOwners $requiredNpmOwners 'NpmPublishOwners'
+                    Assert-SingleNpmReleaseAlias $normalizedApprovers 'NpmPublishApprovers'
 
                     $overlappingAliases = @($normalizedOwners | Where-Object { $normalizedApprovers.Contains($_) })
                     if ($overlappingAliases.Count -gt 0) {

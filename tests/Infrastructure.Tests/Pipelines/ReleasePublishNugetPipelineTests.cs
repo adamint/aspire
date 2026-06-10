@@ -22,12 +22,12 @@ public sealed class ReleasePublishNugetPipelineTests
 
         AssertBefore(
             pipeline,
-            "$parameterName must include required ESRP alias(es)",
+            "$parameterName must include at least one required ESRP owner alias",
             nuGetPublishIndex);
 
         AssertBefore(
             pipeline,
-            "Assert-ContainsRequiredNpmAliases $normalizedApprovers $requiredNpmApprovers 'NpmPublishApprovers'",
+            "Assert-SingleNpmReleaseAlias $normalizedApprovers 'NpmPublishApprovers'",
             nuGetPublishIndex);
     }
 
@@ -111,12 +111,12 @@ public sealed class ReleasePublishNugetPipelineTests
 
         Assert.Contains("- name: NPM_PUBLISH_REQUIRED_OWNERS", commonVariables);
         Assert.Contains("value: joperezr,ankj", commonVariables);
-        Assert.Contains("- name: NPM_PUBLISH_REQUIRED_APPROVERS", commonVariables);
+        Assert.Contains("- name: NPM_PUBLISH_DEFAULT_APPROVER", commonVariables);
         Assert.Contains("value: adamratzman", commonVariables);
         Assert.Contains("displayName: 'npm ESRP owners (comma-separated Microsoft aliases or emails; leave blank for repo default)'", pipeline);
-        Assert.Contains("displayName: 'npm ESRP approvers (comma-separated Microsoft aliases or emails; leave blank for repo default)'", pipeline);
+        Assert.Contains("displayName: 'npm ESRP approver (single Microsoft alias or email; leave blank for repo default)'", pipeline);
         Assert.Contains("$requiredNpmOwnersValue = \"$(NPM_PUBLISH_REQUIRED_OWNERS)\"", pipeline);
-        Assert.Contains("$requiredNpmApproversValue = \"$(NPM_PUBLISH_REQUIRED_APPROVERS)\"", pipeline);
+        Assert.Contains("$defaultNpmApproverValue = \"$(NPM_PUBLISH_DEFAULT_APPROVER)\"", pipeline);
         Assert.Contains("owners: '$(NpmPublishOwnersEffective)'", pipeline);
         Assert.Contains("approvers: '$(NpmPublishApproversEffective)'", pipeline);
         Assert.Contains("NpmPublishOwners and NpmPublishApprovers must not contain the same alias(es)", pipeline);
@@ -127,9 +127,10 @@ public sealed class ReleasePublishNugetPipelineTests
     {
         var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
 
-        Assert.Contains("Assert-ContainsAnyRequiredNpmAlias $normalizedOwners $requiredNpmOwners 'NpmPublishOwners'", pipeline);
+        Assert.Contains("Assert-ContainsAnyRequiredNpmOwnerAlias $normalizedOwners $requiredNpmOwners 'NpmPublishOwners'", pipeline);
         Assert.DoesNotContain("Assert-ContainsRequiredNpmAliases $normalizedOwners $requiredNpmOwners 'NpmPublishOwners'", pipeline);
-        Assert.Contains("Assert-ContainsRequiredNpmAliases $normalizedApprovers $requiredNpmApprovers 'NpmPublishApprovers'", pipeline);
+        Assert.Contains("Assert-SingleNpmReleaseAlias $normalizedApprovers 'NpmPublishApprovers'", pipeline);
+        Assert.DoesNotContain("Assert-ContainsRequiredNpmAliases $normalizedApprovers", pipeline);
     }
 
     [Fact]

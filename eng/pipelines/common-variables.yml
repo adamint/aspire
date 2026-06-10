@@ -18,7 +18,7 @@ variables:
     value: npm-validation-summary-osx
   - name: NPM_PUBLISH_REQUIRED_OWNERS
     value: joperezr,ankj
-  - name: NPM_PUBLISH_REQUIRED_APPROVERS
+  - name: NPM_PUBLISH_DEFAULT_APPROVER
     value: adamratzman
 
   - ${{ if notin(variables['Build.Reason'], 'PullRequest') }}:

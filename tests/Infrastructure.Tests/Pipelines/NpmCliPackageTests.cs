@@ -300,7 +300,7 @@ public sealed class NpmCliPackageTests
         var releasePipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
 
         Assert.Contains("NPM_PUBLISH_REQUIRED_OWNERS", commonVariables);
-        Assert.Contains("NPM_PUBLISH_REQUIRED_APPROVERS", commonVariables);
+        Assert.Contains("NPM_PUBLISH_DEFAULT_APPROVER", commonVariables);
         Assert.Contains("default: ''", releasePipeline);
         Assert.Contains("NpmPublishOwnersEffective", releasePipeline);
         Assert.Contains("NpmPublishApproversEffective", releasePipeline);
