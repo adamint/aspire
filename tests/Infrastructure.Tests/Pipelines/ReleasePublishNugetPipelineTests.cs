@@ -109,14 +109,14 @@ public sealed class ReleasePublishNugetPipelineTests
         var commonVariables = await ReadRepoFileAsync("eng/pipelines/common-variables.yml");
         var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
 
-        Assert.Contains("- name: NPM_PUBLISH_REQUIRED_OWNERS", commonVariables);
-        Assert.Contains("value: joperezr,ankj", commonVariables);
-        Assert.Contains("- name: NPM_PUBLISH_DEFAULT_APPROVER", commonVariables);
-        Assert.Contains("value: adamratzman", commonVariables);
-        Assert.Contains("displayName: 'npm ESRP owners (comma-separated Microsoft aliases or emails; leave blank for repo default)'", pipeline);
-        Assert.Contains("displayName: 'npm ESRP approver (single Microsoft alias or email; leave blank for repo default)'", pipeline);
+        Assert.DoesNotContain("NPM_PUBLISH_REQUIRED_OWNERS", commonVariables);
+        Assert.Contains("- name: NPM_PUBLISH_REQUIRED_OWNERS", pipeline);
+        Assert.Contains("value: joperezr,ankj", pipeline);
+        Assert.DoesNotContain("NPM_PUBLISH_DEFAULT_APPROVER", commonVariables);
+        Assert.Contains("displayName: 'npm ESRP owners (comma-separated Microsoft aliases or emails; must include joperezr or ankj)'", pipeline);
+        Assert.Contains("displayName: 'npm ESRP approver (single Microsoft alias or email; required)'", pipeline);
         Assert.Contains("$requiredNpmOwnersValue = \"$(NPM_PUBLISH_REQUIRED_OWNERS)\"", pipeline);
-        Assert.Contains("$defaultNpmApproverValue = \"$(NPM_PUBLISH_DEFAULT_APPROVER)\"", pipeline);
+        Assert.DoesNotContain("NPM_PUBLISH_DEFAULT_APPROVER", pipeline);
         Assert.Contains("owners: '$(NpmPublishOwnersEffective)'", pipeline);
         Assert.Contains("approvers: '$(NpmPublishApproversEffective)'", pipeline);
         Assert.Contains("NpmPublishOwners and NpmPublishApprovers must not contain the same alias(es)", pipeline);
@@ -131,6 +131,8 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.DoesNotContain("Assert-ContainsRequiredNpmAliases $normalizedOwners $requiredNpmOwners 'NpmPublishOwners'", pipeline);
         Assert.Contains("Assert-SingleNpmReleaseAlias $normalizedApprovers 'NpmPublishApprovers'", pipeline);
         Assert.DoesNotContain("Assert-ContainsRequiredNpmAliases $normalizedApprovers", pipeline);
+        Assert.DoesNotContain("NpmPublishOwners not provided; using NPM_PUBLISH_REQUIRED_OWNERS.", pipeline);
+        Assert.DoesNotContain("NpmPublishApprovers not provided; using NPM_PUBLISH_DEFAULT_APPROVER.", pipeline);
     }
 
     [Fact]

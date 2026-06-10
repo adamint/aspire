@@ -73,12 +73,12 @@ parameters:
     default: false
 
   - name: NpmPublishOwners
-    displayName: 'npm ESRP owners (comma-separated Microsoft aliases or emails; leave blank for repo default)'
+    displayName: 'npm ESRP owners (comma-separated Microsoft aliases or emails; must include joperezr or ankj)'
     type: string
     default: ''
 
   - name: NpmPublishApprovers
-    displayName: 'npm ESRP approver (single Microsoft alias or email; leave blank for repo default)'
+    displayName: 'npm ESRP approver (single Microsoft alias or email; required)'
     type: string
     default: ''
 
@@ -126,6 +126,8 @@ parameters:
 variables:
   - template: /eng/pipelines/common-variables.yml@self
   - template: /eng/common/templates-official/variables/pool-providers.yml@self
+  - name: NPM_PUBLISH_REQUIRED_OWNERS
+    value: joperezr,ankj
   # Variable group containing secrets (VscePublishToken for future use)
   # Note: NuGet publishing uses service connection 'NuGet.org - dotnet/aspire' instead of API key
   - group: Aspire-Release-Secrets
@@ -789,17 +791,6 @@ extends:
                     $owners = "${{ parameters.NpmPublishOwners }}"
                     $approvers = "${{ parameters.NpmPublishApprovers }}"
                     $requiredNpmOwnersValue = "$(NPM_PUBLISH_REQUIRED_OWNERS)"
-                    $defaultNpmApproverValue = "$(NPM_PUBLISH_DEFAULT_APPROVER)"
-
-                    if ([string]::IsNullOrWhiteSpace($owners)) {
-                      $owners = $requiredNpmOwnersValue
-                      Write-Host "NpmPublishOwners not provided; using NPM_PUBLISH_REQUIRED_OWNERS."
-                    }
-
-                    if ([string]::IsNullOrWhiteSpace($approvers)) {
-                      $approvers = $defaultNpmApproverValue
-                      Write-Host "NpmPublishApprovers not provided; using NPM_PUBLISH_DEFAULT_APPROVER."
-                    }
 
                     $requiredNpmOwners = ConvertTo-NpmReleaseAliasSet $requiredNpmOwnersValue 'NPM_PUBLISH_REQUIRED_OWNERS'
                     $normalizedOwners = ConvertTo-NpmReleaseAliasSet $owners 'NpmPublishOwners'
