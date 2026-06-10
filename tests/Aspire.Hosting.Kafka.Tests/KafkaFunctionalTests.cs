@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+#pragma warning disable ASPIREPERSISTENCE001 // Resource lifetime APIs are experimental.
+
 using Aspire.TestUtilities;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Tests.Utils;
@@ -271,5 +273,20 @@ public class KafkaFunctionalTests(ITestOutputHelper testOutputHelper)
                 }
             }
         }
+    }
+    [Fact]
+    [RequiresFeature(TestFeature.Docker)]
+    public async Task Kafka_WithPersistentLifetime_ReusesContainer()
+    {
+        // Kafka advertises the public listener port in the container environment, so use
+        // a stable public port until proxyless persistent endpoints become the default again.
+        const int port = 19094;
+
+        await PersistentContainerTestHelpers.AssertResourceReusesContainerAsync(
+            testOutputHelper,
+            builder => builder.AddKafka("resource", port).WithPersistentLifetime(),
+            "resource",
+            useTestContainerRegistry: true,
+            randomizePorts: false);
     }
 }
