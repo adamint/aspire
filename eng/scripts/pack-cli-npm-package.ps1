@@ -243,8 +243,6 @@ Your stack, streamlined. Aspire is a multi-language, code-first orchestration an
 
 Use an AppHost to describe how services, frontends, containers, databases, caches, and connections fit together in code. The Aspire CLI runs the whole app locally, opens the OpenTelemetry dashboard for logs, traces, metrics, and health checks, and carries the same app model into deployment.
 
-This package adds the `aspire` command to your PATH by installing a small JavaScript launcher plus the matching native Aspire CLI package for your platform.
-
 ## A simple app definition
 
 The same application definition can be written in different languages.

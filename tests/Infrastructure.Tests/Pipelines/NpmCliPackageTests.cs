@@ -201,6 +201,7 @@ public sealed class NpmCliPackageTests
         Assert.Contains("## What is Aspire?", packScript);
         Assert.Contains("Aspire is a multi-language, code-first orchestration and observability layer for building, running, and deploying distributed applications.", packScript);
         Assert.Contains("Use an AppHost to describe how services, frontends, containers, databases, caches, and connections fit together in code.", packScript);
+        Assert.DoesNotContain("This package adds the `aspire` command to your PATH", packScript);
         Assert.Contains("## A simple app definition", packScript);
         Assert.Contains("var cache = builder.AddRedis(\"cache\");", packScript);
         Assert.Contains("const builder = await createBuilder();", packScript);
