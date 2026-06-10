@@ -174,6 +174,50 @@ public sealed class NpmCliPackageTests
     }
 
     [Fact]
+    public async Task PointerPackageMetadataOptimizesNpmSearchVisibility()
+    {
+        var packScript = await ReadRepoFileAsync("eng/scripts/pack-cli-npm-package.ps1");
+
+        Assert.Contains("description = 'The Aspire CLI lets you build, run, manage, and deploy distributed applications in a terminal.'", packScript);
+        Assert.Contains("homepage = 'https://aspire.dev'", packScript);
+        Assert.Contains("keywords = New-StringList", packScript);
+
+        foreach (var keyword in new[] { "aspire", "typescript", "dotnet", "apphost", "polyglot", "distributed-applications", "code-first", "orchestration", "observability", "opentelemetry", "local-development" })
+        {
+            Assert.Contains($"'{keyword}'", packScript);
+        }
+
+        Assert.DoesNotContain("'cli'", packScript);
+        Assert.DoesNotContain("'distributed-application-framework'", packScript);
+    }
+
+    [Fact]
+    public async Task PointerPackageReadmeDocumentsNpmInstallAndNativeDependencies()
+    {
+        var packScript = await ReadRepoFileAsync("eng/scripts/pack-cli-npm-package.ps1");
+
+        Assert.Contains("$pointerReadmeTemplate = @'", packScript);
+        Assert.Contains("# __PACKAGE_NAME__", packScript);
+        Assert.Contains("## What is Aspire?", packScript);
+        Assert.Contains("Aspire is a multi-language, code-first orchestration and observability layer for building, running, and deploying distributed applications.", packScript);
+        Assert.Contains("Use an AppHost to describe how services, frontends, containers, databases, caches, and connections fit together in code.", packScript);
+        Assert.Contains("## A simple app definition", packScript);
+        Assert.Contains("var cache = builder.AddRedis(\"cache\");", packScript);
+        Assert.Contains("const builder = await createBuilder();", packScript);
+        Assert.Contains("This package requires Node.js 20 or later.", packScript);
+        Assert.Contains("npm install -g __PACKAGE_NAME__", packScript);
+        Assert.Contains("aspire --version", packScript);
+        Assert.Contains("aspire init", packScript);
+        Assert.Contains("aspire run", packScript);
+        Assert.Contains("optional dependencies", packScript);
+        Assert.Contains("aspire update --self", packScript);
+        Assert.Contains("[Documentation](https://aspire.dev/docs/)", packScript);
+        Assert.Contains("[Aspire samples repository](https://github.com/microsoft/aspire-samples)", packScript);
+        Assert.Contains("$pointerReadme = $pointerReadmeTemplate -replace '__PACKAGE_NAME__', $PackageName", packScript);
+        Assert.DoesNotContain("Npm package for the Aspire CLI.", packScript);
+    }
+
+    [Fact]
     public async Task NpmInstallValidationJobsUseExplicitJobsSharedStepsTemplateAndCentralArtifactNames()
     {
         var commonVariables = await ReadRepoFileAsync("eng/pipelines/common-variables.yml");
