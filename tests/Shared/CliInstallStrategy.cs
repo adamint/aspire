@@ -171,7 +171,7 @@ internal static class AspireCliShellCommandHelpers
             "PKG_FILE=$(basename \"$PKG_PATH\"); " +
             "PKG_VERSION=${PKG_FILE#\"$PKG.\"}; " +
             "PKG_VERSION=${PKG_VERSION%.nupkg}; " +
-            "dotnet add \"$TARGET\" package \"$PKG\" --version \"$PKG_VERSION\" --prerelease; " +
+            "dotnet add \"$TARGET\" package \"$PKG\" --version \"$PKG_VERSION\"; " +
             "else dotnet add \"$TARGET\" package \"$PKG\" --prerelease; fi";
     }
 
