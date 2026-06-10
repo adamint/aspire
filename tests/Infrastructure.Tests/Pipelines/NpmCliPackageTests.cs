@@ -298,10 +298,10 @@ public sealed class NpmCliPackageTests
     {
         var releasePipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
 
-        Assert.Contains("AllowNpmLatestDistTagMove", releasePipeline);
+        Assert.DoesNotContain("AllowNpmLatestDistTagMove", releasePipeline);
         Assert.Contains("npm view @microsoft/aspire-cli@latest version", releasePipeline);
         Assert.Contains("would move the npm latest dist-tag backward", releasePipeline);
-        Assert.Contains("SkipNpmPublish=true for older servicing releases", releasePipeline);
+        Assert.Contains("Set SkipNpmRidPublish=true and SkipNpmPointerPublish=true for older servicing releases", releasePipeline);
     }
 
     [Fact]

@@ -104,6 +104,33 @@ public sealed class ReleasePublishNugetPipelineTests
     }
 
     [Fact]
+    public async Task NpmPublishUsesOnlyRidAndPointerSkipParameters()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+        var spec = await ReadRepoFileAsync("docs/specs/npm-cli-package.md");
+
+        Assert.DoesNotContain("SkipNpmPublish", pipeline);
+        Assert.DoesNotContain("Skip npm Publish", pipeline);
+        Assert.DoesNotContain("SkipNpmPublish", spec);
+        Assert.Contains("displayName: '[Advanced] Skip npm RID Package Publishing", pipeline);
+        Assert.Contains("displayName: '[Advanced] Skip npm Pointer Package Publishing", pipeline);
+        Assert.Contains("or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false))", pipeline);
+        Assert.Contains("and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true))", pipeline);
+    }
+
+    [Fact]
+    public async Task NpmLatestDistTagDowngradeGuardHasNoOverrideParameter()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+        var spec = await ReadRepoFileAsync("docs/specs/npm-cli-package.md");
+
+        Assert.DoesNotContain("AllowNpmLatestDistTagMove", pipeline);
+        Assert.DoesNotContain("AllowNpmLatestDistTagMove", spec);
+        Assert.DoesNotContain("skipping npm latest dist-tag downgrade guard", pipeline);
+        Assert.Contains("Publishing $($pointerPackage.Spec) would move the npm latest dist-tag backward", pipeline);
+    }
+
+    [Fact]
     public async Task UsesRequiredNpmEsrpOwnersAndApprover()
     {
         var commonVariables = await ReadRepoFileAsync("eng/pipelines/common-variables.yml");
@@ -389,10 +416,10 @@ public sealed class ReleasePublishNugetPipelineTests
         // This regressed in commit debf4ebf38 ("Harden npm prepare/publish
         // validation against partial-failure leakage"), which replaced the
         // earlier `tr -d '[:space:]'` form with a `grep -Eo`+`$` form. The dry
-        // run on 2987740 did NOT exercise this path because SkipNpmPublish=true
-        // skips the release-pipeline consumer that reads the win-x64 validation
-        // summary; the Monday real publish would have hit the bug at the
-        // first source-build Windows install validation.
+        // run on 2987740 did NOT exercise this path because npm publishing was
+        // skipped, bypassing the release-pipeline consumer that reads the
+        // win-x64 validation summary; the Monday real publish would have hit
+        // the bug at the first source-build Windows install validation.
         Assert.Contains("aspire --version 2>&1 | tr -d '\\r'", template);
     }
 
