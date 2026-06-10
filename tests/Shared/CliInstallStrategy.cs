@@ -166,7 +166,7 @@ internal static class AspireCliShellCommandHelpers
         return
             $"PKG={QuoteBashArg(packageId)}; " +
             $"TARGET={QuoteBashArg(projectPath)}; " +
-            "PKG_PATH=$(find \"$HOME/.aspire/hives\" -path \"*/packages/$PKG.*.nupkg\" -type f 2>/dev/null | sort -V | tail -n 1); " +
+            "PKG_PATH=$(find \"$HOME/.aspire/hives\" -path \"*/packages/$PKG.[0-9]*.nupkg\" -type f 2>/dev/null | sort -V | tail -n 1); " +
             "if [ -n \"$PKG_PATH\" ]; then " +
             "PKG_FILE=$(basename \"$PKG_PATH\"); " +
             "PKG_VERSION=${PKG_FILE#\"$PKG.\"}; " +

@@ -725,7 +725,7 @@ public class CliInstallStrategyTests
     {
         var command = AspireCliShellCommandHelpers.GetDotnetAddPackageCommand("K8sDeployTest.ApiService", "Aspire.StackExchange.Redis");
 
-        Assert.Contains("PKG_PATH=$(find \"$HOME/.aspire/hives\" -path \"*/packages/$PKG.*.nupkg\"", command);
+        Assert.Contains("PKG_PATH=$(find \"$HOME/.aspire/hives\" -path \"*/packages/$PKG.[0-9]*.nupkg\"", command);
         Assert.Contains("PKG_VERSION=${PKG_FILE#\"$PKG.\"}", command);
         Assert.Contains("dotnet add \"$TARGET\" package \"$PKG\" --version \"$PKG_VERSION\"", command);
         Assert.Contains("else dotnet add \"$TARGET\" package \"$PKG\" --prerelease", command);
