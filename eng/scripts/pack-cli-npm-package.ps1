@@ -102,6 +102,23 @@ function Write-TextFile([string]$Path, [string]$Value) {
   [System.IO.File]::WriteAllText($Path, $Value, $utf8NoBom)
 }
 
+function Read-TemplateFile([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path)) {
+    throw "Template file does not exist: $Path"
+  }
+
+  return [System.IO.File]::ReadAllText($Path)
+}
+
+function Expand-Template([string]$Template, [hashtable]$Values) {
+  $result = $Template
+  foreach ($entry in $Values.GetEnumerator()) {
+    $result = $result.Replace("__$($entry.Key)__", [string]$entry.Value)
+  }
+
+  return $result
+}
+
 function Invoke-NpmPack([string]$PackageDirectory, [string]$DestinationDirectory) {
   Write-Host "Packing npm package from $PackageDirectory"
   & npm pack $PackageDirectory --pack-destination $DestinationDirectory
@@ -157,22 +174,12 @@ if ($ridInfo.Contains('Libc')) {
 }
 
 Write-JsonFile (Join-Path $ridPackageRoot 'package.json') $ridPackageJson
-# Use a non-expanding here-string so the markdown backticks (`) survive verbatim.
-# In a normal (double-quoted) here-string ` is the PowerShell escape character, which
-# both swallows the backticks and suppresses $-interpolation; using @'...'@ and a
-# manual -replace lets us emit literal `<value>` code spans for $Rid / $PackageName.
-$ridReadmeTemplate = @'
-# __RID_PACKAGE_NAME__
-
-Native Aspire CLI binary for `__RID__`.
-
-This package is installed as an optional dependency of `__PACKAGE_NAME__`.
-'@
-
-$ridReadme = $ridReadmeTemplate `
-  -replace '__RID_PACKAGE_NAME__', $ridPackageName `
-  -replace '__RID__', $Rid `
-  -replace '__PACKAGE_NAME__', $PackageName
+$ridReadmeTemplate = Read-TemplateFile (Join-Path $PSScriptRoot 'pack-cli-npm-package.rid.README.md')
+$ridReadme = Expand-Template $ridReadmeTemplate @{
+  RID_PACKAGE_NAME = $ridPackageName
+  RID = $Rid
+  PACKAGE_NAME = $PackageName
+}
 
 Write-TextFile (Join-Path $ridPackageRoot 'README.md') $ridReadme
 
@@ -229,109 +236,10 @@ $pointerPackageJson = [ordered]@{
 
 Write-JsonFile (Join-Path $pointerPackageRoot 'package.json') $pointerPackageJson
 Write-JsonFile (Join-Path $pointerPackageBin 'aspire-package-map.json') $ridPackageMap
-$pointerReadmeTemplate = @'
-# __PACKAGE_NAME__
-
-[![CI](https://github.com/microsoft/aspire/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/microsoft/aspire/actions/workflows/ci.yml)
-[![Tests](https://github.com/microsoft/aspire/actions/workflows/tests.yml/badge.svg?branch=main&event=push)](https://github.com/microsoft/aspire/actions/workflows/tests.yml)
-
-The Aspire CLI, published for npm-based installs.
-
-## What is Aspire?
-
-Your stack, streamlined. Aspire is a multi-language, code-first orchestration and observability layer for building, running, and deploying distributed applications.
-
-Use an AppHost to describe how services, frontends, containers, databases, caches, and connections fit together in code. The Aspire CLI runs the whole app locally, opens the OpenTelemetry dashboard for logs, traces, metrics, and health checks, and carries the same app model into deployment.
-
-## A simple app definition
-
-The same application definition can be written in different languages.
-
-**C#** (`apphost.cs`)
-
-```csharp
-var builder = DistributedApplication.CreateBuilder(args);
-
-var cache = builder.AddRedis("cache");
-
-var api = builder.AddNodeApp("api", "./api", "src/index.ts")
-  .WithReference(cache)
-  .WaitFor(cache)
-  .WithHttpEndpoint(env: "PORT")
-  .WithExternalHttpEndpoints();
-
-builder.AddViteApp("frontend", "./frontend")
-  .WithReference(api)
-  .WaitFor(api);
-
-builder.Build().Run();
-```
-
-**TypeScript** (`apphost.ts`)
-
-```typescript
-import { createBuilder } from './.aspire/modules/aspire.js';
-
-const builder = await createBuilder();
-
-const cache = await builder.addRedis("cache");
-
-const api = await builder
-  .addNodeApp("api", "./api", "src/index.ts")
-  .withReference(cache)
-  .waitFor(cache)
-  .withHttpEndpoint({ env: "PORT" })
-  .withExternalHttpEndpoints();
-
-await builder
-  .addViteApp("frontend", "./frontend")
-  .withReference(api)
-  .waitFor(api);
-
-await builder.build().run();
-```
-
-## Install
-
-This package requires Node.js 20 or later.
-
-```bash
-npm install -g __PACKAGE_NAME__
-```
-
-Then verify the install:
-
-```bash
-aspire --version
-aspire --help
-```
-
-Start from a repo with one or more app projects:
-
-```bash
-aspire init
-aspire run
-```
-
-The native platform packages are installed through npm optional dependencies. Do not install this package with optional dependencies disabled, or the `aspire` launcher will not be able to find the native CLI binary.
-
-## Update
-
-```bash
-npm install -g __PACKAGE_NAME__@latest
-```
-
-You can also run `aspire update --self`; package updates are routed back through npm.
-
-## Learn more
-
-- [Documentation](https://aspire.dev/docs/)
-- [Build your first app](https://aspire.dev/get-started/first-app/)
-- [Aspire repository](https://github.com/microsoft/aspire)
-- [Aspire samples repository](https://github.com/microsoft/aspire-samples)
-'@
-
-$pointerReadme = $pointerReadmeTemplate -replace '__PACKAGE_NAME__', $PackageName
+$pointerReadmeTemplate = Read-TemplateFile (Join-Path $PSScriptRoot 'pack-cli-npm-package.pointer.README.md')
+$pointerReadme = Expand-Template $pointerReadmeTemplate @{
+  PACKAGE_NAME = $PackageName
+}
 
 Write-TextFile (Join-Path $pointerPackageRoot 'README.md') $pointerReadme
 

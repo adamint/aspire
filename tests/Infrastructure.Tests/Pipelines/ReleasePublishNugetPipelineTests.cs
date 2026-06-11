@@ -141,9 +141,9 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.Contains("value: joperezr,ankj", pipeline);
         Assert.DoesNotContain("NPM_PUBLISH_DEFAULT_APPROVER", commonVariables);
         Assert.DoesNotContain("NPM_PUBLISH_REQUIRED_APPROVERS", commonVariables);
-        Assert.Contains("displayName: 'npm ESRP owners (comma-separated Microsoft aliases or emails; must include joperezr or ankj)'", pipeline);
-        Assert.Contains("displayName: 'npm ESRP approver (single Microsoft alias or email; required)'", pipeline);
-        Assert.Contains("$requiredNpmOwnersValue = \"$(NPM_PUBLISH_REQUIRED_OWNERS)\"", pipeline);
+        Assert.Contains("displayName: '[Advanced] npm ESRP owners (comma-separated Microsoft aliases or emails; must include joperezr or ankj)'", pipeline);
+        Assert.Contains("displayName: '[Advanced] npm ESRP approver (single Microsoft alias or email; must differ from the owners)'", pipeline);
+        Assert.Contains("$requiredNpmOwnersValue = $env:NPM_PUBLISH_REQUIRED_OWNERS", pipeline);
         Assert.DoesNotContain("NPM_PUBLISH_DEFAULT_APPROVER", pipeline);
         Assert.DoesNotContain("NPM_PUBLISH_REQUIRED_APPROVERS", pipeline);
         Assert.DoesNotContain("requiredNpmApprovers", pipeline);
@@ -163,6 +163,79 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.DoesNotContain("Assert-ContainsRequiredNpmAliases $normalizedApprovers", pipeline);
         Assert.DoesNotContain("NpmPublishOwners not provided; using NPM_PUBLISH_REQUIRED_OWNERS.", pipeline);
         Assert.DoesNotContain("NpmPublishApprovers not provided; using NPM_PUBLISH_DEFAULT_APPROVER.", pipeline);
+    }
+
+    [Fact]
+    public async Task ForwardsNpmOwnerAndApproverParametersAsEnvironmentVariables()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        // The queue-time owner/approver values must reach the validation script as environment
+        // variables (data) rather than being interpolated into the inline PowerShell source, where
+        // a hostile value could break out of the quoted literal.
+        Assert.Contains("NPM_PUBLISH_OWNERS: ${{ parameters.NpmPublishOwners }}", pipeline);
+        Assert.Contains("NPM_PUBLISH_APPROVERS: ${{ parameters.NpmPublishApprovers }}", pipeline);
+        Assert.Contains("$owners = $env:NPM_PUBLISH_OWNERS", pipeline);
+        Assert.Contains("$approvers = $env:NPM_PUBLISH_APPROVERS", pipeline);
+        Assert.DoesNotContain("$owners = \"${{ parameters.NpmPublishOwners }}\"", pipeline);
+        Assert.DoesNotContain("$approvers = \"${{ parameters.NpmPublishApprovers }}\"", pipeline);
+    }
+
+    [Fact]
+    public async Task NpmPublishOwnerAndApproverParametersHaveWorkingDefaults()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        // Defaults let an unattended queue submission pass validation without operator input:
+        // owners include a required owner alias, the approver is a single distinct alias, and the
+        // per-run override parameters are marked advanced.
+        Assert.Contains("- name: NpmPublishOwners", pipeline);
+        Assert.Contains("default: 'joperezr,ankj'", pipeline);
+        Assert.Contains("- name: NpmPublishApprovers", pipeline);
+        Assert.Contains("default: 'adamratzman'", pipeline);
+        Assert.Contains("[Advanced] npm ESRP owners", pipeline);
+        Assert.Contains("[Advanced] npm ESRP approver", pipeline);
+        Assert.Contains("[Advanced] Minutes to wait between npm RID and pointer package submissions", pipeline);
+    }
+
+    [Fact]
+    public async Task NpmAliasValidationHelpersMatchScript()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+        var script = await ReadRepoFileAsync("eng/scripts/validate-npm-release-aliases.ps1");
+
+        // releaseJob runs with `checkout: none`, so the pipeline cannot dot-source the script and
+        // instead inlines the same helper functions. Keep the two copies identical (ignoring
+        // indentation) so the behavior verified by ValidateNpmReleaseAliasesTests against the
+        // script also holds for the inlined release-pipeline copy.
+        var pipelineHelpers = ExtractHelperRegion(pipeline);
+        var scriptHelpers = ExtractHelperRegion(script);
+
+        Assert.NotEmpty(pipelineHelpers);
+        Assert.Equal(scriptHelpers, pipelineHelpers);
+    }
+
+    private static IReadOnlyList<string> ExtractHelperRegion(string contents)
+    {
+        const string begin = ">>> BEGIN npm release alias helpers";
+        const string end = "<<< END npm release alias helpers";
+
+        var beginIndex = contents.IndexOf(begin, StringComparison.Ordinal);
+        var endIndex = contents.IndexOf(end, StringComparison.Ordinal);
+
+        Assert.True(beginIndex >= 0, $"Expected to find '{begin}'.");
+        Assert.True(endIndex > beginIndex, $"Expected to find '{end}' after '{begin}'.");
+
+        // Take the lines between the begin- and end-marker lines, trim the (differing) indentation,
+        // and drop blank lines so only the helper-function content is compared.
+        var regionStart = contents.IndexOf('\n', beginIndex) + 1;
+        var regionEnd = contents.LastIndexOf('\n', endIndex);
+
+        return contents[regionStart..regionEnd]
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToArray();
     }
 
     [Fact]

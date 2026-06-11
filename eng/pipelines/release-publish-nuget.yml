@@ -63,17 +63,17 @@ parameters:
     default: false
 
   - name: NpmPublishOwners
-    displayName: 'npm ESRP owners (comma-separated Microsoft aliases or emails; must include joperezr or ankj)'
+    displayName: '[Advanced] npm ESRP owners (comma-separated Microsoft aliases or emails; must include joperezr or ankj)'
     type: string
-    default: ''
+    default: 'joperezr,ankj'
 
   - name: NpmPublishApprovers
-    displayName: 'npm ESRP approver (single Microsoft alias or email; required)'
+    displayName: '[Advanced] npm ESRP approver (single Microsoft alias or email; must differ from the owners)'
     type: string
-    default: ''
+    default: 'adamratzman'
 
   - name: NpmRegistryPropagationDelayMinutes
-    displayName: 'Minutes to wait between npm RID and pointer package submissions'
+    displayName: '[Advanced] Minutes to wait between npm RID and pointer package submissions'
     type: number
     default: 10
 
@@ -734,6 +734,13 @@ extends:
                       exit 1
                     }
 
+                    # The alias-validation helpers below are mirrored in
+                    # eng/scripts/validate-npm-release-aliases.ps1, which is exercised directly by
+                    # ValidateNpmReleaseAliasesTests. releaseJob runs with `checkout: none`, so these
+                    # functions are inlined here instead of dot-sourced; the
+                    # ReleasePublishNugetPipelineTests.NpmAliasValidationHelpersMatchScript test keeps
+                    # the inline copy and the script in sync.
+                    # >>> BEGIN npm release alias helpers (keep in sync with eng/scripts/validate-npm-release-aliases.ps1) >>>
                     function ConvertTo-NpmReleaseAliasSet([string] $value, [string] $parameterName) {
                       $aliases = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 
@@ -776,10 +783,16 @@ extends:
                         exit 1
                       }
                     }
+                    # <<< END npm release alias helpers <<<
 
-                    $owners = "${{ parameters.NpmPublishOwners }}"
-                    $approvers = "${{ parameters.NpmPublishApprovers }}"
-                    $requiredNpmOwnersValue = "$(NPM_PUBLISH_REQUIRED_OWNERS)"
+                    # Read queue-time owner/approver values from the environment instead of
+                    # interpolating ${{ parameters.* }} into this script. Compile-time string
+                    # interpolation would let an operator-supplied value break out of the quoted
+                    # literal and run as code; passing them through the step's env block keeps the
+                    # values as data until ConvertTo-NpmReleaseAliasSet validates them.
+                    $owners = $env:NPM_PUBLISH_OWNERS
+                    $approvers = $env:NPM_PUBLISH_APPROVERS
+                    $requiredNpmOwnersValue = $env:NPM_PUBLISH_REQUIRED_OWNERS
 
                     $requiredNpmOwners = ConvertTo-NpmReleaseAliasSet $requiredNpmOwnersValue 'NPM_PUBLISH_REQUIRED_OWNERS'
                     $normalizedOwners = ConvertTo-NpmReleaseAliasSet $owners 'NpmPublishOwners'
@@ -814,6 +827,14 @@ extends:
 
                   Write-Host "==================================="
                 displayName: 'Validate Parameters'
+                # Forward the queue-time owner/approver values (and the hard-coded required
+                # owners) as environment variables so the inline script reads them as data.
+                # ${{ parameters.* }} is substituted into the env value at compile time, never
+                # into the PowerShell source, so a hostile value cannot escape the quoting.
+                env:
+                  NPM_PUBLISH_OWNERS: ${{ parameters.NpmPublishOwners }}
+                  NPM_PUBLISH_APPROVERS: ${{ parameters.NpmPublishApprovers }}
+                  NPM_PUBLISH_REQUIRED_OWNERS: $(NPM_PUBLISH_REQUIRED_OWNERS)
 
               # ===== EXTRACT BAR BUILD ID =====
               - ${{ if eq(parameters.SkipChannelPromotion, false) }}:
