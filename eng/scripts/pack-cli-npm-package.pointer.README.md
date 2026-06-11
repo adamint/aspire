@@ -15,7 +15,7 @@ Use an AppHost to describe how services, frontends, containers, databases, cache
 
 The same application definition can be written in different languages.
 
-**C#** (`apphost.cs`)
+__C#__ (`apphost.cs`)
 
 ```csharp
 var builder = DistributedApplication.CreateBuilder(args);
@@ -35,7 +35,7 @@ builder.AddViteApp("frontend", "./frontend")
 builder.Build().Run();
 ```
 
-**TypeScript** (`apphost.ts`)
+__TypeScript__ (`apphost.ts`)
 
 ```typescript
 import { createBuilder } from './.aspire/modules/aspire.js';
