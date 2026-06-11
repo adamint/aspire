@@ -64,8 +64,6 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
     private readonly Icon _iconUnselectedMultiple = new Icons.Regular.Size20.CheckboxUnchecked().WithColor(Color.FillInverse);
     private readonly Icon _iconSelectedMultiple = new Icons.Filled.Size20.CheckboxChecked();
     private readonly Icon _iconIndeterminate = new Icons.Filled.Size20.CheckboxIndeterminate();
-    private ElementReference _dataGridContainer;
-    private IJSObjectReference? _jsModule;
     private Task? _resourceSubscriptionTask;
     private FluentDataGrid<ManageDataGridItem>? _dataGrid;
     private bool _isExporting;
@@ -87,15 +85,6 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
 
         // Initialize telemetry-only resources
         UpdateData();
-    }
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (firstRender)
-        {
-            _jsModule = await JS.InvokeAsync<IJSObjectReference>("import", "./Components/Dialogs/ManageDataDialog.razor.js");
-            await _jsModule.InvokeVoidAsync("initializeSelectionCheckboxKeyboard", _dataGridContainer);
-        }
     }
 
     private async Task OnTelemetryChangedAsync()
@@ -718,24 +707,6 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
 
     public async ValueTask DisposeAsync()
     {
-        if (_jsModule is not null)
-        {
-            try
-            {
-                await _jsModule.InvokeVoidAsync("disposeSelectionCheckboxKeyboard", _dataGridContainer);
-            }
-            catch (JSDisconnectedException)
-            {
-                // The browser may already be gone when the dialog is disposed.
-            }
-            catch (OperationCanceledException)
-            {
-                // The browser may already be gone when the dialog is disposed.
-            }
-
-            await JSInteropHelpers.SafeDisposeAsync(_jsModule);
-        }
-
         _resourcesSubscription?.Dispose();
 
         await _cts.CancelAsync();

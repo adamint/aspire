@@ -7,7 +7,7 @@
 @using Resources = Aspire.Dashboard.Resources.Resources
 @using Dialogs = Aspire.Dashboard.Resources.Dialogs
 
-<div @ref="_dataGridContainer" style="height: 44vh; overflow-y: auto;">
+<div style="height: 44vh; overflow-y: auto;">
     <FluentDataGrid @ref="_dataGrid"
                     Items="@GetGridItems()"
                     ItemSize="46"
@@ -28,18 +28,13 @@
                     <div style="display: flex; justify-content: flex-start;">
                         <div style="width: calc(100% - 10px);">
                             <div class="name-title-text">
-                                @* FluentButton renders a shadow-DOM button that remains exposed as role=button,
-                                   so the checkbox semantics need to live on this focused element. *@
-                                <span class="manage-data-selection-checkbox"
-                                      tabindex="@GetHeaderSelectionCheckboxTabIndex()"
-                                      role="checkbox"
-                                      aria-checked="@GetHeaderCheckboxAriaChecked()"
-                                      aria-disabled="@GetHeaderSelectionCheckboxAriaDisabled()"
-                                      title="@headerSelectionLabel"
-                                      aria-label="@headerSelectionLabel"
-                                      @onclick="OnSelectAllClicked">
-                                    <FluentIcon Value="@GetHeaderCheckboxIcon()" aria-hidden="true" />
-                                </span>
+                                <IconCheckbox Icon="@GetHeaderCheckboxIcon()"
+                                              AriaChecked="@GetHeaderCheckboxAriaChecked()"
+                                              AriaDisabled="@GetHeaderSelectionCheckboxAriaDisabled()"
+                                              TabIndex="@GetHeaderSelectionCheckboxTabIndex()"
+                                              AccessibleLabel="@headerSelectionLabel"
+                                              StopPropagation="false"
+                                              OnClick="OnSelectAllClicked" />
                                 @ControlsStringsLoc[nameof(ControlsStrings.NameColumnHeader)]
                             </div>
                         </div>
@@ -67,17 +62,10 @@
                                     </FluentButton>
                                 }
                             </span>
-                            <span @onclick:stopPropagation="true">
-                                <span class="manage-data-selection-checkbox"
-                                      tabindex="0"
-                                      role="checkbox"
-                                      aria-checked="@GetResourceCheckboxAriaChecked(context.ResourceRow)"
-                                      title="@resourceSelectionLabel"
-                                      aria-label="@resourceSelectionLabel"
-                                      @onclick="@(() => OnSelectRowClicked(context.ResourceRow))">
-                                    <FluentIcon Value="@GetResourceCheckboxIcon(context.ResourceRow)" aria-hidden="true" />
-                                </span>
-                            </span>
+                            <IconCheckbox Icon="@GetResourceCheckboxIcon(context.ResourceRow)"
+                                          AriaChecked="@GetResourceCheckboxAriaChecked(context.ResourceRow)"
+                                          AccessibleLabel="@resourceSelectionLabel"
+                                          OnClick="@(() => OnSelectRowClicked(context.ResourceRow))" />
                             @if (context.ResourceRow.Resource is not null)
                             {
                                 <ResourceNameDisplay Resource="context.ResourceRow.Resource" FilterText="" FormatName="GetResourceName" />
@@ -104,17 +92,10 @@
                             var parentResourceDisplayName = GetResourceDisplayName(context.ParentResourceName);
                             var dataTypeSelectionLabel = GetDataRowSelectionLabel(dataTypeDisplayName, parentResourceDisplayName);
 
-                            <span @onclick:stopPropagation="true">
-                                <span class="manage-data-selection-checkbox"
-                                      tabindex="0"
-                                      role="checkbox"
-                                      aria-checked="@GetDataRowCheckboxAriaChecked(context.ParentResourceName, context.NestedRow.DataType)"
-                                      title="@dataTypeSelectionLabel"
-                                      aria-label="@dataTypeSelectionLabel"
-                                      @onclick="@(() => OnSelectDataRowClicked(context.ParentResourceName, context.NestedRow.DataType))">
-                                    <FluentIcon Value="@(IsDataRowSelected(context.ParentResourceName, context.NestedRow.DataType) ? _iconSelectedMultiple : _iconUnselectedMultiple)" aria-hidden="true" />
-                                </span>
-                            </span>
+                            <IconCheckbox Icon="@(IsDataRowSelected(context.ParentResourceName, context.NestedRow.DataType) ? _iconSelectedMultiple : _iconUnselectedMultiple)"
+                                          AriaChecked="@GetDataRowCheckboxAriaChecked(context.ParentResourceName, context.NestedRow.DataType)"
+                                          AccessibleLabel="@dataTypeSelectionLabel"
+                                          OnClick="@(() => OnSelectDataRowClicked(context.ParentResourceName, context.NestedRow.DataType))" />
                             <span class="cellText">@dataTypeDisplayName</span>
                         }
                     </span>
