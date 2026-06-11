@@ -66,18 +66,26 @@ public sealed class ReleasePublishNugetPipelineTests
     }
 
     [Fact]
-    public async Task DisablesMicroBuildPublishAuthPluginOnlyForNonPublishingJobs()
+    public async Task RoutesMicroBuildPublishAuthPluginToDncengFeedOrDisablesIt()
     {
         var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
 
         // MicroBuild.1ES.Official.Publish.yml@MicroBuildTemplate -> Stages/PublishStage.yml
         // -> Jobs/PublishJob.yml auto-injects MicroBuildAuthorizePublishPlugin@0 at the START
-        // of every job. Disable it for jobs that do not ESRP-publish, but keep ReleaseJob on the
-        // standard MicroBuild release-job shape used by working npm publish examples. Adding a
-        // templateContext.mb.publish.feedSource object to ReleaseJob makes Azure Pipelines fail
-        // YAML expansion before the first step with "Unable to convert from Object to String."
+        // of every job. By default that task pulls its nuget package from
+        // `devdiv.pkgs.visualstudio.com/_packaging/MicroBuildToolset`, which is NOT accessible
+        // from the dnceng collection -> 401 -> stage fails before any customer step runs.
+        // Two valid escapes from MicroBuildTemplate are required:
+        //   1) templateContext.mb.publish.enabled: false  (for jobs that don't ESRP-publish)
+        //   2) templateContext.mb.publish.feedSource: <dnceng mirror>  (for the publishing job)
+        // Both must be present in this pipeline:
+        //   - non-publishing jobs (PrepareJob, WinGetJob, DispatchGitHubTasksJob,
+        //     PublishReleaseAssetsJob, HomebrewValidateJob) -> enabled: false
+        //   - ReleaseJob (the only job that actually publishes) -> feedSource = dnceng mirror
         Assert.Contains("enabled: false", pipeline);
-        Assert.DoesNotContain("feedSource:", pipeline);
+        Assert.Contains(
+            "feedSource: 'https://pkgs.dev.azure.com/dnceng/_packaging/MicroBuildToolset/nuget/v3/index.json'",
+            pipeline);
     }
 
     [Fact]
@@ -188,6 +196,17 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.DoesNotContain("Installer-only mode: ${{ and(", pipeline);
         Assert.Contains("$installerOnlyMode = (", pipeline);
         Assert.Contains("Write-Host \"Installer-only mode: $installerOnlyMode\"", pipeline);
+    }
+
+    [Fact]
+    public async Task DoesNotUseWildcardTemplateParameterExpressionLiteral()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        // Azure Pipelines expands template expressions inside block scalars even when the text is
+        // inside a PowerShell comment. The literal wildcard expression evaluates to the parameters
+        // object, which fails release-job parsing with "Unable to convert from Object to String."
+        Assert.DoesNotContain("${{ parameters.* }}", pipeline);
     }
 
     [Fact]
