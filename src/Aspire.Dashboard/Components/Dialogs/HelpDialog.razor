@@ -12,6 +12,10 @@
     var shortcutCategories = GetShortcutsByCategory();
 }
 
+@* Each shortcut category uses <dl> / <dt> / <dd> so screen readers expose the
+   description -> keys pairing as a description list. The dl is associated to its
+   <h6> heading via aria-labelledby so the assistive technology hears the category
+   name when entering the list. Keep this structure when changing the layout. *@
 <FluentGrid Spacing="3">
     @for (var categoryIndex = 0; categoryIndex < shortcutCategories.Count; categoryIndex++)
     {
@@ -25,8 +29,11 @@
                     @foreach (var shortcut in shortcutCategory.Shortcuts)
                     {
                         <div style="display: flex; align-items: center; width: 100%; gap: 6px;">
-                            <dt style="font-weight: normal;">@shortcut.Description</dt>
-                            <dd style="margin: 0 0 0 auto;">
+                            @* dt takes the remaining space so the keys column on the right
+                               stays right-aligned against the panel edge, matching the
+                               pre-refactor FluentSpacer layout. *@
+                            <dt style="font-weight: normal; flex: 1; min-width: 0;">@shortcut.Description</dt>
+                            <dd style="margin: 0;">
                                 @for (var i = 0; i < shortcut.Keys.Length; i++)
                                 {
                                     <kbd style="margin-right: 3px;">@shortcut.Keys[i]</kbd>

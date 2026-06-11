@@ -85,9 +85,12 @@ public class MobileNavMenuTests : DashboardTestContext
         Assert.Contains(expectedText, currentItem.TextContent);
         Assert.True(currentItem.ClassList.Contains("mobile-nav-menu-item-active"));
 
-        var selectedIndicator = Assert.Single(currentItem.QuerySelectorAll(".mobile-nav-menu-selected-indicator"));
-        Assert.Equal("true", selectedIndicator.GetAttribute("aria-hidden"));
-        Assert.Equal("✓", selectedIndicator.TextContent.Trim());
+        // The active item swaps to the filled icon variant and tags the slot wrapper
+        // with mobile-nav-menu-icon-active so non-color cues stay alongside the
+        // ::before accent bar styled in app.css.
+        var activeIconSlot = Assert.Single(currentItem.QuerySelectorAll(".mobile-nav-menu-icon-active"));
+        Assert.Equal("start", activeIconSlot.GetAttribute("slot"));
+        Assert.NotEmpty(activeIconSlot.QuerySelectorAll("svg"));
 
         var inactiveItems = cut.FindAll("fluent-menu-item")
             .Where(item => item.GetAttribute("aria-current") != "page")
@@ -96,7 +99,7 @@ public class MobileNavMenuTests : DashboardTestContext
         Assert.All(inactiveItems, item =>
         {
             Assert.False(item.ClassList.Contains("mobile-nav-menu-item-active"));
-            Assert.Empty(item.QuerySelectorAll(".mobile-nav-menu-selected-indicator"));
+            Assert.Empty(item.QuerySelectorAll(".mobile-nav-menu-icon-active"));
         });
     }
 }

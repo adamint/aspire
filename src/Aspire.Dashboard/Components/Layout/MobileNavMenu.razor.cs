@@ -42,6 +42,7 @@ public partial class MobileNavMenu : ComponentBase
                 Loc[nameof(Resources.Layout.NavMenuResourcesTab)],
                 () => NavigateToAsync(DashboardUrls.ResourcesUrl()),
                 DesktopNavMenu.ResourcesIcon(),
+                ActiveIcon: DesktopNavMenu.ResourcesIcon(active: true),
                 LinkMatchRegex: GetIndexPageRegex(DashboardUrls.ResourcesUrl())
             );
 
@@ -49,6 +50,7 @@ public partial class MobileNavMenu : ComponentBase
                 Loc[nameof(Resources.Layout.NavMenuConsoleLogsTab)],
                 () => NavigateToAsync(DashboardUrls.ConsoleLogsUrl()),
                 DesktopNavMenu.ConsoleLogsIcon(),
+                ActiveIcon: DesktopNavMenu.ConsoleLogsIcon(active: true),
                 LinkMatchRegex: GetNonIndexPageRegex(DashboardUrls.ConsoleLogsUrl())
             );
         }
@@ -57,6 +59,7 @@ public partial class MobileNavMenu : ComponentBase
             Loc[nameof(Resources.Layout.NavMenuStructuredLogsTab)],
             () => NavigateToAsync(DashboardUrls.StructuredLogsUrl()),
             DesktopNavMenu.StructuredLogsIcon(),
+            ActiveIcon: DesktopNavMenu.StructuredLogsIcon(active: true),
             LinkMatchRegex: GetNonIndexPageRegex(DashboardUrls.StructuredLogsUrl())
         );
 
@@ -64,6 +67,7 @@ public partial class MobileNavMenu : ComponentBase
             Loc[nameof(Resources.Layout.NavMenuTracesTab)],
             () => NavigateToAsync(DashboardUrls.TracesUrl()),
             DesktopNavMenu.TracesIcon(),
+            ActiveIcon: DesktopNavMenu.TracesIcon(active: true),
             LinkMatchRegex: GetNonIndexPageRegex(DashboardUrls.TracesUrl())
         );
 
@@ -71,6 +75,7 @@ public partial class MobileNavMenu : ComponentBase
             Loc[nameof(Resources.Layout.NavMenuMetricsTab)],
             () => NavigateToAsync(DashboardUrls.MetricsUrl()),
             DesktopNavMenu.MetricsIcon(),
+            ActiveIcon: DesktopNavMenu.MetricsIcon(active: true),
             LinkMatchRegex: GetNonIndexPageRegex(DashboardUrls.MetricsUrl())
         );
 
