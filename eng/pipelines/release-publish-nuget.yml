@@ -680,18 +680,10 @@ extends:
             templateContext:
               type: releaseJob
               isProduction: true
-              # ReleaseJob is the only job that performs ESRP-backed publish (1ES.PublishNuget@1,
-              # MicroBuild.Publish.yml for npm via DryRun=true gating). The auto-injected
-              # MicroBuildAuthorizePublishPlugin@0 task must therefore be able to authenticate
-              # to the MicroBuildToolset feed. The dnceng collection (b55de4ed-4b5a-4215-a8e4-0a0a5f71e7d8)
-              # hosts its own mirror at pkgs.dev.azure.com/dnceng/_packaging/MicroBuildToolset,
-              # which is accessible to builds in this collection automatically. Using the dnceng
-              # mirror avoids needing the DevDivEsrpAzDoSrvConn service connection (which is
-              # only required for the actual sign/publish ESRP calls, gated by DryRun=false).
-              # Pattern: dotnet/roslyn uses the same dnceng MicroBuildToolset mirror.
-              mb:
-                publish:
-                  feedSource: 'https://pkgs.dev.azure.com/dnceng/_packaging/MicroBuildToolset/nuget/v3/index.json'
+              # Do not add templateContext.mb.publish here. Public MicroBuild npm release examples
+              # use only releaseJob inputs plus explicit MicroBuild.Publish.yml steps; adding the
+              # publish feed override object causes Azure Pipelines release-job expansion to fail
+              # before the first step with "Unable to convert from Object to String."
               inputs:
                 - input: pipelineArtifact
                   artifactName: PackageArtifacts
