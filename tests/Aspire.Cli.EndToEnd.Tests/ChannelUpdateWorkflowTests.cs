@@ -429,7 +429,7 @@ public sealed class ChannelUpdateWorkflowTests(ITestOutputHelper output)
         await auto.TypeAsync("aspire update --channel stable --nuget-config-dir .");
         await auto.EnterAsync();
 
-        async Task WaitForStableUpdatePreviewAsync()
+        async Task WaitForStableUpdatePreviewAsync(bool allowCliUpdatePrompt)
         {
             await auto.WaitUntilAsync(snapshot =>
             {
@@ -443,19 +443,20 @@ public sealed class ChannelUpdateWorkflowTests(ITestOutputHelper output)
                 var foundCliUpdatePrompt = cliUpdatePrompt.Search(snapshot).Count > 0;
                 sawCliUpdatePrompt |= foundCliUpdatePrompt;
 
-                return sawUpdatePrompt || sawUpToDateMessage || foundCliUpdatePrompt;
+                return sawUpdatePrompt || sawUpToDateMessage || (allowCliUpdatePrompt && foundCliUpdatePrompt);
             }, TimeSpan.FromMinutes(3), description: "waiting for stable update preview");
         }
 
-        await WaitForStableUpdatePreviewAsync();
+        await WaitForStableUpdatePreviewAsync(allowCliUpdatePrompt: true);
 
         if (sawCliUpdatePrompt && !sawUpdatePrompt && !sawUpToDateMessage)
         {
             // Stable release versions sort higher than same-base PR prerelease versions
             // (for example, 13.4.3 > 13.4.3-pr.18093.g...). Decline the CLI self-update
-            // prompt so the project update preview can continue.
+            // prompt so the project update preview can continue. The prompt remains in the
+            // terminal snapshot after the key is accepted, so the second wait must ignore it.
             await auto.TypeAsync("n");
-            await WaitForStableUpdatePreviewAsync();
+            await WaitForStableUpdatePreviewAsync(allowCliUpdatePrompt: false);
         }
 
         Assert.False(sawChannelUpdateLine, "Stable channel updates should not enqueue an aspire.config.json#channel rewrite.");
