@@ -684,26 +684,34 @@ extends:
               # use only releaseJob inputs plus explicit MicroBuild.Publish.yml steps; adding the
               # publish feed override object causes Azure Pipelines release-job expansion to fail
               # before the first step with "Unable to convert from Object to String."
-              inputs:
-                - input: pipelineArtifact
-                  artifactName: PackageArtifacts
-                  targetPath: '$(Pipeline.Workspace)/packages/PackageArtifacts'
-                - input: pipelineArtifact
-                  artifactName: NpmRidPackageArtifacts
-                  targetPath: '$(Pipeline.Workspace)/npm/rid-packages'
-                - input: pipelineArtifact
-                  artifactName: NpmPointerPackageArtifacts
-                  targetPath: '$(Pipeline.Workspace)/npm/pointer-package'
-                - input: pipelineArtifact
-                  artifactName: NpmValidationSummary
-                  targetPath: '$(Pipeline.Workspace)/npm/validation-summary'
-                - input: pipelineArtifact
-                  artifactName: NpmSignatureArtifacts
-                  targetPath: '$(Pipeline.Workspace)/npm/signatures'
             steps:
               # ===== VALIDATION =====
               # Note: No checkout - releaseJob doesn't allow it. All scripts are inlined.
-              # Artifacts are downloaded via templateContext inputs above.
+
+              - download: current
+                displayName: 'Download PackageArtifacts from PrepareArtifacts'
+                artifact: PackageArtifacts
+                path: '$(Pipeline.Workspace)/packages/PackageArtifacts'
+
+              - download: current
+                displayName: 'Download npm RID packages from PrepareArtifacts'
+                artifact: NpmRidPackageArtifacts
+                path: '$(Pipeline.Workspace)/npm/rid-packages'
+
+              - download: current
+                displayName: 'Download npm pointer package from PrepareArtifacts'
+                artifact: NpmPointerPackageArtifacts
+                path: '$(Pipeline.Workspace)/npm/pointer-package'
+
+              - download: current
+                displayName: 'Download npm validation summary from PrepareArtifacts'
+                artifact: NpmValidationSummary
+                path: '$(Pipeline.Workspace)/npm/validation-summary'
+
+              - download: current
+                displayName: 'Download npm signature sidecars from PrepareArtifacts'
+                artifact: NpmSignatureArtifacts
+                path: '$(Pipeline.Workspace)/npm/signatures'
 
               - powershell: |
                   Write-Host "=== Release Pipeline Parameters ==="
@@ -903,7 +911,7 @@ extends:
                     SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 
               # ===== DOWNLOAD PACKAGES =====
-              # Artifacts are downloaded automatically via templateContext.inputs above
+              # Artifacts are downloaded explicitly from the current pipeline above.
 
               - ${{ if eq(parameters.SkipNuGetPublish, false) }}:
                 - task: UseDotNet@2
