@@ -236,7 +236,13 @@ extends:
                   Write-Host "Source Build ID: $(resources.pipeline.aspire-build.runID)"
                   Write-Host "Source Build Name: $(resources.pipeline.aspire-build.runName)"
                   Write-Host "This stage downloads artifacts and re-publishes them so 1ES PT can generate SBOM."
-                  Write-Host "Installer-only mode: ${{ and(eq(parameters.SkipNuGetPublish, true), eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true), eq(parameters.SkipChannelPromotion, true)) }}"
+                  $installerOnlyMode = (
+                    "${{ parameters.SkipNuGetPublish }}" -eq "true" -and
+                    "${{ parameters.SkipNpmRidPublish }}" -eq "true" -and
+                    "${{ parameters.SkipNpmPointerPublish }}" -eq "true" -and
+                    "${{ parameters.SkipChannelPromotion }}" -eq "true"
+                  )
+                  Write-Host "Installer-only mode: $installerOnlyMode"
                   Write-Host "==============================="
                 displayName: 'Log Stage Info'
 
@@ -720,7 +726,13 @@ extends:
                   Write-Host "Skip npm RID Publish: ${{ parameters.SkipNpmRidPublish }}"
                   Write-Host "Skip npm Pointer Publish: ${{ parameters.SkipNpmPointerPublish }}"
                   Write-Host "Skip Channel Promotion: ${{ parameters.SkipChannelPromotion }}"
-                  Write-Host "Installer-only mode: ${{ and(eq(parameters.SkipNuGetPublish, true), eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true), eq(parameters.SkipChannelPromotion, true)) }}"
+                  $installerOnlyMode = (
+                    "${{ parameters.SkipNuGetPublish }}" -eq "true" -and
+                    "${{ parameters.SkipNpmRidPublish }}" -eq "true" -and
+                    "${{ parameters.SkipNpmPointerPublish }}" -eq "true" -and
+                    "${{ parameters.SkipChannelPromotion }}" -eq "true"
+                  )
+                  Write-Host "Installer-only mode: $installerOnlyMode"
 
                   if ("${{ parameters.SkipNpmRidPublish }}" -ne "true" -or "${{ parameters.SkipNpmPointerPublish }}" -ne "true") {
                     # Validate ESRP owner/approver configuration on dry runs as well

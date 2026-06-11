@@ -186,6 +186,19 @@ public sealed class ReleasePublishNugetPipelineTests
     }
 
     [Fact]
+    public async Task ComputesInstallerOnlyModeInsidePowerShell()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        // Azure Pipelines reports the start of the `powershell: |` scalar when an embedded
+        // template expression evaluates to a non-string object. Keep the composed boolean
+        // calculation in PowerShell and substitute only the primitive parameter values.
+        Assert.DoesNotContain("Installer-only mode: ${{ and(", pipeline);
+        Assert.Contains("$installerOnlyMode = (", pipeline);
+        Assert.Contains("Write-Host \"Installer-only mode: $installerOnlyMode\"", pipeline);
+    }
+
+    [Fact]
     public async Task NpmPublishOwnerAndApproverParametersHaveWorkingDefaults()
     {
         var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
