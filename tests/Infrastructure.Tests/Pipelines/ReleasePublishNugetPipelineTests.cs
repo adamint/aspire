@@ -172,11 +172,15 @@ public sealed class ReleasePublishNugetPipelineTests
 
         // The queue-time owner/approver values must reach the validation script as environment
         // variables (data) rather than being interpolated into the inline PowerShell source, where
-        // a hostile value could break out of the quoted literal.
-        Assert.Contains("NPM_PUBLISH_OWNERS: ${{ parameters.NpmPublishOwners }}", pipeline);
-        Assert.Contains("NPM_PUBLISH_APPROVERS: ${{ parameters.NpmPublishApprovers }}", pipeline);
+        // a hostile value could break out of the quoted literal. Keep the template expression inside
+        // a string scalar; using the raw expression makes Azure Pipelines preserve expression-object
+        // typing and fail release-job expansion with "Unable to convert from Object to String."
+        Assert.Contains("NPM_PUBLISH_OWNERS: '${{ parameters.NpmPublishOwners }}'", pipeline);
+        Assert.Contains("NPM_PUBLISH_APPROVERS: '${{ parameters.NpmPublishApprovers }}'", pipeline);
         Assert.Contains("$owners = $env:NPM_PUBLISH_OWNERS", pipeline);
         Assert.Contains("$approvers = $env:NPM_PUBLISH_APPROVERS", pipeline);
+        Assert.DoesNotContain("NPM_PUBLISH_OWNERS: ${{ parameters.NpmPublishOwners }}", pipeline);
+        Assert.DoesNotContain("NPM_PUBLISH_APPROVERS: ${{ parameters.NpmPublishApprovers }}", pipeline);
         Assert.DoesNotContain("$owners = \"${{ parameters.NpmPublishOwners }}\"", pipeline);
         Assert.DoesNotContain("$approvers = \"${{ parameters.NpmPublishApprovers }}\"", pipeline);
     }

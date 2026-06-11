@@ -851,11 +851,12 @@ extends:
                 displayName: 'Validate Parameters'
                 # Forward the queue-time owner/approver values (and the hard-coded required
                 # owners) as environment variables so the inline script reads them as data.
-                # ${{ parameters.* }} is substituted into the env value at compile time, never
-                # into the PowerShell source, so a hostile value cannot escape the quoting.
+                # Embedding ${{ parameters.* }} inside a string scalar keeps Azure Pipelines from
+                # preserving expression-object typing for the env value while still avoiding
+                # interpolation into the PowerShell source.
                 env:
-                  NPM_PUBLISH_OWNERS: ${{ parameters.NpmPublishOwners }}
-                  NPM_PUBLISH_APPROVERS: ${{ parameters.NpmPublishApprovers }}
+                  NPM_PUBLISH_OWNERS: '${{ parameters.NpmPublishOwners }}'
+                  NPM_PUBLISH_APPROVERS: '${{ parameters.NpmPublishApprovers }}'
                   NPM_PUBLISH_REQUIRED_OWNERS: $(NPM_PUBLISH_REQUIRED_OWNERS)
 
               # ===== EXTRACT BAR BUILD ID =====
