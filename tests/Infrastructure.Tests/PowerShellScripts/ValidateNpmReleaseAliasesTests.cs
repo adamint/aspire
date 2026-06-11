@@ -100,6 +100,46 @@ public sealed class ValidateNpmReleaseAliasesTests
 
     [Fact]
     [RequiresTools(["pwsh"])]
+    public async Task FailsWhenMicrosoftEmailHasEmptyAlias()
+    {
+        var result = await RunValidation(owners: "@microsoft.com", approvers: "ankj");
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains(
+            "NpmPublishOwners entry '@microsoft.com' must be a non-empty Microsoft alias or @microsoft.com email address containing only letters, digits, '.', '_' or '-'.",
+            Flatten(result.Output));
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
+    public async Task FailsWhenAliasContainsNewlineLoggingCommand()
+    {
+        var maliciousApprover = "adamratzman\n##vso[task.setvariable variable=NpmPublishOwnersEffective]attacker";
+
+        var result = await RunValidation(owners: "joperezr", approvers: maliciousApprover);
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains(
+            @"NpmPublishApprovers entry 'adamratzman\n## vso[task.setvariable variable=NpmPublishOwnersEffective]attacker' must be a non-empty Microsoft alias or @microsoft.com email address containing only letters, digits, '.', '_' or '-'.",
+            Flatten(result.Output));
+        Assert.DoesNotContain("##vso[", result.Output);
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
+    public async Task FailsWhenMicrosoftEmailSuffixWouldLeaveTrailingNewline()
+    {
+        var result = await RunValidation(owners: "joperezr,other\n@microsoft.com", approvers: "ankj");
+
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.Contains(
+            @"NpmPublishOwners entry 'other\n@microsoft.com' must be a non-empty Microsoft alias or @microsoft.com email address containing only letters, digits, '.', '_' or '-'.",
+            Flatten(result.Output));
+        Assert.DoesNotContain("variable=NpmPublishOwnersEffective", result.Output);
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
     public async Task StripsMicrosoftEmailSuffixFromOwnerAliases()
     {
         var result = await RunValidation(owners: "JOPEREZR@microsoft.com", approvers: "ankj");

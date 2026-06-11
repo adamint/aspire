@@ -44,19 +44,34 @@ param(
 )
 
 # >>> BEGIN npm release alias helpers (keep in sync with eng/pipelines/release-publish-nuget.yml) >>>
+function Format-NpmReleaseAliasForError([string] $value) {
+  $escaped = $value.Replace("`r", '\r').Replace("`n", '\n')
+  return [regex]::Replace($escaped, '##vso\[', '## vso[', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+}
+
 function ConvertTo-NpmReleaseAliasSet([string] $value, [string] $parameterName) {
   $aliases = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 
+  # Parse values supplied as:
+  #   joperezr, ankj@microsoft.com
+  # The normalized aliases are later emitted in Azure Pipelines logging commands, so
+  # accept only a small single-line alias alphabet before writing them back to the log.
   foreach ($entry in $value -split ',') {
     $alias = $entry.Trim()
     if ([string]::IsNullOrWhiteSpace($alias)) {
       continue
     }
 
+    $originalAlias = $alias
     if ($alias.EndsWith('@microsoft.com', [StringComparison]::OrdinalIgnoreCase)) {
       $alias = $alias.Substring(0, $alias.Length - '@microsoft.com'.Length)
     } elseif ($alias.Contains('@')) {
-      Write-Error "$parameterName entry '$entry' must be a Microsoft alias or @microsoft.com email address."
+      Write-Error "$parameterName entry '$(Format-NpmReleaseAliasForError $originalAlias)' must be a Microsoft alias or @microsoft.com email address."
+      exit 1
+    }
+
+    if ([string]::IsNullOrWhiteSpace($alias) -or $alias -notmatch '\A[A-Za-z0-9][A-Za-z0-9._-]*\z') {
+      Write-Error "$parameterName entry '$(Format-NpmReleaseAliasForError $originalAlias)' must be a non-empty Microsoft alias or @microsoft.com email address containing only letters, digits, '.', '_' or '-'."
       exit 1
     }
 
@@ -86,6 +101,41 @@ function Assert-ContainsAnyRequiredNpmOwnerAlias(
     exit 1
   }
 }
+
+function Invoke-NpmReleaseAliasValidation(
+  [string] $owners,
+  [string] $approvers,
+  [string] $requiredNpmOwnersValue) {
+  $requiredNpmOwners = ConvertTo-NpmReleaseAliasSet $requiredNpmOwnersValue 'NPM_PUBLISH_REQUIRED_OWNERS'
+  $normalizedOwners = ConvertTo-NpmReleaseAliasSet $owners 'NpmPublishOwners'
+  $normalizedApprovers = ConvertTo-NpmReleaseAliasSet $approvers 'NpmPublishApprovers'
+
+  if ($normalizedOwners.Count -eq 0) {
+    Write-Error "NpmPublishOwners must contain at least one alias before publishing npm packages."
+    exit 1
+  }
+
+  if ($normalizedApprovers.Count -eq 0) {
+    Write-Error "NpmPublishApprovers must contain at least one alias before publishing npm packages."
+    exit 1
+  }
+
+  Assert-ContainsAnyRequiredNpmOwnerAlias $normalizedOwners $requiredNpmOwners 'NpmPublishOwners'
+  Assert-SingleNpmReleaseAlias $normalizedApprovers 'NpmPublishApprovers'
+
+  $overlappingAliases = @($normalizedOwners | Where-Object { $normalizedApprovers.Contains($_) })
+  if ($overlappingAliases.Count -gt 0) {
+    Write-Error "NpmPublishOwners and NpmPublishApprovers must not contain the same alias(es): $($overlappingAliases -join ', ')."
+    exit 1
+  }
+
+  $effectiveOwners = ($normalizedOwners | Sort-Object) -join ','
+  $effectiveApprovers = ($normalizedApprovers | Sort-Object) -join ','
+
+  Write-Host "##vso[task.setvariable variable=NpmPublishOwnersEffective]$effectiveOwners"
+  Write-Host "##vso[task.setvariable variable=NpmPublishApproversEffective]$effectiveApprovers"
+  Write-Host "npm ESRP owners and approvers were resolved and include the required release contacts."
+}
 # <<< END npm release alias helpers <<<
 
 # Importing the helpers (dot-sourcing) should not trigger validation. When the script is
@@ -95,36 +145,4 @@ if ($MyInvocation.InvocationName -eq '.') {
   return
 }
 
-$owners = $Owners
-$approvers = $Approvers
-$requiredNpmOwnersValue = $RequiredOwners
-
-$requiredNpmOwners = ConvertTo-NpmReleaseAliasSet $requiredNpmOwnersValue 'NPM_PUBLISH_REQUIRED_OWNERS'
-$normalizedOwners = ConvertTo-NpmReleaseAliasSet $owners 'NpmPublishOwners'
-$normalizedApprovers = ConvertTo-NpmReleaseAliasSet $approvers 'NpmPublishApprovers'
-
-if ($normalizedOwners.Count -eq 0) {
-  Write-Error "NpmPublishOwners must contain at least one alias before publishing npm packages."
-  exit 1
-}
-
-if ($normalizedApprovers.Count -eq 0) {
-  Write-Error "NpmPublishApprovers must contain at least one alias before publishing npm packages."
-  exit 1
-}
-
-Assert-ContainsAnyRequiredNpmOwnerAlias $normalizedOwners $requiredNpmOwners 'NpmPublishOwners'
-Assert-SingleNpmReleaseAlias $normalizedApprovers 'NpmPublishApprovers'
-
-$overlappingAliases = @($normalizedOwners | Where-Object { $normalizedApprovers.Contains($_) })
-if ($overlappingAliases.Count -gt 0) {
-  Write-Error "NpmPublishOwners and NpmPublishApprovers must not contain the same alias(es): $($overlappingAliases -join ', ')."
-  exit 1
-}
-
-$effectiveOwners = ($normalizedOwners | Sort-Object) -join ','
-$effectiveApprovers = ($normalizedApprovers | Sort-Object) -join ','
-
-Write-Host "##vso[task.setvariable variable=NpmPublishOwnersEffective]$effectiveOwners"
-Write-Host "##vso[task.setvariable variable=NpmPublishApproversEffective]$effectiveApprovers"
-Write-Host "npm ESRP owners and approvers were resolved and include the required release contacts."
+Invoke-NpmReleaseAliasValidation $Owners $Approvers $RequiredOwners

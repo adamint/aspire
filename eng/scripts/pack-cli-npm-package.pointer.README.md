@@ -89,7 +89,7 @@ The native platform packages are installed through npm optional dependencies. Do
 npm install -g __PACKAGE_NAME__@latest
 ```
 
-You can also run `aspire update --self`; package updates are routed back through npm.
+If you run `aspire update --self` from an npm install, the CLI points you back to this npm update command.
 
 ## Learn more
 

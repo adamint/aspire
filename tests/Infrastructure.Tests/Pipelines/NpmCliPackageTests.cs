@@ -185,7 +185,7 @@ public sealed class NpmCliPackageTests : IDisposable
         Assert.Contains("This package requires Node.js 20 or later.", readme);
         Assert.Contains($"npm install -g {PackageName}", readme);
         Assert.Contains("The native platform packages are installed through npm optional dependencies.", readme);
-        Assert.Contains("aspire update --self", readme);
+        Assert.Contains("If you run `aspire update --self` from an npm install, the CLI points you back to this npm update command.", readme);
         Assert.DoesNotContain("__PACKAGE_NAME__", readme);
     }
 
