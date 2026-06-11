@@ -77,14 +77,14 @@ Learn more in the [Aspire VS Code extension documentation](https://aspire.dev/ge
 
 ### Launch configuration
 
-Add an entry to `.vscode/launch.json` pointing at your apphost project:
+Add an entry to `.vscode/launch.json` pointing at your apphost:
 
 ```json
 {
     "type": "aspire",
     "request": "launch",
-    "name": "Aspire: Launch MyAppHost",
-    "program": "${workspaceFolder}/MyAppHost/MyAppHost.csproj"
+    "name": "Aspire: Launch TypeScript starter",
+    "program": "${workspaceFolder}/AppHost/apphost.mts"
 }
 ```
 
@@ -106,8 +106,8 @@ The `command` property in the launch config lets you do more than just run:
 {
     "type": "aspire",
     "request": "launch",
-    "name": "Aspire: Deploy MyAppHost",
-    "program": "${workspaceFolder}/MyAppHost/MyAppHost.csproj",
+    "name": "Aspire: Deploy TypeScript starter",
+    "program": "${workspaceFolder}/AppHost/apphost.mts",
     "command": "deploy"
 }
 ```
