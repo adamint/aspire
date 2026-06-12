@@ -211,8 +211,8 @@ Turn it on by setting `aspire.registerMcpServerInWorkspace` to `true`. When enab
 
 Found a bug or have an idea? File it on the [microsoft/aspire](https://github.com/microsoft/aspire/issues) repo:
 
-- [Report a bug](https://github.com/microsoft/aspire/issues/new?template=10_bug_report.yml&labels=area-extension)
-- [Request a feature](https://github.com/microsoft/aspire/issues/new?template=20_feature-request.yml&labels=area-extension)
+- [Report a bug](https://github.com/microsoft/aspire/issues/new?template=10_bug_report.yml&labels=area-vscode-extension)
+- [Request a feature](https://github.com/microsoft/aspire/issues/new?template=20_feature-request.yml&labels=area-vscode-extension)
 
 ### Learn more
 
