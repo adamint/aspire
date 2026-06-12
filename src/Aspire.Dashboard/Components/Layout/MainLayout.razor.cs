@@ -86,9 +86,6 @@ public partial class MainLayout : IGlobalKeydownListener, IAsyncDisposable
     [Inject]
     public required IAIContextProvider AIContextProvider { get; init; }
 
-    [Inject]
-    private IAssistantDisplayContext AssistantDisplayContext { get; init; } = null!;
-
     [CascadingParameter]
     public required ViewportInformation ViewportInformation { get; set; }
 
@@ -137,9 +134,11 @@ public partial class MainLayout : IGlobalKeydownListener, IAsyncDisposable
 
         _aiDisplayChangedSubscription = AIContextProvider.OnDisplayChanged(() => InvokeAsync(() =>
         {
+            var assistantDisplayContext = ServiceProvider.GetRequiredService<IAssistantDisplayContext>();
+
             if (!AIContextProvider.ShowAssistantSidebarDialog)
             {
-                if (_assistantSidebarWasVisible && AssistantDisplayContext.RestoreFocusOnAssistantSidebarHidden)
+                if (_assistantSidebarWasVisible && assistantDisplayContext.RestoreFocusOnAssistantSidebarHidden)
                 {
                     _pendingReturnFocusElementId = _assistantReturnFocusElementId;
                 }
@@ -149,7 +148,7 @@ public partial class MainLayout : IGlobalKeydownListener, IAsyncDisposable
             }
             else
             {
-                _assistantReturnFocusElementId = AssistantDisplayContext.AssistantReturnFocusElementId;
+                _assistantReturnFocusElementId = assistantDisplayContext.AssistantReturnFocusElementId;
                 _assistantSidebarWasVisible = true;
             }
 
@@ -409,9 +408,11 @@ public partial class MainLayout : IGlobalKeydownListener, IAsyncDisposable
 
     private async Task LaunchAssistantAsync(string? returnFocusElementId)
     {
-        if (AIContextProvider.AssistantChatViewModel != null && AIContextProvider.ShowAssistantSidebarDialog)
+        var assistantDisplayContext = ServiceProvider.GetRequiredService<IAssistantDisplayContext>();
+
+        if (AIContextProvider.AssistantChatViewModel is not null && AIContextProvider.ShowAssistantSidebarDialog)
         {
-            await AssistantDisplayContext.HideAssistantSidebarAsync();
+            await assistantDisplayContext.HideAssistantSidebarAsync();
         }
         else
         {
@@ -423,12 +424,12 @@ public partial class MainLayout : IGlobalKeydownListener, IAsyncDisposable
             if (ViewportInformation.IsDesktop)
             {
                 _assistantReturnFocusElementId = returnFocusElementId;
-                await AssistantDisplayContext.LaunchAssistantSidebarAsync(viewModel, returnFocusElementId);
+                await assistantDisplayContext.LaunchAssistantSidebarAsync(viewModel, returnFocusElementId);
             }
             else
             {
                 _assistantReturnFocusElementId = null;
-                await AssistantDisplayContext.LaunchAssistantModelDialogAsync(viewModel, returnFocusElementId: returnFocusElementId);
+                await assistantDisplayContext.LaunchAssistantModelDialogAsync(viewModel, returnFocusElementId: returnFocusElementId);
             }
 
             await initializeTask;

@@ -30,9 +30,6 @@ public partial class AssistantModalDialog : IAsyncDisposable
     public required IJSRuntime JS { get; init; }
 
     [Inject]
-    private IAssistantDisplayContext AssistantDisplayContext { get; init; } = null!;
-
-    [Inject]
     public required IServiceProvider ServiceProvider { get; init; }
 
     private readonly CancellationTokenSource _cts = new();
@@ -87,17 +84,7 @@ public partial class AssistantModalDialog : IAsyncDisposable
         return ValueTask.CompletedTask;
     }
 
-    public static Task OpenDialogAsync(IDialogService dialogService, string title, AssistantDialogViewModel viewModel)
-    {
-        return OpenDialogCoreAsync(dialogService, js: null, title, viewModel, returnFocusElementId: null);
-    }
-
-    internal static Task OpenDialogAsync(IDialogService dialogService, IJSRuntime js, string title, AssistantDialogViewModel viewModel, string? returnFocusElementId = null)
-    {
-        return OpenDialogCoreAsync(dialogService, js, title, viewModel, returnFocusElementId);
-    }
-
-    private static async Task OpenDialogCoreAsync(IDialogService dialogService, IJSRuntime? js, string title, AssistantDialogViewModel viewModel, string? returnFocusElementId)
+    internal static async Task OpenDialogAsync(IDialogService dialogService, IJSRuntime js, string title, AssistantDialogViewModel viewModel, string? returnFocusElementId = null)
     {
         var parameters = new DialogParameters
         {
@@ -109,7 +96,7 @@ public partial class AssistantModalDialog : IAsyncDisposable
             PreventScroll = true,
             OnDialogClosing = EventCallback.Factory.Create<DialogInstance>(dialogService, async _ =>
             {
-                if (returnFocusElementId is not null && js is not null && viewModel.Chat?.DisplayContainer != AssistantChatDisplayContainer.Switching)
+                if (returnFocusElementId is not null && viewModel.Chat?.DisplayContainer != AssistantChatDisplayContainer.Switching)
                 {
                     // FluentUI can restore focus to a shadow-DOM proxy instead of the launcher.
                     await js.InvokeVoidAsync("focusElement", returnFocusElementId);
@@ -136,7 +123,7 @@ public partial class AssistantModalDialog : IAsyncDisposable
     private async Task DisplaySidebarViewAsync()
     {
         var returnFocusElementId = GetSidebarReturnFocusElementId(Content.OpenedForMobileView, Content.ReturnFocusElementId);
-        await AssistantDisplayContext.LaunchAssistantSidebarAsync(Content.Chat, returnFocusElementId);
+        await ServiceProvider.GetRequiredService<IAssistantDisplayContext>().LaunchAssistantSidebarAsync(Content.Chat, returnFocusElementId);
     }
 
     internal static string? GetSidebarReturnFocusElementId(bool openedForMobileView, string? returnFocusElementId)
