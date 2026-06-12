@@ -35,10 +35,10 @@ builder.AddViteApp("frontend", "./frontend")
 builder.Build().Run();
 ```
 
-__TypeScript__ (`apphost.ts`)
+__TypeScript__ (`apphost.mts`)
 
 ```typescript
-import { createBuilder } from './.aspire/modules/aspire.js';
+import { createBuilder } from './.aspire/modules/aspire.mjs';
 
 const builder = await createBuilder();
 
