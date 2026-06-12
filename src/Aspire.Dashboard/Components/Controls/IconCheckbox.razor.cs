@@ -5,6 +5,7 @@ using Aspire.Dashboard.Utils;
 using Microsoft.AspNetCore.Components;
 using Microsoft.FluentUI.AspNetCore.Components;
 using Microsoft.JSInterop;
+using Icons = Microsoft.FluentUI.AspNetCore.Components.Icons;
 
 namespace Aspire.Dashboard.Components;
 
@@ -21,6 +22,12 @@ public partial class IconCheckbox : ComponentBase, IAsyncDisposable
 {
     private const string JsModulePath = "./Components/Controls/IconCheckbox.razor.js";
 
+    // The control owns the mapping from state to icon so callers only describe the
+    // checked state via CheckState rather than wiring up icons and aria values themselves.
+    private static readonly Icon s_uncheckedIcon = new Icons.Regular.Size20.CheckboxUnchecked().WithColor(Color.FillInverse);
+    private static readonly Icon s_checkedIcon = new Icons.Filled.Size20.CheckboxChecked();
+    private static readonly Icon s_indeterminateIcon = new Icons.Filled.Size20.CheckboxIndeterminate();
+
     private ElementReference _element;
     private IJSObjectReference? _jsModule;
     private bool _keyboardInitialized;
@@ -29,16 +36,11 @@ public partial class IconCheckbox : ComponentBase, IAsyncDisposable
     public required IJSRuntime JS { get; init; }
 
     /// <summary>
-    /// The icon rendered inside the checkbox.
+    /// The checked state of the checkbox. Determines the rendered icon and the exposed
+    /// <c>aria-checked</c> value.
     /// </summary>
     [Parameter]
-    public required Icon Icon { get; set; }
-
-    /// <summary>
-    /// The current aria-checked state. Use <c>"true"</c>, <c>"false"</c>, or <c>"mixed"</c>.
-    /// </summary>
-    [Parameter]
-    public required string AriaChecked { get; set; }
+    public required IconCheckboxState CheckState { get; set; }
 
     /// <summary>
     /// The accessible name used for both <c>title</c> and <c>aria-label</c>.
@@ -53,17 +55,11 @@ public partial class IconCheckbox : ComponentBase, IAsyncDisposable
     public EventCallback OnClick { get; set; }
 
     /// <summary>
-    /// Tab index for the checkbox. Defaults to <c>"0"</c>; pass <c>"-1"</c> to remove the
-    /// checkbox from the tab order without disabling pointer interactions.
+    /// When <c>true</c>, exposes the checkbox as disabled, removes it from the tab order, and
+    /// skips the Space-key handler.
     /// </summary>
     [Parameter]
-    public string TabIndex { get; set; } = "0";
-
-    /// <summary>
-    /// When set to <c>"true"</c>, exposes the checkbox as disabled and skips the Space-key handler.
-    /// </summary>
-    [Parameter]
-    public string? AriaDisabled { get; set; }
+    public bool Disabled { get; set; }
 
     /// <summary>
     /// Additional CSS classes appended to the root element.
@@ -77,6 +73,29 @@ public partial class IconCheckbox : ComponentBase, IAsyncDisposable
     /// </summary>
     [Parameter]
     public bool StopPropagation { get; set; } = true;
+
+    private Icon CurrentIcon => CheckState switch
+    {
+        IconCheckboxState.Checked => s_checkedIcon,
+        IconCheckboxState.Unchecked => s_uncheckedIcon,
+        _ => s_indeterminateIcon
+    };
+
+    // The indeterminate state maps to aria-checked="mixed" per the ARIA checkbox spec.
+    // See: https://www.w3.org/TR/wai-aria-1.2/#checkbox
+    private string AriaChecked => CheckState switch
+    {
+        IconCheckboxState.Checked => "true",
+        IconCheckboxState.Unchecked => "false",
+        _ => "mixed"
+    };
+
+    // Render aria-disabled only when disabled so the attribute is omitted in the common case,
+    // which also keeps the CSS/keyboard handler checks (aria-disabled="true") working.
+    private string? AriaDisabled => Disabled ? "true" : null;
+
+    // Disabled checkboxes are removed from the tab order but remain focusable via pointer.
+    private string TabIndex => Disabled ? "-1" : "0";
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -111,4 +130,25 @@ public partial class IconCheckbox : ComponentBase, IAsyncDisposable
             await JSInteropHelpers.SafeDisposeAsync(_jsModule);
         }
     }
+}
+
+/// <summary>
+/// The checked state of an <see cref="IconCheckbox"/>.
+/// </summary>
+public enum IconCheckboxState
+{
+    /// <summary>
+    /// The checkbox is unchecked (aria-checked="false").
+    /// </summary>
+    Unchecked,
+
+    /// <summary>
+    /// The checkbox is checked (aria-checked="true").
+    /// </summary>
+    Checked,
+
+    /// <summary>
+    /// The checkbox is partially checked (aria-checked="mixed").
+    /// </summary>
+    Indeterminate
 }

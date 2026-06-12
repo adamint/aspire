@@ -28,10 +28,8 @@
                     <div style="display: flex; justify-content: flex-start;">
                         <div style="width: calc(100% - 10px);">
                             <div class="name-title-text">
-                                <IconCheckbox Icon="@GetHeaderCheckboxIcon()"
-                                              AriaChecked="@GetHeaderCheckboxAriaChecked()"
-                                              AriaDisabled="@GetHeaderSelectionCheckboxAriaDisabled()"
-                                              TabIndex="@GetHeaderSelectionCheckboxTabIndex()"
+                                <IconCheckbox CheckState="@GetHeaderCheckboxState()"
+                                              Disabled="@(_resourceDataRows.Count == 0)"
                                               AccessibleLabel="@headerSelectionLabel"
                                               StopPropagation="false"
                                               OnClick="OnSelectAllClicked" />
@@ -62,8 +60,7 @@
                                     </FluentButton>
                                 }
                             </span>
-                            <IconCheckbox Icon="@GetResourceCheckboxIcon(context.ResourceRow)"
-                                          AriaChecked="@GetResourceCheckboxAriaChecked(context.ResourceRow)"
+                            <IconCheckbox CheckState="@GetResourceCheckboxState(context.ResourceRow)"
                                           AccessibleLabel="@resourceSelectionLabel"
                                           OnClick="@(() => OnSelectRowClicked(context.ResourceRow))" />
                             @if (context.ResourceRow.Resource is not null)
@@ -92,8 +89,7 @@
                             var parentResourceDisplayName = GetResourceDisplayName(context.ParentResourceName);
                             var dataTypeSelectionLabel = GetDataRowSelectionLabel(dataTypeDisplayName, parentResourceDisplayName);
 
-                            <IconCheckbox Icon="@(IsDataRowSelected(context.ParentResourceName, context.NestedRow.DataType) ? _iconSelectedMultiple : _iconUnselectedMultiple)"
-                                          AriaChecked="@GetDataRowCheckboxAriaChecked(context.ParentResourceName, context.NestedRow.DataType)"
+                            <IconCheckbox CheckState="@GetDataRowCheckboxState(context.ParentResourceName, context.NestedRow.DataType)"
                                           AccessibleLabel="@dataTypeSelectionLabel"
                                           OnClick="@(() => OnSelectDataRowClicked(context.ParentResourceName, context.NestedRow.DataType))" />
                             <span class="cellText">@dataTypeDisplayName</span>

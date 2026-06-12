@@ -61,9 +61,6 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
     private readonly HashSet<string> _expandedResourceNames = new(StringComparers.ResourceName);
     private readonly HashSet<(string ResourceName, AspireDataType DataType)> _selectedRows = [];
     private readonly CancellationTokenSource _cts = new();
-    private readonly Icon _iconUnselectedMultiple = new Icons.Regular.Size20.CheckboxUnchecked().WithColor(Color.FillInverse);
-    private readonly Icon _iconSelectedMultiple = new Icons.Filled.Size20.CheckboxChecked();
-    private readonly Icon _iconIndeterminate = new Icons.Filled.Size20.CheckboxIndeterminate();
     private Task? _resourceSubscriptionTask;
     private FluentDataGrid<ManageDataGridItem>? _dataGrid;
     private bool _isExporting;
@@ -495,47 +492,18 @@ public partial class ManageDataDialog : IDialogContentComponent, IAsyncDisposabl
         return true;
     }
 
-    private Icon GetHeaderCheckboxIcon()
+    private IconCheckboxState GetHeaderCheckboxState() => GetCheckboxState(AreAllSelected(), AreNoneSelected());
+
+    private IconCheckboxState GetResourceCheckboxState(ResourceDataRow row) => GetCheckboxState(AreAllDataRowsSelected(row), AreNoDataRowsSelected(row));
+
+    private IconCheckboxState GetDataRowCheckboxState(string resourceName, AspireDataType dataType) =>
+        IsDataRowSelected(resourceName, dataType) ? IconCheckboxState.Checked : IconCheckboxState.Unchecked;
+
+    private static IconCheckboxState GetCheckboxState(bool isChecked, bool isUnchecked) => (isChecked, isUnchecked) switch
     {
-        if (AreAllSelected())
-        {
-            return _iconSelectedMultiple;
-        }
-        if (AreNoneSelected())
-        {
-            return _iconUnselectedMultiple;
-        }
-        return _iconIndeterminate;
-    }
-
-    private string GetHeaderCheckboxAriaChecked() => GetCheckboxAriaChecked(AreAllSelected(), AreNoneSelected());
-
-    private string GetHeaderSelectionCheckboxTabIndex() => _resourceDataRows.Count == 0 ? "-1" : "0";
-
-    private string? GetHeaderSelectionCheckboxAriaDisabled() => _resourceDataRows.Count == 0 ? "true" : null;
-
-    private Icon GetResourceCheckboxIcon(ResourceDataRow row)
-    {
-        if (AreAllDataRowsSelected(row))
-        {
-            return _iconSelectedMultiple;
-        }
-        if (AreNoDataRowsSelected(row))
-        {
-            return _iconUnselectedMultiple;
-        }
-        return _iconIndeterminate;
-    }
-
-    private string GetResourceCheckboxAriaChecked(ResourceDataRow row) => GetCheckboxAriaChecked(AreAllDataRowsSelected(row), AreNoDataRowsSelected(row));
-
-    private string GetDataRowCheckboxAriaChecked(string resourceName, AspireDataType dataType) => IsDataRowSelected(resourceName, dataType) ? "true" : "false";
-
-    private static string GetCheckboxAriaChecked(bool isChecked, bool isUnchecked) => (isChecked, isUnchecked) switch
-    {
-        (true, _) => "true",
-        (_, true) => "false",
-        _ => "mixed"
+        (true, _) => IconCheckboxState.Checked,
+        (_, true) => IconCheckboxState.Unchecked,
+        _ => IconCheckboxState.Indeterminate
     };
 
     private void NavigateToDataPage(TelemetryDataRow dataRow)
