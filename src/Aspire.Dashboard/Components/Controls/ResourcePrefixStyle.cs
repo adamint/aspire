@@ -9,7 +9,6 @@ namespace Aspire.Dashboard.Components;
 internal static class ResourcePrefixStyle
 {
     internal const string DarkTextColor = "#000";
-    internal const string LightTextColor = "#fff";
 
     internal static string GetStyle(string resourcePrefix)
     {
