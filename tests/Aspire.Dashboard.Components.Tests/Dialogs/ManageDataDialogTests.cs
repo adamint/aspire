@@ -126,6 +126,26 @@ public sealed class ManageDataDialogTests : DashboardTestContext
         });
     }
 
+    [Fact]
+    public async Task IconCheckbox_DoesNotInvokeClickWhenDisabled()
+    {
+        var clickCount = 0;
+        SetupIconCheckboxJs();
+
+        var cut = RenderComponent<IconCheckbox>(parameters => parameters
+            .Add(p => p.CheckState, IconCheckboxState.Checked)
+            .Add(p => p.Disabled, true)
+            .Add(p => p.AccessibleLabel, "All data")
+            .Add(p => p.OnClick, () => clickCount++));
+
+        var checkbox = cut.Find("[role='checkbox']");
+
+        Assert.Equal("true", checkbox.GetAttribute("aria-disabled"));
+        await cut.InvokeAsync(() => checkbox.Click());
+
+        Assert.Equal(0, clickCount);
+    }
+
     private void SetupManageDataDialogServices(TestDashboardClient dashboardClient)
     {
         FluentUISetupHelpers.AddCommonDashboardServices(this);
@@ -142,6 +162,11 @@ public sealed class ManageDataDialogTests : DashboardTestContext
         FluentUISetupHelpers.SetupFluentButton(this);
         FluentUISetupHelpers.SetupFluentDataGrid(this);
 
+        SetupIconCheckboxJs();
+    }
+
+    private void SetupIconCheckboxJs()
+    {
         var module = JSInterop.SetupModule("./Components/Controls/IconCheckbox.razor.js");
         module.SetupVoid("initializeIconCheckboxKeyboard", _ => true);
         module.SetupVoid("disposeIconCheckboxKeyboard", _ => true);
@@ -196,9 +221,9 @@ public sealed class ManageDataDialogTests : DashboardTestContext
 
     private static void AssertSelectionCheckboxesHaveNoActionLabels(IRenderedComponent<ManageDataDialog> cut)
     {
-        Assert.DoesNotContain(GetSelectionCheckboxes(cut), button =>
+        Assert.DoesNotContain(GetSelectionCheckboxes(cut), checkbox =>
         {
-            var accessibleName = button.GetAttribute("aria-label");
+            var accessibleName = checkbox.GetAttribute("aria-label");
 
             return accessibleName is not null &&
                 (accessibleName.StartsWith("Select ", StringComparison.Ordinal) ||

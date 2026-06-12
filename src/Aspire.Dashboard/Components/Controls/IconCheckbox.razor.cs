@@ -107,6 +107,16 @@ public partial class IconCheckbox : ComponentBase, IAsyncDisposable
         }
     }
 
+    private async Task HandleClickAsync()
+    {
+        if (Disabled)
+        {
+            return;
+        }
+
+        await OnClick.InvokeAsync();
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_jsModule is not null)
