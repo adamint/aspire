@@ -1,0 +1,4 @@
+viewport=320x720
+table tab aria-selected=true visible=true
+table tab bounding box: X=13 Y=193 W=108.359375 H=40
+right edge (X+W)=121.359375 <= 320 viewport width
