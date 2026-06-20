@@ -1,0 +1,67 @@
+PR #17926 — Fix Resources accessibility keyboard and reflow paths
+Proof lane (code-review orchestration / PR tester)
+=================================================================
+Worktree : /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-group-resources
+PR HEAD  : 356274933b810cacc4bbb20a009794d9ed5ccded (matches PR head)
+SDK      : .NET 10.0.201 (local, matches global.json)
+Captured : 2026-06-20T21:1x:00Z
+Tracked source modified: NONE (only this untracked proof/ dir written)
+
+Changed behavior under test (src):
+- AspireMenu/AspireMenuButton: RestoreFocusOnItemClick returns focus to the
+  anchoring button after a menu item is clicked; aria-expanded emits "true"/"false".
+- Resources.razor: @onkeydown:stopPropagation on nested controls so Enter/keyboard
+  activation does NOT also open resource details; GridValue StopClickPropagation;
+  FluentTabs Orientation switches Vertical at IsUltraLowWidth; tabs marked fixed.
+- Resources.razor.css: horizontal tab header overflow-x:auto so the selected tab
+  can scroll into view at narrow widths.
+
+-----------------------------------------------------------------
+COMMAND #1 — bUnit component tests  → PASS (exit 0)
+log: cmd1-component-tests.log
+dotnet test --project tests/Aspire.Dashboard.Components.Tests/Aspire.Dashboard.Components.Tests.csproj \
+  --no-launch-profile -- \
+  --filter-class "*.AspireMenuButtonTests" --filter-class "*.AspireMenuTests" \
+  --filter-class "*.ResourcesTests" --filter-class "*.ResourceDetailsTests" \
+  --filter-class "*.ConsoleLogsTests" \
+  --filter-not-trait "quarantined=true" --filter-not-trait "outerloop=true"
+Result: Passed!  total: 55  failed: 0  succeeded: 55  skipped: 0
+
+-----------------------------------------------------------------
+COMMAND #2 — real-browser Playwright tests  → PASS (exit 0)
+log: cmd2-dashboard-tests.log
+(assembly rebuilt at run time, AFTER HEAD commit 356274933b — verified fresh,
+ not a stale binary; all three methods present in source and compiled in)
+dotnet test --project tests/Aspire.Dashboard.Tests/Aspire.Dashboard.Tests.csproj \
+  --no-launch-profile -- \
+  --filter-method "*.UrlLink_EnterDoesNotOpenResourceDetails" \
+  --filter-method "*.ResourceViewTabs_RemainVisibleAtNarrowViewport" \
+  --filter-method "*.ResourceViewTabs_RemainVisibleAtNarrowHorizontalViewport" \
+  --filter-not-trait "quarantined=true"
+Result: Passed!  total: 3  failed: 0  succeeded: 3  skipped: 0
+Note: these are [RequiresFeature(Playwright)] + [OuterloopTest]; skipped:0 confirms
+they genuinely ran in Chromium (command #2 does not exclude outerloop, per spec).
+What they assert:
+  - UrlLink_EnterDoesNotOpenResourceDetails: focus URL link, press Enter -> popup
+    opens to about:blank#resource-url AND .details-header-title count == 0.
+  - ...NarrowViewport (320px): selected Table tab visible and X+W <= 320.
+  - ...NarrowHorizontalViewport (360px): .resources-tab-header[orientation=horizontal]
+    visible and all three tabs fit within 360px.
+
+-----------------------------------------------------------------
+SCREENSHOT EVIDENCE — real Aspire.Dashboard + real Chromium  → captured (exit 0)
+harness log: screenshot-harness.log   harness src: shot/Program.cs (untracked)
+  resources-320px.png       359x720  vertical tab reflow; selected "Resources" tab
+                                      fully visible. Harness log bbox:
+                                      X=13 W=108.36 right=121.36 (viewport 320).
+  resources-url-focus.png   1280x720 URL link focused (keyboard).
+  resources-after-enter.png 1280x720 after Enter: popup opened/closed, NO details
+                                      panel (harness log: details-header-title count=0).
+Expected harness noise: MockDashboardClient.SubscribeInteractionsAsync throws
+NotImplementedException (interactions are not mocked) — unrelated to captured paths.
+
+PROOF GAP / CAVEAT (harness only, NOT a product issue):
+The standalone screenshot harness needed a one-off Google.Protobuf swap in its own
+output dir (3.31.1.0 -> 3.34.1.0) because an MSB3277 version conflict left a stale
+3.31.1.0 shadowing the dashboard's required 3.34.1.0 (bumped on main). The
+authoritative Playwright tests (command #2) ran cleanly with no such workaround.

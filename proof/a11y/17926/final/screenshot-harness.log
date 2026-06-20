@@ -1,0 +1,73 @@
+===== SHOT HARNESS (direct Shot.dll) @ 356274933b810cacc4bbb20a009794d9ed5ccded @ 2026-06-20T21:15:44Z =====
+info: Aspire.Dashboard.DashboardWebApplication[0]
+      Aspire dashboard version: 13.5.0-dev
+info: Microsoft.AspNetCore.DataProtection.KeyManagement.XmlKeyManager[62]
+      User profile is available. Using '/Users/adamratzman/.aspnet/DataProtection-Keys' as key repository; keys will not be encrypted at rest.
+dbug: Aspire.Dashboard.Configuration.PostConfigureDashboardOptions[0]
+      PostConfigure DashboardOptions with name ''.
+dbug: Aspire.Dashboard.Configuration.ValidateDashboardOptions[0]
+      Validating DashboardOptions.
+warn: Microsoft.AspNetCore.Server.Kestrel[64]
+      HTTP/2 is not enabled for 127.0.0.1:0. The endpoint is configured to use HTTP/1.1 and HTTP/2, but TLS is not enabled. HTTP/2 requires TLS application protocol negotiation. Connections to this endpoint will use HTTP/1.1.
+info: Microsoft.Hosting.Lifetime[14]
+      Now listening on: http://127.0.0.1:58010
+info: Microsoft.Hosting.Lifetime[14]
+      Now listening on: http://127.0.0.1:58011
+info: Microsoft.Hosting.Lifetime[0]
+      Application started. Press Ctrl+C to shut down.
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Development
+info: Microsoft.Hosting.Lifetime[0]
+      Content root path: /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-group-resources/artifacts/bin/Aspire.Dashboard/Debug/net8.0
+info: Aspire.Dashboard.DashboardWebApplication[0]
+      Now listening on: http://127.0.0.1:58010
+info: Aspire.Dashboard.DashboardWebApplication[0]
+      OTLP/HTTP listening on: http://127.0.0.1:58011
+warn: Aspire.Dashboard.DashboardWebApplication[0]
+      OTLP server is unsecured. Untrusted apps can send telemetry to the dashboard. For more information, visit https://go.microsoft.com/fwlink/?linkid=2267030
+dbug: Aspire.Dashboard.DashboardWebApplication[0]
+      Dashboard API disabled: False
+warn: Aspire.Dashboard.DashboardWebApplication[0]
+      Dashboard API is unsecured. Untrusted apps can access sensitive telemetry data.
+info: Aspire.Dashboard.DashboardWebApplication[0]
+      Aspire Dashboard
+      
+            - Dashboard:  http://127.0.0.1:58010
+            - OTLP/HTTP:  http://127.0.0.1:58011
+      
+[shot] dashboard listening at http://127.0.0.1:58010
+** Found playwright dependencies in /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-group-resources/artifacts/bin/playwright-deps
+dbug: Aspire.Dashboard.Telemetry.DashboardTelemetryService[0]
+      Initializing telemetry service.
+dbug: Aspire.Dashboard.Configuration.PostConfigureDashboardOptions[0]
+      PostConfigure DashboardOptions with name ''.
+dbug: Aspire.Dashboard.Configuration.ValidateDashboardOptions[0]
+      Validating DashboardOptions.
+dbug: Aspire.Dashboard.Telemetry.DashboardTelemetrySender[0]
+      Telemetry is not configured.
+dbug: Aspire.Dashboard.Telemetry.DashboardTelemetryService[0]
+      Initialized telemetry service. Telemetry sender state: Disabled
+dbug: Aspire.Dashboard.Model.Assistant.AIContextProvider[0]
+      AI is disabled in configuration.
+fail: Aspire.Dashboard.Components.Interactions.InteractionsProvider[0]
+      Unexpected error while watching interactions.
+      System.NotImplementedException: The method or operation is not implemented.
+         at Aspire.Dashboard.Tests.Integration.Playwright.Infrastructure.MockDashboardClient.SubscribeInteractionsAsync(CancellationToken cancellationToken) in /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-group-resources/tests/Aspire.Dashboard.Tests/Integration/Playwright/Infrastructure/MockDashboardClient.cs:line 70
+         at Aspire.Dashboard.Components.Interactions.InteractionsProvider.WatchInteractionsAsync() in /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-group-resources/src/Aspire.Dashboard/Components/Interactions/InteractionsProvider.cs:line 338
+         at Aspire.Dashboard.Components.Interactions.InteractionsProvider.<OnInitialized>b__48_1() in /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-group-resources/src/Aspire.Dashboard/Components/Interactions/InteractionsProvider.cs:line 124
+dbug: Aspire.Dashboard.Model.BrowserTimeProvider[0]
+      Browser time zone set to 'America/New_York' with UTC offset -05:00:00.
+[shot][320px] selected tab bbox: X=13 W=108.359375 right=121.359375 (viewport width=320)
+dbug: Aspire.Dashboard.Model.Assistant.AIContextProvider[0]
+      AI is disabled in configuration.
+fail: Aspire.Dashboard.Components.Interactions.InteractionsProvider[0]
+      Unexpected error while watching interactions.
+      System.NotImplementedException: The method or operation is not implemented.
+         at Aspire.Dashboard.Tests.Integration.Playwright.Infrastructure.MockDashboardClient.SubscribeInteractionsAsync(CancellationToken cancellationToken) in /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-group-resources/tests/Aspire.Dashboard.Tests/Integration/Playwright/Infrastructure/MockDashboardClient.cs:line 70
+         at Aspire.Dashboard.Components.Interactions.InteractionsProvider.WatchInteractionsAsync() in /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-group-resources/src/Aspire.Dashboard/Components/Interactions/InteractionsProvider.cs:line 338
+         at Aspire.Dashboard.Components.Interactions.InteractionsProvider.<OnInitialized>b__48_1() in /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-group-resources/src/Aspire.Dashboard/Components/Interactions/InteractionsProvider.cs:line 124
+dbug: Aspire.Dashboard.Model.BrowserTimeProvider[0]
+      Browser time zone set to 'America/New_York' with UTC offset -05:00:00.
+[shot][url-enter] popup opened to about:blank#resource-url; details-header-title count=0 (expected 0)
+[shot] done
+EXIT_CODE=0

@@ -1,0 +1,13 @@
+===== COMMAND #2 =====
+dotnet test --project tests/Aspire.Dashboard.Tests/Aspire.Dashboard.Tests.csproj --no-launch-profile -- --filter-method "*.UrlLink_EnterDoesNotOpenResourceDetails" --filter-method "*.ResourceViewTabs_RemainVisibleAtNarrowViewport" --filter-method "*.ResourceViewTabs_RemainVisibleAtNarrowHorizontalViewport" --filter-not-trait "quarantined=true"
+=======================
+Running tests from /Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-group-resources/artifacts/bin/Aspire.Dashboard.Tests/Debug/net8.0/Aspire.Dashboard.Tests.dll (net8.0|arm64)
+/Volumes/DevDrive/source/repos/aspire-adamint/.worktrees/a11y-group-resources/artifacts/bin/Aspire.Dashboard.Tests/Debug/net8.0/Aspire.Dashboard.Tests.dll (net8.0|arm64) passed (2s 967ms)
+
+Test run summary: Passed!
+  total: 3
+  failed: 0
+  succeeded: 3
+  skipped: 0
+  duration: 3s 096ms
+EXIT_CODE=0
