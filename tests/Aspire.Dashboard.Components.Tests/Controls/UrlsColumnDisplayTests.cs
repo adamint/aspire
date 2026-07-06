@@ -13,6 +13,30 @@ namespace Aspire.Dashboard.Components.Tests.Controls;
 public class UrlsColumnDisplayTests : DashboardTestContext
 {
     [Fact]
+    public void Render_SingleUrl_UsesFullWidthClickContainer()
+    {
+        FluentUISetupHelpers.AddCommonDashboardServices(this);
+
+        var displayedUrls = CreateDisplayedUrls(1);
+        var resource = ModelTestHelpers.CreateResource(resourceName: "test-resource", resourceType: "Project", state: KnownResourceState.Running);
+
+        var cut = RenderComponent<UrlsColumnDisplay>(builder =>
+        {
+            builder.Add(p => p.Resource, resource);
+            builder.Add(p => p.HasMultipleReplicas, false);
+            builder.Add(p => p.DisplayedUrls, displayedUrls);
+        });
+
+        var container = Assert.Single(cut.FindAll(".url-container"));
+        Assert.Equal("div", container.LocalName);
+        Assert.Null(container.GetAttribute("style"));
+
+        var anchor = container.QuerySelector("a");
+        Assert.NotNull(anchor);
+        Assert.Equal("https://localhost:5000", anchor.GetAttribute("href"));
+    }
+
+    [Fact]
     public void Render_MoreThanMaxUrls_CapsRenderedOverflowItems()
     {
         // Arrange

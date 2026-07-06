@@ -7,7 +7,7 @@
 }
 else if (DisplayedUrls.Count == 1)
 {
-    <div class="url-container" style="display: inline-block;" @onclick:stopPropagation="true">
+    <div class="url-container" @onclick:stopPropagation="true">
         @WriteUrl(DisplayedUrls[0])
     </div>
 }
