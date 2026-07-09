@@ -1,0 +1,108 @@
+{
+  "$id": "1",
+  "label": "01-overflow-more-focused",
+  "tag": "fluent-button",
+  "id": null,
+  "text": "\u002B20",
+  "path": "div.layout \u003E div.layout-body-container \u003E div.body-content.custom-body-content \u003E div.page-content-container \u003E div.content-layout \u003E main \u003E div.summary-details-container \u003E split-panels#f252d503e.fluent-splitter \u003E div \u003E div.summary-container \u003E div#resources-summary-layout-id.resources-summary-layout \u003E div.resource-tabs \u003E div#resourcesScrollContainer.resources-grid-container \u003E table#f22f07f89.fluent-data-grid.grid.main-grid.enable-row-click \u003E tbody \u003E tr.fluent-data-grid-row.hover.resource-row \u003E td.resource-row.col-justify-start \u003E div.url-container \u003E div#f52a265eb.fluent-overflow.url-overflow \u003E div#f52a265eb-more.fluent-overflow-more \u003E div \u003E fluent-button.url-button.accent",
+  "outerHtml": "\u003Cfluent-button class=\u0022url-button accent\u0022 type=\u0022button\u0022 appearance=\u0022accent\u0022 b-x1200685t0=\u0022\u0022 _bl_0b7b26d9-3a8c-47e7-8b1b-522789bc32c8=\u0022\u0022 current-value=\u0022\u0022\u003E\u002B20\u003C/fluent-button\u003E"
+}
+{
+  "$id": "1",
+  "label": "02-overflow-first-link-before-shift-tab",
+  "tag": "a",
+  "id": null,
+  "text": "about:blank#overflow-url-1",
+  "path": "div.layout \u003E div.layout-body-container \u003E div.body-content.custom-body-content \u003E div.page-content-container \u003E div.content-layout \u003E main \u003E div.summary-details-container \u003E split-panels#f252d503e.fluent-splitter \u003E div \u003E div.summary-container \u003E div#resources-summary-layout-id.resources-summary-layout \u003E div.resource-tabs \u003E div#resourcesScrollContainer.resources-grid-container \u003E table#f22f07f89.fluent-data-grid.grid.main-grid.enable-row-click \u003E tbody \u003E tr.fluent-data-grid-row.hover.resource-row \u003E td.resource-row.col-justify-start \u003E div.url-container \u003E div \u003E fluent-anchored-region#f35cbc101.loaded.bottom.inset-left \u003E div \u003E div.stack-vertical \u003E div.fluent-popover-content \u003E div \u003E div.url-popup \u003E div.url-link \u003E a",
+  "outerHtml": "\u003Ca href=\u0022about:blank#overflow-url-1\u0022 target=\u0022_blank\u0022 title=\u0022about:blank#overflow-url-1\u0022 b-4nfruyblpm=\u0022\u0022\u003Eabout:blank#overflow-url-1\u003C/a\u003E"
+}
+{
+  "$id": "1",
+  "label": "03-overflow-after-shift-tab",
+  "tag": "a",
+  "id": null,
+  "text": "about:blank#overflow-url-1",
+  "path": "div.layout \u003E div.layout-body-container \u003E div.body-content.custom-body-content \u003E div.page-content-container \u003E div.content-layout \u003E main \u003E div.summary-details-container \u003E split-panels#f252d503e.fluent-splitter \u003E div \u003E div.summary-container \u003E div#resources-summary-layout-id.resources-summary-layout \u003E div.resource-tabs \u003E div#resourcesScrollContainer.resources-grid-container \u003E table#f22f07f89.fluent-data-grid.grid.main-grid.enable-row-click \u003E tbody \u003E tr.fluent-data-grid-row.hover.resource-row \u003E td.resource-row.col-justify-start \u003E div.url-container \u003E div \u003E fluent-anchored-region#f35cbc101.loaded.bottom.inset-left \u003E div \u003E div.stack-vertical \u003E div.fluent-popover-content \u003E div \u003E div.url-popup \u003E div.url-link \u003E a",
+  "outerHtml": "\u003Ca href=\u0022about:blank#overflow-url-1\u0022 target=\u0022_blank\u0022 title=\u0022about:blank#overflow-url-1\u0022 b-4nfruyblpm=\u0022\u0022\u003Eabout:blank#overflow-url-1\u003C/a\u003E"
+}
+{
+  "$id": "1",
+  "label": "04-overflow-last-link-before-tab",
+  "tag": "a",
+  "id": null,
+  "text": "about:blank#overflow-url-20",
+  "path": "div.layout \u003E div.layout-body-container \u003E div.body-content.custom-body-content \u003E div.page-content-container \u003E div.content-layout \u003E main \u003E div.summary-details-container \u003E split-panels#f252d503e.fluent-splitter \u003E div \u003E div.summary-container \u003E div#resources-summary-layout-id.resources-summary-layout \u003E div.resource-tabs \u003E div#resourcesScrollContainer.resources-grid-container \u003E table#f22f07f89.fluent-data-grid.grid.main-grid.enable-row-click \u003E tbody \u003E tr.fluent-data-grid-row.hover.resource-row \u003E td.resource-row.col-justify-start \u003E div.url-container \u003E div \u003E fluent-anchored-region#f35cbc101.loaded.bottom.inset-left \u003E div \u003E div.stack-vertical \u003E div.fluent-popover-content \u003E div \u003E div.url-popup \u003E div.url-link \u003E a",
+  "outerHtml": "\u003Ca href=\u0022about:blank#overflow-url-20\u0022 target=\u0022_blank\u0022 title=\u0022about:blank#overflow-url-20\u0022 b-4nfruyblpm=\u0022\u0022\u003Eabout:blank#overflow-url-20\u003C/a\u003E"
+}
+{
+  "$id": "1",
+  "label": "05-overflow-after-tab",
+  "tag": "fluent-anchor",
+  "id": null,
+  "text": "Aspire",
+  "path": "div.layout \u003E div.aspire-icon \u003E fluent-anchor.logo.stealth",
+  "outerHtml": "\u003Cfluent-anchor class=\u0022logo stealth\u0022 href=\u0022/\u0022 appearance=\u0022stealth\u0022 title=\u0022Aspire\u0022 aria-label=\u0022Aspire\u0022 b-acyx52swce=\u0022\u0022 _bl_940e0d02-d316-4643-bd0c-43ce167d96f5=\u0022\u0022\u003E\u003C!--!--\u003E\u003Cdiv style=\u0022width: 24px; fill: var(--accent-fill-rest); display: inline-block;\u0022\u003E\u003C!--!--\u003E\u003Csvg width=\u002224\u0022 height=\u002224\u0022 viewBox=\u00220 0 24 24\u0022 fill=\u0022none\u0022 xmlns=\u0022http://www.w3.org/2000/svg\u0022\u003E\n    \u003Cmask id=\u0022mask0_449_831\u0022 style=\u0022mask-type:alpha\u0022 maskUnits=\u0022userSpaceOnUse\u0022 x=\u00220\u0022 y=\u00220\u0022 width=\u002224\u0022 height=\u002222\u0022\u003E\n        \u003Cpath fill-rule=\u0022evenodd\u0022 clip-rule=\u0022evenodd\u0022 d=\u0022M5.39001 12C4.49001 12 3.67 12.4799 3.22 13.2499L6.67 7.27994L6.6817 7.25982L9.84001 1.79005C10.05 1.43005 10.36 1.11005 10.75 0.880049C11.14 0.650049 11.57 0.550049 12 0.550049C12.86 0.550049 13.7 0.990049 14.17 1.80005L17.33 7.28005L23.67 18.25C23.88 18.62 24 19.05 24 19.5C24 20.88 22.88 22 21.5 22H8.27002C8.27001 22 8.27002 22 8.27002 22H2.5C1.12 22 0 20.88 0 19.5C0 19.05 0.12 18.62 0.33 18.25L3.22 13.2499C3.67 12.4799 4.49001 12 5.39001 12C5.39002 12 5.39001 12 5.39"
+}
+HEADER BUTTONS
+0: fluent-button aria=Name text=Name title=Name id=f20927a1e
+1: button aria=Name text= title=null id=
+2: fluent-button aria=State text=State title=State id=f5ea8d5b3
+3: button aria=State text= title=null id=
+4: fluent-button aria=URLs text=URLs title=URLs id=f39800560
+5: button aria=URLs text= title=null id=
+6: fluent-button aria=Actions text=Actions title=Actions id=f34003a22
+7: button aria=Actions text= title=null id=
+{
+  "$id": "1",
+  "label": "06-column-menu-open",
+  "tag": "fluent-button",
+  "id": "f20927a1e",
+  "text": "Name",
+  "path": "div.layout \u003E div.layout-body-container \u003E div.body-content.custom-body-content \u003E div.page-content-container \u003E div.content-layout \u003E main \u003E div.summary-details-container \u003E split-panels#f252d503e.fluent-splitter \u003E div \u003E div.summary-container \u003E div#resources-summary-layout-id.resources-summary-layout \u003E div.resource-tabs \u003E div#resourcesScrollContainer.resources-grid-container \u003E table#f22f07f89.fluent-data-grid.grid.main-grid.enable-row-click \u003E thead \u003E tr.fluent-data-grid-row.hover \u003E th.column-header.col-justify-start.expand-col.main-grid.enable-row-click.resizable \u003E span.keycapture \u003E fluent-button#f20927a1e.col-sort-button.stealth",
+  "outerHtml": "\u003Cfluent-button class=\u0022col-sort-button stealth\u0022 style=\u0022width: calc(100% - 10px);\u0022 type=\u0022button\u0022 id=\u0022f20927a1e\u0022 title=\u0022Name\u0022 appearance=\u0022stealth\u0022 aria-label=\u0022Name\u0022 b-x1200685t0=\u0022\u0022 _bl_45d3a904-f30f-46d9-b789-fa2b31f2bdd1=\u0022\u0022 current-value=\u0022\u0022\u003E\u003Cdiv class=\u0022col-title-text\u0022 title=\u0022Name\u0022 b-pxhtqoo8qd=\u0022\u0022\u003EName\u003C/div\u003E\u003C/fluent-button\u003E"
+}
+{
+  "$id": "1",
+  "label": "07-column-resize-open-autofocus",
+  "tag": "fluent-button",
+  "id": null,
+  "text": "Shrink column width",
+  "path": "div.layout \u003E div.layout-body-container \u003E div.body-content.custom-body-content \u003E div.page-content-container \u003E div.content-layout \u003E main \u003E div.summary-details-container \u003E split-panels#f252d503e.fluent-splitter \u003E div \u003E div.summary-container \u003E div#resources-summary-layout-id.resources-summary-layout \u003E div.resource-tabs \u003E div#resourcesScrollContainer.resources-grid-container \u003E table#f22f07f89.fluent-data-grid.grid.main-grid.enable-row-click \u003E thead \u003E tr.fluent-data-grid-row.hover \u003E th.column-header.col-justify-start.expand-col.main-grid.enable-row-click.resizable \u003E div.col-resize \u003E div.stack-horizontal.resize-options \u003E fluent-button.neutral",
+  "outerHtml": "\u003Cfluent-button autofocus=\u0022\u0022 type=\u0022button\u0022 appearance=\u0022neutral\u0022 class=\u0022neutral\u0022 aria-label=\u0022Shrink column width\u0022 tabindex=\u00220\u0022 b-x1200685t0=\u0022\u0022 _bl_0108a83a-ca96-4dd8-8b2a-414e538ada2d=\u0022\u0022 current-value=\u0022\u0022\u003E\u003C!--!--\u003E\u003Csvg style=\u0022width: 20px; fill: var(--accent-fill-rest);\u0022 focusable=\u0022false\u0022 viewBox=\u00220 0 20 20\u0022 aria-hidden=\u0022true\u0022\u003E\u003C!--!--\u003E\u003Cpath d=\u0022M3 10c0-.28.22-.5.5-.5h13a.5.5 0 0 1 0 1h-13A.5.5 0 0 1 3 10Z\u0022\u003E\u003C/path\u003E\u003C/svg\u003E\u003C/fluent-button\u003E"
+}
+{
+  "$id": "1",
+  "label": "08-column-resize-first-before-shift-tab",
+  "tag": "fluent-button",
+  "id": null,
+  "text": "Shrink column width",
+  "path": "div.layout \u003E div.layout-body-container \u003E div.body-content.custom-body-content \u003E div.page-content-container \u003E div.content-layout \u003E main \u003E div.summary-details-container \u003E split-panels#f252d503e.fluent-splitter \u003E div \u003E div.summary-container \u003E div#resources-summary-layout-id.resources-summary-layout \u003E div.resource-tabs \u003E div#resourcesScrollContainer.resources-grid-container \u003E table#f22f07f89.fluent-data-grid.grid.main-grid.enable-row-click \u003E thead \u003E tr.fluent-data-grid-row.hover \u003E th.column-header.col-justify-start.expand-col.main-grid.enable-row-click.resizable \u003E div.col-resize \u003E div.stack-horizontal.resize-options \u003E fluent-button.neutral",
+  "outerHtml": "\u003Cfluent-button autofocus=\u0022\u0022 type=\u0022button\u0022 appearance=\u0022neutral\u0022 class=\u0022neutral\u0022 aria-label=\u0022Shrink column width\u0022 tabindex=\u00220\u0022 b-x1200685t0=\u0022\u0022 _bl_0108a83a-ca96-4dd8-8b2a-414e538ada2d=\u0022\u0022 current-value=\u0022\u0022\u003E\u003C!--!--\u003E\u003Csvg style=\u0022width: 20px; fill: var(--accent-fill-rest);\u0022 focusable=\u0022false\u0022 viewBox=\u00220 0 20 20\u0022 aria-hidden=\u0022true\u0022\u003E\u003C!--!--\u003E\u003Cpath d=\u0022M3 10c0-.28.22-.5.5-.5h13a.5.5 0 0 1 0 1h-13A.5.5 0 0 1 3 10Z\u0022\u003E\u003C/path\u003E\u003C/svg\u003E\u003C/fluent-button\u003E"
+}
+{
+  "$id": "1",
+  "label": "09-column-resize-after-shift-tab",
+  "tag": "fluent-button",
+  "id": "f20927a1e",
+  "text": "Name",
+  "path": "div.layout \u003E div.layout-body-container \u003E div.body-content.custom-body-content \u003E div.page-content-container \u003E div.content-layout \u003E main \u003E div.summary-details-container \u003E split-panels#f252d503e.fluent-splitter \u003E div \u003E div.summary-container \u003E div#resources-summary-layout-id.resources-summary-layout \u003E div.resource-tabs \u003E div#resourcesScrollContainer.resources-grid-container \u003E table#f22f07f89.fluent-data-grid.grid.main-grid.enable-row-click \u003E thead \u003E tr.fluent-data-grid-row.hover \u003E th.column-header.col-justify-start.expand-col.main-grid.enable-row-click.resizable \u003E span.keycapture \u003E fluent-button#f20927a1e.col-sort-button.stealth",
+  "outerHtml": "\u003Cfluent-button class=\u0022col-sort-button stealth\u0022 style=\u0022width: calc(100% - 10px);\u0022 type=\u0022button\u0022 id=\u0022f20927a1e\u0022 title=\u0022Name\u0022 appearance=\u0022stealth\u0022 aria-label=\u0022Name\u0022 b-x1200685t0=\u0022\u0022 _bl_45d3a904-f30f-46d9-b789-fa2b31f2bdd1=\u0022\u0022 current-value=\u0022\u0022\u003E\u003Cdiv class=\u0022col-title-text\u0022 title=\u0022Name\u0022 b-pxhtqoo8qd=\u0022\u0022\u003EName\u003C/div\u003E\u003C/fluent-button\u003E"
+}
+{
+  "$id": "1",
+  "label": "10-column-resize-last-before-tab",
+  "tag": "fluent-button",
+  "id": null,
+  "text": "Reset column widths",
+  "path": "div.layout \u003E div.layout-body-container \u003E div.body-content.custom-body-content \u003E div.page-content-container \u003E div.content-layout \u003E main \u003E div.summary-details-container \u003E split-panels#f252d503e.fluent-splitter \u003E div \u003E div.summary-container \u003E div#resources-summary-layout-id.resources-summary-layout \u003E div.resource-tabs \u003E div#resourcesScrollContainer.resources-grid-container \u003E table#f22f07f89.fluent-data-grid.grid.main-grid.enable-row-click \u003E thead \u003E tr.fluent-data-grid-row.hover \u003E th.column-header.col-justify-start.expand-col.main-grid.enable-row-click.resizable \u003E div.col-resize \u003E div.stack-horizontal.resize-options \u003E fluent-button.neutral",
+  "outerHtml": "\u003Cfluent-button type=\u0022button\u0022 appearance=\u0022neutral\u0022 class=\u0022neutral\u0022 aria-label=\u0022Reset column widths\u0022 tabindex=\u00220\t\u0022 b-x1200685t0=\u0022\u0022 _bl_156dd2d6-eee9-4318-a8be-1ee4bdbb2a9c=\u0022\u0022 current-value=\u0022\u0022\u003E\u003C!--!--\u003E\u003Csvg style=\u0022width: 20px; fill: var(--accent-fill-rest);\u0022 focusable=\u0022false\u0022 viewBox=\u00220 0 20 20\u0022 aria-hidden=\u0022true\u0022\u003E\u003C!--!--\u003E\u003Cpath d=\u0022M5.85 2.65c.2.2.2.5 0 .7L4.21 5H11a6 6 0 1 1-6 6 .5.5 0 0 1 1 0 5 5 0 1 0 5-5H4.2l1.65 1.65a.5.5 0 1 1-.7.7l-2.5-2.5a.5.5 0 0 1 0-.7l2.5-2.5c.2-.2.5-.2.7 0Z\u0022\u003E\u003C/path\u003E\u003C/svg\u003E\u003C/fluent-button\u003E"
+}
+{
+  "$id": "1",
+  "label": "11-column-resize-after-tab",
+  "tag": "fluent-button",
+  "id": "f5ea8d5b3",
+  "text": "State",
+  "path": "div.layout \u003E div.layout-body-container \u003E div.body-content.custom-body-content \u003E div.page-content-container \u003E div.content-layout \u003E main \u003E div.summary-details-container \u003E split-panels#f252d503e.fluent-splitter \u003E div \u003E div.summary-container \u003E div#resources-summary-layout-id.resources-summary-layout \u003E div.resource-tabs \u003E div#resourcesScrollContainer.resources-grid-container \u003E table#f22f07f89.fluent-data-grid.grid.main-grid.enable-row-click \u003E thead \u003E tr.fluent-data-grid-row.hover \u003E th.column-header.col-justify-start.main-grid.enable-row-click.resizable \u003E span.keycapture \u003E fluent-button#f5ea8d5b3.col-sort-button.stealth",
+  "outerHtml": "\u003Cfluent-button class=\u0022col-sort-button stealth\u0022 style=\u0022width: calc(100% - 10px);\u0022 type=\u0022button\u0022 id=\u0022f5ea8d5b3\u0022 title=\u0022State\u0022 appearance=\u0022stealth\u0022 aria-label=\u0022State\u0022 b-x1200685t0=\u0022\u0022 _bl_5ffe1ccb-4ca5-4d78-9cea-2b39cf52f557=\u0022\u0022 current-value=\u0022\u0022\u003E\u003Cdiv class=\u0022col-title-text\u0022 title=\u0022State\u0022 b-pxhtqoo8qd=\u0022\u0022\u003EState\u003C/div\u003E\u003C/fluent-button\u003E"
+}
