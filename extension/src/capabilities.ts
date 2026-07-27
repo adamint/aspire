@@ -15,6 +15,11 @@ export type Capability =
     | 'ms-python.python' // Older AppHost versions used this extension identifier instead of python
     | 'go' // Support for running Go projects
     | 'golang.go' // Older AppHost versions used this extension identifier instead of go
+    | 'cppvsdbg' // C++ debugger adapter type used for Rust debugging on Windows
+    | 'cppdbg' // C++ debugger adapter type fallback
+    | 'rust' // Support for running Rust projects
+    | 'rust-lang.rust-analyzer' // Rust Analyzer extension identifier
+    | 'vadimcn.vscode-lldb' // CodeLLDB extension identifier
     | 'node' // Support for running Node.js projects
     | 'bun' // Support for running Bun projects
     | 'oven.bun-vscode' // Bun debug adapter extension identifier
@@ -24,10 +29,40 @@ export type Capability =
     | 'azure-functions'; // Support for running Azure Functions projects
 
 export type Capabilities = Capability[];
+export type RustDebugAdapterType = 'cppvsdbg' | 'cppdbg' | 'lldb' | 'codelldb';
 
 function isExtensionInstalled(extensionId: string): boolean {
     const extension = vscode.extensions.getExtension(extensionId);
     return !!extension;
+}
+
+function hasDebuggerType(debuggerType: RustDebugAdapterType): boolean {
+    return vscode.extensions.all.some((extension) => {
+        const debuggers = (extension.packageJSON as { contributes?: { debuggers?: Array<{ type?: string }> } }).contributes?.debuggers;
+        return Array.isArray(debuggers) && debuggers.some(entry => entry.type === debuggerType);
+    });
+}
+
+export function getRustDebugAdapterType(): RustDebugAdapterType | undefined {
+    if (process.platform === 'win32') {
+        if (hasDebuggerType('cppvsdbg')) {
+            return 'cppvsdbg';
+        }
+
+        if (hasDebuggerType('cppdbg')) {
+            return 'cppdbg';
+        }
+    }
+
+    if (hasDebuggerType('lldb') || isExtensionInstalled("vadimcn.vscode-lldb")) {
+        return 'lldb';
+    }
+
+    if (hasDebuggerType('codelldb')) {
+        return 'codelldb';
+    }
+
+    return undefined;
 }
 
 export function isCsDevKitInstalled() {
@@ -44,6 +79,10 @@ export function isPythonInstalled() {
 
 export function isGoInstalled() {
     return isExtensionInstalled("golang.go");
+}
+
+export function isRustInstalled() {
+    return getRustDebugAdapterType() !== undefined;
 }
 
 export function isAzureFunctionsExtensionInstalled() {
@@ -90,6 +129,18 @@ export function getSupportedCapabilities(): Capabilities {
     if (isGoInstalled()) {
         capabilities.push("go");
         capabilities.push("golang.go");
+    }
+
+    if (isRustInstalled()) {
+        capabilities.push("rust");
+
+        if (isExtensionInstalled("rust-lang.rust-analyzer")) {
+            capabilities.push("rust-lang.rust-analyzer");
+        }
+
+        if (isExtensionInstalled("vadimcn.vscode-lldb")) {
+            capabilities.push("vadimcn.vscode-lldb");
+        }
     }
 
     if (isNodeInstalled()) {

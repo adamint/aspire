@@ -148,6 +148,8 @@ export const browserDisplayName = (url: string) => vscode.l10n.t('Browser: {0}',
 export const browserLabel = vscode.l10n.t('Browser');
 export const goDisplayName = (program: string) => `Go: ${program}`;
 export const goLabel = 'Go';
+export const rustDisplayName = (program: string) => vscode.l10n.t('Rust: {0}', program);
+export const rustLabel = vscode.l10n.t('Rust');
 export const bunDisplayName = (script: string) => `Bun: ${script}`;
 export const bunLabel = 'Bun';
 export const nodeDisplayName = (script: string) => `Node.js: ${script}`;

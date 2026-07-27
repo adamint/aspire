@@ -1,0 +1,26 @@
+{
+  "appHost": {
+    "path": "apphost.cs"
+  },
+  "profiles": {
+    "https": {
+      "applicationUrl": "https://localhost:17001;http://localhost:15001",
+      "environmentVariables": {
+        "ASPIRE_ENVIRONMENT": "Development",
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    },
+    "http": {
+      "applicationUrl": "http://localhost:15001",
+      "environmentVariables": {
+        "ASPIRE_ENVIRONMENT": "Development",
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "DOTNET_ENVIRONMENT": "Development"
+      }
+    }
+  },
+  "features": {
+    "experimentalPolyglot:rust": true
+  }
+}

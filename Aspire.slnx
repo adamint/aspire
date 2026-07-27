@@ -73,6 +73,7 @@
     <Project Path="src/Aspire.Hosting.Orleans/Aspire.Hosting.Orleans.csproj" />
     <Project Path="src/Aspire.Hosting.PostgreSQL/Aspire.Hosting.PostgreSQL.csproj" />
     <Project Path="src/Aspire.Hosting.Python/Aspire.Hosting.Python.csproj" />
+    <Project Path="src/Aspire.Hosting.Rust/Aspire.Hosting.Rust.csproj" />
     <Project Path="src/Aspire.Hosting.Qdrant/Aspire.Hosting.Qdrant.csproj" />
     <Project Path="src/Aspire.Hosting.RabbitMQ/Aspire.Hosting.RabbitMQ.csproj" />
     <Project Path="src/Aspire.Hosting.Radius/Aspire.Hosting.Radius.csproj" />
@@ -547,6 +548,7 @@
     <Project Path="tests/Aspire.Hosting.Orleans.Tests/Aspire.Hosting.Orleans.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.PostgreSQL.Tests/Aspire.Hosting.PostgreSQL.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.Python.Tests/Aspire.Hosting.Python.Tests.csproj" />
+    <Project Path="tests/Aspire.Hosting.Rust.Tests/Aspire.Hosting.Rust.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.Qdrant.Tests/Aspire.Hosting.Qdrant.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.RabbitMQ.Tests/Aspire.Hosting.RabbitMQ.Tests.csproj" />
     <Project Path="tests/Aspire.Hosting.Radius.Tests/Aspire.Hosting.Radius.Tests.csproj" />
