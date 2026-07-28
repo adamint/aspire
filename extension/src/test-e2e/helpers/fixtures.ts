@@ -211,6 +211,49 @@ export async function restoreWorkspaceCliPath(): Promise<void> {
     await writeWorkspaceCliPath(getCliPath());
 }
 
+export interface GlobalToolCmdShim {
+    /** Path to the generated shim (`aspire.cmd` on Windows, `aspire` elsewhere). */
+    shimPath: string;
+    /** Directory that accumulates one marker file per shim invocation. */
+    invocationMarkerDirectory: string;
+}
+
+export function writeGlobalToolCmdShim(name = 'aspire'): GlobalToolCmdShim {
+    // Recreates the .NET global-tool command-shim layout that the Windows CLI fix targets:
+    // ~/.dotnet/tools/aspire.cmd, a shim that forwards every argument to the real CLI via %*.
+    // Launching such a .cmd from Node requires the cmd.exe /c wrapper built by
+    // getCliExecutionCommand; a native .exe path would sidestep the code under test.
+    // See https://github.com/dotnet/aspire/issues/17306.
+    const toolsDirectory = path.join(getWorkspaceRoot(), '.dotnet', 'tools');
+    const invocationMarkerDirectory = path.join(toolsDirectory, '.invocations');
+    fs.mkdirSync(invocationMarkerDirectory, { recursive: true });
+
+    const realCli = getCliPath();
+
+    if (process.platform === 'win32') {
+        const shimPath = path.join(toolsDirectory, `${name}.cmd`);
+        // Drop a uniquely named marker per call before forwarding. Unique names avoid the
+        // concurrent-append file locks a shared log would hit when the extension runs several
+        // CLI commands (config info, ls, ...) at once, and prove the shim actually executed.
+        // %RANDOM% expands per line inside the batch even under `cmd /v:off`.
+        writeFileWithRetry(
+            shimPath,
+            `@echo off\r\n> "${invocationMarkerDirectory}\\%RANDOM%%RANDOM%.txt" echo invoked\r\n"${realCli}" %*\r\n`);
+        return { shimPath, invocationMarkerDirectory };
+    }
+
+    const shimPath = path.join(toolsDirectory, name);
+    fs.writeFileSync(
+        shimPath,
+        `#!/usr/bin/env sh\ntouch "${invocationMarkerDirectory}/$$.txt"\nexec ${JSON.stringify(realCli)} "$@"\n`);
+    fs.chmodSync(shimPath, 0o755);
+    return { shimPath, invocationMarkerDirectory };
+}
+
+export function removeGlobalToolCmdShim(): void {
+    removePath(path.join(getWorkspaceRoot(), '.dotnet'), { recursive: true, force: true });
+}
+
 export function removeWorkspaceAppHostConfig(): void {
     removePath(getWorkspaceAppHostConfigPath(), { force: true });
 }

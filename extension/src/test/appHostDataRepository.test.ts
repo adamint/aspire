@@ -816,8 +816,8 @@ suite('AppHostDataRepository', () => {
     });
 
     test('describe watch surfaces an error and clears loading when the CLI path is unavailable', async () => {
-        // Regression for PR #18338: getAspireCliExecutablePath() now rejects when the CLI is
-        // unavailable, so the describe-watch startup must handle that rejection (clear the
+        // getAspireCliExecutablePath() rejects when the CLI is unavailable, so the
+        // describe-watch startup must handle that rejection (clear the
         // workspace loading flag and surface the error) instead of leaking an unhandled promise
         // rejection that leaves the panel stuck loading.
         getCliPathStub.rejects(new Error('CLI missing'));

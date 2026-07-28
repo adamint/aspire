@@ -2,8 +2,8 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getCommandInvocationCount, getTerminalCommandCount, isSamePath, waitForCommandOutcome, waitForExtensionState, waitForRepositoryIdle, waitForTerminalCommand, waitForWorkspaceAppHost } from './helpers/assertions';
-import { createAdditionalAppHostCandidate, executeE2eControlCommand, removeAdditionalAppHostCandidate, removeWorkspaceAppHostConfig, restoreE2eCliPathForE2E, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setE2eCliPathForE2E, setTerminalCommandExecutionSuppressedForE2E, writeWorkspaceCliPath } from './helpers/fixtures';
-import { getWorkspaceRoot } from './helpers/paths';
+import { createAdditionalAppHostCandidate, executeE2eControlCommand, removeAdditionalAppHostCandidate, removeGlobalToolCmdShim, removeWorkspaceAppHostConfig, restoreE2eCliPathForE2E, restoreWorkspaceAppHostConfig, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setE2eCliPathForE2E, setTerminalCommandExecutionSuppressedForE2E, writeGlobalToolCmdShim, writeWorkspaceCliPath } from './helpers/fixtures';
+import { getPrimaryAppHostProjectPath, getWorkspaceRoot } from './helpers/paths';
 import { chooseActiveQuickPick, executeCommandFromPalette, openAspireView, waitForEditorTitle, waitForNotificationMessage, waitForTerminalChannel, waitForWorkbenchText } from './helpers/vscode';
 
 suite('Aspire command palette E2E', function () {
@@ -18,6 +18,7 @@ suite('Aspire command palette E2E', function () {
             () => restoreWorkspaceCliPath(),
             () => restoreWorkspaceAppHostConfig(),
             () => removeAdditionalAppHostCandidate(),
+            () => removeGlobalToolCmdShim(),
         ], 'Command palette E2E teardown failed.');
     });
 
@@ -72,6 +73,54 @@ suite('Aspire command palette E2E', function () {
             60000,
             beforeTerminalCommand);
         assert.strictEqual(terminalCommand.executionSuppressed, true);
+    });
+
+    test('executes a .NET global-tool aspire.cmd shim end-to-end on Windows', async function () {
+        if (process.platform !== 'win32') {
+            this.skip();
+        }
+
+        // Regression coverage for the Windows cmd-shim fix (dotnet/aspire#17306): a real
+        // ~/.dotnet/tools/aspire.cmd forwards its arguments to the CLI via %*, and the extension can
+        // only launch it through the cmd.exe /c wrapper with windowsVerbatimArguments built by
+        // getCliExecutionCommand. The sibling 'routes terminal commands...' test suppresses
+        // execution, so this is the only coverage that actually spawns the shim from the VS Code
+        // process and drives a CLI-backed surface (AppHost discovery) through it.
+        const { shimPath, invocationMarkerDirectory } = writeGlobalToolCmdShim();
+        try {
+            // Clear the harness-provided native CLI path so resolveCliPath falls through to the
+            // configured .cmd shim and must execute it, mirroring a user whose only Aspire CLI is a
+            // global-tool command shim.
+            await setE2eCliPathForE2E(undefined);
+            await writeWorkspaceCliPath(shimPath);
+
+            await openAspireView();
+            await waitForRepositoryIdle();
+
+            const before = getCommandInvocationCount('aspire-vscode.refreshAppHosts');
+            await executeE2eControlCommand({ name: 'refreshAppHosts' });
+            await waitForCommandOutcome('aspire-vscode.refreshAppHosts', 'success', 120000, before);
+
+            const discovered = await waitForWorkspaceAppHost();
+            assert.strictEqual(discovered.state.hasError, false, discovered.state.errorMessage);
+            assert.ok(
+                discovered.state.workspaceAppHostCandidatePaths.some(candidate => isSamePath(candidate, getPrimaryAppHostProjectPath())),
+                'Expected the workspace AppHost to be discovered through the aspire.cmd shim.');
+
+            // config info and aspire ls ran through the shim, so it must have recorded at least one
+            // invocation. This proves the cmd.exe wrapper actually spawned the .cmd rather than the
+            // extension resolving some other CLI on PATH or a file-only discovery fallback.
+            assert.ok(
+                fs.existsSync(invocationMarkerDirectory) && fs.readdirSync(invocationMarkerDirectory).length > 0,
+                'Expected the aspire.cmd shim to have been executed by the extension.');
+        }
+        finally {
+            await runE2eTeardown([
+                () => restoreE2eCliPathForE2E(),
+                () => restoreWorkspaceCliPath(),
+                () => removeGlobalToolCmdShim(),
+            ], 'Global-tool cmd shim E2E cleanup failed.');
+        }
     });
 
     test('opens settings UI and writes launch configuration through command palette commands', async () => {
