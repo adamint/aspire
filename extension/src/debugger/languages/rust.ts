@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as readline from 'readline';
 import { spawn } from 'child_process';
+import { getRustExtensionId } from "../../capabilities";
 import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, isRustLaunchConfiguration, RustLaunchConfiguration } from "../../dcp/types";
 import { invalidLaunchConfiguration, rustBuildFailedWithError, rustBuildFailedWithExitCode, rustBuildProducedNoExecutable, rustDisplayName, rustLabel } from "../../loc/strings";
 import { extensionLogOutputChannel } from "../../utils/logging";
@@ -128,7 +129,7 @@ function getProjectFile(launchConfig: ExecutableLaunchConfiguration): string {
 // extension VS Code's own docs recommend for macOS/Linux. See:
 // https://code.visualstudio.com/docs/languages/rust#_install-debugging-support
 const rustDebugAdapter = process.platform === 'win32' ? 'cppvsdbg' : 'lldb';
-const rustExtensionId = process.platform === 'win32' ? 'ms-vscode.cpptools' : 'vadimcn.vscode-lldb';
+const rustExtensionId = getRustExtensionId();
 
 export function createRustDebuggerExtension(rustServiceProducer: (debugSession: AspireDebugSession) => IRustService): ResourceDebuggerExtension {
     return {

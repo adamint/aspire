@@ -44,6 +44,7 @@ suite('Rust Debugger Extension Tests', () => {
 
         const capabilities = getSupportedCapabilities();
         assert.ok(capabilities.includes('rust'));
+        assert.ok(capabilities.includes(rustExtensionId));
         assert.ok(getResourceDebuggerExtensions().some(extension => extension.resourceType === 'rust'));
     });
 

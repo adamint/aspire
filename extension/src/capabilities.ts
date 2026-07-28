@@ -16,6 +16,8 @@ export type Capability =
     | 'go' // Support for running Go projects
     | 'golang.go' // Older AppHost versions used this extension identifier instead of go
     | 'rust' // Support for running Rust projects
+    | 'ms-vscode.cpptools' // Rust debug adapter extension identifier on Windows (cppvsdbg)
+    | 'vadimcn.vscode-lldb' // Rust debug adapter extension identifier on macOS/Linux (CodeLLDB)
     | 'node' // Support for running Node.js projects
     | 'bun' // Support for running Bun projects
     | 'oven.bun-vscode' // Bun debug adapter extension identifier
@@ -51,8 +53,12 @@ export function isGoInstalled() {
 // extension owns the Windows-only cppvsdbg engine (needed for MSVC-built PDBs), while CodeLLDB is the
 // extension VS Code's own Rust docs recommend on macOS/Linux. See:
 // https://code.visualstudio.com/docs/languages/rust#_install-debugging-support
+export function getRustExtensionId(): 'ms-vscode.cpptools' | 'vadimcn.vscode-lldb' {
+    return process.platform === 'win32' ? 'ms-vscode.cpptools' : 'vadimcn.vscode-lldb';
+}
+
 export function isRustInstalled() {
-    return isExtensionInstalled(process.platform === 'win32' ? 'ms-vscode.cpptools' : 'vadimcn.vscode-lldb');
+    return isExtensionInstalled(getRustExtensionId());
 }
 
 export function isAzureFunctionsExtensionInstalled() {
@@ -103,6 +109,7 @@ export function getSupportedCapabilities(): Capabilities {
 
     if (isRustInstalled()) {
         capabilities.push("rust");
+        capabilities.push(getRustExtensionId());
     }
 
     if (isNodeInstalled()) {
