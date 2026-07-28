@@ -394,7 +394,12 @@ function sanitizeScalarString(value: string, preserveGuids: boolean): string {
         .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '<email>')))
         .replace(/\b(password|passwd|pwd|token|secret|sig|api[_-]?key|client[_-]?secret|account[_-]?key|shared[_-]?access[_-]?key|sharedaccesskey|connection[_-]?string|connectionstring|key)(\s*[:=]\s*)(?:(["'])([^"']*)\3|([^&\s"',;}]+))/gi, (_match: string, key: string, separator: string, quote: string | undefined) => `${key}${separator}${quote ?? ''}<redacted>${quote ?? ''}`)
         .replace(/([?&]sig=)(?:(["'])([^"']*)\2|([^&\s"',;}]+))/gi, (_match: string, prefix: string, quote: string | undefined) => `${prefix}${quote ?? ''}<redacted>${quote ?? ''}`)
-        .replace(/\b(authorization\s*:\s*bearer\s+)[^\s"',;}]+/gi, '$1<redacted>')
+        // The token body terminates on whitespace or `,;}` but NOT on a quote: stopping at
+        // a quote used to leak the tail (`authorization: bearer abc"def` -> `... <redacted>"def`).
+        // A quote can be consumed safely because JSON bundles are sanitized structurally
+        // upstream (see `trySanitizeJsonBundle`), so a quote here is a literal character in a
+        // free-form string; the `,;}` terminators still stop it from eating a whole JSON blob.
+        .replace(/\b(authorization\s*:\s*bearer\s+)[^\s,;}]+/gi, '$1<redacted>')
         .replace(/\b(bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1<redacted>');
     // Redact whole URLs (scheme kept, host/path/query replaced) and any remaining
     // absolute filesystem path. Running these after the secret passes keeps the
@@ -443,12 +448,18 @@ function redactUrls(value: string): string {
     // analytics (e.g. http vs file vs a custom remote scheme). The scheme grammar
     // follows RFC 3986 §3.1 (`ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`).
     //
-    // The match body stops at whitespace and quotes (so it never crosses a JSON string
-    // boundary and corrupt the surrounding structure) but deliberately allows `<` and
-    // `>` so it absorbs a placeholder that an earlier secret pass already inserted in
-    // the query (e.g. `.../?sig=<redacted>`), collapsing to a single `https://<redacted>`
-    // instead of leaving a doubled `https://<redacted><redacted>`.
-    return value.replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s"']+/g, (match: string) => `${match.slice(0, match.indexOf('://'))}://<redacted>`);
+    // The match body runs to the next whitespace (`\S+`), matching what VS Code's
+    // `cleanData()` does. Stopping earlier at a quote used to truncate the match and
+    // leak the URL tail: `https://private.example/?q="customer"&account=alice` became
+    // `https://<redacted>"customer"&account=alice`, so `&account=alice` survived. A
+    // quote is safe to consume here because JSON bundles are sanitized STRUCTURALLY
+    // upstream (see `trySanitizeJsonBundle`), so by the time a value reaches this
+    // function a quote is a literal character in a free-form string, never a JSON
+    // string delimiter we could corrupt. `\S` is a superset of the old `[^\s"']`
+    // class, so it still absorbs a `<redacted>` placeholder (with its `<`/`>`) that an
+    // earlier secret pass inserted in the query, collapsing `.../?sig=<redacted>` into
+    // a single `https://<redacted>` rather than leaving a doubled marker.
+    return value.replace(/\b[A-Za-z][A-Za-z0-9+.-]*:\/\/\S+/g, (match: string) => `${match.slice(0, match.indexOf('://'))}://<redacted>`);
 }
 
 function redactGenericFilesystemPaths(value: string): string {

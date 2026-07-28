@@ -293,6 +293,48 @@ suite('telemetry utilities', () => {
         assert.strictEqual(parsed.p, '<path>');
     });
 
+    test('sendTelemetryEvent redacts a URL through the next whitespace so a quoted query tail cannot leak', () => {
+        // A quote used to terminate the URL match and leak the query tail:
+        // `https://private.example/?q="customer"&account=alice` became
+        // `https://<redacted>"customer"&account=alice`, so `&account=alice` survived. JSON bundles
+        // are sanitized structurally upstream, so a quote here is a literal character in free-form
+        // text and can be consumed like VS Code's `cleanData()` does — redact through whitespace.
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: 'open https://private.example/?q="customer"&account=alice then quit',
+        });
+
+        assert.strictEqual(
+            fake.events[0].properties?.command,
+            'open https://<redacted> then quit');
+    });
+
+    test('sendTelemetryEvent redacts a bearer token through the next whitespace so a quoted tail cannot leak', () => {
+        // Same class of bug as the URL case, but for a secret: a quote inside the token used to leave
+        // the tail behind (`authorization: bearer abc"def` -> `authorization: bearer <redacted>"def`).
+        // The token body stops on whitespace or `,;}` but not on a quote.
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: 'authorization: bearer abc"def, next',
+        });
+
+        assert.strictEqual(
+            fake.events[0].properties?.command,
+            'authorization: bearer <redacted>, next');
+    });
+
+    test('sendTelemetryEvent redacts a URL with a quoted query inside a JSON bundle and keeps it parseable', () => {
+        // The structural path must stay unharmed by the whitespace-through redaction: the URL leaf is
+        // fully redacted and the bundle still round-trips as valid JSON.
+        const payload = JSON.stringify({ url: 'https://private.example/?q="customer"&account=alice' });
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: payload,
+        });
+
+        const sanitized = fake.events[0].properties?.command ?? '';
+        assert.strictEqual(sanitized, '{"url":"https://<redacted>"}');
+        const parsed = JSON.parse(sanitized) as { url: string };
+        assert.strictEqual(parsed.url, 'https://<redacted>');
+    });
+
     test('sendTelemetryEvent redacts home usernames that contain spaces', () => {
         // The username is a single path segment that can legitimately contain spaces. Redaction must
         // consume the whole segment up to the next separator instead of stopping at the first space
@@ -419,13 +461,16 @@ suite('telemetry utilities', () => {
     });
 
     test('sendTelemetryEvent redacts quoted secrets', () => {
+        // The trailing `https://...?sig="signature"&next=1` is redacted to a bare `https://<redacted>`:
+        // the sig pass redacts the value and then the URL pass consumes the whole URL through the next
+        // whitespace (quotes no longer terminate it), so no query tail survives.
         sendTelemetryEvent('aspire/vscode/command/invoked', {
             command: '--token="secret" token=\'secret\' password=\'secret\' https://storage.example/?sig="signature"&next=1',
         });
 
         assert.strictEqual(
             fake.events[0].properties?.command,
-            '--token="<redacted>" token=\'<redacted>\' password=\'<redacted>\' https://<redacted>"<redacted>"&next=1');
+            '--token="<redacted>" token=\'<redacted>\' password=\'<redacted>\' https://<redacted>');
     });
 
     test('sendTelemetryEvent redacts quoted secrets that contain spaces', () => {
@@ -435,7 +480,7 @@ suite('telemetry utilities', () => {
 
         assert.strictEqual(
             fake.events[0].properties?.command,
-            '--token="<redacted>" token=\'<redacted>\' https://<redacted>"<redacted>"&next=1');
+            '--token="<redacted>" token=\'<redacted>\' https://<redacted>');
     });
 
     test('sendTelemetryEvent does not over-redact path segments after a spaced home username', () => {
