@@ -88,11 +88,46 @@ suite('Browser Debugger Tests', () => {
     });
 
     test('maps Firefox to the VS Code Firefox debug adapter', async () => {
+        // The `firefox` adapter is only available when the firefox-devtools.vscode-firefox-debug
+        // extension is installed, so stub it as present for this happy-path assertion.
+        sinon.stub(vscode.extensions, 'getExtension').callsFake((id: string) =>
+            id === 'firefox-devtools.vscode-firefox-debug' ? ({ id } as vscode.Extension<unknown>) : undefined);
         const debugConfig = createDebugConfig();
 
         await configure({ type: 'browser', url: 'https://localhost:5001', browser: 'firefox' }, debugConfig);
 
         assert.strictEqual(debugConfig.type, 'firefox');
+    });
+
+    test('prompts to install the Firefox debugger and fails when the adapter is missing', async () => {
+        const getExtensionStub = sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+        const showErrorStub = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined as any);
+        const debugConfig = createDebugConfig();
+
+        await assert.rejects(
+            configure({ type: 'browser', url: 'https://localhost:5001', browser: 'firefox' }, debugConfig),
+            /Firefox Debugger extension/);
+
+        assert.ok(getExtensionStub.calledWith('firefox-devtools.vscode-firefox-debug'));
+        assert.strictEqual(showErrorStub.calledOnce, true);
+        assert.match(showErrorStub.firstCall.args[0], /Firefox Debugger extension/);
+    });
+
+    test('installs the Firefox debugger when the user accepts the install prompt', async () => {
+        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+        sinon.stub(vscode.window, 'showErrorMessage').resolves('Install' as any);
+        const executeCommandStub = sinon.stub(vscode.commands, 'executeCommand').resolves();
+        const debugConfig = createDebugConfig();
+
+        await assert.rejects(
+            configure({ type: 'browser', url: 'https://localhost:5001', browser: 'firefox' }, debugConfig),
+            /Firefox Debugger extension/);
+
+        // The prompt is fire-and-forget, so let the resolved showErrorMessage promise settle.
+        await Promise.resolve();
+        await Promise.resolve();
+
+        assert.ok(executeCommandStub.calledOnceWithExactly('workbench.extensions.installExtension', 'firefox-devtools.vscode-firefox-debug'));
     });
 
     test('logs the missing URL reason when browser launch configuration is incomplete', async () => {

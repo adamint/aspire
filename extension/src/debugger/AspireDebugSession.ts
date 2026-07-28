@@ -15,6 +15,7 @@ import { cleanupRun } from "./runCleanupRegistry";
 import { runWithRunStartWrappers } from "./runStartRegistry";
 import AspireRpcServer from "../server/AspireRpcServer";
 import { createDebugSessionConfiguration } from "./debuggerExtensions";
+import { isFirefoxDebuggerInstalled, promptToInstallFirefoxDebugger } from "./firefoxDebugger";
 import { AspireTerminalProvider } from "../utils/AspireTerminalProvider";
 import { ICliRpcClient } from "../server/rpcClient";
 import path from "path";
@@ -758,6 +759,15 @@ export class AspireDebugSession implements vscode.DebugAdapter {
    * The browser will automatically close when the parent Aspire debug session ends.
    */
   private async launchDebugBrowser(url: string, debugType: 'pwa-chrome' | 'pwa-msedge' | 'firefox'): Promise<void> {
+    // The `firefox` adapter is provided by the firefox-devtools.vscode-firefox-debug extension,
+    // not by VS Code's built-in js-debug. If it is missing, prompt to install it and fall back
+    // to the external browser so the dashboard still opens instead of failing silently.
+    if (debugType === 'firefox' && !isFirefoxDebuggerInstalled()) {
+      promptToInstallFirefoxDebugger();
+      await vscode.env.openExternal(vscode.Uri.parse(url));
+      return;
+    }
+
     const debugConfig: vscode.DebugConfiguration = {
       type: debugType,
       name: aspireDashboard,

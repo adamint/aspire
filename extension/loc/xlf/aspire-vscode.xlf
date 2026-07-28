@@ -196,6 +196,9 @@
     <trans-unit id="aspire-vscode.strings.debugProject">
       <source xml:lang="en">Debug {0}</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.firefoxDebuggerNotInstalled">
+      <source xml:lang="en">Debugging with Firefox requires the Firefox Debugger extension (firefox-devtools.vscode-firefox-debug), which is not installed. Install it and try again.</source>
+    </trans-unit>
     <trans-unit id="command.deploy">
       <source xml:lang="en">Deploy app</source>
     </trans-unit>
@@ -336,6 +339,9 @@
     </trans-unit>
     <trans-unit id="command.init">
       <source xml:lang="en">Initialize Aspire in an existing codebase</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.installLabel">
+      <source xml:lang="en">Install</source>
     </trans-unit>
     <trans-unit id="command.installCli">
       <source xml:lang="en">Install Aspire CLI</source>
@@ -688,11 +694,11 @@
     <trans-unit id="aspire-vscode.strings.resourceCommandOutputOpenFailed">
       <source xml:lang="en">The command completed, but its output could not be opened: {0}</source>
     </trans-unit>
-    <trans-unit id="aspire-vscode.strings.dotNetRunFileBasedExecutableProfileFallback">
-      <source xml:lang="en">The default launch profile &apos;{0}&apos; is an Executable profile, so dotnet run-api does not return the file-based app {1}; launching it with dotnet run without debugger attach. Breakpoints will not be hit for this resource.</source>
-    </trans-unit>
     <trans-unit id="aspire-vscode.strings.dashboardLaunchNoneDescription">
       <source xml:lang="en">The dashboard URL is still printed in the terminal and available from the Aspire panel.</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.dotNetRunFileBasedExecutableProfileFallback">
+      <source xml:lang="en">The default launch profile &apos;{0}&apos; is an Executable profile, so dotnet run-api does not return the file-based app {1}; launching it with dotnet run without debugger attach. Breakpoints will not be hit for this resource.</source>
     </trans-unit>
     <trans-unit id="configuration.aspire.aspireCliExecutablePath">
       <source xml:lang="en">The path to the Aspire CLI executable. If not set, the extension will attempt to use &apos;aspire&apos; from the system PATH.</source>

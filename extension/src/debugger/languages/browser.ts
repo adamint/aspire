@@ -2,9 +2,10 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, isBrowserLaunchConfiguration } from "../../dcp/types";
-import { browserDisplayName, browserLabel, invalidLaunchConfiguration } from "../../loc/strings";
+import { browserDisplayName, browserLabel, firefoxDebuggerNotInstalled, invalidLaunchConfiguration } from "../../loc/strings";
 import { extensionLogOutputChannel } from "../../utils/logging";
 import { ResourceDebuggerExtension } from "../debuggerExtensions";
+import { firefoxDebugAdapterType, isFirefoxDebuggerInstalled, promptToInstallFirefoxDebugger } from "../firefoxDebugger";
 import { registerRunCleanup } from "../runCleanupRegistry";
 
 const defaultBrowserRuntimeArgs = [
@@ -37,6 +38,14 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
         }
 
         debugConfiguration.type = getBrowserDebugAdapter(launchConfig.browser);
+        // The `firefox` adapter is not built into VS Code; it comes from the
+        // firefox-devtools.vscode-firefox-debug extension. If it is missing, VS Code would
+        // fail to start the session with only a generic "debug session failed to start"
+        // error, so detect it here and surface an actionable install prompt instead.
+        if (debugConfiguration.type === firefoxDebugAdapterType && !isFirefoxDebuggerInstalled()) {
+            promptToInstallFirefoxDebugger();
+            throw new Error(firefoxDebuggerNotInstalled);
+        }
         debugConfiguration.request = 'launch';
         debugConfiguration.url = launchConfig.url;
         debugConfiguration.webRoot = launchConfig.web_root;
@@ -80,7 +89,7 @@ function getBrowserDebugAdapter(browser: string | undefined): string {
             return 'pwa-chrome';
         case 'firefox':
         case 'mozilla-firefox':
-            return 'firefox';
+            return firefoxDebugAdapterType;
         default:
             return normalizedBrowser.startsWith('pwa-') ? normalizedBrowser : `pwa-${normalizedBrowser}`;
     }
