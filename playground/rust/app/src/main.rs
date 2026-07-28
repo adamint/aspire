@@ -20,7 +20,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(8080);
 
-    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    // Bind to all interfaces rather than loopback so the same binary works both when Aspire runs
+    // it as a host process and when it is published into a container, where a listener on
+    // 127.0.0.1 is unreachable from outside the container.
+    let address = SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!(%address, "starting rust sample");
 
     // `layer` (rather than `route_layer`) wraps every request, including ones that
