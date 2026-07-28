@@ -311,8 +311,8 @@ suite('E2E launch profile', () => {
 
         assert.ok(treeActionsE2E.includes('snapshotClipboardForE2E'));
         assert.ok(treeActionsE2E.includes('restoreClipboardSnapshotForE2E'));
-        assert.ok(treeActionsE2E.indexOf('() => restoreClipboardSnapshotForE2E()') < treeActionsE2E.indexOf('() => setCliUnavailableForE2E(false)'));
-        assert.ok(treeActionsE2E.indexOf('await snapshotClipboardForE2E();') < treeActionsE2E.indexOf("await executeE2eControlCommand({ name: 'copyAppHostPath'"));
+        assertTextOrder(treeActionsE2E, '() => restoreClipboardSnapshotForE2E()', '() => setCliUnavailableForE2E(false)');
+        assertTextOrder(treeActionsE2E, 'await snapshotClipboardForE2E();', "await executeE2eControlCommand({ name: 'copyAppHostPath'");
     });
 
     test('keeps copied values out of E2E control command results', () => {
@@ -369,6 +369,22 @@ suite('E2E launch profile', () => {
         assert.ok(!assertClipboardCase.includes('getEndpointElement'));
         assert.ok(!assertClipboardCase.includes('getLogFileElement'));
         assert.ok(!assertClipboardCase.includes('getResourceElement'));
+    });
+
+    test('keeps raw clipboard values out of E2E mismatch errors', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const e2eStateFileBridge = fs.readFileSync(path.join(extensionRoot, 'src', 'testing', 'e2eStateFileBridge.ts'), 'utf8');
+        const functionStart = e2eStateFileBridge.indexOf('async function assertExpectedClipboardText');
+        const functionEnd = e2eStateFileBridge.indexOf('function getE2eLaunchConfiguration', functionStart);
+
+        assert.ok(functionStart >= 0);
+        assert.ok(functionEnd > functionStart);
+
+        const assertExpectedClipboardTextFunction = e2eStateFileBridge.slice(functionStart, functionEnd);
+
+        assert.ok(assertExpectedClipboardTextFunction.includes('formatClipboardMismatchError(comparison, expectedText.length, clipboardText.length)'));
+        assert.ok(!assertExpectedClipboardTextFunction.includes("Expected: '${expectedText}'"));
+        assert.ok(!assertExpectedClipboardTextFunction.includes("actual: '${clipboardText}'"));
     });
 
     test('latches E2E AppHost stopping path transitions before snapshots can clear', () => {
@@ -604,4 +620,13 @@ function getSwitchCase(source: string, startCase: string, nextCase: string): str
     assert.ok(end > start, `Expected to find ${nextCase} case after ${startCase}.`);
 
     return source.slice(start, end);
+}
+
+function assertTextOrder(source: string, before: string, after: string): void {
+    const beforeIndex = source.indexOf(before);
+    const afterIndex = source.indexOf(after);
+
+    assert.ok(beforeIndex >= 0, `Expected to find "${before}".`);
+    assert.ok(afterIndex >= 0, `Expected to find "${after}".`);
+    assert.ok(beforeIndex < afterIndex, `Expected "${before}" to appear before "${after}".`);
 }
