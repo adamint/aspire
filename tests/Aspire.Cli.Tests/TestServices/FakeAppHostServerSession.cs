@@ -15,8 +15,19 @@ namespace Aspire.Cli.Tests.TestServices;
 /// </summary>
 internal sealed class FakeAppHostServerSession : IAppHostServerSession
 {
-    private readonly FakeAppHostRpcClient _rpcClient = new();
+    private readonly IAppHostRpcClient _rpcClient;
     private readonly TaskCompletionSource<int> _exit = new();
+
+    public FakeAppHostServerSession(IAppHostRpcClient? rpcClient = null)
+    {
+        _rpcClient = rpcClient ?? new FakeAppHostRpcClient();
+    }
+
+    public Func<Task>? StartAsyncCallback { get; init; }
+
+    public Func<CancellationToken, Task<IAppHostRpcClient>>? GetRpcClientAsyncCallback { get; init; }
+
+    public bool StartAsyncCalled { get; private set; }
 
     public string AuthenticationToken { get; } = "fake-token";
 
@@ -40,12 +51,21 @@ internal sealed class FakeAppHostServerSession : IAppHostServerSession
         return _exit.Task.IsCompletedSuccessfully ? _exit.Task.Result : null;
     }
 
-    public Task StartAsync() => Task.CompletedTask;
+    public async Task StartAsync()
+    {
+        StartAsyncCalled = true;
+        if (StartAsyncCallback is not null)
+        {
+            await StartAsyncCallback();
+        }
+    }
 
     public Task<int> WaitForExitAsync() => _exit.Task;
 
     public Task<IAppHostRpcClient> GetRpcClientAsync(CancellationToken cancellationToken)
-        => Task.FromResult<IAppHostRpcClient>(_rpcClient);
+        => GetRpcClientAsyncCallback is not null
+            ? GetRpcClientAsyncCallback(cancellationToken)
+            : Task.FromResult(_rpcClient);
 
     public ValueTask DisposeAsync()
     {
@@ -60,6 +80,10 @@ internal sealed class FakeAppHostServerSession : IAppHostServerSession
 /// </summary>
 internal sealed class FakeAppHostServerSessionFactory : IAppHostServerSessionFactory
 {
+    public IAppHostServerSession? Session { get; init; }
+
+    public Dictionary<string, string>? CapturedEnvironmentVariables { get; private set; }
+
     public IAppHostServerSession Create(
         IAppHostServerProject appHostServerProject,
         Dictionary<string, string>? environmentVariables,
@@ -68,7 +92,10 @@ internal sealed class FakeAppHostServerSessionFactory : IAppHostServerSessionFac
         IGracefulShutdownWindow? shutdownService,
         bool isolateConsole,
         CancellationToken stopRequested)
-        => new FakeAppHostServerSession();
+    {
+        CapturedEnvironmentVariables = environmentVariables is null ? null : new Dictionary<string, string>(environmentVariables);
+        return Session ?? new FakeAppHostServerSession();
+    }
 }
 
 /// <summary>
