@@ -67,15 +67,45 @@ public sealed class CheckChangedFilesActionTests(ITestOutputHelper outputHelper)
         Assert.Equal([npmTemplate], outputs.UnmatchedFiles);
     }
 
+    [Fact]
+    [RequiresTools(["bash", "git", "jq"])]
+    public async Task InputsTreatShellSyntaxAsLiteralGlobText()
+    {
+        const string hostileMarkdown = "eng/scripts/pack-cli-npm-package.$(printf should-not-execute)-`printf should-not-execute`.md";
+        const string patternsFile = "eng/github-ci/skip-patterns-$(printf should-not-execute)-`printf should-not-execute`.txt";
+
+        Git("init", "-q", "-b", "main");
+        Git("config", "user.email", "test@example.com");
+        Git("config", "user.name", "Test");
+        Git("config", "commit.gpgsign", "false");
+
+        WriteWorkspaceFile(patternsFile, "**.md\n");
+        Git("add", "-A");
+        Git("commit", "-q", "-m", "base");
+        var baseSha = Git("rev-parse", "HEAD");
+
+        WriteWorkspaceFile(hostileMarkdown, "changelog\n");
+        Git("add", "-A");
+        Git("commit", "-q", "-m", "head");
+        var headSha = Git("rev-parse", "HEAD");
+
+        var outputs = await RunCheckChangedFilesAsync(patternsFile, hostileMarkdown, baseSha, headSha);
+
+        Assert.Equal("false", outputs.OnlyChanged);
+        Assert.Equal([hostileMarkdown], outputs.ChangedFiles);
+        Assert.Empty(outputs.MatchedFiles);
+        Assert.Equal([hostileMarkdown], outputs.UnmatchedFiles);
+    }
+
     private async Task<ActionOutputs> RunCheckChangedFilesAsync(string patternsFile, string keepUnmatched, string baseSha, string headSha)
     {
-        // Substitute the GitHub Actions expressions the composite step would otherwise receive from the
-        // runner. Everything else -- glob_to_regex, the keep_unmatched precedence loop, the git diff -- is
-        // the action's own code, executed verbatim.
+        // Substitute the GitHub Actions context expressions the composite step would otherwise receive
+        // from the runner. Action inputs intentionally flow through process environment variables below
+        // so shell syntax in those input values stays data, matching the real composite-step wiring.
+        // Everything else -- glob_to_regex, the keep_unmatched precedence loop, the git diff -- is the
+        // action's own code, executed verbatim.
         var script = ExtractCheckFilesScript()
             .Replace("${{ github.event_name }}", "pull_request", StringComparison.Ordinal)
-            .Replace("${{ inputs.patterns_file }}", patternsFile, StringComparison.Ordinal)
-            .Replace("${{ inputs.keep_unmatched }}", keepUnmatched, StringComparison.Ordinal)
             .Replace("${{ github.event.pull_request.base.sha }}", baseSha, StringComparison.Ordinal)
             .Replace("${{ github.event.pull_request.head.sha }}", headSha, StringComparison.Ordinal);
 
@@ -94,6 +124,8 @@ public sealed class CheckChangedFilesActionTests(ITestOutputHelper outputHelper)
         process.StartInfo.UseShellExecute = false;
         process.StartInfo.Environment["GITHUB_WORKSPACE"] = _workspace.Path;
         process.StartInfo.Environment["GITHUB_OUTPUT"] = outputPath;
+        process.StartInfo.Environment["CHECK_CHANGED_FILES_PATTERNS_FILE"] = patternsFile;
+        process.StartInfo.Environment["CHECK_CHANGED_FILES_KEEP_UNMATCHED"] = keepUnmatched;
 
         process.Start();
         var stdoutTask = process.StandardOutput.ReadToEndAsync();

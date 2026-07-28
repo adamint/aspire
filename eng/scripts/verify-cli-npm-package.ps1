@@ -186,9 +186,9 @@ try {
     throw "Pointer package is missing bin/aspire.js."
   }
 
-  # The pointer package ships a version-stamped CHANGELOG.md so npm users can find
-  # the release notes before updating (microsoft/aspire#17719). Verify it exists
-  # and references the packed version.
+  # The pointer package ships a version-stamped CHANGELOG.md as an extra artifact
+  # for users browsing the tarball or npm Code view (microsoft/aspire#17719).
+  # Verify it exists and references the packed version.
   $changelogPath = Join-Path $pointerExtract 'package/CHANGELOG.md'
   if (-not (Test-Path -LiteralPath $changelogPath)) {
     throw "Pointer package is missing CHANGELOG.md."
