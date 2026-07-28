@@ -2637,6 +2637,93 @@ public class DotNetAppHostProjectTests(ITestOutputHelper outputHelper) : IDispos
     }
 
     [Fact]
+    public void IsLikelyAppHost_NearestDirectoryBuildPropsChainSkipsIntermediateToOuterMarker_ReturnsTrue()
+    {
+        // A chain whose start directory skips levels ($(MSBuildThisFileDirectory)../../) begins the
+        // GetPathOfFileAbove search ABOVE the immediate parent, so MSBuild jumps over the intervening
+        // marker-less Directory.Build.props and imports the marker two levels up. A nearest-file walk that
+        // treats the skip as ordinary immediate-parent chaining would continue to that skipped intermediate,
+        // see it stop, and wrongly return false. The prefilter must keep the project a candidate. Verified
+        // with real MSBuild:
+        //   outer/Directory.Build.props                 <IsAspireHost>true</IsAspireHost>
+        //   outer/mid/Directory.Build.props             (no marker, no chain)
+        //   outer/mid/inner/Directory.Build.props       chains via GetPathOfFileAbove(.., '$(MSBuildThisFileDirectory)../../')
+        //   outer/mid/inner/proj/OrdinaryLib.csproj
+        //   dotnet msbuild OrdinaryLib.csproj -getProperty:IsAspireHost  =>  true
+        var projectFile = WriteIsLikelyAppHostProject(Path.Combine("outer", "mid", "inner", "proj", "OrdinaryLib.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "Directory.Build.props"), """
+            <Project>
+              <PropertyGroup>
+                <IsAspireHost>true</IsAspireHost>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "mid", "Directory.Build.props"), """
+            <Project>
+              <PropertyGroup>
+                <SomeUnrelated>1</SomeUnrelated>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "mid", "inner", "Directory.Build.props"), """
+            <Project>
+              <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../../'))" />
+            </Project>
+            """);
+
+        Assert.True(DotNetAppHostProject.IsLikelyAppHost(projectFile));
+    }
+
+    [Fact]
+    public void IsLikelyAppHost_ImmediateParentChainToEmptyParentShadowingGrandparentMarker_ReturnsFalse()
+    {
+        // Guard for the level-skip fix: the ordinary immediate-parent chain ($(MSBuildThisFileDirectory)../)
+        // must still be honored as chaining exactly one level. Here the nearest file chains to its immediate
+        // parent, but that parent is marker-less and does not chain further, so MSBuild's search stops there
+        // and never reaches the grandparent marker. The prefilter must return false rather than promoting the
+        // project on a marker MSBuild cannot see. Verified with real MSBuild:
+        //   outer/Directory.Build.props                 <IsAspireHost>true</IsAspireHost>
+        //   outer/mid/Directory.Build.props             (no marker, no chain)
+        //   outer/mid/inner/Directory.Build.props       chains via GetPathOfFileAbove(.., '$(MSBuildThisFileDirectory)../')
+        //   outer/mid/inner/proj/OrdinaryLib.csproj
+        //   dotnet msbuild OrdinaryLib.csproj -getProperty:IsAspireHost  =>  (empty)
+        var projectFile = WriteIsLikelyAppHostProject(Path.Combine("outer", "mid", "inner", "proj", "OrdinaryLib.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "Directory.Build.props"), """
+            <Project>
+              <PropertyGroup>
+                <IsAspireHost>true</IsAspireHost>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "mid", "Directory.Build.props"), """
+            <Project>
+              <PropertyGroup>
+                <SomeUnrelated>1</SomeUnrelated>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "mid", "inner", "Directory.Build.props"), """
+            <Project>
+              <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+            </Project>
+            """);
+
+        Assert.False(DotNetAppHostProject.IsLikelyAppHost(projectFile));
+    }
+
+    [Fact]
     public void IsLikelyAppHost_NearestDirectoryBuildPropsStaticallyImportsParentMarker_ReturnsTrue()
     {
         // A nested Directory.Build.props can also chain to its parent with an ordinary static import

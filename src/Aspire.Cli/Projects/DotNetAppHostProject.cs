@@ -373,12 +373,12 @@ internal sealed partial class DotNetAppHostProject : IAppHostProject
                 // A tree-walking import: $([MSBuild]::GetPathOfFileAbove/GetDirectoryNameOfFileAbove(...)).
                 if (TryGetWalkUpTargetFileName(project, out var targetFileName, out var startDirectoryArg)
                     && IsConventionalDirectoryBuildFileName(targetFileName)
-                    && IsChainFollowingStartDirectory(startDirectoryArg))
+                    && IsImmediateParentChainStart(startDirectoryArg))
                 {
-                    // Chain-following import of a conventional Directory.Build.* file: its target lives at
-                    // an ancestor level this walk already visits by name. If it targets THIS name it
-                    // advances the chain; if it targets the other name it is handled by the other pass and
-                    // simply contributes no new content here.
+                    // Immediate-parent chaining import of a conventional Directory.Build.* file: its target
+                    // is the nearest file at or above this file's parent — the exact next level this walk
+                    // visits by name. If it targets THIS name it advances the chain; if it targets the other
+                    // name it is handled by the other pass and simply contributes no new content here.
                     if (targetFileName.Equals(chainFileName, StringComparison.Ordinal))
                     {
                         chains = true;
@@ -387,8 +387,9 @@ internal sealed partial class DotNetAppHostProject : IAppHostProject
                     continue;
                 }
 
-                // Walk-up import to a non-conventional target, an out-of-tree starting directory, or one we
-                // cannot parse — a marker could live behind it, so the whole file is uncertain.
+                // Walk-up import to a non-conventional target, a level-skipping or out-of-tree starting
+                // directory, or one we cannot parse — MSBuild may import a file this loop would never reach,
+                // so the whole file is uncertain and the project stays a candidate.
                 return DirectoryBuildChaining.Uncertain;
             }
 
@@ -406,51 +407,64 @@ internal sealed partial class DotNetAppHostProject : IAppHostProject
         return chains ? DirectoryBuildChaining.ChainsToParent : DirectoryBuildChaining.StopsHere;
     }
 
-    private static bool IsChainFollowingStartDirectory(string? startDirectoryArg)
+    private static bool IsImmediateParentChainStart(string? startDirectoryArg)
     {
-        // The conventional-name shortcut (treating a walk-up import of Directory.Build.props/.targets as
-        // "already covered by the ancestor walk") is only sound when the walk-up starts inside the importing
-        // file's own ancestor chain — the range this classifier enumerates. GetPathOfFileAbove /
-        // GetDirectoryNameOfFileAbove accept an ARBITRARY starting directory, so
-        //   $([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(ExternalBuildRoot)'))
-        // can resolve a Directory.Build.props this walk never inspects. Verified against real MSBuild: such
-        // an import DOES pull in the external file (IsAspireHost=true), so applying the shortcut there would
-        // be a false negative that rejects a real AppHost before evaluation.
+        // A conventional Directory.Build.* walk-up import only lets this ancestor walk keep going upward when
+        // its search begins at the importing file's IMMEDIATE parent directory — the exact
+        // '$(MSBuildThisFileDirectory)../' shape MSBuild's own Directory.Build.* chaining uses (verified: it
+        // is the shape in this repo's src/ and tests/ Directory.Build.* files). GetPathOfFileAbove searches
+        // the starting directory AND every directory above it, so starting at the immediate parent means
+        // "nearest Directory.Build.* at or above the parent" — exactly the next file this loop visits by name.
         //
-        // A start argument is chain-following when it is omitted (GetPathOfFileAbove then defaults to
-        // $(MSBuildThisFileDirectory), the importing file's own directory) or is a $(MSBuildThisFileDirectory)-
-        // anchored path that only walks upward (e.g. '$(MSBuildThisFileDirectory)../' — the exact conventional
-        // chaining shape used across this repo's Directory.Build.* files). Anything else (an absolute path, a
-        // different property, or a descent into a named subdirectory) may resolve outside the enumerated
-        // chain and is treated as out-of-tree.
+        // Two other shapes must NOT advance the loop:
+        //  * A level-skipping start ('$(MSBuildThisFileDirectory)../../', etc.) begins the search ABOVE the
+        //    immediate parent, so MSBuild can jump over an intervening marker-less Directory.Build.props and
+        //    import a marker farther up. This loop would instead visit that skipped intermediate next and
+        //    stop there, producing a false negative. Verified against real MSBuild: with a '../../' start and
+        //    a marker two levels up, `dotnet msbuild -getProperty:IsAspireHost` prints `true`, while a
+        //    nearest-file walk that stops at the intermediate would say false.
+        //  * An omitted or same-directory start ('$(MSBuildThisFileDirectory)') resolves to the importing
+        //    file's own directory. GetPathOfFileAbove includes the starting directory, so it finds THIS file
+        //    (a self-import) and never reaches the parent — it does not chain upward at all.
+        // GetPathOfFileAbove / GetDirectoryNameOfFileAbove also accept an ARBITRARY starting directory, e.g.
+        //   $([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(ExternalBuildRoot)'))
+        // which resolves a Directory.Build.props this walk never inspects (verified to pull in an external
+        // IsAspireHost=true under real MSBuild). Any of these non-immediate-parent shapes is left to the
+        // caller as "uncertain", keeping the project a candidate rather than risking a false negative.
         if (string.IsNullOrWhiteSpace(startDirectoryArg))
         {
-            return true;
+            return false;
         }
 
         var start = StripQuotes(startDirectoryArg).Trim();
-        if (start.Length == 0)
-        {
-            return true;
-        }
-
         const string thisFileDirectory = "$(MSBuildThisFileDirectory)";
         if (!start.StartsWith(thisFileDirectory, StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
 
-        // The remainder may only walk upward or stay put — '..', '../', '..\', '.', or trailing separators.
-        // A named path segment or another property could descend or jump out of the enumerated chain.
-        foreach (var c in start.AsSpan(thisFileDirectory.Length))
+        // The remainder must resolve to exactly one directory level up: a single '..' segment, plus any
+        // number of '.'/empty no-op segments. A second '..' skips past the immediate parent, and any named
+        // segment could descend or jump out of the enumerated chain — both disqualify the shortcut.
+        var upLevels = 0;
+        foreach (var rawSegment in start[thisFileDirectory.Length..].Split('/', '\\'))
         {
-            if (c is not ('.' or '/' or '\\') && !char.IsWhiteSpace(c))
+            switch (rawSegment.Trim())
             {
-                return false;
+                case "" or ".":
+                    continue;
+                case "..":
+                    if (++upLevels > 1)
+                    {
+                        return false;
+                    }
+                    continue;
+                default:
+                    return false;
             }
         }
 
-        return true;
+        return upLevels == 1;
     }
 
     private static bool TryGetStaticImportFileName(string projectAttributeValue, out string fileName)
@@ -499,17 +513,18 @@ internal sealed partial class DotNetAppHostProject : IAppHostProject
         // and re-open the false-negative window this fallback is meant to close.
         //
         // Special-case exact-cased conventional Directory.Build.props / Directory.Build.targets chaining
-        // that starts inside this file's own ancestor chain: lines such as
+        // whose walk-up begins at this file's own immediate parent: lines such as
         //   <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
         // appear in this repo's own src/Directory.Build.props, tests/Directory.Build.props, and
         // tests/Directory.Build.targets. The ancestor walk already enumerates Directory.Build.props
         // and Directory.Build.targets at every parent level by name, so the dynamic chain delivers
         // no content we cannot already see — and treating it as uncertain over-promotes every
-        // ordinary project under src/, tests/, etc. The shortcut is gated on IsChainFollowingStartDirectory
+        // ordinary project under src/, tests/, etc. The shortcut is gated on IsImmediateParentChainStart
         // because GetPathOfFileAbove accepts an arbitrary starting directory: a walk-up rooted at an
-        // external directory resolves a Directory.Build.props this walk never inspects and must stay a
-        // candidate. Non-conventional targets (RepoTesting.props, Shared.props, Aspire.Common.props, ...)
-        // and differently-cased targets on case-sensitive filesystems are still treated as uncertain.
+        // external directory (or one that skips levels) resolves a Directory.Build.props this walk never
+        // reliably inspects and must stay a candidate. Non-conventional targets (RepoTesting.props,
+        // Shared.props, Aspire.Common.props, ...) and differently-cased targets on case-sensitive
+        // filesystems are still treated as uncertain.
         // Docs: https://learn.microsoft.com/visualstudio/msbuild/property-functions#msbuild-property-functions
         foreach (var import in root.Descendants().Where(e => e.Name.LocalName.Equals("Import", StringComparison.Ordinal)))
         {
@@ -521,12 +536,13 @@ internal sealed partial class DotNetAppHostProject : IAppHostProject
 
             if (TryGetWalkUpTargetFileName(project, out var targetFileName, out var startDirectoryArg))
             {
-                // Only skip a conventional Directory.Build.* target when the walk-up starts inside this
-                // file's own ancestor chain — the range the ancestor walk enumerates by name. A
+                // Only skip a conventional Directory.Build.* target when the walk-up begins at this file's
+                // immediate parent — the exact level the ancestor walk visits next by name. A
                 // GetPathOfFileAbove('Directory.Build.props', '$(ExternalBuildRoot)') resolves a file
-                // OUTSIDE that chain (verified to pull in an external marker under real MSBuild), so the
-                // shortcut would be a false negative there. Fall through to "uncertain" instead.
-                if (IsConventionalDirectoryBuildFileName(targetFileName) && IsChainFollowingStartDirectory(startDirectoryArg))
+                // OUTSIDE that chain, and a level-skipping start (e.g. '$(MSBuildThisFileDirectory)../../')
+                // can reach a marker the nearest-file walk would miss — both verified against real MSBuild —
+                // so the shortcut would be a false negative there. Fall through to "uncertain" instead.
+                if (IsConventionalDirectoryBuildFileName(targetFileName) && IsImmediateParentChainStart(startDirectoryArg))
                 {
                     continue;
                 }
