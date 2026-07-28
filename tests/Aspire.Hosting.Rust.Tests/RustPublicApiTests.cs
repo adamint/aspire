@@ -51,8 +51,8 @@ public class RustPublicApiTests
     {
         var builder = DistributedApplication.CreateBuilder();
         var app = builder.AddRustApp("api", builder.AppHostDirectory)
-            .WithFeatures("tokio", "serde")
-            .WithBinTarget("worker");
+            .WithCargoFeatures("tokio", "serde")
+            .WithCargoBinTarget("worker");
 
         var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
 
@@ -66,28 +66,6 @@ public class RustPublicApiTests
         var app = builder.AddRustApp("api", builder.AppHostDirectory);
 
         Assert.True(app.Resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out _));
-    }
-
-    [Fact]
-    public void WithCargoFetchCreatesSetupResource()
-    {
-        var builder = DistributedApplication.CreateBuilder();
-        builder.AddRustApp("api", builder.AppHostDirectory).WithCargoFetch();
-        using var app = builder.Build();
-        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
-
-        Assert.Contains(model.Resources, resource => resource.Name == "api-cargo-fetch");
-    }
-
-    [Fact]
-    public void WithCargoCheckCreatesSetupResource()
-    {
-        var builder = DistributedApplication.CreateBuilder();
-        builder.AddRustApp("api", builder.AppHostDirectory).WithCargoCheck();
-        using var app = builder.Build();
-        var model = app.Services.GetRequiredService<DistributedApplicationModel>();
-
-        Assert.Contains(model.Resources, resource => resource.Name == "api-cargo-check");
     }
 
     [Fact]

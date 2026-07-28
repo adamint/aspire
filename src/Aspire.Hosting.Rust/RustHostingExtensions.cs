@@ -39,8 +39,7 @@ public static class RustHostingExtensions
         return builder.AddResource(resource)
             .WithArgs("run")
             .WithRequiredCommand("bacon", "https://dystroy.org/bacon/")
-            .WithOtlpExporter()
-            .WithRustCertificateTrustConfiguration();
+            .WithRustDefaults();
     }
 
     /// <summary>
@@ -65,6 +64,10 @@ public static class RustHostingExtensions
         var resource = new RustAppResource(name, appDirectory);
 
         return builder.AddResource(resource)
+            .WithRequiredCommand("cargo", "https://www.rust-lang.org/tools/install")
+            .WithRustDefaults()
+            .WithVSCodeDebugging()
+            .WithCargoArgs(context => AddInitialCargoArgs(resource, context.Args))
             .WithArgs(async context =>
             {
                 context.Args.Add("run");
@@ -76,10 +79,6 @@ public static class RustHostingExtensions
 
                 context.Args.Add("--");
             })
-            .WithRequiredCommand("cargo", "https://www.rust-lang.org/tools/install")
-            .WithOtlpExporter()
-            .WithRustCertificateTrustConfiguration()
-            .WithVSCodeDebugging()
             .PublishAsDockerFile(containerBuilder =>
             {
                 if (File.Exists(Path.Combine(appDirectory, "Dockerfile")))
@@ -183,11 +182,13 @@ public static class RustHostingExtensions
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
     /// <ats-returns>The resource builder.</ats-returns>
     [AspireExport]
-    public static IResourceBuilder<T> WithReleaseBuild<T>(this IResourceBuilder<T> builder)
+    public static IResourceBuilder<T> WithCargoReleaseBuild<T>(this IResourceBuilder<T> builder)
         where T : RustAppResource
     {
         ArgumentNullException.ThrowIfNull(builder);
-        return builder.WithCargoArgs("--release");
+
+        GetOrAddCargoOptions(builder).ReleaseBuild = true;
+        return builder;
     }
 
     /// <summary>
@@ -199,12 +200,14 @@ public static class RustHostingExtensions
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
     /// <ats-returns>The resource builder.</ats-returns>
     [AspireExport]
-    public static IResourceBuilder<T> WithFeatures<T>(this IResourceBuilder<T> builder, params string[] features)
+    public static IResourceBuilder<T> WithCargoFeatures<T>(this IResourceBuilder<T> builder, params string[] features)
         where T : RustAppResource
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(features);
-        return builder.WithCargoArgs("--features", string.Join(",", features));
+
+        GetOrAddCargoOptions(builder).Features = features;
+        return builder;
     }
 
     /// <summary>
@@ -216,78 +219,54 @@ public static class RustHostingExtensions
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
     /// <ats-returns>The resource builder.</ats-returns>
     [AspireExport]
-    public static IResourceBuilder<T> WithBinTarget<T>(this IResourceBuilder<T> builder, string binName)
+    public static IResourceBuilder<T> WithCargoBinTarget<T>(this IResourceBuilder<T> builder, string binName)
         where T : RustAppResource
     {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentException.ThrowIfNullOrWhiteSpace(binName);
-        return builder.WithCargoArgs("--bin", binName);
-    }
 
-    /// <summary>
-    /// Runs <c>cargo fetch</c> before starting the application to pre-fetch dependencies.
-    /// </summary>
-    /// <typeparam name="T">The resource type.</typeparam>
-    /// <param name="builder">The resource builder.</param>
-    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
-    /// <ats-returns>The resource builder.</ats-returns>
-    [AspireExport]
-    public static IResourceBuilder<T> WithCargoFetch<T>(this IResourceBuilder<T> builder)
-        where T : RustAppResource
-    {
-        ArgumentNullException.ThrowIfNull(builder);
-
-        if (builder.Resource.TryGetLastAnnotation<RustCargoFetchAnnotation>(out _))
-        {
-            return builder;
-        }
-
-        builder.WithAnnotation(new RustCargoFetchAnnotation());
-
-        if (builder.ApplicationBuilder.ExecutionContext.IsRunMode)
-        {
-            var fetchResource = new ExecutableResource($"{builder.Resource.Name}-cargo-fetch", "cargo", builder.Resource.WorkingDirectory);
-            var fetch = builder.ApplicationBuilder.AddResource(fetchResource)
-                .WithArgs("fetch")
-                .ExcludeFromManifest();
-
-            builder.WaitForCompletion(fetch);
-        }
-
+        GetOrAddCargoOptions(builder).BinTarget = binName;
         return builder;
     }
 
-    /// <summary>
-    /// Runs <c>cargo check</c> before starting the application to validate compilation.
-    /// </summary>
-    /// <typeparam name="T">The resource type.</typeparam>
-    /// <param name="builder">The resource builder.</param>
-    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
-    /// <ats-returns>The resource builder.</ats-returns>
-    [AspireExport]
-    public static IResourceBuilder<T> WithCargoCheck<T>(this IResourceBuilder<T> builder)
+    // Gets the resource's existing RustCargoOptionsAnnotation, or creates and attaches a new one. Callers mutate
+    // the returned instance's properties directly rather than adding a new annotation per call, so repeated
+    // WithCargo* calls (in any order) all end up configuring the same shared annotation instance.
+    private static RustCargoOptionsAnnotation GetOrAddCargoOptions<T>(IResourceBuilder<T> builder)
         where T : RustAppResource
     {
-        ArgumentNullException.ThrowIfNull(builder);
-
-        if (builder.Resource.TryGetLastAnnotation<RustCargoCheckAnnotation>(out _))
+        if (!builder.Resource.TryGetLastAnnotation<RustCargoOptionsAnnotation>(out var options))
         {
-            return builder;
+            options = new RustCargoOptionsAnnotation();
+            builder.WithAnnotation(options);
         }
 
-        builder.WithAnnotation(new RustCargoCheckAnnotation());
+        return options;
+    }
 
-        if (builder.ApplicationBuilder.ExecutionContext.IsRunMode)
+    private static void AddInitialCargoArgs(RustAppResource resource, IList<object> args)
+    {
+        if (!resource.TryGetLastAnnotation<RustCargoOptionsAnnotation>(out var options))
         {
-            var checkResource = new ExecutableResource($"{builder.Resource.Name}-cargo-check", "cargo", builder.Resource.WorkingDirectory);
-            var check = builder.ApplicationBuilder.AddResource(checkResource)
-                .WithArgs("check")
-                .ExcludeFromManifest();
-
-            builder.WaitForCompletion(check);
+            return;
         }
 
-        return builder;
+        if (options.Features is { Count: > 0 } features)
+        {
+            args.Add("--features");
+            args.Add(string.Join(",", features));
+        }
+
+        if (options.BinTarget is { } binTarget)
+        {
+            args.Add("--bin");
+            args.Add(binTarget);
+        }
+
+        if (options.ReleaseBuild)
+        {
+            args.Add("--release");
+        }
     }
 
     [Experimental("ASPIREEXTENSION001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
@@ -341,35 +320,24 @@ public static class RustHostingExtensions
 
     private static string ResolvePublishBinaryName(RustAppResource resource)
     {
-        var fallback = resource.Name;
-        var args = new List<object>();
-
-        foreach (var annotation in resource.Annotations.OfType<RustCargoArgsCallbackAnnotation>())
-        {
-            annotation.Callback(new RustCargoArgsCallbackContext(args)).GetAwaiter().GetResult();
-        }
-
-        for (var i = 0; i < args.Count - 1; i++)
-        {
-            if (args[i] is "--bin" && args[i + 1] is string binName && !string.IsNullOrWhiteSpace(binName))
-            {
-                return binName;
-            }
-        }
-
-        return fallback;
+        return resource.TryGetLastAnnotation<RustCargoOptionsAnnotation>(out var options) && options.BinTarget is { } binTarget
+            ? binTarget
+            : resource.Name;
     }
 
-    private static IResourceBuilder<TResource> WithRustCertificateTrustConfiguration<TResource>(this IResourceBuilder<TResource> builder)
+    // Common defaults shared by both Rust resource kinds (bacon and cargo apps): OTLP export plus
+    // certificate trust so outbound TLS calls made by the app pick up the dev/test certificate bundle.
+    private static IResourceBuilder<TResource> WithRustDefaults<TResource>(this IResourceBuilder<TResource> builder)
         where TResource : ExecutableResource
     {
-        return builder.WithCertificateTrustConfiguration(ctx =>
-        {
-            ctx.EnvironmentVariables["SSL_CERT_DIR"] = ctx.CertificateDirectoriesPath;
-            ctx.EnvironmentVariables["SSL_CERT_FILE"] = ctx.CertificateBundlePath;
+        return builder.WithOtlpExporter()
+            .WithCertificateTrustConfiguration(ctx =>
+            {
+                ctx.EnvironmentVariables["SSL_CERT_DIR"] = ctx.CertificateDirectoriesPath;
+                ctx.EnvironmentVariables["SSL_CERT_FILE"] = ctx.CertificateBundlePath;
 
-            return Task.CompletedTask;
-        });
+                return Task.CompletedTask;
+            });
     }
 }
 
