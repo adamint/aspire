@@ -223,6 +223,76 @@ suite('telemetry utilities', () => {
         assert.strictEqual(parsed.v['Aspire.Dashboard.UserAgent'], 'Browser C:\\Users\\<user>\\workspace');
     });
 
+    test('sendTelemetryEvent redacts standalone credential tokens that are not key=value assignments', () => {
+        // Item 1: VS Code's `TelemetryLogger.cleanData()` (bypassed on the dangerous send path)
+        // wipes standalone credential shapes — Google API keys, JWTs, Slack tokens, and GitHub
+        // PATs — that carry no `key=` prefix or `Bearer` header. Restore equivalent coverage so a
+        // bare token pasted into a command cannot leak verbatim.
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: 'auth AIzaSyA1234567890abcdefghijklmnopqrstuv eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0In0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U xoxb-1234567890-abcdefghij ghp_1234567890abcdefghijklmnopqrstuvwxyz github_pat_AAAAAAAAAAAAAAAAAAAAAA_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
+        });
+
+        assert.strictEqual(
+            fake.events[0].properties?.command,
+            'auth <redacted> <redacted> <redacted> <redacted> <redacted>');
+    });
+
+    test('sendTelemetryEvent redacts a standalone token nested inside a JSON dashboard bundle', () => {
+        // A credential can arrive as a leaf inside the `dashboard_properties` JSON bundle. Structural
+        // sanitization must redact it while keeping the bundle parseable.
+        sendTelemetryEvent('aspire/dashboard/operation', {
+            dashboard_event_name: 'aspire/dashboard/component/open',
+            result: 'success',
+            dashboard_properties: JSON.stringify({
+                v: {
+                    'Aspire.Dashboard.Token': 'ghp_1234567890abcdefghijklmnopqrstuvwxyz',
+                },
+            }),
+        });
+
+        const dashboardProperties = fake.events[0].properties?.dashboard_properties;
+        if (dashboardProperties === undefined) {
+            assert.fail('Expected dashboard_properties to be emitted.');
+        }
+        const parsed = JSON.parse(dashboardProperties);
+        assert.strictEqual(parsed.v['Aspire.Dashboard.Token'], '<redacted>');
+    });
+
+    test('sendTelemetryEvent redacts a secret in a JSON-escaped quoted value without corrupting JSON', () => {
+        // Item 2: `JSON.stringify({ x: 'token="secret"' })` is `{"x":"token=\"secret\""}`. A text-level
+        // `token=...` regex consumes only up to the escaped quote, leaking `secret` and leaving an
+        // unescaped quote that makes the bundle unparseable. Structural sanitization decodes the leaf
+        // first, so the secret is redacted and the JSON still parses.
+        const payload = JSON.stringify({ x: 'token="secret"' });
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: payload,
+        });
+
+        const sanitized = fake.events[0].properties?.command ?? '';
+        assert.strictEqual(sanitized, '{"x":"token=\\"<redacted>\\""}');
+        const parsed = JSON.parse(sanitized) as { x: string };
+        assert.strictEqual(parsed.x, 'token="<redacted>"');
+    });
+
+    test('sendTelemetryEvent redacts UNC network paths, including doubled separators in JSON bundles', () => {
+        // Item 4: VS Code's `cleanData()` treats UNC paths (`\\server\share\...`) as absolute paths.
+        // They have no drive letter, so the earlier fallback (drive-letter only) let them through. The
+        // bare form and the JSON-encoded form (every separator doubled) must both be redacted.
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: 'open \\\\server\\share\\customer\\project',
+        });
+        assert.strictEqual(fake.events[0].properties?.command, 'open <path>');
+
+        fake.events.length = 0;
+        const payload = JSON.stringify({ p: '\\\\server\\share\\customer\\project' });
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: payload,
+        });
+        const sanitized = fake.events[0].properties?.command ?? '';
+        const parsed = JSON.parse(sanitized) as { p: string };
+        assert.strictEqual(parsed.p, '<path>');
+    });
+
     test('sendTelemetryEvent redacts home usernames that contain spaces', () => {
         // The username is a single path segment that can legitimately contain spaces. Redaction must
         // consume the whole segment up to the next separator instead of stopping at the first space

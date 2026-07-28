@@ -316,13 +316,82 @@ function preservesStructuralTelemetryIds(key: string): boolean {
 }
 
 function sanitizeTelemetryValue(value: string, preserveGuids: boolean): string {
-    // Redact, in order: emails, home directories, then secret/token assignments.
+    // Dashboard passthrough properties (notably `dashboard_properties`) carry a JSON
+    // object/array bundle. Sanitize those STRUCTURALLY: parse, sanitize each leaf
+    // string, then re-stringify. Running the string sanitizer over the raw JSON text
+    // instead would both corrupt the JSON and leak secrets when a value contains a
+    // JSON-escaped quote. For example `JSON.stringify({ x: 'token="secret"' })` is
+    // `{"x":"token=\"secret\""}`; a text-level `token=...` regex consumes only up to
+    // the escaped quote, leaving `token=<redacted>"secret\""` — the secret survives
+    // and the JSON no longer parses. Decoding first means the leaf is the real string
+    // `token="secret"`, which sanitizes cleanly to `token="<redacted>"`.
+    const structural = trySanitizeJsonBundle(value, preserveGuids);
+    if (structural !== undefined) {
+        return structural;
+    }
+
+    return sanitizeScalarString(value, preserveGuids);
+}
+
+// Attempts to treat `value` as a JSON object/array bundle and sanitize its leaf
+// strings structurally. Returns `undefined` when the value is not a JSON container
+// (a bare scalar, or unparseable free-form text) so the caller falls back to the
+// string sanitizer. Only objects/arrays are handled here; a value that parses as a
+// bare JSON scalar (e.g. `"12345"` or `true`) is left to the scalar sanitizer so a
+// GUID- or path-shaped scalar is still redacted.
+function trySanitizeJsonBundle(value: string, preserveGuids: boolean): string | undefined {
+    const trimmed = value.trim();
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+        return undefined;
+    }
+
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(value);
+    }
+    catch {
+        return undefined;
+    }
+
+    if (parsed === null || typeof parsed !== 'object') {
+        return undefined;
+    }
+
+    return JSON.stringify(sanitizeJsonNode(parsed, preserveGuids));
+}
+
+function sanitizeJsonNode(node: unknown, preserveGuids: boolean): unknown {
+    if (typeof node === 'string') {
+        return sanitizeScalarString(node, preserveGuids);
+    }
+
+    if (Array.isArray(node)) {
+        return node.map(item => sanitizeJsonNode(item, preserveGuids));
+    }
+
+    if (node !== null && typeof node === 'object') {
+        // Preserve keys (they are property names, not user data) and sanitize values,
+        // mirroring how VS Code's `cleanData()` walks values via `cloneAndChange`.
+        const result: Record<string, unknown> = {};
+        for (const [key, child] of Object.entries(node)) {
+            result[key] = sanitizeJsonNode(child, preserveGuids);
+        }
+
+        return result;
+    }
+
+    return node;
+}
+
+function sanitizeScalarString(value: string, preserveGuids: boolean): string {
+    // Redact, in order: emails, standalone credential tokens, home directories, then
+    // secret/token assignments.
     // URL redaction runs LAST (see redactGenericFilesystemPaths' caller below) so that
     // an in-URL secret like `?sig=<value>` is first collapsed to `?sig=<redacted>` by
     // the secret pass and then the whole URL (host, path, query) is replaced by
     // `https://<redacted>`, leaving a single clean token rather than a doubled one.
-    const withoutSecrets = redactHomeDirectories(value
-        .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '<email>'))
+    const withoutSecrets = redactHomeDirectories(redactStandaloneTokens(value
+        .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '<email>')))
         .replace(/\b(password|passwd|pwd|token|secret|sig|api[_-]?key|client[_-]?secret|account[_-]?key|shared[_-]?access[_-]?key|sharedaccesskey|connection[_-]?string|connectionstring|key)(\s*[:=]\s*)(?:(["'])([^"']*)\3|([^&\s"',;}]+))/gi, (_match: string, key: string, separator: string, quote: string | undefined) => `${key}${separator}${quote ?? ''}<redacted>${quote ?? ''}`)
         .replace(/([?&]sig=)(?:(["'])([^"']*)\2|([^&\s"',;}]+))/gi, (_match: string, prefix: string, quote: string | undefined) => `${prefix}${quote ?? ''}<redacted>${quote ?? ''}`)
         .replace(/\b(authorization\s*:\s*bearer\s+)[^\s"',;}]+/gi, '$1<redacted>')
@@ -341,6 +410,28 @@ function sanitizeTelemetryValue(value: string, preserveGuids: boolean): string {
     }
 
     return sanitized.replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, '<guid>');
+}
+
+function redactStandaloneTokens(value: string): string {
+    // The `key=value` / `Bearer` passes below only catch credentials that appear as an
+    // assignment or an auth header. VS Code's `TelemetryLogger.cleanData()` (which the
+    // dangerous send path bypasses) ALSO wipes standalone credential shapes that carry
+    // no such prefix, so restore equivalent coverage here. Without this, a bare token
+    // pasted into a command or nested inside a `dashboard_properties` bundle would reach
+    // the sender verbatim. Patterns mirror VS Code's `userDataRegexes`:
+    // https://github.com/microsoft/vscode/blob/main/src/vs/platform/telemetry/common/telemetryUtils.ts
+    return value
+        // Google API key, e.g. `AIzaSyA...` (39 chars total). No trailing anchor, matching
+        // VS Code, so a key immediately followed by other characters is still redacted.
+        .replace(/\bAIza[A-Za-z0-9_-]{35}/g, '<redacted>')
+        // GitHub tokens: PATs (`ghp_`), OAuth (`gho_`), user-to-server (`ghu_`),
+        // server-to-server (`ghs_`), refresh (`ghr_`), and fine-grained (`github_pat_`).
+        .replace(/\b(?:gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9]{22}_[A-Za-z0-9]{59})/g, '<redacted>')
+        // Slack tokens, e.g. `xoxb-...`, `xoxp-...`.
+        .replace(/\bxox[pboar]-[A-Za-z0-9-]+/gi, '<redacted>')
+        // JSON Web Tokens / Microsoft Entra ID tokens: three base64url segments that
+        // begin with the `eyJ` (`{"`) header prefix.
+        .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '<redacted>');
 }
 
 function redactUrls(value: string): string {
@@ -368,6 +459,13 @@ function redactGenericFilesystemPaths(value: string): string {
     // dashboard event name `aspire/dashboard/component/open` are intentionally NOT
     // matched because they are not absolute paths.
     return value
+        // UNC network paths, e.g. `\\server\share\customer\project`. These have no drive
+        // letter (so the Windows pass below never matches them) and VS Code's `cleanData()`
+        // treats them as absolute paths. Match the leading run of two-or-more backslashes so
+        // JSON-encoded bundles (`\\\\server\\share\\...`, with every separator doubled) are
+        // covered too. Require at least a host plus one more segment so a lone `\\` is left
+        // intact, and keep the preceding boundary character.
+        .replace(/(^|[\s"'=(,|])\\{2,}[^\\/\s"'<>:;,|]+(?:\\+[^\\/\s"'<>:;,|]*)+/g, (_match: string, prefix: string) => `${prefix}<path>`)
         // Windows absolute paths outside the user's home tree. Segments may be
         // separated by one or more backslashes so JSON-encoded values like
         // `D:\\Work\\proj` are handled. The user's `C:\Users\<user>\...` tree is

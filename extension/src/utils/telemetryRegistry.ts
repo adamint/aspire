@@ -268,5 +268,4 @@ export type CommonTelemetryProperties = Partial<Record<CommonTelemetryProperty, 
 //   - aspire/dashboard/component/dispose
 //   - aspire/dashboard/error
 //   - aspire/dashboard/command
-//   - aspire/dashboard/aiassistant/feedback
 // ─────────────────────────────────────────────────────────────────────────────
