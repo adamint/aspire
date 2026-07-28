@@ -10,6 +10,7 @@ import * as cliPathModule from '../utils/cliPath';
 import * as configInfoProvider from '../utils/configInfoProvider';
 import { AppHostDataRepository, shortenPath, shortenPaths } from '../views/AppHostDataRepository';
 import { AspireAppHostTreeProvider, getResourceContextValue, getResourceIcon, getResourceCommandIcon, resolveAppHostSourcePath, buildResourceDescription } from '../views/AspireAppHostTreeProvider';
+import type { Clipboard } from '../views/AspireAppHostTreeProvider';
 import type { AppHostDisplayInfo, ResourceJson, ViewMode } from '../views/AppHostDataRepository';
 import { ResourceCommandInputType } from '../views/AppHostDataRepository';
 import { ResourceState, HealthStatus, StateStyle } from '../editor/resourceConstants';
@@ -62,6 +63,21 @@ function makeTerminalProvider(): AspireTerminalProvider {
         createEnvironment: () => ({}),
         sendAspireCommandToAspireTerminal: () => { },
     } as unknown as AspireTerminalProvider;
+}
+
+interface FakeClipboard extends Clipboard {
+    text: string | undefined;
+}
+
+// Deterministic in-memory clipboard so copy actions can be verified without touching the real OS
+// clipboard, which is unavailable on headless CI and corrupted by concurrent test execution.
+function makeClipboard(): FakeClipboard {
+    return {
+        text: undefined,
+        async writeText(value: string): Promise<void> {
+            this.text = value;
+        },
+    };
 }
 
 function makeTreeProvider(appHosts: readonly AppHostDisplayInfo[], viewMode: ViewMode = 'global', workspaceAppHostDescription?: string): AspireAppHostTreeProvider {
@@ -2875,7 +2891,6 @@ suite('copyAppHostPath', () => {
     });
 
     test('copies the workspace AppHost path and shows a confirmation notification', async () => {
-        const previousClipboard = await vscode.env.clipboard.readText();
         const appHostPath = path.resolve('workspace', 'apps', 'Store', 'AppHost.csproj');
         const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
         const repository = {
@@ -2888,49 +2903,48 @@ suite('copyAppHostPath', () => {
             workspaceAppHostDescription: undefined,
             onDidChangeData,
         } as unknown as AppHostDataRepository;
-        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
-        // vscode.env.clipboard.writeText is non-configurable, so exercise the real clipboard and read
-        // it back rather than stubbing it. Seed a sentinel first so a matching read proves the copy ran.
+        const clipboard = makeClipboard();
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), undefined, clipboard);
         try {
-            await vscode.env.clipboard.writeText('sentinel-before-copy');
             const infoStub = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
             const [appHostItem] = provider.getChildren();
             assert.strictEqual(appHostItem.contextValue, 'workspaceAppHost');
             await provider.copyAppHostPath(appHostItem as any);
 
-            assert.strictEqual(await vscode.env.clipboard.readText(), appHostPath);
+            assert.strictEqual(clipboard.text, appHostPath);
             assert.strictEqual(infoStub.callCount, 1);
             assert.strictEqual(infoStub.firstCall.args[0], appHostPathCopiedToClipboard);
         } finally {
-            try {
-                await vscode.env.clipboard.writeText(previousClipboard);
-            } finally {
-                provider.dispose();
-            }
+            provider.dispose();
         }
     });
 
     test('shows a warning and skips the notification when the AppHost path is missing', async () => {
-        const previousClipboard = await vscode.env.clipboard.readText();
-        const provider = makeTreeProvider([]);
+        const clipboard = makeClipboard();
+        const repository = {
+            viewMode: 'global' as ViewMode,
+            appHosts: [],
+            workspaceResources: [],
+            workspaceAppHostPath: undefined,
+            workspaceAppHostCandidatePaths: [],
+            workspaceAppHostName: undefined,
+            workspaceAppHostDescription: undefined,
+            onDidChangeData: (() => ({ dispose: () => { } })) as vscode.Event<void>,
+        } as unknown as AppHostDataRepository;
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService(), undefined, clipboard);
         try {
-            await vscode.env.clipboard.writeText('sentinel-unchanged');
             const infoStub = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
             const warningStub = sandbox.stub(vscode.window, 'showWarningMessage').resolves(undefined as any);
 
             await provider.copyAppHostPath({ appHostPath: undefined } as any);
 
-            assert.strictEqual(await vscode.env.clipboard.readText(), 'sentinel-unchanged');
+            assert.strictEqual(clipboard.text, undefined);
             assert.strictEqual(infoStub.callCount, 0);
             assert.ok(warningStub.calledOnce);
             assert.strictEqual(warningStub.firstCall.args[0], appHostPathInvalid);
         } finally {
-            try {
-                await vscode.env.clipboard.writeText(previousClipboard);
-            } finally {
-                provider.dispose();
-            }
+            provider.dispose();
         }
     });
 });

@@ -593,6 +593,16 @@ function buildResourceTooltip(resource: ResourceJson): vscode.MarkdownString {
 }
 
 /**
+ * Minimal clipboard abstraction used by tree actions. Depending on the concrete
+ * `vscode.env.clipboard` in unit tests is flaky: it is unavailable on headless CI and remote
+ * containers and gets corrupted by concurrent test execution. Injecting this seam lets tests
+ * observe the copied value deterministically without touching the real OS clipboard.
+ */
+export interface Clipboard {
+    writeText(value: string): Thenable<void>;
+}
+
+/**
  * Pure tree-view renderer.  All data comes from the AppHostDataRepository;
  * this class handles only tree rendering and resource command execution.
  */
@@ -622,6 +632,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
         private readonly _terminalProvider: AspireTerminalProvider,
         private readonly _launchService: AppHostLaunchService,
         private readonly _secretWarningState?: vscode.Memento,
+        private readonly _clipboard: Clipboard = vscode.env.clipboard,
     ) {
         this._dataSubscription = this._repository.onDidChangeData(() => {
             this._clearLaunchingPathsForRunningAppHosts();
@@ -1560,7 +1571,7 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             vscode.window.showWarningMessage(appHostPathInvalid);
             return;
         }
-        await vscode.env.clipboard.writeText(appHostPath);
+        await this._clipboard.writeText(appHostPath);
         vscode.window.showInformationMessage(appHostPathCopiedToClipboard);
     }
 
@@ -1580,16 +1591,16 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     }
 
     async copyLogFilePath(element: LogFileItem): Promise<void> {
-        await vscode.env.clipboard.writeText(element.logFilePath);
+        await this._clipboard.writeText(element.logFilePath);
     }
 
     async copyEndpointUrl(element: EndpointUrlItem): Promise<void> {
-        await vscode.env.clipboard.writeText(element.url);
+        await this._clipboard.writeText(element.url);
     }
 
     async copyResourceName(element: ResourceItem): Promise<void> {
         const name = element.resource.displayName ?? element.resource.name;
-        await vscode.env.clipboard.writeText(name);
+        await this._clipboard.writeText(name);
     }
 
     async viewAppHostSource(element?: AppHostItem | WorkspaceResourcesItem): Promise<void> {

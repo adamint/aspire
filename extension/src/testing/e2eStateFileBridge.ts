@@ -642,18 +642,23 @@ async function assertExpectedClipboardText(expectation: E2eClipboardExpectation)
 
   const expectedText = expectation.text;
   const comparison = expectation.comparison ?? 'exact';
-  expectation.text = undefined;
-  expectation.comparison = undefined;
 
+  // Read and compare before clearing the expectation. Clearing early (as this previously did)
+  // loses the expected value if readText() throws or the comparison fails, which makes failures
+  // hard to diagnose and prevents a retry without re-capturing the expectation.
   const clipboardText = await vscode.env.clipboard.readText();
   const matches = comparison === 'path'
     ? isSamePath(clipboardText, expectedText)
     : clipboardText === expectedText;
   if (!matches) {
     throw new Error(comparison === 'path'
-      ? 'E2E clipboard path did not match the expected path.'
-      : 'E2E clipboard text did not match the expected text.');
+      ? `E2E clipboard path did not match the expected path. Expected: '${expectedText}', actual: '${clipboardText}'.`
+      : `E2E clipboard text did not match the expected text. Expected: '${expectedText}', actual: '${clipboardText}'.`);
   }
+
+  // Only clear once the assertion has succeeded so a failing assertion can be retried.
+  expectation.text = undefined;
+  expectation.comparison = undefined;
 }
 
 function getE2eLaunchConfiguration(value: unknown): ExecutableLaunchConfiguration {

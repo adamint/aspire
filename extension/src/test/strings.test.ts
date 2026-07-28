@@ -33,7 +33,13 @@ suite('utils/strings tests', () => {
         };
 
         for (const [name, value] of Object.entries(expectedStrings)) {
-            assert.ok(stringsSource.includes(`export const ${name} = vscode.l10n.t('${value}');`));
+            // Match the declaration tolerantly (whitespace and quote-style agnostic) rather than
+            // asserting an exact source substring, which broke on harmless refactors. The literal
+            // value is regex-escaped so it still fails if the registered string changes.
+            const escapedValue = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const declaration = new RegExp(
+                `export\\s+const\\s+${name}\\s*=\\s*vscode\\.l10n\\.t\\(\\s*(['"\`])${escapedValue}\\1\\s*\\)`);
+            assert.match(stringsSource, declaration, `Expected ${name} to be registered in strings.ts with the value "${value}".`);
             assert.strictEqual(packageNls[`aspire-vscode.strings.${name}`], value);
         }
     });
