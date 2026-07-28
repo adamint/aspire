@@ -30,9 +30,6 @@ namespace Aspire.Cli.Projects;
 /// </summary>
 internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGenerator
 {
-    private const string TypeScriptAppHostFileName = "apphost.ts";
-    private const string TypeScriptMtsAppHostFileName = "apphost.mts";
-
     private readonly IInteractionService _interactionService;
     private readonly IAppHostCliBackchannel _backchannel;
     private readonly IAppHostServerProjectFactory _appHostServerProjectFactory;
@@ -437,6 +434,7 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
                 launchProfileEnvironmentVariables,
                 defaultEnvironment: AppHostEnvironmentDefaults.DevelopmentEnvironmentName,
                 args: context.UnmatchedTokens);
+            launchSettingsEnvVars[KnownConfigNames.DcpWorkloadId] = AppHostWorkloadId.Create(appHostFile);
 
             // Apply certificate environment variables (e.g., SSL_CERT_DIR on Linux)
             foreach (var kvp in certEnvVars)
@@ -1271,8 +1269,8 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
                 // The real error is in the AppHost output, not this connection-level detail.
                 _logger.LogDebug("AppHost server process has exited with code {ExitCode}. Unable to connect to backchannel at {SocketPath}", exitCode, socketPath);
                 var message = exitCode == CliExitCodes.Success
-                    ? "AppHost server process has exited"
-                    : "AppHost server process has exited unexpectedly";
+                    ? "The AppHost server process exited"
+                    : $"The AppHost server process exited unexpectedly with exit code {exitCode}";
                 var backchannelException = new FailedToConnectBackchannelConnection(message, ex);
                 activity.SetError(backchannelException);
                 backchannelCompletionSource.TrySetException(backchannelException);
@@ -1574,6 +1572,13 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         {
             files = ConvertGeneratedFilesForLegacyTypeScriptAppHost(files);
             outputPath = Path.Combine(appPath, LanguageInfo.LegacyGeneratedFolderName);
+
+            // Nudge the user toward the modern `apphost.mts` layout. The legacy layout keeps
+            // working, so this is a single, non-blocking warning that points at `aspire update --migrate`.
+            _interactionService.DisplayMessage(
+                KnownEmojis.Warning,
+                $"[yellow]{Markup.Escape(ErrorStrings.LegacyTypeScriptAppHostWarning)}[/]",
+                allowMarkup: true);
         }
 
         // Write generated files to the output directory
@@ -1631,9 +1636,8 @@ internal sealed class GuestAppHostProject : IAppHostProject, IGuestAppHostSdkGen
         }
 
         return appHostFile is not null
-            ? appHostFile.Name.Equals(TypeScriptAppHostFileName, StringComparison.OrdinalIgnoreCase)
-            : File.Exists(Path.Combine(appPath, TypeScriptAppHostFileName)) &&
-                !File.Exists(Path.Combine(appPath, TypeScriptMtsAppHostFileName));
+            ? LegacyTypeScriptAppHost.IsLegacyAppHostFile(appHostFile)
+            : LegacyTypeScriptAppHost.IsLegacyLayout(appPath);
     }
 
     /// <summary>

@@ -115,6 +115,15 @@
     <trans-unit id="aspire-vscode.strings.codespacesUrl">
       <source xml:lang="en">Codespaces: {0}</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.resourceCommandSucceeded">
+      <source xml:lang="en">Command &apos;{0}&apos; completed on &apos;{1}&apos;.</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.resourceCommandFailedNoDetail">
+      <source xml:lang="en">Command &apos;{0}&apos; on &apos;{1}&apos; failed.</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.resourceCommandFailed">
+      <source xml:lang="en">Command &apos;{0}&apos; on &apos;{1}&apos; failed: {2}</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.commandsLabel">
       <source xml:lang="en">Commands</source>
     </trans-unit>
@@ -316,6 +325,9 @@
     <trans-unit id="aspire-vscode.strings.failedToStartProject">
       <source xml:lang="en">Failed to start project: {0}.</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.aspireCliPathEnvironmentDescription">
+      <source xml:lang="en">Forwards aspire.aspireCliExecutablePath as AspireCliPath so MSBuild bundle resolution and integrated terminals use the configured Aspire CLI.</source>
+    </trans-unit>
     <trans-unit id="walkthrough.getStarted.title">
       <source xml:lang="en">Get started with Aspire</source>
     </trans-unit>
@@ -366,6 +378,9 @@
     </trans-unit>
     <trans-unit id="configuration.aspire.dashboardBrowser.debugEdge">
       <source xml:lang="en">Launch Microsoft Edge as a debug session (auto-closes when debugging ends).</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.executableLaunchProfileMissingExecutablePath">
+      <source xml:lang="en">Launch profile &apos;{0}&apos; uses commandName &apos;Executable&apos; but does not specify an executablePath. Add an executablePath to the launch profile.</source>
     </trans-unit>
     <trans-unit id="extension.debug.defaultConfiguration.description">
       <source xml:lang="en">Launch the effective Aspire AppHost in your workspace</source>
@@ -500,7 +515,10 @@
       <source xml:lang="en">Path to the AppHost to run</source>
     </trans-unit>
     <trans-unit id="configuration.aspire.globalAppHostsPollingInterval">
-      <source xml:lang="en">Polling interval in milliseconds for fetching all running AppHosts (used in global view). Minimum: 1000.</source>
+      <source xml:lang="en">Polling interval in milliseconds for fetching running AppHosts. Minimum: 1000.</source>
+    </trans-unit>
+    <trans-unit id="configuration.aspire.appHostsPollingInterval">
+      <source xml:lang="en">Polling interval in milliseconds for fetching running AppHosts. Minimum: 1000.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.processExitedWithCode">
       <source xml:lang="en">Process exited with code {0}.</source>
@@ -552,6 +570,9 @@
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.runProject">
       <source xml:lang="en">Run {0}</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.resourceCommandRunning">
+      <source xml:lang="en">Running &apos;{0}&apos; on &apos;{1}&apos;...</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.runningAppHostsGroupLabel">
       <source xml:lang="en">Running AppHosts</source>
@@ -643,6 +664,9 @@
     <trans-unit id="extension.debug.command">
       <source xml:lang="en">The Aspire CLI command to execute (run, deploy, publish, or do)</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.resourceCommandCliNotInstalled">
+      <source xml:lang="en">The Aspire CLI could not be started: {0}</source>
+    </trans-unit>
     <trans-unit id="walkthrough.getStarted.installCli.description">
       <source xml:lang="en">The Aspire CLI creates, runs, and manages your applications. Choose a package manager to install it — or open the guide for every option, including the install script.&#10;&#10;[Install the Aspire CLI](command:aspire-vscode.installCli)</source>
     </trans-unit>
@@ -661,6 +685,12 @@
     <trans-unit id="views.appHosts.errorWelcome">
       <source xml:lang="en">The Aspire panel workspace view requires Aspire CLI 13.2.0 or newer and an AppHost that references Aspire.Hosting 13.2.0 or newer. Install or update the Aspire CLI and update your AppHost package to get started.&#10;[Update Aspire CLI](command:aspire-vscode.updateSelf)&#10;[Refresh](command:aspire-vscode.globalRefreshAppHosts)</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.resourceCommandOutputOpenFailed">
+      <source xml:lang="en">The command completed, but its output could not be opened: {0}</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.dotNetRunFileBasedExecutableProfileFallback">
+      <source xml:lang="en">The default launch profile &apos;{0}&apos; is an Executable profile, so dotnet run-api does not return the file-based app {1}; launching it with dotnet run without debugger attach. Breakpoints will not be hit for this resource.</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.dashboardLaunchNoneDescription">
       <source xml:lang="en">The dashboard URL is still printed in the terminal and available from the Aspire panel.</source>
     </trans-unit>
@@ -674,10 +704,13 @@
       <source xml:lang="en">This command has dynamic inputs that the Aspire extension cannot prompt for yet. Run it from the Aspire Dashboard or Aspire CLI instead.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.resourceCommandSecretWarning">
-      <source xml:lang="en">This command has secret arguments. Values are masked while you enter them, but they are passed to the Aspire CLI terminal and may be visible in terminal history or scrollback.</source>
+      <source xml:lang="en">This command has secret arguments. Values are masked while you enter them, but they are passed to the Aspire CLI as command-line arguments and may briefly be visible to other processes on this machine.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.fieldRequired">
       <source xml:lang="en">This field is required.</source>
+    </trans-unit>
+    <trans-unit id="configuration.aspire.globalAppHostsPollingInterval.deprecated">
+      <source xml:lang="en">This setting has been renamed to aspire.appHostsPollingInterval.</source>
     </trans-unit>
     <trans-unit id="configuration.aspire.appHostDiscoveryTimeoutMs">
       <source xml:lang="en">Timeout in milliseconds for Aspire CLI commands that discover AppHost projects. Minimum: 1000.</source>
@@ -765,6 +798,9 @@
     </trans-unit>
     <trans-unit id="walkthrough.getStarted.nextSteps.description">
       <source xml:lang="en">You&apos;re all set! Add integrations for databases, messaging, and cloud services, or deploy your app to production.&#10;&#10;[Add an integration](command:aspire-vscode.add)&#10;&#10;[Open Aspire docs](https://aspire.dev/docs/)</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.aspireCommandOutputTruncated">
+      <source xml:lang="en">[Aspire command output truncated to {0} characters. Showing the beginning and end of the output.]</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.appHostPathMustBeNonEmptyAbsolute">
       <source xml:lang="en">appHostPath must be a non-empty absolute path</source>
