@@ -1,7 +1,11 @@
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import type { TelemetryReporter } from '@vscode/extension-telemetry';
+import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { __resetCommonPropertiesForTests, __resetTelemetryReporterFactoryForTests, __setReporterForTests, __setTelemetryReporterFactoryForTests, classifyError, initializeTelemetry, isCommandCancellation, sendTelemetryErrorEvent, sendTelemetryEvent, setCommandInvocationListener, setCommonTelemetryProperties, withCommandTelemetry } from '../utils/telemetry';
+import { __detectTelemetryLoggingOnlyForTests, __resetCommonPropertiesForTests, __resetTelemetryClientVersionProviderForTests, __resetTelemetryLoggingModeForTests, __resetTelemetryReporterFactoryForTests, __setReporterForTests, __setTelemetryClientVersionProviderForTests, __setTelemetryLoggingOnlyForTests, __setTelemetryReporterFactoryForTests, classifyError, initializeTelemetry, isCommandCancellation, sendTelemetryErrorEvent, sendTelemetryEvent, setCommandInvocationListener, setCommonTelemetryProperties, withCommandTelemetry } from '../utils/telemetry';
 
 interface RecordedEvent {
     name: string;
@@ -12,6 +16,18 @@ interface RecordedEvent {
 }
 
 type TelemetryLevel = 'all' | 'error' | 'crash' | 'off';
+
+function readJsonFile<T>(filePath: string): T {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8')) as T;
+}
+
+function getExtensionTelemetryPackageVersion(): string {
+    const extensionRoot = path.resolve(__dirname, '..', '..');
+    const extensionPackage = readJsonFile<{ dependencies?: Record<string, string> }>(path.join(extensionRoot, 'package.json'));
+    const telemetryPackage = readJsonFile<{ version: string }>(path.join(extensionRoot, 'node_modules', '@vscode', 'extension-telemetry', 'package.json'));
+    assert.strictEqual(extensionPackage.dependencies?.['@vscode/extension-telemetry'], telemetryPackage.version);
+    return telemetryPackage.version;
+}
 
 // A minimal fake TelemetryReporter that records calls and exposes
 // `telemetryLevel`. The extension routes telemetry through
@@ -59,6 +75,8 @@ suite('telemetry utilities', () => {
         setCommandInvocationListener(undefined);
         restore();
         __resetTelemetryReporterFactoryForTests();
+        __resetTelemetryClientVersionProviderForTests();
+        __resetTelemetryLoggingModeForTests();
         __resetCommonPropertiesForTests();
     });
 
@@ -133,25 +151,60 @@ suite('telemetry utilities', () => {
 
     test('sendTelemetryEvent sanitizes property values before the dangerous send path', () => {
         sendTelemetryEvent('aspire/vscode/command/invoked', {
-            command: 'cmd.leak user@example.com /Users/alice/source C:\\Users\\bob\\source --token=secret',
+            command: 'cmd.leak user@example.com /Users/alice/source C:\\Users\\bob\\source --token=secret client_secret=secret connectionstring=secret https://storage.example/?sig=signature Authorization: Bearer abc.def-ghi 4fd8856f-0fc4-4c65-9074-c234c5a0898b',
         });
 
         assert.strictEqual(
             fake.events[0].properties?.command,
-            'cmd.leak <email> /Users/<user>/source C:\\Users\\<user>\\source --token=<redacted>');
+            'cmd.leak <email> /Users/<user>/source C:\\Users\\<user>\\source --token=<redacted> client_secret=<redacted> connectionstring=<redacted> https://<redacted> Authorization: Bearer <redacted> <guid>');
     });
 
-    test('sendTelemetryEvent sanitizes URI-prefixed and space-containing home paths', () => {
+    test('sendTelemetryEvent redacts arbitrary URL hosts and non-home filesystem paths', () => {
+        // Item 1: the manual sanitizer replaces the `TelemetryLogger.cleanData()` that the dangerous
+        // send path bypasses. cleanData strips whole URLs and absolute paths, so a private host such
+        // as `https://storage.example/...` or a workspace path such as `/mnt/customer/project` must
+        // not survive. Only the URL scheme is kept for coarse analytics.
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: 'open https://storage.example/container/blob?x=1 file:///opt/data /mnt/customer/project D:\\Work\\customer\\proj',
+        });
+
+        assert.strictEqual(
+            fake.events[0].properties?.command,
+            'open https://<redacted> file://<redacted> <path> <path>');
+    });
+
+    test('sendTelemetryEvent redacts URI-prefixed values and home paths inside them', () => {
+        // Custom/remote schemes (`file://`, `vscode-remote://`) must be redacted just like http(s):
+        // the whole URL is replaced (scheme kept) so a private remote host/authority cannot leak. A
+        // non-URL Windows home path in the same value is still redacted to `<user>`.
         sendTelemetryEvent('aspire/vscode/command/invoked', {
             command: 'cmd.leak file:///Users/alice/source vscode-remote://ssh-remote+devbox/home/bob/source C:\\Users\\Bob Smith\\source',
         });
 
         assert.strictEqual(
             fake.events[0].properties?.command,
-            'cmd.leak file:///Users/<user>/source vscode-remote://ssh-remote+devbox/home/<user>/source C:\\Users\\<user>\\source');
+            'cmd.leak file://<redacted> vscode-remote://<redacted> C:\\Users\\<user>\\source');
+    });
+
+    test('sendTelemetryEvent keeps sanitized JSON dashboard values parseable', () => {
+        // Dashboard passthrough values cross a JSON boundary. Redaction must not corrupt the JSON: a
+        // backslash-encoded Windows home path (`C:\\Users\\...`) must keep its doubled separators and
+        // the string must still parse after the host/path redaction runs.
+        const payload = JSON.stringify({ userAgent: 'Browser C:\\Users\\bob\\workspace', endpoint: 'https://acct.blob.core/container?sig=x' });
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: payload,
+        });
+
+        const sanitized = fake.events[0].properties?.command ?? '';
+        const parsed = JSON.parse(sanitized) as { userAgent: string; endpoint: string };
+        assert.strictEqual(parsed.userAgent, 'Browser C:\\Users\\<user>\\workspace');
+        assert.strictEqual(parsed.endpoint, 'https://<redacted>');
     });
 
     test('sendTelemetryEvent sanitizes JSON-encoded dashboard bundle values without corrupting JSON', () => {
+        // The dashboard passthrough emits its properties bundle as a JSON string in
+        // `dashboard_properties`. Sanitization must redact the embedded home path while keeping the
+        // doubled backslashes so the bundle still parses downstream.
         sendTelemetryEvent('aspire/dashboard/operation', {
             dashboard_event_name: 'aspire/dashboard/component/open',
             result: 'success',
@@ -170,6 +223,164 @@ suite('telemetry utilities', () => {
         assert.strictEqual(parsed.v['Aspire.Dashboard.UserAgent'], 'Browser C:\\Users\\<user>\\workspace');
     });
 
+    test('sendTelemetryEvent redacts home usernames that contain spaces', () => {
+        // The username is a single path segment that can legitimately contain spaces. Redaction must
+        // consume the whole segment up to the next separator instead of stopping at the first space
+        // (which previously leaked the rest of the username, e.g. `.../<user> Smith/project`).
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: 'posix /Users/Alice Smith/project win C:\\Users\\Alice Smith\\project home /home/Alice Smith/project',
+        });
+
+        assert.strictEqual(
+            fake.events[0].properties?.command,
+            'posix /Users/<user>/project win C:\\Users\\<user>\\project home /home/<user>/project');
+    });
+
+    test('sendTelemetryEvent redacts exact home directories that contain spaces', () => {
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: '/Users/Alice Smith',
+        });
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: 'C:\\Users\\Alice Smith',
+        });
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: '/home/Alice Smith',
+        });
+
+        assert.strictEqual(fake.events[0].properties?.command, '/Users/<user>');
+        assert.strictEqual(fake.events[1].properties?.command, 'C:\\Users\\<user>');
+        assert.strictEqual(fake.events[2].properties?.command, '/home/<user>');
+    });
+
+    test('sendTelemetryEvent redacts embedded terminal home directories that contain spaces', () => {
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: 'cwd=/Users/Alice Smith --flag',
+        });
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: 'cwd="C:\\Users\\Alice Smith" --flag',
+        });
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: 'cwd=/home/Alice Smith',
+        });
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: 'cwd=/Users/Alice Smith -f',
+        });
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: 'cwd=/Users/Alice Bob Carol Dave --flag',
+        });
+
+        assert.strictEqual(fake.events[0].properties?.command, 'cwd=/Users/<user> --flag');
+        assert.strictEqual(fake.events[1].properties?.command, 'cwd="C:\\Users\\<user>" --flag');
+        assert.strictEqual(fake.events[2].properties?.command, 'cwd=/home/<user>');
+        assert.strictEqual(fake.events[3].properties?.command, 'cwd=/Users/<user> -f');
+        assert.strictEqual(fake.events[4].properties?.command, 'cwd=/Users/<user> --flag');
+    });
+
+    test('sendTelemetryEvent redacts the current home directory before shell and punctuation boundaries', () => {
+        const originalHome = process.env.HOME;
+        const originalUserProfile = process.env.USERPROFILE;
+        const homeDirectory = process.platform === 'win32' ? 'C:\\Users\\Alice Smith' : '/Users/Alice Smith';
+        const expectedHomeDirectory = process.platform === 'win32' ? 'C:\\Users\\<user>' : '/Users/<user>';
+
+        try {
+            if (process.platform === 'win32') {
+                process.env.USERPROFILE = homeDirectory;
+            }
+            else {
+                process.env.HOME = homeDirectory;
+            }
+
+            sendTelemetryEvent('aspire/vscode/command/invoked', {
+                command: `open ${homeDirectory} | cat`,
+            });
+            sendTelemetryEvent('aspire/vscode/command/invoked', {
+                command: `path is ${homeDirectory}, ok building ${homeDirectory} failed`,
+            });
+
+            assert.strictEqual(fake.events[0].properties?.command, `open ${expectedHomeDirectory} | cat`);
+            assert.strictEqual(fake.events[1].properties?.command, `path is ${expectedHomeDirectory}, ok building ${expectedHomeDirectory} failed`);
+        }
+        finally {
+            if (originalHome === undefined) {
+                delete process.env.HOME;
+            }
+            else {
+                process.env.HOME = originalHome;
+            }
+
+            if (originalUserProfile === undefined) {
+                delete process.env.USERPROFILE;
+            }
+            else {
+                process.env.USERPROFILE = originalUserProfile;
+            }
+        }
+    });
+
+    test('sendTelemetryEvent redacts exact Windows current home directories before punctuation and words', () => {
+        const originalHome = process.env.HOME;
+        const originalUserProfile = process.env.USERPROFILE;
+
+        try {
+            process.env.HOME = 'C:\\Users\\Alice Smith';
+            process.env.USERPROFILE = 'C:\\Users\\Alice Smith';
+
+            sendTelemetryEvent('aspire/vscode/command/invoked', {
+                command: 'path is C:\\Users\\Alice Smith, ok building C:\\Users\\Alice Smith failed',
+            });
+
+            assert.strictEqual(fake.events[0].properties?.command, 'path is C:\\Users\\<user>, ok building C:\\Users\\<user> failed');
+        }
+        finally {
+            if (originalHome === undefined) {
+                delete process.env.HOME;
+            }
+            else {
+                process.env.HOME = originalHome;
+            }
+
+            if (originalUserProfile === undefined) {
+                delete process.env.USERPROFILE;
+            }
+            else {
+                process.env.USERPROFILE = originalUserProfile;
+            }
+        }
+    });
+
+    test('sendTelemetryEvent redacts quoted secrets', () => {
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: '--token="secret" token=\'secret\' password=\'secret\' https://storage.example/?sig="signature"&next=1',
+        });
+
+        assert.strictEqual(
+            fake.events[0].properties?.command,
+            '--token="<redacted>" token=\'<redacted>\' password=\'<redacted>\' https://<redacted>"<redacted>"&next=1');
+    });
+
+    test('sendTelemetryEvent redacts quoted secrets that contain spaces', () => {
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: '--token="secret value" token=\'secret value\' https://storage.example/?sig="secret value"&next=1',
+        });
+
+        assert.strictEqual(
+            fake.events[0].properties?.command,
+            '--token="<redacted>" token=\'<redacted>\' https://<redacted>"<redacted>"&next=1');
+    });
+
+    test('sendTelemetryEvent does not over-redact path segments after a spaced home username', () => {
+        // Only the username segment should be redacted. A following, unrelated path segment (which may
+        // itself contain spaces) and adjacent tokens must survive because redaction stops at the
+        // separator that ends the username.
+        sendTelemetryEvent('aspire/vscode/command/invoked', {
+            command: '/Users/Alice Smith/some folder/file --flag /Users/alice C:\\Users\\bob\\x',
+        });
+
+        assert.strictEqual(
+            fake.events[0].properties?.command,
+            '/Users/<user>/some folder/file --flag /Users/<user> C:\\Users\\<user>\\x');
+    });
+
     test('telemetry level "off" suppresses regular and error events', () => {
         fake.telemetryLevel = 'off';
         sendTelemetryEvent('aspire/vscode/command/invoked', { command: 'cmd.off' });
@@ -180,6 +391,39 @@ suite('telemetry utilities', () => {
             end_reason: 'process_exit',
         });
         assert.strictEqual(fake.events.length, 0);
+    });
+
+    test('VS Code logging-only mode is detected and gates the dangerous send path', () => {
+        // Item 2: the `sendDangerous*` APIs bypass `TelemetryLogger`, which is what normally enforces
+        // VS Code's "logging only" mode (used by extension test hosts and OSS builds). Without a gate,
+        // running the extension's tests would emit REAL telemetry to the production key. There is no
+        // public API that reports this state, so the gate detects it behaviorally by routing a probe
+        // through a throwaway `TelemetryLogger` and observing whether VS Code invokes the sender.
+        //
+        // Prove the mechanism, not just an override: the extension test host is logging-only, so the
+        // real behavioral probe must report logging-only even though `vscode.env.isTelemetryEnabled`
+        // is true and the level is `'all'`. This is exactly the condition (telemetry "enabled" yet the
+        // sender unreachable) that neither `isTelemetryEnabled` nor `telemetryLevel` can distinguish.
+        assert.strictEqual(vscode.env.isTelemetryEnabled, true, 'expected the extension test host to report telemetry as enabled');
+        fake.telemetryLevel = 'all';
+        assert.strictEqual(__detectTelemetryLoggingOnlyForTests(), true, 'expected the behavioral probe to detect logging-only mode in the test host');
+
+        // Prove both send paths consult the gate: forced logging-only suppresses, cleared emits.
+        const restoreLoggingOnly = __setTelemetryLoggingOnlyForTests(true);
+        sendTelemetryEvent('aspire/vscode/command/invoked', { command: 'cmd.suppressed' });
+        sendTelemetryErrorEvent('aspire/vscode/debug/runsession/end', {
+            resource_type: 'project',
+            mode: 'run',
+            exit_code_bucket: 'nonzero',
+            end_reason: 'process_exit',
+        });
+        assert.strictEqual(fake.events.length, 0, 'logging-only mode must not reach the telemetry sender');
+
+        restoreLoggingOnly();
+        __setTelemetryLoggingOnlyForTests(false);
+        sendTelemetryEvent('aspire/vscode/command/invoked', { command: 'cmd.allowed' });
+        assert.strictEqual(fake.events.length, 1);
+        assert.strictEqual(fake.events[0].properties?.command, 'cmd.allowed');
     });
 
     test('telemetry level "crash" suppresses regular and error events from our gate', () => {
@@ -263,6 +507,10 @@ suite('telemetry utilities', () => {
 
     test('initializeTelemetry constructs the reporter and emits unprefixed event names', () => {
         restore();
+        // initializeTelemetry marks the reporter as production (not a test fake), so the logging-only
+        // gate would otherwise suppress the emit in this logging-only test host. Disable the gate here
+        // to exercise the real init/emit path; logging-only detection has its own dedicated test.
+        const restoreLoggingOnly = __setTelemetryLoggingOnlyForTests(false);
         let createdWithKey: string | undefined;
         const restoreFactory = __setTelemetryReporterFactoryForTests((aiKey) => {
             createdWithKey = aiKey;
@@ -276,10 +524,7 @@ suite('telemetry utilities', () => {
                     id: 'microsoft-aspire.aspire-vscode',
                     packageJSON: {
                         aiKey: 'test-key',
-                        version: '1.2.3',
-                        dependencies: {
-                            '@vscode/extension-telemetry': '9.8.7'
-                        }
+                        version: '1.2.3'
                     }
                 },
                 subscriptions
@@ -293,9 +538,91 @@ suite('telemetry utilities', () => {
             assert.strictEqual(fake.events[0].isDangerous, true);
             assert.strictEqual(fake.events[0].properties?.['common.extname'], 'microsoft-aspire.aspire-vscode');
             assert.strictEqual(fake.events[0].properties?.['common.extversion'], '1.2.3');
-            assert.strictEqual(fake.events[0].properties?.['common.telemetryclientversion'], '9.8.7');
+            assert.strictEqual(fake.events[0].properties?.['common.vscodemachineid'], vscode.env.machineId);
+            assert.strictEqual(fake.events[0].properties?.['common.vscodesessionid'], vscode.env.sessionId);
+            assert.strictEqual(fake.events[0].properties?.['common.vscodeversion'], vscode.version);
+            assert.strictEqual(fake.events[0].properties?.['common.product'], vscode.env.appHost);
+            let expectedUiKind: string;
+            switch (vscode.env.uiKind) {
+                case vscode.UIKind.Desktop:
+                    expectedUiKind = 'desktop';
+                    break;
+                case vscode.UIKind.Web:
+                    expectedUiKind = 'web';
+                    break;
+                default:
+                    expectedUiKind = String(vscode.env.uiKind);
+                    break;
+            }
+            assert.strictEqual(fake.events[0].properties?.['common.uikind'], expectedUiKind);
+            assert.strictEqual(fake.events[0].properties?.['common.remotename'], vscode.env.remoteName ?? 'none');
+            assert.strictEqual(fake.events[0].properties?.['common.isnewappinstall'], String(vscode.env.isNewAppInstall));
+            if (vscode.env.appRoot) {
+                const productJsonPath = path.join(vscode.env.appRoot, 'product.json');
+                if (fs.existsSync(productJsonPath)) {
+                    assert.strictEqual(fake.events[0].properties?.['common.vscodecommithash'], readJsonFile<{ commit: string }>(productJsonPath).commit);
+                }
+            }
+            assert.strictEqual(fake.events[0].properties?.['common.telemetryclientversion'], getExtensionTelemetryPackageVersion());
         }
         finally {
+            restoreFactory();
+            restoreLoggingOnly();
+        }
+    });
+
+    test('common.telemetryclientversion flows through from the injected provider instead of a hard-coded literal', () => {
+        restore();
+        const restoreLoggingOnly = __setTelemetryLoggingOnlyForTests(false);
+        const restoreFactory = __setTelemetryReporterFactoryForTests(() => fake as unknown as TelemetryReporter);
+        const restoreVersionProvider = __setTelemetryClientVersionProviderForTests(() => '9.9.9-injected');
+
+        try {
+            initializeTelemetry({
+                extension: {
+                    id: 'microsoft-aspire.aspire-vscode',
+                    packageJSON: {
+                        aiKey: 'test-key',
+                        version: '1.2.3'
+                    }
+                },
+                subscriptions: []
+            } as unknown as vscode.ExtensionContext);
+
+            sendTelemetryEvent('aspire/vscode/command/invoked', { command: 'cmd.version' });
+
+            assert.strictEqual(fake.events[0].properties?.['common.telemetryclientversion'], '9.9.9-injected');
+        }
+        finally {
+            restoreVersionProvider();
+            restoreFactory();
+            restoreLoggingOnly();
+        }
+    });
+
+    test('initializeTelemetry ignores malformed VS Code product metadata', () => {
+        restore();
+        const restoreFactory = __setTelemetryReporterFactoryForTests(() => fake as unknown as TelemetryReporter);
+        const appRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-vscode-product-'));
+        fs.writeFileSync(path.join(appRoot, 'product.json'), '{not valid json');
+        const appRootStub = sinon.stub(vscode.env, 'appRoot').value(appRoot);
+
+        try {
+            const subscriptions: vscode.Disposable[] = [];
+            assert.doesNotThrow(() => initializeTelemetry({
+                extension: {
+                    id: 'microsoft-aspire.aspire-vscode',
+                    packageJSON: {
+                        aiKey: 'test-key',
+                        version: '1.2.3'
+                    }
+                },
+                subscriptions
+            } as unknown as vscode.ExtensionContext));
+        }
+        finally {
+            appRootStub.restore();
+            fs.rmSync(appRoot, { recursive: true, force: true });
             restoreFactory();
         }
     });
@@ -345,6 +672,16 @@ suite('telemetry utilities', () => {
         const event = fake.events[0];
         assert.strictEqual(event.properties?.outcome, 'error');
         assert.strictEqual(event.properties?.error_kind, 'HandledError');
+    });
+
+    test('withCommandTelemetry records a handled failure error_kind when the result supplies one', async () => {
+        const result = await withCommandTelemetry('cmd.handledKind', () => ({ success: false, errorKind: 'ResourceNotFound' }));
+
+        assert.deepStrictEqual(result, { success: false, errorKind: 'ResourceNotFound' });
+        assert.strictEqual(fake.events.length, 1);
+        const event = fake.events[0];
+        assert.strictEqual(event.properties?.outcome, 'error');
+        assert.strictEqual(event.properties?.error_kind, 'ResourceNotFound');
     });
 
     test('withCommandTelemetry normalizes caller-provided handled error kind', async () => {

@@ -168,9 +168,12 @@ suite('DashboardTelemetryPassthrough route-level normalization', () => {
     });
 
     test('POST /telemetry/fault always routes through the error channel', async () => {
-        // Faults are the dashboard's exception telemetry channel; they MUST
-        // go through sendTelemetryErrorEvent so they are tagged as errors in
-        // the telemetry pipeline.
+        // Faults are the dashboard's exception telemetry channel; they MUST go
+        // through sendTelemetryErrorEvent so they respect the user's error-level
+        // opt-in (emitted at 'error' or 'all'). The dangerous send path still emits
+        // an EventData/customEvent payload, so downstream distinguishes faults by
+        // the `aspire/dashboard/fault` event name and result, not by an App Insights
+        // exception envelope.
         const { status } = await postJson(h.baseUrl, '/telemetry/fault', {
             eventName: 'aspire/dashboard/error',
             description: 'short fault description',
