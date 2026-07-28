@@ -20,6 +20,7 @@ export const aspireHostingSdkVersion = (version: string) => vscode.l10n.t('Aspir
 export const aspireCliVersion = (version: string) => vscode.l10n.t('Aspire CLI Version: {0}.', version);
 export const requiredCapability = (capability: string) => vscode.l10n.t('Required capability: {0}.', capability);
 export const aspireTerminalName = vscode.l10n.t('Aspire terminal');
+export const aspireCliPathEnvironmentDescription = vscode.l10n.t('Forwards aspire.aspireCliExecutablePath as AspireCliPath so MSBuild bundle resolution and integrated terminals use the configured Aspire CLI.');
 export const installCliPlaceholder = vscode.l10n.t('Select how to install the Aspire CLI');
 export const installCliViewAllOptions = vscode.l10n.t('View all installation options');
 export const installCliViewAllOptionsDescription = vscode.l10n.t('Open the installation guide (includes the install script)');
@@ -83,6 +84,7 @@ export const errorFetchingAppHosts = (error: string) => vscode.l10n.t('Error fet
 export const aspireCliCommandFailed = (command: string, exitCode: string, output: string) => vscode.l10n.t('{0} exited with code {1}{2}', command, exitCode, output);
 export const aspireCliCommandTimedOut = (timeoutMs: number) => vscode.l10n.t('timed out after {0}ms', timeoutMs);
 export const aspireCliOutputParseFailed = (command: string, error: string) => vscode.l10n.t('Failed to parse {0} output: {1}', command, error);
+export const aspireCommandOutputTruncated = (limit: number) => vscode.l10n.t('[Aspire command output truncated to {0} characters. Showing the beginning and end of the output.]', limit);
 export const appHostPathMustBeNonEmptyAbsolute = vscode.l10n.t('appHostPath must be a non-empty absolute path');
 export const aspireDescribeMinimumVersion = '13.2.0';
 export const aspireCliDescribeNotSupported = (version: string) => vscode.l10n.t('Workspace resources require Aspire CLI {0} or newer. Update the Aspire CLI and refresh the Aspire panel.', version);
@@ -98,12 +100,18 @@ export const resourceCommandCustomChoiceDescription = vscode.l10n.t('Custom valu
 export const resourceCommandDynamicInputsUnsupported = vscode.l10n.t('This command has dynamic inputs that the Aspire extension cannot prompt for yet. Run it from the Aspire Dashboard or Aspire CLI instead.');
 export const resourceCommandDynamicInputsFailed = vscode.l10n.t('Failed to load dynamic command inputs. Run this command from the Aspire Dashboard or Aspire CLI instead.');
 export const resourceCommandLoadingDynamicInputs = vscode.l10n.t('Updating command inputs...');
-export const resourceCommandSecretWarning = vscode.l10n.t('This command has secret arguments. Values are masked while you enter them, but they are passed to the Aspire CLI terminal and may be visible in terminal history or scrollback.');
+export const resourceCommandSecretWarning = vscode.l10n.t('This command has secret arguments. Values are masked while you enter them, but they are passed to the Aspire CLI as command-line arguments and may briefly be visible to other processes on this machine.');
 export const resourceCommandContinue = vscode.l10n.t('Continue');
 export const resourceCommandDontShowAgain = vscode.l10n.t("Don't show again");
 export const resourceCommandInvalidNumber = vscode.l10n.t('Enter a number using invariant culture, for example 1, -1.5, or 1e3.');
 export const resourceCommandMaxLength = (length: number) => vscode.l10n.t('Value must be {0} characters or fewer.', length);
 export const resourceCommandDisabledDescription = vscode.l10n.t('(disabled)');
+export const resourceCommandRunning = (command: string, resource: string) => vscode.l10n.t("Running '{0}' on '{1}'...", command, resource);
+export const resourceCommandSucceeded = (command: string, resource: string) => vscode.l10n.t("Command '{0}' completed on '{1}'.", command, resource);
+export const resourceCommandFailed = (command: string, resource: string, error: string) => vscode.l10n.t("Command '{0}' on '{1}' failed: {2}", command, resource, error);
+export const resourceCommandFailedNoDetail = (command: string, resource: string) => vscode.l10n.t("Command '{0}' on '{1}' failed.", command, resource);
+export const resourceCommandCliNotInstalled = (error: string) => vscode.l10n.t('The Aspire CLI could not be started: {0}', error);
+export const resourceCommandOutputOpenFailed = (error: string) => vscode.l10n.t('The command completed, but its output could not be opened: {0}', error);
 export const selectDashboardPlaceholder = vscode.l10n.t('Select a dashboard to open');
 export const dashboardUrlNotFound = vscode.l10n.t('No Aspire Dashboard URL is available. Start an AppHost and try again.');
 export const dashboardUrlUnsupported = vscode.l10n.t('The Aspire Dashboard URL must use http or https.');
@@ -161,6 +169,8 @@ export const testRunSessionManagerNotInitialized = vscode.l10n.t('Test run sessi
 export const buildFailedForProjectWithError = (project: string, error: string) => vscode.l10n.t('Build failed for project {0} with error: {1}.', project, error);
 export const failedToInspectRuntimeConfig = (outputPath: string, error: string) => vscode.l10n.t('Failed to inspect runtimeconfig for {0}: {1}', outputPath, error);
 export const dotNetRunFallbackDisablesDebugger = (outputPath: string, projectPath: string) => vscode.l10n.t('Project output {0} is not directly runnable; launching {1} with dotnet run without debugger attach. Breakpoints will not be hit for this resource.', outputPath, projectPath);
+export const dotNetRunFileBasedExecutableProfileFallback = (profileName: string, projectPath: string) => vscode.l10n.t('The default launch profile \'{0}\' is an Executable profile, so dotnet run-api does not return the file-based app {1}; launching it with dotnet run without debugger attach. Breakpoints will not be hit for this resource.', profileName, projectPath);
+export const executableLaunchProfileMissingExecutablePath = (profileName: string) => vscode.l10n.t('Launch profile \'{0}\' uses commandName \'Executable\' but does not specify an executablePath. Add an executablePath to the launch profile.', profileName);
 export const lookingForDevkitBuildTask = vscode.l10n.t('C# Dev Kit is installed, looking for C# Dev Kit build task...');
 export const csharpDevKitNotInstalled = vscode.l10n.t('C# Dev Kit is not installed, building using dotnet CLI...');
 export const dismissLabel = vscode.l10n.t('Dismiss');

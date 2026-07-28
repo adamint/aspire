@@ -901,6 +901,7 @@ internal sealed partial class DotNetAppHostProject : IAppHostProject
             // package add, layout, and other short-lived invocations leave these unset so
             // they continue to use the shared ladder's force-kill mode.
             IsolateConsole = true,
+            KillOnParentExit = true,
             GracefulShutdownSignaler = _gracefulShutdownSignaler,
             ShutdownService = _shutdownService,
         };
@@ -913,6 +914,8 @@ internal sealed partial class DotNetAppHostProject : IAppHostProject
         {
             ConfigureSingleFileRunEnvironment(effectiveAppHostFile, env, args: context.UnmatchedTokens);
         }
+
+        env[KnownConfigNames.DcpWorkloadId] = AppHostWorkloadId.Create(effectiveAppHostFile);
 
         var directRun = !isSingleFileAppHost && !watch && !isExtensionHost
             ? await TryCreateDirectRunSpecAsync(effectiveAppHostFile, env, context.UnmatchedTokens, runOptions.NoLaunchProfile, cancellationToken)

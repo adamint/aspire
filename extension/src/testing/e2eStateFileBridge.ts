@@ -436,6 +436,17 @@ async function executeE2eControlCommand(
       markStarted();
       return await commandPromise;
     }
+    case 'executeCodeLensResourceAction': {
+      const element = getResourceCommandElement(appHostTreeProvider, command);
+      const commandPromise = vscode.commands.executeCommand(
+        'aspire-vscode.codeLensResourceAction',
+        element.resourceItem.resource.name,
+        element.commandName,
+        command.appHostPath ?? element.resourceItem.appHostPath ?? '',
+        element.commandJson);
+      markStarted();
+      return await commandPromise;
+    }
     case 'executeAspireCommand': {
       const commandId = getE2eAspireCommandId(command.commandId);
       const args = getE2eCommandArguments(command.args);
@@ -537,6 +548,13 @@ async function executeE2eControlCommand(
     case 'readClipboard': {
       markStarted();
       return await vscode.env.clipboard.readText();
+    }
+    case 'openFile': {
+      const filePath = getE2eRunPath(command.filePath);
+      markStarted();
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+      await vscode.window.showTextDocument(document, { preview: false });
+      return getActiveEditorInfo();
     }
     case 'openWorkspaceFolder': {
       const folderPath = getE2eWorkspaceFolderPath(command.folderPath);
@@ -1069,6 +1087,23 @@ function getE2eWorkspaceFolderPath(folderPath: unknown): string {
   return folderPath;
 }
 
+function getE2eRunPath(filePath: unknown): string {
+  if (typeof filePath !== 'string' || filePath.length === 0 || !path.isAbsolute(filePath)) {
+    throw new Error('Aspire extension E2E openFile requires an absolute file path.');
+  }
+
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    throw new Error(`Aspire extension E2E openFile requires an existing file: ${filePath}`);
+  }
+
+  const runRoot = process.env.ASPIRE_EXTENSION_E2E_RUN_ROOT;
+  if (typeof runRoot !== 'string' || runRoot.length === 0 || !isPathWithinDirectory(filePath, runRoot)) {
+    throw new Error('Aspire extension E2E openFile can only open files inside the configured E2E run root.');
+  }
+
+  return filePath;
+}
+
 function getE2eBreakpointLine(line: unknown): number {
   if (typeof line !== 'number' || !Number.isInteger(line) || line < 0) {
     throw new Error('Aspire extension E2E setSourceBreakpoint requires a zero-based non-negative integer line.');
@@ -1174,8 +1209,12 @@ function hasEndpointUrl(element: unknown): element is { url: string } {
 
 function getResourceCommandElement(
   appHostTreeProvider: AspireAppHostTreeProvider,
-  command: Extract<AspireExtensionE2EControlCommand, { name: 'executeResourceCommandItem' }>
-): unknown {
+  command: Extract<AspireExtensionE2EControlCommand, { name: 'executeResourceCommandItem' | 'executeCodeLensResourceAction' }>
+): {
+  commandName: string;
+  commandJson: unknown;
+  resourceItem: { resource: { name: string }; appHostPath?: string };
+} {
   if (typeof command.resourceName !== 'string' || command.resourceName.length === 0) {
     throw new Error('Aspire extension E2E resource command item requires resourceName.');
   }
@@ -1193,7 +1232,31 @@ function getResourceCommandElement(
     throw new Error(`Aspire extension E2E resource command item could not find command '${command.commandName}' on resource '${command.resourceName}'.`);
   }
 
+  if (!hasResourceCommandShape(element)) {
+    throw new Error(`Aspire extension E2E resource command item '${command.commandName}' on resource '${command.resourceName}' has an unexpected shape.`);
+  }
+
   return element;
+}
+
+function hasResourceCommandShape(element: unknown): element is {
+  commandName: string;
+  commandJson: unknown;
+  resourceItem: { resource: { name: string }; appHostPath?: string };
+} {
+  return typeof element === 'object'
+    && element !== null
+    && 'commandName' in element
+    && typeof element.commandName === 'string'
+    && 'commandJson' in element
+    && 'resourceItem' in element
+    && typeof element.resourceItem === 'object'
+    && element.resourceItem !== null
+    && 'resource' in element.resourceItem
+    && typeof element.resourceItem.resource === 'object'
+    && element.resourceItem.resource !== null
+    && 'name' in element.resourceItem.resource
+    && typeof element.resourceItem.resource.name === 'string';
 }
 
 function getLogFileElement(appHostTreeProvider: AspireAppHostTreeProvider, appHostPath?: string): unknown {
@@ -1205,11 +1268,12 @@ function getLogFileElement(appHostTreeProvider: AspireAppHostTreeProvider, appHo
   return element;
 }
 
-function getActiveEditorInfo(): { uri?: string; fileName?: string } {
+function getActiveEditorInfo(): { uri?: string; fileName?: string; text?: string } {
   const document = vscode.window.activeTextEditor?.document;
   return {
     uri: document?.uri.toString(),
     fileName: document?.fileName,
+    text: document?.getText(),
   };
 }
 
