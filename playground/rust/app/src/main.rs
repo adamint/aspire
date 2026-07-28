@@ -1,32 +1,16 @@
+mod telemetry;
+
+use axum::extract::{MatchedPath, Request};
+use axum::http::StatusCode;
+use axum::middleware::{self, Next};
+use axum::response::Response;
 use axum::{routing::get, Router};
-use opentelemetry::global::{self, BoxedTracer};
-use opentelemetry::trace::{Span, SpanKind, Status, Tracer};
-use opentelemetry::KeyValue;
-use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use opentelemetry_otlp::WithTonicConfig;
-use opentelemetry_sdk::logs::SdkLoggerProvider;
-use opentelemetry_sdk::metrics::SdkMeterProvider;
-use opentelemetry_sdk::trace::SdkTracerProvider;
+use opentelemetry::trace::Status;
 use std::net::SocketAddr;
-use std::sync::OnceLock;
-use tonic::transport::{Certificate, ClientTlsConfig};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-
-static REQUEST_COUNTER: OnceLock<opentelemetry::metrics::Counter<u64>> = OnceLock::new();
-
-fn get_request_counter() -> &'static opentelemetry::metrics::Counter<u64> {
-    REQUEST_COUNTER.get_or_init(|| {
-        global::meter("rust-apphost-playground")
-            .u64_counter("http.server.request.count")
-            .with_description("Total number of HTTP requests.")
-            .build()
-    })
-}
-
-fn get_tracer() -> &'static BoxedTracer {
-    static TRACER: OnceLock<BoxedTracer> = OnceLock::new();
-    TRACER.get_or_init(|| global::tracer("rust-apphost-playground"))
-}
+use std::time::Instant;
+use telemetry::{init_telemetry, record_metrics};
+use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -36,13 +20,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(8080);
 
-    let address = SocketAddr::from(([127.0.0.1], port));
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
     tracing::info!(%address, "starting rust sample");
 
+    // `layer` (rather than `route_layer`) wraps every request, including ones that
+    // don't match any route, so 404s get traced and measured too - `route_layer`
+    // would skip the middleware entirely for unmatched paths. `MatchedPath` is
+    // simply absent on those requests; `instrument_request` falls back to the raw
+    // request path in that case.
     let app = Router::new()
-        .route("/", get(index))
-        .route("/health", get(health))
-        .route("/ping", get(health));
+        .route("/", get(|| async { "Hello World from Rust" }))
+        .route("/health", get(|| async { "healthy" }))
+        .route("/ping", get(|| async { "healthy" }))
+        .route("/error", get(|| async { StatusCode::INTERNAL_SERVER_ERROR }))
+        .layer(middleware::from_fn(instrument_request));
 
     let listener = tokio::net::TcpListener::bind(address).await?;
     let server_result = axum::serve(listener, app).await;
@@ -51,109 +42,46 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     Ok(())
 }
 
-async fn index() -> &'static str {
-    let tracer = get_tracer();
-    let mut span = tracer
-        .span_builder("GET /")
-        .with_kind(SpanKind::Server)
-        .start(tracer);
+async fn instrument_request(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let route = req
+        .extensions()
+        .get::<MatchedPath>()
+        .map(|matched_path| matched_path.as_str().to_owned())
+        .unwrap_or_else(|| req.uri().path().to_owned());
 
-    get_request_counter().add(1, &[KeyValue::new("http.route", "/")]);
-    tracing::info!(
-        name: "http.request",
-        route = "/",
-        message = "Serving Hello World page"
+    // `otel.name`/`otel.kind` are special fields recognized by `tracing_opentelemetry`'s
+    // layer to control the exported span's name/kind, mirroring what the previous
+    // manual `span_builder(...).with_kind(SpanKind::Server)` call did.
+    let span_name = format!("{method} {route}");
+    let span = tracing::info_span!(
+        "http.request",
+        otel.kind = "server",
+        otel.name = span_name.as_str(),
     );
-    span.set_status(Status::Ok);
 
-    "Hello World from Rust"
-}
+    // Instrumenting the whole future (rather than just holding an `.enter()` guard)
+    // keeps this span "current" every time the future is polled, including across
+    // the `.await` below - that's what lets logs emitted anywhere during request
+    // handling (here or in a route handler) carry this span's trace_id/span_id.
+    async move {
+        tracing::info!(%method, %route, "handling request");
 
-async fn health() -> &'static str {
-    let tracer = get_tracer();
-    let mut span = tracer
-        .span_builder("GET /health")
-        .with_kind(SpanKind::Server)
-        .start(tracer);
+        let start = Instant::now();
+        let response = next.run(req).await;
+        let elapsed_secs = start.elapsed().as_secs_f64();
 
-    get_request_counter().add(1, &[KeyValue::new("http.route", "/health")]);
-    tracing::info!(name: "http.request", route = "/health", message = "Health check");
-    span.set_status(Status::Ok);
+        let status = response.status();
+        record_metrics(&route, status, elapsed_secs);
 
-    "healthy"
-}
+        tracing::Span::current().set_status(if status.is_server_error() {
+            Status::error(status.to_string())
+        } else {
+            Status::Ok
+        });
 
-fn init_telemetry() -> Result<OtelTelemetry, Box<dyn std::error::Error + Send + Sync>> {
-    let tls = create_tls_config()?;
-
-    let trace_exporter = opentelemetry_otlp::SpanExporter::builder()
-        .with_tonic()
-        .with_tls_config(tls.clone())
-        .build()?;
-    let tracer_provider = SdkTracerProvider::builder()
-        .with_batch_exporter(trace_exporter)
-        .build();
-    global::set_tracer_provider(tracer_provider.clone());
-
-    let metric_exporter = opentelemetry_otlp::MetricExporter::builder()
-        .with_tonic()
-        .with_tls_config(tls.clone())
-        .build()?;
-    let meter_provider = SdkMeterProvider::builder()
-        .with_periodic_exporter(metric_exporter)
-        .build();
-    global::set_meter_provider(meter_provider.clone());
-
-    let log_exporter = opentelemetry_otlp::LogExporter::builder()
-        .with_tonic()
-        .with_tls_config(tls)
-        .build()?;
-    let logger_provider = SdkLoggerProvider::builder()
-        .with_batch_exporter(log_exporter)
-        .build();
-
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-
-    tracing_subscriber::registry()
-        .with(env_filter)
-        .with(tracing_subscriber::fmt::layer())
-        .with(OpenTelemetryTracingBridge::new(&logger_provider))
-        .try_init()?;
-
-    Ok(OtelTelemetry {
-        tracer_provider,
-        meter_provider,
-        logger_provider,
-    })
-}
-
-fn create_tls_config() -> Result<ClientTlsConfig, Box<dyn std::error::Error + Send + Sync>> {
-    let mut tls = ClientTlsConfig::new();
-
-    if let Ok(cert_file) = std::env::var("SSL_CERT_FILE") {
-        let pem = std::fs::read(cert_file)?;
-        tls = tls.ca_certificate(Certificate::from_pem(pem));
+        response
     }
-
-    Ok(tls)
-}
-
-struct OtelTelemetry {
-    tracer_provider: SdkTracerProvider,
-    meter_provider: SdkMeterProvider,
-    logger_provider: SdkLoggerProvider,
-}
-
-impl OtelTelemetry {
-    fn shutdown(self) {
-        if let Err(error) = self.tracer_provider.shutdown() {
-            eprintln!("failed to shut down tracer provider: {error}");
-        }
-        if let Err(error) = self.meter_provider.shutdown() {
-            eprintln!("failed to shut down meter provider: {error}");
-        }
-        if let Err(error) = self.logger_provider.shutdown() {
-            eprintln!("failed to shut down logger provider: {error}");
-        }
-    }
+    .instrument(span)
+    .await
 }
