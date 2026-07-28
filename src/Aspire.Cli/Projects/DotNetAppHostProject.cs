@@ -268,13 +268,23 @@ internal sealed partial class DotNetAppHostProject : IAppHostProject
 
     private static bool AncestorDirectoryContainsAppHostMarker(DirectoryInfo? directory)
     {
-        // Walk from the project's own directory up to the filesystem root (or a .git boundary, matching
-        // AppHostInfoDiskCache's walk-up — see Caching/AppHostInfoDiskCache.cs). Stopping at the first
+        // Walk from the project's own directory up to the filesystem root, exactly as MSBuild does when
+        // it discovers Directory.Build.props/.targets — that discovery has NO .git boundary and keeps
+        // going to the root of the drive (see
+        // https://learn.microsoft.com/visualstudio/msbuild/customize-by-directory). Stopping at the first
         // Directory.Build.props/.targets we *find* (matching MSBuild's "nearest wins" rule exactly) would
         // miss the common case where the nearest file does nothing more than chain to a shared parent that
         // contains the actual marker. A false negative here silently rejects a real AppHost, so we err the
-        // other way and check every ancestor up to the .git boundary — finding any setter is treated as
+        // other way and check every ancestor up to the filesystem root — finding any setter is treated as
         // "plausibly an AppHost", and MSBuild evaluation remains the authoritative confirmation downstream.
+        //
+        // We deliberately do NOT stop at a .git directory. An earlier version bounded the walk at .git for
+        // parity with AppHostInfoDiskCache's fingerprint walk, but that produced a real false negative: a
+        // valid AppHost checked in inside a nested repo, git submodule, or worktree can legitimately inherit
+        // <IsAspireHost>true</IsAspireHost> from a Directory.Build.props ABOVE its inner .git, which MSBuild
+        // honors but a .git-bounded prefilter would reject before evaluation. The cache fingerprint walk was
+        // widened to the same filesystem-root range (see Caching/AppHostInfoDiskCache.cs) so an out-of-.git
+        // Directory.Build.props edit still invalidates the cache and this classifier stays in parity with it.
         for (var current = directory; current is not null; current = current.Parent)
         {
             foreach (var fileName in s_directoryBuildFileNames)
@@ -319,24 +329,6 @@ internal sealed partial class DotNetAppHostProject : IAppHostProject
                 {
                     return true;
                 }
-            }
-
-            // Stop at a .git boundary to avoid walking the entire user profile (matches the bounds
-            // AppHostInfoDiskCache uses for cache-fingerprint walk-ups). In a regular checkout `.git`
-            // is a directory; in a worktree, submodule, or certain tool-managed setups it is a regular
-            // file that points at the real git dir. Check both so the walk terminates in those layouts.
-            // https://git-scm.com/docs/git-worktree#_details
-            //
-            // This bound is chosen for parity with the fingerprint walk and deliberately trades away one
-            // narrow false-negative window: MSBuild's own Directory.Build.* discovery does NOT stop at
-            // .git, so a marker set in a Directory.Build.props *above* a nested .git boundary (for example
-            // an Aspire app checked in inside a repository that has its own inner .git, or a submodule
-            // whose marker lives in the outer parent) would be found by MSBuild but not by this prefilter.
-            // That layout is unusual; if it ever needs to be supported, this is the boundary to revisit.
-            var gitMarker = Path.Combine(current.FullName, ".git");
-            if (Directory.Exists(gitMarker) || File.Exists(gitMarker))
-            {
-                break;
             }
         }
 

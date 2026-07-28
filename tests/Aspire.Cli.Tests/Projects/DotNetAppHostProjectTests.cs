@@ -2460,27 +2460,108 @@ public class DotNetAppHostProjectTests(ITestOutputHelper outputHelper) : IDispos
     }
 
     [Fact]
-    public void IsLikelyAppHost_AncestorWalkStopsAtGitBoundary_ReturnsFalse()
+    public void IsLikelyAppHost_MarkerAboveNestedGitBoundary_ReturnsTrue()
     {
-        // The ancestor walk terminates at a .git directory or file (matching AppHostInfoDiskCache's
-        // walk-up bounds, Caching/AppHostInfoDiskCache.cs), so a Directory.Build.props above the .git
-        // boundary must not promote a descendant project. Without this bound, an unrelated file in the
-        // user's home or organization-wide profile could over-promote every project. The marker file
-        // is placed in the workspace root (one level above the .git boundary in this layout) and the
-        // .git marker sits next to the project's nearest parent.
-        var projectFile = WriteIsLikelyAppHostProject(Path.Combine("repo", "src", "MyHost", "MyHost.csproj"), """
-            <Project Sdk="Microsoft.NET.Sdk" />
+        // Layout 1 (nested repo). MSBuild's Directory.Build.props/.targets discovery has no concept of a
+        // .git boundary — it walks parent directories to the filesystem root (see
+        // https://learn.microsoft.com/visualstudio/msbuild/customize-by-directory). So an Aspire AppHost
+        // checked in inside a nested repository, git submodule, or worktree can legitimately inherit
+        // <IsAspireHost>true</IsAspireHost> from a Directory.Build.props ABOVE its inner .git. The prefilter
+        // must match MSBuild here and keep walking past .git; stopping at .git would silently reject a real
+        // AppHost before MSBuild ever evaluates it. This mirrors a fixture evaluated with real MSBuild:
+        //   outer/Directory.Build.props                       <IsAspireHost>true</IsAspireHost>
+        //   outer/inner-repo/.git/                            (nested repo boundary)
+        //   outer/inner-repo/MyAppHost/MyAppHost.csproj
+        //   dotnet msbuild MyAppHost.csproj -getProperty:IsAspireHost  =>  true
+        var projectFile = WriteIsLikelyAppHostProject(Path.Combine("outer", "inner-repo", "MyAppHost", "MyAppHost.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
             """);
-        WriteIsLikelyAppHostProject("Directory.Build.props", """
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "Directory.Build.props"), """
             <Project>
               <PropertyGroup>
                 <IsAspireHost>true</IsAspireHost>
               </PropertyGroup>
             </Project>
             """);
-        // Create a .git directory at the simulated repo root so the walk stops there before reaching
-        // the marker file at the workspace root above it.
-        Directory.CreateDirectory(Path.Combine(_workspace.WorkspaceRoot.FullName, "repo", ".git"));
+        // Nested repo boundary between the project and the marker directory above it, proving the walk no
+        // longer stops at .git.
+        Directory.CreateDirectory(Path.Combine(_workspace.WorkspaceRoot.FullName, "outer", "inner-repo", ".git"));
+
+        Assert.True(DotNetAppHostProject.IsLikelyAppHost(projectFile));
+    }
+
+    [Fact]
+    public void IsLikelyAppHost_ImportAppendsSiblingAfterGetDirectoryNameOfFileAboveDirectoryBuildPropsAnchor_ReturnsTrue()
+    {
+        // Layout 2 (anchor + appended sibling). GetDirectoryNameOfFileAbove returns the *directory* that
+        // contains the anchor file, and the actually-imported project is the file appended after the call.
+        // Here the anchor is 'Directory.Build.props' but the import target is the appended Custom.props,
+        // which carries the marker — so the conventional-name skip must NOT be applied to the anchor. This
+        // mirrors a fixture evaluated with real MSBuild:
+        //   repo/Directory.Build.props                        (NO marker)
+        //   repo/Custom.props                                 <IsAspireHost>true</IsAspireHost>
+        //   repo/src/MyAppHost/MyAppHost.csproj imports
+        //     $([MSBuild]::GetDirectoryNameOfFileAbove($(MSBuildThisFileDirectory), 'Directory.Build.props'))\Custom.props
+        //   dotnet msbuild MyAppHost.csproj -getProperty:IsAspireHost  =>  true
+        var projectFile = WriteIsLikelyAppHostProject(Path.Combine("repo", "src", "MyAppHost", "MyAppHost.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <Import Project="$([MSBuild]::GetDirectoryNameOfFileAbove($(MSBuildThisFileDirectory), 'Directory.Build.props'))\Custom.props" />
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("repo", "Directory.Build.props"), """
+            <Project>
+              <!-- Deliberately contains NO Aspire marker. The marker lives in Custom.props next to it. -->
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("repo", "Custom.props"), """
+            <Project>
+              <PropertyGroup>
+                <IsAspireHost>true</IsAspireHost>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        Assert.True(DotNetAppHostProject.IsLikelyAppHost(projectFile));
+    }
+
+    [Fact]
+    public void IsLikelyAppHost_ConventionalDirectoryBuildChainingWithoutMarker_ReturnsFalse()
+    {
+        // Layout 3 (conventional chaining, no marker). A src-level Directory.Build.props that only chains to
+        // its parent via GetPathOfFileAbove('Directory.Build.props', ...) delivers no content the ancestor
+        // walk cannot already see by name, and neither build file declares a marker. This is exactly the
+        // "evaluation storm" shape the prefilter exists to filter out, so the widened walk-to-root and the
+        // GetDirectoryNameOfFileAbove handling must NOT turn it into a candidate. Real MSBuild agrees:
+        //   repo/Directory.Build.props                        (no marker, just LangVersion)
+        //   repo/src/Directory.Build.props                    chains via GetPathOfFileAbove('Directory.Build.props', ...)
+        //   repo/src/OrdinaryLib/OrdinaryLib.csproj
+        //   dotnet msbuild OrdinaryLib.csproj -getProperty:IsAspireHost  =>  (empty)
+        var projectFile = WriteIsLikelyAppHostProject(Path.Combine("repo", "src", "OrdinaryLib", "OrdinaryLib.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("repo", "Directory.Build.props"), """
+            <Project>
+              <PropertyGroup>
+                <LangVersion>preview</LangVersion>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("repo", "src", "Directory.Build.props"), """
+            <Project>
+              <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+            </Project>
+            """);
 
         Assert.False(DotNetAppHostProject.IsLikelyAppHost(projectFile));
     }
@@ -2707,12 +2788,13 @@ public class DotNetAppHostProjectTests(ITestOutputHelper outputHelper) : IDispos
 
     private FileInfo WriteIsLikelyAppHostProject(string fileName, string content)
     {
-        // Stamp a .git sentinel at the synthetic workspace root so IsLikelyAppHost's ancestor walk
-        // terminates here instead of escaping to the real filesystem. Without this bound, a stray
-        // Directory.Build.props anywhere above the OS temp directory could promote a project and flip
-        // the _ReturnsFalse assertions in these tests, making them environment-dependent. Tests that
-        // exercise a nearer boundary (e.g. the git-boundary walk-stop test) create an additional .git
-        // deeper in the tree; the walk stops at whichever boundary it reaches first.
+        // Isolation note: the ancestor walk now mirrors MSBuild and walks to the filesystem root with
+        // no .git boundary, so these tests rely on each temp workspace being a unique, randomly-named
+        // directory with no Directory.Build.* marker anywhere above it. A stray marker above the OS temp
+        // directory could flip the _ReturnsFalse assertions; in practice temp roots contain no such files.
+        // Sibling workspaces are not ancestors of one another, so per-test markers never leak across tests.
+        // We still stamp a .git sentinel here for realism (a nested repo layout), but it no longer bounds
+        // the walk — tests that need a marker found above a nested .git deliberately place it there.
         Directory.CreateDirectory(Path.Combine(_workspace.WorkspaceRoot.FullName, ".git"));
 
         var path = Path.Combine(_workspace.WorkspaceRoot.FullName, fileName);

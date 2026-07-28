@@ -299,7 +299,7 @@ public class AppHostInfoDiskCacheTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public void ComputeKey_StopsAtGitFileBoundary()
+    public void ComputeKey_WalksPastGitFileBoundary()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
@@ -322,6 +322,10 @@ public class AppHostInfoDiskCacheTests(ITestOutputHelper outputHelper)
 
         var keyAfterParentImportEdit = AppHostInfoDiskCache.ComputeKeyAsync(new FileInfo(projectFile.FullName), new TestEnvironment());
 
-        Assert.Equal(keyBeforeParentImportEdit, keyAfterParentImportEdit);
+        // MSBuild's Directory.Build.* discovery has no .git boundary, so a Directory.Build.props above a
+        // nested .git can still influence evaluation. The fingerprint walk mirrors that range (and
+        // DotNetAppHostProject.IsLikelyAppHost's ancestor walk), so editing the file above the .git must
+        // change the key — otherwise a classifier that promoted the project would reuse a stale entry.
+        Assert.NotEqual(keyBeforeParentImportEdit, keyAfterParentImportEdit);
     }
 }

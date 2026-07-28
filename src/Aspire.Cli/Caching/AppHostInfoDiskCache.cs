@@ -36,9 +36,10 @@ namespace Aspire.Cli.Caching;
 ///         this timestamp.</item>
 ///   <item>The mtimes of <c>Directory.Build.props</c>, <c>Directory.Build.targets</c>,
 ///         <c>Directory.Packages.props</c>, and <c>Directory.Packages.targets</c> found by
-///         walking up from the project directory to either a <c>.git</c> boundary or the
-///         filesystem root. This catches transitive .props edits that the user has not yet
-///         restored against.</item>
+///         walking up from the project directory to the filesystem root. This matches MSBuild's
+///         own Directory.Build.* discovery range (which has no <c>.git</c> boundary) and keeps
+///         the fingerprint in parity with <c>DotNetAppHostProject.IsLikelyAppHost</c>. This catches
+///         transitive .props edits that the user has not yet restored against.</item>
 ///   <item>The mtime of <c>global.json</c> walking up the same path, to catch SDK pin
 ///         changes that do not trigger a restore.</item>
 ///   <item>A schema version constant, bumped when the set of cached properties changes.</item>
@@ -263,8 +264,13 @@ internal sealed class AppHostInfoDiskCache : IAppHostInfoDiskCache
             // changes that affect restore, or a fresh restore after package graph changes.
             AppendMtime(sb, Path.Combine(projectDir, "obj", "project.assets.json"), "assets");
 
-            // Walk up to a .git boundary or filesystem root and stat any
-            // Directory.Build.* / Directory.Packages.* / global.json we find along the way.
+            // Walk up to the filesystem root and stat any Directory.Build.* / Directory.Packages.* /
+            // global.json we find along the way. This matches MSBuild's own Directory.Build.* discovery,
+            // which has no .git boundary and walks to the root of the drive
+            // (https://learn.microsoft.com/visualstudio/msbuild/customize-by-directory), and keeps this
+            // fingerprint in parity with DotNetAppHostProject's IsLikelyAppHost ancestor walk. If the two
+            // walks disagreed, a Directory.Build.props above a nested .git could promote a project in the
+            // classifier while an edit to that same file failed to invalidate this cache — a stale hit.
             // Files higher up shadow files lower down in MSBuild, but for cache invalidation
             // we just need to detect ANY change. AppendMtime records each entry as
             // "tag=ticks" (or "tag=-" when absent); the path itself is used only to stat the
@@ -280,19 +286,6 @@ internal sealed class AppHostInfoDiskCache : IAppHostInfoDiskCache
                     AppendMtime(sb, Path.Combine(dir.FullName, siblingName), siblingName);
                 }
                 AppendMtime(sb, Path.Combine(dir.FullName, "global.json"), "globaljson");
-
-                // Stop at a .git boundary — typically the repo root, which is far enough
-                // for MSBuild import resolution and avoids walking the entire user profile.
-                // In a regular checkout `.git` is a directory; in a worktree, submodule, or
-                // certain tool-managed setups it is a regular file that points at the real
-                // git dir (e.g. "gitdir: /path/to/parent/.git/worktrees/foo"). Check both so
-                // the walk terminates in those layouts as well.
-                // https://git-scm.com/docs/git-worktree#_details
-                var gitMarker = Path.Combine(dir.FullName, ".git");
-                if (Directory.Exists(gitMarker) || File.Exists(gitMarker))
-                {
-                    break;
-                }
 
                 dir = dir.Parent;
             }
