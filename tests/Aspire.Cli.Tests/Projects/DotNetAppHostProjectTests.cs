@@ -2567,6 +2567,177 @@ public class DotNetAppHostProjectTests(ITestOutputHelper outputHelper) : IDispos
     }
 
     [Fact]
+    public void IsLikelyAppHost_NearestDirectoryBuildPropsWithoutChainShadowsOuterMarker_ReturnsFalse()
+    {
+        // MSBuild imports only the NEAREST Directory.Build.props. When that nearest file declares no marker
+        // and does NOT chain to its parent, an outer Directory.Build.props marker is shadowed and never
+        // evaluated, so the prefilter must return false — walking every ancestor and accepting the outer
+        // marker would force MSBuild evaluation for every ordinary project below it. Verified with real
+        // MSBuild:
+        //   outer/Directory.Build.props            <IsAspireHost>true</IsAspireHost>
+        //   outer/repo/Directory.Build.props       (no marker, no chain to parent)
+        //   outer/repo/proj/OrdinaryLib.csproj
+        //   dotnet msbuild OrdinaryLib.csproj -getProperty:IsAspireHost  =>  (empty)
+        var projectFile = WriteIsLikelyAppHostProject(Path.Combine("outer", "repo", "proj", "OrdinaryLib.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "Directory.Build.props"), """
+            <Project>
+              <PropertyGroup>
+                <IsAspireHost>true</IsAspireHost>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "repo", "Directory.Build.props"), """
+            <Project>
+              <PropertyGroup>
+                <SomeUnrelated>1</SomeUnrelated>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        Assert.False(DotNetAppHostProject.IsLikelyAppHost(projectFile));
+    }
+
+    [Fact]
+    public void IsLikelyAppHost_NearestDirectoryBuildPropsChainsToOuterMarker_ReturnsTrue()
+    {
+        // Counterpart to the shadowing case: when the nearest Directory.Build.props explicitly chains to its
+        // parent via the conventional GetPathOfFileAbove import, MSBuild keeps reading upward and DOES see
+        // the outer marker, so the prefilter must return true. Verified with real MSBuild: adding the chain
+        // import to the nested file flips -getProperty:IsAspireHost from empty to `true`.
+        var projectFile = WriteIsLikelyAppHostProject(Path.Combine("outer", "repo", "proj", "MyAppHost.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "Directory.Build.props"), """
+            <Project>
+              <PropertyGroup>
+                <IsAspireHost>true</IsAspireHost>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "repo", "Directory.Build.props"), """
+            <Project>
+              <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '$(MSBuildThisFileDirectory)../'))" />
+              <PropertyGroup>
+                <SomeUnrelated>1</SomeUnrelated>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        Assert.True(DotNetAppHostProject.IsLikelyAppHost(projectFile));
+    }
+
+    [Fact]
+    public void IsLikelyAppHost_NearestDirectoryBuildPropsStaticallyImportsParentMarker_ReturnsTrue()
+    {
+        // A nested Directory.Build.props can also chain to its parent with an ordinary static import
+        // (<Import Project="../Directory.Build.props" />) rather than the GetPathOfFileAbove helper. Verified
+        // with real MSBuild: that static chain makes the outer <IsAspireHost>true</IsAspireHost> visible
+        // (-getProperty:IsAspireHost => true), so the prefilter must treat this as a candidate and not stop
+        // at the nearest file.
+        var projectFile = WriteIsLikelyAppHostProject(Path.Combine("outer", "repo", "proj", "MyAppHost.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "Directory.Build.props"), """
+            <Project>
+              <PropertyGroup>
+                <IsAspireHost>true</IsAspireHost>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "repo", "Directory.Build.props"), """
+            <Project>
+              <Import Project="../Directory.Build.props" />
+              <PropertyGroup>
+                <SomeUnrelated>1</SomeUnrelated>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        Assert.True(DotNetAppHostProject.IsLikelyAppHost(projectFile));
+    }
+
+    [Fact]
+    public void IsLikelyAppHost_NearestDirectoryBuildTargetsMarkerNotShadowedByNonChainingProps_ReturnsTrue()
+    {
+        // props and targets are resolved independently by MSBuild. A nearest Directory.Build.props that does
+        // not chain shadows only outer *props*; a marker in the nearest Directory.Build.targets is still
+        // imported. The prefilter must search the two file names independently and not let a non-chaining
+        // props file suppress a real targets marker.
+        var projectFile = WriteIsLikelyAppHostProject(Path.Combine("outer", "repo", "proj", "MyHost.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "repo", "Directory.Build.props"), """
+            <Project>
+              <PropertyGroup>
+                <SomeUnrelated>1</SomeUnrelated>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "repo", "Directory.Build.targets"), """
+            <Project>
+              <PropertyGroup>
+                <IsAspireHost>true</IsAspireHost>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        Assert.True(DotNetAppHostProject.IsLikelyAppHost(projectFile));
+    }
+
+    [Fact]
+    public void IsLikelyAppHost_ConventionalChainImportFromExternalStartDirectory_ReturnsTrue()
+    {
+        // The conventional-name shortcut (skipping GetPathOfFileAbove('Directory.Build.props', ...) as
+        // "already enumerated by the ancestor walk") is only valid when the walk-up starts inside the
+        // importing file's own ancestor chain. GetPathOfFileAbove accepts an ARBITRARY starting directory,
+        // so a walk-up rooted at an external directory resolves a Directory.Build.props this walk never
+        // inspects. Verified with real MSBuild: such an import DOES pull in the external file
+        // (-getProperty:IsAspireHost => true), so applying the shortcut here would be a false negative. The
+        // absolute external start makes it out-of-tree, so the project must stay a candidate.
+        var projectFile = WriteIsLikelyAppHostProject(Path.Combine("proj", "MyApp.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """);
+        var externalAnchor = Path.Combine(_workspace.WorkspaceRoot.FullName, "external", "anchor");
+        Directory.CreateDirectory(externalAnchor);
+        WriteIsLikelyAppHostProject(Path.Combine("proj", "Directory.Build.props"), $"""
+            <Project>
+              <Import Project="$([MSBuild]::GetPathOfFileAbove('Directory.Build.props', '{externalAnchor.Replace("\\", "\\\\")}'))" />
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("external", "Directory.Build.props"), """
+            <Project>
+              <PropertyGroup>
+                <IsAspireHost>true</IsAspireHost>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        Assert.True(DotNetAppHostProject.IsLikelyAppHost(projectFile));
+    }
+
+    [Fact]
     public void IsLikelyAppHost_ImportProjectPathContainsCallShapedHelperNameInLiteralPath_ReturnsFalse()
     {
         // Even a literal path that happens to contain "GetPathOfFileAbove(...)" as text — not an
@@ -2587,12 +2758,11 @@ public class DotNetAppHostProjectTests(ITestOutputHelper outputHelper) : IDispos
     [Fact]
     public void IsLikelyAppHost_MalformedProjectXmlWithAncestorIsAspireHostMarker_ReturnsTrue()
     {
-        // When the project's own XML can't be parsed, the cheap pre-check used to jump straight to
-        // the name heuristic and never consult ancestor Directory.Build.* files. That silently
-        // rejected an ordinary-named broken project whose ancestors declared the AppHost marker —
-        // exactly the case where MSBuild would still try to evaluate the project and surface a
-        // "possibly unbuildable" warning. The ancestor walk must run before falling back to the
-        // name heuristic.
+        // When the project's own XML can't be parsed, the cheap pre-check must still consult ancestor
+        // Directory.Build.* files before falling back to the name heuristic. An ordinary-named broken
+        // project whose ancestors declare the AppHost marker is exactly the case where MSBuild would still
+        // try to evaluate the project and surface a "possibly unbuildable" warning, so rejecting it here on
+        // a name miss would silently drop a real AppHost.
         var projectFile = WriteIsLikelyAppHostProject(Path.Combine("src", "MyHost", "MyHost.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\"");
         WriteIsLikelyAppHostProject("Directory.Build.props", """
             <Project>
@@ -2788,13 +2958,13 @@ public class DotNetAppHostProjectTests(ITestOutputHelper outputHelper) : IDispos
 
     private FileInfo WriteIsLikelyAppHostProject(string fileName, string content)
     {
-        // Isolation note: the ancestor walk now mirrors MSBuild and walks to the filesystem root with
-        // no .git boundary, so these tests rely on each temp workspace being a unique, randomly-named
-        // directory with no Directory.Build.* marker anywhere above it. A stray marker above the OS temp
-        // directory could flip the _ReturnsFalse assertions; in practice temp roots contain no such files.
-        // Sibling workspaces are not ancestors of one another, so per-test markers never leak across tests.
-        // We still stamp a .git sentinel here for realism (a nested repo layout), but it no longer bounds
-        // the walk — tests that need a marker found above a nested .git deliberately place it there.
+        // Isolation note: the ancestor walk mirrors MSBuild and walks to the filesystem root with no .git
+        // boundary, so these tests rely on each temp workspace being a unique, randomly-named directory
+        // with no Directory.Build.* marker anywhere above it. A stray marker above the OS temp directory
+        // could flip the _ReturnsFalse assertions; in practice temp roots contain no such files. Sibling
+        // workspaces are not ancestors of one another, so per-test markers never leak across tests. The
+        // .git sentinel stamped here provides a realistic nested-repo layout but does not bound the walk —
+        // tests that need a marker found above a nested .git deliberately place it there.
         Directory.CreateDirectory(Path.Combine(_workspace.WorkspaceRoot.FullName, ".git"));
 
         var path = Path.Combine(_workspace.WorkspaceRoot.FullName, fileName);
