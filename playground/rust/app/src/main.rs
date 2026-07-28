@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(8080);
 
-    let address = SocketAddr::from(([0, 0, 0, 0], port));
+    let address = SocketAddr::from(([127.0.0.1], port));
     tracing::info!(%address, "starting rust sample");
 
     let app = Router::new()

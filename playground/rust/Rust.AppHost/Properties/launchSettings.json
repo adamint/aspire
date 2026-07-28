@@ -3,7 +3,7 @@
     "https": {
       "commandName": "Project",
       "dotnetRunMessages": true,
-      "applicationUrl": "https://localhost:17001;http://localhost:15001",
+      "applicationUrl": "https://rust.dev.localhost:17001;http://rust.dev.localhost:15001",
       "environmentVariables": {
         "ASPIRE_ENVIRONMENT": "Development",
         "ASPNETCORE_ENVIRONMENT": "Development",
@@ -15,7 +15,7 @@
     "http": {
       "commandName": "Project",
       "dotnetRunMessages": true,
-      "applicationUrl": "http://localhost:15001",
+      "applicationUrl": "http://rust.dev.localhost:15001",
       "environmentVariables": {
         "ASPIRE_ENVIRONMENT": "Development",
         "ASPNETCORE_ENVIRONMENT": "Development",

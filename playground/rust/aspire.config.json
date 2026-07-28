@@ -1,24 +1,10 @@
 {
   "appHost": {
-    "path": "apphost.cs"
+    "path": "Rust.AppHost/Rust.AppHost.csproj",
+    "language": "rust"
   },
-  "profiles": {
-    "https": {
-      "applicationUrl": "https://localhost:17001;http://localhost:15001",
-      "environmentVariables": {
-        "ASPIRE_ENVIRONMENT": "Development",
-        "ASPNETCORE_ENVIRONMENT": "Development",
-        "DOTNET_ENVIRONMENT": "Development"
-      }
-    },
-    "http": {
-      "applicationUrl": "http://localhost:15001",
-      "environmentVariables": {
-        "ASPIRE_ENVIRONMENT": "Development",
-        "ASPNETCORE_ENVIRONMENT": "Development",
-        "DOTNET_ENVIRONMENT": "Development"
-      }
-    }
+  "packages": {
+    "Aspire.Hosting.Rust": "../../src/Aspire.Hosting.Rust/Aspire.Hosting.Rust.csproj"
   },
   "features": {
     "experimentalPolyglot:rust": true
