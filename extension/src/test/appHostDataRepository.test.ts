@@ -815,6 +815,34 @@ suite('AppHostDataRepository', () => {
         repository.dispose();
     });
 
+    test('describe watch surfaces an error and clears loading when the CLI path is unavailable', async () => {
+        // Regression for PR #18338: getAspireCliExecutablePath() now rejects when the CLI is
+        // unavailable, so the describe-watch startup must handle that rejection (clear the
+        // workspace loading flag and surface the error) instead of leaking an unhandled promise
+        // rejection that leaves the panel stuck loading.
+        getCliPathStub.rejects(new Error('CLI missing'));
+        const executeCommandStub = sinon.stub(vscode.commands, 'executeCommand').resolves(undefined);
+        const repository = new AppHostDataRepository(terminalProvider);
+
+        try {
+            repository.activate();
+            repository.setPanelVisible(true);
+            await waitForMicrotasks();
+
+            // The path rejected before we ever spawned `aspire describe --follow`.
+            assert.strictEqual(spawnStub.called, false);
+            assert.ok(repository.hasError);
+            assert.ok(repository.errorMessage?.includes('CLI missing'), repository.errorMessage);
+
+            const loadingContextCalls = executeCommandStub.getCalls().filter(call =>
+                call.args[0] === 'setContext' && call.args[1] === 'aspire.loading');
+            assert.strictEqual(loadingContextCalls.at(-1)?.args[2], false);
+        } finally {
+            repository.dispose();
+            executeCommandStub.restore();
+        }
+    });
+
     test('workspace ps success does not clear describe error', async () => {
         let getAppHostsLineCallback: ((line: string) => void) | undefined;
         const getAppHostsProcess = new TestChildProcess();
