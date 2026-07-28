@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import { BrowserLaunchConfiguration } from '../dcp/types';
 import { executeE2eControlCommand, runE2eTeardown } from './helpers/fixtures';
 
-// E2E coverage for the browser resource debugger (PR #18626).
+// E2E coverage for the browser resource debugger.
 //
 // Actually launching a browser debug session in headless CI is not feasible: the js-debug
 // Chrome/Edge adapters spawn a real GUI browser, and the `firefox` adapter additionally

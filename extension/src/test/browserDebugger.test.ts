@@ -464,7 +464,71 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(dcpServer.sendNotification.calledOnce, true);
         assert.strictEqual(rmStub.calledOnceWithExactly(path.join(os.tmpdir(), 'aspire-vscode-browser-debug', 'run-1'), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }), true);
     });
+
+    test('openDashboard debugFirefox launches the Firefox debug configuration', async () => {
+        // The dashboard Firefox launch path is distinct from resource-based browser debugging:
+        // it builds its own debug configuration in AspireDebugSession.launchDebugBrowser rather
+        // than going through browserDebuggerExtension. Stub the Firefox extension as installed so
+        // we exercise the happy path instead of the install prompt/fallback.
+        sinon.stub(vscode.extensions, 'getExtension').callsFake((id: string) =>
+            id === 'firefox-devtools.vscode-firefox-debug' ? ({ id } as vscode.Extension<unknown>) : undefined);
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(() => ({ dispose: () => { } }));
+        const startDebuggingStub = sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        const openExternalStub = sinon.stub(vscode.env, 'openExternal').resolves(true);
+
+        const aspireDebugSession = createAspireDebugSession();
+
+        await aspireDebugSession.openDashboard('https://localhost:5001', 'debugFirefox');
+
+        assert.strictEqual(startDebuggingStub.calledOnce, true);
+        assert.strictEqual(openExternalStub.called, false);
+        const launchedConfig = startDebuggingStub.firstCall.args[1] as vscode.DebugConfiguration;
+        assert.strictEqual(launchedConfig.type, 'firefox');
+        assert.strictEqual(launchedConfig.request, 'launch');
+        assert.strictEqual(launchedConfig.url, 'https://localhost:5001');
+        assert.deepStrictEqual(launchedConfig.pathMappings, []);
+        assert.strictEqual(typeof launchedConfig.webRoot, 'string');
+        assert.ok((launchedConfig.webRoot as string).length > 0);
+
+        aspireDebugSession.dispose();
+    });
+
+    test('openDashboard debugFirefox prompts to install and falls back to the external browser when the adapter is missing', async () => {
+        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+        const showErrorStub = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined as any);
+        const startDebuggingStub = sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        const openExternalStub = sinon.stub(vscode.env, 'openExternal').resolves(true);
+
+        const aspireDebugSession = createAspireDebugSession();
+
+        await aspireDebugSession.openDashboard('https://localhost:5001', 'debugFirefox');
+
+        assert.strictEqual(startDebuggingStub.called, false);
+        assert.strictEqual(showErrorStub.calledOnce, true);
+        assert.match(showErrorStub.firstCall.args[0], /Firefox Debugger extension/);
+        assert.strictEqual(openExternalStub.calledOnce, true);
+
+        aspireDebugSession.dispose();
+    });
 });
+
+function createAspireDebugSession(): AspireDebugSession {
+    const dcpServer = {
+        sendNotification: sinon.stub(),
+        takeDebugSessionAggregateStats: sinon.stub().returns(undefined),
+    };
+    const parentDebugSession = createDebugSession('aspire-session-id', {
+        type: 'aspire',
+        request: 'launch',
+        name: 'Aspire',
+        program: '/workspace/apphost.cs',
+    });
+    const terminalProvider = {
+        isDebugConfigEnvironmentLoggingEnabled: () => false,
+    };
+
+    return new AspireDebugSession(parentDebugSession, {} as any, dcpServer as any, terminalProvider as any, () => { });
+}
 
 async function configure(launchConfig: BrowserLaunchConfiguration, debugConfig: AspireResourceExtendedDebugConfiguration): Promise<void> {
     const fakeAspireDebugSession = {} as AspireDebugSession;
