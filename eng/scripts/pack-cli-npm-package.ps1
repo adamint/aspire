@@ -242,13 +242,16 @@ Write-JsonFile (Join-Path $pointerPackageBin 'aspire-package-map.json') $ridPack
 $pointerReadmeTemplate = Read-TemplateFile (Join-Path $PSScriptRoot 'pack-cli-npm-package.pointer.README.md')
 $pointerReadme = Expand-Template $pointerReadmeTemplate @{
   PACKAGE_NAME = $PackageName
+  VERSION = $Version
 }
 
 Write-TextFile (Join-Path $pointerPackageRoot 'README.md') $pointerReadme
 
-# Ship a version-stamped CHANGELOG.md in the pointer package. npmjs.com renders
-# CHANGELOG.md on a dedicated tab, so this gives users a discoverable, per-version
-# pointer to the GitHub release notes before they update (microsoft/aspire#17719).
+# Also ship a version-stamped CHANGELOG.md as an extra artifact in the tarball. npmjs.com
+# renders ONLY the README on the package page -- there is no Changelog tab and CHANGELOG.md
+# is not auto-rendered (https://docs.npmjs.com/about-package-readme-files/). The discoverable,
+# per-version pointer to the GitHub release notes therefore lives in the README above; this
+# file is kept for users browsing the tarball or the npm Code view (microsoft/aspire#17719).
 $pointerChangelogTemplate = Read-TemplateFile (Join-Path $PSScriptRoot 'pack-cli-npm-package.CHANGELOG.md')
 $pointerChangelog = Expand-Template $pointerChangelogTemplate @{
   PACKAGE_NAME = $PackageName

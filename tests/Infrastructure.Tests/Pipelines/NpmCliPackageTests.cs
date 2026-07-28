@@ -268,7 +268,7 @@ public sealed class NpmCliPackageTests : IDisposable
             GetStringMap(packageMap));
 
         var readme = await File.ReadAllTextAsync(Path.Combine(package.PointerPackageRoot, "README.md"));
-        Assert.Equal(await RenderTemplateAsync("eng/scripts/pack-cli-npm-package.pointer.README.md", ("PACKAGE_NAME", PackageName)), readme);
+        Assert.Equal(await RenderTemplateAsync("eng/scripts/pack-cli-npm-package.pointer.README.md", ("PACKAGE_NAME", PackageName), ("VERSION", PackageVersion)), readme);
         Assert.Contains("Use it to create, run, publish, and deploy Aspire AppHosts from a terminal.", readme);
         Assert.Contains("This package requires Node.js 20 or later.", readme);
         Assert.Contains("Supported platforms:", readme);
@@ -294,9 +294,15 @@ public sealed class NpmCliPackageTests : IDisposable
         Assert.Contains("import { createBuilder } from './.aspire/modules/aspire.mjs';", readme);
         Assert.Contains("aspire dashboard run", readme);
         Assert.Contains("Browse Aspire samples", readme);
+        // npm renders only the README on the package page, so the discoverable release-notes pointer
+        // must live here (not in CHANGELOG.md, which npm does not surface).
+        Assert.Contains("## Release notes", readme);
+        Assert.Contains($"This package bundles the Aspire CLI at version `{PackageVersion}`.", readme);
+        Assert.Contains("[Aspire release notes](https://github.com/microsoft/aspire/releases)", readme);
         Assert.DoesNotContain("apphost.ts", readme);
         Assert.DoesNotContain("./.aspire/modules/aspire.js", readme);
         Assert.DoesNotContain("__PACKAGE_NAME__", readme);
+        Assert.DoesNotContain("__VERSION__", readme);
         // The C# AppHost example was intentionally removed; the npm README is TypeScript-only.
         Assert.DoesNotContain("apphost.cs", readme);
         Assert.DoesNotContain("```csharp", readme);
@@ -329,9 +335,29 @@ public sealed class NpmCliPackageTests : IDisposable
     }
 
     [Fact]
+    public async Task PointerPackageReadmeReferencesVersionAndReleaseNotes()
+    {
+        // npmjs.com renders only the README on the package page (no Changelog tab, no CHANGELOG.md
+        // rendering: https://docs.npmjs.com/about-package-readme-files/), so the per-version release-notes
+        // pointer must be discoverable from the README itself rather than the shipped CHANGELOG.md.
+        var readme = await RenderTemplateAsync(
+            "eng/scripts/pack-cli-npm-package.pointer.README.md",
+            ("PACKAGE_NAME", PackageName),
+            ("VERSION", PackageVersion));
+
+        Assert.Contains("## Release notes", readme);
+        Assert.Contains($"This package bundles the Aspire CLI at version `{PackageVersion}`.", readme);
+        Assert.Contains("[Aspire release notes](https://github.com/microsoft/aspire/releases)", readme);
+        Assert.Contains($"Find the entry that matches version `{PackageVersion}` on the releases page.", readme);
+        Assert.DoesNotContain("https://github.com/microsoft/aspire/releases/tag/v", readme);
+        Assert.DoesNotContain("__VERSION__", readme);
+        Assert.DoesNotContain("__PACKAGE_NAME__", readme);
+    }
+
+    [Fact]
     public async Task PointerPackageReadmeSupportedPlatformTextMatchesSupportedRidMatrix()
     {
-        var readme = await RenderTemplateAsync("eng/scripts/pack-cli-npm-package.pointer.README.md", ("PACKAGE_NAME", PackageName));
+        var readme = await RenderTemplateAsync("eng/scripts/pack-cli-npm-package.pointer.README.md", ("PACKAGE_NAME", PackageName), ("VERSION", PackageVersion));
         var supportedPlatformText = GetExpectedSupportedPlatformText();
 
         Assert.Contains($"Supported platforms: {supportedPlatformText}.", readme);
