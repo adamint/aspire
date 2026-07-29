@@ -66,7 +66,7 @@ Before starting a release:
 3. **Permissions and approvals**:
    - Access to run Azure DevOps pipelines with the publishing pool.
    - Permission to use the NuGet.org service connection.
-   - Permission to use the `VSCode Marketplace Publishing` service connection if publishing the VS Code extension.
+   - Permission to use the `AspireSecurePublishPipelineMarketplaceConnectionWithManagedIdentity` service connection if publishing the VS Code extension.
    - Approval to use the DevDiv ESRP service connection for MicroBuild npm publishing.
    - Valid ESRP owner and approver aliases for npm publishing.
    - GitHub write access for creating tags, releases, and PRs if you need to run the GitHub workflow manually.
@@ -219,7 +219,7 @@ These automations are designed to be idempotent and safe to re-run.
 | Validate Published npm Package from Registry | Confirm the pointer package is visible on npm and that `npm install -g @microsoft/aspire-cli@<version>` works. If registry propagation is slow, re-run with completed publish steps skipped after the package is visible. |
 | Promote Build to Channel | Re-run with completed publish steps skipped. |
 | WinGet publishing / Homebrew validation | Re-run with the corresponding skip flags for completed work. |
-| Publish VS Code Extension to Marketplace | Check that `aspire-vscode-extension` contains one `.vsix`, `.manifest`, and `.signature.p7s`; verify the `VSCode Marketplace Publishing` service connection identity is a Contributor on the Visual Studio Marketplace `microsoft-aspire` publisher; re-run with the already-completed `Skip*` flags set to `true`. |
+| Publish VS Code Extension to Marketplace | Check that `aspire-vscode-extension` contains one `.vsix`, `.manifest`, and `.signature.p7s`; verify the `AspireSecurePublishPipelineMarketplaceConnectionWithManagedIdentity` service connection identity is a Contributor on the Visual Studio Marketplace `microsoft-aspire` publisher; re-run with the already-completed `Skip*` flags set to `true`. |
 | GitHubTasks dispatch | Re-run with completed AzDO-side work skipped and `SkipGitHubTasks: false`; set `SkipReleaseAssets` according to whether release asset upload already completed. |
 | Release asset upload | Re-run with `SkipGitHubTasks: true` and `SkipReleaseAssets: false` after the GitHub release exists. |
 | Nix flake update dispatch | Re-run with `SkipGitHubTasks: true`, `SkipReleaseAssets: true`, and `SkipNixPackageUpdate: false` after the stable GitHub release assets and `update-baseline-<version>` branch exist. If the Nix manifest was already committed to the baseline PR, set `SkipNixPackageUpdate: true` instead. For prereleases, leave it skipped because the Nix manifest only tracks stable `x.y.z` releases. |
@@ -259,11 +259,31 @@ The pipeline uses:
 | Connection name | Purpose |
 |-----------------|---------|
 | `NuGet.org - dotnet/aspire` | NuGet service connection for publishing packages to NuGet.org. |
-| `VSCode Marketplace Publishing` | Azure Resource Manager workload-identity service connection used by `vsce --azure-credential` to publish the signed VS Code extension to the Visual Studio Marketplace. Its managed identity must be a Contributor on the `microsoft-aspire` Marketplace publisher. |
+| `AspireSecurePublishPipelineMarketplaceConnectionWithManagedIdentity` | Azure Resource Manager workload-identity service connection used by `vsce --azure-credential` to publish the signed VS Code extension to the Visual Studio Marketplace. Its managed identity must be a Contributor on the `microsoft-aspire` Marketplace publisher. |
 | `DevDivEsrpAzDoSrvConn` | ESRP service connection used by the MicroBuild publish template for npm publishing. |
 | `Darc: Maestro Production` | Used for darc channel promotion. |
 
 The release definition must be approved for the 1ES and MicroBuild publishing templates and must have permission to use `DevDivEsrpAzDoSrvConn`.
+
+#### Marketplace publishing identity
+
+`vsce --azure-credential` authenticates as the user-assigned managed identity behind the
+`AspireSecurePublishPipelineMarketplaceConnectionWithManagedIdentity` connection, following
+[Secure Automated Publishing as Microsoft](https://eng.ms/docs/cloud-ai-platform/devdiv/vs-services-dougam/vs-marketplace-skofman/visual-studio-marketplace/extension-publisher-guides/secure-automated-publishing-as-microsoft).
+
+| Value | |
+|-------|--|
+| Managed identity | `AspireSecurePublishPipelineMarketplaceManagedIdentity` (subscription `660ae102-bc17-44e4-9939-99d3ad19d523`, resource group `MarketplacePublish`) |
+| Client ID | `1d168f8c-e3fd-4f77-b0f6-3da902c04e1f` |
+| Principal ID | `bae7db05-6158-4628-8c06-fc49aa3c3bcf` |
+| AzDO user ID | `894fc423-ead2-61c2-b133-2fca81a87f13` |
+
+The AzDO user ID is the value to add as a member of the `microsoft-aspire` Marketplace
+publisher; the Marketplace shows it as `<tenant id>\<principal id>`. It is not the client or
+principal ID, and it is only obtainable by calling
+`https://app.vssps.visualstudio.com/_apis/profile/profiles/me` *while authenticated as the
+identity itself*, so it must be read from a pipeline run using the service connection rather
+than from the Azure portal.
 
 ### Approved GitHub Actions
 

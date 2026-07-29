@@ -555,7 +555,11 @@ public sealed class ReleasePublishNugetPipelineTests
             "# ===== WINGET PUBLISHING =====");
 
         Assert.Contains("task: AzureCLI@2", job);
-        Assert.Contains("azureSubscription: 'VSCode Marketplace Publishing'", job);
+        // The service connection name must match the AzDO connection that is federated to
+        // AspireSecurePublishPipelineMarketplaceManagedIdentity, since that identity is the
+        // member authorized on the microsoft-aspire Marketplace publisher. A mismatched name
+        // fails only at publish time, which is the last step of a release.
+        Assert.Contains("azureSubscription: 'AspireSecurePublishPipelineMarketplaceConnectionWithManagedIdentity'", job);
         Assert.Contains("vsce verify-pat --azure-credential $publisher", job);
         Assert.Contains("""$publishArgs = @("publish", "--azure-credential", "--packagePath", $vsix.FullName, "--manifestPath", $manifestPath, "--signaturePath", $signaturePath)""", job);
         Assert.Contains("vsce @publishArgs", job);
