@@ -78,20 +78,16 @@ public static class RustHostingExtensions
 
                 context.Args.Add("--");
             })
-            // Must be registered after the callback above. WithVSCodeDebugging does not install a
-            // post-processing hook: it registers an ordinary WithArgs callback, and command-line arg
-            // callbacks take turns mutating one shared list in registration order. Its callback strips
-            // the `run <cargo args> --` prefix so a debugged binary — launched directly rather than
-            // through cargo — receives only its own arguments. Registered earlier it would run against
-            // an empty list, silently do nothing, and leave the binary parsing "run" as its first
-            // argument.
+            // Must be registered after the callback above. WithVSCodeDebugging ultimately calls
+            // WithDebugSupport, which registers its argument rewriter as an ordinary WithArgs
+            // callback (see ResourceBuilderExtensions.WithDebugSupport). Argument callbacks all run
+            // at evaluation time, but they run in registration order against one shared list, and
+            // this one removes the `run <cargo args> --` prefix so a debugged binary — launched
+            // directly rather than through cargo — receives only its own arguments. Registered first
+            // it would see an empty list and silently do nothing.
             //
-            // Arguments a caller adds via WithArgs after AddRustApp are appended after the strip has
-            // run, which is why an explicit "--" in those arguments is never mistaken for the
-            // separator added above. Cargo arguments are unaffected by ordering entirely: unlike
-            // command-line arg callbacks they are not sequential mutations, they are annotations that
-            // both the callback above and the launch configuration enumerate as a whole when arguments
-            // are evaluated, not when AddRustApp runs.
+            // This ordering requirement is invisible at the call site and shared with the Go and
+            // Python integrations; tracked in https://github.com/microsoft/aspire/issues/18929
             .WithVSCodeDebugging()
             .PublishAsDockerFile(containerBuilder =>
             {
