@@ -83,6 +83,30 @@ public class RustDebugArgsTests
     }
 
     [Fact]
+    public async Task CargoArgumentsRegisteredAfterProgramArgumentsAreStillApplied()
+    {
+        // Cargo arguments are held in annotations enumerated when arguments are evaluated rather
+        // than when AddRustApp runs, so registration position does not matter for them — unlike the
+        // two command-line arg callbacks, which mutate one shared list in sequence. Options-derived
+        // arguments such as --release are emitted before explicit WithCargoArgs values because the
+        // callback that reads those options is registered by AddRustApp.
+        var args = await GetDebugArgsAsync(
+            rust => rust.WithArgs("--port", "8080").WithCargoArgs("--locked").WithCargoReleaseBuild(),
+            supportedLaunchConfigurations: ["project"]);
+
+        Assert.Equal(["run", "--release", "--locked", "--", "--port", "8080"], args);
+    }
+
+    [Fact]
+    public async Task CargoArgumentsRegisteredAfterProgramArgumentsAreStillStrippedWhenDebugging()
+    {
+        var args = await GetDebugArgsAsync(
+            rust => rust.WithArgs("--port", "8080").WithCargoArgs("--locked").WithCargoReleaseBuild());
+
+        Assert.Equal(["--port", "8080"], args);
+    }
+
+    [Fact]
     public async Task RunArgsRetainCargoArgumentsWhenIdeCannotDebugRust()
     {
         // Without an IDE that supports the "rust" launch configuration the resource runs as
