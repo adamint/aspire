@@ -45,18 +45,31 @@ public sealed class SelectTestsWorkflowTests
             testsYml);
     }
 
+    // The npm markdown templates are build inputs that `**.md` in the patterns file would otherwise
+    // hide, letting a template-only PR skip the ENTIRE workflow. The carve-out is a glob rather than a
+    // literal list on purpose: the same set is enumerated in eng/github-ci/test-trigger-map.yml too, and
+    // a literal list means adding a 4th template and forgetting one file silently reintroduces the bug.
+    // Assert the glob form in every place that carves them out, so a regression to enumeration fails.
     [Fact]
     public void CiSkipGateKeepsNpmChangelogTemplateUnmatched()
     {
         var ciYml = File.ReadAllText(CiWorkflowPath);
         var action = File.ReadAllText(CheckChangedFilesActionPath);
+        var map = File.ReadAllText(Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml"));
 
         Assert.Contains("keep_unmatched:", action);
         Assert.Contains("KEEP_UNMATCHED_PATTERNS", action);
         Assert.Contains("keep_unmatched: |", ciYml);
-        Assert.Contains("eng/scripts/pack-cli-npm-package.CHANGELOG.md", ciYml);
-        Assert.Contains("eng/scripts/pack-cli-npm-package.pointer.README.md", ciYml);
-        Assert.Contains("eng/scripts/pack-cli-npm-package.rid.README.md", ciYml);
+        Assert.Contains("eng/scripts/pack-cli-npm-package.*.md", ciYml);
+        Assert.Contains("eng/scripts/pack-cli-npm-package.*.md", map);
+
+        // No file may enumerate the templates individually; that is the drift the glob exists to prevent.
+        foreach (var (file, contents) in new[] { (CiWorkflowPath, ciYml), ("test-trigger-map.yml", map) })
+        {
+            Assert.False(
+                contents.Contains("pack-cli-npm-package.CHANGELOG.md", StringComparison.Ordinal),
+                $"{file} enumerates an npm markdown template by name; use the eng/scripts/pack-cli-npm-package.*.md glob instead so new templates are covered automatically.");
+        }
     }
 
     // The comment_selection job posts one comment per pushed commit (createComment for a new commit,

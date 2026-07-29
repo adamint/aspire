@@ -64,8 +64,10 @@ The `.github/actions/check-changed-files` composite action:
    - `*` → `[^/]*`
    - `.` and other regex metacharacters (`+`, `?`, `[`, `]`, `(`, `)`, `|`, `$`, `^`, `{`, `}`) → escaped with `\`
 3. For every file changed in the PR, checks whether the file path matches at least one of the converted regexes.
-4. Applies the caller's `keep_unmatched` carve-outs before the skip patterns, forcing those files to stay unmatched even if a broad skip pattern such as `**.md` would otherwise match them.
+4. Applies the caller's `keep_unmatched` carve-outs before the skip patterns, forcing those files to stay unmatched even if a broad skip pattern such as `**.md` would otherwise match them. Carve-outs are written as globs (not literal file lists) so that adding a file to a carved-out family — such as a new `pack-cli-npm-package.<name>.md` template — is covered automatically instead of depending on someone remembering to update every place the family is enumerated.
 5. Outputs `only_changed=true` when every changed file matched, allowing the calling workflow to skip further jobs.
+
+> **Important:** step 2's glob-to-regex conversion exists twice — in the action's `glob_to_regex` bash function and in its C# port in `tools/SelectTests/ChangedFileFilter.cs`, which the selective-test selector uses to drop skippable files. Both read this same patterns file, so the selector's "excluded" set must equal the gate's "skip" set. Change the escape set in one and you must change it in the other; `GlobToRegexParityTests` fails if they diverge.
 
 ## Related Files
 
@@ -74,3 +76,4 @@ The `.github/actions/check-changed-files` composite action:
 - `.github/workflows/ci.yml` — the CI workflow that calls the action
 - `eng/github-ci/test-trigger-map.yml` — the selective-test map that routes the CLI npm templates to packaging validation after `keep_unmatched` lets them through the skip gate
 - `tests/Infrastructure.Tests/TestTriggerMap/CheckChangedFilesActionTests.cs` — behavioral tests for the skip gate action
+- `tests/Infrastructure.Tests/TestTriggerMap/GlobToRegexParityTests.cs` — pins the action's `glob_to_regex` and its C# port to the same glob semantics

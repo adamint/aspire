@@ -837,15 +837,37 @@ public sealed class SelectTestsAcceptanceTests(ITestOutputHelper outputHelper) :
         Assert.False(filter.IsExcluded(".github/workflows/backport.yml"));
         Assert.False(filter.IsExcluded("eng/pipelines/azure-pipelines-public.yml"));
         Assert.False(filter.IsExcluded("eng/github-ci/ci-skip-entirely-patterns.txt"));
-        Assert.False(filter.IsExcluded("eng/scripts/pack-cli-npm-package.CHANGELOG.md"));
-        Assert.False(filter.IsExcluded("eng/scripts/pack-cli-npm-package.pointer.README.md"));
-        Assert.False(filter.IsExcluded("eng/scripts/pack-cli-npm-package.rid.README.md"));
+
+        // Every npm markdown template ON DISK must be carved out, enumerated from the filesystem rather
+        // than listed here: the carve-out is a glob precisely so a newly added template is covered
+        // without editing the map, and a hardcoded list here could not tell the difference.
+        foreach (var template in NpmPackageMarkdownTemplatePaths())
+        {
+            Assert.False(filter.IsExcluded(template), $"{template} must be carved out of the skip-gate patterns file by the map's keep_routed glob.");
+        }
+    }
+
+    // Repo-relative paths of the markdown templates eng/scripts/pack-cli-npm-package.ps1 renders into the
+    // npm packages. Enumerated from disk so adding a template automatically extends the coverage below.
+    public static IEnumerable<string> NpmPackageMarkdownTemplatePaths()
+        => Directory.EnumerateFiles(Path.Combine(RepoRoot.Path, "eng", "scripts"), "pack-cli-npm-package.*.md")
+            .Select(path => "eng/scripts/" + Path.GetFileName(path))
+            .OrderBy(path => path, StringComparer.Ordinal);
+
+    public static TheoryData<string> NpmPackageMarkdownTemplates()
+    {
+        var data = new TheoryData<string>();
+        foreach (var template in NpmPackageMarkdownTemplatePaths())
+        {
+            data.Add(template);
+        }
+
+        Assert.NotEmpty(data);
+        return data;
     }
 
     [Theory]
-    [InlineData("eng/scripts/pack-cli-npm-package.CHANGELOG.md")]
-    [InlineData("eng/scripts/pack-cli-npm-package.pointer.README.md")]
-    [InlineData("eng/scripts/pack-cli-npm-package.rid.README.md")]
+    [MemberData(nameof(NpmPackageMarkdownTemplates))]
     public void RealMapNpmPackageMarkdownTemplateChangeRunsPackagingValidation(string templatePath)
     {
         var mapPath = Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml");

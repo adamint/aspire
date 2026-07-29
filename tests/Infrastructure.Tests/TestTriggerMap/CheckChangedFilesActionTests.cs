@@ -28,18 +28,20 @@ public sealed class CheckChangedFilesActionTests(ITestOutputHelper outputHelper)
     [RequiresTools(["bash", "git", "jq"])]
     public async Task KeepUnmatchedForcesNpmTemplateToRequireCiWhileOrdinaryMarkdownSkips()
     {
-        // The skip gate lists **.md, so BOTH files below match it on their own -- only keep_unmatched
+        // The skip gate lists **.md, so ALL files below match it on their own -- only keep_unmatched
         // distinguishes them. An ordinary doc must stay matched (skippable), while the npm packaging
-        // template must be forced unmatched (requires CI) even though it is also a .md file.
+        // templates must be forced unmatched (requires CI) even though they are also .md files.
         const string ordinaryMarkdown = "docs/notes.md";
         const string npmTemplate = "eng/scripts/pack-cli-npm-package.CHANGELOG.md";
+        // A template that does not exist yet: the carve-out is a glob, so a future template is covered
+        // the moment it is added, without editing this test or the workflow.
+        const string futureNpmTemplate = "eng/scripts/pack-cli-npm-package.FUTURE.md";
         const string patternsFile = "eng/github-ci/skip-patterns.txt";
 
-        // Mirrors the newline-separated keep_unmatched list wired in .github/workflows/ci.yml.
-        const string keepUnmatched =
-            "eng/scripts/pack-cli-npm-package.CHANGELOG.md\n" +
-            "eng/scripts/pack-cli-npm-package.pointer.README.md\n" +
-            "eng/scripts/pack-cli-npm-package.rid.README.md";
+        // Read the REAL keep_unmatched value out of .github/workflows/ci.yml rather than restating it.
+        // A copy here would keep passing after the workflow's carve-out was narrowed or deleted, which
+        // is precisely the regression this test exists to catch.
+        var keepUnmatched = ReadKeepUnmatchedFromCiWorkflow();
 
         Git("init", "-q", "-b", "main");
         Git("config", "user.email", "test@example.com");
@@ -53,18 +55,50 @@ public sealed class CheckChangedFilesActionTests(ITestOutputHelper outputHelper)
 
         WriteWorkspaceFile(ordinaryMarkdown, "notes\n");
         WriteWorkspaceFile(npmTemplate, "changelog\n");
+        WriteWorkspaceFile(futureNpmTemplate, "future\n");
         Git("add", "-A");
         Git("commit", "-q", "-m", "head");
         var headSha = Git("rev-parse", "HEAD");
 
         var outputs = await RunCheckChangedFilesAsync(patternsFile, keepUnmatched, baseSha, headSha);
 
-        // The gate must not report "only skippable files changed": the template requires CI.
+        // The gate must not report "only skippable files changed": the templates require CI.
         Assert.Equal("false", outputs.OnlyChanged);
-        // git diff --name-only sorts alphabetically, so docs/ precedes eng/.
-        Assert.Equal([ordinaryMarkdown, npmTemplate], outputs.ChangedFiles);
+        // git diff --name-only sorts alphabetically, so docs/ precedes eng/, and CHANGELOG precedes FUTURE.
+        Assert.Equal([ordinaryMarkdown, npmTemplate, futureNpmTemplate], outputs.ChangedFiles);
         Assert.Equal([ordinaryMarkdown], outputs.MatchedFiles);
-        Assert.Equal([npmTemplate], outputs.UnmatchedFiles);
+        Assert.Equal([npmTemplate, futureNpmTemplate], outputs.UnmatchedFiles);
+    }
+
+    // Extracts the keep_unmatched input the real workflow passes to the check-changed-files action.
+    private static string ReadKeepUnmatchedFromCiWorkflow()
+    {
+        var ciPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "ci.yml");
+        var deserializer = new DeserializerBuilder().Build();
+        var root = deserializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(ciPath));
+
+        var jobs = (Dictionary<object, object>)root["jobs"];
+        foreach (var job in jobs.Values.Cast<Dictionary<object, object>>())
+        {
+            if (!job.TryGetValue("steps", out var stepsValue))
+            {
+                continue;
+            }
+
+            foreach (var step in ((List<object>)stepsValue).Cast<Dictionary<object, object>>())
+            {
+                if (step.TryGetValue("uses", out var uses)
+                    && ((string)uses).Contains("check-changed-files", StringComparison.Ordinal)
+                    && step.TryGetValue("with", out var with)
+                    && ((Dictionary<object, object>)with).TryGetValue("keep_unmatched", out var keepUnmatched))
+                {
+                    // The workflow uses a block scalar, so the parsed value carries a trailing newline.
+                    return ((string)keepUnmatched).TrimEnd('\n', '\r');
+                }
+            }
+        }
+
+        throw new InvalidOperationException("Could not find a check-changed-files step with keep_unmatched in .github/workflows/ci.yml.");
     }
 
     [Fact]
