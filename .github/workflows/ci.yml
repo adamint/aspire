@@ -47,7 +47,7 @@ jobs:
           # than a literal list so adding a new pack-cli-npm-package.<x>.md template cannot silently
           # reintroduce that bug by being added here in only some of the places that enumerate them.
           keep_unmatched: |
-            eng/scripts/pack-cli-npm-package.*.md
+            eng/scripts/pack-cli-npm-package*.md
 
       - id: compute_version_suffix
         name: Compute version suffix for PRs

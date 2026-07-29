@@ -6,7 +6,6 @@ using System.Text;
 using Aspire.SelectTests;
 using Aspire.TestUtilities;
 using Xunit;
-using YamlDotNet.Serialization;
 
 namespace Infrastructure.Tests.TestTriggerMap;
 
@@ -114,7 +113,7 @@ public sealed class GlobToRegexParityTests(ITestOutputHelper outputHelper) : IDi
 
         var driver = $$"""
             set -u
-            {{ExtractGlobToRegexFunction()}}
+            {{CheckChangedFilesActionTests.ExtractGlobToRegexFunction()}}
 
             while IFS= read -r pattern; do
               [ -z "$pattern" ] && continue
@@ -188,31 +187,5 @@ public sealed class GlobToRegexParityTests(ITestOutputHelper outputHelper) : IDi
         }
 
         return matrix;
-    }
-
-    // Slices glob_to_regex out of the action's check_files step. The YAML block scalar is already
-    // dedented by the parser, so the function opens at column 0 and closes at the first bare '}'.
-    private static string ExtractGlobToRegexFunction()
-    {
-        var actionPath = Path.Combine(RepoRoot.Path, ".github", "actions", "check-changed-files", "action.yml");
-        var deserializer = new DeserializerBuilder().Build();
-        var root = deserializer.Deserialize<Dictionary<string, object>>(File.ReadAllText(actionPath));
-
-        var runs = (Dictionary<object, object>)root["runs"];
-        var steps = (List<object>)runs["steps"];
-        var script = steps.Cast<Dictionary<object, object>>()
-            .Where(step => step.TryGetValue("id", out var id) && (string)id == "check_files")
-            .Select(step => (string)step["run"])
-            .FirstOrDefault()
-            ?? throw new InvalidOperationException("Could not find the 'check_files' step in check-changed-files/action.yml.");
-
-        var lines = script.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-        var start = Array.FindIndex(lines, line => line.StartsWith("glob_to_regex()", StringComparison.Ordinal));
-        Assert.True(start >= 0, "Could not find glob_to_regex() in the check_files step.");
-
-        var end = Array.FindIndex(lines, start, line => line == "}");
-        Assert.True(end > start, "Could not find the end of glob_to_regex() in the check_files step.");
-
-        return string.Join('\n', lines[start..(end + 1)]);
     }
 }

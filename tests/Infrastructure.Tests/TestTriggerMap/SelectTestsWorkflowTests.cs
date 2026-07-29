@@ -49,7 +49,9 @@ public sealed class SelectTestsWorkflowTests
     // hide, letting a template-only PR skip the ENTIRE workflow. The carve-out is a glob rather than a
     // literal list on purpose: the same set is enumerated in eng/github-ci/test-trigger-map.yml too, and
     // a literal list means adding a 4th template and forgetting one file silently reintroduces the bug.
-    // Assert the glob form in every place that carves them out, so a regression to enumeration fails.
+    // This pins the wiring and forbids a regression to enumeration; that the glob actually REACHES every
+    // template on disk is asserted semantically (via the action's own glob_to_regex) by
+    // CheckChangedFilesActionTests.CiKeepUnmatchedGlobsCoverEveryNpmMarkdownTemplateOnDisk.
     [Fact]
     public void CiSkipGateKeepsNpmChangelogTemplateUnmatched()
     {
@@ -60,15 +62,15 @@ public sealed class SelectTestsWorkflowTests
         Assert.Contains("keep_unmatched:", action);
         Assert.Contains("KEEP_UNMATCHED_PATTERNS", action);
         Assert.Contains("keep_unmatched: |", ciYml);
-        Assert.Contains("eng/scripts/pack-cli-npm-package.*.md", ciYml);
-        Assert.Contains("eng/scripts/pack-cli-npm-package.*.md", map);
 
-        // No file may enumerate the templates individually; that is the drift the glob exists to prevent.
-        foreach (var (file, contents) in new[] { (CiWorkflowPath, ciYml), ("test-trigger-map.yml", map) })
+        // Both files must carve the templates out by wildcard, and neither may name one individually --
+        // enumeration is the drift the glob exists to prevent.
+        foreach (var (file, contents) in new[] { ("ci.yml", ciYml), ("test-trigger-map.yml", map) })
         {
+            Assert.Contains("eng/scripts/pack-cli-npm-package*", contents);
             Assert.False(
                 contents.Contains("pack-cli-npm-package.CHANGELOG.md", StringComparison.Ordinal),
-                $"{file} enumerates an npm markdown template by name; use the eng/scripts/pack-cli-npm-package.*.md glob instead so new templates are covered automatically.");
+                $"{file} enumerates an npm markdown template by name; use a wildcard so new templates are covered automatically.");
         }
     }
 

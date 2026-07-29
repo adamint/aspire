@@ -3,6 +3,7 @@
 
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Aspire.TestUtilities;
 using Xunit;
 using YamlDotNet.Serialization;
@@ -68,6 +69,97 @@ public sealed class CheckChangedFilesActionTests(ITestOutputHelper outputHelper)
         Assert.Equal([ordinaryMarkdown, npmTemplate, futureNpmTemplate], outputs.ChangedFiles);
         Assert.Equal([ordinaryMarkdown], outputs.MatchedFiles);
         Assert.Equal([npmTemplate, futureNpmTemplate], outputs.UnmatchedFiles);
+    }
+
+    // The strongest form of the carve-out guard: compile the globs the REAL ci.yml passes to the skip
+    // gate using the action's OWN glob_to_regex, and require them to cover every npm markdown template
+    // that exists on disk. Unlike an assertion on the glob's text, this fails for either way the
+    // carve-out can rot -- someone narrowing the glob, or someone adding a template whose name the glob
+    // does not reach (e.g. `pack-cli-npm-package.md`, which an `...package.*.md` glob misses because it
+    // requires two dots). Missing a template means a PR touching only that file skips ALL of CI.
+    [Fact]
+    [RequiresTools(["bash"])]
+    public async Task CiKeepUnmatchedGlobsCoverEveryNpmMarkdownTemplateOnDisk()
+    {
+        var templates = SelectTestsAcceptanceTests.NpmPackageMarkdownTemplatePaths().ToList();
+        Assert.NotEmpty(templates);
+
+        var keepUnmatchedGlobs = ReadKeepUnmatchedFromCiWorkflow()
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        Assert.NotEmpty(keepUnmatchedGlobs);
+
+        var regexes = await CompileWithActionGlobToRegexAsync(keepUnmatchedGlobs);
+
+        foreach (var template in templates)
+        {
+            Assert.True(
+                regexes.Any(regex => Regex.IsMatch(template, regex)),
+                $"""
+                {template} is not covered by any keep_unmatched glob in .github/workflows/ci.yml.
+                  globs   : {string.Join(", ", keepUnmatchedGlobs)}
+                  compiled: {string.Join(", ", regexes)}
+
+                An uncovered template matches the **.md skip pattern, so a PR changing only that file
+                would skip the ENTIRE CI workflow. Widen the glob in ci.yml (and the matching entries in
+                eng/github-ci/test-trigger-map.yml) to reach it.
+                """);
+        }
+    }
+
+    // Runs the action's own glob_to_regex over the given globs, so this test compiles them exactly the
+    // way the gate does rather than reimplementing the conversion.
+    private async Task<string[]> CompileWithActionGlobToRegexAsync(string[] globs)
+    {
+        var driver = $$"""
+            set -eu
+            {{ExtractGlobToRegexFunction()}}
+            while IFS= read -r glob; do
+              [ -z "$glob" ] && continue
+              glob_to_regex "$glob"
+            done < "$1"
+            """;
+
+        var globsPath = Path.Combine(_workspace.Path, "keep-unmatched-globs.txt");
+        var driverPath = Path.Combine(_workspace.Path, "compile-globs.sh");
+        await File.WriteAllTextAsync(globsPath, string.Join('\n', globs) + "\n");
+        await File.WriteAllTextAsync(driverPath, driver);
+
+        using var process = new Process();
+        process.StartInfo.FileName = "bash";
+        process.StartInfo.ArgumentList.Add(driverPath);
+        process.StartInfo.ArgumentList.Add(globsPath);
+        process.StartInfo.WorkingDirectory = _workspace.Path;
+        process.StartInfo.RedirectStandardOutput = true;
+        process.StartInfo.RedirectStandardError = true;
+        process.StartInfo.UseShellExecute = false;
+
+        process.Start();
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderrTask = process.StandardError.ReadToEndAsync();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await process.WaitForExitAsync(cts.Token);
+        var stdout = await stdoutTask;
+        var stderr = await stderrTask;
+
+        Assert.True(process.ExitCode == 0, $"glob compilation driver failed.{Environment.NewLine}{stdout}{stderr}");
+
+        return stdout.Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    // Slices glob_to_regex out of the action's check_files step. The YAML block scalar is already
+    // dedented by the parser, so the function opens at column 0 and closes at the first bare '}'.
+    // Shared with GlobToRegexParityTests, which runs the same function against its C# port.
+    internal static string ExtractGlobToRegexFunction()
+    {
+        var lines = ExtractCheckFilesScript().Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var start = Array.FindIndex(lines, line => line.StartsWith("glob_to_regex()", StringComparison.Ordinal));
+        Assert.True(start >= 0, "Could not find glob_to_regex() in the check_files step.");
+
+        var end = Array.FindIndex(lines, start, line => line == "}");
+        Assert.True(end > start, "Could not find the end of glob_to_regex() in the check_files step.");
+
+        return string.Join('\n', lines[start..(end + 1)]);
     }
 
     // Extracts the keep_unmatched input the real workflow passes to the check-changed-files action.

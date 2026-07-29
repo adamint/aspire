@@ -848,9 +848,13 @@ public sealed class SelectTestsAcceptanceTests(ITestOutputHelper outputHelper) :
     }
 
     // Repo-relative paths of the markdown templates eng/scripts/pack-cli-npm-package.ps1 renders into the
-    // npm packages. Enumerated from disk so adding a template automatically extends the coverage below.
+    // npm packages. Enumerated with the WIDEST possible pattern (every pack-cli-npm-package* file, then
+    // filtered to .md) rather than a shape like "pack-cli-npm-package.*.md": a narrower pattern here
+    // would silently agree with an equally narrow carve-out glob and prove nothing. Anything named
+    // pack-cli-npm-package<anything>.md must be covered, whatever the naming convention drifts to.
     public static IEnumerable<string> NpmPackageMarkdownTemplatePaths()
-        => Directory.EnumerateFiles(Path.Combine(RepoRoot.Path, "eng", "scripts"), "pack-cli-npm-package.*.md")
+        => Directory.EnumerateFiles(Path.Combine(RepoRoot.Path, "eng", "scripts"), "pack-cli-npm-package*")
+            .Where(path => path.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
             .Select(path => "eng/scripts/" + Path.GetFileName(path))
             .OrderBy(path => path, StringComparer.Ordinal);
 
