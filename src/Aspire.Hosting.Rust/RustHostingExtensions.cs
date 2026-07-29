@@ -78,16 +78,8 @@ public static class RustHostingExtensions
 
                 context.Args.Add("--");
             })
-            // Must be registered after the callback above. WithVSCodeDebugging ultimately calls
-            // WithDebugSupport, which registers its argument rewriter as an ordinary WithArgs
-            // callback (see ResourceBuilderExtensions.WithDebugSupport). Argument callbacks all run
-            // at evaluation time, but they run in registration order against one shared list, and
-            // this one removes the `run <cargo args> --` prefix so a debugged binary — launched
-            // directly rather than through cargo — receives only its own arguments. Registered first
-            // it would see an empty list and silently do nothing.
-            //
-            // This ordering requirement is invisible at the call site and shared with the Go and
-            // Python integrations; tracked in https://github.com/microsoft/aspire/issues/18929
+            // Must be registered after the cargo args above, otherwise the debug args filter has
+            // nothing to strip. See https://github.com/microsoft/aspire/issues/18929
             .WithVSCodeDebugging()
             .PublishAsDockerFile(containerBuilder =>
             {
