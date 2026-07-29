@@ -66,7 +66,6 @@ public static class RustHostingExtensions
         return builder.AddResource(resource)
             .WithRequiredCommand("cargo", "https://www.rust-lang.org/tools/install")
             .WithRustDefaults()
-            .WithVSCodeDebugging()
             .WithCargoArgs(context => AddInitialCargoArgs(resource, context.Args))
             .WithArgs(async context =>
             {
@@ -79,6 +78,13 @@ public static class RustHostingExtensions
 
                 context.Args.Add("--");
             })
+            // Must be registered after the argument callback above. Argument callbacks run in
+            // registration order, and the one WithVSCodeDebugging installs strips the
+            // `run <cargo args> --` prefix so a debugged binary — which is launched directly rather
+            // than through cargo — receives only its own arguments. Registered earlier it would run
+            // against an empty list, silently do nothing, and leave the binary parsing "run" as its
+            // first argument.
+            .WithVSCodeDebugging()
             .PublishAsDockerFile(containerBuilder =>
             {
                 if (File.Exists(Path.Combine(appDirectory, "Dockerfile")))
