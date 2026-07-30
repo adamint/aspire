@@ -537,10 +537,6 @@ public static class RustHostingExtensions
     // and the published container run the same binary. It is also strictly better than reading the build's
     // artifacts: `cargo build` ignores `default-run` and therefore reports every binary in the package,
     // whereas metadata reports `default-run` itself and so matches what `cargo run` launches.
-    //
-    // The blocking wait is deliberate: the launch configuration annotator is synchronous today, this runs
-    // only on a debug launch (never on a plain run), and it is immediately followed by a full cargo build
-    // that takes orders of magnitude longer than a manifest query.
     private static string ResolveDebugExecutablePath(RustAppResource resource, string workingDirectory, DistributedApplicationExecutionContext executionContext)
     {
         var options = resource.TryGetLastAnnotation<RustCargoOptionsAnnotation>(out var cargoOptions)
