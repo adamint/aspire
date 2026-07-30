@@ -6,8 +6,8 @@ using Aspire.Hosting.ApplicationModel;
 namespace Aspire.Hosting.Rust;
 
 /// <summary>
-/// Captures the cargo build/run options configured through the <c>WithCargoReleaseBuild</c>, <c>WithCargoFeatures</c>,
-/// and <c>WithCargoBinTarget</c> fluent APIs, so that a single default <see cref="RustCargoArgsCallbackAnnotation"/>
+/// Captures the cargo build/run options configured through the <c>WithCargoReleaseBuild</c> and <c>WithCargoFeatures</c>
+/// fluent APIs, so that a single default <see cref="RustCargoArgsCallbackAnnotation"/>
 /// registered by <c>AddRustApp</c> can translate them into cargo command-line arguments at execution time, regardless
 /// of the order the WithCargo* methods were called relative to each other.
 /// </summary>
@@ -22,9 +22,4 @@ internal sealed class RustCargoOptionsAnnotation : IResourceAnnotation
     /// Gets or sets the cargo features to enable via <c>--features</c>.
     /// </summary>
     public IReadOnlyList<string>? Features { get; set; }
-
-    /// <summary>
-    /// Gets or sets the cargo bin target to run via <c>--bin</c>.
-    /// </summary>
-    public string? BinTarget { get; set; }
 }

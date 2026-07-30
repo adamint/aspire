@@ -56,9 +56,8 @@ await builder.build().run();
 `appDirectory` is the directory containing `Cargo.toml`. Arguments for your program are passed with
 `.WithArgs(...)`; arguments for cargo itself are passed with `.WithCargoArgs(...)`.
 
-Read the listening port from the environment variable named by `WithHttpEndpoint(env: ...)` and bind
-to all interfaces (`0.0.0.0`). A `127.0.0.1` listener works while Aspire runs the app as a host
-process, but is unreachable once the app is published into a container.
+Read the listening port from the environment variable named by `WithHttpEndpoint(env: ...)` rather
+than hard-coding one, so Aspire can assign a free port and wire up service discovery.
 
 ### Cargo options
 
@@ -75,47 +74,26 @@ builder.AddRustApp("api", "../rust-api")
 | `WithCargoArgs(Action<RustCargoArgsCallbackContext> callback)` | Computes cargo arguments when the resource starts. An async `Func<RustCargoArgsCallbackContext, Task>` overload is also available |
 | `WithCargoReleaseBuild()` | Adds `--release` |
 | `WithCargoFeatures(params string[] features)` | Adds `--features` with the supplied features |
-| `WithCargoBinTarget(string binName)` | Adds `--bin <name>`, selecting one binary from a crate that declares several |
 
-These options apply to local execution, debugging, and publishing alike.
+These options apply to local execution and debugging alike.
 
-### Running under bacon
-
-`AddBaconApp` runs a crate under [bacon](https://dystroy.org/bacon/), which rebuilds and reruns it as
-source files change. It requires `bacon` on the PATH:
+Cargo's target selection flags need no dedicated API — pass them like any other cargo argument. A
+crate with several `[[bin]]` targets is selected the same way `cargo run` requires:
 
 ```csharp
-builder.AddBaconApp("api", "../rust-api");
-```
-
-### Publishing
-
-A Rust app publishes to a container. If `appDirectory` contains a `Dockerfile` it is used as-is;
-otherwise one is generated for you.
-
-The `beta` and `nightly` toolchain channels have no official Docker image, so pin images explicitly
-when your crate requires them:
-
-```csharp
-#pragma warning disable ASPIREDOCKERFILEBUILDER001
-
 builder.AddRustApp("api", "../rust-api")
-    .WithDockerfileBaseImage(
-        buildImage: "rustlang/rust:nightly-bookworm",
-        runtimeImage: "debian:bookworm-slim");
+    .WithCargoArgs("--bin", "worker");
 ```
-
-`WithDockerfileBaseImage` is experimental, so its `ASPIREDOCKERFILEBUILDER001` diagnostic must be
-suppressed. When you supply a non-Alpine runtime image, that image is responsible for providing CA
-certificates and any non-root user you want the app to run as.
-
-Crates that declare more than one `[[bin]]` target must select one with `WithCargoBinTarget`.
 
 ### Debugging
 
 Debugging is enabled automatically by `AddRustApp` — use the normal Aspire "Start Debugging" flow in
-VS Code. Library-only crates produce no executable and cannot be debugged. If a crate defines several
-binaries, select the one to debug with `WithCargoBinTarget`.
+VS Code. Library-only crates produce no executable and cannot be debugged.
+
+Debugging builds the crate with the same cargo arguments used to run it, so any `--bin`/`--example`
+selection carries over. One case differs from `cargo run`: `cargo build` ignores the `default-run`
+manifest key, so a crate that relies on `default-run` alone builds every binary and debugging cannot
+tell which to launch. Pass `--bin` explicitly through `WithCargoArgs` in that case.
 
 ## Additional documentation
 
@@ -123,7 +101,6 @@ binaries, select the one to debug with `WithCargoBinTarget`.
 - https://aspire.dev/integrations/frameworks/rust/rust-host/
 - [Aspire documentation](https://aspire.dev/)
 - [The Cargo Book](https://doc.rust-lang.org/cargo/)
-- [bacon](https://dystroy.org/bacon/)
 
 ## Feedback & contributing
 

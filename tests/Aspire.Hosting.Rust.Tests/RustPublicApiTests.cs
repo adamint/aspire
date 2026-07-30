@@ -4,6 +4,7 @@
 #pragma warning disable ASPIREEXTENSION001
 
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Dcp.Model;
 using Aspire.Hosting.Tests.Utils;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -47,12 +48,12 @@ public class RustPublicApiTests
     }
 
     [Fact]
-    public async Task WithFeatureAndBinWrappersMapToCargoArgs()
+    public async Task WithCargoFeaturesAndTargetSelectionMapToCargoArgs()
     {
         var builder = DistributedApplication.CreateBuilder();
         var app = builder.AddRustApp("api", builder.AppHostDirectory)
             .WithCargoFeatures("tokio", "serde")
-            .WithCargoBinTarget("worker");
+            .WithCargoArgs("--bin", "worker");
 
         var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
 
@@ -69,14 +70,48 @@ public class RustPublicApiTests
     }
 
     [Fact]
-    public async Task AddBaconAppUsesBaconCommandAndRunArg()
+    public void LaunchConfigurationCarriesCargoBuildArguments()
     {
         var builder = DistributedApplication.CreateBuilder();
-        var app = builder.AddBaconApp("api", builder.AppHostDirectory);
+        var app = builder.AddRustApp("api", builder.AppHostDirectory)
+            .WithCargoFeatures("tls-ring")
+            .WithCargoReleaseBuild();
 
-        Assert.Equal("bacon", app.Resource.Command);
+        var launchConfig = InvokeLaunchConfigurationAnnotator(app.Resource);
 
-        var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
-        Assert.Equal(["run"], args);
+        Assert.Equal("rust", launchConfig.Type);
+        Assert.Equal(Path.GetFullPath(builder.AppHostDirectory), launchConfig.WorkingDirectory);
+
+        var cargo = Assert.IsType<RustCargoLaunchTarget>(launchConfig.Cargo);
+        Assert.Equal(["build", "--features", "tls-ring", "--release"], cargo.Args);
+    }
+
+    [Fact]
+    public void LaunchConfigurationCarriesCargoTargetSelectionArguments()
+    {
+        // `cargo build` builds every binary target unless the arguments narrow it, so the target
+        // selection that makes `cargo run` unambiguous has to reach the debug build too.
+        var builder = DistributedApplication.CreateBuilder();
+        var app = builder.AddRustApp("api", builder.AppHostDirectory)
+            .WithCargoArgs("--bin", "worker");
+
+        var launchConfig = InvokeLaunchConfigurationAnnotator(app.Resource);
+
+        var cargo = Assert.IsType<RustCargoLaunchTarget>(launchConfig.Cargo);
+        Assert.Equal(["build", "--bin", "worker"], cargo.Args);
+    }
+
+    private static RustLaunchConfiguration InvokeLaunchConfigurationAnnotator(IResource resource)
+    {
+        Assert.True(resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebugging));
+
+        var exe = Executable.Create("test", "cargo");
+        supportsDebugging.LaunchConfigurationAnnotator(exe, ExecutableLaunchMode.Debug);
+
+        Assert.True(exe.TryGetAnnotationAsObjectList<RustLaunchConfiguration>(
+            Executable.LaunchConfigurationsAnnotation,
+            out var launchConfigs));
+
+        return Assert.Single(launchConfigs);
     }
 }

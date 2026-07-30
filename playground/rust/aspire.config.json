@@ -1,6 +1,6 @@
 {
   "appHost": {
-    "path": "Rust.AppHost/Rust.AppHost.csproj",
+    "path": "apphost.rs",
     "language": "rust"
   },
   "packages": {

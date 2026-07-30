@@ -152,7 +152,8 @@ export const rustDisplayName = (program: string) => vscode.l10n.t('Rust: {0}', p
 export const rustLabel = vscode.l10n.t('Rust');
 export const rustBuildFailedWithError = (workingDirectory: string, error: string) => vscode.l10n.t('cargo build failed in {0} with error: {1}.', workingDirectory, error);
 export const rustBuildFailedWithExitCode = (workingDirectory: string, exitCode: string) => vscode.l10n.t('cargo build failed in {0} with exit code {1}.', workingDirectory, exitCode);
-export const rustBuildProducedNoExecutable = (workingDirectory: string) => vscode.l10n.t('cargo build in {0} completed but did not produce a runnable binary. Ensure the crate defines a binary target, or select one with WithCargoBinTarget.', workingDirectory);
+export const rustBuildProducedNoExecutable = (workingDirectory: string) => vscode.l10n.t('cargo build in {0} completed but did not produce a runnable binary. Ensure the crate defines a binary target.', workingDirectory);
+export const rustBuildProducedMultipleExecutables = (workingDirectory: string, targets: string) => vscode.l10n.t('cargo build in {0} could not determine which binary to debug. Available binaries: {1}. Pass the --bin option with WithCargoArgs to specify one.', workingDirectory, targets);
 export const bunDisplayName = (script: string) => `Bun: ${script}`;
 export const bunLabel = 'Bun';
 export const nodeDisplayName = (script: string) => `Node.js: ${script}`;

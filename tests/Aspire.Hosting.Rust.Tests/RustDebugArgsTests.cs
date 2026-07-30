@@ -67,7 +67,7 @@ public class RustDebugArgsTests
         var args = await GetDebugArgsAsync(rust => rust
             .WithCargoReleaseBuild()
             .WithCargoFeatures("tls-ring")
-            .WithCargoBinTarget("server")
+            .WithCargoArgs("--bin", "server")
             .WithCargoArgs("--locked")
             .WithArgs("--port", "8080"));
 

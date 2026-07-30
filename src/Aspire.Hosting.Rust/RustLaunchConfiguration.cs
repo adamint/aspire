@@ -19,8 +19,4 @@ internal sealed class RustCargoLaunchTarget
 {
     [JsonPropertyName("args")]
     public string[] Args { get; set; } = [];
-
-    [JsonPropertyName("filter")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Filter { get; set; }
 }
