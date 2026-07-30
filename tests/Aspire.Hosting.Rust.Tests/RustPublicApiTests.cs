@@ -70,14 +70,14 @@ public class RustPublicApiTests
     }
 
     [Fact]
-    public void LaunchConfigurationCarriesCargoBuildArguments()
+    public async Task LaunchConfigurationCarriesCargoBuildArguments()
     {
         var builder = DistributedApplication.CreateBuilder();
         var app = builder.AddRustApp("api", builder.AppHostDirectory)
             .WithCargoFeatures("tls-ring")
             .WithCargoReleaseBuild();
 
-        var launchConfig = InvokeLaunchConfigurationAnnotator(app.Resource);
+        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(app.Resource);
 
         Assert.Equal("rust", launchConfig.Type);
         Assert.Equal(Path.GetFullPath(builder.AppHostDirectory), launchConfig.WorkingDirectory);
@@ -87,7 +87,7 @@ public class RustPublicApiTests
     }
 
     [Fact]
-    public void LaunchConfigurationCarriesCargoTargetSelectionArguments()
+    public async Task LaunchConfigurationCarriesCargoTargetSelectionArguments()
     {
         // `cargo build` builds every binary target unless the arguments narrow it, so the target
         // selection that makes `cargo run` unambiguous has to reach the debug build too.
@@ -95,15 +95,56 @@ public class RustPublicApiTests
         var app = builder.AddRustApp("api", builder.AppHostDirectory)
             .WithCargoArgs("--bin", "worker");
 
-        var launchConfig = InvokeLaunchConfigurationAnnotator(app.Resource);
+        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(app.Resource);
 
         var cargo = Assert.IsType<RustCargoLaunchTarget>(launchConfig.Cargo);
         Assert.Equal(["build", "--bin", "worker"], cargo.Args);
     }
 
-    private static RustLaunchConfiguration InvokeLaunchConfigurationAnnotator(IResource resource)
+    [Fact]
+    public async Task LaunchConfigurationReusesResolvedCargoArgumentsInsteadOfRunningCallbacksAgain()
+    {
+        // A cargo argument callback may be one-shot or nondeterministic, so building the launch
+        // configuration must reuse what argument evaluation already produced rather than re-running it.
+        var invocations = 0;
+
+        var builder = DistributedApplication.CreateBuilder();
+        var app = builder.AddRustApp("api", builder.AppHostDirectory)
+            .WithCargoArgs(context =>
+            {
+                invocations++;
+                context.Args.Add($"--config=build.jobs={invocations}");
+            });
+
+        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(app.Resource);
+
+        Assert.Equal(1, invocations);
+        var cargo = Assert.IsType<RustCargoLaunchTarget>(launchConfig.Cargo);
+        Assert.Equal(["build", "--config=build.jobs=1"], cargo.Args);
+    }
+
+    [Fact]
+    public async Task LaunchConfigurationThrowsWhenCargoArgumentsHaveNotBeenResolved()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var app = builder.AddRustApp("api", builder.AppHostDirectory);
+
+        Assert.True(app.Resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebugging));
+
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => supportsDebugging.LaunchConfigurationAnnotator(Executable.Create("test", "cargo"), ExecutableLaunchMode.Debug));
+
+        Assert.Contains("have not been resolved", exception.Message);
+        await Task.CompletedTask;
+    }
+
+    private static async Task<RustLaunchConfiguration> InvokeLaunchConfigurationAnnotatorAsync(RustAppResource resource)
     {
         Assert.True(resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebugging));
+
+        // DCP resolves the resource's arguments before it asks for the launch configuration, and the
+        // launch configuration reuses those resolved cargo arguments, so evaluate them first.
+        await ArgumentEvaluator.GetArgumentListAsync(resource);
 
         var exe = Executable.Create("test", "cargo");
         supportsDebugging.LaunchConfigurationAnnotator(exe, ExecutableLaunchMode.Debug);

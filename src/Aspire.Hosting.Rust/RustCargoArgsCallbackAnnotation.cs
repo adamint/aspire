@@ -15,7 +15,7 @@ public sealed class RustCargoArgsCallbackAnnotation(Func<RustCargoArgsCallbackCo
     /// Initializes a new instance of the <see cref="RustCargoArgsCallbackAnnotation"/> class.
     /// </summary>
     /// <param name="callback">The callback action to be executed.</param>
-    public RustCargoArgsCallbackAnnotation(Action<IList<object>> callback)
+    public RustCargoArgsCallbackAnnotation(Action<IList<string>> callback)
         : this(context =>
         {
             callback(context.Args);
@@ -36,12 +36,18 @@ public sealed class RustCargoArgsCallbackAnnotation(Func<RustCargoArgsCallbackCo
 /// </summary>
 /// <param name="args">The command-line arguments collection.</param>
 /// <param name="cancellationToken">The cancellation token associated with this callback context.</param>
-public sealed class RustCargoArgsCallbackContext(IList<object> args, CancellationToken cancellationToken = default)
+/// <remarks>
+/// Unlike program arguments, cargo arguments are plain strings rather than <see cref="object"/>.
+/// They select build behaviour (<c>--release</c>, <c>--features</c>, <c>--bin</c>) before the program
+/// starts, so there is nothing for a deferred value such as an endpoint reference to resolve against;
+/// those belong after the <c>--</c> separator and are added with <c>WithArgs</c>.
+/// </remarks>
+public sealed class RustCargoArgsCallbackContext(IList<string> args, CancellationToken cancellationToken = default)
 {
     /// <summary>
     /// Gets the list of command-line arguments.
     /// </summary>
-    public IList<object> Args { get; } = args ?? throw new ArgumentNullException(nameof(args));
+    public IList<string> Args { get; } = args ?? throw new ArgumentNullException(nameof(args));
 
     /// <summary>
     /// Gets the cancellation token associated with the callback context.

@@ -22,6 +22,36 @@ public static class RustHostingExtensions
     /// <param name="appDirectory">The directory containing the Rust application files.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/>.</returns>
     /// <ats-returns>The resource builder.</ats-returns>
+    /// <remarks>
+    /// <para>
+    /// The resource runs <c>cargo run</c> in <paramref name="appDirectory"/>, which must contain a
+    /// <c>Cargo.toml</c>. Cargo requires the two kinds of argument to be separated by <c>--</c>, so they
+    /// are configured separately: <c>WithCargoArgs</c> adds arguments for cargo itself (before the
+    /// separator) and <c>WithArgs</c> adds arguments for the application (after it).
+    /// </para>
+    /// <para>
+    /// Debugging is wired up automatically. In VS Code the resource is built with <c>cargo build</c> and
+    /// the resulting binary is launched under a native debugger, so the cargo arguments are applied to
+    /// the build rather than to <c>cargo run</c>.
+    /// </para>
+    /// <para>
+    /// OTLP export and dev certificate trust are configured by default. Rust does not read a port from
+    /// the environment on its own, so bind to the port named by <c>WithHttpEndpoint(env: ...)</c> rather
+    /// than a hard-coded one.
+    /// </para>
+    /// </remarks>
+    /// <example>
+    /// Add a Rust application to the app host and expose an HTTP endpoint:
+    /// <code language="csharp">
+    /// var builder = DistributedApplication.CreateBuilder(args);
+    ///
+    /// builder.AddRustApp("api", "../rust-api")
+    ///        .WithHttpEndpoint(env: "PORT")
+    ///        .WithCargoReleaseBuild();
+    ///
+    /// builder.Build().Run();
+    /// </code>
+    /// </example>
     [AspireExport]
     public static IResourceBuilder<RustAppResource> AddRustApp(
         this IDistributedApplicationBuilder builder,
@@ -41,11 +71,21 @@ public static class RustHostingExtensions
             .WithCargoArgs(context => AddInitialCargoArgs(resource, context.Args))
             .WithArgs(async context =>
             {
-                context.Args.Add("run");
+                // Resolve the cargo arguments once and record them: the debug launch configuration
+                // reuses this list rather than invoking the user's callbacks a second time.
+                var cargoArgs = new List<string>();
 
-                foreach (var annotation in context.Resource.Annotations.OfType<RustCargoArgsCallbackAnnotation>())
+                foreach (var annotation in resource.Annotations.OfType<RustCargoArgsCallbackAnnotation>())
                 {
-                    await annotation.Callback(new RustCargoArgsCallbackContext(context.Args, context.CancellationToken)).ConfigureAwait(false);
+                    await annotation.Callback(new RustCargoArgsCallbackContext(cargoArgs, context.CancellationToken)).ConfigureAwait(false);
+                }
+
+                resource.ResolvedCargoArgs = cargoArgs;
+
+                context.Args.Add("run");
+                foreach (var cargoArg in cargoArgs)
+                {
+                    context.Args.Add(cargoArg);
                 }
 
                 context.Args.Add("--");
@@ -87,7 +127,7 @@ public static class RustHostingExtensions
     /// <param name="callback">A callback that computes cargo arguments at execution time.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
     /// <remarks>This method is not available in polyglot app hosts. Use the string[] overload instead.</remarks>
-    [AspireExportIgnore(Reason = "RustCargoArgsCallbackContext exposes IList<object> — not usable from polyglot hosts.")]
+    [AspireExportIgnore(Reason = "Callback-based cargo arguments are not expressible in polyglot app hosts.")]
     public static IResourceBuilder<T> WithCargoArgs<T>(this IResourceBuilder<T> builder, Action<RustCargoArgsCallbackContext> callback)
         where T : RustAppResource
     {
@@ -109,7 +149,7 @@ public static class RustHostingExtensions
     /// <param name="callback">A callback that computes cargo arguments at execution time.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
     /// <remarks>This method is not available in polyglot app hosts. Use the string[] overload instead.</remarks>
-    [AspireExportIgnore(Reason = "RustCargoArgsCallbackContext exposes IList<object> — not usable from polyglot hosts.")]
+    [AspireExportIgnore(Reason = "Callback-based cargo arguments are not expressible in polyglot app hosts.")]
     public static IResourceBuilder<T> WithCargoArgs<T>(this IResourceBuilder<T> builder, Func<RustCargoArgsCallbackContext, Task> callback)
         where T : RustAppResource
     {
@@ -171,7 +211,7 @@ public static class RustHostingExtensions
         return options;
     }
 
-    private static void AddInitialCargoArgs(RustAppResource resource, IList<object> args)
+    private static void AddInitialCargoArgs(RustAppResource resource, IList<string> args)
     {
         if (!resource.TryGetLastAnnotation<RustCargoOptionsAnnotation>(out var options))
         {
@@ -199,14 +239,14 @@ public static class RustHostingExtensions
         return builder.WithDebugSupport(
             mode =>
             {
-                var cargoArgs = new List<string>();
-
-                foreach (var annotation in builder.Resource.Annotations.OfType<RustCargoArgsCallbackAnnotation>())
-                {
-                    var args = new List<object>();
-                    annotation.Callback(new RustCargoArgsCallbackContext(args)).GetAwaiter().GetResult();
-                    cargoArgs.AddRange(args.OfType<string>());
-                }
+                // DCP resolves the resource's arguments before it asks for the launch configuration
+                // (ExecutableCreator.CreateObjectAsync builds the args, then invokes this annotator),
+                // so the resolved cargo arguments are reused here. That keeps the debug build identical
+                // to the run command and means user cargo argument callbacks run exactly once per launch.
+                var cargoArgs = builder.Resource.ResolvedCargoArgs
+                    ?? throw new InvalidOperationException(
+                        $"Cargo arguments for resource '{builder.Resource.Name}' have not been resolved yet. " +
+                        "The debug launch configuration must be created after the resource's arguments are evaluated.");
 
                 return new RustLaunchConfiguration
                 {

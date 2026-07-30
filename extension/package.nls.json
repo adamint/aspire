@@ -271,5 +271,11 @@
   "aspire-vscode.strings.workspaceViewSelectedSingleAppHostWithLanguage": "Workspace view selected because aspire ls found one buildable {0} AppHost.",
   "aspire-vscode.strings.workspaceViewSelectedSingleAppHost": "Workspace view selected because aspire ls found one buildable AppHost.",
   "aspire-vscode.strings.workspaceViewSelectedMultipleAppHosts": "Workspace view selected because aspire ls found {0} buildable AppHosts.",
+  "aspire-vscode.strings.rustDisplayName": "Rust: {0}",
+  "aspire-vscode.strings.rustLabel": "Rust",
+  "aspire-vscode.strings.rustBuildFailedWithError": "cargo build failed in {0} with error: {1}.",
+  "aspire-vscode.strings.rustBuildFailedWithExitCode": "cargo build failed in {0} with exit code {1}.",
+  "aspire-vscode.strings.rustBuildProducedNoExecutable": "cargo build in {0} completed but did not produce a runnable binary. Ensure the crate defines a binary target.",
+  "aspire-vscode.strings.rustBuildProducedMultipleExecutables": "cargo build in {0} could not determine which target to debug. Available targets: {1}. Pass the --bin or --example option with WithCargoArgs to specify one.",
   "command.openDashboardToSide": "Open Aspire Dashboard to the Side"
 }
