@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 #pragma warning disable ASPIREEXTENSION001
+#pragma warning disable ASPIREDOCKERFILEBUILDER001
 
 using System.Diagnostics.CodeAnalysis;
 using Aspire.Hosting.ApplicationModel;
@@ -38,6 +39,12 @@ public static class RustHostingExtensions
     /// OTLP export and dev certificate trust are configured by default. Rust does not read a port from
     /// the environment on its own, so bind to the port named by <c>WithHttpEndpoint(env: ...)</c> rather
     /// than a hard-coded one.
+    /// </para>
+    /// <para>
+    /// When publishing, a multi-stage Dockerfile is generated that builds the crate inside the container;
+    /// the crate is never compiled on the host. If the app directory already contains a <c>Dockerfile</c>,
+    /// that file is used instead. Call <c>WithDockerfileBaseImage</c> to override the build and runtime
+    /// base images.
     /// </para>
     /// </remarks>
     /// <example>
@@ -92,7 +99,20 @@ public static class RustHostingExtensions
             })
             // Must be registered after the cargo args above, otherwise the debug args filter has
             // nothing to strip. See https://github.com/microsoft/aspire/issues/18929
-            .WithVSCodeDebugging();
+            .WithVSCodeDebugging()
+            .PublishAsDockerFile(containerBuilder =>
+            {
+                // A hand-written Dockerfile always wins: the generated one is a convenience for crates that
+                // do not have one, not something that should silently shadow the user's own container build.
+                if (File.Exists(Path.Combine(appDirectory, "Dockerfile")))
+                {
+                    return;
+                }
+
+                containerBuilder.WithDockerfileBuilder(
+                    appDirectory,
+                    context => RustDockerfileGenerator.WriteAsync(resource, appDirectory, context));
+            });
     }
 
     /// <summary>
@@ -196,6 +216,101 @@ public static class RustHostingExtensions
         return builder;
     }
 
+    /// <summary>
+    /// Configures the binary target to run for Rust applications that declare more than one.
+    /// </summary>
+    /// <typeparam name="T">The resource type.</typeparam>
+    /// <param name="builder">The resource builder.</param>
+    /// <param name="binName">The binary target name, as declared by <c>[[bin]] name</c> in Cargo.toml.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
+    /// <ats-returns>The resource builder.</ats-returns>
+    /// <remarks>
+    /// Passed to cargo as <c>--bin</c>. Publishing also uses it to name the binary copied into the container,
+    /// so a package with several binaries must select one here (or set <c>default-run</c> in Cargo.toml).
+    /// </remarks>
+    [AspireExport]
+    public static IResourceBuilder<T> WithCargoBinTarget<T>(this IResourceBuilder<T> builder, string binName)
+        where T : RustAppResource
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(binName);
+
+        GetOrAddCargoOptions(builder).BinTarget = binName;
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures the workspace package to build and run.
+    /// </summary>
+    /// <typeparam name="T">The resource type.</typeparam>
+    /// <param name="builder">The resource builder.</param>
+    /// <param name="packageName">The cargo package name.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
+    /// <ats-returns>The resource builder.</ats-returns>
+    /// <remarks>
+    /// Passed to cargo as <c>--package</c>. Required when the crate directory is a workspace with more than
+    /// one default member, because the binary to run would otherwise be ambiguous.
+    /// </remarks>
+    [AspireExport]
+    public static IResourceBuilder<T> WithCargoPackage<T>(this IResourceBuilder<T> builder, string packageName)
+        where T : RustAppResource
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(packageName);
+
+        GetOrAddCargoOptions(builder).Package = packageName;
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures the target triple cargo builds for.
+    /// </summary>
+    /// <typeparam name="T">The resource type.</typeparam>
+    /// <param name="builder">The resource builder.</param>
+    /// <param name="targetTriple">The target triple, for example <c>x86_64-unknown-linux-musl</c>.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
+    /// <ats-returns>The resource builder.</ats-returns>
+    /// <remarks>
+    /// Passed to cargo as <c>--target</c>. Cargo writes a cross-compiled binary to
+    /// <c>target/&lt;triple&gt;/&lt;profile&gt;/</c>, and the generated Dockerfile follows that layout and adds
+    /// the target to the build image with <c>rustup target add</c>. A glibc (<c>-gnu</c>) triple is rejected
+    /// unless both base images are supplied through <c>WithDockerfileBaseImage</c>, because the default
+    /// generated Dockerfile builds and runs on musl images.
+    /// </remarks>
+    [AspireExport]
+    public static IResourceBuilder<T> WithCargoTarget<T>(this IResourceBuilder<T> builder, string targetTriple)
+        where T : RustAppResource
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetTriple);
+
+        GetOrAddCargoOptions(builder).TargetTriple = targetTriple;
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures the named cargo profile to build with.
+    /// </summary>
+    /// <typeparam name="T">The resource type.</typeparam>
+    /// <param name="builder">The resource builder.</param>
+    /// <param name="profileName">The profile name, for example <c>dev</c>, <c>release</c>, or a custom profile.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
+    /// <ats-returns>The resource builder.</ats-returns>
+    /// <remarks>
+    /// Passed to cargo as <c>--profile</c>, which takes precedence over <c>WithCargoReleaseBuild</c> because
+    /// cargo rejects <c>--profile</c> and <c>--release</c> together.
+    /// </remarks>
+    [AspireExport]
+    public static IResourceBuilder<T> WithCargoProfile<T>(this IResourceBuilder<T> builder, string profileName)
+        where T : RustAppResource
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(profileName);
+
+        GetOrAddCargoOptions(builder).Profile = profileName;
+        return builder;
+    }
+
     // Gets the resource's existing RustCargoOptionsAnnotation, or creates and attaches a new one. Callers mutate
     // the returned instance's properties directly rather than adding a new annotation per call, so repeated
     // WithCargo* calls (in any order) all end up configuring the same shared annotation instance.
@@ -224,7 +339,31 @@ public static class RustHostingExtensions
             args.Add(string.Join(",", features));
         }
 
-        if (options.ReleaseBuild)
+        if (options.BinTarget is { } binTarget)
+        {
+            args.Add("--bin");
+            args.Add(binTarget);
+        }
+
+        if (options.Package is { } package)
+        {
+            args.Add("--package");
+            args.Add(package);
+        }
+
+        if (options.TargetTriple is { } targetTriple)
+        {
+            args.Add("--target");
+            args.Add(targetTriple);
+        }
+
+        // Cargo rejects --profile and --release together, so an explicit profile wins.
+        if (options.Profile is { } profile)
+        {
+            args.Add("--profile");
+            args.Add(profile);
+        }
+        else if (options.ReleaseBuild)
         {
             args.Add("--release");
         }
@@ -298,3 +437,4 @@ public static class RustHostingExtensions
 }
 
 #pragma warning restore ASPIREEXTENSION001
+#pragma warning restore ASPIREDOCKERFILEBUILDER001

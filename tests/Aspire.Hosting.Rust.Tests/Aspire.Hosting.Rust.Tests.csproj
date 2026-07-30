@@ -14,4 +14,12 @@
     <ProjectReference Include="..\Aspire.Hosting.TestUtilities\Aspire.Hosting.TestUtilities.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="$(TestsSharedDir)\TestModuleInitializer.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Verify.XunitV3" />
+  </ItemGroup>
+
 </Project>

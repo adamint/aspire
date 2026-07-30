@@ -1,0 +1,12 @@
+﻿FROM rust:1.89-bookworm AS build
+WORKDIR /app
+COPY . .
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    cargo build --release
+
+FROM debian:bookworm-slim
+RUN groupadd --system --gid 999 app && useradd --system --gid 999 --uid 999 --no-create-home app
+WORKDIR /app
+COPY --from=build /app/target/release/my-service /app/my-service
+USER app
+ENTRYPOINT ["/app/my-service"]

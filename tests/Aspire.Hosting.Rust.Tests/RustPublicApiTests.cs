@@ -61,6 +61,38 @@ public class RustPublicApiTests
     }
 
     [Fact]
+    public async Task WithCargoTargetSelectionMethodsMapToCargoArgs()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var app = builder.AddRustApp("api", builder.AppHostDirectory)
+            .WithCargoFeatures("tokio")
+            .WithCargoBinTarget("worker")
+            .WithCargoPackage("services")
+            .WithCargoTarget("aarch64-unknown-linux-musl")
+            .WithCargoProfile("dist");
+
+        var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
+
+        Assert.Equal(
+            ["run", "--features", "tokio", "--bin", "worker", "--package", "services", "--target", "aarch64-unknown-linux-musl", "--profile", "dist", "--"],
+            args);
+    }
+
+    [Fact]
+    public async Task WithCargoProfileWinsOverWithCargoReleaseBuild()
+    {
+        // Cargo rejects --profile and --release together.
+        var builder = DistributedApplication.CreateBuilder();
+        var app = builder.AddRustApp("api", builder.AppHostDirectory)
+            .WithCargoReleaseBuild()
+            .WithCargoProfile("dist");
+
+        var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
+
+        Assert.Equal(["run", "--profile", "dist", "--"], args);
+    }
+
+    [Fact]
     public void AddRustAppEnablesDebuggingSupport()
     {
         var builder = DistributedApplication.CreateBuilder();

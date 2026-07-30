@@ -74,15 +74,18 @@ builder.AddRustApp("api", "../rust-api")
 | `WithCargoArgs(Action<RustCargoArgsCallbackContext> callback)` | Computes cargo arguments when the resource starts. An async `Func<RustCargoArgsCallbackContext, Task>` overload is also available |
 | `WithCargoReleaseBuild()` | Adds `--release` |
 | `WithCargoFeatures(params string[] features)` | Adds `--features` with the supplied features |
+| `WithCargoBinTarget(string binName)` | Adds `--bin` to select one of several `[[bin]]` targets |
+| `WithCargoPackage(string packageName)` | Adds `--package` to select a workspace member |
+| `WithCargoTarget(string targetTriple)` | Adds `--target` to cross-compile for a specific triple |
+| `WithCargoProfile(string profileName)` | Adds `--profile`. Takes precedence over `WithCargoReleaseBuild()`, which cargo rejects alongside `--profile` |
 
-These options apply to local execution and debugging alike.
-
-Cargo's target selection flags need no dedicated API — pass them like any other cargo argument. A
-crate with several `[[bin]]` targets is selected the same way `cargo run` requires:
+These options apply to local execution, debugging, and publishing alike. Target selection in
+particular must go through the dedicated methods rather than `WithCargoArgs`, because publishing uses
+them to work out which file cargo produces:
 
 ```csharp
 builder.AddRustApp("api", "../rust-api")
-    .WithCargoArgs("--bin", "worker");
+    .WithCargoBinTarget("worker");
 ```
 
 ### Debugging
@@ -93,7 +96,64 @@ VS Code. Library-only crates produce no executable and cannot be debugged.
 Debugging builds the crate with the same cargo arguments used to run it, so any `--bin`/`--example`
 selection carries over. One case differs from `cargo run`: `cargo build` ignores the `default-run`
 manifest key, so a crate that relies on `default-run` alone builds every binary and debugging cannot
-tell which to launch. Pass `--bin` explicitly through `WithCargoArgs` in that case.
+tell which to launch. Call `WithCargoBinTarget(...)` explicitly in that case.
+
+### Publishing
+
+`aspire publish` and `aspire deploy` build the app into a container. If the app directory already
+contains a `Dockerfile`, that file is used as-is. Otherwise a multi-stage Dockerfile is generated:
+
+```dockerfile
+FROM rust:1.89-alpine AS build
+WORKDIR /app
+RUN apk add --no-cache musl-dev gcc
+COPY . .
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    cargo build --release
+
+FROM alpine:3.22
+RUN apk --no-cache add ca-certificates tzdata
+RUN addgroup -S app && adduser -S -G app app
+WORKDIR /app
+COPY --from=build /app/target/release/my-service /app/my-service
+USER app
+ENTRYPOINT ["/app/my-service"]
+```
+
+The crate is **only ever compiled inside the container**. The AppHost does not run `cargo build`
+during publish; it runs `cargo metadata`, a manifest query that neither compiles nor downloads
+dependencies, purely to learn the name of the binary cargo will produce.
+
+Because the binary name has to be known up front, publishing fails with an actionable message when it
+is ambiguous — a package with several `[[bin]]` targets and no `WithCargoBinTarget(...)` or
+`default-run`, or a workspace with several default members and no `WithCargoPackage(...)`.
+`default-run` is honoured, so publish produces the same binary `cargo run` does.
+
+#### Base images
+
+| Stage | Default |
+| --- | --- |
+| Build | `rust:<version>-alpine`, where `<version>` comes from `rust-toolchain.toml`/`rust-toolchain`, or `rust:1.89-alpine` when the crate pins nothing |
+| Runtime | `alpine:3.22` |
+
+Both defaults are musl-based, so the binary and the runtime image share a libc by construction and
+there is no glibc-version skew between the two stages.
+
+rustup channel names are not container image tags, so they are mapped: `stable` becomes `rust:alpine`
+(the unversioned tag that tracks current stable, since there is no `rust:stable-alpine`), and
+`nightly`/`nightly-<date>` become `rustlang/rust:nightly-alpine`/`rustlang/rust:nightly-<date>-alpine`.
+`beta` publishes no image, so it fails with a message pointing at `WithDockerfileBaseImage`.
+
+Override either stage to move to glibc:
+
+```csharp
+builder.AddRustApp("api", "../rust-api")
+    .WithDockerfileBaseImage(buildImage: "rust:1.89-bookworm", runtimeImage: "debian:bookworm-slim");
+```
+
+`WithCargoTarget(...)` adds `rustup target add <triple>` to the build stage and follows cargo's
+`target/<triple>/<profile>/` layout. A glibc (`-gnu`) triple is rejected against the default musl
+images; supply both base images through `WithDockerfileBaseImage` to use one.
 
 ## Additional documentation
 
