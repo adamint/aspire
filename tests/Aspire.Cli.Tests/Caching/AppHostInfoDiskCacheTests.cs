@@ -467,6 +467,91 @@ public class AppHostInfoDiskCacheTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task EditingAppendedDirectoryNameWalkUpTargetInvalidatesCacheEntry()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var cache = CreateCache(workspace);
+
+        // The mirror image of the GetPathOfFileAbove case: GetDirectoryNameOfFileAbove returns a DIRECTORY,
+        // so the suffix must start with a separator and names a file BESIDE the anchor rather than a
+        // continuation of the anchor's name. The import below resolves to <root>/Custom.props, selected by
+        // <root>/Repo.marker. Both names have to be fingerprinted — the anchor because it decides which
+        // ancestor directory is chosen, Custom.props because it is the file MSBuild actually reads.
+        var projectDirectory = Directory.CreateDirectory(Path.Combine(workspace.WorkspaceRoot.FullName, "src", "MyHost"));
+        var projectFile = new FileInfo(Path.Combine(projectDirectory.FullName, "MyHost.csproj"));
+        File.WriteAllText(projectFile.FullName, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <Import Project="$([MSBuild]::GetDirectoryNameOfFileAbove('$(MSBuildThisFileDirectory)../', 'Repo.marker'))/Custom.props" />
+            </Project>
+            """);
+
+        File.WriteAllText(Path.Combine(workspace.WorkspaceRoot.FullName, "Repo.marker"), "");
+        var customProps = Path.Combine(workspace.WorkspaceRoot.FullName, "Custom.props");
+        File.WriteAllText(customProps, "<Project />");
+
+        await cache.SetAsync(projectFile, cache.GetCacheKey(projectFile), SampleEntry() with { IsAspireHost = false }, CancellationToken.None).DefaultTimeout();
+        Assert.NotNull(await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout());
+
+        File.WriteAllText(customProps, """
+            <Project>
+              <PropertyGroup>
+                <IsAspireHost>true</IsAspireHost>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.SetLastWriteTimeUtc(customProps, DateTime.UtcNow.AddSeconds(2));
+
+        var hit = await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout();
+        Assert.Null(hit);
+    }
+
+    [Fact]
+    public async Task NestedSuffixWalkUpImportNeverReadsOrWrites()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var cache = CreateCache(workspace);
+
+        // A suffix that descends into a sub-directory ('/build/Custom.props') resolves to a file whose
+        // directory the ancestor walk never enumerates, so statting the leaf name at every ancestor level
+        // would miss it. There is no single name to fingerprint, so the cache must opt out.
+        var projectFile = CreateProjectFile(workspace, "MyHost.csproj");
+        File.WriteAllText(projectFile.FullName, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <Import Project="$([MSBuild]::GetDirectoryNameOfFileAbove('$(MSBuildThisFileDirectory)../', 'Repo.marker'))/build/Custom.props" />
+            </Project>
+            """);
+
+        await cache.SetAsync(new FileInfo(projectFile.FullName), cache.GetCacheKey(projectFile), SampleEntry(), CancellationToken.None).DefaultTimeout();
+        var hit = await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout();
+
+        Assert.Null(hit);
+        Assert.Empty(EnumerateCacheEntries(workspace));
+    }
+
+    [Fact]
+    public async Task UnresolvableStaticImportInProjectFileStillCaches()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var cache = CreateCache(workspace);
+
+        // Only walk-up imports inside the .csproj itself can promote it (IsLikelyAppHost step 1b), so a
+        // static import there never changes the prefilter's verdict and must not widen the cache bypass.
+        // Ordinary static imports remain this cache's documented pre-existing limitation; they are no worse
+        // here than for any other project.
+        var projectFile = CreateProjectFile(workspace, "Test.AppHost.csproj");
+        File.WriteAllText(projectFile.FullName, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <Import Project="$(RepoRoot)Directory.Build.props" />
+            </Project>
+            """);
+
+        await cache.SetAsync(new FileInfo(projectFile.FullName), cache.GetCacheKey(projectFile), SampleEntry(), CancellationToken.None).DefaultTimeout();
+
+        var hit = await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout();
+        Assert.NotNull(hit);
+    }
+
+    [Fact]
     public void ComputeKey_IsStableForUnchangedInputs()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
