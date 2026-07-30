@@ -191,15 +191,45 @@ public static class RustHostingExtensions
     /// </summary>
     /// <typeparam name="T">The resource type.</typeparam>
     /// <param name="builder">The resource builder.</param>
+    /// <param name="releaseBuild"><see langword="true"/> to add <c>--release</c>; otherwise <see langword="false"/>.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
     /// <ats-returns>The resource builder.</ats-returns>
+    /// <remarks>
+    /// Publishing builds an optimized image by default, so pass <see langword="false"/> to opt a published
+    /// image out of <c>--release</c>.
+    /// </remarks>
     [AspireExport]
-    public static IResourceBuilder<T> WithCargoReleaseBuild<T>(this IResourceBuilder<T> builder)
+    public static IResourceBuilder<T> WithCargoReleaseBuild<T>(this IResourceBuilder<T> builder, bool releaseBuild = true)
         where T : RustAppResource
     {
         ArgumentNullException.ThrowIfNull(builder);
 
-        GetOrAddCargoOptions(builder).ReleaseBuild = true;
+        GetOrAddCargoOptions(builder).ReleaseBuild = releaseBuild;
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures the Rust application to build and run with the exact dependency versions recorded in
+    /// <c>Cargo.lock</c>.
+    /// </summary>
+    /// <typeparam name="T">The resource type.</typeparam>
+    /// <param name="builder">The resource builder.</param>
+    /// <param name="locked"><see langword="true"/> to add <c>--locked</c>; otherwise <see langword="false"/>.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
+    /// <ats-returns>The resource builder.</ats-returns>
+    /// <remarks>
+    /// Passed to cargo as <c>--locked</c>, which fails the build rather than updating <c>Cargo.lock</c>.
+    /// Publishing already adds this whenever the crate has a lock file, so a published image cannot silently
+    /// pick up dependency versions that were never committed; pass <see langword="false"/> to opt out.
+    /// See https://doc.rust-lang.org/cargo/commands/cargo-build.html#manifest-options
+    /// </remarks>
+    [AspireExport]
+    public static IResourceBuilder<T> WithCargoLocked<T>(this IResourceBuilder<T> builder, bool locked = true)
+        where T : RustAppResource
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        GetOrAddCargoOptions(builder).Locked = locked;
         return builder;
     }
 
@@ -428,13 +458,18 @@ public static class RustHostingExtensions
             args.Add(target);
         }
 
+        if (options.Locked == true)
+        {
+            args.Add("--locked");
+        }
+
         // Cargo rejects --profile and --release together, so an explicit profile wins.
         if (options.Profile is { } profile)
         {
             args.Add("--profile");
             args.Add(profile);
         }
-        else if (options.ReleaseBuild)
+        else if (options.ReleaseBuild == true)
         {
             args.Add("--release");
         }

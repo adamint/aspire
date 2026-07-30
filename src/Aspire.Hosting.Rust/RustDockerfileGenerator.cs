@@ -24,12 +24,6 @@ internal static class RustDockerfileGenerator
     {
         var logger = context.Services.GetService<ILogger<RustAppResource>>();
 
-        // Cargo args must come from the same annotation pipeline that run mode uses, otherwise
-        // WithCargoArgs/WithCargoFeatures configuration silently changes meaning at publish time. They are
-        // read from `resource` rather than context.Resource because the latter is the ContainerResource that
-        // PublishAsDockerFile substitutes in, which does not carry the Rust annotations.
-        var cargoArgs = await ResolvePublishCargoArgsAsync(resource, context.CancellationToken).ConfigureAwait(false);
-
         // Target selection comes from the options annotation rather than from the argument list: those are
         // the values that decide which file ends up under target/, and reading them here keeps publish in
         // step with whatever the WithCargo* methods emitted into the argument list.
@@ -45,6 +39,12 @@ internal static class RustDockerfileGenerator
             options,
             context.Services.GetRequiredService<DistributedApplicationExecutionContext>(),
             resource.Name);
+
+        // Cargo args must come from the same annotation pipeline that run mode uses, otherwise
+        // WithCargoArgs/WithCargoFeatures configuration silently changes meaning at publish time. They are
+        // read from `resource` rather than context.Resource because the latter is the ContainerResource that
+        // PublishAsDockerFile substitutes in, which does not carry the Rust annotations.
+        var cargoArgs = await ResolvePublishCargoArgsAsync(resource, options, metadata, context.CancellationToken).ConfigureAwait(false);
 
         // A manifest path configured for the host points somewhere that does not exist in the container, so
         // the copy of it that reaches `cargo build` has to be rewritten to sit under /app.
@@ -130,11 +130,15 @@ internal static class RustDockerfileGenerator
             .Entrypoint([$"/app/{target.Name}"]);
     }
 
-    // Evaluates every cargo args callback exactly as run mode does, then ensures the result selects an
-    // optimized build. --release is only appended when the resource has chosen neither a profile nor a
-    // release build, so an explicit --profile is preserved rather than conflicting with a hard-coded
-    // --release (cargo rejects the two together).
-    private static async Task<List<string>> ResolvePublishCargoArgsAsync(RustAppResource resource, CancellationToken cancellationToken)
+    // Evaluates every cargo args callback exactly as run mode does, then applies the defaults that only
+    // publishing opts into. Both are appended only when the resource expressed no preference: an explicit
+    // WithCargoReleaseBuild/WithCargoLocked has already put its flag in the list, and an explicit `false`
+    // means the published image deliberately does without.
+    private static async Task<List<string>> ResolvePublishCargoArgsAsync(
+        RustAppResource resource,
+        RustCargoOptionsAnnotation options,
+        CargoMetadata metadata,
+        CancellationToken cancellationToken)
     {
         var args = new List<string>();
 
@@ -145,16 +149,30 @@ internal static class RustDockerfileGenerator
 
         var cargoArgs = args.Where(static arg => arg.Length > 0).ToList();
 
-        var alreadyOptimized = resource.TryGetLastAnnotation<RustCargoOptionsAnnotation>(out var options)
-            && (options.ReleaseBuild || options.Profile is not null);
+        // --locked fails the build rather than writing a lock file, so a published image can only build the
+        // dependency versions that were committed. It is only safe to add when a lock file actually exists;
+        // cargo errors out with "the lock file needs to be updated but --locked was passed" otherwise, which
+        // would break publishing for crates that deliberately do not commit one (libraries, mostly).
+        if (options.Locked is null && HasLockFile(metadata))
+        {
+            cargoArgs.Add("--locked");
+        }
 
-        if (!alreadyOptimized)
+        // Cargo rejects --release alongside --profile, so a resource that named a profile is already optimized
+        // as it asked to be.
+        if (options.Profile is null && options.ReleaseBuild is null)
         {
             cargoArgs.Add("--release");
         }
 
         return cargoArgs;
     }
+
+    // Cargo keeps a single lock file for the whole workspace, next to the root manifest.
+    // See https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
+    private static bool HasLockFile(CargoMetadata metadata)
+        => metadata.WorkspaceRoot is { Length: > 0 } workspaceRoot
+            && File.Exists(Path.Combine(workspaceRoot, "Cargo.lock"));
 
     // The two-token form is what WithCargoManifestPath emits, so match on the pair rather than reformatting
     // the argument list. A --manifest-path passed as a raw string through WithCargoArgs is left alone, in

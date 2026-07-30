@@ -108,6 +108,31 @@ public class RustPublicApiTests
     }
 
     [Fact]
+    public async Task WithCargoLockedMapsToCargoArgs()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var app = builder.AddRustApp("api", builder.AppHostDirectory)
+            .WithCargoLocked();
+
+        var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
+
+        Assert.Equal(["run", "--locked", "--"], args);
+    }
+
+    [Fact]
+    public async Task RunModeDoesNotOptIntoLockedOrRelease()
+    {
+        // Both default to cargo's own behaviour locally; only publishing turns them on by default, so a
+        // `cargo run` that works from the terminal keeps working through the app host.
+        var builder = DistributedApplication.CreateBuilder();
+        var app = builder.AddRustApp("api", builder.AppHostDirectory);
+
+        var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
+
+        Assert.Equal(["run", "--"], args);
+    }
+
+    [Fact]
     public void AddRustAppEnablesDebuggingSupport()
     {
         var builder = DistributedApplication.CreateBuilder();

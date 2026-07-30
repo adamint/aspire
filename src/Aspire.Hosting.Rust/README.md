@@ -64,15 +64,17 @@ than hard-coding one, so Aspire can assign a free port and wire up service disco
 ```csharp
 builder.AddRustApp("api", "../rust-api")
     .WithCargoReleaseBuild()
+    .WithCargoLocked()
     .WithCargoFeatures("grpc-tonic", "tls-ring")
-    .WithCargoArgs("--no-default-features", "--locked");
+    .WithCargoArgs("--no-default-features");
 ```
 
 | Method | Effect |
 | --- | --- |
 | `WithCargoArgs(params string[] args)` | Appends raw arguments to the cargo command line |
 | `WithCargoArgs(Action<RustCargoArgsCallbackContext> callback)` | Computes cargo arguments when the resource starts. An async `Func<RustCargoArgsCallbackContext, Task>` overload is also available |
-| `WithCargoReleaseBuild()` | Adds `--release` |
+| `WithCargoReleaseBuild(bool releaseBuild = true)` | Adds `--release`. Publishing adds it by default, so pass `false` to publish an unoptimized image |
+| `WithCargoLocked(bool locked = true)` | Adds `--locked`, which fails rather than updating `Cargo.lock`. Publishing adds it by default whenever the crate has a lock file, so pass `false` to opt out |
 | `WithCargoFeatures(params string[] features)` | Adds `--features` with the supplied features |
 | `WithCargoBinTarget(string binName)` | Adds `--bin` to select one of several `[[bin]]` targets |
 | `WithCargoExample(string exampleName)` | Adds `--example` to run an example instead of a binary |
@@ -81,9 +83,12 @@ builder.AddRustApp("api", "../rust-api")
 | `WithCargoManifestPath(string manifestPath)` | Adds `--manifest-path`. Only needed when the manifest is not the one cargo finds from the app directory. Must be inside the app directory so publishing can copy it into the image |
 | `WithCargoProfile(string profileName)` | Adds `--profile`. Takes precedence over `WithCargoReleaseBuild()`, which cargo rejects alongside `--profile` |
 
-These options apply to local execution, debugging, and publishing alike. Target selection in
-particular must go through the dedicated methods rather than `WithCargoArgs`, because debugging and
-publishing use them to work out which file cargo produces:
+These options apply to local execution, debugging, and publishing alike, except that publishing turns
+on `--release` and (when a `Cargo.lock` exists) `--locked` unless the resource said otherwise: a
+published image should be optimized and should build the dependency versions that were committed,
+while local runs keep cargo's own defaults so they stay fast and behave like running `cargo run` from
+the terminal. Target selection in particular must go through the dedicated methods rather than
+`WithCargoArgs`, because debugging and publishing use them to work out which file cargo produces:
 
 ```csharp
 builder.AddRustApp("api", "../rust-api")
@@ -104,7 +109,8 @@ key, which `cargo build` itself ignores.
 ### Publishing
 
 `aspire publish` and `aspire deploy` build the app into a container. If the app directory already
-contains a `Dockerfile`, that file is used as-is. Otherwise a multi-stage Dockerfile is generated:
+contains a `Dockerfile`, that file is used as-is. Otherwise a multi-stage Dockerfile is generated
+(`--locked` appears only when the crate has a `Cargo.lock`):
 
 ```dockerfile
 FROM rust:1.89-alpine AS build
@@ -112,7 +118,7 @@ WORKDIR /app
 RUN apk add --no-cache musl-dev gcc
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --release
+    cargo build --locked --release
 
 FROM alpine:3.22
 RUN apk --no-cache add ca-certificates tzdata

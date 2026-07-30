@@ -81,14 +81,15 @@ public class RustCargoTargetResolverTests
     }
 
     [Theory]
-    [InlineData(null, false, "release/my-service")]
+    [InlineData(null, null, "release/my-service")]
     [InlineData(null, true, "release/my-service")]
-    [InlineData("release", false, "release/my-service")]
-    [InlineData("dev", false, "debug/my-service")]
-    [InlineData("test", false, "debug/my-service")]
-    [InlineData("bench", false, "release/my-service")]
-    [InlineData("dist", false, "dist/my-service")]
-    public void PublishProfileDeterminesTheOutputDirectory(string? profile, bool releaseBuild, string expectedPath)
+    [InlineData(null, false, "debug/my-service")]
+    [InlineData("release", null, "release/my-service")]
+    [InlineData("dev", null, "debug/my-service")]
+    [InlineData("test", null, "debug/my-service")]
+    [InlineData("bench", null, "release/my-service")]
+    [InlineData("dist", null, "dist/my-service")]
+    public void PublishProfileDeterminesTheOutputDirectory(string? profile, bool? releaseBuild, string expectedPath)
     {
         var options = new RustCargoOptionsAnnotation { Profile = profile, ReleaseBuild = releaseBuild };
 
@@ -98,11 +99,11 @@ public class RustCargoTargetResolverTests
     }
 
     [Theory]
-    [InlineData(null, false, "debug/my-service")]
+    [InlineData(null, null, "debug/my-service")]
     [InlineData(null, true, "release/my-service")]
-    [InlineData("dev", false, "debug/my-service")]
-    [InlineData("dist", false, "dist/my-service")]
-    public void DebugProfileDefaultsToDebugUnlikePublish(string? profile, bool releaseBuild, string expectedPath)
+    [InlineData("dev", null, "debug/my-service")]
+    [InlineData("dist", null, "dist/my-service")]
+    public void DebugProfileDefaultsToDebugUnlikePublish(string? profile, bool? releaseBuild, string expectedPath)
     {
         // A debug build uses cargo's own default (dev) so it reuses the artifacts a plain `cargo run`
         // already produced, while publishing opts into an optimized build.

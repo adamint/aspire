@@ -112,10 +112,10 @@ internal static class RustCargoTargetResolver
     private static string ResolveProfileDirectory(RustCargoOptionsAnnotation options, DistributedApplicationExecutionContext executionContext)
     {
         // A debug build takes cargo's own default profile (dev) unless the resource asked for an optimized
-        // build, so it reuses whatever `cargo run` already compiled. Publish always optimizes, so an app
-        // that configured neither still publishes release.
+        // build, so it reuses whatever `cargo run` already compiled. Publish always optimizes unless the
+        // resource explicitly opted out.
         var profile = options.Profile
-            ?? (executionContext.IsPublishMode || options.ReleaseBuild ? "release" : "dev");
+            ?? ((options.ReleaseBuild ?? executionContext.IsPublishMode) ? "release" : "dev");
 
         return profile switch
         {

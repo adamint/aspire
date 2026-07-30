@@ -163,6 +163,36 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         Assert.IsType<FileNotFoundException>(exception);
     }
 
+    [Fact]
+    public async Task VerifyPublish_AddsLockedWhenTheCrateHasALockFile()
+    {
+        // A committed lock file is the whole point of --locked: the image must build the dependency versions
+        // that were reviewed, not whatever resolves at build time.
+        var content = await PublishDockerfileAsync(configureSource: source =>
+            File.WriteAllText(Path.Combine(source, "Cargo.lock"), "version = 4\n"));
+
+        await Verify(content);
+    }
+
+    [Fact]
+    public async Task VerifyPublish_HonoursOptingOutOfTheLockedAndReleaseDefaults()
+    {
+        var content = await PublishDockerfileAsync(
+            configureSource: source => File.WriteAllText(Path.Combine(source, "Cargo.lock"), "version = 4\n"),
+            configureResource: app => app.WithCargoLocked(false).WithCargoReleaseBuild(false));
+
+        await Verify(content);
+    }
+
+    [Fact]
+    public async Task VerifyPublish_DoesNotRepeatLockedWhenTheResourceAlreadyAskedForIt()
+    {
+        // Run mode already emitted --locked, and passing it twice makes cargo's own error messages confusing.
+        var content = await PublishDockerfileAsync(configureResource: app => app.WithCargoLocked());
+
+        await Verify(content);
+    }
+
     private async Task<string> PublishDockerfileAsync(
         Action<string>? configureSource = null,
         string? metadata = null,

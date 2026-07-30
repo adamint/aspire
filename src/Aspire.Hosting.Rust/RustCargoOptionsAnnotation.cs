@@ -21,7 +21,22 @@ internal sealed class RustCargoOptionsAnnotation : IResourceAnnotation
     /// <summary>
     /// Gets or sets a value indicating whether cargo should build/run using the <c>--release</c> profile.
     /// </summary>
-    public bool ReleaseBuild { get; set; }
+    /// <remarks>
+    /// <see langword="null"/> means the resource expressed no preference, which run mode treats as cargo's
+    /// own default (the <c>dev</c> profile) and publishing treats as <c>--release</c>.
+    /// </remarks>
+    public bool? ReleaseBuild { get; set; }
+
+    /// <summary>
+    /// Gets or sets a value indicating whether cargo should build/run with <c>--locked</c>.
+    /// </summary>
+    /// <remarks>
+    /// <see langword="null"/> means the resource expressed no preference, which run mode treats as cargo's
+    /// own default (the lock file may be updated) and publishing treats as <c>--locked</c> whenever a
+    /// <c>Cargo.lock</c> exists, so a published image builds the exact dependency versions that were
+    /// committed.
+    /// </remarks>
+    public bool? Locked { get; set; }
 
     /// <summary>
     /// Gets or sets the cargo features to enable via <c>--features</c>.
