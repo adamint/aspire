@@ -68,13 +68,14 @@ public class RustPublicApiTests
             .WithCargoFeatures("tokio")
             .WithCargoBinTarget("worker")
             .WithCargoPackage("services")
+            .WithCargoManifestPath("crates/worker/Cargo.toml")
             .WithCargoTarget("aarch64-unknown-linux-musl")
             .WithCargoProfile("dist");
 
         var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
 
         Assert.Equal(
-            ["run", "--features", "tokio", "--bin", "worker", "--package", "services", "--target", "aarch64-unknown-linux-musl", "--profile", "dist", "--"],
+            ["run", "--features", "tokio", "--bin", "worker", "--package", "services", "--manifest-path", "crates/worker/Cargo.toml", "--target", "aarch64-unknown-linux-musl", "--profile", "dist", "--"],
             args);
     }
 

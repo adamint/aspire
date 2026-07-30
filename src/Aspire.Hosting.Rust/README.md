@@ -76,7 +76,8 @@ builder.AddRustApp("api", "../rust-api")
 | `WithCargoFeatures(params string[] features)` | Adds `--features` with the supplied features |
 | `WithCargoBinTarget(string binName)` | Adds `--bin` to select one of several `[[bin]]` targets |
 | `WithCargoPackage(string packageName)` | Adds `--package` to select a workspace member |
-| `WithCargoTarget(string targetTriple)` | Adds `--target` to cross-compile for a specific triple |
+| `WithCargoTarget(string target)` | Adds `--target` to cross-compile for a specific triple |
+| `WithCargoManifestPath(string manifestPath)` | Adds `--manifest-path`. Only needed when the manifest is not the one cargo finds from the app directory |
 | `WithCargoProfile(string profileName)` | Adds `--profile`. Takes precedence over `WithCargoReleaseBuild()`, which cargo rejects alongside `--profile` |
 
 These options apply to local execution, debugging, and publishing alike. Target selection in
@@ -124,10 +125,12 @@ The crate is **only ever compiled inside the container**. The AppHost does not r
 during publish; it runs `cargo metadata`, a manifest query that neither compiles nor downloads
 dependencies, purely to learn the name of the binary cargo will produce.
 
-Because the binary name has to be known up front, publishing fails with an actionable message when it
-is ambiguous — a package with several `[[bin]]` targets and no `WithCargoBinTarget(...)` or
-`default-run`, or a workspace with several default members and no `WithCargoPackage(...)`.
-`default-run` is honoured, so publish produces the same binary `cargo run` does.
+Publishing assumes the app already runs, so it does not re-validate anything cargo would itself have
+rejected at `cargo run` time. It only reports the cases where run mode works but the produced file
+name is still unknowable: a package with several `[[bin]]` targets picked by a raw `--bin` passed
+through `WithCargoArgs` (call `WithCargoBinTarget` instead), or a workspace with several default
+members (call `WithCargoPackage`). `default-run` is honoured, so publish produces the same binary
+`cargo run` does.
 
 #### Base images
 

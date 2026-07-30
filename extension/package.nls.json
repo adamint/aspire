@@ -276,6 +276,6 @@
   "aspire-vscode.strings.rustBuildFailedWithError": "cargo build failed in {0} with error: {1}.",
   "aspire-vscode.strings.rustBuildFailedWithExitCode": "cargo build failed in {0} with exit code {1}.",
   "aspire-vscode.strings.rustBuildProducedNoExecutable": "cargo build in {0} completed but did not produce a runnable binary. Ensure the crate defines a binary target.",
-  "aspire-vscode.strings.rustBuildProducedMultipleExecutables": "cargo build in {0} could not determine which target to debug. Available targets: {1}. Pass the --bin or --example option with WithCargoArgs to specify one.",
+  "aspire-vscode.strings.rustBuildProducedMultipleExecutables": "cargo build in {0} could not determine which target to debug. Available targets: {1}. Call WithCargoBinTarget to specify one.",
   "command.openDashboardToSide": "Open Aspire Dashboard to the Side"
 }

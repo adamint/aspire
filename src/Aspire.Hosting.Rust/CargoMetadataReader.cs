@@ -1,7 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Diagnostics;
+using System.Text;
+using Aspire.Hosting.Dcp.Process;
 
 namespace Aspire.Hosting.Rust;
 
@@ -25,105 +26,79 @@ internal static class CargoMetadataReader
     /// <remarks>
     /// Exposed separately so tests can assert that publishing never invokes a compiling subcommand.
     /// </remarks>
-    internal static string[] BuildArguments(string manifestPath)
-        => ["metadata", "--format-version", "1", "--no-deps", "--manifest-path", manifestPath];
+    internal static string[] BuildArguments(string? manifestPath)
+    {
+        string[] arguments = ["metadata", "--format-version", "1", "--no-deps"];
+
+        // Cargo discovers the manifest from the working directory, which is the crate directory the
+        // resource already runs `cargo run` in, so metadata resolves exactly what run mode resolves.
+        // Only a caller who redirected run mode with WithCargoManifestPath needs the flag here too.
+        return manifestPath is null ? arguments : [.. arguments, "--manifest-path", manifestPath];
+    }
 
     /// <summary>
     /// Runs <c>cargo metadata</c> for the crate in <paramref name="appDirectory"/>.
     /// </summary>
-    public static async Task<CargoMetadata> ReadAsync(string appDirectory, string resourceName, CancellationToken cancellationToken)
+    public static async Task<CargoMetadata> ReadAsync(string appDirectory, string? manifestPath, string resourceName, CancellationToken cancellationToken)
     {
-        var manifestPath = Path.Combine(appDirectory, "Cargo.toml");
+        var stdout = new StringBuilder();
+        var stderr = new StringBuilder();
 
-        if (!File.Exists(manifestPath))
-        {
-            throw new DistributedApplicationException(
-                $"Unable to publish the Rust app '{resourceName}' because no Cargo.toml was found at '{manifestPath}'.");
-        }
-
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = "cargo",
-            // The manifest path is passed explicitly rather than relying on the working directory so that
-            // cargo cannot walk up to an unrelated parent manifest.
-            WorkingDirectory = appDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        foreach (var argument in BuildArguments(manifestPath))
-        {
-            startInfo.ArgumentList.Add(argument);
-        }
-
-        using var process = StartCargo(startInfo, resourceName);
-
-        // Read both streams concurrently: cargo metadata output for a large workspace easily exceeds the
-        // pipe buffer, and waiting for exit before draining stdout would deadlock.
-        var stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        var stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
-
-        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeoutSource.CancelAfter(s_timeout);
+        Task<ProcessResult> resultTask;
+        IAsyncDisposable disposable;
 
         try
         {
-            await process.WaitForExitAsync(timeoutSource.Token).ConfigureAwait(false);
+            (resultTask, disposable) = ProcessUtil.Run(new ProcessSpec("cargo")
+            {
+                ArgumentList = BuildArguments(manifestPath),
+                WorkingDirectory = appDirectory,
+                // Cargo reports a missing or malformed manifest on stderr with a non-zero exit code, which is
+                // more useful than a generic launch failure, so handle the exit code here instead.
+                ThrowOnNonZeroReturnCode = false,
+                OnOutputData = line => stdout.AppendLine(line),
+                OnErrorData = line => stderr.AppendLine(line)
+            });
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            TryKill(process);
-
-            throw new DistributedApplicationException(
-                $"'cargo metadata' for the Rust app '{resourceName}' did not complete within {s_timeout.TotalSeconds:0} seconds.");
-        }
-
-        var stdout = await stdoutTask.ConfigureAwait(false);
-        var stderr = await stderrTask.ConfigureAwait(false);
-
-        if (process.ExitCode != 0)
+        catch (Exception ex)
         {
             throw new DistributedApplicationException(
-                $"'cargo metadata' failed for the Rust app '{resourceName}' with exit code {process.ExitCode}. {stderr.Trim()}");
+                $"Unable to start 'cargo' to inspect the Rust app '{resourceName}'. Install Rust from https://www.rust-lang.org/tools/install " +
+                $"or supply your own Dockerfile in '{appDirectory}'. {ex.Message}", ex);
+        }
+
+        ProcessResult result;
+
+        await using (disposable.ConfigureAwait(false))
+        {
+            using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutSource.CancelAfter(s_timeout);
+
+            try
+            {
+                result = await resultTask.WaitAsync(timeoutSource.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new DistributedApplicationException(
+                    $"'cargo metadata' for the Rust app '{resourceName}' did not complete within {s_timeout.TotalSeconds:0} seconds.");
+            }
+        }
+
+        if (result.ExitCode != 0)
+        {
+            throw new DistributedApplicationException(
+                $"'cargo metadata' failed for the Rust app '{resourceName}' with exit code {result.ExitCode}. {stderr.ToString().Trim()}");
         }
 
         try
         {
-            return CargoMetadata.Parse(stdout);
+            return CargoMetadata.Parse(stdout.ToString());
         }
         catch (Exception ex) when (ex is not DistributedApplicationException)
         {
             throw new DistributedApplicationException(
                 $"Unable to read the output of 'cargo metadata' for the Rust app '{resourceName}'. {ex.Message}", ex);
-        }
-    }
-
-    private static Process StartCargo(ProcessStartInfo startInfo, string resourceName)
-    {
-        try
-        {
-            return Process.Start(startInfo)
-                ?? throw new DistributedApplicationException($"Unable to start 'cargo' to inspect the Rust app '{resourceName}'.");
-        }
-        catch (Exception ex) when (ex is not DistributedApplicationException)
-        {
-            throw new DistributedApplicationException(
-                $"Unable to start 'cargo' to inspect the Rust app '{resourceName}'. Install Rust from https://www.rust-lang.org/tools/install " +
-                $"or supply your own Dockerfile next to '{startInfo.WorkingDirectory}'. {ex.Message}", ex);
-        }
-    }
-
-    private static void TryKill(Process process)
-    {
-        try
-        {
-            process.Kill(entireProcessTree: true);
-        }
-        catch (InvalidOperationException)
-        {
-            // The process exited between the timeout firing and the kill attempt.
         }
     }
 }

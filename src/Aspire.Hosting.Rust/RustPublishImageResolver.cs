@@ -54,15 +54,15 @@ internal static partial class RustPublishImageResolver
         string? explicitBuildImage,
         string? explicitRuntimeImage,
         string appDirectory,
-        string? targetTriple,
+        string? target,
         string resourceName)
     {
         var buildImage = explicitBuildImage ?? ResolveDefaultBuildImage(appDirectory, resourceName);
         var runtimeImage = explicitRuntimeImage ?? DefaultRuntimeImage;
 
-        if (targetTriple is not null)
+        if (target is not null)
         {
-            ValidateTargetTriple(targetTriple, explicitBuildImage is not null && explicitRuntimeImage is not null, resourceName);
+            ValidateTarget(target, explicitBuildImage is not null && explicitRuntimeImage is not null, resourceName);
         }
 
         return new RustPublishImages(buildImage, runtimeImage);
@@ -72,19 +72,19 @@ internal static partial class RustPublishImageResolver
     // musl, so a -gnu triple would build a binary Alpine cannot execute; rather than emit a Dockerfile that
     // fails at container start with a confusing "no such file or directory" (the classic missing-loader
     // error), fail here with the fix. When the caller supplied both images they own the pairing.
-    private static void ValidateTargetTriple(string targetTriple, bool callerOwnsImagePairing, string resourceName)
+    private static void ValidateTarget(string target, bool callerOwnsImagePairing, string resourceName)
     {
-        if (!targetTriple.Contains("linux", StringComparison.OrdinalIgnoreCase))
+        if (!target.Contains("linux", StringComparison.OrdinalIgnoreCase))
         {
             throw new DistributedApplicationException(
-                $"The Rust app '{resourceName}' passes '--target {targetTriple}' to cargo, but the generated Dockerfile produces a Linux container " +
+                $"The Rust app '{resourceName}' passes '--target {target}' to cargo, but the generated Dockerfile produces a Linux container " +
                 $"image. Remove the --target argument, or add a Dockerfile next to Cargo.toml to take over the container build.");
         }
 
-        if (!callerOwnsImagePairing && targetTriple.Contains("-gnu", StringComparison.OrdinalIgnoreCase))
+        if (!callerOwnsImagePairing && target.Contains("-gnu", StringComparison.OrdinalIgnoreCase))
         {
             throw new DistributedApplicationException(
-                $"The Rust app '{resourceName}' passes '--target {targetTriple}' to cargo, which produces a glibc binary, but the default generated " +
+                $"The Rust app '{resourceName}' passes '--target {target}' to cargo, which produces a glibc binary, but the default generated " +
                 $"Dockerfile builds and runs on musl (Alpine) images. Call WithDockerfileBaseImage(buildImage: \"rust:{RustToolchainDetector.DefaultChannel}-bookworm\", " +
                 $"runtimeImage: \"debian:bookworm-slim\") to supply a matching glibc pair, or target a *-musl triple.");
         }

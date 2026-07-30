@@ -267,7 +267,7 @@ public static class RustHostingExtensions
     /// </summary>
     /// <typeparam name="T">The resource type.</typeparam>
     /// <param name="builder">The resource builder.</param>
-    /// <param name="targetTriple">The target triple, for example <c>x86_64-unknown-linux-musl</c>.</param>
+    /// <param name="target">The target triple, for example <c>x86_64-unknown-linux-musl</c>.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
     /// <ats-returns>The resource builder.</ats-returns>
     /// <remarks>
@@ -278,13 +278,38 @@ public static class RustHostingExtensions
     /// generated Dockerfile builds and runs on musl images.
     /// </remarks>
     [AspireExport]
-    public static IResourceBuilder<T> WithCargoTarget<T>(this IResourceBuilder<T> builder, string targetTriple)
+    public static IResourceBuilder<T> WithCargoTarget<T>(this IResourceBuilder<T> builder, string target)
         where T : RustAppResource
     {
         ArgumentNullException.ThrowIfNull(builder);
-        ArgumentException.ThrowIfNullOrWhiteSpace(targetTriple);
+        ArgumentException.ThrowIfNullOrWhiteSpace(target);
 
-        GetOrAddCargoOptions(builder).TargetTriple = targetTriple;
+        GetOrAddCargoOptions(builder).Target = target;
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures the <c>Cargo.toml</c> cargo builds from.
+    /// </summary>
+    /// <typeparam name="T">The resource type.</typeparam>
+    /// <param name="builder">The resource builder.</param>
+    /// <param name="manifestPath">The path to the manifest, absolute or relative to the app directory.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
+    /// <ats-returns>The resource builder.</ats-returns>
+    /// <remarks>
+    /// Passed to cargo as <c>--manifest-path</c>. Cargo otherwise discovers the manifest by searching upwards
+    /// from the app directory, which is what most apps want, so this is only needed to point at a manifest
+    /// somewhere else — for example the crate of one workspace member when the app directory is the
+    /// workspace root.
+    /// </remarks>
+    [AspireExport]
+    public static IResourceBuilder<T> WithCargoManifestPath<T>(this IResourceBuilder<T> builder, string manifestPath)
+        where T : RustAppResource
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(manifestPath);
+
+        GetOrAddCargoOptions(builder).ManifestPath = manifestPath;
         return builder;
     }
 
@@ -351,10 +376,16 @@ public static class RustHostingExtensions
             args.Add(package);
         }
 
-        if (options.TargetTriple is { } targetTriple)
+        if (options.ManifestPath is { } manifestPath)
+        {
+            args.Add("--manifest-path");
+            args.Add(manifestPath);
+        }
+
+        if (options.Target is { } target)
         {
             args.Add("--target");
-            args.Add(targetTriple);
+            args.Add(target);
         }
 
         // Cargo rejects --profile and --release together, so an explicit profile wins.

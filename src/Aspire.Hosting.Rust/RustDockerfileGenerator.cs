@@ -37,7 +37,7 @@ internal static class RustDockerfileGenerator
             ? cargoOptions
             : new RustCargoOptionsAnnotation();
 
-        var metadata = await ReadMetadataAsync(resource, appDirectory, context.CancellationToken).ConfigureAwait(false);
+        var metadata = await ReadMetadataAsync(resource, appDirectory, options.ManifestPath, context.CancellationToken).ConfigureAwait(false);
         var target = RustPublishTargetResolver.Resolve(metadata, options, resource.Name);
 
         var baseImageAnnotation = ResolveBaseImageAnnotation(resource, context);
@@ -45,7 +45,7 @@ internal static class RustDockerfileGenerator
             baseImageAnnotation?.BuildImage,
             baseImageAnnotation?.RuntimeImage,
             appDirectory,
-            options.TargetTriple,
+            options.Target,
             resource.Name);
 
         var buildStage = context.Builder
@@ -62,7 +62,7 @@ internal static class RustDockerfileGenerator
             buildStage.Run("apk add --no-cache musl-dev gcc");
         }
 
-        if (target.TargetTriple is { } triple)
+        if (target.Target is { } triple)
         {
             // A cross target's standard library is not present in the base image, so it has to be installed
             // before cargo can build for it.
@@ -110,14 +110,14 @@ internal static class RustDockerfileGenerator
             .Entrypoint([$"/app/{target.BinaryName}"]);
     }
 
-    private static async Task<CargoMetadata> ReadMetadataAsync(RustAppResource resource, string appDirectory, CancellationToken cancellationToken)
+    private static async Task<CargoMetadata> ReadMetadataAsync(RustAppResource resource, string appDirectory, string? manifestPath, CancellationToken cancellationToken)
     {
         if (resource.TryGetLastAnnotation<RustCargoMetadataProviderAnnotation>(out var provider))
         {
             return await provider.Provider(cancellationToken).ConfigureAwait(false);
         }
 
-        return await CargoMetadataReader.ReadAsync(appDirectory, resource.Name, cancellationToken).ConfigureAwait(false);
+        return await CargoMetadataReader.ReadAsync(appDirectory, manifestPath, resource.Name, cancellationToken).ConfigureAwait(false);
     }
 
     // Evaluates every cargo args callback exactly as run mode does, then ensures the result selects an

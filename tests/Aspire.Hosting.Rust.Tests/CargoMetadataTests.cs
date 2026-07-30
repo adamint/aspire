@@ -82,9 +82,11 @@ public class CargoMetadataTests
     {
         // The container build is the real build. If this vector ever gains a compiling subcommand, publish
         // would build the crate twice: once on the host and once inside the container.
-        var arguments = CargoMetadataReader.BuildArguments("/app/Cargo.toml");
+        Assert.Equal(["metadata", "--format-version", "1", "--no-deps"], CargoMetadataReader.BuildArguments(manifestPath: null));
 
-        Assert.Equal(["metadata", "--format-version", "1", "--no-deps", "--manifest-path", "/app/Cargo.toml"], arguments);
+        Assert.Equal(
+            ["metadata", "--format-version", "1", "--no-deps", "--manifest-path", "/app/Cargo.toml"],
+            CargoMetadataReader.BuildArguments("/app/Cargo.toml"));
     }
 
     [Fact]
@@ -101,7 +103,7 @@ public class CargoMetadataTests
         Directory.CreateDirectory(Path.Combine(crate.Path, "src"));
         crate.Write(Path.Combine("src", "main.rs"), "fn main() { println!(\"hello\"); }");
 
-        var metadata = await CargoMetadataReader.ReadAsync(crate.Path, "api", TestContext.Current.CancellationToken);
+        var metadata = await CargoMetadataReader.ReadAsync(crate.Path, manifestPath: null, "api", TestContext.Current.CancellationToken);
 
         Assert.Equal("metadata-probe", Assert.Single(metadata.Packages).Name);
 
@@ -116,13 +118,14 @@ public class CargoMetadataTests
     }
 
     [Fact]
-    public async Task MissingManifestFailsWithAnActionableMessage()
+    [RequiresTools(["cargo"])]
+    public async Task MissingManifestSurfacesCargosOwnError()
     {
         using var crate = new TempCrateDirectory();
 
         var exception = await Assert.ThrowsAsync<DistributedApplicationException>(
-            () => CargoMetadataReader.ReadAsync(crate.Path, "api", TestContext.Current.CancellationToken));
+            () => CargoMetadataReader.ReadAsync(crate.Path, manifestPath: null, "api", TestContext.Current.CancellationToken));
 
-        Assert.Contains("no Cargo.toml was found", exception.Message);
+        Assert.Contains("Cargo.toml", exception.Message);
     }
 }

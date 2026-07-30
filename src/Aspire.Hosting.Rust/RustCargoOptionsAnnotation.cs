@@ -41,7 +41,16 @@ internal sealed class RustCargoOptionsAnnotation : IResourceAnnotation
     /// <summary>
     /// Gets or sets the target triple selected with <c>--target</c>.
     /// </summary>
-    public string? TargetTriple { get; set; }
+    public string? Target { get; set; }
+
+    /// <summary>
+    /// Gets or sets the manifest selected with <c>--manifest-path</c>.
+    /// </summary>
+    /// <remarks>
+    /// Cargo otherwise discovers the manifest from its working directory, which is the app directory, so
+    /// this stays <see langword="null"/> unless the caller redirected it.
+    /// </remarks>
+    public string? ManifestPath { get; set; }
 
     /// <summary>
     /// Gets or sets the named profile selected with <c>--profile</c>.

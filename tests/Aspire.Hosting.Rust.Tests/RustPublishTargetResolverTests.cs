@@ -87,9 +87,9 @@ public class RustPublishTargetResolverTests
     }
 
     [Fact]
-    public void TargetTripleAddsATripleDirectoryToThePath()
+    public void TargetAddsATripleDirectoryToThePath()
     {
-        var options = new RustCargoOptionsAnnotation { TargetTriple = "aarch64-unknown-linux-musl" };
+        var options = new RustCargoOptionsAnnotation { Target = "aarch64-unknown-linux-musl" };
 
         var target = Resolve(CargoMetadataFactory.SinglePackage("my-service"), options);
 
@@ -99,26 +99,15 @@ public class RustPublishTargetResolverTests
     [Fact]
     public void MultipleBinTargetsWithoutSelectionFail()
     {
+        // `cargo run` can still succeed here (with a raw --bin that publish deliberately does not interpret),
+        // so this is one of the few cases publish has to report rather than pass through.
         var metadata = CargoMetadataFactory.SinglePackage("my-service", extraBins: ["worker"]);
 
         var exception = Assert.Throws<DistributedApplicationException>(() => Resolve(metadata, new RustCargoOptionsAnnotation()));
 
         Assert.Equal(
-            "The package 'my-service' used by the Rust app 'api' declares 2 binary targets ('my-service', 'worker'), so the binary to publish is " +
-            "ambiguous. Call WithCargoBinTarget(\"<name>\") to select one, or set default-run in Cargo.toml.",
-            exception.Message);
-    }
-
-    [Fact]
-    public void NoBinTargetsFails()
-    {
-        var metadata = CargoMetadataFactory.Workspace(new CargoPackageSpec("my-lib", []));
-
-        var exception = Assert.Throws<DistributedApplicationException>(() => Resolve(metadata, new RustCargoOptionsAnnotation()));
-
-        Assert.Equal(
-            "The package 'my-lib' used by the Rust app 'api' declares no binary targets, so there is nothing to run in a container. " +
-            "Add a src/main.rs or a [[bin]] section to Cargo.toml.",
+            "Unable to work out which binary the Rust app 'api' publishes: the package 'my-service' declares 2 binary targets. " +
+            "Call WithCargoBinTarget(\"<name>\") so the generated Dockerfile copies the right one.",
             exception.Message);
     }
 
@@ -132,7 +121,7 @@ public class RustPublishTargetResolverTests
         var exception = Assert.Throws<DistributedApplicationException>(() => Resolve(metadata, new RustCargoOptionsAnnotation()));
 
         Assert.Equal(
-            "The Rust app 'api' points at a cargo workspace with 2 default members ('api', 'worker'), so the binary to publish is ambiguous. " +
+            "Unable to work out which binary the Rust app 'api' publishes: 'cargo metadata' reported 2 default workspace members. " +
             "Call WithCargoPackage(\"<name>\") to select one.",
             exception.Message);
     }
@@ -152,42 +141,16 @@ public class RustPublishTargetResolverTests
     }
 
     [Fact]
-    public void UnknownBinTargetFails()
+    public void ABinTargetCargoDoesNotReportIsPassedThrough()
     {
+        // Publishing runs after the app already ran, so cargo has already had its say on whether the
+        // selection is valid. Re-validating here would only turn a working app into a publish-time failure
+        // when metadata and the selection disagree for a reason cargo accepts.
         var metadata = CargoMetadataFactory.SinglePackage("my-service");
 
-        var exception = Assert.Throws<DistributedApplicationException>(
-            () => Resolve(metadata, new RustCargoOptionsAnnotation { BinTarget = "nope" }));
+        var target = Resolve(metadata, new RustCargoOptionsAnnotation { BinTarget = "worker" });
 
-        Assert.Equal(
-            "The Rust app 'api' selects the cargo binary 'nope', which the package 'my-service' does not declare. Available binaries: 'my-service'.",
-            exception.Message);
-    }
-
-    [Fact]
-    public void UnknownPackageFails()
-    {
-        var metadata = CargoMetadataFactory.Workspace(new CargoPackageSpec("api", ["api"]));
-
-        var exception = Assert.Throws<DistributedApplicationException>(
-            () => Resolve(metadata, new RustCargoOptionsAnnotation { Package = "nope" }));
-
-        Assert.Equal(
-            "The Rust app 'api' selects the cargo package 'nope', which does not exist in this workspace. Available packages: 'api'.",
-            exception.Message);
-    }
-
-    [Fact]
-    public void DefaultRunPointingAtAMissingBinaryFails()
-    {
-        var metadata = CargoMetadataFactory.SinglePackage("my-service", defaultRun: "ghost");
-
-        var exception = Assert.Throws<DistributedApplicationException>(() => Resolve(metadata, new RustCargoOptionsAnnotation()));
-
-        Assert.Equal(
-            "The package 'my-service' used by the Rust app 'api' sets default-run = \"ghost\", but declares no such binary. " +
-            "Available binaries: 'my-service'.",
-            exception.Message);
+        Assert.Equal("worker", target.BinaryName);
     }
 
     private static RustPublishTarget Resolve(string metadataJson, RustCargoOptionsAnnotation options)

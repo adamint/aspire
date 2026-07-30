@@ -77,7 +77,7 @@ public class RustPublishImageResolverTests
     {
         using var crate = new TempCrateDirectory();
 
-        var images = RustPublishImageResolver.Resolve(null, null, crate.Path, targetTriple: null, "api");
+        var images = RustPublishImageResolver.Resolve(null, null, crate.Path, target: null, "api");
 
         Assert.Equal($"rust:{RustToolchainDetector.DefaultChannel}-alpine", images.BuildImage);
         Assert.Equal(RustPublishImageResolver.DefaultRuntimeImage, images.RuntimeImage);
@@ -86,7 +86,7 @@ public class RustPublishImageResolverTests
     }
 
     [Fact]
-    public void MuslTargetTripleIsAllowedWithTheDefaultImages()
+    public void MuslTargetIsAllowedWithTheDefaultImages()
     {
         using var crate = new TempCrateDirectory();
 
@@ -96,7 +96,7 @@ public class RustPublishImageResolverTests
     }
 
     [Fact]
-    public void GnuTargetTripleIsRejectedAgainstTheDefaultMuslImages()
+    public void GnuTargetIsRejectedAgainstTheDefaultMuslImages()
     {
         using var crate = new TempCrateDirectory();
 
@@ -108,7 +108,7 @@ public class RustPublishImageResolverTests
     }
 
     [Fact]
-    public void GnuTargetTripleIsAllowedWhenTheCallerSuppliesBothImages()
+    public void GnuTargetIsAllowedWhenTheCallerSuppliesBothImages()
     {
         using var crate = new TempCrateDirectory();
 
@@ -125,7 +125,7 @@ public class RustPublishImageResolverTests
     }
 
     [Fact]
-    public void NonLinuxTargetTripleIsRejected()
+    public void NonLinuxTargetIsRejected()
     {
         using var crate = new TempCrateDirectory();
 
