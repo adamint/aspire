@@ -341,6 +341,59 @@ public class AppHostInfoDiskCacheTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task EditingExactStaticImportWithRedundantSeparatorInvalidatesCacheEntry()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var cache = CreateCache(workspace);
+        var projectDirectory = Directory.CreateDirectory(Path.Combine(workspace.WorkspaceRoot.FullName, "repo", "proj"));
+        var projectFile = new FileInfo(Path.Combine(projectDirectory.FullName, "MyHost.csproj"));
+        File.WriteAllText(projectFile.FullName, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        File.WriteAllText(Path.Combine(workspace.WorkspaceRoot.FullName, "repo", "Directory.Build.props"), """
+            <Project>
+              <Import Project="$(MSBuildThisFileDirectory)/../shared/Directory.Build.props" />
+            </Project>
+            """);
+
+        var sharedDirectory = Directory.CreateDirectory(Path.Combine(workspace.WorkspaceRoot.FullName, "shared"));
+        var sharedProps = Path.Combine(sharedDirectory.FullName, "Directory.Build.props");
+        File.WriteAllText(sharedProps, "<Project />");
+
+        await cache.SetAsync(projectFile, cache.GetCacheKey(projectFile), SampleEntry() with { IsAspireHost = false }, CancellationToken.None).DefaultTimeout();
+        Assert.NotNull(await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout());
+
+        File.WriteAllText(sharedProps, """
+            <Project>
+              <PropertyGroup>
+                <IsAspireHost>true</IsAspireHost>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.SetLastWriteTimeUtc(sharedProps, DateTime.UtcNow.AddSeconds(2));
+
+        Assert.Null(await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout());
+    }
+
+    [Fact]
+    public async Task WildcardStaticConventionalImportNeverReadsOrWrites()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var cache = CreateCache(workspace);
+        var projectDirectory = Directory.CreateDirectory(Path.Combine(workspace.WorkspaceRoot.FullName, "repo", "proj"));
+        var projectFile = new FileInfo(Path.Combine(projectDirectory.FullName, "MyHost.csproj"));
+        File.WriteAllText(projectFile.FullName, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        File.WriteAllText(Path.Combine(workspace.WorkspaceRoot.FullName, "repo", "Directory.Build.props"), """
+            <Project>
+              <Import Project="../Directory.Build.p*" />
+            </Project>
+            """);
+
+        await cache.SetAsync(projectFile, cache.GetCacheKey(projectFile), SampleEntry(), CancellationToken.None).DefaultTimeout();
+
+        Assert.Null(await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout());
+        Assert.Empty(EnumerateCacheEntries(workspace));
+    }
+
+    [Fact]
     public async Task UnresolvableStaticImportNeverReadsOrWrites()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -426,6 +479,24 @@ public class AppHostInfoDiskCacheTests(ITestOutputHelper outputHelper)
         var hit = await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout();
 
         Assert.Null(hit);
+        Assert.Empty(EnumerateCacheEntries(workspace));
+    }
+
+    [Fact]
+    public async Task WrappedWalkUpImportNeverReadsOrWrites()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var cache = CreateCache(workspace);
+        var projectFile = CreateProjectFile(workspace, "MyHost.csproj");
+        File.WriteAllText(projectFile.FullName, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <Import Project="$([System.String]::Concat($([MSBuild]::GetPathOfFileAbove('Anchor', '$(MSBuildThisFileDirectory)../')), '.props'))" />
+            </Project>
+            """);
+
+        await cache.SetAsync(projectFile, cache.GetCacheKey(projectFile), SampleEntry(), CancellationToken.None).DefaultTimeout();
+
+        Assert.Null(await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout());
         Assert.Empty(EnumerateCacheEntries(workspace));
     }
 
