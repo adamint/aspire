@@ -51,6 +51,12 @@ public class AppHostInfoDiskCacheTests(ITestOutputHelper outputHelper)
         TargetFramework = "net10.0",
     };
 
+    private static IEnumerable<string> EnumerateCacheEntries(TemporaryWorkspace workspace)
+    {
+        var cacheDirectory = Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "cache", "apphost-info");
+        return Directory.Exists(cacheDirectory) ? Directory.EnumerateFiles(cacheDirectory) : [];
+    }
+
     [Fact]
     public async Task CacheMissThenHit()
     {
@@ -286,8 +292,178 @@ public class AppHostInfoDiskCacheTests(ITestOutputHelper outputHelper)
 
         Assert.Null(hit);
 
-        var cacheDir = Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "cache", "apphost-info");
-        Assert.False(Directory.Exists(cacheDir) && Directory.EnumerateFiles(cacheDir).Any());
+        Assert.Empty(EnumerateCacheEntries(workspace));
+    }
+
+    [Fact]
+    public async Task EditingExactStaticImportInvalidatesCacheEntry()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var cache = CreateCache(workspace);
+
+        // The nearest Directory.Build.props carries no marker but imports a Directory.Build.props from a
+        // SIBLING directory, so the prefilter cannot prove the project is not an AppHost and admits it.
+        // 'shared' is not an ancestor of the project, so the conventional walk never stats the file MSBuild
+        // actually evaluates; only fingerprinting the exact resolved path notices the edit.
+        //   <root>/shared/Directory.Build.props   the file that decides the verdict
+        //   <root>/repo/Directory.Build.props     imports $(MSBuildThisFileDirectory)../shared/Directory.Build.props
+        //   <root>/repo/proj/MyHost.csproj
+        var projectDirectory = Directory.CreateDirectory(Path.Combine(workspace.WorkspaceRoot.FullName, "repo", "proj"));
+        var projectFile = new FileInfo(Path.Combine(projectDirectory.FullName, "MyHost.csproj"));
+        File.WriteAllText(projectFile.FullName, """
+            <Project Sdk="Microsoft.NET.Sdk" />
+            """);
+
+        File.WriteAllText(Path.Combine(workspace.WorkspaceRoot.FullName, "repo", "Directory.Build.props"), """
+            <Project>
+              <Import Project="$(MSBuildThisFileDirectory)../shared/Directory.Build.props" />
+            </Project>
+            """);
+
+        var sharedDirectory = Directory.CreateDirectory(Path.Combine(workspace.WorkspaceRoot.FullName, "shared"));
+        var sharedProps = Path.Combine(sharedDirectory.FullName, "Directory.Build.props");
+        File.WriteAllText(sharedProps, "<Project />");
+
+        await cache.SetAsync(projectFile, cache.GetCacheKey(projectFile), SampleEntry() with { IsAspireHost = false }, CancellationToken.None).DefaultTimeout();
+        Assert.NotNull(await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout());
+
+        File.WriteAllText(sharedProps, """
+            <Project>
+              <PropertyGroup>
+                <IsAspireHost>true</IsAspireHost>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.SetLastWriteTimeUtc(sharedProps, DateTime.UtcNow.AddSeconds(2));
+
+        var hit = await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout();
+        Assert.Null(hit);
+    }
+
+    [Fact]
+    public async Task UnresolvableStaticImportNeverReadsOrWrites()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var cache = CreateCache(workspace);
+
+        // <Import Project="$(RepoRoot)Directory.Build.props" /> names a conventional file, so the prefilter
+        // admits the project, but only MSBuild knows which directory $(RepoRoot) expands to. There is no
+        // path to stat, so the disk cache must opt out instead of storing an entry that an edit to that file
+        // could never invalidate.
+        var projectDirectory = Directory.CreateDirectory(Path.Combine(workspace.WorkspaceRoot.FullName, "repo", "proj"));
+        var projectFile = new FileInfo(Path.Combine(projectDirectory.FullName, "MyHost.csproj"));
+        File.WriteAllText(projectFile.FullName, """
+            <Project Sdk="Microsoft.NET.Sdk" />
+            """);
+
+        File.WriteAllText(Path.Combine(workspace.WorkspaceRoot.FullName, "repo", "Directory.Build.props"), """
+            <Project>
+              <Import Project="$(RepoRoot)Directory.Build.props" />
+            </Project>
+            """);
+
+        await cache.SetAsync(projectFile, cache.GetCacheKey(projectFile), SampleEntry(), CancellationToken.None).DefaultTimeout();
+        var hit = await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout();
+
+        Assert.Null(hit);
+        Assert.Empty(EnumerateCacheEntries(workspace));
+    }
+
+    [Fact]
+    public async Task EditingAppendedWalkUpImportTargetInvalidatesCacheEntry()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var cache = CreateCache(workspace);
+
+        // GetPathOfFileAbove returns a FILE path, so trailing text concatenates onto the file name rather
+        // than naming a separate file: the import below resolves to <root>/Aspire.Common.props, not to
+        // 'Aspire.Common' plus '.props'. Recording those two pieces separately fingerprints neither the file
+        // MSBuild reads nor anything that changes when it is edited.
+        var projectDirectory = Directory.CreateDirectory(Path.Combine(workspace.WorkspaceRoot.FullName, "src", "MyHost"));
+        var projectFile = new FileInfo(Path.Combine(projectDirectory.FullName, "MyHost.csproj"));
+        File.WriteAllText(projectFile.FullName, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <Import Project="$([MSBuild]::GetPathOfFileAbove('Aspire.Common', '$(MSBuildThisFileDirectory)../')).props" />
+            </Project>
+            """);
+
+        File.WriteAllText(Path.Combine(workspace.WorkspaceRoot.FullName, "Aspire.Common"), "");
+        var commonProps = Path.Combine(workspace.WorkspaceRoot.FullName, "Aspire.Common.props");
+        File.WriteAllText(commonProps, "<Project />");
+
+        await cache.SetAsync(projectFile, cache.GetCacheKey(projectFile), SampleEntry() with { IsAspireHost = false }, CancellationToken.None).DefaultTimeout();
+        Assert.NotNull(await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout());
+
+        File.WriteAllText(commonProps, """
+            <Project>
+              <PropertyGroup>
+                <IsAspireHost>true</IsAspireHost>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.SetLastWriteTimeUtc(commonProps, DateTime.UtcNow.AddSeconds(2));
+
+        var hit = await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout();
+        Assert.Null(hit);
+    }
+
+    [Fact]
+    public async Task WildcardWalkUpImportNeverReadsOrWrites()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var cache = CreateCache(workspace);
+
+        // A glob suffix expands to every match at evaluation time, so the import has no single target to
+        // stat and creating a new matching file would not move any tracked mtime.
+        var projectFile = CreateProjectFile(workspace, "MyHost.csproj");
+        File.WriteAllText(projectFile.FullName, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <Import Project="$([MSBuild]::GetDirectoryNameOfFileAbove('$(MSBuildThisFileDirectory)../', 'Repo.marker'))/*.props" />
+            </Project>
+            """);
+
+        await cache.SetAsync(new FileInfo(projectFile.FullName), cache.GetCacheKey(projectFile), SampleEntry(), CancellationToken.None).DefaultTimeout();
+        var hit = await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout();
+
+        Assert.Null(hit);
+        Assert.Empty(EnumerateCacheEntries(workspace));
+    }
+
+    [Fact]
+    public async Task ShadowedAncestorWithUnfingerprintableImportStillCaches()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var cache = CreateCache(workspace);
+
+        // The nearest Directory.Build.props declares no chaining import, so MSBuild never evaluates the
+        // outer one and its unresolvable import cannot affect this project. Analyzing every ancestor level
+        // instead of the reachable chain would disable caching here for no reason.
+        //   <root>/Directory.Build.props        imports $(SharedPropsDir)Directory.Build.props (shadowed)
+        //   <root>/repo/Directory.Build.props   no marker, no imports — terminates the chain
+        //   <root>/repo/proj/MyHost.csproj
+        var projectDirectory = Directory.CreateDirectory(Path.Combine(workspace.WorkspaceRoot.FullName, "repo", "proj"));
+        var projectFile = new FileInfo(Path.Combine(projectDirectory.FullName, "MyHost.csproj"));
+        File.WriteAllText(projectFile.FullName, """
+            <Project Sdk="Microsoft.NET.Sdk" />
+            """);
+
+        File.WriteAllText(Path.Combine(workspace.WorkspaceRoot.FullName, "Directory.Build.props"), """
+            <Project>
+              <Import Project="$(SharedPropsDir)Directory.Build.props" />
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(workspace.WorkspaceRoot.FullName, "repo", "Directory.Build.props"), """
+            <Project>
+              <PropertyGroup>
+                <SomeUnrelated>1</SomeUnrelated>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        await cache.SetAsync(projectFile, cache.GetCacheKey(projectFile), SampleEntry(), CancellationToken.None).DefaultTimeout();
+
+        var hit = await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout();
+        Assert.NotNull(hit);
     }
 
     [Fact]

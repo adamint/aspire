@@ -3125,16 +3125,20 @@ public class DotNetAppHostProjectTests(ITestOutputHelper outputHelper) : IDispos
     {
         // GetDirectoryNameOfFileAbove(start, anchor) is selected by its ANCHOR argument: the call returns the
         // directory containing the nearest 'Repo.marker' at or above the start, and the appended
-        // '/Directory.Build.props' names the file imported FROM that directory. So this import reaches the
-        // outer marker even though a nearer marker-less Directory.Build.props shadows the ordinary chain.
-        // Treating the appended conventional name as "a file the ancestor walk already enumerates" made the
-        // prefilter stop at the nearer file and reject the project:
-        //   outer/Repo.marker                       (anchor)
-        //   outer/Directory.Build.props             <IsAspireHost>true</IsAspireHost>
-        //   outer/repo/Directory.Build.props        imports GetDirectoryNameOfFileAbove(.., 'Repo.marker')/Directory.Build.props
-        //   outer/repo/proj/OrdinaryLib.csproj
+        // '/Directory.Build.props' names the file imported FROM that directory. The anchor can therefore
+        // reach PAST a nearer marker-less Directory.Build.props that shadows the ordinary chain. Treating the
+        // appended conventional name as "the next file the ancestor walk visits" made the walk advance one
+        // level, stop at that intervening file, and reject the project:
+        //   outer/Repo.marker                          (anchor)
+        //   outer/Directory.Build.props                <IsAspireHost>true</IsAspireHost>
+        //   outer/mid/Directory.Build.props            (no marker, no chain — shadows outer for the walk)
+        //   outer/mid/repo/Directory.Build.props       imports GetDirectoryNameOfFileAbove(.., 'Repo.marker')/Directory.Build.props
+        //   outer/mid/repo/proj/OrdinaryLib.csproj
         //   dotnet msbuild OrdinaryLib.csproj -getProperty:IsAspireHost  =>  true
-        var projectFile = WriteIsLikelyAppHostProject(Path.Combine("outer", "repo", "proj", "OrdinaryLib.csproj"), """
+        // The intervening outer/mid file is what makes this fail without the fix: with it, following the
+        // appended name lands on a marker-less file and the walk stops, while MSBuild jumps straight to the
+        // anchor-bearing directory two levels up.
+        var projectFile = WriteIsLikelyAppHostProject(Path.Combine("outer", "mid", "repo", "proj", "OrdinaryLib.csproj"), """
             <Project Sdk="Microsoft.NET.Sdk" />
             """);
         WriteIsLikelyAppHostProject(Path.Combine("outer", "Repo.marker"), "<Project />");
@@ -3145,7 +3149,14 @@ public class DotNetAppHostProjectTests(ITestOutputHelper outputHelper) : IDispos
               </PropertyGroup>
             </Project>
             """);
-        WriteIsLikelyAppHostProject(Path.Combine("outer", "repo", "Directory.Build.props"), """
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "mid", "Directory.Build.props"), """
+            <Project>
+              <PropertyGroup>
+                <SomeUnrelated>1</SomeUnrelated>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteIsLikelyAppHostProject(Path.Combine("outer", "mid", "repo", "Directory.Build.props"), """
             <Project>
               <Import Project="$([MSBuild]::GetDirectoryNameOfFileAbove('$(MSBuildThisFileDirectory)../', 'Repo.marker'))/Directory.Build.props" />
             </Project>
