@@ -37,8 +37,8 @@ internal static class RustDockerfileGenerator
             ? cargoOptions
             : new RustCargoOptionsAnnotation();
 
-        var metadata = await ReadMetadataAsync(resource, appDirectory, options.ManifestPath, context.CancellationToken).ConfigureAwait(false);
-        var target = RustPublishTargetResolver.Resolve(metadata, options, resource.Name);
+        var metadata = await CargoMetadataReader.ReadAsync(resource, appDirectory, options.ManifestPath, context.CancellationToken).ConfigureAwait(false);
+        var target = RustCargoTargetResolver.Resolve(metadata, options, options.PublishProfileDirectory, resource.Name);
 
         var baseImageAnnotation = ResolveBaseImageAnnotation(resource, context);
         var images = RustPublishImageResolver.Resolve(
@@ -105,19 +105,11 @@ internal static class RustDockerfileGenerator
             .WorkDir("/app")
             // Add COPY --from=<source> instructions for each container files source.
             .AddContainerFiles(context.Resource, "/app", logger)
-            .CopyFrom("build", $"/app/{target.RelativeBinaryPath}", $"/app/{target.BinaryName}")
+            // RelativePath is relative to cargo's target directory, which inside the build stage is
+            // /app/target because the crate was copied to /app.
+            .CopyFrom("build", $"/app/target/{target.RelativePath}", $"/app/{target.Name}")
             .User("app")
-            .Entrypoint([$"/app/{target.BinaryName}"]);
-    }
-
-    private static async Task<CargoMetadata> ReadMetadataAsync(RustAppResource resource, string appDirectory, string? manifestPath, CancellationToken cancellationToken)
-    {
-        if (resource.TryGetLastAnnotation<RustCargoMetadataProviderAnnotation>(out var provider))
-        {
-            return await provider.Provider(cancellationToken).ConfigureAwait(false);
-        }
-
-        return await CargoMetadataReader.ReadAsync(appDirectory, manifestPath, resource.Name, cancellationToken).ConfigureAwait(false);
+            .Entrypoint([$"/app/{target.Name}"]);
     }
 
     // Evaluates every cargo args callback exactly as run mode does, then ensures the result selects an

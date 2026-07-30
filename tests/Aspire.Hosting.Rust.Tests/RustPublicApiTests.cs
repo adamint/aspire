@@ -80,6 +80,20 @@ public class RustPublicApiTests
     }
 
     [Fact]
+    public async Task WithCargoExampleMapsToCargoArgs()
+    {
+        // --bin and --example are mutually exclusive in cargo, so the example gets its own test rather
+        // than being folded into the target selection case above.
+        var builder = DistributedApplication.CreateBuilder();
+        var app = builder.AddRustApp("api", builder.AppHostDirectory)
+            .WithCargoExample("demo");
+
+        var args = await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
+
+        Assert.Equal(["run", "--example", "demo", "--"], args);
+    }
+
+    [Fact]
     public async Task WithCargoProfileWinsOverWithCargoReleaseBuild()
     {
         // Cargo rejects --profile and --release together.
@@ -157,6 +171,22 @@ public class RustPublicApiTests
     }
 
     [Fact]
+    public async Task LaunchConfigurationCarriesTheExecutableTheBuildWillProduce()
+    {
+        // The extension runs a plain `cargo build` and debugs this path, rather than parsing cargo's JSON
+        // artifact stream, so the debugged process is the same binary publishing containerizes.
+        var builder = DistributedApplication.CreateBuilder();
+        var app = builder.AddRustApp("api", builder.AppHostDirectory);
+
+        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(app.Resource);
+
+        var cargo = Assert.IsType<RustCargoLaunchTarget>(launchConfig.Cargo);
+        var expected = Path.Combine("/app/target", "debug", OperatingSystem.IsWindows() ? "my-service.exe" : "my-service");
+
+        Assert.Equal(expected, cargo.ExecutablePath);
+    }
+
+    [Fact]
     public async Task LaunchConfigurationThrowsWhenCargoArgumentsHaveNotBeenResolved()
     {
         var builder = DistributedApplication.CreateBuilder();
@@ -174,6 +204,11 @@ public class RustPublicApiTests
     private static async Task<RustLaunchConfiguration> InvokeLaunchConfigurationAnnotatorAsync(RustAppResource resource)
     {
         Assert.True(resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebugging));
+
+        // The debug launch configuration resolves the executable cargo will produce from the crate's
+        // metadata. Supply that directly so these tests run on machines without a Rust toolchain.
+        resource.Annotations.Add(new RustCargoMetadataProviderAnnotation(
+            _ => Task.FromResult(CargoMetadata.Parse(CargoMetadataFactory.SinglePackage("my-service")))));
 
         // DCP resolves the resource's arguments before it asks for the launch configuration, and the
         // launch configuration reuses those resolved cargo arguments, so evaluate them first.

@@ -3,15 +3,15 @@
 
 namespace Aspire.Hosting.Rust.Tests;
 
-public class RustPublishTargetResolverTests
+public class RustCargoTargetResolverTests
 {
     [Fact]
     public void ResolvesTheSingleBinTargetOfADefaultPackage()
     {
         var target = Resolve(CargoMetadataFactory.SinglePackage("my-service"), new RustCargoOptionsAnnotation());
 
-        Assert.Equal("my-service", target.BinaryName);
-        Assert.Equal("target/release/my-service", target.RelativeBinaryPath);
+        Assert.Equal("my-service", target.Name);
+        Assert.Equal("release/my-service", target.RelativePath);
     }
 
     [Fact]
@@ -21,7 +21,7 @@ public class RustPublishTargetResolverTests
         // COPY path must use the name exactly as cargo reports it.
         var target = Resolve(CargoMetadataFactory.SinglePackage("aspire-sample-rust-app"), new RustCargoOptionsAnnotation());
 
-        Assert.Equal("aspire-sample-rust-app", target.BinaryName);
+        Assert.Equal("aspire-sample-rust-app", target.Name);
     }
 
     [Fact]
@@ -31,8 +31,19 @@ public class RustPublishTargetResolverTests
 
         var target = Resolve(metadata, new RustCargoOptionsAnnotation { BinTarget = "worker" });
 
-        Assert.Equal("worker", target.BinaryName);
-        Assert.Equal("target/release/worker", target.RelativeBinaryPath);
+        Assert.Equal("worker", target.Name);
+        Assert.Equal("release/worker", target.RelativePath);
+    }
+
+    [Fact]
+    public void WithCargoExampleSelectsTheExampleAndItsOwnDirectory()
+    {
+        // Examples are written to target/<profile>/examples/ rather than alongside binaries, and cargo does
+        // not report them as bin targets, so the name is taken from the option rather than the metadata.
+        var target = Resolve(CargoMetadataFactory.SinglePackage("my-service"), new RustCargoOptionsAnnotation { Example = "demo" });
+
+        Assert.Equal("demo", target.Name);
+        Assert.Equal("release/examples/demo", target.RelativePath);
     }
 
     [Fact]
@@ -44,7 +55,7 @@ public class RustPublishTargetResolverTests
 
         var target = Resolve(metadata, new RustCargoOptionsAnnotation { Package = "worker" });
 
-        Assert.Equal("worker", target.BinaryName);
+        Assert.Equal("worker", target.Name);
     }
 
     [Fact]
@@ -56,7 +67,7 @@ public class RustPublishTargetResolverTests
 
         var target = Resolve(metadata, new RustCargoOptionsAnnotation());
 
-        Assert.Equal("server", target.BinaryName);
+        Assert.Equal("server", target.Name);
     }
 
     [Fact]
@@ -66,24 +77,44 @@ public class RustPublishTargetResolverTests
 
         var target = Resolve(metadata, new RustCargoOptionsAnnotation { BinTarget = "worker" });
 
-        Assert.Equal("worker", target.BinaryName);
+        Assert.Equal("worker", target.Name);
     }
 
     [Theory]
-    [InlineData(null, false, "target/release/my-service")]
-    [InlineData(null, true, "target/release/my-service")]
-    [InlineData("release", false, "target/release/my-service")]
-    [InlineData("dev", false, "target/debug/my-service")]
-    [InlineData("test", false, "target/debug/my-service")]
-    [InlineData("bench", false, "target/release/my-service")]
-    [InlineData("dist", false, "target/dist/my-service")]
-    public void ProfileDeterminesTheOutputDirectory(string? profile, bool releaseBuild, string expectedPath)
+    [InlineData(null, false, "release/my-service")]
+    [InlineData(null, true, "release/my-service")]
+    [InlineData("release", false, "release/my-service")]
+    [InlineData("dev", false, "debug/my-service")]
+    [InlineData("test", false, "debug/my-service")]
+    [InlineData("bench", false, "release/my-service")]
+    [InlineData("dist", false, "dist/my-service")]
+    public void PublishProfileDeterminesTheOutputDirectory(string? profile, bool releaseBuild, string expectedPath)
     {
         var options = new RustCargoOptionsAnnotation { Profile = profile, ReleaseBuild = releaseBuild };
 
         var target = Resolve(CargoMetadataFactory.SinglePackage("my-service"), options);
 
-        Assert.Equal(expectedPath, target.RelativeBinaryPath);
+        Assert.Equal(expectedPath, target.RelativePath);
+    }
+
+    [Theory]
+    [InlineData(null, false, "debug/my-service")]
+    [InlineData(null, true, "release/my-service")]
+    [InlineData("dev", false, "debug/my-service")]
+    [InlineData("dist", false, "dist/my-service")]
+    public void RunProfileDefaultsToDebugUnlikePublish(string? profile, bool releaseBuild, string expectedPath)
+    {
+        // Run and debug use cargo's own default (dev) so a debug launch reuses the artifacts a plain
+        // `cargo run` already produced, while publishing opts into an optimized build.
+        var options = new RustCargoOptionsAnnotation { Profile = profile, ReleaseBuild = releaseBuild };
+
+        var target = RustCargoTargetResolver.Resolve(
+            CargoMetadata.Parse(CargoMetadataFactory.SinglePackage("my-service")),
+            options,
+            options.RunProfileDirectory,
+            "api");
+
+        Assert.Equal(expectedPath, target.RelativePath);
     }
 
     [Fact]
@@ -93,21 +124,34 @@ public class RustPublishTargetResolverTests
 
         var target = Resolve(CargoMetadataFactory.SinglePackage("my-service"), options);
 
-        Assert.Equal("target/aarch64-unknown-linux-musl/release/my-service", target.RelativeBinaryPath);
+        Assert.Equal("aarch64-unknown-linux-musl/release/my-service", target.RelativePath);
+    }
+
+    [Fact]
+    public void ExecutablePathIsRootedAtTheTargetDirectoryCargoReported()
+    {
+        // cargo reports target_directory as an absolute path, so CARGO_TARGET_DIR, build.target-dir and a
+        // workspace member sharing the workspace root's target directory all come out correct without the
+        // app host having to guess.
+        var target = Resolve(CargoMetadataFactory.SinglePackage("my-service"), new RustCargoOptionsAnnotation());
+
+        var expected = Path.Combine("/crates/target", "release", OperatingSystem.IsWindows() ? "my-service.exe" : "my-service");
+
+        Assert.Equal(expected, target.GetExecutablePath("/crates/target"));
     }
 
     [Fact]
     public void MultipleBinTargetsWithoutSelectionFail()
     {
-        // `cargo run` can still succeed here (with a raw --bin that publish deliberately does not interpret),
-        // so this is one of the few cases publish has to report rather than pass through.
+        // `cargo run` can still succeed here (with a raw --bin that Aspire deliberately does not interpret),
+        // so this is one of the few cases that has to be reported rather than passed through.
         var metadata = CargoMetadataFactory.SinglePackage("my-service", extraBins: ["worker"]);
 
         var exception = Assert.Throws<DistributedApplicationException>(() => Resolve(metadata, new RustCargoOptionsAnnotation()));
 
         Assert.Equal(
-            "Unable to work out which binary the Rust app 'api' publishes: the package 'my-service' declares 2 binary targets. " +
-            "Call WithCargoBinTarget(\"<name>\") so the generated Dockerfile copies the right one.",
+            "Unable to work out which binary the Rust app 'api' produces: the package 'my-service' declares 2 binary targets. " +
+            "Call WithCargoBinTarget(\"<name>\") to select one.",
             exception.Message);
     }
 
@@ -121,7 +165,7 @@ public class RustPublishTargetResolverTests
         var exception = Assert.Throws<DistributedApplicationException>(() => Resolve(metadata, new RustCargoOptionsAnnotation()));
 
         Assert.Equal(
-            "Unable to work out which binary the Rust app 'api' publishes: 'cargo metadata' reported 2 default workspace members. " +
+            "Unable to work out which binary the Rust app 'api' produces: 'cargo metadata' reported 2 default workspace members. " +
             "Call WithCargoPackage(\"<name>\") to select one.",
             exception.Message);
     }
@@ -137,22 +181,22 @@ public class RustPublishTargetResolverTests
 
         var target = Resolve(metadata, new RustCargoOptionsAnnotation());
 
-        Assert.Equal("api", target.BinaryName);
+        Assert.Equal("api", target.Name);
     }
 
     [Fact]
     public void ABinTargetCargoDoesNotReportIsPassedThrough()
     {
-        // Publishing runs after the app already ran, so cargo has already had its say on whether the
+        // Resolution runs after the app already ran, so cargo has already had its say on whether the
         // selection is valid. Re-validating here would only turn a working app into a publish-time failure
         // when metadata and the selection disagree for a reason cargo accepts.
         var metadata = CargoMetadataFactory.SinglePackage("my-service");
 
         var target = Resolve(metadata, new RustCargoOptionsAnnotation { BinTarget = "worker" });
 
-        Assert.Equal("worker", target.BinaryName);
+        Assert.Equal("worker", target.Name);
     }
 
-    private static RustPublishTarget Resolve(string metadataJson, RustCargoOptionsAnnotation options)
-        => RustPublishTargetResolver.Resolve(CargoMetadata.Parse(metadataJson), options, "api");
+    private static RustCargoTarget Resolve(string metadataJson, RustCargoOptionsAnnotation options)
+        => RustCargoTargetResolver.Resolve(CargoMetadata.Parse(metadataJson), options, options.PublishProfileDirectory, "api");
 }

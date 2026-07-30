@@ -225,8 +225,9 @@ public static class RustHostingExtensions
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
     /// <ats-returns>The resource builder.</ats-returns>
     /// <remarks>
-    /// Passed to cargo as <c>--bin</c>. Publishing also uses it to name the binary copied into the container,
-    /// so a package with several binaries must select one here (or set <c>default-run</c> in Cargo.toml).
+    /// Passed to cargo as <c>--bin</c>. Debugging and publishing also use it to work out which file cargo
+    /// produces, so a package with several binaries must select one here (or set <c>default-run</c> in
+    /// Cargo.toml).
     /// </remarks>
     [AspireExport]
     public static IResourceBuilder<T> WithCargoBinTarget<T>(this IResourceBuilder<T> builder, string binName)
@@ -236,6 +237,29 @@ public static class RustHostingExtensions
         ArgumentException.ThrowIfNullOrWhiteSpace(binName);
 
         GetOrAddCargoOptions(builder).BinTarget = binName;
+        return builder;
+    }
+
+    /// <summary>
+    /// Configures an example target to run instead of a binary.
+    /// </summary>
+    /// <typeparam name="T">The resource type.</typeparam>
+    /// <param name="builder">The resource builder.</param>
+    /// <param name="exampleName">The example name, as declared by a file or directory under <c>examples/</c>.</param>
+    /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
+    /// <ats-returns>The resource builder.</ats-returns>
+    /// <remarks>
+    /// Passed to cargo as <c>--example</c>. Cargo writes examples to <c>target/&lt;profile&gt;/examples/</c>,
+    /// and debugging and publishing both follow that layout.
+    /// </remarks>
+    [AspireExport]
+    public static IResourceBuilder<T> WithCargoExample<T>(this IResourceBuilder<T> builder, string exampleName)
+        where T : RustAppResource
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(exampleName);
+
+        GetOrAddCargoOptions(builder).Example = exampleName;
         return builder;
     }
 
@@ -370,6 +394,12 @@ public static class RustHostingExtensions
             args.Add(binTarget);
         }
 
+        if (options.Example is { } example)
+        {
+            args.Add("--example");
+            args.Add(example);
+        }
+
         if (options.Package is { } package)
         {
             args.Add("--package");
@@ -418,16 +448,19 @@ public static class RustHostingExtensions
                         $"Cargo arguments for resource '{builder.Resource.Name}' have not been resolved yet. " +
                         "The debug launch configuration must be created after the resource's arguments are evaluated.");
 
+                var workingDirectory = Path.GetFullPath(builder.Resource.WorkingDirectory);
+
                 return new RustLaunchConfiguration
                 {
                     Mode = mode,
-                    WorkingDirectory = Path.GetFullPath(builder.Resource.WorkingDirectory),
+                    WorkingDirectory = workingDirectory,
                     Cargo = new RustCargoLaunchTarget
                     {
                         // The same cargo arguments run mode uses, so any target selection the user made
                         // (`--bin`, `--example`, `--package`) narrows the debug build the same way it
                         // narrows `cargo run`.
-                        Args = ["build", .. cargoArgs]
+                        Args = ["build", .. cargoArgs],
+                        ExecutablePath = ResolveDebugExecutablePath(builder.Resource, workingDirectory)
                     }
                 };
             },
@@ -450,6 +483,33 @@ public static class RustHostingExtensions
                     }
                 }
             });
+    }
+
+    // Works out the file the debug build will produce, so the debugger can run a plain `cargo build` and
+    // launch the result instead of parsing cargo's JSON artifact stream to find it.
+    //
+    // This is the same resolution publishing uses, against the same cargo metadata, so the debugged process
+    // and the published container run the same binary. It is also strictly better than reading the build's
+    // artifacts: `cargo build` ignores `default-run` and therefore reports every binary in the package,
+    // whereas metadata reports `default-run` itself and so matches what `cargo run` launches.
+    //
+    // The blocking wait is deliberate: the launch configuration annotator is synchronous today, this runs
+    // only on a debug launch (never on a plain run), and it is immediately followed by a full cargo build
+    // that takes orders of magnitude longer than a manifest query.
+    private static string ResolveDebugExecutablePath(RustAppResource resource, string workingDirectory)
+    {
+        var options = resource.TryGetLastAnnotation<RustCargoOptionsAnnotation>(out var cargoOptions)
+            ? cargoOptions
+            : new RustCargoOptionsAnnotation();
+
+        var metadata = CargoMetadataReader
+            .ReadAsync(resource, workingDirectory, options.ManifestPath, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+
+        var target = RustCargoTargetResolver.Resolve(metadata, options, options.RunProfileDirectory, resource.Name);
+
+        return target.GetExecutablePath(metadata.TargetDirectory);
     }
 
     // OTLP export plus certificate trust so outbound TLS calls made by the app pick up the dev/test

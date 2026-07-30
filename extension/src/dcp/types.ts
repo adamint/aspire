@@ -58,6 +58,7 @@ export function isGoLaunchConfiguration(obj: any): obj is GoLaunchConfiguration 
 
 export interface RustCargoLaunchTarget {
     args?: string[];
+    executable_path?: string;
 }
 
 export interface RustLaunchConfiguration extends ExecutableLaunchConfiguration {

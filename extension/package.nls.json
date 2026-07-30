@@ -275,7 +275,6 @@
   "aspire-vscode.strings.rustLabel": "Rust",
   "aspire-vscode.strings.rustBuildFailedWithError": "cargo build failed in {0} with error: {1}.",
   "aspire-vscode.strings.rustBuildFailedWithExitCode": "cargo build failed in {0} with exit code {1}.",
-  "aspire-vscode.strings.rustBuildProducedNoExecutable": "cargo build in {0} completed but did not produce a runnable binary. Ensure the crate defines a binary target.",
-  "aspire-vscode.strings.rustBuildProducedMultipleExecutables": "cargo build in {0} could not determine which target to debug. Available targets: {1}. Call WithCargoBinTarget to specify one.",
+  "aspire-vscode.strings.rustLaunchConfigurationMissingExecutable": "The Aspire app host did not report which executable the Rust app in {0} produces, so there is nothing to debug.",
   "command.openDashboardToSide": "Open Aspire Dashboard to the Side"
 }

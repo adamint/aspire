@@ -109,9 +109,13 @@ public class CargoMetadataTests
 
         // Resolve against real cargo output, not a hand-written fixture, so the parser stays honest
         // about the shape the installed toolchain actually emits.
-        var target = RustPublishTargetResolver.Resolve(metadata, new RustCargoOptionsAnnotation(), "api");
-        Assert.Equal("metadata-probe", target.BinaryName);
-        Assert.Equal("target/release/metadata-probe", target.RelativeBinaryPath);
+        var target = RustCargoTargetResolver.Resolve(metadata, new RustCargoOptionsAnnotation(), "release", "api");
+        Assert.Equal("metadata-probe", target.Name);
+        Assert.Equal("release/metadata-probe", target.RelativePath);
+
+        // The target directory cargo reports is absolute, which is what lets the debugger point at the
+        // executable without reimplementing CARGO_TARGET_DIR / build.target-dir / workspace resolution.
+        Assert.Equal(Path.Combine(crate.Path, "target"), metadata.TargetDirectory);
 
         // Compiling would have created target/. Its absence is the proof that the host did no build work.
         Assert.False(Directory.Exists(Path.Combine(crate.Path, "target")));

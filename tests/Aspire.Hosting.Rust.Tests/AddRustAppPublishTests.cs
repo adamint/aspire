@@ -44,6 +44,15 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task VerifyPublish_HonoursWithCargoExample()
+    {
+        // Examples land in target/<profile>/examples/, so the COPY --from path gets an extra segment.
+        var content = await PublishDockerfileAsync(configureResource: app => app.WithCargoExample("demo"));
+
+        await Verify(content);
+    }
+
+    [Fact]
     public async Task VerifyPublish_HonoursWithCargoProfile()
     {
         // A custom profile writes to target/<profile>/, so the COPY --from path must follow it rather than

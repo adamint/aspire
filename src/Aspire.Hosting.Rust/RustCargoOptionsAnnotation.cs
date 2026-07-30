@@ -34,6 +34,11 @@ internal sealed class RustCargoOptionsAnnotation : IResourceAnnotation
     public string? BinTarget { get; set; }
 
     /// <summary>
+    /// Gets or sets the example target selected with <c>--example</c>.
+    /// </summary>
+    public string? Example { get; set; }
+
+    /// <summary>
     /// Gets or sets the workspace package selected with <c>--package</c>.
     /// </summary>
     public string? Package { get; set; }
@@ -62,23 +67,36 @@ internal sealed class RustCargoOptionsAnnotation : IResourceAnnotation
     public string? Profile { get; set; }
 
     /// <summary>
+    /// The profile a run or debug build uses. Cargo defaults to <c>dev</c> unless the resource asked for an
+    /// optimized build.
+    /// </summary>
+    public string RunProfile => Profile ?? (ReleaseBuild ? "release" : "dev");
+
+    /// <summary>
     /// The profile a publish build uses. Publishing defaults to an optimized build, so an app that configured
     /// neither a profile nor a release build still publishes <c>release</c>.
     /// </summary>
     public string PublishProfile => Profile ?? "release";
 
     /// <summary>
+    /// The directory under <c>target/</c> (or <c>target/&lt;triple&gt;/</c>) that a run or debug build writes to.
+    /// </summary>
+    public string RunProfileDirectory => ToProfileDirectory(RunProfile);
+
+    /// <summary>
     /// The directory under <c>target/</c> (or <c>target/&lt;triple&gt;/</c>) that a publish build writes to.
     /// </summary>
+    public string PublishProfileDirectory => ToProfileDirectory(PublishProfile);
+
     /// <remarks>
     /// The directory is not always the profile name: the built-in <c>dev</c> and <c>test</c> profiles both
     /// emit to <c>target/debug</c> and <c>bench</c> emits to <c>target/release</c>. Custom profiles use their
     /// own name. See https://doc.rust-lang.org/cargo/reference/profiles.html
     /// </remarks>
-    public string PublishProfileDirectory => PublishProfile switch
+    private static string ToProfileDirectory(string profile) => profile switch
     {
         "dev" or "test" => "debug",
         "bench" => "release",
-        var profile => profile
+        _ => profile
     };
 }

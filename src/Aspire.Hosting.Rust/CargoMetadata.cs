@@ -6,7 +6,8 @@ using System.Text.Json;
 namespace Aspire.Hosting.Rust;
 
 /// <summary>
-/// The subset of <c>cargo metadata --format-version 1 --no-deps</c> output that publishing needs.
+/// The subset of <c>cargo metadata --format-version 1 --no-deps</c> output that Aspire needs to work out
+/// which file a cargo build produces.
 /// </summary>
 internal sealed class CargoMetadata
 {
@@ -19,6 +20,17 @@ internal sealed class CargoMetadata
     /// The package ids cargo would build when no <c>-p</c>/<c>--package</c> is given.
     /// </summary>
     public required IReadOnlyList<string> DefaultMemberIds { get; init; }
+
+    /// <summary>
+    /// The absolute path of the directory cargo writes build output to.
+    /// </summary>
+    /// <remarks>
+    /// This is not always <c>&lt;crate&gt;/target</c>: <c>CARGO_TARGET_DIR</c>, <c>build.target-dir</c> in
+    /// <c>.cargo/config.toml</c>, and <c>--target-dir</c> all move it, and a workspace member shares the
+    /// workspace root's directory. Cargo resolves all of that and reports the answer, so debugging uses this
+    /// rather than assuming the default layout.
+    /// </remarks>
+    public required string TargetDirectory { get; init; }
 
     /// <summary>
     /// Parses the JSON emitted by <c>cargo metadata --format-version 1 --no-deps</c>.
@@ -80,7 +92,10 @@ internal sealed class CargoMetadata
         return new CargoMetadata
         {
             Packages = packages,
-            DefaultMemberIds = defaultMembers
+            DefaultMemberIds = defaultMembers,
+            TargetDirectory = root.TryGetProperty("target_directory", out var targetDirectoryElement)
+                ? targetDirectoryElement.GetString() ?? string.Empty
+                : string.Empty
         };
     }
 

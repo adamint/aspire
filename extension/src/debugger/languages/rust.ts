@@ -1,66 +1,15 @@
 import * as vscode from 'vscode';
-import * as readline from 'readline';
 import { spawn } from 'child_process';
 import { getRustExtensionId } from "../../capabilities";
 import { AspireResourceExtendedDebugConfiguration, EnvVar, ExecutableLaunchConfiguration, isRustLaunchConfiguration, RustLaunchConfiguration } from "../../dcp/types";
-import { invalidLaunchConfiguration, rustBuildFailedWithError, rustBuildFailedWithExitCode, rustBuildProducedMultipleExecutables, rustBuildProducedNoExecutable, rustDisplayName, rustLabel } from "../../loc/strings";
+import { invalidLaunchConfiguration, rustBuildFailedWithError, rustBuildFailedWithExitCode, rustLaunchConfigurationMissingExecutable, rustDisplayName, rustLabel } from "../../loc/strings";
 import { extensionLogOutputChannel } from "../../utils/logging";
 import { ResourceDebuggerExtension } from "../debuggerExtensions";
 import { AspireDebugSession } from "../AspireDebugSession";
 import { mergeCliSpawnEnvironment } from "./cli";
 
-// cargo's own diagnostic message, emitted once per compiler-message when --message-format=json is used:
-//   {"reason":"compiler-message","message":{"rendered":"warning: unused variable...","level":"warning"}}
-// The artifact message we actually need looks like:
-//   {"reason":"compiler-artifact","target":{"name":"myapp","kind":["bin"]},"executable":"/repo/target/debug/myapp","fresh":false}
-// "executable" is only populated for targets that produce a runnable binary (bins, examples, integration
-// tests); library-only crates never set it.
-export interface CargoCompilerArtifactMessage {
-    reason: 'compiler-artifact';
-    target?: { name?: string; kind?: string[] };
-    executable?: string | null;
-}
-
-interface CargoCompilerMessage {
-    reason: 'compiler-message';
-    message?: { rendered?: string; level?: string };
-}
-
-type CargoBuildMessage = CargoCompilerArtifactMessage | CargoCompilerMessage | { reason: string };
-
 export interface IRustService {
-    buildAndGetExecutablePath(workingDirectory: string, cargoArgs: string[], env: EnvVar[]): Promise<string>;
-}
-
-// cargo only reports an "executable" for targets that can be run, and those are the target kinds a
-// debugger can attach to. Examples are included because `cargo run --example demo` is a normal way to
-// launch a crate, and the launch configuration passes the user's cargo arguments through verbatim.
-const runnableTargetKinds = ['bin', 'example'];
-
-// Records the executables cargo reported, keyed by target kind and name so a target rebuilt within the
-// same run does not look like a second candidate, while a bin and an example sharing a name still do.
-export function collectExecutableArtifact(executablesByTarget: Map<string, string>, message: CargoCompilerArtifactMessage): void {
-    const targetName = message.target?.name;
-    const targetKind = message.target?.kind?.find(kind => runnableTargetKinds.includes(kind));
-    if (message.executable && targetName && targetKind) {
-        executablesByTarget.set(`${targetKind}/${targetName}`, message.executable);
-    }
-}
-
-// The debug build runs the same cargo arguments as run mode, so whatever narrows `cargo run` to one
-// target (`--bin`, `--example`, `--package`, or a crate with a single binary) narrows this too. The
-// one case that can still report several is `default-run`, which `cargo run` honours and `cargo build`
-// ignores; report that rather than launching whichever artifact cargo happened to finish last.
-export function selectExecutable(workingDirectory: string, executablesByTarget: Map<string, string>): string {
-    if (executablesByTarget.size === 0) {
-        throw new Error(rustBuildProducedNoExecutable(workingDirectory));
-    }
-
-    if (executablesByTarget.size > 1) {
-        throw new Error(rustBuildProducedMultipleExecutables(workingDirectory, [...executablesByTarget.keys()].sort().join(', ')));
-    }
-
-    return [...executablesByTarget.values()][0];
+    build(workingDirectory: string, cargoArgs: string[], env: EnvVar[]): Promise<void>;
 }
 
 export class RustService implements IRustService {
@@ -74,13 +23,9 @@ export class RustService implements IRustService {
         this._debugSession.sendMessage(message, false, category);
     }
 
-    async buildAndGetExecutablePath(workingDirectory: string, cargoArgs: string[], env: EnvVar[]): Promise<string> {
-        return new Promise<string>((resolve, reject) => {
-            // --message-format=json lets us reliably discover the compiled binary's absolute path
-            // instead of guessing the target/<profile>/<name> layout (which varies with --release,
-            // custom target directories, and cross-compilation).
-            const args = [...cargoArgs, '--message-format=json'];
-            extensionLogOutputChannel.info(`Building Rust application in ${workingDirectory} using: cargo ${args.join(' ')}`);
+    build(workingDirectory: string, cargoArgs: string[], env: EnvVar[]): Promise<void> {
+        return new Promise<void>((resolve, reject) => {
+            extensionLogOutputChannel.info(`Building Rust application in ${workingDirectory} using: cargo ${cargoArgs.join(' ')}`);
 
             // Build with the resource's environment so settings the app host injects (RUSTFLAGS,
             // CARGO_*, proxy variables, and anything set with WithEnvironment) apply to the debug
@@ -88,7 +33,7 @@ export class RustService implements IRustService {
             const buildEnv: Record<string, string | undefined> = { ...process.env };
             mergeCliSpawnEnvironment(buildEnv, env);
 
-            const buildProcess = spawn('cargo', args, { cwd: workingDirectory, env: buildEnv });
+            const buildProcess = spawn('cargo', cargoArgs, { cwd: workingDirectory, env: buildEnv });
 
             // A build can outlive the session that asked for it (cargo waits on its own package lock,
             // and a cold build takes minutes), so stop it when the debug session goes away rather than
@@ -102,32 +47,12 @@ export class RustService implements IRustService {
                 }
             });
 
-            // Keyed by target kind and name; see collectExecutableArtifact.
-            const executablesByTarget = new Map<string, string>();
             let stderrOutput = '';
 
-            const rl = readline.createInterface({ input: buildProcess.stdout });
-            rl.on('line', line => {
-                let message: CargoBuildMessage;
-                try {
-                    message = JSON.parse(line);
-                } catch {
-                    // Not every line cargo writes to stdout under --message-format=json is guaranteed to be
-                    // JSON (some toolchain shims interleave plain text); surface it rather than dropping it.
-                    this.writeToDebugConsole(`${line}\n`, 'stdout');
-                    return;
-                }
+            buildProcess.stdout.on('data', (data: Buffer) => this.writeToDebugConsole(data.toString(), 'stdout'));
 
-                if (message.reason === 'compiler-message') {
-                    const rendered = (message as CargoCompilerMessage).message?.rendered;
-                    if (rendered) {
-                        this.writeToDebugConsole(rendered, (message as CargoCompilerMessage).message?.level === 'error' ? 'stderr' : 'stdout');
-                    }
-                } else if (message.reason === 'compiler-artifact') {
-                    collectExecutableArtifact(executablesByTarget, message as CargoCompilerArtifactMessage);
-                }
-            });
-
+            // cargo writes its progress and all compiler diagnostics to stderr, so this carries the output a
+            // user needs to fix a broken build, not just failures.
             buildProcess.stderr.on('data', (data: Buffer) => {
                 const output = data.toString();
                 stderrOutput += output;
@@ -153,11 +78,7 @@ export class RustService implements IRustService {
                     return;
                 }
 
-                try {
-                    resolve(selectExecutable(workingDirectory, executablesByTarget));
-                } catch (err) {
-                    reject(err);
-                }
+                resolve();
             });
         });
     }
@@ -204,8 +125,18 @@ export function createRustDebuggerExtension(rustServiceProducer: (debugSession: 
             const workingDirectory = config.working_directory || '';
             const cargoArgs = config.cargo?.args ?? ['build'];
 
+            // The app host works out which file this build produces from `cargo metadata`, so there is
+            // nothing to discover here. That answer is better than anything the build could report:
+            // `cargo build` ignores `default-run` and so produces every binary in the package, while
+            // metadata reports `default-run` and therefore matches what `cargo run` launches, and what
+            // `aspire publish` puts in the container.
+            const executablePath = config.cargo?.executable_path;
+            if (!executablePath) {
+                throw new Error(rustLaunchConfigurationMissingExecutable(workingDirectory));
+            }
+
             const rustService = rustServiceProducer(launchOptions.debugSession);
-            const executablePath = await rustService.buildAndGetExecutablePath(workingDirectory, cargoArgs, env ?? []);
+            await rustService.build(workingDirectory, cargoArgs, env ?? []);
 
             debugConfiguration.program = executablePath;
             debugConfiguration.cwd = workingDirectory;

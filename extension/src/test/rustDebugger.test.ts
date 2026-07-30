@@ -4,24 +4,24 @@ import * as vscode from 'vscode';
 import { getSupportedCapabilities } from '../capabilities';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import { getResourceDebuggerExtensions } from '../debugger/debuggerExtensions';
-import { CargoCompilerArtifactMessage, collectExecutableArtifact, createRustDebuggerExtension, IRustService, selectExecutable } from '../debugger/languages/rust';
+import { createRustDebuggerExtension, IRustService } from '../debugger/languages/rust';
 import { AspireResourceExtendedDebugConfiguration, EnvVar, RustLaunchConfiguration } from '../dcp/types';
 import { ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
 
 class TestRustService implements IRustService {
-    public buildAndGetExecutablePathStub: sinon.SinonStub;
+    public buildStub: sinon.SinonStub;
 
-    constructor(executablePathOrError: string | Error) {
-        this.buildAndGetExecutablePathStub = sinon.stub();
-        if (executablePathOrError instanceof Error) {
-            this.buildAndGetExecutablePathStub.rejects(executablePathOrError);
+    constructor(error?: Error) {
+        this.buildStub = sinon.stub();
+        if (error) {
+            this.buildStub.rejects(error);
         } else {
-            this.buildAndGetExecutablePathStub.resolves(executablePathOrError);
+            this.buildStub.resolves();
         }
     }
 
-    buildAndGetExecutablePath(workingDirectory: string, cargoArgs: string[], env: EnvVar[]): Promise<string> {
-        return this.buildAndGetExecutablePathStub(workingDirectory, cargoArgs, env);
+    build(workingDirectory: string, cargoArgs: string[], env: EnvVar[]): Promise<void> {
+        return this.buildStub(workingDirectory, cargoArgs, env);
     }
 }
 
@@ -32,8 +32,8 @@ suite('Rust Debugger Extension Tests', () => {
 
     teardown(() => sinon.restore());
 
-    function createExtension(executablePathOrError: string | Error): { rustService: TestRustService, extension: ResourceDebuggerExtension } {
-        const rustService = new TestRustService(executablePathOrError);
+    function createExtension(error?: Error): { rustService: TestRustService, extension: ResourceDebuggerExtension } {
+        const rustService = new TestRustService(error);
         return { rustService, extension: createRustDebuggerExtension(() => rustService) };
     }
 
@@ -56,17 +56,12 @@ suite('Rust Debugger Extension Tests', () => {
         assert.ok(!getResourceDebuggerExtensions().some(extension => extension.resourceType === 'rust'));
     });
 
-    test('builds the crate and configures the platform-specific native debugger', async () => {
-        const { rustService, extension } = createExtension('/workspace/api/target/debug/api');
-        const launchConfig: RustLaunchConfiguration = {
-            type: 'rust',
-            working_directory: '/workspace/api',
-            cargo: { args: ['build', '--release'] }
-        };
+    test('builds the crate and debugs the executable the app host resolved', async () => {
+        const { rustService, extension } = createExtension();
         const debugConfig = createDebugConfig();
 
         await extension.createDebugSessionConfigurationCallback!(
-            launchConfig,
+            createLaunchConfig(['build', '--release'], '/workspace/api/target/release/api'),
             ['--listen', ':8080'],
             [{ name: 'RUSTFLAGS', value: '-C target-cpu=native' }],
             { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession },
@@ -74,11 +69,11 @@ suite('Rust Debugger Extension Tests', () => {
 
         // The resource environment has to reach the build: it carries settings such as RUSTFLAGS and
         // CARGO_* that change what cargo produces.
-        assert.ok(rustService.buildAndGetExecutablePathStub.calledWith(
+        assert.ok(rustService.buildStub.calledWith(
             '/workspace/api',
             ['build', '--release'],
             [{ name: 'RUSTFLAGS', value: '-C target-cpu=native' }]));
-        assert.strictEqual(debugConfig.program, '/workspace/api/target/debug/api');
+        assert.strictEqual(debugConfig.program, '/workspace/api/target/release/api');
         assert.strictEqual(debugConfig.cwd, '/workspace/api');
         assert.deepStrictEqual(debugConfig.args, ['--listen', ':8080']);
 
@@ -91,116 +86,69 @@ suite('Rust Debugger Extension Tests', () => {
     });
 
     test('passes cargo target selection arguments through to the build', async () => {
-        const { rustService, extension } = createExtension('/workspace/api/target/debug/worker');
-        const launchConfig: RustLaunchConfiguration = {
-            type: 'rust',
-            working_directory: '/workspace/api',
-            cargo: { args: ['build', '--bin', 'worker'] }
-        };
+        const { rustService, extension } = createExtension();
         const debugConfig = createDebugConfig();
 
         await extension.createDebugSessionConfigurationCallback!(
-            launchConfig,
+            createLaunchConfig(['build', '--bin', 'worker'], '/workspace/api/target/debug/worker'),
             [],
             [],
             { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession },
             debugConfig);
 
-        assert.ok(rustService.buildAndGetExecutablePathStub.calledWith('/workspace/api', ['build', '--bin', 'worker'], []));
+        assert.ok(rustService.buildStub.calledWith('/workspace/api', ['build', '--bin', 'worker'], []));
         assert.strictEqual(debugConfig.program, '/workspace/api/target/debug/worker');
+    });
+
+    test('does not ask cargo for build messages because the executable is already known', async () => {
+        const { rustService, extension } = createExtension();
+
+        await extension.createDebugSessionConfigurationCallback!(
+            createLaunchConfig(['build'], '/workspace/api/target/debug/api'),
+            [],
+            [],
+            { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession },
+            createDebugConfig());
+
+        const cargoArgs = rustService.buildStub.firstCall.args[1] as string[];
+        assert.deepStrictEqual(cargoArgs, ['build']);
     });
 
     test('propagates build failures instead of starting a debug session', async () => {
         const { extension } = createExtension(new Error('cargo build failed in /workspace/api with exit code 101.'));
-        const launchConfig: RustLaunchConfiguration = {
-            type: 'rust',
-            working_directory: '/workspace/api',
-            cargo: { args: ['build'] }
-        };
-        const debugConfig = createDebugConfig();
 
         await assert.rejects(
             () => extension.createDebugSessionConfigurationCallback!(
-                launchConfig,
+                createLaunchConfig(['build'], '/workspace/api/target/debug/api'),
                 [],
                 [],
                 { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession },
-                debugConfig),
+                createDebugConfig()),
             /cargo build failed/);
     });
 
-    test('selects the only binary cargo produced', () => {
-        const executables = collectArtifacts([
-            { reason: 'compiler-artifact', target: { name: 'api', kind: ['bin'] }, executable: '/workspace/api/target/debug/api' },
-            { reason: 'compiler-artifact', target: { name: 'api', kind: ['lib'] }, executable: null }
-        ]);
+    test('fails without building when the app host reported no executable', async () => {
+        const { rustService, extension } = createExtension();
 
-        assert.strictEqual(selectExecutable('/workspace/api', executables), '/workspace/api/target/debug/api');
-    });
+        await assert.rejects(
+            () => extension.createDebugSessionConfigurationCallback!(
+                createLaunchConfig(['build'], undefined),
+                [],
+                [],
+                { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession },
+                createDebugConfig()),
+            /did not report which executable/);
 
-    test('rebuilding the same target does not make the binary ambiguous', () => {
-        const executables = collectArtifacts([
-            { reason: 'compiler-artifact', target: { name: 'api', kind: ['bin'] }, executable: '/workspace/api/target/debug/api' },
-            { reason: 'compiler-artifact', target: { name: 'api', kind: ['bin'] }, executable: '/workspace/api/target/debug/api' }
-        ]);
-
-        assert.strictEqual(selectExecutable('/workspace/api', executables), '/workspace/api/target/debug/api');
-    });
-
-    test('selects an example target because cargo can run examples', () => {
-        // `cargo run --example demo` is a normal launch shape, and cargo reports the artifact with
-        // kind ["example"] rather than ["bin"].
-        const executables = collectArtifacts([
-            { reason: 'compiler-artifact', target: { name: 'demo', kind: ['example'] }, executable: '/workspace/api/target/debug/examples/demo' }
-        ]);
-
-        assert.strictEqual(selectExecutable('/workspace/api', executables), '/workspace/api/target/debug/examples/demo');
-    });
-
-    test('ignores test and bench artifacts that are not the debug target', () => {
-        const executables = collectArtifacts([
-            { reason: 'compiler-artifact', target: { name: 'api', kind: ['bin'] }, executable: '/workspace/api/target/debug/api' },
-            { reason: 'compiler-artifact', target: { name: 'integration', kind: ['test'] }, executable: '/workspace/api/target/debug/deps/integration' },
-            { reason: 'compiler-artifact', target: { name: 'throughput', kind: ['bench'] }, executable: '/workspace/api/target/debug/deps/throughput' }
-        ]);
-
-        assert.strictEqual(selectExecutable('/workspace/api', executables), '/workspace/api/target/debug/api');
-    });
-
-    test('fails instead of guessing when a crate produced several binaries', () => {
-        const executables = collectArtifacts([
-            { reason: 'compiler-artifact', target: { name: 'server', kind: ['bin'] }, executable: '/workspace/api/target/debug/server' },
-            { reason: 'compiler-artifact', target: { name: 'worker', kind: ['bin'] }, executable: '/workspace/api/target/debug/worker' }
-        ]);
-
-        assert.throws(() => selectExecutable('/workspace/api', executables), /bin\/server, bin\/worker/);
-    });
-
-    test('a bin and an example sharing a name are still ambiguous', () => {
-        const executables = collectArtifacts([
-            { reason: 'compiler-artifact', target: { name: 'demo', kind: ['bin'] }, executable: '/workspace/api/target/debug/demo' },
-            { reason: 'compiler-artifact', target: { name: 'demo', kind: ['example'] }, executable: '/workspace/api/target/debug/examples/demo' }
-        ]);
-
-        assert.throws(() => selectExecutable('/workspace/api', executables), /bin\/demo, example\/demo/);
-    });
-
-    test('fails when the build produced no runnable binary', () => {
-        const executables = collectArtifacts([
-            { reason: 'compiler-artifact', target: { name: 'api', kind: ['lib'] }, executable: null }
-        ]);
-
-        assert.throws(() => selectExecutable('/workspace/api', executables), /did not produce a runnable binary/);
+        assert.ok(rustService.buildStub.notCalled);
     });
 });
 
-function collectArtifacts(messages: CargoCompilerArtifactMessage[]): Map<string, string> {
-    const executables = new Map<string, string>();
-    for (const message of messages) {
-        collectExecutableArtifact(executables, message);
-    }
-
-    return executables;
+function createLaunchConfig(args: string[], executablePath: string | undefined): RustLaunchConfiguration {
+    return {
+        type: 'rust',
+        working_directory: '/workspace/api',
+        cargo: { args, executable_path: executablePath }
+    };
 }
 
 function createDebugConfig(): AspireResourceExtendedDebugConfiguration {

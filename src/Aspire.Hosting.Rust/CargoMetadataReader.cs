@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text;
+using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Dcp.Process;
 
 namespace Aspire.Hosting.Rust;
@@ -34,6 +35,20 @@ internal static class CargoMetadataReader
         // resource already runs `cargo run` in, so metadata resolves exactly what run mode resolves.
         // Only a caller who redirected run mode with WithCargoManifestPath needs the flag here too.
         return manifestPath is null ? arguments : [.. arguments, "--manifest-path", manifestPath];
+    }
+
+    /// <summary>
+    /// Reads the metadata for a resource's crate, honouring a <see cref="RustCargoMetadataProviderAnnotation"/>
+    /// when one is present.
+    /// </summary>
+    public static async Task<CargoMetadata> ReadAsync(RustAppResource resource, string appDirectory, string? manifestPath, CancellationToken cancellationToken)
+    {
+        if (resource.TryGetLastAnnotation<RustCargoMetadataProviderAnnotation>(out var provider))
+        {
+            return await provider.Provider(cancellationToken).ConfigureAwait(false);
+        }
+
+        return await ReadAsync(appDirectory, manifestPath, resource.Name, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
