@@ -201,7 +201,10 @@ const defaultDependencies: CliPathDependencies = {
  *
  * If the CLI is found at a native default installation path but not on PATH,
  * the VS Code setting is updated to use that path. Command shims are discovered
- * on demand instead so an explicit shim setting remains distinguishable.
+ * on demand instead so an explicit shim setting remains distinguishable. When
+ * current discovery supersedes a legacy auto-configured setting with a path we
+ * intentionally do not persist, the old setting is cleared so it cannot keep
+ * forwarding a different CLI bundle through AspireCliPath.
  *
  * If the CLI is on PATH and a setting was previously auto-configured to a default path,
  * the setting is cleared to prefer PATH.
@@ -251,9 +254,18 @@ export async function resolveCliPath(deps: CliPathDependencies = defaultDependen
         // The setting does not record who wrote it, so persist only paths that
         // older versions already recognized as automatic defaults. Newly added
         // discovery locations remain distinguishable from explicit user pins.
-        if (!areCliPathsEqual(configuredPath, foundPath) && containsCliPath(defaultPaths, foundPath) && !isCommandShimPath(foundPath)) {
-            extensionLogOutputChannel.info('Updating aspireCliExecutablePath setting to use default install location');
-            await deps.setConfiguredPath(foundPath);
+        if (!areCliPathsEqual(configuredPath, foundPath)) {
+            if (containsCliPath(defaultPaths, foundPath) && !isCommandShimPath(foundPath)) {
+                extensionLogOutputChannel.info('Updating aspireCliExecutablePath setting to use default install location');
+                await deps.setConfiguredPath(foundPath);
+            }
+            else if (configuredPathIsLegacyDefault) {
+                // The extension will execute foundPath, while the configured setting is independently
+                // forwarded as AspireCliPath for MSBuild bundle resolution. Leaving a legacy setting here
+                // could therefore run one CLI while stamping AppHosts with another CLI's bundle paths.
+                extensionLogOutputChannel.info('Clearing superseded auto-configured aspireCliExecutablePath setting');
+                await deps.setConfiguredPath('');
+            }
         }
 
         return { cliPath: foundPath, available: true, source: 'default-install' };

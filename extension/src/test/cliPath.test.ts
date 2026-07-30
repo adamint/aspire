@@ -218,6 +218,32 @@ suite('utils/cliPath tests', () => {
             assert.ok(setConfiguredPath.notCalled);
         });
 
+        test('clears a superseded legacy setting when redirected discovery selects a command shim', async () => {
+            const platformStub = sinon.stub(process, 'platform').value('win32');
+            const legacyGlobalToolPath = 'C:\\Users\\user\\.dotnet\\tools\\aspire.exe';
+            const redirectedCommandShim = 'D:\\dotnet-home\\.dotnet\\tools\\aspire.cmd';
+            const setConfiguredPath = sinon.stub().resolves();
+
+            try {
+                const result = await resolveCliPath(createMockDeps({
+                    getConfiguredPath: () => legacyGlobalToolPath,
+                    getDefaultPaths: () => [legacyGlobalToolPath],
+                    findAtDefaultPath: async () => redirectedCommandShim,
+                    setConfiguredPath,
+                }));
+
+                assert.deepStrictEqual(result, {
+                    cliPath: redirectedCommandShim,
+                    available: true,
+                    source: 'default-install',
+                });
+                assert.ok(setConfiguredPath.calledOnceWithExactly(''));
+            }
+            finally {
+                platformStub.restore();
+            }
+        });
+
         test('keeps a valid legacy global-tool setting as a final fallback', async () => {
             const legacyGlobalToolPath = path.join(os.homedir(), '.dotnet', 'tools', 'aspire.exe');
             const tryExecute = sinon.stub().callsFake(async candidate => candidate === legacyGlobalToolPath);
