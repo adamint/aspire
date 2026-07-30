@@ -7,6 +7,8 @@
 using System.Diagnostics.CodeAnalysis;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Rust;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Aspire.Hosting;
 
@@ -71,6 +73,10 @@ public static class RustHostingExtensions
 
         appDirectory = Path.GetFullPath(appDirectory, builder.AppHostDirectory);
         var resource = new RustAppResource(name, appDirectory);
+
+        // TryAdd so a test (or a caller who wants to answer from a cached manifest) can substitute its own
+        // reader by registering one before or after AddRustApp.
+        builder.Services.TryAddSingleton<ICargoMetadataReader, CargoMetadataReader>();
 
         return builder.AddResource(resource)
             .WithRequiredCommand("cargo", "https://www.rust-lang.org/tools/install")
@@ -460,7 +466,7 @@ public static class RustHostingExtensions
                         // (`--bin`, `--example`, `--package`) narrows the debug build the same way it
                         // narrows `cargo run`.
                         Args = ["build", .. cargoArgs],
-                        ExecutablePath = ResolveDebugExecutablePath(builder.Resource, workingDirectory)
+                        ExecutablePath = ResolveDebugExecutablePath(builder.Resource, workingDirectory, builder.ApplicationBuilder.ExecutionContext)
                     }
                 };
             },
@@ -496,18 +502,18 @@ public static class RustHostingExtensions
     // The blocking wait is deliberate: the launch configuration annotator is synchronous today, this runs
     // only on a debug launch (never on a plain run), and it is immediately followed by a full cargo build
     // that takes orders of magnitude longer than a manifest query.
-    private static string ResolveDebugExecutablePath(RustAppResource resource, string workingDirectory)
+    private static string ResolveDebugExecutablePath(RustAppResource resource, string workingDirectory, DistributedApplicationExecutionContext executionContext)
     {
         var options = resource.TryGetLastAnnotation<RustCargoOptionsAnnotation>(out var cargoOptions)
             ? cargoOptions
             : new RustCargoOptionsAnnotation();
 
-        var metadata = CargoMetadataReader
-            .ReadAsync(resource, workingDirectory, options.ManifestPath, CancellationToken.None)
+        var metadata = executionContext.Services.GetRequiredService<ICargoMetadataReader>()
+            .ReadAsync(workingDirectory, options.ManifestPath, resource.Name, CancellationToken.None)
             .GetAwaiter()
             .GetResult();
 
-        var target = RustCargoTargetResolver.Resolve(metadata, options, options.RunProfileDirectory, resource.Name);
+        var target = RustCargoTargetResolver.Resolve(metadata, options, executionContext, resource.Name);
 
         return target.GetExecutablePath(metadata.TargetDirectory);
     }

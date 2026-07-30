@@ -2,10 +2,21 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text;
-using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Dcp.Process;
 
 namespace Aspire.Hosting.Rust;
+
+/// <summary>
+/// Queries cargo for a crate's package/target layout without compiling anything.
+/// </summary>
+/// <remarks>
+/// Registered in the app host's service container by <c>AddRustApp</c> so tests can substitute a
+/// deterministic implementation and exercise publishing and debugging on machines with no Rust toolchain.
+/// </remarks>
+internal interface ICargoMetadataReader
+{
+    Task<CargoMetadata> ReadAsync(string appDirectory, string? manifestPath, string resourceName, CancellationToken cancellationToken);
+}
 
 /// <summary>
 /// Queries cargo for a crate's package/target layout without compiling anything.
@@ -17,9 +28,9 @@ namespace Aspire.Hosting.Rust;
 /// <c>--no-deps</c> additionally stops cargo from resolving or downloading the dependency graph.
 /// See https://doc.rust-lang.org/cargo/commands/cargo-metadata.html
 /// </remarks>
-internal static class CargoMetadataReader
+internal sealed class CargoMetadataReader : ICargoMetadataReader
 {
-    private static readonly TimeSpan s_timeout = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan s_timeout = TimeSpan.FromSeconds(10);
 
     /// <summary>
     /// Builds the argument vector passed to cargo.
@@ -31,30 +42,13 @@ internal static class CargoMetadataReader
     {
         string[] arguments = ["metadata", "--format-version", "1", "--no-deps"];
 
-        // Cargo discovers the manifest from the working directory, which is the crate directory the
-        // resource already runs `cargo run` in, so metadata resolves exactly what run mode resolves.
-        // Only a caller who redirected run mode with WithCargoManifestPath needs the flag here too.
         return manifestPath is null ? arguments : [.. arguments, "--manifest-path", manifestPath];
-    }
-
-    /// <summary>
-    /// Reads the metadata for a resource's crate, honouring a <see cref="RustCargoMetadataProviderAnnotation"/>
-    /// when one is present.
-    /// </summary>
-    public static async Task<CargoMetadata> ReadAsync(RustAppResource resource, string appDirectory, string? manifestPath, CancellationToken cancellationToken)
-    {
-        if (resource.TryGetLastAnnotation<RustCargoMetadataProviderAnnotation>(out var provider))
-        {
-            return await provider.Provider(cancellationToken).ConfigureAwait(false);
-        }
-
-        return await ReadAsync(appDirectory, manifestPath, resource.Name, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Runs <c>cargo metadata</c> for the crate in <paramref name="appDirectory"/>.
     /// </summary>
-    public static async Task<CargoMetadata> ReadAsync(string appDirectory, string? manifestPath, string resourceName, CancellationToken cancellationToken)
+    public async Task<CargoMetadata> ReadAsync(string appDirectory, string? manifestPath, string resourceName, CancellationToken cancellationToken)
     {
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();

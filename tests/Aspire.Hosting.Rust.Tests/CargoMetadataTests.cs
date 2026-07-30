@@ -103,13 +103,17 @@ public class CargoMetadataTests
         Directory.CreateDirectory(Path.Combine(crate.Path, "src"));
         crate.Write(Path.Combine("src", "main.rs"), "fn main() { println!(\"hello\"); }");
 
-        var metadata = await CargoMetadataReader.ReadAsync(crate.Path, manifestPath: null, "api", TestContext.Current.CancellationToken);
+        var metadata = await new CargoMetadataReader().ReadAsync(crate.Path, manifestPath: null, "api", TestContext.Current.CancellationToken);
 
         Assert.Equal("metadata-probe", Assert.Single(metadata.Packages).Name);
 
         // Resolve against real cargo output, not a hand-written fixture, so the parser stays honest
         // about the shape the installed toolchain actually emits.
-        var target = RustCargoTargetResolver.Resolve(metadata, new RustCargoOptionsAnnotation(), "release", "api");
+        var target = RustCargoTargetResolver.Resolve(
+            metadata,
+            new RustCargoOptionsAnnotation(),
+            new DistributedApplicationExecutionContext(DistributedApplicationOperation.Publish),
+            "api");
         Assert.Equal("metadata-probe", target.Name);
         Assert.Equal("release/metadata-probe", target.RelativePath);
 
@@ -128,7 +132,7 @@ public class CargoMetadataTests
         using var crate = new TempCrateDirectory();
 
         var exception = await Assert.ThrowsAsync<DistributedApplicationException>(
-            () => CargoMetadataReader.ReadAsync(crate.Path, manifestPath: null, "api", TestContext.Current.CancellationToken));
+            () => new CargoMetadataReader().ReadAsync(crate.Path, manifestPath: null, "api", TestContext.Current.CancellationToken));
 
         Assert.Contains("Cargo.toml", exception.Message);
     }

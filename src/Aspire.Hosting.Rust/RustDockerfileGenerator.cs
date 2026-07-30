@@ -37,15 +37,20 @@ internal static class RustDockerfileGenerator
             ? cargoOptions
             : new RustCargoOptionsAnnotation();
 
-        var metadata = await CargoMetadataReader.ReadAsync(resource, appDirectory, options.ManifestPath, context.CancellationToken).ConfigureAwait(false);
-        var target = RustCargoTargetResolver.Resolve(metadata, options, options.PublishProfileDirectory, resource.Name);
+        var metadata = await context.Services.GetRequiredService<ICargoMetadataReader>()
+            .ReadAsync(appDirectory, options.ManifestPath, resource.Name, context.CancellationToken)
+            .ConfigureAwait(false);
+        var target = RustCargoTargetResolver.Resolve(
+            metadata,
+            options,
+            context.Services.GetRequiredService<DistributedApplicationExecutionContext>(),
+            resource.Name);
 
         var baseImageAnnotation = ResolveBaseImageAnnotation(resource, context);
         var images = RustPublishImageResolver.Resolve(
             baseImageAnnotation?.BuildImage,
             baseImageAnnotation?.RuntimeImage,
             appDirectory,
-            options.Target,
             resource.Name);
 
         var buildStage = context.Builder

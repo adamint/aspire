@@ -6,6 +6,7 @@
 
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Utils;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Aspire.Hosting.Rust.Tests;
 
@@ -150,12 +151,13 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         configureSource?.Invoke(sourceDir.FullName);
 
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
-        var app = builder.AddRustApp("api", sourceDir.FullName);
 
-        // Supply the cargo metadata directly so these tests exercise Dockerfile generation on machines
-        // without a Rust toolchain installed.
-        var metadataJson = metadata ?? CargoMetadataFactory.SinglePackage("my-service");
-        app.WithAnnotation(new RustCargoMetadataProviderAnnotation(_ => Task.FromResult(CargoMetadata.Parse(metadataJson))));
+        // Answer cargo metadata from a canned document so these tests exercise Dockerfile generation on
+        // machines without a Rust toolchain installed.
+        builder.Services.AddSingleton<ICargoMetadataReader>(
+            new FakeCargoMetadataReader(metadata ?? CargoMetadataFactory.SinglePackage("my-service")));
+
+        var app = builder.AddRustApp("api", sourceDir.FullName);
 
         configureResource?.Invoke(app);
 

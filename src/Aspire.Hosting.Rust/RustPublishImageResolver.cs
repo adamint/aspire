@@ -25,8 +25,7 @@ internal sealed record RustPublishImages(string BuildImage, string RuntimeImage)
 }
 
 /// <summary>
-/// Chooses the base images for a generated Rust Dockerfile and validates that the pair can actually run the
-/// binary the build stage produces.
+/// Chooses the base images for a generated Rust Dockerfile.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -39,7 +38,9 @@ internal sealed record RustPublishImages(string BuildImage, string RuntimeImage)
 /// <para>
 /// Callers who need glibc (proprietary crates shipping <c>-gnu</c> binaries, or crates that build materially
 /// faster against glibc) can pair the images themselves through <c>WithDockerfileBaseImage</c>, for example
-/// <c>rust:1.89-bookworm</c> with <c>debian:bookworm-slim</c>.
+/// <c>rust:1.89-bookworm</c> with <c>debian:bookworm-slim</c>. Pairing a <c>--target</c> triple with images
+/// that can run the result is then theirs to get right; a mismatch surfaces when the container build or the
+/// container itself runs.
 /// </para>
 /// </remarks>
 internal static partial class RustPublishImageResolver
@@ -54,40 +55,12 @@ internal static partial class RustPublishImageResolver
         string? explicitBuildImage,
         string? explicitRuntimeImage,
         string appDirectory,
-        string? target,
         string resourceName)
     {
         var buildImage = explicitBuildImage ?? ResolveDefaultBuildImage(appDirectory, resourceName);
         var runtimeImage = explicitRuntimeImage ?? DefaultRuntimeImage;
 
-        if (target is not null)
-        {
-            ValidateTarget(target, explicitBuildImage is not null && explicitRuntimeImage is not null, resourceName);
-        }
-
         return new RustPublishImages(buildImage, runtimeImage);
-    }
-
-    // A cross-compiled binary only runs in the runtime image when its libc matches. The default images are
-    // musl, so a -gnu triple would build a binary Alpine cannot execute; rather than emit a Dockerfile that
-    // fails at container start with a confusing "no such file or directory" (the classic missing-loader
-    // error), fail here with the fix. When the caller supplied both images they own the pairing.
-    private static void ValidateTarget(string target, bool callerOwnsImagePairing, string resourceName)
-    {
-        if (!target.Contains("linux", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new DistributedApplicationException(
-                $"The Rust app '{resourceName}' passes '--target {target}' to cargo, but the generated Dockerfile produces a Linux container " +
-                $"image. Remove the --target argument, or add a Dockerfile next to Cargo.toml to take over the container build.");
-        }
-
-        if (!callerOwnsImagePairing && target.Contains("-gnu", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new DistributedApplicationException(
-                $"The Rust app '{resourceName}' passes '--target {target}' to cargo, which produces a glibc binary, but the default generated " +
-                $"Dockerfile builds and runs on musl (Alpine) images. Call WithDockerfileBaseImage(buildImage: \"rust:{RustToolchainDetector.DefaultChannel}-bookworm\", " +
-                $"runtimeImage: \"debian:bookworm-slim\") to supply a matching glibc pair, or target a *-musl triple.");
-        }
     }
 
     /// <summary>

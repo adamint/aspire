@@ -75,6 +75,10 @@ internal sealed record RustCargoTarget(string Name, string ProfileDirectory, str
 /// container image and the debugged process the same binary.
 /// </para>
 /// <para>
+/// A plain <c>cargo run</c> never gets here: the arguments go straight to cargo and cargo picks the binary
+/// itself. Run mode only reaches this when a debug launch needs somewhere to attach.
+/// </para>
+/// <para>
 /// Anything cargo would itself have rejected at <c>cargo run</c> time is passed straight through rather
 /// than re-validated. The only reported failures are the cases where run mode succeeds but the produced
 /// file name is still unknowable.
@@ -82,8 +86,14 @@ internal sealed record RustCargoTarget(string Name, string ProfileDirectory, str
 /// </remarks>
 internal static class RustCargoTargetResolver
 {
-    public static RustCargoTarget Resolve(CargoMetadata metadata, RustCargoOptionsAnnotation options, string profileDirectory, string resourceName)
+    public static RustCargoTarget Resolve(
+        CargoMetadata metadata,
+        RustCargoOptionsAnnotation options,
+        DistributedApplicationExecutionContext executionContext,
+        string resourceName)
     {
+        var profileDirectory = ResolveProfileDirectory(options, executionContext);
+
         if (options.Example is { } example)
         {
             return new RustCargoTarget(example, profileDirectory, options.Target, IsExample: true);
@@ -94,13 +104,31 @@ internal static class RustCargoTargetResolver
         return new RustCargoTarget(name, profileDirectory, options.Target, IsExample: false);
     }
 
+    /// <remarks>
+    /// The directory is not always the profile name: the built-in <c>dev</c> and <c>test</c> profiles both
+    /// emit to <c>target/debug</c> and <c>bench</c> emits to <c>target/release</c>. Custom profiles use their
+    /// own name. See https://doc.rust-lang.org/cargo/reference/profiles.html
+    /// </remarks>
+    private static string ResolveProfileDirectory(RustCargoOptionsAnnotation options, DistributedApplicationExecutionContext executionContext)
+    {
+        // A debug build takes cargo's own default profile (dev) unless the resource asked for an optimized
+        // build, so it reuses whatever `cargo run` already compiled. Publish always optimizes, so an app
+        // that configured neither still publishes release.
+        var profile = options.Profile
+            ?? (executionContext.IsPublishMode || options.ReleaseBuild ? "release" : "dev");
+
+        return profile switch
+        {
+            "dev" or "test" => "debug",
+            "bench" => "release",
+            _ => profile
+        };
+    }
+
     private static string ResolveBinaryName(CargoMetadata metadata, string? requestedPackage, string resourceName)
     {
         var package = ResolvePackage(metadata, requestedPackage, resourceName);
 
-        // `cargo run` honours default-run while `cargo build` ignores it, so a crate relying on it builds
-        // several binaries but runs exactly one. Resolving it here is what lets publishing and debugging
-        // agree with `cargo run` instead of with `cargo build`.
         if (package.DefaultRun is { Length: > 0 } defaultRun)
         {
             return defaultRun;
@@ -109,8 +137,6 @@ internal static class RustCargoTargetResolver
         return package.BinTargetNames switch
         {
             [var single] => single,
-            // `cargo run` gets this far with several bins only when the binary was chosen by an argument
-            // Aspire does not interpret, such as a raw --bin passed through WithCargoArgs.
             var many => throw new DistributedApplicationException(
                 $"Unable to work out which binary the Rust app '{resourceName}' produces: the package '{package.Name}' declares " +
                 $"{many.Count} binary targets. Call WithCargoBinTarget(\"<name>\") to select one.")
@@ -124,9 +150,6 @@ internal static class RustCargoTargetResolver
             return metadata.Packages.First(p => p.Name == requestedPackage);
         }
 
-        // Without --package, cargo builds the workspace's default members. Matching on id (rather than name)
-        // keeps this correct for workspaces whose `default-members` is a subset of the members. A plain
-        // (non-workspace) crate reports itself as the sole member, so this covers both shapes.
         var defaultPackages = metadata.Packages.Where(p => metadata.DefaultMemberIds.Contains(p.Id)).ToList();
 
         return defaultPackages switch

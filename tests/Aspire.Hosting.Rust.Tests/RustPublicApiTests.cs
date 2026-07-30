@@ -124,7 +124,7 @@ public class RustPublicApiTests
             .WithCargoFeatures("tls-ring")
             .WithCargoReleaseBuild();
 
-        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(app.Resource);
+        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(builder, app.Resource);
 
         Assert.Equal("rust", launchConfig.Type);
         Assert.Equal(Path.GetFullPath(builder.AppHostDirectory), launchConfig.WorkingDirectory);
@@ -142,7 +142,7 @@ public class RustPublicApiTests
         var app = builder.AddRustApp("api", builder.AppHostDirectory)
             .WithCargoArgs("--bin", "worker");
 
-        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(app.Resource);
+        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(builder, app.Resource);
 
         var cargo = Assert.IsType<RustCargoLaunchTarget>(launchConfig.Cargo);
         Assert.Equal(["build", "--bin", "worker"], cargo.Args);
@@ -163,7 +163,7 @@ public class RustPublicApiTests
                 context.Args.Add($"--config=build.jobs={invocations}");
             });
 
-        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(app.Resource);
+        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(builder, app.Resource);
 
         Assert.Equal(1, invocations);
         var cargo = Assert.IsType<RustCargoLaunchTarget>(launchConfig.Cargo);
@@ -178,7 +178,7 @@ public class RustPublicApiTests
         var builder = DistributedApplication.CreateBuilder();
         var app = builder.AddRustApp("api", builder.AppHostDirectory);
 
-        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(app.Resource);
+        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(builder, app.Resource);
 
         var cargo = Assert.IsType<RustCargoLaunchTarget>(launchConfig.Cargo);
         var expected = Path.Combine("/app/target", "debug", OperatingSystem.IsWindows() ? "my-service.exe" : "my-service");
@@ -201,14 +201,17 @@ public class RustPublicApiTests
         await Task.CompletedTask;
     }
 
-    private static async Task<RustLaunchConfiguration> InvokeLaunchConfigurationAnnotatorAsync(RustAppResource resource)
+    private static async Task<RustLaunchConfiguration> InvokeLaunchConfigurationAnnotatorAsync(IDistributedApplicationBuilder builder, RustAppResource resource)
     {
         Assert.True(resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebugging));
 
         // The debug launch configuration resolves the executable cargo will produce from the crate's
-        // metadata. Supply that directly so these tests run on machines without a Rust toolchain.
-        resource.Annotations.Add(new RustCargoMetadataProviderAnnotation(
-            _ => Task.FromResult(CargoMetadata.Parse(CargoMetadataFactory.SinglePackage("my-service")))));
+        // metadata, so answer that from a canned document rather than requiring a Rust toolchain. The app
+        // has to be built for the resolved reader to be reachable through the execution context.
+        builder.Services.AddSingleton<ICargoMetadataReader>(
+            new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+
+        await using var app = builder.Build();
 
         // DCP resolves the resource's arguments before it asks for the launch configuration, and the
         // launch configuration reuses those resolved cargo arguments, so evaluate them first.

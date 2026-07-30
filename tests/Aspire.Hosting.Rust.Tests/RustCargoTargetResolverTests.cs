@@ -102,16 +102,16 @@ public class RustCargoTargetResolverTests
     [InlineData(null, true, "release/my-service")]
     [InlineData("dev", false, "debug/my-service")]
     [InlineData("dist", false, "dist/my-service")]
-    public void RunProfileDefaultsToDebugUnlikePublish(string? profile, bool releaseBuild, string expectedPath)
+    public void DebugProfileDefaultsToDebugUnlikePublish(string? profile, bool releaseBuild, string expectedPath)
     {
-        // Run and debug use cargo's own default (dev) so a debug launch reuses the artifacts a plain
-        // `cargo run` already produced, while publishing opts into an optimized build.
+        // A debug build uses cargo's own default (dev) so it reuses the artifacts a plain `cargo run`
+        // already produced, while publishing opts into an optimized build.
         var options = new RustCargoOptionsAnnotation { Profile = profile, ReleaseBuild = releaseBuild };
 
         var target = RustCargoTargetResolver.Resolve(
             CargoMetadata.Parse(CargoMetadataFactory.SinglePackage("my-service")),
             options,
-            options.RunProfileDirectory,
+            new DistributedApplicationExecutionContext(DistributedApplicationOperation.Run),
             "api");
 
         Assert.Equal(expectedPath, target.RelativePath);
@@ -198,5 +198,9 @@ public class RustCargoTargetResolverTests
     }
 
     private static RustCargoTarget Resolve(string metadataJson, RustCargoOptionsAnnotation options)
-        => RustCargoTargetResolver.Resolve(CargoMetadata.Parse(metadataJson), options, options.PublishProfileDirectory, "api");
+        => RustCargoTargetResolver.Resolve(
+            CargoMetadata.Parse(metadataJson),
+            options,
+            new DistributedApplicationExecutionContext(DistributedApplicationOperation.Publish),
+            "api");
 }

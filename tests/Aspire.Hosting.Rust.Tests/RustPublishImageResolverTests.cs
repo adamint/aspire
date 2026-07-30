@@ -77,7 +77,7 @@ public class RustPublishImageResolverTests
     {
         using var crate = new TempCrateDirectory();
 
-        var images = RustPublishImageResolver.Resolve(null, null, crate.Path, target: null, "api");
+        var images = RustPublishImageResolver.Resolve(null, null, crate.Path, "api");
 
         Assert.Equal($"rust:{RustToolchainDetector.DefaultChannel}-alpine", images.BuildImage);
         Assert.Equal(RustPublishImageResolver.DefaultRuntimeImage, images.RuntimeImage);
@@ -86,52 +86,15 @@ public class RustPublishImageResolverTests
     }
 
     [Fact]
-    public void MuslTargetIsAllowedWithTheDefaultImages()
+    public void SuppliedImagesAreUsedVerbatim()
     {
         using var crate = new TempCrateDirectory();
 
-        var images = RustPublishImageResolver.Resolve(null, null, crate.Path, "aarch64-unknown-linux-musl", "api");
-
-        Assert.Equal(RustPublishImageResolver.DefaultRuntimeImage, images.RuntimeImage);
-    }
-
-    [Fact]
-    public void GnuTargetIsRejectedAgainstTheDefaultMuslImages()
-    {
-        using var crate = new TempCrateDirectory();
-
-        var exception = Assert.Throws<DistributedApplicationException>(
-            () => RustPublishImageResolver.Resolve(null, null, crate.Path, "x86_64-unknown-linux-gnu", "api"));
-
-        Assert.Contains("produces a glibc binary", exception.Message);
-        Assert.Contains("WithDockerfileBaseImage", exception.Message);
-    }
-
-    [Fact]
-    public void GnuTargetIsAllowedWhenTheCallerSuppliesBothImages()
-    {
-        using var crate = new TempCrateDirectory();
-
-        var images = RustPublishImageResolver.Resolve(
-            "rust:1.89-bookworm",
-            "debian:bookworm-slim",
-            crate.Path,
-            "x86_64-unknown-linux-gnu",
-            "api");
+        var images = RustPublishImageResolver.Resolve("rust:1.89-bookworm", "debian:bookworm-slim", crate.Path, "api");
 
         Assert.Equal("rust:1.89-bookworm", images.BuildImage);
+        Assert.Equal("debian:bookworm-slim", images.RuntimeImage);
         Assert.False(images.BuildImageIsAlpine);
         Assert.False(images.RuntimeImageIsAlpine);
-    }
-
-    [Fact]
-    public void NonLinuxTargetIsRejected()
-    {
-        using var crate = new TempCrateDirectory();
-
-        var exception = Assert.Throws<DistributedApplicationException>(
-            () => RustPublishImageResolver.Resolve(null, null, crate.Path, "x86_64-pc-windows-msvc", "api"));
-
-        Assert.Contains("the generated Dockerfile produces a Linux container image", exception.Message);
     }
 }

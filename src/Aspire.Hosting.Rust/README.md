@@ -157,8 +157,9 @@ builder.AddRustApp("api", "../rust-api")
 ```
 
 `WithCargoTarget(...)` adds `rustup target add <triple>` to the build stage and follows cargo's
-`target/<triple>/<profile>/` layout. A glibc (`-gnu`) triple is rejected against the default musl
-images; supply both base images through `WithDockerfileBaseImage` to use one.
+`target/<triple>/<profile>/` layout. Pairing the triple with images that can run the result is yours
+to get right — a glibc (`-gnu`) triple needs glibc base images, which `WithDockerfileBaseImage`
+supplies.
 
 ## Additional documentation
 
