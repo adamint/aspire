@@ -22,6 +22,21 @@ function createMockDeps(overrides: Partial<CliPathDependencies> = {}): CliPathDe
 }
 
 suite('utils/cliPath tests', () => {
+    let originalDotnetCliHome: string | undefined;
+
+    setup(() => {
+        originalDotnetCliHome = process.env.DOTNET_CLI_HOME;
+        delete process.env.DOTNET_CLI_HOME;
+    });
+
+    teardown(() => {
+        if (originalDotnetCliHome === undefined) {
+            delete process.env.DOTNET_CLI_HOME;
+        }
+        else {
+            process.env.DOTNET_CLI_HOME = originalDotnetCliHome;
+        }
+    });
 
     suite('getDefaultCliInstallPaths', () => {
         test('returns bundle path (~/.aspire/bin) as first entry', () => {
@@ -39,17 +54,61 @@ suite('utils/cliPath tests', () => {
             assert.ok(paths[1].startsWith(path.join(homeDir, '.dotnet', 'tools')), `Second path should be global tool: ${paths[1]}`);
         });
 
-        test('uses correct executable name for current platform', () => {
+        test('returns the Windows global tool command shim before its executable fallback', () => {
+            const platformStub = sinon.stub(process, 'platform').value('win32');
+
+            try {
+                const paths = getDefaultCliInstallPaths();
+
+                assert.deepStrictEqual(paths.map(candidate => path.basename(candidate)), [
+                    'aspire.exe',
+                    'aspire.cmd',
+                    'aspire.exe',
+                ]);
+            }
+            finally {
+                platformStub.restore();
+            }
+        });
+
+        test('uses DOTNET_CLI_HOME for global tool candidates without moving the bundle candidate', () => {
+            const platformStub = sinon.stub(process, 'platform').value('win32');
+            const originalDotNetCliHome = process.env.DOTNET_CLI_HOME;
+            const dotnetCliHome = path.join(os.tmpdir(), 'custom-dotnet-cli-home');
+            process.env.DOTNET_CLI_HOME = dotnetCliHome;
+
+            try {
+                const paths = getDefaultCliInstallPaths();
+
+                assert.strictEqual(paths[0], path.join(os.homedir(), '.aspire', 'bin', 'aspire.exe'));
+                assert.deepStrictEqual(paths.slice(1), [
+                    path.join(dotnetCliHome, '.dotnet', 'tools', 'aspire.cmd'),
+                    path.join(dotnetCliHome, '.dotnet', 'tools', 'aspire.exe'),
+                ]);
+            }
+            finally {
+                platformStub.restore();
+                if (originalDotNetCliHome === undefined) {
+                    delete process.env.DOTNET_CLI_HOME;
+                }
+                else {
+                    process.env.DOTNET_CLI_HOME = originalDotNetCliHome;
+                }
+            }
+        });
+
+        test('uses extensionless executable names outside Windows', function () {
+            if (process.platform === 'win32') {
+                this.skip();
+            }
+
+            process.env.DOTNET_CLI_HOME = path.join(os.tmpdir(), 'ignored-dotnet-cli-home');
             const paths = getDefaultCliInstallPaths();
 
             for (const p of paths) {
-                const basename = path.basename(p);
-                if (process.platform === 'win32') {
-                    assert.strictEqual(basename, 'aspire.exe');
-                } else {
-                    assert.strictEqual(basename, 'aspire');
-                }
+                assert.strictEqual(path.basename(p), 'aspire');
             }
+            assert.ok(paths[1].startsWith(path.join(os.homedir(), '.dotnet', 'tools')));
         });
     });
 
@@ -121,6 +180,109 @@ suite('utils/cliPath tests', () => {
 
             assert.ok(setConfiguredPath.calledOnce, 'setConfiguredPath should be called once');
             assert.strictEqual(setConfiguredPath.firstCall.args[0], bundlePath, 'should set the path to the found install location');
+        });
+
+        test('does not persist an automatically discovered command shim as an explicit setting', async () => {
+            const commandShim = 'C:\\Users\\user\\.dotnet\\tools\\aspire.cmd';
+            const setConfiguredPath = sinon.stub().resolves();
+
+            const deps = createMockDeps({
+                getDefaultPaths: () => [...defaultPaths, commandShim],
+                findAtDefaultPath: async () => commandShim,
+                setConfiguredPath,
+            });
+
+            const result = await resolveCliPath(deps);
+
+            assert.deepStrictEqual(result, {
+                cliPath: commandShim,
+                available: true,
+                source: 'default-install',
+            });
+            assert.ok(setConfiguredPath.notCalled);
+        });
+
+        test('does not persist a newly recognized default path without legacy provenance', async () => {
+            const redirectedGlobalTool = 'D:\\dotnet-home\\.dotnet\\tools\\aspire.exe';
+            const setConfiguredPath = sinon.stub().resolves();
+
+            const deps = createMockDeps({
+                findAtDefaultPath: async () => redirectedGlobalTool,
+                setConfiguredPath,
+            });
+
+            const result = await resolveCliPath(deps);
+
+            assert.strictEqual(result.cliPath, redirectedGlobalTool);
+            assert.strictEqual(result.source, 'default-install');
+            assert.ok(setConfiguredPath.notCalled);
+        });
+
+        test('keeps a valid legacy global-tool setting as a final fallback', async () => {
+            const legacyGlobalToolPath = path.join(os.homedir(), '.dotnet', 'tools', 'aspire.exe');
+            const tryExecute = sinon.stub().callsFake(async candidate => candidate === legacyGlobalToolPath);
+
+            const result = await resolveCliPath(createMockDeps({
+                getConfiguredPath: () => legacyGlobalToolPath,
+                getDefaultPaths: () => [legacyGlobalToolPath],
+                findAtDefaultPath: async () => undefined,
+                tryExecute,
+            }));
+
+            assert.deepStrictEqual(result, {
+                cliPath: legacyGlobalToolPath,
+                available: true,
+                source: 'default-install',
+            });
+            assert.ok(tryExecute.calledOnceWithExactly(legacyGlobalToolPath));
+        });
+
+        test('treats casing-equivalent Windows legacy paths as auto-configured', async () => {
+            const platformStub = sinon.stub(process, 'platform').value('win32');
+            const legacyGlobalToolPath = 'C:\\Users\\User\\.dotnet\\tools\\aspire.exe';
+            const configuredPath = 'c:\\users\\user\\.dotnet\\tools\\ASPIRE.EXE';
+            const setConfiguredPath = sinon.stub().resolves();
+            const tryExecute = sinon.stub().resolves(true);
+
+            try {
+                const result = await resolveCliPath(createMockDeps({
+                    getConfiguredPath: () => configuredPath,
+                    getDefaultPaths: () => [legacyGlobalToolPath],
+                    isOnPath: async () => true,
+                    tryExecute,
+                    setConfiguredPath,
+                }));
+
+                assert.deepStrictEqual(result, { cliPath: 'aspire', available: true, source: 'path' });
+                assert.ok(tryExecute.notCalled);
+                assert.ok(setConfiguredPath.calledOnceWithExactly(''));
+            }
+            finally {
+                platformStub.restore();
+            }
+        });
+
+        test('keeps syntactically equivalent non-Windows paths explicit', async function () {
+            if (process.platform === 'win32') {
+                this.skip();
+            }
+
+            const configuredPath = '/home/user/.dotnet/tools/../tools/aspire';
+            const isOnPath = sinon.stub().resolves(true);
+
+            const result = await resolveCliPath(createMockDeps({
+                getConfiguredPath: () => configuredPath,
+                getDefaultPaths: () => [globalToolPath],
+                isOnPath,
+                tryExecute: async candidate => candidate === configuredPath,
+            }));
+
+            assert.deepStrictEqual(result, {
+                cliPath: configuredPath,
+                available: true,
+                source: 'configured',
+            });
+            assert.ok(isOnPath.notCalled);
         });
 
         test('prefers PATH over default install path', async () => {
@@ -195,6 +357,27 @@ suite('utils/cliPath tests', () => {
             assert.strictEqual(result.available, true);
             assert.strictEqual(result.source, 'configured');
             assert.strictEqual(result.cliPath, customPath);
+        });
+
+        test('keeps an explicitly configured Windows command shim ahead of PATH', async () => {
+            const configuredShim = 'C:\\Users\\user\\.dotnet\\tools\\aspire.cmd';
+            const isOnPath = sinon.stub().resolves(true);
+
+            const deps = createMockDeps({
+                getConfiguredPath: () => configuredShim,
+                getDefaultPaths: () => [...defaultPaths, configuredShim],
+                isOnPath,
+                tryExecute: async candidate => candidate === configuredShim,
+            });
+
+            const result = await resolveCliPath(deps);
+
+            assert.deepStrictEqual(result, {
+                cliPath: configuredShim,
+                available: true,
+                source: 'configured',
+            });
+            assert.ok(isOnPath.notCalled);
         });
 
         test('falls through to PATH check when custom configured path is invalid', async () => {
