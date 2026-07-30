@@ -46,6 +46,19 @@ internal static class RustDockerfileGenerator
             context.Services.GetRequiredService<DistributedApplicationExecutionContext>(),
             resource.Name);
 
+        // A manifest path configured for the host points somewhere that does not exist in the container, so
+        // the copy of it that reaches `cargo build` has to be rewritten to sit under /app.
+        if (options.ManifestPath is { } manifestPath)
+        {
+            RewriteManifestPath(cargoArgs, manifestPath, ToContainerPath(manifestPath, appDirectory, resource.Name));
+        }
+
+        // Cargo writes target/ next to the workspace's root manifest, which is not necessarily the app
+        // directory once a manifest path points at a nested crate.
+        var targetDirectory = metadata.WorkspaceRoot is { Length: > 0 } workspaceRoot
+            ? ToContainerPath(workspaceRoot, appDirectory, resource.Name) + "/target"
+            : "/app/target";
+
         var baseImageAnnotation = ResolveBaseImageAnnotation(resource, context);
         var images = RustPublishImageResolver.Resolve(
             baseImageAnnotation?.BuildImage,
@@ -110,9 +123,9 @@ internal static class RustDockerfileGenerator
             .WorkDir("/app")
             // Add COPY --from=<source> instructions for each container files source.
             .AddContainerFiles(context.Resource, "/app", logger)
-            // RelativePath is relative to cargo's target directory, which inside the build stage is
-            // /app/target because the crate was copied to /app.
-            .CopyFrom("build", $"/app/target/{target.RelativePath}", $"/app/{target.Name}")
+            // RelativePath is relative to cargo's target directory, which the build stage places relative to
+            // /app because the crate was copied there.
+            .CopyFrom("build", $"{targetDirectory}/{target.RelativePath}", $"/app/{target.Name}")
             .User("app")
             .Entrypoint([$"/app/{target.Name}"]);
     }
@@ -141,6 +154,45 @@ internal static class RustDockerfileGenerator
         }
 
         return cargoArgs;
+    }
+
+    // The two-token form is what WithCargoManifestPath emits, so match on the pair rather than reformatting
+    // the argument list. A --manifest-path passed as a raw string through WithCargoArgs is left alone, in
+    // keeping with raw arguments being forwarded verbatim everywhere else.
+    private static void RewriteManifestPath(List<string> cargoArgs, string hostPath, string containerPath)
+    {
+        for (var i = 0; i < cargoArgs.Count - 1; i++)
+        {
+            if (cargoArgs[i] == "--manifest-path" && cargoArgs[i + 1] == hostPath)
+            {
+                cargoArgs[i + 1] = containerPath;
+            }
+        }
+    }
+
+    // The app directory is the docker build context and is copied to /app, so a host path only has a
+    // container equivalent when it sits inside that directory. A path outside it is not part of the build
+    // context at all, so there is nothing to rewrite it to and no Dockerfile that could build the crate.
+    private static string ToContainerPath(string hostPath, string appDirectory, string resourceName)
+    {
+        var relative = Path.GetRelativePath(appDirectory, Path.GetFullPath(hostPath, appDirectory));
+
+        // GetRelativePath returns a rooted path when the two share no common root (different drives on
+        // Windows), and a ..-prefixed path when the target is above the app directory.
+        var escapesContext = Path.IsPathRooted(relative)
+            || relative == ".."
+            || relative.StartsWith("../", StringComparison.Ordinal)
+            || relative.StartsWith(@"..\", StringComparison.Ordinal);
+
+        if (escapesContext)
+        {
+            throw new DistributedApplicationException(
+                $"The Rust app '{resourceName}' builds from '{hostPath}', which is outside its app directory '{appDirectory}'. " +
+                $"Publishing copies only the app directory into the container image, so point the app directory at a location that " +
+                $"contains the whole crate, or add a Dockerfile next to Cargo.toml to take over the container build.");
+        }
+
+        return relative is "." ? "/app" : $"/app/{relative.Replace('\\', '/')}";
     }
 
     private static string BuildCargoCommand(List<string> cargoArgs)

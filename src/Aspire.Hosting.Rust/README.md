@@ -78,7 +78,7 @@ builder.AddRustApp("api", "../rust-api")
 | `WithCargoExample(string exampleName)` | Adds `--example` to run an example instead of a binary |
 | `WithCargoPackage(string packageName)` | Adds `--package` to select a workspace member |
 | `WithCargoTarget(string target)` | Adds `--target` to cross-compile for a specific triple |
-| `WithCargoManifestPath(string manifestPath)` | Adds `--manifest-path`. Only needed when the manifest is not the one cargo finds from the app directory |
+| `WithCargoManifestPath(string manifestPath)` | Adds `--manifest-path`. Only needed when the manifest is not the one cargo finds from the app directory. Must be inside the app directory so publishing can copy it into the image |
 | `WithCargoProfile(string profileName)` | Adds `--profile`. Takes precedence over `WithCargoReleaseBuild()`, which cargo rejects alongside `--profile` |
 
 These options apply to local execution, debugging, and publishing alike. Target selection in

@@ -139,9 +139,34 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         Assert.False(File.Exists(Path.Combine(outputDir.FullName, "api.Dockerfile")));
     }
 
+    [Fact]
+    public async Task VerifyPublish_RebasesTheManifestPathIntoTheContainer()
+    {
+        // A manifest path is a host path, so it has to be rewritten to where the app directory lands in the
+        // image, and cargo writes target/ next to that manifest rather than at the app directory root.
+        var content = await PublishDockerfileAsync(
+            workspaceRootRelativePath: "crates/api",
+            configureResource: app => app.WithCargoManifestPath("crates/api/Cargo.toml"));
+
+        await Verify(content);
+    }
+
+    [Fact]
+    public async Task PublishFailsWhenTheManifestIsOutsideTheAppDirectory()
+    {
+        // Only the app directory is copied into the image, so a manifest above it could never be built there.
+        // The publish pipeline reports the failure through the host rather than rethrowing, so the observable
+        // result is that no Dockerfile is produced.
+        var exception = await Record.ExceptionAsync(
+            () => PublishDockerfileAsync(configureResource: app => app.WithCargoManifestPath("../elsewhere/Cargo.toml")));
+
+        Assert.IsType<FileNotFoundException>(exception);
+    }
+
     private async Task<string> PublishDockerfileAsync(
         Action<string>? configureSource = null,
         string? metadata = null,
+        string workspaceRootRelativePath = ".",
         Func<IResourceBuilder<RustAppResource>, IResourceBuilder<RustAppResource>>? configureResource = null)
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
@@ -155,7 +180,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         // Answer cargo metadata from a canned document so these tests exercise Dockerfile generation on
         // machines without a Rust toolchain installed.
         builder.Services.AddSingleton<ICargoMetadataReader>(
-            new FakeCargoMetadataReader(metadata ?? CargoMetadataFactory.SinglePackage("my-service")));
+            new FakeCargoMetadataReader(metadata ?? CargoMetadataFactory.SinglePackage("my-service"), workspaceRootRelativePath));
 
         var app = builder.AddRustApp("api", sourceDir.FullName);
 

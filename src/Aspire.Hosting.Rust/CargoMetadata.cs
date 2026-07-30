@@ -33,6 +33,17 @@ internal sealed class CargoMetadata
     public required string TargetDirectory { get; init; }
 
     /// <summary>
+    /// The absolute path of the directory holding the workspace's root manifest.
+    /// </summary>
+    /// <remarks>
+    /// For a crate that is not in a workspace this is the crate directory. Cargo places <c>target/</c> here by
+    /// default, so publishing derives the container's target directory from this rather than from
+    /// <see cref="TargetDirectory"/>: the host's <c>CARGO_TARGET_DIR</c> and <c>.cargo/config.toml</c> do not
+    /// apply inside the container, so only the default layout is guaranteed there.
+    /// </remarks>
+    public required string WorkspaceRoot { get; init; }
+
+    /// <summary>
     /// Parses the JSON emitted by <c>cargo metadata --format-version 1 --no-deps</c>.
     /// </summary>
     /// <remarks>
@@ -95,6 +106,9 @@ internal sealed class CargoMetadata
             DefaultMemberIds = defaultMembers,
             TargetDirectory = root.TryGetProperty("target_directory", out var targetDirectoryElement)
                 ? targetDirectoryElement.GetString() ?? string.Empty
+                : string.Empty,
+            WorkspaceRoot = root.TryGetProperty("workspace_root", out var workspaceRootElement)
+                ? workspaceRootElement.GetString() ?? string.Empty
                 : string.Empty
         };
     }

@@ -331,6 +331,10 @@ public static class RustHostingExtensions
     /// from the app directory, which is what most apps want, so this is only needed to point at a manifest
     /// somewhere else — for example the crate of one workspace member when the app directory is the
     /// workspace root.
+    /// <para>
+    /// Publishing copies the app directory into the container image and rewrites the manifest path to match,
+    /// so the manifest has to live inside the app directory.
+    /// </para>
     /// </remarks>
     [AspireExport]
     public static IResourceBuilder<T> WithCargoManifestPath<T>(this IResourceBuilder<T> builder, string manifestPath)
