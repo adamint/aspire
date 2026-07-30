@@ -227,6 +227,70 @@ public class AppHostInfoDiskCacheTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task EditingCustomWalkUpImportInvalidatesCacheEntry()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var cache = CreateCache(workspace);
+
+        // The prefilter admits this project because of the walk-up import, and MSBuild resolves that import
+        // to the Aspire.Common.props two directories above. Flipping IsAspireHost inside that file changes
+        // the answer without touching the .csproj, obj/project.assets.json, or any Directory.Build.* /
+        // Directory.Packages.* / global.json the conventional walk stats — so unless the custom import is
+        // fingerprinted too, the stale "not an AppHost" entry wins forever and the AppHost stays
+        // undiscoverable across CLI invocations.
+        var projectDirectory = Directory.CreateDirectory(Path.Combine(workspace.WorkspaceRoot.FullName, "src", "MyHost"));
+        var projectFile = new FileInfo(Path.Combine(projectDirectory.FullName, "MyHost.csproj"));
+        File.WriteAllText(projectFile.FullName, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <Import Project="$([MSBuild]::GetPathOfFileAbove('Aspire.Common.props', '$(MSBuildThisFileDirectory)../'))" />
+            </Project>
+            """);
+
+        var commonProps = Path.Combine(workspace.WorkspaceRoot.FullName, "Aspire.Common.props");
+        File.WriteAllText(commonProps, "<Project />");
+
+        await cache.SetAsync(projectFile, cache.GetCacheKey(projectFile), SampleEntry() with { IsAspireHost = false }, CancellationToken.None).DefaultTimeout();
+        Assert.NotNull(await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout());
+
+        File.WriteAllText(commonProps, """
+            <Project>
+              <PropertyGroup>
+                <IsAspireHost>true</IsAspireHost>
+              </PropertyGroup>
+            </Project>
+            """);
+        File.SetLastWriteTimeUtc(commonProps, DateTime.UtcNow.AddSeconds(2));
+
+        var hit = await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout();
+        Assert.Null(hit);
+    }
+
+    [Fact]
+    public async Task UnfingerprintableWalkUpImportNeverReadsOrWrites()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var cache = CreateCache(workspace);
+
+        // Here the searched file name is itself an MSBuild expression, so no filesystem walk can predict
+        // which file the import binds to and no mtime can represent it. Caching such a project would make an
+        // edit to that unknown file permanently invisible, so the disk cache must opt out entirely.
+        var projectFile = CreateProjectFile(workspace, "MyHost.csproj");
+        File.WriteAllText(projectFile.FullName, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <Import Project="$([MSBuild]::GetPathOfFileAbove($(SharedPropsFileName), '$(MSBuildThisFileDirectory)../'))" />
+            </Project>
+            """);
+
+        await cache.SetAsync(new FileInfo(projectFile.FullName), cache.GetCacheKey(projectFile), SampleEntry(), CancellationToken.None).DefaultTimeout();
+        var hit = await cache.TryGetAsync(new FileInfo(projectFile.FullName), CancellationToken.None).DefaultTimeout();
+
+        Assert.Null(hit);
+
+        var cacheDir = Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire", "cache", "apphost-info");
+        Assert.False(Directory.Exists(cacheDir) && Directory.EnumerateFiles(cacheDir).Any());
+    }
+
+    [Fact]
     public void ComputeKey_IsStableForUnchangedInputs()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

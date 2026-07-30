@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
 using Aspire.Cli.Configuration;
+using Aspire.Cli.Projects;
 using Aspire.Cli.Utils;
 using Microsoft.Extensions.Logging;
 
@@ -27,7 +28,7 @@ namespace Aspire.Cli.Caching;
 /// so it fingerprints stable filesystem beacons that represent those same inputs instead of
 /// asking MSBuild for another evaluation.
 ///
-/// Tracked inputs (see <see cref="ComputeKeyAsync"/>):
+/// Tracked inputs (see <see cref="ComputeKeyAsync(FileInfo, IEnvironment, in DotNetAppHostProject.AppHostImportDependencies)"/>):
 /// <list type="bullet">
 ///   <item>The .csproj absolute path and its last-write time.</item>
 ///   <item>The mtime of <c>obj/project.assets.json</c> next to the .csproj. NuGet writes this
@@ -42,8 +43,18 @@ namespace Aspire.Cli.Caching;
 ///         transitive .props edits that the user has not yet restored against.</item>
 ///   <item>The mtime of <c>global.json</c> walking up the same path, to catch SDK pin
 ///         changes that do not trigger a restore.</item>
+///   <item>The mtimes of the custom files that the AppHost prefilter's walk-up imports resolve to
+///         (see <c>DotNetAppHostProject.CollectImportDependencies</c>), statted at every ancestor
+///         level. Those imports — for example
+///         <c>$([MSBuild]::GetPathOfFileAbove('Aspire.Common.props'))</c> — can set
+///         <c>IsAspireHost</c> without touching any conventional file above.</item>
 ///   <item>A schema version constant, bumped when the set of cached properties changes.</item>
 /// </list>
+///
+/// When the prefilter honors a walk-up import whose target no filesystem walk can predict (an MSBuild
+/// expression in place of the file name, a search rooted outside the project's ancestor chain, or an
+/// appended sub-directory path), the disk cache is bypassed entirely for that project rather than risking
+/// a permanently stale entry.
 ///
 /// The cache only stores metadata from the AppHost inspection target, not build outputs or runtime
 /// state, so a stale hit can only reuse stale answers such as the AppHost marker, Aspire.Hosting
@@ -113,9 +124,17 @@ internal sealed class AppHostInfoDiskCache : IAppHostInfoDiskCache
             return null;
         }
 
+        // Collect once and reuse for both the bypass decision and the key: the collector parses the project
+        // and the ancestor Directory.Build.* files, which is the most expensive part of a cache hit.
+        var importDependencies = DotNetAppHostProject.CollectImportDependencies(projectFile);
+        if (HasUnfingerprintableImports(projectFile, importDependencies))
+        {
+            return null;
+        }
+
         try
         {
-            var key = GetCacheKey(projectFile);
+            var key = ComputeKeyAsync(projectFile, _environment, importDependencies);
             var path = Path.Combine(_cacheDirectory.FullName, $"{key}.json");
             if (!File.Exists(path))
             {
@@ -160,6 +179,12 @@ internal sealed class AppHostInfoDiskCache : IAppHostInfoDiskCache
             return;
         }
 
+        var importDependencies = DotNetAppHostProject.CollectImportDependencies(projectFile);
+        if (HasUnfingerprintableImports(projectFile, importDependencies))
+        {
+            return;
+        }
+
         string? tempPath = null;
 
         try
@@ -169,7 +194,7 @@ internal sealed class AppHostInfoDiskCache : IAppHostInfoDiskCache
                 _cacheDirectory.Create();
             }
 
-            var key = GetCacheKey(projectFile);
+            var key = ComputeKeyAsync(projectFile, _environment, importDependencies);
             if (!string.Equals(key, expectedCacheKey, StringComparison.Ordinal))
             {
                 // The key is captured before MSBuild runs and checked again before publishing.
@@ -236,7 +261,32 @@ internal sealed class AppHostInfoDiskCache : IAppHostInfoDiskCache
         return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
     }
 
+    private bool HasUnfingerprintableImports(FileInfo projectFile, in DotNetAppHostProject.AppHostImportDependencies importDependencies)
+    {
+        // The AppHost prefilter honors walk-up imports such as
+        //   <Import Project="$([MSBuild]::GetPathOfFileAbove('Aspire.Common.props', '$(ExternalRoot)'))" />
+        // Most of them are fingerprinted by name in ComputeKeyAsync, but some resolve to a file no
+        // filesystem walk can predict (an MSBuild expression where the file name belongs, a search rooted
+        // outside the project's ancestor chain, an appended sub-directory path). Editing such a file to set
+        // <IsAspireHost>true</IsAspireHost> would leave every fingerprinted mtime untouched, so a cached
+        // "not an AppHost" answer would survive forever and the AppHost would stay undiscoverable. Skip the
+        // disk cache entirely for those projects and let MSBuild answer each time; the in-process cache in
+        // AppHostInfoResolver still de-duplicates work inside a single CLI invocation.
+        if (!importDependencies.HasUnfingerprintableImport)
+        {
+            return false;
+        }
+
+        _logger.LogTrace(
+            "Skipping AppHost info disk cache for {Project}; it depends on an import that cannot be fingerprinted",
+            projectFile.FullName);
+        return true;
+    }
+
     internal static string ComputeKeyAsync(FileInfo projectFile, IEnvironment environment)
+        => ComputeKeyAsync(projectFile, environment, DotNetAppHostProject.CollectImportDependencies(projectFile));
+
+    internal static string ComputeKeyAsync(FileInfo projectFile, IEnvironment environment, in DotNetAppHostProject.AppHostImportDependencies importDependencies)
     {
         // Raw fingerprint shape:
         //   v1|/repo/app/AppHost.csproj|csproj=638831006400000000|assets=638831006410000000|...
@@ -264,6 +314,14 @@ internal sealed class AppHostInfoDiskCache : IAppHostInfoDiskCache
             // changes that affect restore, or a fresh restore after package graph changes.
             AppendMtime(sb, Path.Combine(projectDir, "obj", "project.assets.json"), "assets");
 
+            // Beyond the conventional files, stat the custom files that DotNetAppHostProject's prefilter
+            // lets decide whether this project is an AppHost — for example a shared Aspire.Common.props
+            // pulled in with $([MSBuild]::GetPathOfFileAbove(...)). Those imports resolve by walking
+            // ancestors, so statting each name at every level covers wherever MSBuild binds them. Without
+            // this, setting <IsAspireHost>true</IsAspireHost> in such a file leaves every tracked mtime
+            // unchanged and the CLI keeps serving the stale "not an AppHost" entry.
+            var customImportFileNames = importDependencies.WalkUpFileNames;
+
             // Walk up to the filesystem root and stat any Directory.Build.* / Directory.Packages.* /
             // global.json we find along the way. This matches MSBuild's own Directory.Build.* discovery,
             // which has no .git boundary and walks to the root of the drive
@@ -286,6 +344,12 @@ internal sealed class AppHostInfoDiskCache : IAppHostInfoDiskCache
                     AppendMtime(sb, Path.Combine(dir.FullName, siblingName), siblingName);
                 }
                 AppendMtime(sb, Path.Combine(dir.FullName, "global.json"), "globaljson");
+
+                // Ordinal-sorted by the collector, so the same import set always produces the same key.
+                foreach (var customName in customImportFileNames)
+                {
+                    AppendMtime(sb, Path.Combine(dir.FullName, customName), customName);
+                }
 
                 dir = dir.Parent;
             }
