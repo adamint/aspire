@@ -1,3 +1,5 @@
+import type * as vscode from 'vscode';
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Telemetry event/property registry.
 //
@@ -30,9 +32,9 @@
 //   `dashboard_event_name`, so events like `aspire/dashboard/command` stay
 //   queryable without creating a new VS Code wire entity per upstream event.
 //   The names here are the FINAL wire names — the helpers in `telemetry.ts`
-//   deliberately bypass VS Code's automatic
-//   `<extensionId>/<eventName>` prefix (added by `vscode.env.createTelemetryLogger`)
-//   so this convention is what reaches the telemetry backend.
+//   route through `vscode.env.createTelemetryLogger`, then strip its automatic
+//   `<extensionId>/` prefix in the transport sender after VS Code has applied
+//   opt-in gating, privacy cleaning, common properties, and local logging.
 //
 // IMPORTANT for reviewers: changing the keys of this object (or the unions
 // inside each entry) requires a corresponding classification update before
@@ -210,6 +212,7 @@ export interface TelemetryEventSchema {
 
 /** Union of every event name the extension is allowed to emit. */
 export type KnownTelemetryEventName = keyof TelemetryEventSchema;
+export type TelemetryPropertyValue = string | vscode.TelemetryTrustedValue<string>;
 
 /**
  * Property bag accepted by {@link sendTelemetryEvent} for a given event name.
@@ -221,7 +224,7 @@ export type KnownTelemetryEventName = keyof TelemetryEventSchema;
  * are rejected by the type checker.
  */
 export type EventProperties<E extends KnownTelemetryEventName> =
-    Partial<Record<TelemetryEventSchema[E]['properties'] | CommonTelemetryProperty, string>>;
+    Partial<Record<TelemetryEventSchema[E]['properties'] | CommonTelemetryProperty, TelemetryPropertyValue>>;
 
 /**
  * Numeric measurement bag accepted by {@link sendTelemetryEvent} for a given

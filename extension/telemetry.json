@@ -561,6 +561,96 @@
     }
   },
   "commonProperties": {
+    "common.devDeviceId": {
+      "classification": "EndUserPseudonymizedInformation",
+      "purpose": "BusinessInsight",
+      "comment": "The pseudonymous development-device identifier supplied by VS Code."
+    },
+    "common.extname": {
+      "classification": "PublicNonPersonalData",
+      "purpose": "FeatureInsight",
+      "comment": "The public publisher and name of the Aspire VS Code extension."
+    },
+    "common.extversion": {
+      "classification": "PublicNonPersonalData",
+      "purpose": "FeatureInsight",
+      "comment": "The public version of the Aspire VS Code extension."
+    },
+    "common.isAgentsWindow": {
+      "classification": "SystemMetaData",
+      "purpose": "FeatureInsight",
+      "comment": "Whether VS Code is running the extension in an agents window."
+    },
+    "common.isnewappinstall": {
+      "classification": "SystemMetaData",
+      "purpose": "FeatureInsight",
+      "comment": "Whether VS Code considers this a new application installation."
+    },
+    "common.nodeArch": {
+      "classification": "SystemMetaData",
+      "purpose": "FeatureInsight",
+      "comment": "The Node.js process architecture used by the extension host."
+    },
+    "common.os": {
+      "classification": "SystemMetaData",
+      "purpose": "FeatureInsight",
+      "comment": "The operating-system family used by the extension host."
+    },
+    "common.platformversion": {
+      "classification": "SystemMetaData",
+      "purpose": "FeatureInsight",
+      "comment": "The coarse operating-system version used by the extension host."
+    },
+    "common.product": {
+      "classification": "SystemMetaData",
+      "purpose": "FeatureInsight",
+      "comment": "The VS Code product host running the extension."
+    },
+    "common.remotename": {
+      "classification": "SystemMetaData",
+      "purpose": "FeatureInsight",
+      "comment": "The coarse VS Code remote-environment category."
+    },
+    "common.sqmid": {
+      "classification": "EndUserPseudonymizedInformation",
+      "purpose": "BusinessInsight",
+      "comment": "The pseudonymous SQM device identifier supplied by VS Code."
+    },
+    "common.telemetryclientversion": {
+      "classification": "SystemMetaData",
+      "purpose": "FeatureInsight",
+      "comment": "The version of the VS Code extension telemetry client."
+    },
+    "common.uikind": {
+      "classification": "SystemMetaData",
+      "purpose": "FeatureInsight",
+      "comment": "Whether the extension is running in the desktop or web UI."
+    },
+    "common.vscodecommithash": {
+      "classification": "SystemMetaData",
+      "purpose": "FeatureInsight",
+      "comment": "The public VS Code product commit hash."
+    },
+    "common.vscodemachineid": {
+      "classification": "EndUserPseudonymizedInformation",
+      "purpose": "FeatureInsight",
+      "comment": "The pseudonymous machine identifier supplied by VS Code."
+    },
+    "common.vscodereleasedate": {
+      "classification": "SystemMetaData",
+      "purpose": "FeatureInsight",
+      "comment": "The public release date of the VS Code build."
+    },
+    "common.vscodesessionid": {
+      "classification": "SystemMetaData",
+      "purpose": "FeatureInsight",
+      "comment": "The pseudorandom identifier for the current VS Code session."
+    },
+    "common.vscodeversion": {
+      "classification": "SystemMetaData",
+      "purpose": "FeatureInsight",
+      "comment": "The public VS Code product version."
+    },
     "apphost_languages": {
       "classification": "SystemMetaData",
       "purpose": "FeatureInsight",

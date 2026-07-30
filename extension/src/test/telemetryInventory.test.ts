@@ -15,12 +15,31 @@ type TelemetryRegistryEvent = {
 
 // Telemetry events emit verbatim to the wire — the registry-declared name
 // (e.g. `aspire/vscode/command/invoked`, `aspire/dashboard/operation`) is
-// what appears in `extension/telemetry.json`. The extension routes every
-// event through `sendDangerousTelemetryEvent` so VS Code's automatic
-// `<extensionId>/` prefix is bypassed; the inventory file therefore stores
-// the bare wire name with no additional prefix.
+// what appears in `extension/telemetry.json`. The transport sender strips VS
+// Code's automatic `<extensionId>/` prefix after the TelemetryLogger has
+// applied its platform guarantees.
 const telemetryEntityPrefix = '';
 const freeformPropertyNamePattern = /(?:^|_)(?:path|message|description|args?)(?:_|$)/i;
+const platformCommonTelemetryProperties = [
+    'common.devDeviceId',
+    'common.extname',
+    'common.extversion',
+    'common.isAgentsWindow',
+    'common.isnewappinstall',
+    'common.nodeArch',
+    'common.os',
+    'common.platformversion',
+    'common.product',
+    'common.remotename',
+    'common.sqmid',
+    'common.telemetryclientversion',
+    'common.uikind',
+    'common.vscodecommithash',
+    'common.vscodemachineid',
+    'common.vscodereleasedate',
+    'common.vscodesessionid',
+    'common.vscodeversion',
+] as const;
 
 function readTelemetryInventory(): TelemetryInventory {
     const inventoryPath = path.resolve(__dirname, '../../telemetry.json');
@@ -134,6 +153,14 @@ suite('extension/telemetry.json', () => {
     test('declares every common property from telemetry registry', () => {
         const inventory = readTelemetryInventory();
         const missingCommonProperties = readCommonTelemetryProperties()
+            .filter(property => !Object.hasOwn(inventory.commonProperties, property));
+
+        assert.deepStrictEqual(missingCommonProperties, []);
+    });
+
+    test('declares common properties added by VS Code and the telemetry reporter', () => {
+        const inventory = readTelemetryInventory();
+        const missingCommonProperties = platformCommonTelemetryProperties
             .filter(property => !Object.hasOwn(inventory.commonProperties, property));
 
         assert.deepStrictEqual(missingCommonProperties, []);

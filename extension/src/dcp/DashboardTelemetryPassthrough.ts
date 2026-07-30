@@ -1,8 +1,9 @@
 import { Request, Response, Express, NextFunction } from 'express';
 import { randomUUID } from 'crypto';
+import * as vscode from 'vscode';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { isExtensionTelemetryEnabled, sendTelemetryErrorEvent, sendTelemetryEvent } from '../utils/telemetry';
-import { EventMeasurements, EventProperties } from '../utils/telemetryRegistry';
+import { EventMeasurements, EventProperties, TelemetryPropertyValue } from '../utils/telemetryRegistry';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Dashboard → extension telemetry contract.
@@ -12,9 +13,9 @@ import { EventMeasurements, EventProperties } from '../utils/telemetryRegistry';
 // (`TelemetryEndpoints` constants). When the dashboard is hosted by Visual
 // Studio or the C# Dev Kit extension, those hosts expose this HTTP surface
 // and forward each request to their own telemetry pipeline. We do the same
-// here for the VS Code Aspire extension by forwarding to
-// `@vscode/extension-telemetry`'s TelemetryReporter (which adds VS Code's
-// telemetry-level enforcement and standard envelope properties).
+// here for the VS Code Aspire extension by forwarding through VS Code's
+// TelemetryLogger, which owns opt-in, privacy cleaning, and common properties,
+// into `@vscode/extension-telemetry` as the transport.
 //
 // Wire shapes mirror the dashboard-side records in `TelemetryRequests.cs` and
 // `TelemetryResponses.cs`. Keep these types and the dashboard records in
@@ -83,8 +84,8 @@ function telemetryResultLabel(value: unknown): string {
     return Number.isFinite(n) ? `Unknown(${n})` : 'Unknown';
 }
 // Failure / UserFault are routed through `sendTelemetryErrorEvent` so they
-// respect the user's error-level telemetry opt-in. The dangerous send path
-// still emits EventData/customEvent payloads, so downstream distinguishes these
+// respect the user's error-level telemetry opt-in. String-named error events
+// still emit EventData/customEvent payloads, so downstream distinguishes these
 // by event name/result rather than an App Insights exception envelope.
 function isFailureResult(value: unknown): boolean {
     if (value === undefined || value === null) {
@@ -207,7 +208,7 @@ interface PendingOperation {
 /**
  * Dashboard telemetry passthrough handler. Owns the in-flight start/end
  * correlation map and routes every dashboard telemetry request through the
- * extension's TelemetryReporter.
+ * extension's telemetry pipeline.
  */
 export class DashboardTelemetryPassthrough {
     // After this long without an `end`, an in-flight operation is treated as
@@ -245,8 +246,8 @@ export class DashboardTelemetryPassthrough {
         });
 
         // POST /telemetry/start — session-start handshake. We don't open any
-        // dashboard-specific session here; TelemetryReporter is already
-        // running. Returning 200 OK tells the dashboard to start sending.
+        // dashboard-specific session here; the extension telemetry pipeline is
+        // already running. Returning 200 OK tells the dashboard to start sending.
         app.post('/telemetry/start', requireHeaders, (_req, res) => {
             res.status(200).end();
         });
@@ -288,7 +289,7 @@ export class DashboardTelemetryPassthrough {
             // via the retained `Aspire.Dashboard.Exception.Type` bundle property,
             // alongside `fault_severity` and `dashboard_event_name`.
             const properties: EventProperties<'aspire/dashboard/fault'> = {
-                dashboard_event_name: clampDashboardKey(payload.eventName),
+                dashboard_event_name: dashboardEventNameProperty(payload.eventName),
                 fault_severity: faultSeverityLabel(payload.severity),
             };
             applyBundleAndCorrelations(properties, payload.properties, payload.correlatedWith);
@@ -299,7 +300,7 @@ export class DashboardTelemetryPassthrough {
         app.post('/telemetry/asset', requireHeaders, (req: Request, res: Response) => {
             const payload = req.body as PostAssetRequest;
             const properties: EventProperties<'aspire/dashboard/asset'> = {
-                dashboard_event_name: clampDashboardKey(payload.eventName),
+                dashboard_event_name: dashboardEventNameProperty(payload.eventName),
                 asset_id: clampDashboardKey(payload.assetId),
                 asset_event_version: formatAssetEventVersion(payload.assetEventVersion),
             };
@@ -387,7 +388,7 @@ export class DashboardTelemetryPassthrough {
 
         if (postStartEvent) {
             const startProps: EventProperties<'aspire/dashboard/scope/start'> = {
-                dashboard_event_name: eventName,
+                dashboard_event_name: dashboardEventNameProperty(eventName),
                 operation_id: operationId,
                 scope_kind: kind,
             };
@@ -419,7 +420,7 @@ export class DashboardTelemetryPassthrough {
 
         const durationMs = Date.now() - pending.startTime;
         const endProperties: EventProperties<'aspire/dashboard/scope/end'> = {
-            dashboard_event_name: pending.eventName,
+            dashboard_event_name: dashboardEventNameProperty(pending.eventName),
             operation_id: payload.id,
             scope_kind: pending.kind,
             result: telemetryResultLabel(payload.result),
@@ -477,7 +478,7 @@ export class DashboardTelemetryPassthrough {
     ): void {
         const payload = req.body as PostOperationRequest;
         const properties: EventProperties<'aspire/dashboard/operation' | 'aspire/dashboard/usertask'> = {
-            dashboard_event_name: clampDashboardKey(payload.eventName),
+            dashboard_event_name: dashboardEventNameProperty(payload.eventName),
             result: telemetryResultLabel(payload.result),
         };
         // Intentionally do NOT forward `payload.resultSummary`. It is a
@@ -543,14 +544,20 @@ export class DashboardTelemetryPassthrough {
  * that declares those two properties (which all dashboard events do).
  */
 function applyBundleFields(
-    target: { dashboard_properties?: string; dashboard_measurements?: string },
+    target: {
+        dashboard_properties?: TelemetryPropertyValue;
+        dashboard_measurements?: TelemetryPropertyValue;
+    },
     properties: { [key: string]: AspireTelemetryProperty } | undefined,
 ): void {
     applyBundle(target, bundleDashboardData(properties));
 }
 
 function applyBundle(
-    target: { dashboard_properties?: string; dashboard_measurements?: string },
+    target: {
+        dashboard_properties?: TelemetryPropertyValue;
+        dashboard_measurements?: TelemetryPropertyValue;
+    },
     bundle: { properties?: string; measurements?: string },
 ): void {
     if (bundle.properties !== undefined) {
@@ -567,9 +574,9 @@ function applyBundle(
  */
 function applyBundleAndCorrelations(
     target: {
-        dashboard_properties?: string;
-        dashboard_measurements?: string;
-        dashboard_correlated_with?: string;
+        dashboard_properties?: TelemetryPropertyValue;
+        dashboard_measurements?: TelemetryPropertyValue;
+        dashboard_correlated_with?: TelemetryPropertyValue;
     },
     properties: { [key: string]: AspireTelemetryProperty } | undefined,
     correlations: unknown,
@@ -609,13 +616,14 @@ function applyBundleAndCorrelations(
  *    anything as `Pii` today, but honoring the discriminator keeps the
  *    README's "no resource names or workspace contents are reported"
  *    guarantee enforced end-to-end rather than incidental.
- *  - Known-safe dashboard `Basic` / `UserSetting` keys are stringified into the
- *    properties bundle. Unknown free-form property keys are dropped so a future
- *    dashboard regression cannot smuggle secrets or workspace contents through
- *    `dashboard_properties`.
+ *  - Known-safe dashboard `Basic` / `UserSetting` keys are normalized into the
+ *    properties bundle. String arrays remain arrays in the encoded envelope so
+ *    element boundaries are preserved without nested JSON escape sequences.
+ *    Unknown free-form property keys are dropped so a future dashboard regression
+ *    cannot smuggle secrets or workspace contents through `dashboard_properties`.
  *
  * Privacy mitigation (per-entry):
- *  - Every string value (including JSON-stringified objects) is capped at
+ *  - Every string value, including each string-array element, is capped at
  *    {@link MAX_DIAGNOSTIC_STRING_LENGTH} via {@link scrubFreeformDiagnosticText}.
  *    The dashboard's `TelemetryErrorRecorder` puts the exception type, the
  *    exception message, and the *full stack trace* into the properties
@@ -660,7 +668,7 @@ function bundleDashboardData(input: { [key: string]: AspireTelemetryProperty } |
         return result;
     }
 
-    const properties: Array<[string, string]> = [];
+    const properties: Array<[string, string | string[]]> = [];
     const measurements: Array<[string, number]> = [];
     let propTruncatedByCount = false;
     let measTruncatedByCount = false;
@@ -714,9 +722,9 @@ function bundleDashboardData(input: { [key: string]: AspireTelemetryProperty } |
             propTruncatedByCount = true;
             continue;
         }
-        let stringValue: string;
+        let stringValue: string | string[];
         if (typeof value === 'string') {
-            stringValue = value;
+            stringValue = sanitizeDashboardBundleScalar(value);
         }
         else if (typeof value === 'boolean') {
             stringValue = value ? 'true' : 'false';
@@ -725,14 +733,15 @@ function bundleDashboardData(input: { [key: string]: AspireTelemetryProperty } |
             stringValue = String(value);
         }
         else {
-            stringValue = JSON.stringify(value);
+            stringValue = (value as string[])
+                .map(item => sanitizeDashboardBundleScalar(item));
         }
         // Per-entry value truncation as defense-in-depth. The most sensitive
         // free-form keys (exception message/stack trace) are dropped entirely
         // above via DROPPED_FREEFORM_PROPERTY_KEYS; any other Basic-tagged
         // string is still bounded here so a single oversized value can't bloat
         // the bundle or smuggle large workspace content.
-        properties.push([key, scrubFreeformDiagnosticText(stringValue)]);
+        properties.push([key, stringValue]);
     }
 
     if (properties.length > 0 || propTruncatedByCount) {
@@ -757,7 +766,7 @@ function bundleDashboardData(input: { [key: string]: AspireTelemetryProperty } |
  * `Object.fromEntries` and then iterating it would silently reorder the
  * dashboard's keys. Iterating a flat tuple array sidesteps that entirely.
  */
-function serializeBundle<V extends string | number>(entries: Array<readonly [string, V]>, truncatedByCount: boolean): string {
+function serializeBundle<V extends string | number | string[]>(entries: Array<readonly [string, V]>, truncatedByCount: boolean): string {
     const buildEnvelope = (count: number, truncated: boolean): string => {
         const v: Record<string, V> = {};
         for (let i = 0; i < count; i++) {
@@ -879,9 +888,9 @@ const TRUNCATION_MARKER = '...[truncated]';
 // result summary) are dropped entirely elsewhere rather than forwarded; this
 // cap is the residual per-entry bound on every OTHER Basic-tagged bundle value
 // so a single property can't dump multi-KB workspace content into telemetry.
-// The telemetry wrapper applies its explicit value sanitizer on the dangerous
-// send path, but this cap is the primary defense because we intentionally
-// bypass TelemetryLogger.cleanData() to preserve dashboard wire names.
+// The telemetry wrapper routes through VS Code's TelemetryLogger. This cap is
+// still the primary defense because each bundle becomes one encoded string
+// property after the route-level structural sanitizer runs.
 const MAX_DIAGNOSTIC_STRING_LENGTH = 1024;
 
 // Caps on dashboard-supplied list-shaped fields. Both are formatted into a
@@ -898,6 +907,18 @@ const MAX_FLAG_PREFIXES = 100;
 // memory. When full, the oldest pending entry is evicted (its end event is
 // dropped — same outcome as if it had been abandoned via the TTL).
 const MAX_PENDING_OPERATIONS = 10_000;
+const KNOWN_DASHBOARD_EVENT_NAMES = new Set([
+    'aspire/dashboard/component/initialize',
+    'aspire/dashboard/component/paramsSet',
+    'aspire/dashboard/component/dispose',
+    'aspire/dashboard/error',
+    'aspire/dashboard/command',
+    // The extension can run against older installed Aspire CLI/dashboard versions.
+    // Keep event names shipped in supported 13.x dashboards queryable even after
+    // their producers are removed from the current dashboard.
+    'aspire/dashboard/aiassistant/feedback',
+    'aspire/dashboard/mcp/toolcall',
+]);
 
 // Dashboard property keys whose VALUES are known to carry free-form
 // user/workspace content rather than a bounded categorical signal. The
@@ -979,6 +1000,62 @@ function isAllowedDashboardProperty(rawKey: string, value: unknown): boolean {
 }
 
 /**
+ * Sanitizes an individual dashboard string before it is encoded into the JSON
+ * bundle. VS Code's TelemetryLogger sees the final bundle as one opaque string,
+ * so it cannot clean individual values structurally. Redacting each leaf first
+ * prevents a secret or path inside an allowed string-array property from hiding
+ * in that encoded value.
+ */
+function sanitizeDashboardStringValue(value: string): string {
+    // Bound the work before running any regex. The email detector in
+    // particular can backtrack heavily on long path-like non-matches.
+    const boundedValue = scrubFreeformDiagnosticText(value);
+    const containsCredential =
+        /(?:^|[\s"'`\-])(?:authorization|client[_-]?secret|connection[_-]?string|access[_-]?key|api[_-]?key|token|password|passwd|pwd|signature|sig)(?:\s*(?::|=)\s*|\s+)/i.test(boundedValue) ||
+        /\bauthorization\s*:\s*(?:bearer|basic)\b/i.test(boundedValue) ||
+        /\bbearer\s+[A-Za-z0-9._~+/-]+=*/i.test(boundedValue);
+    const containsKnownToken =
+        /AIza[A-Za-z0-9_-]{35}/.test(boundedValue) ||
+        /xox[pbar]-[A-Za-z0-9]/.test(boundedValue) ||
+        /(?:gh[psuro]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/.test(boundedValue) ||
+        /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/.test(boundedValue) ||
+        /eyJ(?:0eXAiOiJKV1Qi|hbGci|[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.)/.test(boundedValue);
+    // The final bundle still runs through VS Code's cleaner. Redact a conservative superset of its
+    // secret vocabulary before JSON serialization so VS Code cannot replace the whole bundle string
+    // with a non-JSON redaction marker. Keep this aligned with telemetryUtils.ts in VS Code 1.98.
+    // https://github.com/microsoft/vscode/blob/1.98.0/src/vs/platform/telemetry/common/telemetryUtils.ts
+    const containsPlatformSecret =
+        /(key|token|sig|secret|signature|password|passwd|pwd|android:value)[^A-Za-z0-9]/i.test(boundedValue) ||
+        /\b(?:login|psexec|certutil(?:\.exe)?|net(?:\.exe)?\s+(?:user|share)|user\s+-?\s*secrets\s+set)\b/i.test(boundedValue) ||
+        /(?:^|[\s\r\n\\])net(?:\.exe)?.{1,5}(?:user|share)\b/i.test(boundedValue);
+    const containsPrivateLocation =
+        /\b[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(boundedValue) ||
+        /(?:^|[\s"'(])(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|\/(?:[^/\s]+[\\/])|\.\.?[\\/])/.test(boundedValue) ||
+        /(?:^|[\s"'(])(?:(?:[^\\/\s"'()]+[\\/]){2,}[^\\/\s"'()]+|(?:[^\\/\s"'()]+[\\/])+[^\\/\s"'()]+\.(?:cs|fs|vb|ts|js|json|xml|props|targets|sln|slnx))\b/i.test(boundedValue);
+    const containsEmail = /@[A-Za-z0-9-]+\.[A-Za-z0-9-]+/.test(boundedValue);
+
+    return containsCredential || containsKnownToken || containsPlatformSecret || containsPrivateLocation || containsEmail
+        ? '<redacted>'
+        : boundedValue;
+}
+
+function sanitizeDashboardBundleScalar(value: string): string {
+    const sanitizedValue = sanitizeDashboardStringValue(value)
+        // The leaf is serialized into the outer property bundle below. Avoid
+        // JSON escape sequences that VS Code's path cleaner could consume.
+        .replace(/["\\\x00-\x1F\uD800-\uDFFF]/g, '_');
+
+    return sanitizedValue;
+}
+
+function dashboardEventNameProperty(value: unknown): TelemetryPropertyValue {
+    const eventName = typeof value === 'string' ? value : '';
+    return KNOWN_DASHBOARD_EVENT_NAMES.has(eventName)
+        ? new vscode.TelemetryTrustedValue(eventName)
+        : 'other';
+}
+
+/**
  * Clamps a single dashboard-supplied key/short-metadata string to
  * {@link MAX_DASHBOARD_KEY_LENGTH}. Used for bundle keys, event names,
  * property names, asset ids, and flag prefixes — anything dashboard-supplied
@@ -1057,13 +1134,12 @@ function formatFlagPrefixes(prefixes: unknown): string {
  *  - Truncate to {@link MAX_DIAGNOSTIC_STRING_LENGTH} characters so a single
  *    oversized value cannot serve as a side channel for arbitrary workspace
  *    content or bloat the bundle.
- *  - Bundle values forwarded on failure events still run through the telemetry
- *    wrapper's value sanitizer, but they intentionally bypass
- *    TelemetryLogger.cleanData() so dashboard wire names are preserved.
+ *  - Bundle values are sanitized structurally before stringification, then the
+ *    final event still runs through VS Code's TelemetryLogger cleaning.
  *
- * This is intentionally not a PII filter — it is a length cap plus the
- * wrapper's value sanitizer, applied as defense-in-depth on top of the
- * drop-list and the Pii-tag filter in {@link bundleDashboardData}.
+ * This is intentionally not a PII filter — it is a length cap applied as
+ * defense-in-depth on top of the structural sanitizer, drop-list, and Pii-tag
+ * filter in {@link bundleDashboardData}.
  */
 function scrubFreeformDiagnosticText(text: unknown): string {
     // Callers pass values straight off the JSON-parsed request body, where the
