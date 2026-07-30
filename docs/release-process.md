@@ -243,7 +243,7 @@ Re-run with the corresponding `skip_*` input set to `true` to skip steps that ha
 
 ### 1ES and MicroBuild compliance
 
-The AzDO pipeline extends the MicroBuild publish-enabled 1ES template (`azure-pipelines/1ES.Official.Publish.yml@MicroBuildTemplate`) to be compliant with Microsoft organization requirements and to grant `MicroBuild.Publish.yml@MicroBuildTemplate` access to the DevDiv ESRP service connection for npm submissions. The source build creates, signs where platform signing applies, verifies, and stages the package artifacts; the release pipeline consumes those pre-built artifacts and does not rebuild or re-pack the CLI.
+The AzDO pipeline extends the MicroBuild publish-enabled 1ES template (`azure-pipelines/MicroBuild.1ES.Official.Publish.yml@MicroBuildTemplate`) to be compliant with Microsoft organization requirements and to grant `MicroBuild.Publish.yml@MicroBuildTemplate` access to the DevDiv ESRP service connection for npm submissions. The source build creates, signs where platform signing applies, verifies, and stages the package artifacts; the release pipeline consumes those pre-built artifacts and does not rebuild or re-pack the CLI.
 
 ### Variable groups
 
@@ -253,6 +253,8 @@ The pipeline uses:
 |----------------|---------|
 | `Aspire-Release-Secrets` | Release pipeline secrets, including the `aspire-repo-bot` GitHub App credentials. NuGet and VS Code Marketplace publishing use service connections rather than variable-group API keys. |
 | `Aspire-Secrets` | WinGet bot token. |
+
+The legacy `VscePublishToken` PAT must not be retained as a fallback after the Marketplace service-connection migration. If the variable is still present in `Aspire-Release-Secrets`, revoke the PAT and delete the variable.
 
 ### Service connections
 
@@ -271,16 +273,11 @@ The release definition must be approved for the 1ES and MicroBuild publishing te
 `AspireSecurePublishPipelineMarketplaceConnectionWithManagedIdentity` connection, following
 [Secure Automated Publishing as Microsoft](https://eng.ms/docs/cloud-ai-platform/devdiv/vs-services-dougam/vs-marketplace-skofman/visual-studio-marketplace/extension-publisher-guides/secure-automated-publishing-as-microsoft).
 
-| Value | |
-|-------|--|
-| Managed identity | `AspireSecurePublishPipelineMarketplaceManagedIdentity` (subscription `660ae102-bc17-44e4-9939-99d3ad19d523`, resource group `MarketplacePublish`) |
-| Client ID | `1d168f8c-e3fd-4f77-b0f6-3da902c04e1f` |
-| Principal ID | `bae7db05-6158-4628-8c06-fc49aa3c3bcf` |
-| AzDO user ID | `894fc423-ead2-61c2-b133-2fca81a87f13` |
-
-The AzDO user ID is the value to add as a member of the `microsoft-aspire` Marketplace
-publisher; the Marketplace shows it as `<tenant id>\<principal id>`. It is not the client or
-principal ID, and it is only obtainable by calling
+The concrete Azure resource identifiers are maintained in the internal
+[Azure DevOps service connections](https://dev.azure.com/dnceng/internal/_settings/adminservices),
+not this public repository. The AzDO user ID is the value to add as a member of the
+`microsoft-aspire` Marketplace publisher; the Marketplace shows it as
+`<tenant id>\<principal id>`. It is not the client or principal ID, and it is only obtainable by calling
 `https://app.vssps.visualstudio.com/_apis/profile/profiles/me` *while authenticated as the
 identity itself*, so it must be read from a pipeline run using the service connection rather
 than from the Azure portal.

@@ -555,10 +555,9 @@ public sealed class ReleasePublishNugetPipelineTests
             "# ===== WINGET PUBLISHING =====");
 
         Assert.Contains("task: AzureCLI@2", job);
-        // The service connection name must match the AzDO connection that is federated to
-        // AspireSecurePublishPipelineMarketplaceManagedIdentity, since that identity is the
-        // member authorized on the microsoft-aspire Marketplace publisher. A mismatched name
-        // fails only at publish time, which is the last step of a release.
+        // The service connection name must match the connection whose identity is authorized on
+        // the microsoft-aspire Marketplace publisher. A mismatch fails only at publish time,
+        // which is the last step of a release.
         Assert.Contains("azureSubscription: 'AspireSecurePublishPipelineMarketplaceConnectionWithManagedIdentity'", job);
         Assert.Contains("vsce verify-pat --azure-credential $publisher", job);
         Assert.Contains("""$publishArgs = @("publish", "--azure-credential", "--packagePath", $vsix.FullName, "--manifestPath", $manifestPath, "--signaturePath", $signaturePath)""", job);
@@ -596,6 +595,26 @@ public sealed class ReleasePublishNugetPipelineTests
 
         Assert.Contains("can acquire an Azure credential and read publisher role assignments", workflow);
         Assert.Contains("Separately confirm the service connection identity is a Contributor", workflow);
+    }
+
+    [Fact]
+    public async Task MarketplacePublishingDocumentationKeepsIdentityDetailsInternalAndRetiresPat()
+    {
+        var documentation = await ReadRepoFileAsync("docs/release-process.md");
+        var identitySection = ExtractSection(
+            documentation,
+            "#### Marketplace publishing identity",
+            "### Approved GitHub Actions");
+
+        Assert.Contains(
+            "[Azure DevOps service connections](https://dev.azure.com/dnceng/internal/_settings/adminservices)",
+            identitySection);
+        Assert.DoesNotMatch(
+            @"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+            documentation);
+        Assert.Contains(
+            "If the variable is still present in `Aspire-Release-Secrets`, revoke the PAT and delete the variable.",
+            documentation);
     }
 
     private static string ExtractSection(string contents, string begin, string end)
