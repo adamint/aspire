@@ -129,6 +129,13 @@ public static class RustHostingExtensions
     /// <param name="args">The cargo arguments to append before <c>--</c>.</param>
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
     /// <ats-returns>The resource builder.</ats-returns>
+    /// <remarks>
+    /// Arguments are forwarded to cargo verbatim and are not interpreted. Publishing and debugging work out
+    /// which file cargo produces from the <c>WithCargo*</c> options alone, so a target selection that has a
+    /// dedicated method — <c>WithCargoBinTarget</c>, <c>WithCargoExample</c>, <c>WithCargoPackage</c>,
+    /// <c>WithCargoProfile</c>, <c>WithCargoReleaseBuild</c> and <c>WithCargoTarget</c> — has to go through
+    /// it rather than being passed here.
+    /// </remarks>
     [AspireExport]
     public static IResourceBuilder<T> WithCargoArgs<T>(this IResourceBuilder<T> builder, params string[] args)
         where T : RustAppResource
@@ -333,9 +340,10 @@ public static class RustHostingExtensions
     /// <remarks>
     /// Passed to cargo as <c>--target</c>. Cargo writes a cross-compiled binary to
     /// <c>target/&lt;triple&gt;/&lt;profile&gt;/</c>, and the generated Dockerfile follows that layout and adds
-    /// the target to the build image with <c>rustup target add</c>. A glibc (<c>-gnu</c>) triple is rejected
-    /// unless both base images are supplied through <c>WithDockerfileBaseImage</c>, because the default
-    /// generated Dockerfile builds and runs on musl images.
+    /// the target to the build image with <c>rustup target add</c>. Pairing the triple with base images that
+    /// can build and run the result is the caller's: a glibc (<c>-gnu</c>) triple needs glibc images, and a
+    /// triple for another architecture needs a cross-linker in the build image, both of which
+    /// <c>WithDockerfileBaseImage</c> supplies.
     /// </remarks>
     [AspireExport]
     public static IResourceBuilder<T> WithCargoTarget<T>(this IResourceBuilder<T> builder, string target)

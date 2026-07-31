@@ -39,8 +39,7 @@ internal sealed record RustPublishImages(string BuildImage, string RuntimeImage)
 /// Callers who need glibc (proprietary crates shipping <c>-gnu</c> binaries, or crates that build materially
 /// faster against glibc) can pair the images themselves through <c>WithDockerfileBaseImage</c>, for example
 /// <c>rust:1.89-bookworm</c> with <c>debian:bookworm-slim</c>. Pairing a <c>--target</c> triple with images
-/// that can run the result is then theirs to get right; a mismatch surfaces when the container build or the
-/// container itself runs.
+/// that can run the result is then theirs to get right.
 /// </para>
 /// </remarks>
 internal static partial class RustPublishImageResolver

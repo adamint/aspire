@@ -135,10 +135,15 @@ dependencies, purely to learn the name of the binary cargo will produce.
 
 Publishing assumes the app already runs, so it does not re-validate anything cargo would itself have
 rejected at `cargo run` time. It only reports the cases where run mode works but the produced file
-name is still unknowable: a package with several `[[bin]]` targets picked by a raw `--bin` passed
-through `WithCargoArgs` (call `WithCargoBinTarget` instead), or a workspace with several default
-members (call `WithCargoPackage`). `default-run` is honoured, so publish produces the same binary
-`cargo run` does. The same reasoning applies to debugging, which shares this resolution.
+name is still unknowable: a package with several `[[bin]]` targets that no option selects (call
+`WithCargoBinTarget`), or a workspace with several default members (call `WithCargoPackage`).
+`default-run` is honoured, so publish produces the same binary `cargo run` does. The same reasoning
+applies to debugging, which shares this resolution.
+
+Only the `WithCargo*` options feed that resolution. Values passed through `WithCargoArgs` are
+forwarded to cargo verbatim and are not parsed, so a target selection made with a raw `--bin`,
+`--example`, `--package`, `--target`, `--release` or `--profile` changes what cargo builds without
+moving the file publish copies or the debugger launches. Use the dedicated method for those.
 
 #### Base images
 
@@ -163,9 +168,10 @@ builder.AddRustApp("api", "../rust-api")
 ```
 
 `WithCargoTarget(...)` adds `rustup target add <triple>` to the build stage and follows cargo's
-`target/<triple>/<profile>/` layout. Pairing the triple with images that can run the result is yours
-to get right — a glibc (`-gnu`) triple needs glibc base images, which `WithDockerfileBaseImage`
-supplies.
+`target/<triple>/<profile>/` layout. Pairing the triple with base images that can build and run the
+result is yours to get right — a glibc (`-gnu`) triple needs glibc base images, and a triple for
+another architecture needs a cross-linker in the build image, since `rustup target add` installs only
+the target's standard library. `WithDockerfileBaseImage` supplies both.
 
 ## Additional documentation
 

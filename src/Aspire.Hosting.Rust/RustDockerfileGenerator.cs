@@ -149,8 +149,12 @@ internal static class RustDockerfileGenerator
         }
         else
         {
-            // Debian/Ubuntu and other glibc-based images use groupadd/useradd.
-            runtimeStage.Run("groupadd --system --gid 999 app && useradd --system --gid 999 --uid 999 --no-create-home app");
+            // The image name is only a hint — a private image can be built on Alpine and named anything — so
+            // try the BusyBox commands first and fall back to shadow-utils rather than assuming the glibc
+            // tooling. The ids are pinned so a mounted volume sees the same owner either way.
+            runtimeStage.Run(
+                "(addgroup -g 999 -S app || groupadd --system --gid 999 app) && " +
+                "(adduser -u 999 -S -G app app || useradd --system --uid 999 --gid 999 --no-create-home app)");
         }
 
         runtimeStage
