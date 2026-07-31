@@ -31,6 +31,7 @@ function makeDeps(overrides: Partial<CliPathEnvironmentDependencies> = {}): CliP
         isAbsolute: (cliPath: string) => cliPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(cliPath),
         fileExists: (cliPath: string) => cliPath.endsWith('/aspire') || cliPath.endsWith('\\aspire.exe') || cliPath.endsWith('/aspire.exe'),
         realpath: (cliPath: string) => cliPath,
+        isRejectedForForwarding: () => false,
         log: () => { },
         ...overrides,
     };
@@ -109,6 +110,32 @@ suite('cliPathEnvironment.getForwardableAspireCliPath tests', () => {
                     || normalized === '/work/aspire/bin/dcp/dcp'
                     || normalized === '/work/aspire/bin/managed/aspire-managed';
             },
+        })), '/work/aspire/bin/aspire');
+    });
+
+    test('returns undefined when CLI resolution rejected the configured path and fell back elsewhere', () => {
+        // resolveCliPath executes a different CLI in this state, so forwarding the configured
+        // path would make ResolveAspireCliBundle stamp bundle paths from a CLI that never ran.
+        assert.strictEqual(getForwardableAspireCliPath(makeDeps({
+            getConfiguredPath: () => '/work/aspire/bin/aspire',
+            fileExists: (candidate) => {
+                const normalized = normalizeCandidate(candidate);
+                return normalized === '/work/aspire/bin/aspire'
+                    || normalized === '/work/aspire/bin/.aspire-install.json';
+            },
+            isRejectedForForwarding: (candidate) => candidate === '/work/aspire/bin/aspire',
+        })), undefined);
+    });
+
+    test('keeps forwarding a configured path that resolution did not reject', () => {
+        assert.strictEqual(getForwardableAspireCliPath(makeDeps({
+            getConfiguredPath: () => '/work/aspire/bin/aspire',
+            fileExists: (candidate) => {
+                const normalized = normalizeCandidate(candidate);
+                return normalized === '/work/aspire/bin/aspire'
+                    || normalized === '/work/aspire/bin/.aspire-install.json';
+            },
+            isRejectedForForwarding: (candidate) => candidate === '/some/other/aspire',
         })), '/work/aspire/bin/aspire');
     });
 });

@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
-import { getConfiguredCliPath } from './cliPath';
+import { getConfiguredCliPath, isConfiguredCliPathRejectedForForwarding } from './cliPath';
 import { extensionLogOutputChannel } from './logging';
 import { aspireCliPathEnvironmentDescription } from '../loc/strings';
 
@@ -36,6 +36,7 @@ export interface ForwardableCliPathDependencies {
     isAbsolute: (cliPath: string) => boolean;
     fileExists: (cliPath: string) => boolean;
     realpath: (cliPath: string) => string | undefined;
+    isRejectedForForwarding: (cliPath: string) => boolean;
 }
 
 /**
@@ -51,6 +52,7 @@ const defaultForwardableCliPathDeps: ForwardableCliPathDependencies = {
     isAbsolute: path.isAbsolute,
     fileExists: fileExists,
     realpath: realpath,
+    isRejectedForForwarding: isConfiguredCliPathRejectedForForwarding,
 };
 
 const defaultDeps: CliPathEnvironmentDependencies = {
@@ -66,6 +68,9 @@ export function isForwardableAspireCliPath(
     return configuredPath.length > 0
         && deps.isAbsolute(configuredPath)
         && deps.fileExists(configuredPath)
+        // CLI resolution rejected this path and is running a different CLI, so forwarding it
+        // would make ResolveAspireCliBundle stamp bundle paths from a CLI that never ran.
+        && !deps.isRejectedForForwarding(configuredPath)
         && !isUnbundledFrameworkDependentCliPath(configuredPath, deps)
         && !isResolvedUnbundledFrameworkDependentCliPath(configuredPath, deps);
 }

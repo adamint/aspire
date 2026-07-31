@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as childProcess from 'child_process';
-import { aspireTerminalName, dcpServerNotInitialized, rpcServerNotInitialized, terminalCommandArgumentControlCharacters, terminalCommandUnsafeLiteral } from '../loc/strings';
+import { aspireTerminalName, dcpServerNotInitialized, rpcServerNotInitialized, terminalCommandUnsafeLiteral } from '../loc/strings';
 import { extensionLogOutputChannel } from './logging';
 import { RpcServerConnectionInfo } from '../server/AspireRpcServer';
 import { DcpServerConnectionInfo } from '../dcp/types';
@@ -9,6 +9,10 @@ import { EnvironmentVariables, getEnvironmentWithoutE2EBridgeVariables } from '.
 import { resolveCliPath } from './cliPath';
 import { ASPIRE_CLI_PATH_ENV_VAR, getForwardableAspireCliPath } from './cliPathEnvironment';
 import path from 'path';
+import { assertNoTerminalControlCharacters } from './cmdShim';
+
+// Re-exported so existing importers keep a single implementation of the guard.
+export { assertNoTerminalControlCharacters };
 
 export const enum AnsiColors {
     Green = '\x1b[32m',
@@ -537,16 +541,6 @@ function isE2eTerminalCommandExecutionSuppressed(): boolean {
         process.env.ASPIRE_EXTENSION_E2E_SUPPRESS_TERMINAL_COMMAND_EXECUTION === 'true';
 }
 
-export function assertNoTerminalControlCharacters(value: string): void {
-    // Shell quoting protects shell metacharacters after the command reaches the
-    // shell. C0 controls are terminal input first: in sendText fallback, ETX can
-    // abort the current line and CR/LF can submit following text as another
-    // command before shell parsing can make those bytes inert. Tab is allowed
-    // because shells treat it as ordinary whitespace inside quotes.
-    if (/[\x00-\x08\x0A-\x1F\x7F]/.test(value)) {
-        throw new Error(terminalCommandArgumentControlCharacters);
-    }
-}
 
 function validateLiteralSubcommandPart(value: string): string {
     if (!/^-{0,2}[A-Za-z0-9][-A-Za-z0-9]*$/.test(value)) {

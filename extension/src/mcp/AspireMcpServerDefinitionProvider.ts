@@ -1,7 +1,30 @@
 import * as vscode from 'vscode';
 import { resolveCliPath } from '../utils/cliPath';
 import { extensionLogOutputChannel } from '../utils/logging';
+import { getCmdShimSpawnCommandWithoutVerbatimArguments, shouldWrapWithCmd } from '../utils/cmdShim';
 import { getRegisterMcpServerInWorkspace, registerMcpServerInWorkspaceSetting } from '../utils/settings';
+
+const mcpServerLabel = 'Aspire';
+const mcpServerArgs = ['agent', 'mcp'];
+
+/**
+ * Builds the stdio definition VS Code uses to launch `aspire agent mcp`.
+ *
+ * A .NET global-tool install exposes `aspire.cmd`, and VS Code spawns stdio MCP
+ * servers with `shell: false`, so handing the shim over directly fails with
+ * `spawn EINVAL` on Windows (https://github.com/nodejs/node/issues/52681).
+ * Command shims are therefore routed through cmd.exe. `McpStdioServerDefinition`
+ * cannot request `windowsVerbatimArguments`, so this uses the argv-shaped wrapper
+ * rather than the single-command-string form used for extension-owned spawns.
+ */
+export function createAspireMcpServerDefinition(cliPath: string): vscode.McpStdioServerDefinition {
+    if (!shouldWrapWithCmd(cliPath)) {
+        return new vscode.McpStdioServerDefinition(mcpServerLabel, cliPath, [...mcpServerArgs]);
+    }
+
+    const { command, args } = getCmdShimSpawnCommandWithoutVerbatimArguments(cliPath, mcpServerArgs);
+    return new vscode.McpStdioServerDefinition(mcpServerLabel, command, args);
+}
 
 /**
  * Provides the Aspire MCP server definition to VS Code so it appears
@@ -58,7 +81,15 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
             return [];
         }
 
-        return [new vscode.McpStdioServerDefinition('Aspire', this._cliPath, ['agent', 'mcp'])];
+        try {
+            return [createAspireMcpServerDefinition(this._cliPath)];
+        }
+        catch (error) {
+            // The wrapper rejects paths carrying terminal control characters. Surfacing no
+            // server is better than throwing out of the provider and breaking MCP discovery.
+            extensionLogOutputChannel.error(`Unable to build the Aspire MCP server definition: ${error}`);
+            return [];
+        }
     }
 
     dispose(): void {

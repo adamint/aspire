@@ -3,7 +3,15 @@ import * as sinon from 'sinon';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { getDefaultCliInstallPaths, resolveCliPath, CliPathDependencies, tryExecuteCli } from '../utils/cliPath';
+import {
+    getDefaultCliInstallPaths,
+    resolveCliPath,
+    CliPathDependencies,
+    tryExecuteCli,
+    CliProbeExecutor,
+    isConfiguredCliPathRejectedForForwarding,
+    resetRejectedConfiguredCliPathForForwarding,
+} from '../utils/cliPath';
 
 const bundlePath = '/home/user/.aspire/bin/aspire';
 const globalToolPath = '/home/user/.dotnet/tools/aspire';
@@ -454,6 +462,98 @@ suite('utils/cliPath tests', () => {
         });
     });
 
+    suite('configured path forwarding suppression', () => {
+        const configuredPath = '/opt/custom/aspire';
+        const discoveredShim = 'C:\\Users\\me\\.dotnet\\tools\\aspire.cmd';
+
+        setup(() => {
+            resetRejectedConfiguredCliPathForForwarding();
+        });
+
+        teardown(() => {
+            resetRejectedConfiguredCliPathForForwarding();
+        });
+
+        test('suppresses forwarding when an explicitly configured path fails and discovery falls back', async () => {
+            const setConfiguredPath = sinon.stub().resolves();
+
+            const deps = createMockDeps({
+                getConfiguredPath: () => configuredPath,
+                tryExecute: async () => false,
+                isOnPath: async () => false,
+                findAtDefaultPath: async () => discoveredShim,
+                setConfiguredPath,
+            });
+
+            const result = await resolveCliPath(deps);
+
+            assert.strictEqual(result.cliPath, discoveredShim);
+            assert.strictEqual(result.source, 'default-install');
+            assert.ok(
+                isConfiguredCliPathRejectedForForwarding(configuredPath),
+                'the rejected configured path must not keep forwarding as AspireCliPath');
+            assert.ok(setConfiguredPath.notCalled, 'an explicit user setting should be suppressed, not silently erased');
+        });
+
+        test('suppresses forwarding when an explicitly configured path fails and the CLI is on PATH', async () => {
+            const deps = createMockDeps({
+                getConfiguredPath: () => configuredPath,
+                tryExecute: async () => false,
+                isOnPath: async () => true,
+                findAtDefaultPath: async () => undefined,
+            });
+
+            const result = await resolveCliPath(deps);
+
+            assert.strictEqual(result.source, 'path');
+            assert.ok(isConfiguredCliPathRejectedForForwarding(configuredPath));
+        });
+
+        test('does not suppress forwarding when the configured path executes successfully', async () => {
+            const deps = createMockDeps({
+                getConfiguredPath: () => configuredPath,
+                tryExecute: async () => true,
+            });
+
+            const result = await resolveCliPath(deps);
+
+            assert.strictEqual(result.cliPath, configuredPath);
+            assert.strictEqual(result.source, 'configured');
+            assert.strictEqual(isConfiguredCliPathRejectedForForwarding(configuredPath), false);
+        });
+
+        test('clears a previous suppression once the configured path starts working', async () => {
+            const failing = createMockDeps({
+                getConfiguredPath: () => configuredPath,
+                tryExecute: async () => false,
+                findAtDefaultPath: async () => discoveredShim,
+            });
+
+            await resolveCliPath(failing);
+            assert.ok(isConfiguredCliPathRejectedForForwarding(configuredPath));
+
+            const recovered = createMockDeps({
+                getConfiguredPath: () => configuredPath,
+                tryExecute: async () => true,
+            });
+
+            await resolveCliPath(recovered);
+            assert.strictEqual(isConfiguredCliPathRejectedForForwarding(configuredPath), false);
+        });
+
+        test('only suppresses the configured path that was actually rejected', async () => {
+            const deps = createMockDeps({
+                getConfiguredPath: () => configuredPath,
+                tryExecute: async () => false,
+                findAtDefaultPath: async () => discoveredShim,
+            });
+
+            await resolveCliPath(deps);
+
+            assert.strictEqual(isConfiguredCliPathRejectedForForwarding('/some/other/aspire'), false);
+        });
+    });
+
     suite('tryExecuteCli', () => {
         test('validates Windows cmd wrappers', async function () {
             if (process.platform !== 'win32') {
@@ -469,6 +569,96 @@ suite('utils/cliPath tests', () => {
             }
             finally {
                 fs.rmSync(tempDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+            }
+        });
+
+        test('validates Windows cmd wrappers whose path contains cmd.exe metacharacters', async function () {
+            if (process.platform !== 'win32') {
+                this.skip();
+            }
+
+            // A '&' in an unquoted cmd.exe command line terminates the command, and '%PATH%'
+            // expands, so a shim under such a directory is only reachable through the quoted
+            // verbatim wrapper. Directory names with no space are the failing shape, because
+            // libuv only auto-quotes arguments containing a space, tab, or quote.
+            const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-cli&test%PATH%-'));
+            try {
+                const wrapperPath = path.join(tempDirectory, 'aspire.cmd');
+                fs.writeFileSync(wrapperPath, '@echo off\r\nif "%~1"=="--version" (\r\n  echo 13.5.0-pr.e2e\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n');
+
+                assert.strictEqual(await tryExecuteCli(wrapperPath), true);
+            }
+            finally {
+                fs.rmSync(tempDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+            }
+        });
+
+        test('probes Windows command shims through the quoted verbatim cmd.exe wrapper', async () => {
+            const platformStub = sinon.stub(process, 'platform').value('win32');
+            const originalComSpec = process.env.ComSpec;
+            process.env.ComSpec = 'C:\\Windows\\System32\\cmd.exe';
+
+            try {
+                const calls: Array<{ command: string; args: string[]; timeout: number; windowsVerbatimArguments?: boolean }> = [];
+                const execute: CliProbeExecutor = async (command, args, options) => {
+                    calls.push({ command, args, timeout: options.timeout, windowsVerbatimArguments: options.windowsVerbatimArguments });
+                };
+
+                const result = await tryExecuteCli('C:\\Users\\a&b\\.dotnet\\tools\\aspire.cmd', execute);
+
+                assert.strictEqual(result, true);
+                assert.deepStrictEqual(calls, [{
+                    command: 'C:\\Windows\\System32\\cmd.exe',
+                    args: ['/d', '/v:off', '/s', '/c', 'call "C:\\Users\\a&b\\.dotnet\\tools\\aspire.cmd" "--version"'],
+                    timeout: 5000,
+                    windowsVerbatimArguments: true,
+                }]);
+            }
+            finally {
+                platformStub.restore();
+
+                if (originalComSpec === undefined) {
+                    delete process.env.ComSpec;
+                }
+                else {
+                    process.env.ComSpec = originalComSpec;
+                }
+            }
+        });
+
+        test('probes native executables directly without a cmd.exe wrapper', async () => {
+            const platformStub = sinon.stub(process, 'platform').value('win32');
+
+            try {
+                const calls: Array<{ command: string; args: string[]; windowsVerbatimArguments?: boolean }> = [];
+                const execute: CliProbeExecutor = async (command, args, options) => {
+                    calls.push({ command, args, windowsVerbatimArguments: options.windowsVerbatimArguments });
+                };
+
+                assert.strictEqual(await tryExecuteCli('C:\\Users\\me\\.aspire\\bin\\aspire.exe', execute), true);
+                assert.deepStrictEqual(calls, [{
+                    command: 'C:\\Users\\me\\.aspire\\bin\\aspire.exe',
+                    args: ['--version'],
+                    windowsVerbatimArguments: undefined,
+                }]);
+            }
+            finally {
+                platformStub.restore();
+            }
+        });
+
+        test('rejects shim paths containing terminal control characters', async () => {
+            const platformStub = sinon.stub(process, 'platform').value('win32');
+
+            try {
+                const execute: CliProbeExecutor = async () => {
+                    assert.fail('should not execute a shim path containing control characters');
+                };
+
+                assert.strictEqual(await tryExecuteCli('C:\\tools\\asp\r\nire.cmd', execute), false);
+            }
+            finally {
+                platformStub.restore();
             }
         });
     });

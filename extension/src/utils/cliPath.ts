@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { extensionLogOutputChannel } from './logging';
+import { getCmdShimSpawnCommand, isCommandShimPath, shouldWrapWithCmd } from './cmdShim';
 
 const execFileAsync = promisify(execFile);
 const fsAccessAsync = promisify(fs.access);
@@ -85,18 +86,31 @@ async function fileExists(filePath: string): Promise<boolean> {
 }
 
 /**
+ * Test seam for the process launch performed by {@link tryExecuteCli}.
+ */
+export type CliProbeExecutor = (
+    command: string,
+    args: string[],
+    options: { timeout: number; windowsVerbatimArguments?: boolean },
+) => Promise<unknown>;
+
+const defaultProbeExecutor: CliProbeExecutor = (command, args, options) => execFileAsync(command, args, options);
+
+/**
  * Tries to execute the CLI at the given path to verify it works.
  */
-export async function tryExecuteCli(cliPath: string): Promise<boolean> {
+export async function tryExecuteCli(cliPath: string, execute: CliProbeExecutor = defaultProbeExecutor): Promise<boolean> {
     try {
-        if (shouldUseCmdForCliPath(cliPath)) {
-            // .cmd/.bat files are interpreted by cmd.exe. Passing the wrapper path as a
-            // separate argument lets Node quote paths with spaces instead of relying on
-            // fragile hand-built cmd.exe command strings.
-            await execFileAsync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/c', 'call', cliPath, '--version'], { timeout: 5000 });
+        if (shouldWrapWithCmd(cliPath)) {
+            // Reuse the spawn path's cmd.exe wrapper. Passing the shim as a plain argv entry
+            // is not enough: libuv only auto-quotes arguments containing a space, tab, or
+            // quote, so a shim under a directory such as `C:\Users\a&b\.dotnet\tools` reaches
+            // cmd.exe unquoted and gets split at the `&`, rejecting a working CLI.
+            const { command, args, windowsVerbatimArguments } = getCmdShimSpawnCommand(cliPath, ['--version']);
+            await execute(command, args, { timeout: 5000, windowsVerbatimArguments });
         }
         else {
-            await execFileAsync(cliPath, ['--version'], { timeout: 5000 });
+            await execute(cliPath, ['--version'], { timeout: 5000 });
         }
 
         return true;
@@ -106,12 +120,28 @@ export async function tryExecuteCli(cliPath: string): Promise<boolean> {
     }
 }
 
-function shouldUseCmdForCliPath(cliPath: string): boolean {
-    return process.platform === 'win32' && isCommandShimPath(cliPath);
+/**
+ * The configured path that CLI resolution most recently rejected as unusable.
+ *
+ * `getForwardableAspireCliPath` reads the raw setting independently of resolution, so a
+ * configured file that exists but fails to execute would still be forwarded as
+ * `AspireCliPath` after resolution fell back to a different CLI. `ResolveAspireCliBundle`
+ * stops at an explicit `AspireCliPath` instead of probing PATH, so the AppHost would be
+ * stamped with bundle paths belonging to a CLI that never ran.
+ */
+let rejectedConfiguredCliPath: string | undefined;
+
+/**
+ * Reports whether CLI resolution rejected this configured path and fell back to a
+ * different CLI. Such a path must not be forwarded as `AspireCliPath`.
+ */
+export function isConfiguredCliPathRejectedForForwarding(configuredPath: string): boolean {
+    return rejectedConfiguredCliPath !== undefined && rejectedConfiguredCliPath === configuredPath;
 }
 
-function isCommandShimPath(cliPath: string): boolean {
-    return /\.(?:cmd|bat)$/i.test(cliPath);
+/** Test seam that clears the rejected-configured-path state between cases. */
+export function resetRejectedConfiguredCliPathForForwarding(): void {
+    rejectedConfiguredCliPath = undefined;
 }
 
 /**
@@ -228,11 +258,20 @@ export async function resolveCliPath(deps: CliPathDependencies = defaultDependen
     if (configuredPath && (!configuredPathIsLegacyDefault || isCommandShimPath(configuredPath))) {
         const isValid = await deps.tryExecute(configuredPath);
         if (isValid) {
+            rejectedConfiguredCliPath = undefined;
             return { cliPath: configuredPath, available: true, source: 'configured' };
         }
 
         extensionLogOutputChannel.warn(`Configured CLI path is invalid: ${configuredPath}`);
+        // Everything below this point resolves a different CLI. The setting is kept so an
+        // explicit user pin is not silently erased, but it must stop being forwarded as
+        // AspireCliPath, otherwise MSBuild resolves bundle assets from the CLI that failed.
+        extensionLogOutputChannel.warn('Suppressing AspireCliPath forwarding for the rejected configured CLI path');
+        rejectedConfiguredCliPath = configuredPath;
         // Continue to check other locations
+    }
+    else {
+        rejectedConfiguredCliPath = undefined;
     }
 
     // 2. Check if CLI is on PATH
