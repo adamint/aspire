@@ -48,12 +48,18 @@ function assertNoCmdWrapperControlCharacters(values: readonly string[]): void {
 
 /**
  * Builds the cmd.exe invocation for a command shim when the caller can set
- * `windowsVerbatimArguments`. The whole command is passed as a single `/c` string
- * that this module quotes itself, which keeps cmd.exe metacharacters inert.
+ * `windowsVerbatimArguments`. The whole command is passed as one `/c` string that this
+ * module quotes itself, wrapped in an extra quote pair that `/s` strips, which is the
+ * same shape Node uses for `shell: true`.
  *
- * Quoting makes `&`, `^`, `|`, `<`, `>` and parentheses literal. It does not undo
- * percent expansion: cmd.exe resolves `%NAME%` before quote handling, so a CLI path
- * containing a live variable reference is still not addressable this way.
+ * `call` is deliberately not used. It re-parses its command line, which consumes a `^`
+ * in the shim path even when the path is quoted, so `call` cannot launch a shim under a
+ * directory such as `C:\tools\a^b`. Verified on Windows CI across `&`, `^`, `()` and
+ * space directories.
+ *
+ * Quoting makes `&`, `^`, `|`, `<`, `>` and parentheses literal. It does not undo percent
+ * expansion: cmd.exe resolves `%NAME%` before quote handling, so a CLI path containing a
+ * live variable reference is still not addressable this way.
  */
 export function getCmdShimSpawnCommand(command: string, args: readonly string[]): CmdShimSpawnCommand {
     const commandArgs = [...args];
@@ -65,7 +71,7 @@ export function getCmdShimSpawnCommand(command: string, args: readonly string[])
     return {
         command: getComSpec(),
         args: ['/d', '/v:off', '/s', '/c', buildCmdWrapperCommand(command, commandArgs)],
-        diagnosticArgs: ['call', command, ...commandArgs],
+        diagnosticArgs: [command, ...commandArgs],
         windowsVerbatimArguments: true,
     };
 }
@@ -88,9 +94,10 @@ export function getCmdShimSpawnCommandWithoutVerbatimArguments(command: string, 
 
     return {
         command: getComSpec(),
-        // `/s` is deliberately omitted: it strips the first and last quote of the whole
-        // string after `/c`, which only makes sense for the single-string form above.
-        args: ['/d', '/v:off', '/c', 'call', ...[command, ...commandArgs].map(escapeCmdArgumentForLibuvQuoting)],
+        // `/s` is omitted because there is no outer quote pair to strip here, and `call` is
+        // omitted for the same reason as above: its re-parse consumes carets, and it also
+        // fails for parenthesised directories in this argv form. Verified on Windows CI.
+        args: ['/d', '/v:off', '/c', ...[command, ...commandArgs].map(escapeCmdArgumentForLibuvQuoting)],
     };
 }
 
@@ -113,7 +120,9 @@ function escapeCmdArgumentForLibuvQuoting(value: string): string {
 }
 
 function buildCmdWrapperCommand(command: string, args: string[]): string {
-    return ['call', quoteCmdArgument(command), ...args.map(quoteCmdArgument)].join(' ');
+    // The outer quote pair is consumed by `/s`, leaving the inner per-argument quoting
+    // intact for cmd.exe. See `cmd /?` for the `/s` first/last quote stripping rule.
+    return `"${[quoteCmdArgument(command), ...args.map(quoteCmdArgument)].join(' ')}"`;
 }
 
 function quoteCmdArgument(value: string): string {

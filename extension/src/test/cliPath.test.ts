@@ -572,7 +572,7 @@ suite('utils/cliPath tests', () => {
             }
         });
 
-        test.skip('validates Windows cmd wrappers whose path contains cmd.exe metacharacters', async function () {
+        test('validates Windows cmd wrappers whose path contains cmd.exe metacharacters', async function () {
             if (process.platform !== 'win32') {
                 this.skip();
             }
@@ -582,7 +582,7 @@ suite('utils/cliPath tests', () => {
             // names with no space are the failing shape, because libuv only auto-quotes arguments
             // containing a space, tab, or quote. '%' is deliberately excluded: percent expansion is
             // resolved by cmd.exe before quoting applies and is not something this wrapper can undo.
-            const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-cli&test^dir(x)-'));
+            const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire&cli^test(x)-'));
             try {
                 const wrapperPath = path.join(tempDirectory, 'aspire.cmd');
                 fs.writeFileSync(wrapperPath, '@echo off\r\nif "%~1"=="--version" (\r\n  echo 13.5.0-pr.e2e\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n');
@@ -610,7 +610,7 @@ suite('utils/cliPath tests', () => {
                 assert.strictEqual(result, true);
                 assert.deepStrictEqual(calls, [{
                     command: 'C:\\Windows\\System32\\cmd.exe',
-                    args: ['/d', '/v:off', '/s', '/c', 'call "C:\\Users\\a&b\\.dotnet\\tools\\aspire.cmd" "--version"'],
+                    args: ['/d', '/v:off', '/s', '/c', '""C:\\Users\\a&b\\.dotnet\\tools\\aspire.cmd" "--version""'],
                     timeout: 5000,
                     windowsVerbatimArguments: true,
                 }]);

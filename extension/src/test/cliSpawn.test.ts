@@ -14,7 +14,7 @@ suite('spawnCliProcess tests', () => {
             const result = getCliSpawnCommand('C:\\Tools\\Aspire CLI\\aspire.cmd', ['config', 'info']);
 
             assert.strictEqual(result.command, process.env.ComSpec);
-            assert.deepStrictEqual(result.args, ['/d', '/v:off', '/s', '/c', 'call "C:\\Tools\\Aspire CLI\\aspire.cmd" "config" "info"']);
+            assert.deepStrictEqual(result.args, ['/d', '/v:off', '/s', '/c', '""C:\\Tools\\Aspire CLI\\aspire.cmd" "config" "info""']);
             assert.strictEqual(result.windowsVerbatimArguments, true);
         }
         finally {
@@ -51,7 +51,7 @@ suite('spawnCliProcess tests', () => {
                 '/v:off',
                 '/s',
                 '/c',
-                'call "C:\\Tools\\Aspire CLI\\aspire.cmd" "resource" "api&whoami" "echo" "--" "--message=hello & del C:\\important" "--path=%%PATH%%" "--literal=""quoted"""'
+                '""C:\\Tools\\Aspire CLI\\aspire.cmd" "resource" "api&whoami" "echo" "--" "--message=hello & del C:\\important" "--path=%%PATH%%" "--literal=""quoted""""'
             ]);
             assert.strictEqual(result.windowsVerbatimArguments, true);
         }
@@ -132,7 +132,7 @@ suite('spawnCliProcess tests', () => {
                 '/v:off',
                 '/s',
                 '/c',
-                String.raw`call "C:\Tools\Aspire CLI\aspire.cmd" "--path=C:\temp\\" "next"`
+                String.raw`""C:\Tools\Aspire CLI\aspire.cmd" "--path=C:\temp\\" "next""`
             ]);
             assert.strictEqual(result.windowsVerbatimArguments, true);
         }
@@ -164,7 +164,7 @@ suite('spawnCliProcess tests', () => {
                 '/v:off',
                 '/s',
                 '/c',
-                String.raw`call "C:\Tools\Aspire CLI\aspire.cmd" "--literal=C:\temp\\""quoted"""`
+                String.raw`""C:\Tools\Aspire CLI\aspire.cmd" "--literal=C:\temp\\""quoted""""`
             ]);
             assert.strictEqual(result.windowsVerbatimArguments, true);
         }
