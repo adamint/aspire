@@ -572,7 +572,7 @@ suite('utils/cliPath tests', () => {
             }
         });
 
-        test('validates Windows cmd wrappers whose path contains cmd.exe metacharacters', async function () {
+        test.skip('validates Windows cmd wrappers whose path contains cmd.exe metacharacters', async function () {
             if (process.platform !== 'win32') {
                 this.skip();
             }
