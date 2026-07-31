@@ -50,6 +50,10 @@ function assertNoCmdWrapperControlCharacters(values: readonly string[]): void {
  * Builds the cmd.exe invocation for a command shim when the caller can set
  * `windowsVerbatimArguments`. The whole command is passed as a single `/c` string
  * that this module quotes itself, which keeps cmd.exe metacharacters inert.
+ *
+ * Quoting makes `&`, `^`, `|`, `<`, `>` and parentheses literal. It does not undo
+ * percent expansion: cmd.exe resolves `%NAME%` before quote handling, so a CLI path
+ * containing a live variable reference is still not addressable this way.
  */
 export function getCmdShimSpawnCommand(command: string, args: readonly string[]): CmdShimSpawnCommand {
     const commandArgs = [...args];
@@ -102,7 +106,9 @@ function escapeCmdArgumentForLibuvQuoting(value: string): string {
     // Otherwise the value reaches cmd.exe unquoted and must escape its own metacharacters.
     // This is the shape that broke global-tool discovery: a DOTNET_CLI_HOME containing '&'
     // has no space, so libuv passed it through and cmd.exe split the path in two.
-    // '!' is not escaped because these wrappers always run with `/v:off`.
+    // '!' is not escaped because these wrappers always run with `/v:off`. '%' is not escaped
+    // either: cmd.exe resolves percent expansion before caret handling, so a path containing
+    // a live `%NAME%` reference cannot be protected here.
     return value.replace(/[\^&|<>()]/g, match => `^${match}`);
 }
 

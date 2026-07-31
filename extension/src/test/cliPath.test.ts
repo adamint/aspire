@@ -577,11 +577,12 @@ suite('utils/cliPath tests', () => {
                 this.skip();
             }
 
-            // A '&' in an unquoted cmd.exe command line terminates the command, and '%PATH%'
-            // expands, so a shim under such a directory is only reachable through the quoted
-            // verbatim wrapper. Directory names with no space are the failing shape, because
-            // libuv only auto-quotes arguments containing a space, tab, or quote.
-            const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-cli&test%PATH%-'));
+            // '&', '^' and parentheses terminate or regroup an unquoted cmd.exe command line, so a
+            // shim under such a directory is only reachable through the quoted wrapper. Directory
+            // names with no space are the failing shape, because libuv only auto-quotes arguments
+            // containing a space, tab, or quote. '%' is deliberately excluded: percent expansion is
+            // resolved by cmd.exe before quoting applies and is not something this wrapper can undo.
+            const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire-cli&test^dir(x)-'));
             try {
                 const wrapperPath = path.join(tempDirectory, 'aspire.cmd');
                 fs.writeFileSync(wrapperPath, '@echo off\r\nif "%~1"=="--version" (\r\n  echo 13.5.0-pr.e2e\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n');
