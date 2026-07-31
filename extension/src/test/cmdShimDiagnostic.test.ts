@@ -27,14 +27,17 @@ suite('cmd shim shape diagnostic', () => {
         };
 
         const q = (v: string) => `"${v}"`;
+        // Non-verbatim shapes go through libuv quote_cmd_arg, which only quotes an argument
+        // containing a space, tab, or quote. Caret escaping is applied only when it will not.
+        const esc = (v: string) => /[ \t"]/.test(v) ? v : v.replace(/[\^&|<>()]/g, m => `^${m}`);
+        const escTwice = (v: string) => /[ \t"]/.test(v) ? v : v.replace(/[\^&|<>()]/g, m => `^^${m}`);
+
         const shapes: Record<string, (p: string) => { args: string[]; verbatim: boolean }> = {
-            'A verbatim /s /c call "P"': p => ({ args: ['/d', '/v:off', '/s', '/c', `call ${q(p)} ${q('--version')}`], verbatim: true }),
-            'B verbatim /s /c "P"': p => ({ args: ['/d', '/v:off', '/s', '/c', `${q(p)} ${q('--version')}`], verbatim: true }),
-            'C verbatim /c call "P"': p => ({ args: ['/d', '/v:off', '/c', `call ${q(p)} ${q('--version')}`], verbatim: true }),
-            'D verbatim /s /c OUTER("call "P"")': p => ({ args: ['/d', '/v:off', '/s', '/c', `"call ${q(p)} ${q('--version')}"`], verbatim: true }),
             'E verbatim /s /c OUTER(""P"")': p => ({ args: ['/d', '/v:off', '/s', '/c', `"${q(p)} ${q('--version')}"`], verbatim: true }),
-            'F argv /d /c call P': p => ({ args: ['/d', '/c', 'call', p, '--version'], verbatim: false }),
-            'G argv /d /c P': p => ({ args: ['/d', '/c', p, '--version'], verbatim: false }),
+            'H argv /d /v:off /c esc(P)': p => ({ args: ['/d', '/v:off', '/c', esc(p), '--version'], verbatim: false }),
+            'I argv /d /v:off /c call esc(P)': p => ({ args: ['/d', '/v:off', '/c', 'call', esc(p), '--version'], verbatim: false }),
+            'J argv /d /v:off /c call escTwice(P)': p => ({ args: ['/d', '/v:off', '/c', 'call', escTwice(p), '--version'], verbatim: false }),
+            'K argv /d /v:off /c quoted(P)': p => ({ args: ['/d', '/v:off', '/c', q(p), '--version'], verbatim: false }),
         };
 
         const lines: string[] = [];
