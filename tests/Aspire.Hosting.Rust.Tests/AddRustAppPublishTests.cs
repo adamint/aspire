@@ -193,6 +193,25 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         await Verify(content);
     }
 
+    [Fact]
+    public async Task VerifyPublish_EmitsABuildContextIgnoreThatExcludesTargetDirectories()
+    {
+        // `COPY . .` would otherwise upload the crate's local target/ directory, which is routinely several
+        // gigabytes and is rebuilt inside the image regardless.
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service"), "."));
+        builder.AddRustApp("api", sourceDir.FullName);
+        builder.Build().Run();
+
+        var ignore = await File.ReadAllTextAsync(Path.Combine(outputDir.FullName, "api.Dockerfile.dockerignore"), TestContext.Current.CancellationToken);
+
+        await Verify(ignore);
+    }
+
     private async Task<string> PublishDockerfileAsync(
         Action<string>? configureSource = null,
         string? metadata = null,
