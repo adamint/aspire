@@ -21,6 +21,9 @@ function createMockDeps(overrides: Partial<CliPathDependencies> = {}): CliPathDe
     return {
         getConfiguredPath: () => '',
         getDefaultPaths: () => defaultPaths,
+        isConfiguredPathAutoConfigured: (configuredPath, paths) => paths.some(candidate => process.platform === 'win32'
+            ? path.win32.normalize(candidate).toLowerCase() === path.win32.normalize(configuredPath).toLowerCase()
+            : candidate === configuredPath),
         isOnPath: async () => false,
         findAtDefaultPath: async () => undefined,
         tryExecute: async () => false,
@@ -296,6 +299,31 @@ suite('utils/cliPath tests', () => {
             }
         });
 
+        test('keeps a workspace-scoped legacy path as an explicit user pin', async () => {
+            const legacyGlobalToolPath = '/home/user/.dotnet/tools/aspire';
+            const isOnPath = sinon.stub().resolves(true);
+            const tryExecute = sinon.stub().resolves(true);
+            const setConfiguredPath = sinon.stub().resolves();
+
+            const result = await resolveCliPath(createMockDeps({
+                getConfiguredPath: () => legacyGlobalToolPath,
+                getDefaultPaths: () => [legacyGlobalToolPath],
+                isConfiguredPathAutoConfigured: () => false,
+                isOnPath,
+                tryExecute,
+                setConfiguredPath,
+            }));
+
+            assert.deepStrictEqual(result, {
+                cliPath: legacyGlobalToolPath,
+                available: true,
+                source: 'configured',
+            });
+            assert.ok(tryExecute.calledOnceWithExactly(legacyGlobalToolPath));
+            assert.ok(isOnPath.notCalled);
+            assert.ok(setConfiguredPath.notCalled);
+        });
+
         test('keeps syntactically equivalent non-Windows paths explicit', async function () {
             if (process.platform === 'win32') {
                 this.skip();
@@ -551,6 +579,36 @@ suite('utils/cliPath tests', () => {
             await resolveCliPath(deps);
 
             assert.strictEqual(isConfiguredCliPathRejectedForForwarding('/some/other/aspire'), false);
+        });
+
+        test('does not let an older resolution clear a newer configured-path rejection', async () => {
+            const olderConfiguredPath = '/opt/old/aspire';
+            const newerConfiguredPath = '/opt/new/aspire';
+            let configuredPath = olderConfiguredPath;
+            let completeOlderProbe: ((value: boolean) => void) | undefined;
+            const olderProbe = new Promise<boolean>(resolve => completeOlderProbe = resolve);
+
+            const deps = createMockDeps({
+                getConfiguredPath: () => configuredPath,
+                tryExecute: async candidate => candidate === olderConfiguredPath
+                    ? olderProbe
+                    : false,
+                isOnPath: async () => true,
+            });
+
+            const olderResolution = resolveCliPath(deps);
+            configuredPath = newerConfiguredPath;
+
+            const newerResolution = await resolveCliPath(deps);
+            assert.strictEqual(newerResolution.source, 'path');
+            assert.ok(isConfiguredCliPathRejectedForForwarding(newerConfiguredPath));
+
+            completeOlderProbe!(true);
+            await olderResolution;
+
+            assert.ok(
+                isConfiguredCliPathRejectedForForwarding(newerConfiguredPath),
+                'an older in-flight resolution must not clear suppression for the current setting');
         });
     });
 

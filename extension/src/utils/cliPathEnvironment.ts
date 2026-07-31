@@ -1,7 +1,11 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
-import { getConfiguredCliPath, isConfiguredCliPathRejectedForForwarding } from './cliPath';
+import {
+    getConfiguredCliPath,
+    isConfiguredCliPathRejectedForForwarding,
+    onDidChangeConfiguredCliPathRejection,
+} from './cliPath';
 import { extensionLogOutputChannel } from './logging';
 import { aspireCliPathEnvironmentDescription } from '../loc/strings';
 
@@ -212,15 +216,21 @@ export function registerCliPathEnvironmentSync(
 ): vscode.Disposable {
     let forwardedPath = syncAspireCliPathEnvironment(collection, deps);
 
-    const disposable = vscode.workspace.onDidChangeConfiguration((event) => {
+    const syncForwardedPath = () => {
+        const previousPath = forwardedPath;
+        forwardedPath = syncAspireCliPathEnvironment(collection, deps);
+        if (previousPath !== forwardedPath) {
+            onForwardedPathChanged?.(previousPath, forwardedPath);
+        }
+    };
+
+    const configurationDisposable = vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration(`aspire.${ASPIRE_CLI_EXECUTABLE_PATH_SETTING}`)) {
-            const previousPath = forwardedPath;
-            forwardedPath = syncAspireCliPathEnvironment(collection, deps);
-            if (previousPath !== forwardedPath) {
-                onForwardedPathChanged?.(previousPath, forwardedPath);
-            }
+            syncForwardedPath();
         }
     });
+    const rejectionDisposable = onDidChangeConfiguredCliPathRejection(syncForwardedPath);
+    const disposable = vscode.Disposable.from(configurationDisposable, rejectionDisposable);
 
     subscriptions.push(disposable);
     return disposable;

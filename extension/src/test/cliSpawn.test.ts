@@ -1,4 +1,8 @@
 import * as assert from 'assert';
+import { spawnSync } from 'child_process';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import * as sinon from 'sinon';
 import { getCliSpawnCommand, getCliSpawnDiagnostics, mergeCliSpawnEnvironment } from '../debugger/languages/cli';
 import { terminalCommandArgumentControlCharacters } from '../loc/strings';
@@ -64,6 +68,48 @@ suite('spawnCliProcess tests', () => {
             else {
                 process.env.ComSpec = originalComSpec;
             }
+        }
+    });
+
+    test('preserves literal percent sequences when executing Windows cmd wrappers', function () {
+        if (process.platform !== 'win32') {
+            this.skip();
+        }
+
+        const variableName = 'ASPIRE_CMD_SHIM_PERCENT_TEST';
+        const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `aspire%${variableName}%-`));
+
+        try {
+            const wrapperPath = path.join(tempDirectory, 'aspire.cmd');
+            fs.writeFileSync(wrapperPath, [
+                '@echo off',
+                'if "%~1"=="echo-argument" (',
+                '  echo(%~2',
+                '  exit /b 0',
+                ')',
+                'exit /b 1',
+                '',
+            ].join('\r\n'));
+
+            const literalArgument = `--path=%${variableName}%`;
+            const { command, args, windowsVerbatimArguments } = getCliSpawnCommand(
+                wrapperPath,
+                ['echo-argument', literalArgument],
+            );
+            const result = spawnSync(command, args, {
+                encoding: 'utf8',
+                env: {
+                    ...process.env,
+                    [variableName]: 'EXPANDED',
+                },
+                windowsVerbatimArguments,
+            });
+
+            assert.strictEqual(result.status, 0, result.stderr);
+            assert.strictEqual(result.stdout.trim(), literalArgument);
+        }
+        finally {
+            fs.rmSync(tempDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
         }
     });
 

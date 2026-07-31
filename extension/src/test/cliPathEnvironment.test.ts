@@ -10,6 +10,11 @@ import {
     registerCliPathEnvironmentSync,
     syncAspireCliPathEnvironment,
 } from '../utils/cliPathEnvironment';
+import {
+    isConfiguredCliPathRejectedForForwarding,
+    resetRejectedConfiguredCliPathForForwarding,
+    resolveCliPath,
+} from '../utils/cliPath';
 
 function createFakeCollection(): CliPathEnvironmentCollection & { entries: Map<string, string> } {
     const entries = new Map<string, string>();
@@ -258,6 +263,7 @@ suite('cliPathEnvironment.registerCliPathEnvironmentSync tests', () => {
     teardown(() => {
         onDidChangeConfigurationStub.restore();
         subscriptions.forEach(s => s.dispose());
+        resetRejectedConfiguredCliPathForForwarding();
     });
 
     test('applies current setting on registration and re-applies when aspireCliExecutablePath changes', () => {
@@ -301,6 +307,41 @@ suite('cliPathEnvironment.registerCliPathEnvironmentSync tests', () => {
 
         assert.strictEqual(collection.entries.has(ASPIRE_CLI_PATH_ENV_VAR), false);
         assert.strictEqual(onForwardedPathChanged.callCount, 0);
+    });
+
+    test('re-applies the contributed path when CLI resolution rejects and later accepts the setting', async () => {
+        const collection = createFakeCollection();
+        const configuredPath = '/abs/aspire';
+        const onForwardedPathChanged = sinon.stub();
+        let configuredPathWorks = false;
+
+        registerCliPathEnvironmentSync(collection, subscriptions, makeDeps({
+            getConfiguredPath: () => configuredPath,
+            isRejectedForForwarding: isConfiguredCliPathRejectedForForwarding,
+        }), onForwardedPathChanged);
+
+        assert.strictEqual(collection.entries.get(ASPIRE_CLI_PATH_ENV_VAR), configuredPath);
+
+        const resolutionDeps = {
+            getConfiguredPath: () => configuredPath,
+            getDefaultPaths: () => [],
+            isConfiguredPathAutoConfigured: () => false,
+            isOnPath: async () => true,
+            findAtDefaultPath: async () => undefined,
+            tryExecute: async () => configuredPathWorks,
+            setConfiguredPath: async () => { },
+        };
+
+        await resolveCliPath(resolutionDeps);
+
+        assert.strictEqual(collection.entries.has(ASPIRE_CLI_PATH_ENV_VAR), false);
+        assert.deepStrictEqual(onForwardedPathChanged.firstCall.args, [configuredPath, undefined]);
+
+        configuredPathWorks = true;
+        await resolveCliPath(resolutionDeps);
+
+        assert.strictEqual(collection.entries.get(ASPIRE_CLI_PATH_ENV_VAR), configuredPath);
+        assert.deepStrictEqual(onForwardedPathChanged.secondCall.args, [undefined, configuredPath]);
     });
 
     test('ignores configuration changes that do not touch aspireCliExecutablePath', () => {

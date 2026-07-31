@@ -6,6 +6,7 @@ import { getRegisterMcpServerInWorkspace, registerMcpServerInWorkspaceSetting } 
 
 const mcpServerLabel = 'Aspire';
 const mcpServerArgs = ['agent', 'mcp'];
+const aspireCliExecutablePathSetting = 'aspire.aspireCliExecutablePath';
 
 /**
  * Builds the stdio definition VS Code uses to launch `aspire agent mcp`.
@@ -44,7 +45,8 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
     constructor() {
         // Re-evaluate when the setting changes
         this._configChangeDisposable = vscode.workspace.onDidChangeConfiguration(e => {
-            if (e.affectsConfiguration(registerMcpServerInWorkspaceSetting)) {
+            if (e.affectsConfiguration(registerMcpServerInWorkspaceSetting)
+                || e.affectsConfiguration(aspireCliExecutablePathSetting)) {
                 this.refresh();
             }
         });

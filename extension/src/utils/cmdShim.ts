@@ -57,9 +57,8 @@ function assertNoCmdWrapperControlCharacters(values: readonly string[]): void {
  * directory such as `C:\tools\a^b`. Verified on Windows CI across `&`, `^`, `()` and
  * space directories.
  *
- * Quoting makes `&`, `^`, `|`, `<`, `>` and parentheses literal. It does not undo percent
- * expansion: cmd.exe resolves `%NAME%` before quote handling, so a CLI path containing a
- * live variable reference is still not addressable this way.
+ * Quoting makes `&`, `^`, `|`, `<`, `>` and parentheses literal. Percent signs are doubled
+ * so cmd.exe's single expansion pass forwards them literally to the batch shim.
  */
 export function getCmdShimSpawnCommand(command: string, args: readonly string[]): CmdShimSpawnCommand {
     const commandArgs = [...args];
@@ -102,21 +101,24 @@ export function getCmdShimSpawnCommandWithoutVerbatimArguments(command: string, 
 }
 
 function escapeCmdArgumentForLibuvQuoting(value: string): string {
+    // cmd.exe expands percent sequences before invoking the batch shim. Doubling the
+    // percent sign makes that single pass forward a literal percent instead of resolving
+    // a path or argument such as `%USERPROFILE%`.
+    const valueWithEscapedPercents = value.replace(/%/g, '%%');
+
     // libuv's quote_cmd_arg only wraps an argument in quotes when it contains a space,
     // tab, or quote (https://github.com/libuv/libuv/blob/v1.x/src/win/process.c). When it
     // does, cmd.exe sees a quoted token and metacharacters inside are already inert, so
     // adding carets here would leak literal '^' characters into the path.
-    if (/[ \t"]/.test(value)) {
-        return value;
+    if (/[ \t"]/.test(valueWithEscapedPercents)) {
+        return valueWithEscapedPercents;
     }
 
     // Otherwise the value reaches cmd.exe unquoted and must escape its own metacharacters.
     // This is the shape that broke global-tool discovery: a DOTNET_CLI_HOME containing '&'
     // has no space, so libuv passed it through and cmd.exe split the path in two.
-    // '!' is not escaped because these wrappers always run with `/v:off`. '%' is not escaped
-    // either: cmd.exe resolves percent expansion before caret handling, so a path containing
-    // a live `%NAME%` reference cannot be protected here.
-    return value.replace(/[\^&|<>()]/g, match => `^${match}`);
+    // '!' is not escaped because these wrappers always run with `/v:off`.
+    return valueWithEscapedPercents.replace(/[\^&|<>()]/g, match => `^${match}`);
 }
 
 function buildCmdWrapperCommand(command: string, args: string[]): string {
@@ -127,12 +129,13 @@ function buildCmdWrapperCommand(command: string, args: string[]): string {
 
 function quoteCmdArgument(value: string): string {
     // The wrapper command is executed as:
-    //   cmd.exe /d /v:off /s /c call "aspire.cmd" "<arg>" ...
+    //   cmd.exe /d /v:off /s /c ""aspire.cmd" "<arg>" ..."
     // Many .cmd shims then forward arguments to a native executable with `%*`, for example:
     //   "node.exe" "aspire.js" %*
-    // Because `%*` is parsed later by normal Windows argv rules, trailing backslashes must be
-    // doubled before our closing quote (`"--path=C:\temp\\" "next"`), and backslashes before
-    // embedded quotes must be doubled before cmd's doubled-quote escape.
+    // Percent signs must survive cmd.exe's expansion pass before `%*` is evaluated inside the
+    // shim. Trailing backslashes must also be doubled before our closing quote
+    // (`"--path=C:\temp\\" "next"`), and backslashes before embedded quotes must be doubled
+    // before cmd's doubled-quote escape.
     const valueWithEscapedPercents = value.replace(/%/g, '%%');
     let quotedValue = '';
     let backslashCount = 0;

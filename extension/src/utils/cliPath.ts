@@ -130,6 +130,28 @@ export async function tryExecuteCli(cliPath: string, execute: CliProbeExecutor =
  * stamped with bundle paths belonging to a CLI that never ran.
  */
 let rejectedConfiguredCliPath: string | undefined;
+const rejectedConfiguredCliPathChangedEmitter = new vscode.EventEmitter<void>();
+
+/**
+ * Fires when CLI resolution changes whether the configured path may be forwarded
+ * through `AspireCliPath`.
+ */
+export const onDidChangeConfiguredCliPathRejection = rejectedConfiguredCliPathChangedEmitter.event;
+
+function updateRejectedConfiguredCliPath(
+    expectedConfiguredPath: string,
+    rejectedPath: string | undefined,
+    getCurrentConfiguredPath: () => string,
+): void {
+    // CLI probes are asynchronous and can overlap. Only the resolution for the
+    // setting that is still current may change forwarding state.
+    if (getCurrentConfiguredPath() !== expectedConfiguredPath || rejectedConfiguredCliPath === rejectedPath) {
+        return;
+    }
+
+    rejectedConfiguredCliPath = rejectedPath;
+    rejectedConfiguredCliPathChangedEmitter.fire();
+}
 
 /**
  * Reports whether CLI resolution rejected this configured path and fell back to a
@@ -141,7 +163,10 @@ export function isConfiguredCliPathRejectedForForwarding(configuredPath: string)
 
 /** Test seam that clears the rejected-configured-path state between cases. */
 export function resetRejectedConfiguredCliPathForForwarding(): void {
-    rejectedConfiguredCliPath = undefined;
+    if (rejectedConfiguredCliPath !== undefined) {
+        rejectedConfiguredCliPath = undefined;
+        rejectedConfiguredCliPathChangedEmitter.fire();
+    }
 }
 
 /**
@@ -204,6 +229,7 @@ export interface CliPathResolutionResult {
 export interface CliPathDependencies {
     getConfiguredPath: () => string;
     getDefaultPaths: () => string[];
+    isConfiguredPathAutoConfigured: (configuredPath: string, defaultPaths: readonly string[]) => boolean;
     isOnPath: () => Promise<boolean>;
     findAtDefaultPath: () => Promise<string | undefined>;
     tryExecute: (cliPath: string) => Promise<boolean>;
@@ -215,6 +241,15 @@ const defaultDependencies: CliPathDependencies = {
     // Only paths that older extension versions could have written to the
     // setting are safe to treat as automatically configured.
     getDefaultPaths: getLegacyAutoConfiguredCliPaths,
+    isConfiguredPathAutoConfigured: (configuredPath, defaultPaths) => {
+        const inspection = vscode.workspace.getConfiguration('aspire').inspect<string>('aspireCliExecutablePath');
+        const hasWorkspaceOverride = inspection?.workspaceValue !== undefined
+            || inspection?.workspaceFolderValue !== undefined;
+
+        // Older versions only wrote this setting globally. A workspace-scoped value is
+        // therefore an explicit user pin even when it happens to equal a legacy default.
+        return !hasWorkspaceOverride && containsCliPath(defaultPaths, configuredPath);
+    },
     isOnPath: isCliOnPath,
     findAtDefaultPath: findCliAtDefaultPath,
     tryExecute: tryExecuteCli,
@@ -242,7 +277,8 @@ const defaultDependencies: CliPathDependencies = {
 export async function resolveCliPath(deps: CliPathDependencies = defaultDependencies): Promise<CliPathResolutionResult> {
     const configuredPath = deps.getConfiguredPath();
     const defaultPaths = deps.getDefaultPaths();
-    const configuredPathIsLegacyDefault = configuredPath !== '' && containsCliPath(defaultPaths, configuredPath);
+    const configuredPathIsLegacyDefault = configuredPath !== ''
+        && deps.isConfiguredPathAutoConfigured(configuredPath, defaultPaths);
     const e2eCliPath = process.env.ASPIRE_EXTENSION_E2E_CLI_PATH?.trim();
 
     if (e2eCliPath) {
@@ -258,7 +294,7 @@ export async function resolveCliPath(deps: CliPathDependencies = defaultDependen
     if (configuredPath && (!configuredPathIsLegacyDefault || isCommandShimPath(configuredPath))) {
         const isValid = await deps.tryExecute(configuredPath);
         if (isValid) {
-            rejectedConfiguredCliPath = undefined;
+            updateRejectedConfiguredCliPath(configuredPath, undefined, deps.getConfiguredPath);
             return { cliPath: configuredPath, available: true, source: 'configured' };
         }
 
@@ -267,11 +303,11 @@ export async function resolveCliPath(deps: CliPathDependencies = defaultDependen
         // explicit user pin is not silently erased, but it must stop being forwarded as
         // AspireCliPath, otherwise MSBuild resolves bundle assets from the CLI that failed.
         extensionLogOutputChannel.warn('Suppressing AspireCliPath forwarding for the rejected configured CLI path');
-        rejectedConfiguredCliPath = configuredPath;
+        updateRejectedConfiguredCliPath(configuredPath, configuredPath, deps.getConfiguredPath);
         // Continue to check other locations
     }
     else {
-        rejectedConfiguredCliPath = undefined;
+        updateRejectedConfiguredCliPath(configuredPath, undefined, deps.getConfiguredPath);
     }
 
     // 2. Check if CLI is on PATH

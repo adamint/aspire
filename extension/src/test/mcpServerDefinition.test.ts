@@ -1,6 +1,11 @@
 import * as assert from 'assert';
+import { spawnSync } from 'child_process';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import * as sinon from 'sinon';
-import { createAspireMcpServerDefinition } from '../mcp/AspireMcpServerDefinitionProvider';
+import * as vscode from 'vscode';
+import { AspireMcpServerDefinitionProvider, createAspireMcpServerDefinition } from '../mcp/AspireMcpServerDefinitionProvider';
 
 function withWindows<T>(action: () => T): T {
     const platformStub = sinon.stub(process, 'platform').value('win32');
@@ -75,6 +80,67 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
         });
     });
 
+    test('doubles percent signs before cmd.exe expands the shim path', () => {
+        withWindows(() => {
+            const definition = createAspireMcpServerDefinition('C:\\Users\\a%USERPROFILE%b\\.dotnet\\tools\\aspire.cmd');
+
+            assert.deepStrictEqual(definition.args, [
+                '/d',
+                '/v:off',
+                '/c',
+                'C:\\Users\\a%%USERPROFILE%%b\\.dotnet\\tools\\aspire.cmd',
+                'agent',
+                'mcp',
+            ]);
+        });
+    });
+
+    test('executes MCP command shims from Windows metacharacter paths', function () {
+        if (process.platform !== 'win32') {
+            this.skip();
+        }
+
+        const variableName = 'ASPIRE_MCP_SHIM_PERCENT_TEST';
+        const cases = [
+            'aspire space-',
+            'aspire&path-',
+            'aspire^path-',
+            'aspire(path)-',
+            `aspire%${variableName}%-`,
+        ];
+
+        for (const prefix of cases) {
+            const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+            try {
+                const wrapperPath = path.join(tempDirectory, 'aspire.cmd');
+                fs.writeFileSync(wrapperPath, [
+                    '@echo off',
+                    'if "%~1"=="agent" if "%~2"=="mcp" (',
+                    '  echo MCP_OK',
+                    '  exit /b 0',
+                    ')',
+                    'exit /b 1',
+                    '',
+                ].join('\r\n'));
+
+                const definition = createAspireMcpServerDefinition(wrapperPath);
+                const result = spawnSync(definition.command, definition.args, {
+                    encoding: 'utf8',
+                    env: {
+                        ...process.env,
+                        [variableName]: 'EXPANDED',
+                    },
+                });
+
+                assert.strictEqual(result.status, 0, `${prefix}: ${result.stderr}`);
+                assert.strictEqual(result.stdout.trim(), 'MCP_OK', prefix);
+            }
+            finally {
+                fs.rmSync(tempDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+            }
+        }
+    });
+
     test('passes native Windows executables through unwrapped', () => {
         withWindows(() => {
             const definition = createAspireMcpServerDefinition('C:\\Users\\me\\.aspire\\bin\\aspire.exe');
@@ -111,5 +177,36 @@ suite('AspireMcpServerDefinitionProvider definition tests', () => {
         withWindows(() => {
             assert.throws(() => createAspireMcpServerDefinition('C:\\tools\\asp\r\nire.cmd'));
         });
+    });
+});
+
+suite('AspireMcpServerDefinitionProvider refresh tests', () => {
+    let configChangeHandler: ((event: vscode.ConfigurationChangeEvent) => void) | undefined;
+    let configurationStub: sinon.SinonStub;
+    let workspaceFoldersStub: sinon.SinonStub;
+
+    setup(() => {
+        configurationStub = sinon.stub(vscode.workspace, 'onDidChangeConfiguration').callsFake(handler => {
+            configChangeHandler = handler as (event: vscode.ConfigurationChangeEvent) => void;
+            return { dispose: () => { } };
+        });
+        workspaceFoldersStub = sinon.stub(vscode.workspace, 'onDidChangeWorkspaceFolders').returns({ dispose: () => { } });
+    });
+
+    teardown(() => {
+        configurationStub.restore();
+        workspaceFoldersStub.restore();
+    });
+
+    test('refreshes when the configured CLI executable path changes', () => {
+        const provider = new AspireMcpServerDefinitionProvider();
+        const refresh = sinon.stub(provider, 'refresh').resolves();
+
+        configChangeHandler!({
+            affectsConfiguration: section => section === 'aspire.aspireCliExecutablePath',
+        });
+
+        assert.ok(refresh.calledOnce);
+        provider.dispose();
     });
 });
