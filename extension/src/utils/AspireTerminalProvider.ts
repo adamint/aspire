@@ -113,6 +113,7 @@ export function shellArg(value: string): ShellArg {
 
 export class AspireTerminalProvider implements vscode.Disposable {
     private _terminalByDebugSessionId: Map<string | null, AspireTerminal> = new Map();
+    private _invalidatedSharedTerminals = new Set<vscode.Terminal>();
     private _rpcServerConnectionInfo?: RpcServerConnectionInfo;
     private _dcpServerConnectionInfo?: DcpServerConnectionInfo;
     private _windowsPowerShellPath?: string;
@@ -125,6 +126,7 @@ export class AspireTerminalProvider implements vscode.Disposable {
         private readonly _isPowerShell7Available = isPowerShell7Available,
     ) {
         subscriptions.push(vscode.window.onDidCloseTerminal(closedTerminal => {
+            this._invalidatedSharedTerminals.delete(closedTerminal);
             for (const [debugSessionId, terminal] of this._terminalByDebugSessionId.entries()) {
                 if (terminal.terminal === closedTerminal) {
                     this._terminalByDebugSessionId.delete(debugSessionId);
@@ -273,6 +275,19 @@ export class AspireTerminalProvider implements vscode.Disposable {
         this._terminalByDebugSessionId.set(null, aspireTerminal);
 
         return aspireTerminal;
+    }
+
+    invalidateSharedAspireTerminal(): void {
+        const existingTerminal = this._terminalByDebugSessionId.get(null);
+        if (!existingTerminal) {
+            return;
+        }
+
+        // The terminal may be running a long-lived command, so leave it open. Stop reusing it
+        // so the next Aspire command gets a new terminal with the current environment.
+        extensionLogOutputChannel.info('Invalidating shared Aspire terminal environment');
+        this._terminalByDebugSessionId.delete(null);
+        this._invalidatedSharedTerminals.add(existingTerminal.terminal);
     }
 
     private createAspireEditorTerminal(): AspireTerminal {
@@ -425,12 +440,17 @@ export class AspireTerminalProvider implements vscode.Disposable {
         }
 
         this._terminalByDebugSessionId.clear();
+        this._invalidatedSharedTerminals.clear();
     }
 
     dispose() {
         for (const terminal of this._terminalByDebugSessionId.values()) {
             terminal.dispose();
         }
+        for (const terminal of this._invalidatedSharedTerminals) {
+            terminal.dispose();
+        }
+        this._invalidatedSharedTerminals.clear();
         this._onDidSendAspireCommand.dispose();
     }
 

@@ -6,6 +6,7 @@ import * as path from 'path';
 import * as sinon from 'sinon';
 import { getCliSpawnCommand, getCliSpawnDiagnostics, mergeCliSpawnEnvironment } from '../debugger/languages/cli';
 import { terminalCommandArgumentControlCharacters } from '../loc/strings';
+import { getCmdShimSpawnCommandWithoutVerbatimArguments } from '../utils/cmdShim';
 import { EnvironmentVariables } from '../utils/environment';
 
 suite('spawnCliProcess tests', () => {
@@ -45,7 +46,6 @@ suite('spawnCliProcess tests', () => {
                 'echo',
                 '--',
                 '--message=hello & del C:\\important',
-                '--path=%PATH%',
                 '--literal="quoted"',
             ]);
 
@@ -55,7 +55,7 @@ suite('spawnCliProcess tests', () => {
                 '/v:off',
                 '/s',
                 '/c',
-                '""C:\\Tools\\Aspire CLI\\aspire.cmd" "resource" "api&whoami" "echo" "--" "--message=hello & del C:\\important" "--path=%%PATH%%" "--literal=""quoted""""'
+                '""C:\\Tools\\Aspire CLI\\aspire.cmd" "resource" "api&whoami" "echo" "--" "--message=hello & del C:\\important" "--literal=""quoted""""'
             ]);
             assert.strictEqual(result.windowsVerbatimArguments, true);
         }
@@ -71,13 +71,45 @@ suite('spawnCliProcess tests', () => {
         }
     });
 
-    test('preserves literal percent sequences when executing Windows cmd wrappers', function () {
+    test('does not rewrite percent sequences that cmd command lines cannot escape', () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+
+        try {
+            const result = getCliSpawnCommand(
+                'C:\\Tools\\Aspire CLI\\aspire.cmd',
+                ['resource', 'api', 'echo', '--', '--path=%PATH%'],
+            );
+
+            assert.strictEqual(
+                result.args[4],
+                '""C:\\Tools\\Aspire CLI\\aspire.cmd" "resource" "api" "echo" "--" "--path=%PATH%""');
+        }
+        finally {
+            platformStub.restore();
+        }
+    });
+
+    test('does not rewrite percent sequences in non-verbatim cmd wrappers', () => {
+        const result = getCmdShimSpawnCommandWithoutVerbatimArguments(
+            'C:\\tools\\%ASPIRE_HOME%\\aspire.cmd',
+            ['--path=%PATH%'],
+        );
+
+        assert.deepStrictEqual(result.args, [
+            '/d',
+            '/v:off',
+            '/c',
+            'C:\\tools\\%ASPIRE_HOME%\\aspire.cmd',
+            '--path^=%PATH%',
+        ]);
+    });
+
+    test('runs non-verbatim cmd wrappers from paths combining spaces and metacharacters', function () {
         if (process.platform !== 'win32') {
             this.skip();
         }
 
-        const variableName = 'ASPIRE_CMD_SHIM_PERCENT_TEST';
-        const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `aspire%${variableName}%-`));
+        const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire mcp&a^b(x),c;d-[e]-'));
 
         try {
             const wrapperPath = path.join(tempDirectory, 'aspire.cmd');
@@ -91,22 +123,14 @@ suite('spawnCliProcess tests', () => {
                 '',
             ].join('\r\n'));
 
-            const literalArgument = `--path=%${variableName}%`;
-            const { command, args, windowsVerbatimArguments } = getCliSpawnCommand(
+            const { command, args } = getCmdShimSpawnCommandWithoutVerbatimArguments(
                 wrapperPath,
-                ['echo-argument', literalArgument],
+                ['echo-argument', 'mcp-started'],
             );
-            const result = spawnSync(command, args, {
-                encoding: 'utf8',
-                env: {
-                    ...process.env,
-                    [variableName]: 'EXPANDED',
-                },
-                windowsVerbatimArguments,
-            });
+            const result = spawnSync(command, args, { encoding: 'utf8' });
 
             assert.strictEqual(result.status, 0, result.stderr);
-            assert.strictEqual(result.stdout.trim(), literalArgument);
+            assert.strictEqual(result.stdout.trim(), 'mcp-started');
         }
         finally {
             fs.rmSync(tempDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });

@@ -72,7 +72,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // any command can fire so the first user-initiated terminal already inherits
   // AspireCliPath when the setting is configured.
   registerCliPathEnvironmentSync(context.environmentVariableCollection, context.subscriptions, undefined, () => {
-    terminalProvider.closeAllOpenAspireTerminals();
+    terminalProvider.invalidateSharedAspireTerminal();
   });
 
   const rpcServer = await AspireRpcServer.create(

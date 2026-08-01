@@ -57,8 +57,8 @@ function assertNoCmdWrapperControlCharacters(values: readonly string[]): void {
  * directory such as `C:\tools\a^b`. Verified on Windows CI across `&`, `^`, `()` and
  * space directories.
  *
- * Quoting makes `&`, `^`, `|`, `<`, `>` and parentheses literal. Percent signs are doubled
- * so cmd.exe's single expansion pass forwards them literally to the batch shim.
+ * Quoting makes `&`, `^`, `|`, `<`, `>` and parentheses literal. Percent expansion is
+ * an unavoidable limitation of routing a batch shim through a `cmd /c` command string.
  */
 export function getCmdShimSpawnCommand(command: string, args: readonly string[]): CmdShimSpawnCommand {
     const commandArgs = [...args];
@@ -77,15 +77,14 @@ export function getCmdShimSpawnCommand(command: string, args: readonly string[])
 
 /**
  * Builds the cmd.exe invocation for a command shim when the caller cannot set
- * `windowsVerbatimArguments` — most importantly `McpStdioServerDefinition`, which
- * exposes only `command`/`args` and is spawned by VS Code with `shell: false`
- * (`src/vs/workbench/api/node/extHostMcpNode.ts`).
+ * `windowsVerbatimArguments`. VS Code 1.102's MCP launcher quotes shell-script
+ * tokens only when they contain whitespace, so a path such as `C:\Users\a&b\aspire.cmd`
+ * would otherwise be split at the ampersand.
  *
- * Without verbatim arguments, libuv rebuilds the command line and applies its own
- * quoting, so the single-`/c`-string form used by {@link getCmdShimSpawnCommand}
- * cannot be reused: libuv escapes our embedded quotes as `\"`, which cmd.exe does
- * not understand. The argv form below survives that round trip because libuv quotes
- * each argument individually.
+ * The argv shape survives libuv's quoting pass by caret-escaping both whitespace
+ * and metacharacters. The caret forces cmd.exe's quote-stripping branch, then makes
+ * the resulting unquoted token parse as one literal value. Percent expansion remains
+ * an unavoidable limitation of routing a batch shim through a cmd.exe command string.
  */
 export function getCmdShimSpawnCommandWithoutVerbatimArguments(command: string, args: readonly string[]): CmdShimSpawnCommand {
     const commandArgs = [...args];
@@ -93,32 +92,21 @@ export function getCmdShimSpawnCommandWithoutVerbatimArguments(command: string, 
 
     return {
         command: getComSpec(),
-        // `/s` is omitted because there is no outer quote pair to strip here, and `call` is
-        // omitted for the same reason as above: its re-parse consumes carets, and it also
-        // fails for parenthesised directories in this argv form. Verified on Windows CI.
+        // `/s` is omitted because there is no outer quote pair to strip here. `call`
+        // is omitted because its second parse consumes carets and breaks parenthesized paths.
         args: ['/d', '/v:off', '/c', ...[command, ...commandArgs].map(escapeCmdArgumentForLibuvQuoting)],
     };
 }
 
 function escapeCmdArgumentForLibuvQuoting(value: string): string {
-    // cmd.exe expands percent sequences before invoking the batch shim. Doubling the
-    // percent sign makes that single pass forward a literal percent instead of resolving
-    // a path or argument such as `%USERPROFILE%`.
-    const valueWithEscapedPercents = value.replace(/%/g, '%%');
-
-    // libuv's quote_cmd_arg only wraps an argument in quotes when it contains a space,
-    // tab, or quote (https://github.com/libuv/libuv/blob/v1.x/src/win/process.c). When it
-    // does, cmd.exe sees a quoted token and metacharacters inside are already inert, so
-    // adding carets here would leak literal '^' characters into the path.
-    if (/[ \t"]/.test(valueWithEscapedPercents)) {
-        return valueWithEscapedPercents;
-    }
-
-    // Otherwise the value reaches cmd.exe unquoted and must escape its own metacharacters.
-    // This is the shape that broke global-tool discovery: a DOTNET_CLI_HOME containing '&'
-    // has no space, so libuv passed it through and cmd.exe split the path in two.
-    // '!' is not escaped because these wrappers always run with `/v:off`.
-    return valueWithEscapedPercents.replace(/[\^&|<>()]/g, match => `^${match}`);
+    // libuv wraps a token containing whitespace in quotes. cmd.exe preserves those
+    // quotes only when the quoted text contains no special characters; the caret we
+    // add makes it strip the quotes and then consume each caret as an escape. This
+    // handles paths combining spaces and metacharacters without windowsVerbatimArguments.
+    // Escape cmd.exe's documented special characters that are legal in Windows
+    // paths. Percent is intentionally excluded because caret escaping does not
+    // prevent `%NAME%` expansion in a cmd /c command string.
+    return value.replace(/[ \t()[\]{}!^`<>&|;,+'=@~]/g, match => `^${match}`);
 }
 
 function buildCmdWrapperCommand(command: string, args: string[]): string {
@@ -132,15 +120,15 @@ function quoteCmdArgument(value: string): string {
     //   cmd.exe /d /v:off /s /c ""aspire.cmd" "<arg>" ..."
     // Many .cmd shims then forward arguments to a native executable with `%*`, for example:
     //   "node.exe" "aspire.js" %*
-    // Percent signs must survive cmd.exe's expansion pass before `%*` is evaluated inside the
-    // shim. Trailing backslashes must also be doubled before our closing quote
+    // Percent signs cannot be escaped in a `cmd /c` command string. `%%` only collapses
+    // inside a batch file; using it here corrupts the path or argument before the shim runs.
+    // Trailing backslashes must be doubled before our closing quote
     // (`"--path=C:\temp\\" "next"`), and backslashes before embedded quotes must be doubled
     // before cmd's doubled-quote escape.
-    const valueWithEscapedPercents = value.replace(/%/g, '%%');
     let quotedValue = '';
     let backslashCount = 0;
 
-    for (const character of valueWithEscapedPercents) {
+    for (const character of value) {
         if (character === '\\') {
             backslashCount++;
             continue;

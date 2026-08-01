@@ -11,12 +11,10 @@ const aspireCliExecutablePathSetting = 'aspire.aspireCliExecutablePath';
 /**
  * Builds the stdio definition VS Code uses to launch `aspire agent mcp`.
  *
- * A .NET global-tool install exposes `aspire.cmd`, and VS Code spawns stdio MCP
- * servers with `shell: false`, so handing the shim over directly fails with
- * `spawn EINVAL` on Windows (https://github.com/nodejs/node/issues/52681).
- * Command shims are therefore routed through cmd.exe. `McpStdioServerDefinition`
- * cannot request `windowsVerbatimArguments`, so this uses the argv-shaped wrapper
- * rather than the single-command-string form used for extension-owned spawns.
+ * Supported VS Code versions quote a .cmd path only when it contains whitespace.
+ * Route command shims through cmd.exe so metacharacters in a no-space path remain
+ * literal. See:
+ * https://github.com/microsoft/vscode/blob/1.102.3/src/vs/workbench/api/node/extHostMcpNode.ts#L141-L167
  */
 export function createAspireMcpServerDefinition(cliPath: string): vscode.McpStdioServerDefinition {
     if (!shouldWrapWithCmd(cliPath)) {
@@ -39,6 +37,7 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
     private _cliPath: string | undefined;
     private _cliAvailable: boolean = false;
     private _shouldProvide: boolean = false;
+    private _refreshGeneration = 0;
     private _configChangeDisposable: vscode.Disposable | undefined;
     private _workspaceFolderChangeDisposable: vscode.Disposable | undefined;
 
@@ -58,10 +57,15 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
     }
 
     async refresh(): Promise<void> {
+        const refreshGeneration = ++this._refreshGeneration;
         const [cliResult, shouldProvide] = await Promise.all([
             resolveCliPath(),
             checkShouldProvideMcpServer(),
         ]);
+
+        if (refreshGeneration !== this._refreshGeneration) {
+            return;
+        }
 
         const changed =
             this._cliAvailable !== cliResult.available ||
@@ -83,18 +87,11 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
             return [];
         }
 
-        try {
-            return [createAspireMcpServerDefinition(this._cliPath)];
-        }
-        catch (error) {
-            // The wrapper rejects paths carrying terminal control characters. Surfacing no
-            // server is better than throwing out of the provider and breaking MCP discovery.
-            extensionLogOutputChannel.error(`Unable to build the Aspire MCP server definition: ${error}`);
-            return [];
-        }
+        return [createAspireMcpServerDefinition(this._cliPath)];
     }
 
     dispose(): void {
+        this._refreshGeneration++;
         this._configChangeDisposable?.dispose();
         this._workspaceFolderChangeDisposable?.dispose();
         this._onDidChange.dispose();

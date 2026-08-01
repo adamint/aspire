@@ -200,8 +200,8 @@ export function syncAspireCliPathEnvironment(
 
 /**
  * Wires `syncAspireCliPathEnvironment` into the extension lifecycle: applies the
- * current setting once at activation and re-applies whenever the user edits
- * `aspire.aspireCliExecutablePath`.
+ * current setting once and re-applies whenever configuration or CLI validation
+ * changes whether the path can be forwarded.
  *
  * The returned disposable removes the configuration listener but does *not*
  * clear `EnvironmentVariableCollection` itself — VS Code preserves contributed
@@ -212,7 +212,10 @@ export function registerCliPathEnvironmentSync(
     collection: CliPathEnvironmentCollection,
     subscriptions: vscode.Disposable[],
     deps: CliPathEnvironmentDependencies = defaultDeps,
-    onForwardedPathChanged?: (previousPath: string | undefined, currentPath: string | undefined) => void,
+    onForwardedPathChanged?: (
+        previousPath: string | undefined,
+        currentPath: string | undefined,
+    ) => void,
 ): vscode.Disposable {
     let forwardedPath = syncAspireCliPathEnvironment(collection, deps);
 

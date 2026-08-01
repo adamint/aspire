@@ -335,13 +335,17 @@ suite('cliPathEnvironment.registerCliPathEnvironmentSync tests', () => {
         await resolveCliPath(resolutionDeps);
 
         assert.strictEqual(collection.entries.has(ASPIRE_CLI_PATH_ENV_VAR), false);
-        assert.deepStrictEqual(onForwardedPathChanged.firstCall.args, [configuredPath, undefined]);
+        assert.deepStrictEqual(
+            onForwardedPathChanged.firstCall.args,
+            [configuredPath, undefined]);
 
         configuredPathWorks = true;
         await resolveCliPath(resolutionDeps);
 
         assert.strictEqual(collection.entries.get(ASPIRE_CLI_PATH_ENV_VAR), configuredPath);
-        assert.deepStrictEqual(onForwardedPathChanged.secondCall.args, [undefined, configuredPath]);
+        assert.deepStrictEqual(
+            onForwardedPathChanged.secondCall.args,
+            [undefined, configuredPath]);
     });
 
     test('ignores configuration changes that do not touch aspireCliExecutablePath', () => {

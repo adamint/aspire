@@ -65,7 +65,7 @@ suite('utils/cliPath tests', () => {
             assert.ok(paths[1].startsWith(path.join(homeDir, '.dotnet', 'tools')), `Second path should be global tool: ${paths[1]}`);
         });
 
-        test('returns the Windows global tool command shim before its executable fallback', () => {
+        test('prefers the Windows global tool executable over its command shim fallback', () => {
             const platformStub = sinon.stub(process, 'platform').value('win32');
 
             try {
@@ -73,8 +73,8 @@ suite('utils/cliPath tests', () => {
 
                 assert.deepStrictEqual(paths.map(candidate => path.basename(candidate)), [
                     'aspire.exe',
-                    'aspire.cmd',
                     'aspire.exe',
+                    'aspire.cmd',
                 ]);
             }
             finally {
@@ -93,8 +93,8 @@ suite('utils/cliPath tests', () => {
 
                 assert.strictEqual(paths[0], path.join(os.homedir(), '.aspire', 'bin', 'aspire.exe'));
                 assert.deepStrictEqual(paths.slice(1), [
-                    path.join(dotnetCliHome, '.dotnet', 'tools', 'aspire.cmd'),
                     path.join(dotnetCliHome, '.dotnet', 'tools', 'aspire.exe'),
+                    path.join(dotnetCliHome, '.dotnet', 'tools', 'aspire.cmd'),
                 ]);
             }
             finally {
@@ -191,6 +191,33 @@ suite('utils/cliPath tests', () => {
 
             assert.ok(setConfiguredPath.calledOnce, 'setConfiguredPath should be called once');
             assert.strictEqual(setConfiguredPath.firstCall.args[0], bundlePath, 'should set the path to the found install location');
+        });
+
+        test('does not repeat discovery after persisting the default install path', async () => {
+            let configuredPath = '';
+            let onPathCalls = 0;
+            let defaultPathCalls = 0;
+
+            const deps = createMockDeps({
+                getConfiguredPath: () => configuredPath,
+                isOnPath: async () => {
+                    onPathCalls++;
+                    return false;
+                },
+                findAtDefaultPath: async () => {
+                    defaultPathCalls++;
+                    return bundlePath;
+                },
+                setConfiguredPath: async value => {
+                    configuredPath = value;
+                },
+            });
+
+            const result = await resolveCliPath(deps);
+
+            assert.strictEqual(result.cliPath, bundlePath);
+            assert.strictEqual(onPathCalls, 1);
+            assert.strictEqual(defaultPathCalls, 1);
         });
 
         test('does not persist an automatically discovered command shim as an explicit setting', async () => {
@@ -610,6 +637,87 @@ suite('utils/cliPath tests', () => {
                 isConfiguredCliPathRejectedForForwarding(newerConfiguredPath),
                 'an older in-flight resolution must not clear suppression for the current setting');
         });
+
+        test('shares concurrent resolutions for the same configured path', async () => {
+            let completeProbe: ((value: boolean) => void) | undefined;
+            const probe = new Promise<boolean>(resolve => completeProbe = resolve);
+            let probeCount = 0;
+
+            const deps = createMockDeps({
+                getConfiguredPath: () => configuredPath,
+                tryExecute: async () => {
+                    probeCount++;
+                    return probe;
+                },
+            });
+
+            const firstResolution = resolveCliPath(deps);
+            const secondResolution = resolveCliPath(deps);
+
+            await Promise.resolve();
+            assert.strictEqual(probeCount, 1, 'concurrent callers should share one CLI probe');
+
+            completeProbe!(true);
+            const [firstResult, secondResult] = await Promise.all([firstResolution, secondResolution]);
+
+            assert.deepStrictEqual(firstResult, secondResult);
+            assert.strictEqual(firstResult.cliPath, configuredPath);
+        });
+
+        test('restarts resolution when the configured path scope changes', async () => {
+            let isAutoConfigured = true;
+            let completePathProbe: ((value: boolean) => void) | undefined;
+            const pathProbe = new Promise<boolean>(resolve => completePathProbe = resolve);
+            const tryExecute = sinon.stub().resolves(true);
+            const setConfiguredPath = sinon.stub().resolves();
+
+            const deps = createMockDeps({
+                getConfiguredPath: () => globalToolPath,
+                isConfiguredPathAutoConfigured: () => isAutoConfigured,
+                isOnPath: async () => pathProbe,
+                tryExecute,
+                setConfiguredPath,
+            });
+
+            const autoConfiguredResolution = resolveCliPath(deps);
+            isAutoConfigured = false;
+            const explicitResolution = resolveCliPath(deps);
+            completePathProbe!(true);
+
+            const [autoConfiguredResult, explicitResult] = await Promise.all([
+                autoConfiguredResolution,
+                explicitResolution,
+            ]);
+
+            assert.strictEqual(autoConfiguredResult.source, 'configured');
+            assert.strictEqual(explicitResult.source, 'configured');
+            assert.ok(tryExecute.called, 'the workspace-scoped path should be probed as an explicit user pin');
+            assert.ok(setConfiguredPath.notCalled, 'the stale auto-configured resolution must not update the global setting');
+        });
+
+        test('retries a resolution when the configured path changes during its probe', async () => {
+            const olderConfiguredPath = '/opt/old/aspire';
+            const newerConfiguredPath = '/opt/new/aspire';
+            let configuredPathValue = olderConfiguredPath;
+            let completeOlderProbe: ((value: boolean) => void) | undefined;
+            const olderProbe = new Promise<boolean>(resolve => completeOlderProbe = resolve);
+
+            const deps = createMockDeps({
+                getConfiguredPath: () => configuredPathValue,
+                tryExecute: async candidate => candidate === olderConfiguredPath
+                    ? olderProbe
+                    : true,
+            });
+
+            const resolution = resolveCliPath(deps);
+            configuredPathValue = newerConfiguredPath;
+            completeOlderProbe!(true);
+
+            const result = await resolution;
+
+            assert.strictEqual(result.cliPath, newerConfiguredPath);
+            assert.strictEqual(result.source, 'configured');
+        });
     });
 
     suite('tryExecuteCli', () => {
@@ -638,9 +746,9 @@ suite('utils/cliPath tests', () => {
             // '&', '^' and parentheses terminate or regroup an unquoted cmd.exe command line, so a
             // shim under such a directory is only reachable through the quoted wrapper. Directory
             // names with no space are the failing shape, because libuv only auto-quotes arguments
-            // containing a space, tab, or quote. '%' is deliberately excluded: percent expansion is
-            // resolved by cmd.exe before quoting applies and is not something this wrapper can undo.
-            const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire&cli^test(x)-'));
+            // containing a space, tab, or quote. An unmatched '%' remains literal; paired `%NAME%`
+            // references are expanded by cmd.exe and cannot be preserved by this wrapper.
+            const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire%literal&cli^test(x)-'));
             try {
                 const wrapperPath = path.join(tempDirectory, 'aspire.cmd');
                 fs.writeFileSync(wrapperPath, '@echo off\r\nif "%~1"=="--version" (\r\n  echo 13.5.0-pr.e2e\r\n  exit /b 0\r\n)\r\nexit /b 1\r\n');
