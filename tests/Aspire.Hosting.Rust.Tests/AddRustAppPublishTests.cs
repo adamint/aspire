@@ -122,7 +122,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task PublishPrefersAHandWrittenDockerfile()
+    public void PublishPrefersAHandWrittenDockerfile()
     {
         // A crate that already has a Dockerfile owns its own container build; generating one would silently
         // shadow it.
@@ -221,6 +221,37 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         var ignore = await File.ReadAllTextAsync(Path.Combine(outputDir.FullName, "api.Dockerfile.dockerignore"), TestContext.Current.CancellationToken);
 
         await Verify(ignore);
+    }
+
+    [Fact]
+    public async Task PublishFailsWhenTheWorkspaceRootIsAboveTheAppDirectory()
+    {
+        // Only the app directory is copied into the image, so a workspace member whose root manifest sits
+        // above it could never build there: inherited fields, path dependencies and the lock file are all
+        // missing. The publish pipeline reports the failure through the host rather than rethrowing, so the
+        // observable result is that no Dockerfile is produced.
+        var exception = await Record.ExceptionAsync(() => PublishDockerfileAsync(workspaceRootRelativePath: ".."));
+
+        Assert.IsType<FileNotFoundException>(exception);
+    }
+
+    [Fact]
+    public async Task AnAuthoredDockerignoreTakesOverFromTheDefaults()
+    {
+        // Docker gives <dockerfile>.dockerignore precedence over the context root's .dockerignore instead of
+        // merging them, so emitting the defaults would silently discard the crate's own rules.
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var outputDir = workspace.CreateDirectory("output");
+
+        File.WriteAllText(Path.Combine(sourceDir.FullName, ".dockerignore"), "*.md\n");
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
+        builder.AddRustApp("api", sourceDir.FullName);
+        builder.Build().Run();
+
+        Assert.False(File.Exists(Path.Combine(outputDir.FullName, "api.Dockerfile.dockerignore")));
     }
 
     private async Task<string> PublishDockerfileAsync(

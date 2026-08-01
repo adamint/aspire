@@ -11,17 +11,25 @@ namespace Aspire.Hosting.Rust;
 internal sealed record RustPublishImages(string BuildImage, string RuntimeImage)
 {
     /// <summary>
-    /// Whether the build stage is Alpine-based, which determines whether a C toolchain has to be installed.
+    /// Whether the build stage looks Alpine-based, which determines whether a C toolchain has to be
+    /// installed.
     /// </summary>
-    public bool BuildImageIsAlpine => IsAlpine(BuildImage);
+    public bool BuildImageIsPossiblyAlpine => IsPossiblyAlpine(BuildImage);
 
     /// <summary>
-    /// Whether the runtime stage is Alpine-based, which determines whether BusyBox user/package management
-    /// commands can be emitted.
+    /// Whether the runtime stage looks Alpine-based, which determines whether BusyBox user/package
+    /// management commands can be emitted.
     /// </summary>
-    public bool RuntimeImageIsAlpine => IsAlpine(RuntimeImage);
+    public bool RuntimeImageIsPossiblyAlpine => IsPossiblyAlpine(RuntimeImage);
 
-    private static bool IsAlpine(string image) => image.Contains("alpine", StringComparison.OrdinalIgnoreCase);
+    /// <remarks>
+    /// A hint, never a guarantee. An image name is free-form, so a private image built on Alpine can be
+    /// called anything and an image called <c>alpine-tools</c> can be Debian underneath. Callers must
+    /// therefore treat the answer as a preference for which commands to try first, and must not refuse to
+    /// generate a Dockerfile on the strength of it: a wrong guess should at worst cost a container build,
+    /// whereas a rejection blocks a configuration that may well have worked.
+    /// </remarks>
+    private static bool IsPossiblyAlpine(string image) => image.Contains("alpine", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>

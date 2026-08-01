@@ -12,8 +12,8 @@ namespace Aspire.Hosting.Rust.Tests;
 /// <param name="metadataJson">The document to answer with.</param>
 /// <param name="workspaceRootRelativePath">
 /// Where the workspace's root manifest sits relative to the app directory. Real cargo reports absolute host
-/// paths, and publishing turns the workspace root into the container's target directory, so the canned
-/// document's placeholder root is rebased onto the directory the reader is actually asked about.
+/// paths, and publishing checks the workspace root against the build context, so the canned document's
+/// placeholder root is rebased onto the directory the reader is actually asked about.
 /// </param>
 internal sealed class FakeCargoMetadataReader(string metadataJson, string workspaceRootRelativePath = ".") : ICargoMetadataReader
 {

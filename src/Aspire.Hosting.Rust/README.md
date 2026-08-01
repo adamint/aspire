@@ -1,6 +1,7 @@
-# Rust app hosting integration
+# Rust hosting integration
 
-Use this integration to model, configure, and orchestrate Rust applications in an Aspire solution.
+Use this integration to model, configure, and orchestrate a Rust application resource in an Aspire
+solution.
 
 ## Getting started
 
@@ -23,7 +24,8 @@ aspire add Aspire.Hosting.Rust
 
 ## Usage example
 
-In the AppHost, add a Rust application resource:
+Then, in the AppHost, add a Rust application resource and reference it from another resource with
+either C# or TypeScript:
 
 **C#**
 
@@ -32,8 +34,10 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 var api = builder.AddRustApp("api", "../rust-api")
     .WithHttpEndpoint(env: "PORT")
-    .WithExternalHttpEndpoints()
-    .WithOtlpExporter();
+    .WithExternalHttpEndpoints();
+
+var web = builder.AddProject<Projects.Web>("web")
+                 .WithReference(api);
 
 builder.Build().Run();
 ```
@@ -47,8 +51,10 @@ const builder = await createBuilder();
 
 const api = await builder.addRustApp("api", "../rust-api")
     .withHttpEndpoint({ env: "PORT" })
-    .withExternalHttpEndpoints()
-    .withOtlpExporter();
+    .withExternalHttpEndpoints();
+
+const web = await builder.addNodeApp("web", "../web", "server.js")
+    .withReference(api);
 
 await builder.build().run();
 ```
