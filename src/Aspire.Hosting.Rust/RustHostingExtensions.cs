@@ -315,8 +315,9 @@ public static class RustHostingExtensions
     /// <returns>A reference to the <see cref="IResourceBuilder{T}"/> for chaining.</returns>
     /// <ats-returns>The resource builder.</ats-returns>
     /// <remarks>
-    /// Passed to cargo as <c>--package</c>. Required when the crate directory is a workspace with more than
-    /// one default member, because the binary to run would otherwise be ambiguous.
+    /// Passed to cargo as <c>--package</c>. Required when the crate directory is a workspace whose default
+    /// members include more than one package with a binary target, because the binary to run would otherwise
+    /// be ambiguous. Library-only members are ignored, so an app crate beside library crates needs nothing.
     /// </remarks>
     [AspireExport]
     public static IResourceBuilder<T> WithCargoPackage<T>(this IResourceBuilder<T> builder, string packageName)
@@ -562,18 +563,11 @@ public static class RustHostingExtensions
     }
 
     // OTLP export plus certificate trust so outbound TLS calls made by the app pick up the dev/test
-    // certificate bundle.
+    // certificate bundle. Certificate trust needs nothing Rust-specific: the app host already exports
+    // SSL_CERT_DIR (and SSL_CERT_FILE, for the scopes that replace the system store rather than add to it),
+    // which is what OpenSSL and rustls-native-certs read.
     private static IResourceBuilder<RustAppResource> WithRustDefaults(this IResourceBuilder<RustAppResource> builder)
-    {
-        return builder.WithOtlpExporter()
-            .WithCertificateTrustConfiguration(ctx =>
-            {
-                ctx.EnvironmentVariables["SSL_CERT_DIR"] = ctx.CertificateDirectoriesPath;
-                ctx.EnvironmentVariables["SSL_CERT_FILE"] = ctx.CertificateBundlePath;
-
-                return Task.CompletedTask;
-            });
-    }
+        => builder.WithOtlpExporter();
 }
 
 #pragma warning restore ASPIREEXTENSION001

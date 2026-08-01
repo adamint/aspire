@@ -38,6 +38,7 @@ internal static class CargoMetadataFactory
                     """);
 
             var defaultRun = p.DefaultRun is null ? "null" : $"\"{p.DefaultRun}\"";
+            var rustVersion = p.RustVersion is null ? "null" : $"\"{p.RustVersion}\"";
 
             return $$"""
                     {
@@ -45,6 +46,7 @@ internal static class CargoMetadataFactory
                       "id": "{{PackageId(p.Name)}}",
                       "manifest_path": "/app/{{p.Name}}/Cargo.toml",
                       "default_run": {{defaultRun}},
+                      "rust_version": {{rustVersion}},
                       "targets": [
                 {{string.Join(",\n", targets)}}
                       ]
@@ -73,4 +75,4 @@ internal static class CargoMetadataFactory
     private static string PackageId(string packageName) => $"path+file:///app/{packageName}#{packageName}@0.1.0";
 }
 
-internal sealed record CargoPackageSpec(string Name, IReadOnlyList<string> BinTargetNames, string? DefaultRun = null);
+internal sealed record CargoPackageSpec(string Name, IReadOnlyList<string> BinTargetNames, string? DefaultRun = null, string? RustVersion = null);

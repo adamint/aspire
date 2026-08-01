@@ -140,10 +140,21 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task VerifyPublish_RaisesTheDefaultToolchainToTheCrateMsrv()
+    {
+        // The crate pins no toolchain but declares an MSRV newer than the default image, and cargo refuses
+        // to build with an older toolchain, so the default has to move up rather than produce a broken image.
+        var content = await PublishDockerfileAsync(
+            metadata: CargoMetadataFactory.Workspace(new CargoPackageSpec("my-service", ["my-service"], RustVersion: "1.90")));
+
+        await Verify(content);
+    }
+
+    [Fact]
     public async Task VerifyPublish_RebasesTheManifestPathIntoTheContainer()
     {
         // A manifest path is a host path, so it has to be rewritten to where the app directory lands in the
-        // image, and cargo writes target/ next to that manifest rather than at the app directory root.
+        // image. The build output stays at the pinned target directory regardless of where the manifest sits.
         var content = await PublishDockerfileAsync(
             workspaceRootRelativePath: "crates/api",
             configureResource: app => app.WithCargoManifestPath("crates/api/Cargo.toml"));

@@ -3,12 +3,12 @@ WORKDIR /app
 RUN apk add --no-cache musl-dev gcc
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --example demo --release
+    cargo build --example demo --release --target-dir /build/target
 
 FROM alpine:3.22
 RUN apk --no-cache add ca-certificates tzdata
 RUN addgroup -S app && adduser -S -G app app
 WORKDIR /app
-COPY --from=build /app/target/release/examples/demo /app/demo
+COPY --from=build /build/target/release/examples/demo /app/demo
 USER app
 ENTRYPOINT ["/app/demo"]

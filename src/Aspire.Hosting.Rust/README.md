@@ -118,13 +118,13 @@ WORKDIR /app
 RUN apk add --no-cache musl-dev gcc
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --locked --release
+    cargo build --locked --release --target-dir /build/target
 
 FROM alpine:3.22
 RUN apk --no-cache add ca-certificates tzdata
 RUN addgroup -S app && adduser -S -G app app
 WORKDIR /app
-COPY --from=build /app/target/release/my-service /app/my-service
+COPY --from=build /build/target/release/my-service /app/my-service
 USER app
 ENTRYPOINT ["/app/my-service"]
 ```
@@ -136,7 +136,8 @@ dependencies, purely to learn the name of the binary cargo will produce.
 Publishing assumes the app already runs, so it does not re-validate anything cargo would itself have
 rejected at `cargo run` time. It only reports the cases where run mode works but the produced file
 name is still unknowable: a package with several `[[bin]]` targets that no option selects (call
-`WithCargoBinTarget`), or a workspace with several default members (call `WithCargoPackage`).
+`WithCargoBinTarget`), or a workspace with several default members that each produce a binary (call
+`WithCargoPackage`). A workspace that pairs one app crate with library crates resolves on its own.
 `default-run` is honoured, so publish produces the same binary `cargo run` does. The same reasoning
 applies to debugging, which shares this resolution.
 
@@ -145,12 +146,18 @@ forwarded to cargo verbatim and are not parsed, so a target selection made with 
 `--example`, `--package`, `--target`, `--release` or `--profile` changes what cargo builds without
 moving the file publish copies or the debugger launches. Use the dedicated method for those.
 
+The container build pins `--target-dir`, so a `build.target-dir` in the crate's `.cargo/config.toml`
+moves the local build output without moving what the image copies.
+
 #### Base images
 
 | Stage | Default |
 | --- | --- |
 | Build | `rust:<version>-alpine`, where `<version>` comes from `rust-toolchain.toml`/`rust-toolchain`, or `rust:1.89-alpine` when the crate pins nothing |
 | Runtime | `alpine:3.22` |
+
+When the crate pins no toolchain but declares a `rust-version` newer than `1.89`, that version is
+used instead: cargo refuses to build with an older toolchain than the declared minimum.
 
 Both defaults are musl-based, so the binary and the runtime image share a libc by construction and
 there is no glibc-version skew between the two stages.

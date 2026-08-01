@@ -2,11 +2,11 @@
 WORKDIR /app
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --release
+    cargo build --release --target-dir /build/target
 
 FROM debian:bookworm-slim
 RUN (addgroup -g 999 -S app || groupadd --system --gid 999 app) && (adduser -u 999 -S -G app app || useradd --system --uid 999 --gid 999 --no-create-home app)
 WORKDIR /app
-COPY --from=build /app/target/release/my-service /app/my-service
+COPY --from=build /build/target/release/my-service /app/my-service
 USER app
 ENTRYPOINT ["/app/my-service"]

@@ -4,12 +4,12 @@ RUN apk add --no-cache musl-dev gcc
 RUN rustup target add aarch64-unknown-linux-musl
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --target aarch64-unknown-linux-musl --release
+    cargo build --target aarch64-unknown-linux-musl --release --target-dir /build/target
 
 FROM alpine:3.22
 RUN apk --no-cache add ca-certificates tzdata
 RUN addgroup -S app && adduser -S -G app app
 WORKDIR /app
-COPY --from=build /app/target/aarch64-unknown-linux-musl/release/my-service /app/my-service
+COPY --from=build /build/target/aarch64-unknown-linux-musl/release/my-service /app/my-service
 USER app
 ENTRYPOINT ["/app/my-service"]

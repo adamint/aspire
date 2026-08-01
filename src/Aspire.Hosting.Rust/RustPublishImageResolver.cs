@@ -54,9 +54,10 @@ internal static partial class RustPublishImageResolver
         string? explicitBuildImage,
         string? explicitRuntimeImage,
         string appDirectory,
+        string? minimumRustVersion,
         string resourceName)
     {
-        var buildImage = explicitBuildImage ?? ResolveDefaultBuildImage(appDirectory, resourceName);
+        var buildImage = explicitBuildImage ?? ResolveDefaultBuildImage(appDirectory, minimumRustVersion, resourceName);
         var runtimeImage = explicitRuntimeImage ?? DefaultRuntimeImage;
 
         return new RustPublishImages(buildImage, runtimeImage);
@@ -73,13 +74,13 @@ internal static partial class RustPublishImageResolver
     /// which publishes <c>nightly</c> and dated <c>nightly-YYYY-MM-DD</c> tags with the same OS suffixes.
     /// See https://hub.docker.com/_/rust and https://hub.docker.com/r/rustlang/rust
     /// </remarks>
-    internal static string ResolveDefaultBuildImage(string appDirectory, string resourceName)
+    internal static string ResolveDefaultBuildImage(string appDirectory, string? minimumRustVersion, string resourceName)
     {
         var channel = RustToolchainDetector.Detect(appDirectory);
 
         if (channel is null)
         {
-            return $"rust:{RustToolchainDetector.DefaultChannel}-alpine";
+            return $"rust:{ResolveUnpinnedVersion(minimumRustVersion)}-alpine";
         }
 
         if (RustToolchainDetector.GetChannelName(channel) is { } channelName)
@@ -106,4 +107,16 @@ internal static partial class RustPublishImageResolver
 
     [GeneratedRegex(@"^(\d+(?:\.\d+){0,2})(?:-|$)")]
     private static partial Regex VersionPrefixRegex();
+
+    // A crate that pins no toolchain still declares the oldest one it supports, and cargo refuses to build
+    // with anything older, so the crate's rust-version raises the pinned default when it is newer. The
+    // default stays a pinned version rather than the floating `rust:alpine` tag so generated Dockerfiles
+    // remain reproducible.
+    private static string ResolveUnpinnedVersion(string? minimumRustVersion)
+        => minimumRustVersion is not null
+            && CargoMetadata.TryParseRustVersion(minimumRustVersion, out var minimum)
+            && CargoMetadata.TryParseRustVersion(RustToolchainDetector.DefaultChannel, out var @default)
+            && minimum > @default
+                ? minimumRustVersion
+                : RustToolchainDetector.DefaultChannel;
 }

@@ -152,12 +152,21 @@ internal static class RustCargoTargetResolver
 
         var defaultPackages = metadata.Packages.Where(p => metadata.DefaultMemberIds.Contains(p.Id)).ToList();
 
-        return defaultPackages switch
+        if (defaultPackages is [var onlyMember])
+        {
+            return onlyMember;
+        }
+
+        // `cargo run` only needs one *runnable* member, so the common workspace shape of an app crate beside
+        // library crates runs fine. Library-only members are dropped before the choice is called ambiguous.
+        var runnablePackages = defaultPackages.Where(static p => p.BinTargetNames.Count > 0).ToList();
+
+        return runnablePackages switch
         {
             [var single] => single,
             _ => throw new DistributedApplicationException(
                 $"Unable to work out which binary the Rust app '{resourceName}' produces: 'cargo metadata' reported " +
-                $"{defaultPackages.Count} default workspace members. Call WithCargoPackage(\"<name>\") to select one.")
+                $"{runnablePackages.Count} default workspace members with a binary target. Call WithCargoPackage(\"<name>\") to select one.")
         };
     }
 }

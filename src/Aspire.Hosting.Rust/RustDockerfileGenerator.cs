@@ -20,6 +20,12 @@ namespace Aspire.Hosting.Rust;
 /// </remarks>
 internal static class RustDockerfileGenerator
 {
+    // Cargo's output directory inside the build stage. The build context is copied wholesale, so a crate's
+    // .cargo/config.toml comes with it and its build.target-dir would otherwise move the binary somewhere the
+    // COPY --from below does not look. Pinning it to a path outside /app also keeps build output away from the
+    // copied sources.
+    private const string ContainerTargetDirectory = "/build/target";
+
     // Default .dockerignore emitted next to the generated Dockerfile using BuildKit's per-Dockerfile ignore
     // convention. The build stage does `COPY . .`, so without this a local `target/` directory is uploaded to
     // the daemon as build context and copied into the build stage: it is routinely several gigabytes after a
@@ -87,17 +93,12 @@ internal static class RustDockerfileGenerator
             RewriteManifestPath(cargoArgs, manifestPath, ToContainerPath(manifestPath, appDirectory, resource.Name));
         }
 
-        // Cargo writes target/ next to the workspace's root manifest, which is not necessarily the app
-        // directory once a manifest path points at a nested crate.
-        var targetDirectory = metadata.WorkspaceRoot is { Length: > 0 } workspaceRoot
-            ? ToContainerPath(workspaceRoot, appDirectory, resource.Name) + "/target"
-            : "/app/target";
-
         var baseImageAnnotation = ResolveBaseImageAnnotation(resource, context);
         var images = RustPublishImageResolver.Resolve(
             baseImageAnnotation?.BuildImage,
             baseImageAnnotation?.RuntimeImage,
             appDirectory,
+            metadata.MinimumRustVersion,
             resource.Name);
 
         var buildStage = context.Builder
@@ -161,9 +162,9 @@ internal static class RustDockerfileGenerator
             .WorkDir("/app")
             // Add COPY --from=<source> instructions for each container files source.
             .AddContainerFiles(context.Resource, "/app", logger)
-            // RelativePath is relative to cargo's target directory, which the build stage places relative to
-            // /app because the crate was copied there.
-            .CopyFrom("build", $"{targetDirectory}/{target.RelativePath}", $"/app/{target.Name}")
+            // RelativePath is relative to cargo's target directory, which the build stage pins to a fixed
+            // location so the crate's own configuration cannot move it.
+            .CopyFrom("build", $"{ContainerTargetDirectory}/{target.RelativePath}", $"/app/{target.Name}")
             .User("app")
             .Entrypoint([$"/app/{target.Name}"]);
     }
@@ -202,6 +203,11 @@ internal static class RustDockerfileGenerator
         {
             cargoArgs.Add("--release");
         }
+
+        // Appended last because cargo takes the last occurrence of a flag, so this overrides a --target-dir
+        // that reached the list some other way as well as the crate's own configuration.
+        cargoArgs.Add("--target-dir");
+        cargoArgs.Add(ContainerTargetDirectory);
 
         return cargoArgs;
     }

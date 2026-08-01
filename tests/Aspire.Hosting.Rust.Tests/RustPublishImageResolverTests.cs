@@ -10,7 +10,7 @@ public class RustPublishImageResolverTests
     {
         using var crate = new TempCrateDirectory();
 
-        Assert.Equal($"rust:{RustToolchainDetector.DefaultChannel}-alpine", RustPublishImageResolver.ResolveDefaultBuildImage(crate.Path, "api"));
+        Assert.Equal($"rust:{RustToolchainDetector.DefaultChannel}-alpine", RustPublishImageResolver.ResolveDefaultBuildImage(crate.Path, minimumRustVersion: null, "api"));
     }
 
     [Theory]
@@ -32,7 +32,7 @@ public class RustPublishImageResolverTests
             channel = "{channel}"
             """);
 
-        Assert.Equal(expectedImage, RustPublishImageResolver.ResolveDefaultBuildImage(crate.Path, "api"));
+        Assert.Equal(expectedImage, RustPublishImageResolver.ResolveDefaultBuildImage(crate.Path, minimumRustVersion: null, "api"));
     }
 
     [Fact]
@@ -41,7 +41,7 @@ public class RustPublishImageResolverTests
         using var crate = new TempCrateDirectory();
         crate.Write("rust-toolchain", "1.85.0\n");
 
-        Assert.Equal("rust:1.85.0-alpine", RustPublishImageResolver.ResolveDefaultBuildImage(crate.Path, "api"));
+        Assert.Equal("rust:1.85.0-alpine", RustPublishImageResolver.ResolveDefaultBuildImage(crate.Path, minimumRustVersion: null, "api"));
     }
 
     [Fact]
@@ -54,7 +54,7 @@ public class RustPublishImageResolverTests
             channel = '1.90'
             """);
 
-        Assert.Equal("rust:1.90-alpine", RustPublishImageResolver.ResolveDefaultBuildImage(crate.Path, "api"));
+        Assert.Equal("rust:1.90-alpine", RustPublishImageResolver.ResolveDefaultBuildImage(crate.Path, minimumRustVersion: null, "api"));
     }
 
     [Fact]
@@ -64,7 +64,7 @@ public class RustPublishImageResolverTests
         crate.Write("rust-toolchain", "beta");
 
         var exception = Assert.Throws<DistributedApplicationException>(
-            () => RustPublishImageResolver.ResolveDefaultBuildImage(crate.Path, "api"));
+            () => RustPublishImageResolver.ResolveDefaultBuildImage(crate.Path, minimumRustVersion: null, "api"));
 
         Assert.Equal(
             "The Rust app 'api' pins the 'beta' toolchain, but no official container image publishes the 'beta' channel. " +
@@ -72,12 +72,41 @@ public class RustPublishImageResolverTests
             exception.Message);
     }
 
+    [Theory]
+    // Older or equal MSRVs keep the pinned default, so a generated Dockerfile stays reproducible.
+    [InlineData("1.70", null)]
+    [InlineData("1.89", null)]
+    [InlineData("1.89.0", null)]
+    // A crate that needs something newer than the default cannot build with it, so the MSRV wins.
+    [InlineData("1.90", "rust:1.90-alpine")]
+    [InlineData("1.90.1", "rust:1.90.1-alpine")]
+    public void MsrvOnlyRaisesTheDefaultVersion(string minimumRustVersion, string? expectedImage)
+    {
+        using var crate = new TempCrateDirectory();
+
+        Assert.Equal(
+            expectedImage ?? $"rust:{RustToolchainDetector.DefaultChannel}-alpine",
+            RustPublishImageResolver.ResolveDefaultBuildImage(crate.Path, minimumRustVersion, "api"));
+    }
+
+    [Fact]
+    public void MsrvDoesNotOverrideAPinnedToolchain()
+    {
+        using var crate = new TempCrateDirectory();
+        crate.Write("rust-toolchain.toml", """
+            [toolchain]
+            channel = "1.85.0"
+            """);
+
+        Assert.Equal("rust:1.85.0-alpine", RustPublishImageResolver.ResolveDefaultBuildImage(crate.Path, "1.90", "api"));
+    }
+
     [Fact]
     public void DefaultsPairAMuslBuildImageWithAMuslRuntimeImage()
     {
         using var crate = new TempCrateDirectory();
 
-        var images = RustPublishImageResolver.Resolve(null, null, crate.Path, "api");
+        var images = RustPublishImageResolver.Resolve(null, null, crate.Path, minimumRustVersion: null, "api");
 
         Assert.Equal($"rust:{RustToolchainDetector.DefaultChannel}-alpine", images.BuildImage);
         Assert.Equal(RustPublishImageResolver.DefaultRuntimeImage, images.RuntimeImage);
@@ -90,7 +119,7 @@ public class RustPublishImageResolverTests
     {
         using var crate = new TempCrateDirectory();
 
-        var images = RustPublishImageResolver.Resolve("rust:1.89-bookworm", "debian:bookworm-slim", crate.Path, "api");
+        var images = RustPublishImageResolver.Resolve("rust:1.89-bookworm", "debian:bookworm-slim", crate.Path, minimumRustVersion: null, "api");
 
         Assert.Equal("rust:1.89-bookworm", images.BuildImage);
         Assert.Equal("debian:bookworm-slim", images.RuntimeImage);

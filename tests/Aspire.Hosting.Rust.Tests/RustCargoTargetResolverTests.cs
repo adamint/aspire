@@ -166,9 +166,23 @@ public class RustCargoTargetResolverTests
         var exception = Assert.Throws<DistributedApplicationException>(() => Resolve(metadata, new RustCargoOptionsAnnotation()));
 
         Assert.Equal(
-            "Unable to work out which binary the Rust app 'api' produces: 'cargo metadata' reported 2 default workspace members. " +
-            "Call WithCargoPackage(\"<name>\") to select one.",
+            "Unable to work out which binary the Rust app 'api' produces: 'cargo metadata' reported 2 default workspace members " +
+            "with a binary target. Call WithCargoPackage(\"<name>\") to select one.",
             exception.Message);
+    }
+
+    [Fact]
+    public void ALibraryCrateBesideAnAppCrateIsNotAmbiguous()
+    {
+        // `cargo run` picks the workspace's only runnable member, so the very common "app crate plus shared
+        // library crate" workspace must resolve without the caller naming a package.
+        var metadata = CargoMetadataFactory.Workspace(
+            new CargoPackageSpec("api", ["api"]),
+            new CargoPackageSpec("shared", []));
+
+        var target = Resolve(metadata, new RustCargoOptionsAnnotation());
+
+        Assert.Equal("api", target.Name);
     }
 
     [Fact]

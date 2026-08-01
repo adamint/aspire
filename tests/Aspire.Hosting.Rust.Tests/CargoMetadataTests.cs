@@ -78,6 +78,27 @@ public class CargoMetadataTests
     }
 
     [Fact]
+    public void TakesTheHighestRustVersionInTheWorkspace()
+    {
+        // Every workspace member is built by the same toolchain, so the newest MSRV is the one that has to
+        // be satisfied. Components are padded before comparing so "1.9" does not sort above "1.10".
+        var metadata = CargoMetadata.Parse(CargoMetadataFactory.Workspace(
+            new CargoPackageSpec("api", ["api"], RustVersion: "1.85"),
+            new CargoPackageSpec("worker", ["worker"], RustVersion: "1.90.1"),
+            new CargoPackageSpec("shared", [])));
+
+        Assert.Equal("1.90.1", metadata.MinimumRustVersion);
+    }
+
+    [Fact]
+    public void MinimumRustVersionIsNullWhenNoPackageDeclaresOne()
+    {
+        var metadata = CargoMetadata.Parse(CargoMetadataFactory.SinglePackage("my-service"));
+
+        Assert.Null(metadata.MinimumRustVersion);
+    }
+
+    [Fact]
     public void CargoIsOnlyEverAskedForMetadata()
     {
         // The container build is the real build. If this vector ever gains a compiling subcommand, publish
