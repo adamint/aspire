@@ -131,14 +131,17 @@ export async function tryExecuteCli(cliPath: string, execute: CliProbeExecutor =
  * stamped with bundle paths belonging to a CLI that never ran.
  */
 let rejectedConfiguredCliPath: string | undefined;
+let resolvedCliPathForForwarding: { configuredPath: string; resolvedPath: string } | undefined;
 let cliPathResolutionGeneration = 0;
 const rejectedConfiguredCliPathChangedEmitter = new vscode.EventEmitter<void>();
+const resolvedCliPathForForwardingChangedEmitter = new vscode.EventEmitter<void>();
 
 /**
  * Fires when CLI resolution changes whether the configured path may be forwarded
  * through `AspireCliPath`.
  */
 export const onDidChangeConfiguredCliPathRejection = rejectedConfiguredCliPathChangedEmitter.event;
+export const onDidChangeResolvedCliPathForForwarding = resolvedCliPathForForwardingChangedEmitter.event;
 
 function updateRejectedConfiguredCliPath(
     expectedConfiguredPath: string,
@@ -169,6 +172,29 @@ export function isConfiguredCliPathRejectedForForwarding(configuredPath: string)
     return rejectedConfiguredCliPath !== undefined && rejectedConfiguredCliPath === configuredPath;
 }
 
+/**
+ * Returns the effective default-install path resolved for the current setting
+ * snapshot without persisting it as an explicit user configuration value.
+ */
+export function getResolvedCliPathForForwarding(configuredPath: string): string | undefined {
+    return resolvedCliPathForForwarding?.configuredPath === configuredPath
+        ? resolvedCliPathForForwarding.resolvedPath
+        : undefined;
+}
+
+function updateResolvedCliPathForForwarding(configuredPath: string, resolvedPath: string | undefined): void {
+    const nextValue = resolvedPath === undefined
+        ? undefined
+        : { configuredPath, resolvedPath };
+    if (resolvedCliPathForForwarding?.configuredPath === nextValue?.configuredPath
+        && resolvedCliPathForForwarding?.resolvedPath === nextValue?.resolvedPath) {
+        return;
+    }
+
+    resolvedCliPathForForwarding = nextValue;
+    resolvedCliPathForForwardingChangedEmitter.fire();
+}
+
 /** Test seam that clears the rejected-configured-path state between cases. */
 export function resetRejectedConfiguredCliPathForForwarding(): void {
     cliPathResolutionGeneration++;
@@ -176,13 +202,55 @@ export function resetRejectedConfiguredCliPathForForwarding(): void {
         rejectedConfiguredCliPath = undefined;
         rejectedConfiguredCliPathChangedEmitter.fire();
     }
+    if (resolvedCliPathForForwarding !== undefined) {
+        resolvedCliPathForForwarding = undefined;
+        resolvedCliPathForForwardingChangedEmitter.fire();
+    }
+}
+
+interface CliPathLookupOptions {
+    platform?: NodeJS.Platform;
+    pathValue?: string;
+    fileExists?: (candidate: string) => Promise<boolean>;
+    tryExecute?: (candidate: string) => Promise<boolean>;
 }
 
 /**
- * Checks if the Aspire CLI is available on the system PATH.
+ * Finds an executable Aspire CLI on PATH.
+ *
+ * Windows command shims must be resolved to their concrete path so downstream
+ * process launches can route them through cmd.exe instead of passing the bare
+ * command name to Node's executable-only spawn path.
  */
-export async function isCliOnPath(): Promise<boolean> {
-    return await tryExecuteCli('aspire');
+export async function findCliOnPath(options: CliPathLookupOptions = {}): Promise<string | undefined> {
+    const platform = options.platform ?? process.platform;
+    const tryExecute = options.tryExecute ?? tryExecuteCli;
+    if (platform !== 'win32') {
+        return await tryExecute('aspire') ? 'aspire' : undefined;
+    }
+
+    const pathValue = options.pathValue ?? process.env.PATH;
+    if (!pathValue) {
+        return undefined;
+    }
+
+    const candidateExists = options.fileExists ?? fileExists;
+    const executableNames = ['aspire.exe', 'aspire.cmd', 'aspire.bat', 'aspire'];
+    for (const pathEntry of pathValue.split(path.win32.delimiter)) {
+        const directory = pathEntry.trim().replace(/^"(.*)"$/, '$1');
+        if (!directory || !path.win32.isAbsolute(directory)) {
+            continue;
+        }
+
+        for (const executableName of executableNames) {
+            const candidate = path.win32.join(directory, executableName);
+            if (await candidateExists(candidate) && await tryExecute(candidate)) {
+                return candidate;
+            }
+        }
+    }
+
+    return undefined;
 }
 
 /**
@@ -239,10 +307,11 @@ export interface CliPathDependencies {
     getConfiguredPath: () => string;
     getDefaultPaths: () => string[];
     isConfiguredPathAutoConfigured: (configuredPath: string, defaultPaths: readonly string[]) => boolean;
-    isOnPath: () => Promise<boolean>;
+    findOnPath: () => Promise<string | undefined>;
     findAtDefaultPath: () => Promise<string | undefined>;
     tryExecute: (cliPath: string) => Promise<boolean>;
     setConfiguredPath: (cliPath: string) => Promise<void>;
+    updateResolvedPathForForwarding: (configuredPath: string, resolvedPath: string | undefined) => void;
 }
 
 const defaultDependencies: CliPathDependencies = {
@@ -259,10 +328,11 @@ const defaultDependencies: CliPathDependencies = {
         // therefore an explicit user pin even when it happens to equal a legacy default.
         return !hasWorkspaceOverride && containsCliPath(defaultPaths, configuredPath);
     },
-    isOnPath: isCliOnPath,
+    findOnPath: findCliOnPath,
     findAtDefaultPath: findCliAtDefaultPath,
     tryExecute: tryExecuteCli,
     setConfiguredPath: setConfiguredCliPath,
+    updateResolvedPathForForwarding: updateResolvedCliPathForForwarding,
 };
 
 interface InFlightCliPathResolution {
@@ -319,23 +389,32 @@ export function resolveCliPath(deps: CliPathDependencies = defaultDependencies):
         return inFlightResolution.promise;
     }
 
+    const resolutionGeneration = ++cliPathResolutionGeneration;
     let writtenConfiguredPathSnapshot: ConfiguredCliPathSnapshot | undefined;
     let promise!: Promise<CliPathResolutionResult>;
     promise = resolveCliPathCore(
         deps,
         configuredPathSnapshot,
         e2eCliPath,
+        resolutionGeneration,
         snapshot => writtenConfiguredPathSnapshot = snapshot)
         .then(result => {
             // A setting edit or scope change can race a CLI probe. Do not return a result
             // for a configuration snapshot that is no longer current.
             const currentConfiguredPathSnapshot = getConfiguredCliPathSnapshot(deps);
-            if ((!areConfiguredCliPathSnapshotsEqual(currentConfiguredPathSnapshot, configuredPathSnapshot)
+            if (resolutionGeneration !== cliPathResolutionGeneration
+                || (!areConfiguredCliPathSnapshotsEqual(currentConfiguredPathSnapshot, configuredPathSnapshot)
                 && !areConfiguredCliPathSnapshotsEqual(currentConfiguredPathSnapshot, writtenConfiguredPathSnapshot))
                 || process.env.ASPIRE_EXTENSION_E2E_CLI_PATH?.trim() !== e2eCliPath) {
                 return resolveCliPath(deps);
             }
 
+            deps.updateResolvedPathForForwarding(
+                currentConfiguredPathSnapshot.configuredPath,
+                result.source === 'default-install'
+                    && !areCliPathsEqual(currentConfiguredPathSnapshot.configuredPath, result.cliPath)
+                    ? result.cliPath
+                    : undefined);
             return result;
         })
         .finally(() => {
@@ -366,9 +445,9 @@ async function resolveCliPathCore(
     deps: CliPathDependencies,
     configuredPathSnapshot: ConfiguredCliPathSnapshot,
     e2eCliPath: string | undefined,
+    resolutionGeneration: number,
     configuredPathWritten: (snapshot: ConfiguredCliPathSnapshot) => void,
 ): Promise<CliPathResolutionResult> {
-    const resolutionGeneration = ++cliPathResolutionGeneration;
     const { configuredPath, configuredPathIsLegacyDefault, defaultPaths } = configuredPathSnapshot;
     let expectedConfiguredPathSnapshot = configuredPathSnapshot;
 
@@ -376,7 +455,8 @@ async function resolveCliPathCore(
         // Do not overwrite a setting whose value or scope changed while the CLI probe
         // was running. A workspace pin can have the same effective value as the global
         // auto-configured setting, but must still block a stale global write.
-        if (!areConfiguredCliPathSnapshotsEqual(
+        if (resolutionGeneration !== cliPathResolutionGeneration
+            || !areConfiguredCliPathSnapshotsEqual(
             getConfiguredCliPathSnapshot(deps),
             expectedConfiguredPathSnapshot)) {
             return;
@@ -422,8 +502,8 @@ async function resolveCliPathCore(
     }
 
     // 2. Check if CLI is on PATH
-    const onPath = await deps.isOnPath();
-    if (onPath) {
+    const cliOnPath = await deps.findOnPath();
+    if (cliOnPath) {
         // If we previously auto-set the path to a default install location, clear it
         // since PATH is now working
         if (configuredPathIsLegacyDefault) {
@@ -431,7 +511,7 @@ async function resolveCliPathCore(
             await updateConfiguredPath('');
         }
 
-        return { cliPath: 'aspire', available: true, source: 'path' };
+        return { cliPath: cliOnPath, available: true, source: 'path' };
     }
 
     // 3. Check default installation paths (~/.aspire/bin first, then ~/.dotnet/tools)
@@ -441,7 +521,9 @@ async function resolveCliPathCore(
         // older versions already recognized as automatic defaults. Newly added
         // discovery locations remain distinguishable from explicit user pins.
         if (!areCliPathsEqual(configuredPath, foundPath)) {
-            if (containsCliPath(defaultPaths, foundPath) && !isCommandShimPath(foundPath)) {
+            if ((configuredPath === '' || configuredPathIsLegacyDefault)
+                && containsCliPath(defaultPaths, foundPath)
+                && !isCommandShimPath(foundPath)) {
                 extensionLogOutputChannel.info('Updating aspireCliExecutablePath setting to use default install location');
                 await updateConfiguredPath(foundPath);
             }

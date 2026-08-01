@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import {
+    findCliOnPath,
     getDefaultCliInstallPaths,
     resolveCliPath,
     CliPathDependencies,
@@ -24,10 +25,11 @@ function createMockDeps(overrides: Partial<CliPathDependencies> = {}): CliPathDe
         isConfiguredPathAutoConfigured: (configuredPath, paths) => paths.some(candidate => process.platform === 'win32'
             ? path.win32.normalize(candidate).toLowerCase() === path.win32.normalize(configuredPath).toLowerCase()
             : candidate === configuredPath),
-        isOnPath: async () => false,
+        findOnPath: async () => undefined,
         findAtDefaultPath: async () => undefined,
         tryExecute: async () => false,
         setConfiguredPath: async () => {},
+        updateResolvedPathForForwarding: () => {},
         ...overrides,
     };
 }
@@ -108,18 +110,66 @@ suite('utils/cliPath tests', () => {
             }
         });
 
-        test('uses extensionless executable names outside Windows', function () {
-            if (process.platform === 'win32') {
+        test('uses extensionless executable names outside Windows', () => {
+            const platformStub = sinon.stub(process, 'platform').value('linux');
+
+            try {
+                process.env.DOTNET_CLI_HOME = path.join(os.tmpdir(), 'ignored-dotnet-cli-home');
+                const paths = getDefaultCliInstallPaths();
+
+                for (const p of paths) {
+                    assert.strictEqual(path.basename(p), 'aspire');
+                }
+                assert.ok(paths[1].startsWith(path.join(os.homedir(), '.dotnet', 'tools')));
+            }
+            finally {
+                platformStub.restore();
+            }
+        });
+    });
+
+    suite('findCliOnPath', () => {
+        test('returns a concrete Windows command shim from PATH', async () => {
+            const commandShim = 'C:\\npm\\aspire.cmd';
+            const result = await findCliOnPath({
+                platform: 'win32',
+                pathValue: 'C:\\npm',
+                fileExists: async candidate => candidate === commandShim,
+                tryExecute: async candidate => candidate === commandShim,
+            });
+
+            assert.strictEqual(result, commandShim);
+        });
+
+        test('skips relative Windows PATH entries', async () => {
+            const commandShim = 'C:\\npm\\aspire.cmd';
+            const result = await findCliOnPath({
+                platform: 'win32',
+                pathValue: 'tools;C:\\npm',
+                fileExists: async candidate => candidate === 'tools\\aspire.exe' || candidate === commandShim,
+                tryExecute: async () => true,
+            });
+
+            assert.strictEqual(result, commandShim);
+        });
+
+        test('executes a Windows command shim discovered only through PATH', async function () {
+            if (process.platform !== 'win32') {
                 this.skip();
             }
 
-            process.env.DOTNET_CLI_HOME = path.join(os.tmpdir(), 'ignored-dotnet-cli-home');
-            const paths = getDefaultCliInstallPaths();
+            const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'aspire path&a^b(x)-'));
+            try {
+                const commandShim = path.join(tempDirectory, 'aspire.cmd');
+                fs.writeFileSync(commandShim, '@echo off\r\nif "%~1"=="--version" exit /b 0\r\nexit /b 1\r\n');
 
-            for (const p of paths) {
-                assert.strictEqual(path.basename(p), 'aspire');
+                assert.strictEqual(
+                    await findCliOnPath({ pathValue: tempDirectory }),
+                    commandShim);
             }
-            assert.ok(paths[1].startsWith(path.join(os.homedir(), '.dotnet', 'tools')));
+            finally {
+                fs.rmSync(tempDirectory, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
+            }
         });
     });
 
@@ -147,7 +197,7 @@ suite('utils/cliPath tests', () => {
 
             const deps = createMockDeps({
                 getConfiguredPath: () => '/configured/path/aspire',
-                isOnPath: async () => true,
+                findOnPath: async () => 'aspire',
                 tryExecute: async (p) => p === e2ePath,
                 setConfiguredPath,
             });
@@ -164,7 +214,7 @@ suite('utils/cliPath tests', () => {
             const setConfiguredPath = sinon.stub().resolves();
 
             const deps = createMockDeps({
-                isOnPath: async () => false,
+                findOnPath: async () => undefined,
                 findAtDefaultPath: async () => bundlePath,
                 setConfiguredPath,
             });
@@ -182,7 +232,7 @@ suite('utils/cliPath tests', () => {
 
             const deps = createMockDeps({
                 getConfiguredPath: () => '',
-                isOnPath: async () => false,
+                findOnPath: async () => undefined,
                 findAtDefaultPath: async () => bundlePath,
                 setConfiguredPath,
             });
@@ -200,9 +250,9 @@ suite('utils/cliPath tests', () => {
 
             const deps = createMockDeps({
                 getConfiguredPath: () => configuredPath,
-                isOnPath: async () => {
+                findOnPath: async () => {
                     onPathCalls++;
-                    return false;
+                    return undefined;
                 },
                 findAtDefaultPath: async () => {
                     defaultPathCalls++;
@@ -312,7 +362,7 @@ suite('utils/cliPath tests', () => {
                 const result = await resolveCliPath(createMockDeps({
                     getConfiguredPath: () => configuredPath,
                     getDefaultPaths: () => [legacyGlobalToolPath],
-                    isOnPath: async () => true,
+                    findOnPath: async () => 'aspire',
                     tryExecute,
                     setConfiguredPath,
                 }));
@@ -328,7 +378,7 @@ suite('utils/cliPath tests', () => {
 
         test('keeps a workspace-scoped legacy path as an explicit user pin', async () => {
             const legacyGlobalToolPath = '/home/user/.dotnet/tools/aspire';
-            const isOnPath = sinon.stub().resolves(true);
+            const findOnPath = sinon.stub().resolves('aspire');
             const tryExecute = sinon.stub().resolves(true);
             const setConfiguredPath = sinon.stub().resolves();
 
@@ -336,7 +386,7 @@ suite('utils/cliPath tests', () => {
                 getConfiguredPath: () => legacyGlobalToolPath,
                 getDefaultPaths: () => [legacyGlobalToolPath],
                 isConfiguredPathAutoConfigured: () => false,
-                isOnPath,
+                findOnPath,
                 tryExecute,
                 setConfiguredPath,
             }));
@@ -347,38 +397,40 @@ suite('utils/cliPath tests', () => {
                 source: 'configured',
             });
             assert.ok(tryExecute.calledOnceWithExactly(legacyGlobalToolPath));
-            assert.ok(isOnPath.notCalled);
+            assert.ok(findOnPath.notCalled);
             assert.ok(setConfiguredPath.notCalled);
         });
 
-        test('keeps syntactically equivalent non-Windows paths explicit', async function () {
-            if (process.platform === 'win32') {
-                this.skip();
-            }
-
+        test('keeps syntactically equivalent non-Windows paths explicit', async () => {
+            const platformStub = sinon.stub(process, 'platform').value('linux');
             const configuredPath = '/home/user/.dotnet/tools/../tools/aspire';
-            const isOnPath = sinon.stub().resolves(true);
+            const findOnPath = sinon.stub().resolves('aspire');
 
-            const result = await resolveCliPath(createMockDeps({
-                getConfiguredPath: () => configuredPath,
-                getDefaultPaths: () => [globalToolPath],
-                isOnPath,
-                tryExecute: async candidate => candidate === configuredPath,
-            }));
+            try {
+                const result = await resolveCliPath(createMockDeps({
+                    getConfiguredPath: () => configuredPath,
+                    getDefaultPaths: () => [globalToolPath],
+                    findOnPath,
+                    tryExecute: async candidate => candidate === configuredPath,
+                }));
 
-            assert.deepStrictEqual(result, {
-                cliPath: configuredPath,
-                available: true,
-                source: 'configured',
-            });
-            assert.ok(isOnPath.notCalled);
+                assert.deepStrictEqual(result, {
+                    cliPath: configuredPath,
+                    available: true,
+                    source: 'configured',
+                });
+                assert.ok(findOnPath.notCalled);
+            }
+            finally {
+                platformStub.restore();
+            }
         });
 
         test('prefers PATH over default install path', async () => {
             const setConfiguredPath = sinon.stub().resolves();
 
             const deps = createMockDeps({
-                isOnPath: async () => true,
+                findOnPath: async () => 'aspire',
                 findAtDefaultPath: async () => bundlePath,
                 setConfiguredPath,
             });
@@ -391,12 +443,27 @@ suite('utils/cliPath tests', () => {
             assert.ok(setConfiguredPath.notCalled, 'should not update settings when CLI is on PATH');
         });
 
+        test('returns a concrete command shim discovered on PATH', async () => {
+            const commandShim = 'C:\\npm\\aspire.cmd';
+            const deps = createMockDeps({
+                findOnPath: async () => commandShim,
+            });
+
+            const result = await resolveCliPath(deps);
+
+            assert.deepStrictEqual(result, {
+                cliPath: commandShim,
+                available: true,
+                source: 'path',
+            });
+        });
+
         test('clears setting when CLI is on PATH and setting was previously set to a default path', async () => {
             const setConfiguredPath = sinon.stub().resolves();
 
             const deps = createMockDeps({
                 getConfiguredPath: () => bundlePath,
-                isOnPath: async () => true,
+                findOnPath: async () => 'aspire',
                 setConfiguredPath,
             });
 
@@ -411,7 +478,7 @@ suite('utils/cliPath tests', () => {
 
             const deps = createMockDeps({
                 getConfiguredPath: () => globalToolPath,
-                isOnPath: async () => true,
+                findOnPath: async () => 'aspire',
                 setConfiguredPath,
             });
 
@@ -423,7 +490,7 @@ suite('utils/cliPath tests', () => {
 
         test('returns not-found when CLI is not on PATH and not at any default path', async () => {
             const deps = createMockDeps({
-                isOnPath: async () => false,
+                findOnPath: async () => undefined,
                 findAtDefaultPath: async () => undefined,
             });
 
@@ -450,12 +517,12 @@ suite('utils/cliPath tests', () => {
 
         test('keeps an explicitly configured Windows command shim ahead of PATH', async () => {
             const configuredShim = 'C:\\Users\\user\\.dotnet\\tools\\aspire.cmd';
-            const isOnPath = sinon.stub().resolves(true);
+            const findOnPath = sinon.stub().resolves('aspire');
 
             const deps = createMockDeps({
                 getConfiguredPath: () => configuredShim,
                 getDefaultPaths: () => [...defaultPaths, configuredShim],
-                isOnPath,
+                findOnPath,
                 tryExecute: async candidate => candidate === configuredShim,
             });
 
@@ -466,14 +533,14 @@ suite('utils/cliPath tests', () => {
                 available: true,
                 source: 'configured',
             });
-            assert.ok(isOnPath.notCalled);
+            assert.ok(findOnPath.notCalled);
         });
 
         test('falls through to PATH check when custom configured path is invalid', async () => {
             const deps = createMockDeps({
                 getConfiguredPath: () => '/bad/path/aspire',
                 tryExecute: async () => false,
-                isOnPath: async () => true,
+                findOnPath: async () => 'aspire',
             });
 
             const result = await resolveCliPath(deps);
@@ -482,13 +549,13 @@ suite('utils/cliPath tests', () => {
             assert.strictEqual(result.available, true);
         });
 
-        test('falls through to default path when custom configured path is invalid and not on PATH', async () => {
+        test('does not overwrite an invalid explicit setting when falling back to a default path', async () => {
             const setConfiguredPath = sinon.stub().resolves();
 
             const deps = createMockDeps({
                 getConfiguredPath: () => '/bad/path/aspire',
                 tryExecute: async () => false,
-                isOnPath: async () => false,
+                findOnPath: async () => undefined,
                 findAtDefaultPath: async () => bundlePath,
                 setConfiguredPath,
             });
@@ -497,7 +564,7 @@ suite('utils/cliPath tests', () => {
 
             assert.strictEqual(result.source, 'default-install');
             assert.strictEqual(result.cliPath, bundlePath);
-            assert.ok(setConfiguredPath.calledOnceWith(bundlePath));
+            assert.ok(setConfiguredPath.notCalled);
         });
 
         test('does not update setting when already set to the found default path', async () => {
@@ -505,7 +572,7 @@ suite('utils/cliPath tests', () => {
 
             const deps = createMockDeps({
                 getConfiguredPath: () => bundlePath,
-                isOnPath: async () => false,
+                findOnPath: async () => undefined,
                 findAtDefaultPath: async () => bundlePath,
                 setConfiguredPath,
             });
@@ -535,7 +602,7 @@ suite('utils/cliPath tests', () => {
             const deps = createMockDeps({
                 getConfiguredPath: () => configuredPath,
                 tryExecute: async () => false,
-                isOnPath: async () => false,
+                findOnPath: async () => undefined,
                 findAtDefaultPath: async () => discoveredShim,
                 setConfiguredPath,
             });
@@ -550,11 +617,27 @@ suite('utils/cliPath tests', () => {
             assert.ok(setConfiguredPath.notCalled, 'an explicit user setting should be suppressed, not silently erased');
         });
 
+        test('publishes a discovered fallback for environment forwarding', async () => {
+            const updateResolvedPathForForwarding = sinon.stub();
+            const deps = {
+                ...createMockDeps({
+                    getConfiguredPath: () => configuredPath,
+                    tryExecute: async () => false,
+                    findAtDefaultPath: async () => discoveredShim,
+                }),
+                updateResolvedPathForForwarding,
+            } as CliPathDependencies;
+
+            await resolveCliPath(deps);
+
+            assert.ok(updateResolvedPathForForwarding.calledOnceWithExactly(configuredPath, discoveredShim));
+        });
+
         test('suppresses forwarding when an explicitly configured path fails and the CLI is on PATH', async () => {
             const deps = createMockDeps({
                 getConfiguredPath: () => configuredPath,
                 tryExecute: async () => false,
-                isOnPath: async () => true,
+                findOnPath: async () => 'aspire',
                 findAtDefaultPath: async () => undefined,
             });
 
@@ -620,7 +703,7 @@ suite('utils/cliPath tests', () => {
                 tryExecute: async candidate => candidate === olderConfiguredPath
                     ? olderProbe
                     : false,
-                isOnPath: async () => true,
+                findOnPath: async () => 'aspire',
             });
 
             const olderResolution = resolveCliPath(deps);
@@ -636,6 +719,97 @@ suite('utils/cliPath tests', () => {
             assert.ok(
                 isConfiguredCliPathRejectedForForwarding(newerConfiguredPath),
                 'an older in-flight resolution must not clear suppression for the current setting');
+        });
+
+        test('does not publish a stale fallback when the setting returns to the same snapshot', async () => {
+            const firstConfiguredPath = '/opt/first/aspire';
+            const intermediateConfiguredPath = '/opt/intermediate/aspire';
+            const oldFallback = '/opt/old-fallback/aspire';
+            const newFallback = '/opt/new-fallback/aspire';
+            let configuredPathValue = firstConfiguredPath;
+            let completeOldFallback: ((value: string) => void) | undefined;
+            let notifyOldFallbackStarted: (() => void) | undefined;
+            const oldFallbackStarted = new Promise<void>(resolve => notifyOldFallbackStarted = resolve);
+            const oldFallbackPromise = new Promise<string>(resolve => completeOldFallback = resolve);
+            const updateResolvedPathForForwarding = sinon.stub();
+            let firstFallbackPending = true;
+
+            const deps = createMockDeps({
+                getConfiguredPath: () => configuredPathValue,
+                findAtDefaultPath: async () => {
+                    if (firstFallbackPending) {
+                        firstFallbackPending = false;
+                        notifyOldFallbackStarted!();
+                        return oldFallbackPromise;
+                    }
+
+                    return configuredPathValue === intermediateConfiguredPath
+                        ? '/opt/intermediate-fallback/aspire'
+                        : newFallback;
+                },
+                updateResolvedPathForForwarding,
+            });
+
+            const olderResolution = resolveCliPath(deps);
+            await oldFallbackStarted;
+
+            configuredPathValue = intermediateConfiguredPath;
+            await resolveCliPath(deps);
+
+            configuredPathValue = firstConfiguredPath;
+            await resolveCliPath(deps);
+
+            completeOldFallback!(oldFallback);
+            await olderResolution;
+
+            assert.ok(
+                updateResolvedPathForForwarding.neverCalledWith(firstConfiguredPath, oldFallback),
+                'an older resolution must not publish its fallback after a newer generation restored the same setting');
+        });
+
+        test('does not persist a default path from a stale resolution', async () => {
+            const intermediateConfiguredPath = '/opt/intermediate/aspire';
+            const redirectedFallback = '/opt/redirected/aspire';
+            let configuredPathValue = '';
+            let completeOldFallback: ((value: string) => void) | undefined;
+            let notifyOldFallbackStarted: (() => void) | undefined;
+            const oldFallbackStarted = new Promise<void>(resolve => notifyOldFallbackStarted = resolve);
+            const oldFallbackPromise = new Promise<string>(resolve => completeOldFallback = resolve);
+            const setConfiguredPath = sinon.stub().callsFake(async (value: string) => {
+                configuredPathValue = value;
+            });
+            let firstFallbackPending = true;
+
+            const deps = createMockDeps({
+                getConfiguredPath: () => configuredPathValue,
+                tryExecute: async () => false,
+                findAtDefaultPath: async () => {
+                    if (firstFallbackPending) {
+                        firstFallbackPending = false;
+                        notifyOldFallbackStarted!();
+                        return oldFallbackPromise;
+                    }
+
+                    return redirectedFallback;
+                },
+                setConfiguredPath,
+            });
+
+            const olderResolution = resolveCliPath(deps);
+            await oldFallbackStarted;
+
+            configuredPathValue = intermediateConfiguredPath;
+            await resolveCliPath(deps);
+
+            configuredPathValue = '';
+            await resolveCliPath(deps);
+
+            completeOldFallback!(bundlePath);
+            await olderResolution;
+
+            assert.ok(
+                setConfiguredPath.neverCalledWith(bundlePath),
+                'an older resolution must not persist its default path after a newer generation restored the same setting');
         });
 
         test('shares concurrent resolutions for the same configured path', async () => {
@@ -666,15 +840,15 @@ suite('utils/cliPath tests', () => {
 
         test('restarts resolution when the configured path scope changes', async () => {
             let isAutoConfigured = true;
-            let completePathProbe: ((value: boolean) => void) | undefined;
-            const pathProbe = new Promise<boolean>(resolve => completePathProbe = resolve);
+            let completePathProbe: ((value: string) => void) | undefined;
+            const pathProbe = new Promise<string>(resolve => completePathProbe = resolve);
             const tryExecute = sinon.stub().resolves(true);
             const setConfiguredPath = sinon.stub().resolves();
 
             const deps = createMockDeps({
                 getConfiguredPath: () => globalToolPath,
                 isConfiguredPathAutoConfigured: () => isAutoConfigured,
-                isOnPath: async () => pathProbe,
+                findOnPath: async () => pathProbe,
                 tryExecute,
                 setConfiguredPath,
             });
@@ -682,7 +856,7 @@ suite('utils/cliPath tests', () => {
             const autoConfiguredResolution = resolveCliPath(deps);
             isAutoConfigured = false;
             const explicitResolution = resolveCliPath(deps);
-            completePathProbe!(true);
+            completePathProbe!('aspire');
 
             const [autoConfiguredResult, explicitResult] = await Promise.all([
                 autoConfiguredResolution,

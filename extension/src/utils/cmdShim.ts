@@ -89,6 +89,9 @@ export function getCmdShimSpawnCommand(command: string, args: readonly string[])
 export function getCmdShimSpawnCommandWithoutVerbatimArguments(command: string, args: readonly string[]): CmdShimSpawnCommand {
     const commandArgs = [...args];
     assertNoCmdWrapperControlCharacters([command, ...commandArgs]);
+    if (commandArgs.some(argument => argument.length === 0 || /[ \t"]/.test(argument))) {
+        throw new Error('The non-verbatim cmd.exe wrapper cannot safely quote arguments containing whitespace or quotes.');
+    }
 
     return {
         command: getComSpec(),

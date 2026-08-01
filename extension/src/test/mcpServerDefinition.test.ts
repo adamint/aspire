@@ -84,6 +84,31 @@ suite('AspireMcpServerDefinitionProvider refresh tests', () => {
         provider.dispose();
     });
 
+    test('refreshes when CLI resolution rejects a configured path', async () => {
+        cliPath.resetRejectedConfiguredCliPathForForwarding();
+        const provider = new AspireMcpServerDefinitionProvider();
+        const refresh = sinon.stub(provider, 'refresh').resolves();
+
+        try {
+            await cliPath.resolveCliPath({
+                getConfiguredPath: () => '/invalid/aspire',
+                getDefaultPaths: () => [],
+                isConfiguredPathAutoConfigured: () => false,
+                findOnPath: async () => 'aspire',
+                findAtDefaultPath: async () => undefined,
+                tryExecute: async () => false,
+                setConfiguredPath: async () => { },
+                updateResolvedPathForForwarding: () => { },
+            });
+
+            assert.ok(refresh.called, 'MCP definitions should refresh when another consumer rejects the configured CLI');
+        }
+        finally {
+            provider.dispose();
+            cliPath.resetRejectedConfiguredCliPathForForwarding();
+        }
+    });
+
     test('ignores an older refresh that completes after a newer result', async () => {
         const workspaceFoldersValueStub = sinon.stub(vscode.workspace, 'workspaceFolders').value([{
             index: 0,

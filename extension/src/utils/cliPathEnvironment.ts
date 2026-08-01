@@ -3,8 +3,11 @@ import * as fs from 'fs';
 import * as vscode from 'vscode';
 import {
     getConfiguredCliPath,
+    getResolvedCliPathForForwarding,
     isConfiguredCliPathRejectedForForwarding,
     onDidChangeConfiguredCliPathRejection,
+    onDidChangeResolvedCliPathForForwarding,
+    resolveCliPath,
 } from './cliPath';
 import { extensionLogOutputChannel } from './logging';
 import { aspireCliPathEnvironmentDescription } from '../loc/strings';
@@ -44,11 +47,12 @@ export interface ForwardableCliPathDependencies {
 }
 
 /**
- * Test seam: the synchronizer asks the collection (not vscode.workspace) for the
- * current configured CLI path so unit tests can avoid mocking `vscode.workspace`.
+ * Test seam: the synchronizer asks its dependencies for both configured and
+ * unpersisted resolved paths so unit tests can avoid mocking `vscode.workspace`.
  */
 export interface CliPathEnvironmentDependencies extends ForwardableCliPathDependencies {
     getConfiguredPath: () => string;
+    getResolvedPath: (configuredPath: string) => string | undefined;
     log?: (message: string) => void;
 }
 
@@ -61,6 +65,7 @@ const defaultForwardableCliPathDeps: ForwardableCliPathDependencies = {
 
 const defaultDeps: CliPathEnvironmentDependencies = {
     getConfiguredPath: () => getConfiguredCliPath(),
+    getResolvedPath: getResolvedCliPathForForwarding,
     ...defaultForwardableCliPathDeps,
     log: (message) => extensionLogOutputChannel.info(message),
 };
@@ -81,7 +86,14 @@ export function isForwardableAspireCliPath(
 
 export function getForwardableAspireCliPath(deps: CliPathEnvironmentDependencies = defaultDeps): string | undefined {
     const configuredPath = deps.getConfiguredPath();
-    return isForwardableAspireCliPath(configuredPath, deps) ? configuredPath : undefined;
+    if (isForwardableAspireCliPath(configuredPath, deps)) {
+        return configuredPath;
+    }
+
+    const resolvedPath = deps.getResolvedPath(configuredPath);
+    return resolvedPath !== undefined && isForwardableAspireCliPath(resolvedPath, deps)
+        ? resolvedPath
+        : undefined;
 }
 
 export function createAspireCliPathProcessEnvironment(
@@ -158,15 +170,15 @@ function hasBundleRoot(bundleRoot: string, deps: ForwardableCliPathDependencies)
 }
 
 /**
- * Applies the current value of `aspire.aspireCliExecutablePath` to the supplied
- * environment variable collection. Called both at activation and from a
- * configuration-change listener so user edits to the setting take effect for
- * any subsequently created terminals or task processes.
+ * Applies the configured CLI path, or the effective unpersisted fallback, to
+ * the supplied environment variable collection. Called at activation and when
+ * configuration or resolution state changes so subsequently created terminals
+ * and task processes use the same CLI installation as the extension.
  *
- * The contributed variable is cleared when the configured path is empty or not
- * an absolute path. Relative values and the on-PATH `aspire` fallback would
- * either fail `ResolveAspireCliBundle` (which logs a warning and returns no
- * outputs) or be ambiguous, so propagating them would only add noise.
+ * Relative values and the on-PATH `aspire` fallback are not propagated because
+ * they would either fail `ResolveAspireCliBundle` or be ambiguous. An absolute
+ * default-install fallback can be contributed without persisting it as a user
+ * setting.
  *
  * Returns the value that was applied (or `undefined` when the variable was
  * cleared) so the caller — and tests — can verify the decision without poking
@@ -188,7 +200,7 @@ export function syncAspireCliPathEnvironment(
     if (forwardablePath === undefined) {
         collection.description = undefined;
         collection.delete(ASPIRE_CLI_PATH_ENV_VAR);
-        deps.log?.(`Not forwarding ${ASPIRE_CLI_PATH_ENV_VAR}: aspireCliExecutablePath must be an existing absolute path (current: ${configuredPath || '(empty)'}).`);
+        deps.log?.(`Not forwarding ${ASPIRE_CLI_PATH_ENV_VAR}: no resolved CLI path with a bundle is available (configured: ${configuredPath || '(empty)'}).`);
         return undefined;
     }
 
@@ -233,8 +245,27 @@ export function registerCliPathEnvironmentSync(
         }
     });
     const rejectionDisposable = onDidChangeConfiguredCliPathRejection(syncForwardedPath);
-    const disposable = vscode.Disposable.from(configurationDisposable, rejectionDisposable);
+    const resolvedPathDisposable = onDidChangeResolvedCliPathForForwarding(syncForwardedPath);
+    const disposable = vscode.Disposable.from(configurationDisposable, rejectionDisposable, resolvedPathDisposable);
 
     subscriptions.push(disposable);
     return disposable;
+}
+
+/**
+ * Registers CLI path forwarding immediately, then resolves the initial CLI path
+ * so activation can wait until any unpersisted fallback has been contributed.
+ */
+export async function initializeCliPathEnvironmentSync(
+    collection: CliPathEnvironmentCollection,
+    subscriptions: vscode.Disposable[],
+    deps: CliPathEnvironmentDependencies = defaultDeps,
+    onForwardedPathChanged?: (
+        previousPath: string | undefined,
+        currentPath: string | undefined,
+    ) => void,
+    resolvePath: () => Promise<unknown> = resolveCliPath,
+): Promise<void> {
+    registerCliPathEnvironmentSync(collection, subscriptions, deps, onForwardedPathChanged);
+    await resolvePath();
 }

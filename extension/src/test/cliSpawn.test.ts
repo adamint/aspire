@@ -104,6 +104,24 @@ suite('spawnCliProcess tests', () => {
         ]);
     });
 
+    test('rejects non-verbatim cmd wrappers with multiple tokens requiring libuv quotes', () => {
+        assert.throws(
+            () => getCmdShimSpawnCommandWithoutVerbatimArguments(
+                'C:\\Program Files\\Aspire\\aspire.cmd',
+                ['--message=hello world'],
+            ),
+            /cannot safely quote arguments containing whitespace or quotes/);
+    });
+
+    test('rejects empty arguments in non-verbatim cmd wrappers', () => {
+        assert.throws(
+            () => getCmdShimSpawnCommandWithoutVerbatimArguments(
+                'C:\\Program Files\\Aspire\\aspire.cmd',
+                ['agent', ''],
+            ),
+            /cannot safely quote arguments containing whitespace or quotes/);
+    });
+
     test('runs non-verbatim cmd wrappers from paths combining spaces and metacharacters', function () {
         if (process.platform !== 'win32') {
             this.skip();

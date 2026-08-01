@@ -7,6 +7,7 @@ import {
     CliPathEnvironmentDependencies,
     createAspireCliPathProcessEnvironment,
     getForwardableAspireCliPath,
+    initializeCliPathEnvironmentSync,
     registerCliPathEnvironmentSync,
     syncAspireCliPathEnvironment,
 } from '../utils/cliPathEnvironment';
@@ -33,6 +34,7 @@ function createFakeCollection(): CliPathEnvironmentCollection & { entries: Map<s
 function makeDeps(overrides: Partial<CliPathEnvironmentDependencies> = {}): CliPathEnvironmentDependencies {
     return {
         getConfiguredPath: () => '',
+        getResolvedPath: () => undefined,
         isAbsolute: (cliPath: string) => cliPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(cliPath),
         fileExists: (cliPath: string) => cliPath.endsWith('/aspire') || cliPath.endsWith('\\aspire.exe') || cliPath.endsWith('/aspire.exe'),
         realpath: (cliPath: string) => cliPath,
@@ -130,6 +132,18 @@ suite('cliPathEnvironment.getForwardableAspireCliPath tests', () => {
             },
             isRejectedForForwarding: (candidate) => candidate === '/work/aspire/bin/aspire',
         })), undefined);
+    });
+
+    test('returns the effective fallback when the configured path was rejected', () => {
+        const deps = {
+            ...makeDeps({
+                getConfiguredPath: () => '/invalid/aspire',
+                isRejectedForForwarding: candidate => candidate === '/invalid/aspire',
+            }),
+            getResolvedPath: () => '/redirected/aspire',
+        };
+
+        assert.strictEqual(getForwardableAspireCliPath(deps), '/redirected/aspire');
     });
 
     test('keeps forwarding a configured path that resolution did not reject', () => {
@@ -326,10 +340,11 @@ suite('cliPathEnvironment.registerCliPathEnvironmentSync tests', () => {
             getConfiguredPath: () => configuredPath,
             getDefaultPaths: () => [],
             isConfiguredPathAutoConfigured: () => false,
-            isOnPath: async () => true,
+            findOnPath: async () => 'aspire',
             findAtDefaultPath: async () => undefined,
             tryExecute: async () => configuredPathWorks,
             setConfiguredPath: async () => { },
+            updateResolvedPathForForwarding: () => { },
         };
 
         await resolveCliPath(resolutionDeps);
@@ -378,5 +393,25 @@ suite('cliPathEnvironment.registerCliPathEnvironmentSync tests', () => {
 
         assert.strictEqual(subscriptions.length, 1, 'registration should push a disposable onto subscriptions');
         assert.strictEqual(typeof disposable.dispose, 'function');
+    });
+
+    test('initialization waits for the first CLI path resolution', async () => {
+        let completeResolution: (() => void) | undefined;
+        const resolution = new Promise<void>(resolve => completeResolution = resolve);
+        let initializationCompleted = false;
+        const initialization = initializeCliPathEnvironmentSync(
+            createFakeCollection(),
+            subscriptions,
+            makeDeps(),
+            undefined,
+            () => resolution);
+        void initialization.then(() => initializationCompleted = true);
+
+        await Promise.resolve();
+        assert.strictEqual(initializationCompleted, false);
+
+        completeResolution!();
+        await initialization;
+        assert.strictEqual(initializationCompleted, true);
     });
 });

@@ -1,5 +1,9 @@
 import * as vscode from 'vscode';
-import { resolveCliPath } from '../utils/cliPath';
+import {
+    onDidChangeConfiguredCliPathRejection,
+    onDidChangeResolvedCliPathForForwarding,
+    resolveCliPath,
+} from '../utils/cliPath';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { getCmdShimSpawnCommandWithoutVerbatimArguments, shouldWrapWithCmd } from '../utils/cmdShim';
 import { getRegisterMcpServerInWorkspace, registerMcpServerInWorkspaceSetting } from '../utils/settings';
@@ -40,6 +44,7 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
     private _refreshGeneration = 0;
     private _configChangeDisposable: vscode.Disposable | undefined;
     private _workspaceFolderChangeDisposable: vscode.Disposable | undefined;
+    private _cliPathForwardingChangeDisposable: vscode.Disposable | undefined;
 
     constructor() {
         // Re-evaluate when the setting changes
@@ -54,6 +59,14 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
         this._workspaceFolderChangeDisposable = vscode.workspace.onDidChangeWorkspaceFolders(() => {
             this.refresh();
         });
+
+        // Another CLI consumer can discover that the configured path stopped
+        // working or that an unpersisted fallback changed. Re-resolve the MCP
+        // command so it cannot keep serving the stale path.
+        this._cliPathForwardingChangeDisposable = vscode.Disposable.from(
+            onDidChangeConfiguredCliPathRejection(() => this.refresh()),
+            onDidChangeResolvedCliPathForForwarding(() => this.refresh()),
+        );
     }
 
     async refresh(): Promise<void> {
@@ -94,6 +107,7 @@ export class AspireMcpServerDefinitionProvider implements vscode.McpServerDefini
         this._refreshGeneration++;
         this._configChangeDisposable?.dispose();
         this._workspaceFolderChangeDisposable?.dispose();
+        this._cliPathForwardingChangeDisposable?.dispose();
         this._onDidChange.dispose();
     }
 }
