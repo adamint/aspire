@@ -95,11 +95,12 @@ public static class RustHostingExtensions
 
                 resource.ResolvedCargoArgs = cargoArgs;
 
-                // Forwarded verbatim, with no inspection of what they contain. Only the WithCargo* options
-                // feed the executable-path and Dockerfile resolution; a flag that arrives as a raw string
-                // through WithCargoArgs is not parsed back out, because doing so would be a second,
-                // subtly-different implementation of cargo's own argument handling that could never be
-                // complete — a WithArgs callback can append arguments after this point.
+                // No validation is performed on these arguments: every value is passed through raw for
+                // cargo itself to accept or reject. Nothing here inspects what they contain, so only the
+                // WithCargo* options feed the executable-path and Dockerfile resolution — a flag that
+                // arrives as a raw string through WithCargoArgs is not parsed back out. Doing so would be
+                // a second, subtly-different implementation of cargo's own argument handling that could
+                // never be complete, since a WithArgs callback can append arguments after this point.
                 context.Args.Add("run");
                 foreach (var cargoArg in cargoArgs)
                 {
