@@ -23,7 +23,9 @@ public class RustPublishImageResolverTests
     [InlineData("stable-x86_64-unknown-linux-gnu", "rust:alpine")]
     // Pre-release toolchains live in the rustlang/rust repository rather than the official rust one.
     [InlineData("nightly", "rustlang/rust:nightly-alpine")]
-    [InlineData("nightly-2024-01-01", "rustlang/rust:nightly-2024-01-01-alpine")]
+    // The date goes after the OS suffix: rustlang/rust publishes nightly-alpine-2024-01-01, and there is no
+    // nightly-2024-01-01-alpine tag. https://hub.docker.com/r/rustlang/rust/tags?name=nightly-alpine
+    [InlineData("nightly-2024-01-01", "rustlang/rust:nightly-alpine-2024-01-01")]
     public void MapsToolchainChannelsOntoRealImageTags(string channel, string expectedImage)
     {
         using var crate = new TempCrateDirectory();

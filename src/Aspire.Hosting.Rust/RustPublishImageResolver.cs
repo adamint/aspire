@@ -79,7 +79,8 @@ internal static partial class RustPublishImageResolver
     /// publishes by version (<c>rust:1.89-alpine</c>, <c>rust:1.89.0-alpine</c>) plus an unversioned
     /// <c>rust:alpine</c> that tracks current stable; there is no <c>rust:stable-alpine</c> or
     /// <c>rust:beta-*</c> tag. Pre-release toolchains live in the separate <c>rustlang/rust</c> repository,
-    /// which publishes <c>nightly</c> and dated <c>nightly-YYYY-MM-DD</c> tags with the same OS suffixes.
+    /// which publishes <c>nightly-alpine</c> plus dated variants that append the date after the OS suffix,
+    /// as in <c>nightly-alpine-2026-08-01</c> — not <c>nightly-2026-08-01-alpine</c>.
     /// See https://hub.docker.com/_/rust and https://hub.docker.com/r/rustlang/rust
     /// </remarks>
     internal static string ResolveDefaultBuildImage(string appDirectory, string? minimumRustVersion, string resourceName)
@@ -96,7 +97,7 @@ internal static partial class RustPublishImageResolver
             return channelName switch
             {
                 "stable" => "rust:alpine",
-                "nightly" when RustToolchainDetector.GetChannelDate(channel) is { } date => $"rustlang/rust:nightly-{date}-alpine",
+                "nightly" when RustToolchainDetector.GetChannelDate(channel) is { } date => $"rustlang/rust:nightly-alpine-{date}",
                 "nightly" => "rustlang/rust:nightly-alpine",
                 _ => throw new DistributedApplicationException(
                     $"The Rust app '{resourceName}' pins the '{channel}' toolchain, but no official container image publishes the '{channelName}' " +
