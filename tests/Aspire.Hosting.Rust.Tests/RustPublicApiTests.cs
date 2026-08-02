@@ -212,6 +212,29 @@ public class RustPublicApiTests
     }
 
     [Fact]
+    public async Task LaunchConfigurationHonoursCargoEnvironmentVariables()
+    {
+        // cargo metadata is queried with the resource's resolved environment, so CARGO_TARGET_DIR moves the
+        // reported target directory, and CARGO_BUILD_TARGET adds the triple directory that cargo does not
+        // report at all. Without both, the debugger would be pointed at a file the build never wrote.
+        var builder = DistributedApplication.CreateBuilder();
+        var app = builder.AddRustApp("api", builder.AppHostDirectory)
+            .WithEnvironment("CARGO_TARGET_DIR", "/elsewhere")
+            .WithEnvironment("CARGO_BUILD_TARGET", "aarch64-unknown-linux-musl");
+
+        var launchConfig = await InvokeLaunchConfigurationAnnotatorAsync(builder, app.Resource);
+
+        var cargo = Assert.IsType<RustCargoLaunchTarget>(launchConfig.Cargo);
+        var expected = Path.Combine(
+            Path.GetFullPath("/elsewhere", builder.AppHostDirectory),
+            "aarch64-unknown-linux-musl",
+            "debug",
+            OperatingSystem.IsWindows() ? "my-service.exe" : "my-service");
+
+        Assert.Equal(expected, cargo.ExecutablePath);
+    }
+
+    [Fact]
     public async Task LaunchConfigurationThrowsWhenCargoArgumentsHaveNotBeenResolved()
     {
         var builder = DistributedApplication.CreateBuilder();
@@ -238,8 +261,8 @@ public class RustPublicApiTests
 
         await using var app = builder.Build();
 
-        // DCP resolves the resource's arguments before it asks for the launch configuration, and the
-        // launch configuration reuses those resolved cargo arguments, so evaluate them first.
+        // DCP resolves the resource's arguments before it asks for the launch configuration, and the launch
+        // configuration reuses them, so evaluate them first.
         await ArgumentEvaluator.GetArgumentListAsync(resource);
 
         var exe = Executable.Create("test", "cargo");

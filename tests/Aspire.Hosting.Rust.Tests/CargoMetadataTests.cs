@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Collections.ObjectModel;
 using Aspire.TestUtilities;
 
 namespace Aspire.Hosting.Rust.Tests;
@@ -124,7 +125,7 @@ public class CargoMetadataTests
         Directory.CreateDirectory(Path.Combine(crate.Path, "src"));
         crate.Write(Path.Combine("src", "main.rs"), "fn main() { println!(\"hello\"); }");
 
-        var metadata = await new CargoMetadataReader().ReadAsync(crate.Path, manifestPath: null, "api", TestContext.Current.CancellationToken);
+        var metadata = await new CargoMetadataReader().ReadAsync(crate.Path, manifestPath: null, "api", environment: ReadOnlyDictionary<string, string>.Empty, TestContext.Current.CancellationToken);
 
         Assert.Equal("metadata-probe", Assert.Single(metadata.Packages).Name);
 
@@ -136,7 +137,7 @@ public class CargoMetadataTests
             new DistributedApplicationExecutionContext(DistributedApplicationOperation.Publish),
             "api");
         Assert.Equal("metadata-probe", target.Name);
-        Assert.Equal("release/metadata-probe", target.RelativePath);
+        Assert.Equal("release/metadata-probe", target.RelativePathWithoutTarget);
 
         // The target directory cargo reports is absolute, which is what lets the debugger point at the
         // executable without reimplementing CARGO_TARGET_DIR / build.target-dir / workspace resolution.
@@ -153,7 +154,7 @@ public class CargoMetadataTests
         using var crate = new TempCrateDirectory();
 
         var exception = await Assert.ThrowsAsync<DistributedApplicationException>(
-            () => new CargoMetadataReader().ReadAsync(crate.Path, manifestPath: null, "api", TestContext.Current.CancellationToken));
+            () => new CargoMetadataReader().ReadAsync(crate.Path, manifestPath: null, "api", environment: ReadOnlyDictionary<string, string>.Empty, TestContext.Current.CancellationToken));
 
         Assert.Contains("Cargo.toml", exception.Message);
     }

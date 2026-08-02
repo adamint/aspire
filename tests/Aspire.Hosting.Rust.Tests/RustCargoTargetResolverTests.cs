@@ -11,7 +11,7 @@ public class RustCargoTargetResolverTests
         var target = Resolve(CargoMetadataFactory.SinglePackage("my-service"), new RustCargoOptionsAnnotation());
 
         Assert.Equal("my-service", target.Name);
-        Assert.Equal("release/my-service", target.RelativePath);
+        Assert.Equal("release/my-service", target.RelativePathWithoutTarget);
     }
 
     [Fact]
@@ -32,7 +32,7 @@ public class RustCargoTargetResolverTests
         var target = Resolve(metadata, new RustCargoOptionsAnnotation { BinTarget = "worker" });
 
         Assert.Equal("worker", target.Name);
-        Assert.Equal("release/worker", target.RelativePath);
+        Assert.Equal("release/worker", target.RelativePathWithoutTarget);
     }
 
     [Fact]
@@ -43,7 +43,7 @@ public class RustCargoTargetResolverTests
         var target = Resolve(CargoMetadataFactory.SinglePackage("my-service"), new RustCargoOptionsAnnotation { Example = "demo" });
 
         Assert.Equal("demo", target.Name);
-        Assert.Equal("release/examples/demo", target.RelativePath);
+        Assert.Equal("release/examples/demo", target.RelativePathWithoutTarget);
     }
 
     [Fact]
@@ -95,7 +95,7 @@ public class RustCargoTargetResolverTests
 
         var target = Resolve(CargoMetadataFactory.SinglePackage("my-service"), options);
 
-        Assert.Equal(expectedPath, target.RelativePath);
+        Assert.Equal(expectedPath, target.RelativePathWithoutTarget);
     }
 
     [Theory]
@@ -115,7 +115,7 @@ public class RustCargoTargetResolverTests
             new DistributedApplicationExecutionContext(DistributedApplicationOperation.Run),
             "api");
 
-        Assert.Equal(expectedPath, target.RelativePath);
+        Assert.Equal(expectedPath, target.RelativePathWithoutTarget);
     }
 
     [Fact]
@@ -125,7 +125,11 @@ public class RustCargoTargetResolverTests
 
         var target = Resolve(CargoMetadataFactory.SinglePackage("my-service"), options);
 
-        Assert.Equal("aarch64-unknown-linux-musl/release/my-service", target.RelativePath);
+        // The triple is part of cargo's output path but deliberately absent from the container search path,
+        // which globs the segment because a target can also be selected without the app host seeing it.
+        var expected = Path.Combine("/crates/target", "aarch64-unknown-linux-musl", "release", OperatingSystem.IsWindows() ? "my-service.exe" : "my-service");
+        Assert.Equal(expected, target.GetExecutablePath("/crates/target"));
+        Assert.Equal("release/my-service", target.RelativePathWithoutTarget);
     }
 
     [Fact]
@@ -167,7 +171,39 @@ public class RustCargoTargetResolverTests
 
         Assert.Equal(
             "Unable to work out which binary the Rust app 'api' produces: 'cargo metadata' reported 2 default workspace members " +
-            "with a binary target. Call WithCargoPackage(\"<name>\") to select one.",
+            "with a binary target. Call WithCargoPackage(\"<name>\") to select one. Available packages: 'api', 'worker'.",
+            exception.Message);
+    }
+
+    [Fact]
+    public void AnUnknownPackageIsReportedWithTheAvailableNames()
+    {
+        // Resolution happens before any build, so a typo would otherwise surface as LINQ's
+        // "Sequence contains no matching element" with nothing tying it back to the AppHost.
+        var metadata = CargoMetadataFactory.Workspace(
+            new CargoPackageSpec("api", ["api"]),
+            new CargoPackageSpec("worker", ["worker"]));
+
+        var exception = Assert.Throws<DistributedApplicationException>(
+            () => Resolve(metadata, new RustCargoOptionsAnnotation { Package = "wroker" }));
+
+        Assert.Equal(
+            "The Rust app 'api' requested the cargo package 'wroker' with WithCargoPackage, but 'cargo metadata' reported no such " +
+            "package. Available packages: 'api', 'worker'.",
+            exception.Message);
+    }
+
+    [Fact]
+    public void APackageWithNoBinaryIsReportedAsSuch()
+    {
+        // Suggesting WithCargoBinTarget here would send the user looking for a target that cannot exist.
+        var metadata = CargoMetadataFactory.Workspace(new CargoPackageSpec("shared", []));
+
+        var exception = Assert.Throws<DistributedApplicationException>(() => Resolve(metadata, new RustCargoOptionsAnnotation()));
+
+        Assert.Equal(
+            "Unable to work out which binary the Rust app 'api' produces: the package 'shared' declares no binary targets. " +
+            "Point the app directory at a package with a binary, or select one with WithCargoPackage(\"<name>\").",
             exception.Message);
     }
 

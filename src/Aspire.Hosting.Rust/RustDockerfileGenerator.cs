@@ -3,6 +3,7 @@
 
 #pragma warning disable ASPIREDOCKERFILEBUILDER001
 
+using System.Collections.ObjectModel;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.ApplicationModel.Docker;
 using Microsoft.Extensions.DependencyInjection;
@@ -25,6 +26,12 @@ internal static class RustDockerfileGenerator
     // COPY --from below does not look. Pinning it to a path outside /app also keeps build output away from the
     // copied sources.
     private const string ContainerTargetDirectory = "/build/target";
+
+    // Where the build stage leaves the binary for the runtime stage to copy. Cargo's own output path
+    // contains a triple directory whenever a target is selected, and .cargo/config.toml (which arrives with
+    // the build context) can select one without the app host ever seeing it, so the binary is collected to
+    // this fixed path instead of the runtime stage predicting cargo's layout.
+    private const string ContainerArtifactDirectory = "/build/bin";
 
     // Default .dockerignore emitted next to the generated Dockerfile using BuildKit's per-Dockerfile ignore
     // convention. The build stage does `COPY . .`, so without this a local `target/` directory is uploaded to
@@ -75,7 +82,10 @@ internal static class RustDockerfileGenerator
             : new RustCargoOptionsAnnotation();
 
         var metadata = await context.Services.GetRequiredService<ICargoMetadataReader>()
-            .ReadAsync(appDirectory, options.ManifestPath, resource.Name, context.CancellationToken)
+            // Publishing deliberately queries with an empty environment: the resource's environment applies
+            // to the process the container runs, not to the host-side manifest query, and the container build
+            // pins its own target directory regardless of what CARGO_TARGET_DIR says here.
+            .ReadAsync(appDirectory, options.ManifestPath, resource.Name, ReadOnlyDictionary<string, string>.Empty, context.CancellationToken)
             .ConfigureAwait(false);
 
         // Only the app directory is copied into the image, so a workspace root above it never reaches the
@@ -147,7 +157,7 @@ internal static class RustDockerfileGenerator
             // CARGO_HOME is /usr/local/cargo in the official rust images; a cache mount on a path a custom
             // build image does not use is harmless.
             .RunWithMounts(
-                BuildCargoCommand(cargoArgs),
+                $"{BuildCargoCommand(cargoArgs)}{CommandContinuation}{BuildCollectArtifactCommand(target)}",
                 "type=cache,target=/usr/local/cargo/registry");
 
         // Add intermediate FROM stages for any container files sources (e.g. FROM frontend AS frontend_stage).
@@ -181,7 +191,7 @@ internal static class RustDockerfileGenerator
             .AddContainerFiles(context.Resource, "/app", logger)
             // RelativePath is relative to cargo's target directory, which the build stage pins to a fixed
             // location so the crate's own configuration cannot move it.
-            .CopyFrom("build", $"{ContainerTargetDirectory}/{target.RelativePath}", $"/app/{target.Name}")
+            .CopyFrom("build", $"{ContainerArtifactDirectory}/{target.Name}", $"/app/{target.Name}")
             .User("app")
             .Entrypoint([$"/app/{target.Name}"]);
     }
@@ -281,6 +291,37 @@ internal static class RustDockerfileGenerator
 
     private static string BuildCargoCommand(List<string> cargoArgs)
         => string.Join(" ", new[] { "cargo", "build" }.Concat(cargoArgs.Select(ShellQuote)));
+
+    // Moves the freshly built binary to a fixed path so the runtime stage's COPY --from does not have to
+    // know whether cargo inserted a target-triple directory. `--target` is only one of the ways a triple is
+    // selected — `[build] target` in a .cargo/config.toml arrives with the build context, and
+    // CARGO_BUILD_TARGET can come from the resource environment — so both layouts are searched rather than
+    // one being predicted:
+    //   /build/target/release/api            (host build)
+    //   /build/target/x86_64-.../release/api (some target selected, by whatever means)
+    // The explicit emptiness test reports the miss directly; without it the failure is a bare
+    // `cp: cannot stat ''`, which says nothing about what was looked for.
+    private static string BuildCollectArtifactCommand(RustCargoTarget target)
+    {
+        // Quoting only the suffix keeps the wildcard live: `/build/target/*/'my bin'` still globs, whereas
+        // quoting the whole path would make the `*` literal.
+        var suffix = ShellQuote(target.RelativePathWithoutTarget);
+        var candidates = $"{ContainerTargetDirectory}/{suffix} {ContainerTargetDirectory}/*/{suffix}";
+        var destination = $"{ContainerArtifactDirectory}/{ShellQuote(target.Name)}";
+
+        return string.Join(
+            CommandContinuation,
+            [
+                $"bin=\"$(ls -1d {candidates} 2>/dev/null | head -n1)\"",
+                $"[ -n \"$bin\" ] || {{ echo \"cargo build produced no binary under {ContainerTargetDirectory}\" >&2; exit 1; }}",
+                $"mkdir -p {ContainerArtifactDirectory}",
+                $"cp \"$bin\" {destination}"
+            ]);
+    }
+
+    // An explicit LF is used rather than Environment.NewLine or a raw string literal because a CR after the
+    // backslash stops the shell treating the line as a continuation, and the Dockerfile is written verbatim.
+    private const string CommandContinuation = " && \\\n    ";
 
     // Dockerfile RUN uses the shell form (/bin/sh -c), so user-supplied values such as bin target and feature
     // names must be quoted to avoid changing the command's meaning. Already-safe tokens (notably cargo's own

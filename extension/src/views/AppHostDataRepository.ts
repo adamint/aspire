@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { ChildProcessWithoutNullStreams, spawn as spawnProcess } from 'child_process';
+import { ChildProcessWithoutNullStreams } from 'child_process';
 import { spawnCliProcess } from '../debugger/languages/cli';
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
 import { extensionLogOutputChannel } from '../utils/logging';
+import { terminateProcessTree } from '../utils/processTree';
 import { appHostDescribeMayNotBeSupported, appHostPathMustBeNonEmptyAbsolute, aspireCliCommandFailed, aspireCliCommandTimedOut, aspireCliDescribeNotSupported, aspireCliOutputParseFailed, aspireCommandOutputTruncated, aspireDescribeMinimumVersion, errorFetchingAppHosts, workspaceViewSelectedMultipleAppHosts, workspaceViewSelectedSingleAppHost } from '../loc/strings';
 import { AppHostCandidate, AppHostDiscoveryService, formatAppHostLanguage, getWorkspaceAppHostProjectSearchResult, isBuildableAppHostCandidate } from '../utils/appHostDiscovery';
 import { isNoLogoUnsupportedOutput, noLogoOption, removeRootNoLogoOption } from '../utils/cliCompatibility';
@@ -1896,7 +1897,7 @@ export class AppHostDataRepository {
 
         try {
             if (!childProcess.killed) {
-                const signalSent = this._terminateProcessTree(childProcess, false);
+                const signalSent = terminateProcessTree(childProcess, false);
                 if (!signalSent) {
                     cleanup();
                     return;
@@ -1918,7 +1919,7 @@ export class AppHostDataRepository {
                     extensionLogOutputChannel.warn(`${description} did not exit within ${AppHostDataRepository._processShutdownGracePeriodMs}ms; forcing termination.`);
                 }
                 try {
-                    const signalSent = this._terminateProcessTree(childProcess, true);
+                    const signalSent = terminateProcessTree(childProcess, true);
                     if (!signalSent) {
                         cleanup();
                     }
@@ -1931,28 +1932,6 @@ export class AppHostDataRepository {
         }
     }
 
-    private _terminateProcessTree(childProcess: ChildProcessWithoutNullStreams, force: boolean): boolean {
-        if (process.platform !== 'win32' || childProcess.pid === undefined) {
-            return childProcess.kill(force ? 'SIGKILL' : undefined);
-        }
-
-        const args = ['/pid', String(childProcess.pid), '/t'];
-        if (force) {
-            args.push('/f');
-        }
-
-        const taskkill = spawnProcess('taskkill.exe', args, {
-            stdio: 'ignore',
-            windowsHide: true,
-        });
-        taskkill.on('error', error => {
-            extensionLogOutputChannel.warn(`Failed to stop process tree for PID ${childProcess.pid}: ${error}`);
-            childProcess.kill();
-        });
-        taskkill.unref();
-
-        return true;
-    }
 }
 
 export function shortenPath(filePath: string): string {

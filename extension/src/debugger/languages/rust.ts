@@ -7,6 +7,7 @@ import { extensionLogOutputChannel } from "../../utils/logging";
 import { ResourceDebuggerExtension } from "../debuggerExtensions";
 import { AspireDebugSession } from "../AspireDebugSession";
 import { mergeCliSpawnEnvironment } from "./cli";
+import { processGroupSpawnOptions, terminateProcessTree } from "../../utils/processTree";
 
 export interface IRustService {
     build(workingDirectory: string, cargoArgs: string[], env: EnvVar[]): Promise<void>;
@@ -33,7 +34,13 @@ export class RustService implements IRustService {
             const buildEnv: Record<string, string | undefined> = { ...process.env };
             mergeCliSpawnEnvironment(buildEnv, env);
 
-            const buildProcess = spawn('cargo', cargoArgs, { cwd: workingDirectory, env: buildEnv });
+            const buildProcess = spawn('cargo', cargoArgs, {
+                cwd: workingDirectory,
+                env: buildEnv,
+                // Cargo fans out into rustc, the linker and any build scripts. Making it a process group
+                // leader is what lets the cancellation below take those down with it.
+                ...processGroupSpawnOptions()
+            });
 
             // A build can outlive the session that asked for it (cargo waits on its own package lock,
             // and a cold build takes minutes), so stop it when the debug session goes away rather than
@@ -42,7 +49,7 @@ export class RustService implements IRustService {
                 dispose: () => {
                     if (buildProcess.exitCode === null && buildProcess.signalCode === null) {
                         extensionLogOutputChannel.info(`Debug session ended; stopping cargo build in ${workingDirectory}.`);
-                        buildProcess.kill();
+                        terminateProcessTree(buildProcess);
                     }
                 }
             });

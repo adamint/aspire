@@ -17,13 +17,30 @@ namespace Aspire.Hosting.Rust.Tests;
 /// </param>
 internal sealed class FakeCargoMetadataReader(string metadataJson, string workspaceRootRelativePath = ".") : ICargoMetadataReader
 {
-    public Task<CargoMetadata> ReadAsync(string appDirectory, string? manifestPath, string resourceName, CancellationToken cancellationToken)
+    /// <summary>
+    /// The environment the reader was last asked to query with.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> LastEnvironment { get; private set; } = new Dictionary<string, string>();
+
+    public Task<CargoMetadata> ReadAsync(string appDirectory, string? manifestPath, string resourceName, IReadOnlyDictionary<string, string> environment, CancellationToken cancellationToken)
     {
+        LastEnvironment = environment;
+
         var workspaceRoot = Path.GetFullPath(workspaceRootRelativePath, appDirectory);
         var rebased = metadataJson.Replace(
             "\"workspace_root\": \"/app\"",
             $"\"workspace_root\": {JsonSerializer.Serialize(workspaceRoot)}",
             StringComparison.Ordinal);
+
+        // Real cargo honours CARGO_TARGET_DIR when reporting target_directory, and the debug executable path
+        // is derived from it, so the fake reflects it too.
+        if (environment.TryGetValue("CARGO_TARGET_DIR", out var targetDirectory) && targetDirectory.Length > 0)
+        {
+            rebased = rebased.Replace(
+                "\"target_directory\": \"/app/target\"",
+                $"\"target_directory\": {JsonSerializer.Serialize(Path.GetFullPath(targetDirectory, appDirectory))}",
+                StringComparison.Ordinal);
+        }
 
         return Task.FromResult(CargoMetadata.Parse(rebased));
     }

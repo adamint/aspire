@@ -42,18 +42,26 @@ internal sealed record RustCargoTarget(string Name, string ProfileDirectory, str
     }
 
     /// <summary>
-    /// The path of the produced executable relative to the crate's <c>target</c> directory, using forward
-    /// slashes so it can be written straight into a Dockerfile.
+    /// The path of the produced executable relative to the crate's <c>target</c> directory, with any
+    /// target-triple directory left out, using forward slashes so it can be written straight into a
+    /// Dockerfile.
     /// </summary>
-    public string RelativePath => string.Join('/', Segments);
+    /// <remarks>
+    /// Cargo inserts a triple directory whenever a target is selected, and <c>--target</c> is not the only
+    /// way to select one: <c>[build] target</c> in a <c>.cargo/config.toml</c> and the
+    /// <c>CARGO_BUILD_TARGET</c> environment variable both do it without passing through
+    /// <see cref="Target"/>. The container build therefore searches for this path under both layouts rather
+    /// than predicting which one applies.
+    /// </remarks>
+    public string RelativePathWithoutTarget => string.Join('/', Target is null ? Segments : Segments.Skip(1));
 
     /// <summary>
     /// The absolute path of the produced executable, given the target directory cargo reported.
     /// </summary>
     /// <remarks>
     /// The executable extension is applied for the host platform because the app host, the debugger, and the
-    /// build all run on the same machine. It is deliberately not applied to <see cref="RelativePath"/>, which
-    /// describes output produced inside a Linux container.
+    /// build all run on the same machine. It is deliberately not applied to
+    /// <see cref="RelativePathWithoutTarget"/>, which describes output produced inside a Linux container.
     /// </remarks>
     public string GetExecutablePath(string targetDirectory)
     {
@@ -137,6 +145,11 @@ internal static class RustCargoTargetResolver
         return package.BinTargetNames switch
         {
             [var single] => single,
+            // A package with no binary at all is a different mistake from an ambiguous one, and pointing the
+            // user at WithCargoBinTarget would send them looking for a target that does not exist.
+            [] => throw new DistributedApplicationException(
+                $"Unable to work out which binary the Rust app '{resourceName}' produces: the package '{package.Name}' declares no " +
+                $"binary targets. Point the app directory at a package with a binary, or select one with WithCargoPackage(\"<name>\")."),
             var many => throw new DistributedApplicationException(
                 $"Unable to work out which binary the Rust app '{resourceName}' produces: the package '{package.Name}' declares " +
                 $"{many.Count} binary targets. Call WithCargoBinTarget(\"<name>\") to select one.")
@@ -147,7 +160,13 @@ internal static class RustCargoTargetResolver
     {
         if (requestedPackage is not null)
         {
-            return metadata.Packages.First(p => p.Name == requestedPackage);
+            // Reported here rather than left to cargo because this runs before any build: the debugger needs
+            // the executable path up front, so a typo would otherwise surface as an unexplained
+            // "Sequence contains no matching element" from LINQ.
+            return metadata.Packages.FirstOrDefault(p => p.Name == requestedPackage)
+                ?? throw new DistributedApplicationException(
+                    $"The Rust app '{resourceName}' requested the cargo package '{requestedPackage}' with WithCargoPackage, but " +
+                    $"'cargo metadata' reported no such package. Available packages: {FormatPackageNames(metadata)}.");
         }
 
         var defaultPackages = metadata.Packages.Where(p => metadata.DefaultMemberIds.Contains(p.Id)).ToList();
@@ -166,7 +185,13 @@ internal static class RustCargoTargetResolver
             [var single] => single,
             _ => throw new DistributedApplicationException(
                 $"Unable to work out which binary the Rust app '{resourceName}' produces: 'cargo metadata' reported " +
-                $"{runnablePackages.Count} default workspace members with a binary target. Call WithCargoPackage(\"<name>\") to select one.")
+                $"{runnablePackages.Count} default workspace members with a binary target. Call WithCargoPackage(\"<name>\") to select one. " +
+                $"Available packages: {FormatPackageNames(metadata)}.")
         };
     }
+
+    private static string FormatPackageNames(CargoMetadata metadata)
+        => metadata.Packages is { Count: > 0 } packages
+            ? string.Join(", ", packages.Select(static p => $"'{p.Name}'"))
+            : "none";
 }

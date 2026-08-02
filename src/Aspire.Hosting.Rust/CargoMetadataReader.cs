@@ -15,7 +15,7 @@ namespace Aspire.Hosting.Rust;
 /// </remarks>
 internal interface ICargoMetadataReader
 {
-    Task<CargoMetadata> ReadAsync(string appDirectory, string? manifestPath, string resourceName, CancellationToken cancellationToken);
+    Task<CargoMetadata> ReadAsync(string appDirectory, string? manifestPath, string resourceName, IReadOnlyDictionary<string, string> environment, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -48,7 +48,12 @@ internal sealed class CargoMetadataReader : ICargoMetadataReader
     /// <summary>
     /// Runs <c>cargo metadata</c> for the crate in <paramref name="appDirectory"/>.
     /// </summary>
-    public async Task<CargoMetadata> ReadAsync(string appDirectory, string? manifestPath, string resourceName, CancellationToken cancellationToken)
+    /// <remarks>
+    /// <paramref name="environment"/> carries the resource's own environment so the query sees the same
+    /// cargo configuration the build will. <c>CARGO_TARGET_DIR</c> is the one that matters most: it moves the
+    /// <c>target_directory</c> cargo reports here, and therefore the path the debugger is pointed at.
+    /// </remarks>
+    public async Task<CargoMetadata> ReadAsync(string appDirectory, string? manifestPath, string resourceName, IReadOnlyDictionary<string, string> environment, CancellationToken cancellationToken)
     {
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();
@@ -62,6 +67,7 @@ internal sealed class CargoMetadataReader : ICargoMetadataReader
             {
                 ArgumentList = BuildArguments(manifestPath),
                 WorkingDirectory = appDirectory,
+                EnvironmentVariables = environment.ToDictionary(),
                 // Cargo reports a missing or malformed manifest on stderr with a non-zero exit code, which is
                 // more useful than a generic launch failure, so handle the exit code here instead.
                 ThrowOnNonZeroReturnCode = false,

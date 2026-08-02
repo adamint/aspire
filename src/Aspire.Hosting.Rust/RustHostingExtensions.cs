@@ -95,6 +95,11 @@ public static class RustHostingExtensions
 
                 resource.ResolvedCargoArgs = cargoArgs;
 
+                // Forwarded verbatim, with no inspection of what they contain. Only the WithCargo* options
+                // feed the executable-path and Dockerfile resolution; a flag that arrives as a raw string
+                // through WithCargoArgs is not parsed back out, because doing so would be a second,
+                // subtly-different implementation of cargo's own argument handling that could never be
+                // complete — a WithArgs callback can append arguments after this point.
                 context.Args.Add("run");
                 foreach (var cargoArg in cargoArgs)
                 {
@@ -552,12 +557,40 @@ public static class RustHostingExtensions
             ? cargoOptions
             : new RustCargoOptionsAnnotation();
 
+        // The resource's own environment, resolved the same way DCP resolves it before launching the
+        // process, so cargo sees exactly what the app will see.
+        //
+        // This is a second evaluation of the environment callbacks: DCP has already resolved them into
+        // exe.Spec.Env by the time it asks for the launch configuration, but the launch configuration
+        // producer is only handed the debug mode, so the resolved values are not reachable from here.
+        // Aspire.Hosting.Maui resolves the environment the same way, for the same reason, when it
+        // materialises environment variables into an MSBuild targets file.
+        // Remove once the producer receives the resolved configuration:
+        // https://github.com/microsoft/aspire/issues/18956
+        var environment = ExecutionConfigurationBuilder.Create(resource)
+            .WithEnvironmentVariablesConfig()
+            .BuildAsync(executionContext)
+            .GetAwaiter()
+            .GetResult()
+            .EnvironmentVariables
+            .ToDictionary(StringComparer.Ordinal);
+
         var metadata = executionContext.Services.GetRequiredService<ICargoMetadataReader>()
-            .ReadAsync(workingDirectory, options.ManifestPath, resource.Name, CancellationToken.None)
+            .ReadAsync(workingDirectory, options.ManifestPath, resource.Name, environment, CancellationToken.None)
             .GetAwaiter()
             .GetResult();
 
         var target = RustCargoTargetResolver.Resolve(metadata, options, executionContext, resource.Name);
+
+        // CARGO_BUILD_TARGET selects a target the same way --target does, and cargo then writes the binary
+        // under an extra triple directory. Cargo metadata does not report the value, so it is read from the
+        // resource environment here. WithCargoTarget still wins because a command-line --target beats both
+        // the environment and .cargo/config.toml.
+        // See https://doc.rust-lang.org/cargo/reference/config.html#buildtarget
+        if (target.Target is null && environment.TryGetValue("CARGO_BUILD_TARGET", out var buildTarget) && buildTarget.Length > 0)
+        {
+            target = target with { Target = buildTarget };
+        }
 
         return target.GetExecutablePath(metadata.TargetDirectory);
     }
