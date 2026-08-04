@@ -256,19 +256,15 @@ export type CommonTelemetryProperties = Partial<Record<CommonTelemetryProperty, 
 // The dashboard emits a small fixed set of event names (declared in
 // `src/Aspire.Dashboard/Telemetry/TelemetryEventKeys.cs`) that other Aspire
 // dashboard hosts (Visual Studio, C# Dev Kit) recognize verbatim. The
-// passthrough preserves the raw dashboard event name as the
+// passthrough preserves an allowlisted dashboard event name as the
 // `dashboard_event_name` property on each route's fixed wire event (e.g.
 // `aspire/dashboard/operation`), so other ingestion tools can group by
 // dashboard event name without us having to add a new classification row
 // per dashboard event.
 //
-// Truncation of the raw name to a bounded length is handled by
-// `clampDashboardKey` at the call site, which is sufficient to bound the
-// classification footprint without forcing an explicit allowlist here. If we
-// ever need to fall back to a closed allowlist, the set of known names is:
-//   - aspire/dashboard/component/initialize
-//   - aspire/dashboard/component/paramsSet
-//   - aspire/dashboard/component/dispose
-//   - aspire/dashboard/error
-//   - aspire/dashboard/command
+// `dashboardEventNameProperty` checks `KNOWN_DASHBOARD_EVENT_NAMES` in
+// `DashboardTelemetryPassthrough.ts`; unknown names map to `other`. When the
+// dashboard adds an event that must remain queryable by its exact wire name,
+// add it to that allowlist. Keep names from supported older dashboards there
+// as well so extension/dashboard version skew does not collapse known events.
 // ─────────────────────────────────────────────────────────────────────────────
