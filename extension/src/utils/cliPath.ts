@@ -60,6 +60,15 @@ function areCliPathsEqual(left: string, right: string): boolean {
     return path.win32.normalize(left).toLowerCase() === path.win32.normalize(right).toLowerCase();
 }
 
+export function isFullyQualifiedWindowsPath(cliPath: string): boolean {
+    const root = path.win32.parse(path.win32.normalize(cliPath)).root;
+    return /^[A-Za-z]:[\\/]$/.test(root) || root.startsWith('\\\\');
+}
+
+function isAbsoluteCliPath(cliPath: string): boolean {
+    return path.posix.isAbsolute(cliPath) || isFullyQualifiedWindowsPath(cliPath);
+}
+
 function containsCliPath(paths: readonly string[], candidate: string): boolean {
     return paths.some(defaultPath => areCliPathsEqual(defaultPath, candidate));
 }
@@ -173,7 +182,7 @@ export function isConfiguredCliPathRejectedForForwarding(configuredPath: string)
 }
 
 /**
- * Returns the effective default-install path resolved for the current setting
+ * Returns the effective absolute discovery path resolved for the current setting
  * snapshot without persisting it as an explicit user configuration value.
  */
 export function getResolvedCliPathForForwarding(configuredPath: string): string | undefined {
@@ -238,7 +247,7 @@ export async function findCliOnPath(options: CliPathLookupOptions = {}): Promise
     const executableNames = ['aspire.exe', 'aspire.cmd', 'aspire.bat', 'aspire'];
     for (const pathEntry of pathValue.split(path.win32.delimiter)) {
         const directory = pathEntry.trim().replace(/^"(.*)"$/, '$1');
-        if (!directory || !path.win32.isAbsolute(directory)) {
+        if (!directory || !isFullyQualifiedWindowsPath(directory)) {
             continue;
         }
 
@@ -411,7 +420,8 @@ export function resolveCliPath(deps: CliPathDependencies = defaultDependencies):
 
             deps.updateResolvedPathForForwarding(
                 currentConfiguredPathSnapshot.configuredPath,
-                result.source === 'default-install'
+                (result.source === 'default-install' || result.source === 'path')
+                    && isAbsoluteCliPath(result.cliPath)
                     && !areCliPathsEqual(currentConfiguredPathSnapshot.configuredPath, result.cliPath)
                     ? result.cliPath
                     : undefined);

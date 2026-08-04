@@ -141,12 +141,38 @@ suite('utils/cliPath tests', () => {
             assert.strictEqual(result, commandShim);
         });
 
+        test('returns a concrete Windows command shim from a UNC PATH entry', async () => {
+            const commandShim = '\\\\server\\share\\tools\\aspire.cmd';
+            const result = await findCliOnPath({
+                platform: 'win32',
+                pathValue: '\\\\server\\share\\tools',
+                fileExists: async candidate => candidate === commandShim,
+                tryExecute: async candidate => candidate === commandShim,
+            });
+
+            assert.strictEqual(result, commandShim);
+        });
+
+        test('normalizes a forward-slash UNC PATH entry', async () => {
+            const commandShim = '\\\\server\\share\\tools\\aspire.cmd';
+            const result = await findCliOnPath({
+                platform: 'win32',
+                pathValue: '//server/share/tools',
+                fileExists: async candidate => candidate === commandShim,
+                tryExecute: async candidate => candidate === commandShim,
+            });
+
+            assert.strictEqual(result, commandShim);
+        });
+
         test('skips relative Windows PATH entries', async () => {
             const commandShim = 'C:\\npm\\aspire.cmd';
             const result = await findCliOnPath({
                 platform: 'win32',
-                pathValue: 'tools;C:\\npm',
-                fileExists: async candidate => candidate === 'tools\\aspire.exe' || candidate === commandShim,
+                pathValue: 'tools;\\tools;C:\\npm',
+                fileExists: async candidate => candidate === 'tools\\aspire.exe'
+                    || candidate === '\\tools\\aspire.exe'
+                    || candidate === commandShim,
                 tryExecute: async () => true,
             });
 
@@ -456,6 +482,19 @@ suite('utils/cliPath tests', () => {
                 available: true,
                 source: 'path',
             });
+        });
+
+        test('publishes a concrete PATH discovery for environment forwarding', async () => {
+            const commandShim = 'C:\\npm\\aspire.cmd';
+            const updateResolvedPathForForwarding = sinon.stub();
+            const deps = createMockDeps({
+                findOnPath: async () => commandShim,
+                updateResolvedPathForForwarding,
+            });
+
+            await resolveCliPath(deps);
+
+            assert.ok(updateResolvedPathForForwarding.calledOnceWithExactly('', commandShim));
         });
 
         test('clears setting when CLI is on PATH and setting was previously set to a default path', async () => {

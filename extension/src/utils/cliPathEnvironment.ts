@@ -5,6 +5,7 @@ import {
     getConfiguredCliPath,
     getResolvedCliPathForForwarding,
     isConfiguredCliPathRejectedForForwarding,
+    isFullyQualifiedWindowsPath,
     onDidChangeConfiguredCliPathRejection,
     onDidChangeResolvedCliPathForForwarding,
     resolveCliPath,
@@ -57,7 +58,9 @@ export interface CliPathEnvironmentDependencies extends ForwardableCliPathDepend
 }
 
 const defaultForwardableCliPathDeps: ForwardableCliPathDependencies = {
-    isAbsolute: path.isAbsolute,
+    isAbsolute: cliPath => process.platform === 'win32'
+        ? isFullyQualifiedWindowsPath(cliPath)
+        : path.isAbsolute(cliPath),
     fileExists: fileExists,
     realpath: realpath,
     isRejectedForForwarding: isConfiguredCliPathRejectedForForwarding,
@@ -175,10 +178,9 @@ function hasBundleRoot(bundleRoot: string, deps: ForwardableCliPathDependencies)
  * configuration or resolution state changes so subsequently created terminals
  * and task processes use the same CLI installation as the extension.
  *
- * Relative values and the on-PATH `aspire` fallback are not propagated because
+ * Relative values and the bare on-PATH `aspire` fallback are not propagated because
  * they would either fail `ResolveAspireCliBundle` or be ambiguous. An absolute
- * default-install fallback can be contributed without persisting it as a user
- * setting.
+ * discovered path can be contributed without persisting it as a user setting.
  *
  * Returns the value that was applied (or `undefined` when the variable was
  * cleared) so the caller — and tests — can verify the decision without poking
