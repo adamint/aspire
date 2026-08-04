@@ -837,51 +837,6 @@ public sealed class SelectTestsAcceptanceTests(ITestOutputHelper outputHelper) :
         Assert.False(filter.IsExcluded(".github/workflows/backport.yml"));
         Assert.False(filter.IsExcluded("eng/pipelines/azure-pipelines-public.yml"));
         Assert.False(filter.IsExcluded("eng/github-ci/ci-skip-entirely-patterns.txt"));
-
-        // Every npm markdown template ON DISK must be carved out, enumerated from the filesystem rather
-        // than listed here: the carve-out is a glob precisely so a newly added template is covered
-        // without editing the map, and a hardcoded list here could not tell the difference.
-        foreach (var template in NpmPackageMarkdownTemplatePaths())
-        {
-            Assert.False(filter.IsExcluded(template), $"{template} must be carved out of the skip-gate patterns file by the map's keep_routed glob.");
-        }
-    }
-
-    // Repo-relative paths of the markdown templates eng/scripts/pack-cli-npm-package.ps1 renders into the
-    // npm packages. Enumerated with the WIDEST possible pattern (every pack-cli-npm-package* file, then
-    // filtered to .md) rather than a shape like "pack-cli-npm-package.*.md": a narrower pattern here
-    // would silently agree with an equally narrow carve-out glob and prove nothing. Anything named
-    // pack-cli-npm-package<anything>.md must be covered, whatever the naming convention drifts to.
-    public static IEnumerable<string> NpmPackageMarkdownTemplatePaths()
-        => Directory.EnumerateFiles(Path.Combine(RepoRoot.Path, "eng", "scripts"), "pack-cli-npm-package*")
-            .Where(path => path.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
-            .Select(path => "eng/scripts/" + Path.GetFileName(path))
-            .OrderBy(path => path, StringComparer.Ordinal);
-
-    public static TheoryData<string> NpmPackageMarkdownTemplates()
-    {
-        var data = new TheoryData<string>();
-        foreach (var template in NpmPackageMarkdownTemplatePaths())
-        {
-            data.Add(template);
-        }
-
-        Assert.NotEmpty(data);
-        return data;
-    }
-
-    [Theory]
-    [MemberData(nameof(NpmPackageMarkdownTemplates))]
-    public void RealMapNpmPackageMarkdownTemplateChangeRunsPackagingValidation(string templatePath)
-    {
-        var mapPath = Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml");
-        var selector = new TestSelector(mapPath, EnumerateMatrixTestProjects(), LoadProjectDirectories());
-
-        var r = selector.Select([templatePath], [], new SelectorOptions());
-
-        Assert.False(r.SelectsAll);
-        Assert.Contains("Aspire.Cli.Tests", r.TestProjects);
-        Assert.Contains("Infrastructure.Tests", r.TestProjects);
     }
 
     // A src/** file that no Layer 2 rule matches and that is not under a project directory normally hits

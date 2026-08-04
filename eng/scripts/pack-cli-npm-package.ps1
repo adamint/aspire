@@ -234,7 +234,7 @@ $pointerPackageJson = [ordered]@{
     node = '>=20'
   }
   optionalDependencies = $optionalDependencies
-  files = New-StringList @('bin', 'README.md', 'CHANGELOG.md')
+  files = New-StringList @('bin', 'README.md')
 }
 
 Write-JsonFile (Join-Path $pointerPackageRoot 'package.json') $pointerPackageJson
@@ -246,19 +246,6 @@ $pointerReadme = Expand-Template $pointerReadmeTemplate @{
 }
 
 Write-TextFile (Join-Path $pointerPackageRoot 'README.md') $pointerReadme
-
-# Also ship a version-stamped CHANGELOG.md as an extra artifact in the tarball. npmjs.com
-# renders ONLY the README on the package page -- there is no Changelog tab and CHANGELOG.md
-# is not auto-rendered (https://docs.npmjs.com/about-package-readme-files/). The discoverable,
-# per-version pointer to the GitHub release notes therefore lives in the README above; this
-# file is kept for users browsing the tarball or the npm Code view (microsoft/aspire#17719).
-$pointerChangelogTemplate = Read-TemplateFile (Join-Path $PSScriptRoot 'pack-cli-npm-package.CHANGELOG.md')
-$pointerChangelog = Expand-Template $pointerChangelogTemplate @{
-  PACKAGE_NAME = $PackageName
-  VERSION = $Version
-}
-
-Write-TextFile (Join-Path $pointerPackageRoot 'CHANGELOG.md') $pointerChangelog
 
 Invoke-NpmPack $ridPackageRoot $OutputPath
 Invoke-NpmPack $pointerPackageRoot $OutputPath

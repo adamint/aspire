@@ -88,11 +88,8 @@ internal sealed class ChangedFileFilter
     //   **  -> .*        (any chars including '/')
     //   *   -> [^/]*     (any chars except '/')
     //   .   -> \.        (literal dot)
-    //   every other regex metacharacter the action escapes (\ . + ? [ ] ( ) | $ ^ { }) is escaped so
-    //   a pattern like `docs/a{2}.md` matches its own literal filename instead of being read as an
-    //   ERE quantifier, then the result is anchored ^...$.
-    // The escape set MUST stay identical to the action's, or the selector's "excluded" set stops
-    // equalling the gate's "skip" set. GlobToRegexParityTests pins the two together.
+    //   the same regex metacharacters the action escapes (\ . + ? [ ] ( ) |) are escaped; { } ^ $ are
+    //   intentionally left unescaped (the action does the same), then the result is anchored ^...$.
     private static Regex GlobToRegex(string glob)
     {
         // Reserve placeholders for the two glob stars so escaping below cannot touch them. Use control
@@ -125,10 +122,6 @@ internal sealed class ChangedFileFilter
                 case '(':
                 case ')':
                 case '|':
-                case '$':
-                case '^':
-                case '{':
-                case '}':
                     sb.Append('\\').Append(c);
                     break;
                 default:

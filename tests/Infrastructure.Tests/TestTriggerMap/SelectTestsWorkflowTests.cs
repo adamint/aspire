@@ -45,35 +45,6 @@ public sealed class SelectTestsWorkflowTests
             testsYml);
     }
 
-    // The npm markdown templates are build inputs that `**.md` in the patterns file would otherwise
-    // hide, letting a template-only PR skip the ENTIRE workflow. The carve-out is a glob rather than a
-    // literal list on purpose: the same set is enumerated in eng/github-ci/test-trigger-map.yml too, and
-    // a literal list means adding a 4th template and forgetting one file silently reintroduces the bug.
-    // This pins the wiring and forbids a regression to enumeration; that the glob actually REACHES every
-    // template on disk is asserted semantically (via the action's own glob_to_regex) by
-    // CheckChangedFilesActionTests.CiKeepUnmatchedGlobsCoverEveryNpmMarkdownTemplateOnDisk.
-    [Fact]
-    public void CiSkipGateKeepsNpmChangelogTemplateUnmatched()
-    {
-        var ciYml = File.ReadAllText(CiWorkflowPath);
-        var action = File.ReadAllText(CheckChangedFilesActionPath);
-        var map = File.ReadAllText(Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml"));
-
-        Assert.Contains("keep_unmatched:", action);
-        Assert.Contains("KEEP_UNMATCHED_PATTERNS", action);
-        Assert.Contains("keep_unmatched: |", ciYml);
-
-        // Both files must carve the templates out by wildcard, and neither may name one individually --
-        // enumeration is the drift the glob exists to prevent.
-        foreach (var (file, contents) in new[] { ("ci.yml", ciYml), ("test-trigger-map.yml", map) })
-        {
-            Assert.Contains("eng/scripts/pack-cli-npm-package*", contents);
-            Assert.False(
-                contents.Contains("pack-cli-npm-package.CHANGELOG.md", StringComparison.Ordinal),
-                $"{file} enumerates an npm markdown template by name; use a wildcard so new templates are covered automatically.");
-        }
-    }
-
     // The comment_selection job posts one comment per pushed commit (createComment for a new commit,
     // updateComment for a re-run of the same commit) and collapses superseded comments with
     // minimizeComment -- it must never delete. This guard fails if deletion is introduced or the
@@ -163,12 +134,6 @@ public sealed class SelectTestsWorkflowTests
 
     private static string SelectTestsActionPath
         => Path.Combine(RepoRoot.Path, ".github", "actions", "select-tests", "action.yml");
-
-    private static string CheckChangedFilesActionPath
-        => Path.Combine(RepoRoot.Path, ".github", "actions", "check-changed-files", "action.yml");
-
-    private static string CiWorkflowPath
-        => Path.Combine(RepoRoot.Path, ".github", "workflows", "ci.yml");
 
     private static string TestsWorkflowPath
         => Path.Combine(RepoRoot.Path, ".github", "workflows", "tests.yml");

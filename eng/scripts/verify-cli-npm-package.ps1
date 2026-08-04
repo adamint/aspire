@@ -186,29 +186,33 @@ try {
     throw "Pointer package is missing bin/aspire.js."
   }
 
-  # The pointer package ships a version-stamped CHANGELOG.md as an extra artifact
-  # for users browsing the tarball or npm Code view (microsoft/aspire#17719).
-  # Verify it exists and references the packed version.
-  $changelogPath = Join-Path $pointerExtract 'package/CHANGELOG.md'
-  if (-not (Test-Path -LiteralPath $changelogPath)) {
-    throw "Pointer package is missing CHANGELOG.md."
+  # npmjs.com renders the package README but does not surface a packaged CHANGELOG.md.
+  # Keep the version-specific release-notes pointer in the README so users can discover it
+  # before updating. See https://docs.npmjs.com/about-package-readme-files/ and #17719.
+  $readmePath = Join-Path $pointerExtract 'package/README.md'
+  if (-not (Test-Path -LiteralPath $readmePath)) {
+    throw "Pointer package is missing README.md."
   }
 
-  $changelog = Get-Content -Path $changelogPath -Raw
-  if ($changelog -notmatch [System.Text.RegularExpressions.Regex]::Escape($pointerPackageJson.version)) {
-    throw "Pointer package CHANGELOG.md does not reference the packed version '$($pointerPackageJson.version)'."
+  $readme = Get-Content -Path $readmePath -Raw
+  if ($readme -notmatch [System.Text.RegularExpressions.Regex]::Escape($pointerPackageJson.version)) {
+    throw "Pointer package README.md does not reference the packed version '$($pointerPackageJson.version)'."
   }
 
-  if ($changelog -match '__[A-Z0-9_]+__') {
-    throw "Pointer package CHANGELOG.md contains an unreplaced template placeholder."
+  if ($readme -cmatch '__[A-Z0-9_]+__') {
+    throw "Pointer package README.md contains an unreplaced template placeholder."
   }
 
-  if ($changelog -notmatch [System.Text.RegularExpressions.Regex]::Escape('https://github.com/microsoft/aspire/releases')) {
-    throw "Pointer package CHANGELOG.md does not link to the Aspire release notes."
+  if ($readme -notmatch [System.Text.RegularExpressions.Regex]::Escape('https://github.com/microsoft/aspire/releases')) {
+    throw "Pointer package README.md does not link to the Aspire release notes."
   }
 
-  if ($pointerPackageJson.files -notcontains 'CHANGELOG.md') {
-    throw "Pointer package.json files list must include CHANGELOG.md so npm publishes it."
+  if ($readme -match [System.Text.RegularExpressions.Regex]::Escape('https://github.com/microsoft/aspire/releases/tag/v')) {
+    throw "Pointer package README.md must not assume GitHub release tags map directly to npm package versions."
+  }
+
+  if ($pointerPackageJson.files -notcontains 'README.md') {
+    throw "Pointer package.json files list must include README.md so npm publishes it."
   }
 
   $packageMapPath = Join-Path $pointerExtract 'package/bin/aspire-package-map.json'

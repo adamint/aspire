@@ -42,12 +42,6 @@ jobs:
         uses: ./.github/actions/check-changed-files
         with:
           patterns_file: eng/github-ci/ci-skip-entirely-patterns.txt
-          # The npm package's markdown templates are real build inputs, but `**.md` in the patterns
-          # file would hide them and skip ALL of CI for a template-only PR. Matched as a glob rather
-          # than a literal list so adding a new pack-cli-npm-package.<x>.md template cannot silently
-          # reintroduce that bug by being added here in only some of the places that enumerate them.
-          keep_unmatched: |
-            eng/scripts/pack-cli-npm-package*.md
 
       - id: compute_version_suffix
         name: Compute version suffix for PRs

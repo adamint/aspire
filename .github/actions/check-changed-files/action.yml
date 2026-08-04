@@ -9,8 +9,6 @@ description: |
   Inputs:
   - patterns_file: Path to a file containing glob patterns (relative to repository root).
                    Lines starting with '#' and blank lines are ignored.
-  - keep_unmatched: Optional newline-separated glob patterns for files that must be treated
-                    as requiring CI even when patterns_file would otherwise match them.
 
   Pattern syntax:
   - **  matches any path including directory separators (recursive)
@@ -27,10 +25,6 @@ inputs:
   patterns_file:
     description: 'Path to a file containing glob patterns (relative to repository root)'
     required: true
-  keep_unmatched:
-    description: 'Newline-separated glob patterns for files that should not be counted as matched by patterns_file'
-    required: false
-    default: ''
 
 outputs:
   only_changed:
@@ -55,9 +49,6 @@ runs:
     - name: Check changed files against patterns
       id: check_files
       shell: bash
-      env:
-        CHECK_CHANGED_FILES_PATTERNS_FILE: ${{ inputs.patterns_file }}
-        CHECK_CHANGED_FILES_KEEP_UNMATCHED: ${{ inputs.keep_unmatched }}
       run: |
         set -ex
 
@@ -82,12 +73,12 @@ runs:
         glob_to_regex() {
           local glob="$1"
           local result="$glob"
-          local escaped_open_brace='\{'
-          local escaped_close_brace='\}'
           # Replace ** and * with placeholders before escaping
           result="${result//\*\*/__DOUBLESTAR__}"
           result="${result//\*/__STAR__}"
           # Escape regex metacharacters that could appear in file paths.
+          # Note: { } ^ $ are not escaped because they are either not special
+          # in ERE mid-pattern or cannot appear in file paths.
           result="${result//\\/\\\\}"
           result="${result//./\\.}"
           result="${result//+/\\+}"
@@ -97,10 +88,6 @@ runs:
           result="${result//\(/\\(}"
           result="${result//\)/\\)}"
           result="${result//|/\\|}"
-          result="${result//\$/\\$}"
-          result="${result//^/\\^}"
-          result="${result//\{/$escaped_open_brace}"
-          result="${result//\}/$escaped_close_brace}"
           # Restore glob placeholders as regex
           result="${result//__STAR__/[^/]*}"
           result="${result//__DOUBLESTAR__/.*}"
@@ -109,9 +96,8 @@ runs:
         }
 
         PATTERNS=()
-        KEEP_UNMATCHED_PATTERNS=()
 
-        PATTERNS_FILE="$CHECK_CHANGED_FILES_PATTERNS_FILE"
+        PATTERNS_FILE="${{ inputs.patterns_file }}"
 
         # Read glob patterns from file, skip comments and blank lines
         FULL_PATH="${GITHUB_WORKSPACE}/${PATTERNS_FILE}"
@@ -128,16 +114,6 @@ runs:
           fi
           PATTERNS+=("$(glob_to_regex "$line")")
         done < "$FULL_PATH"
-
-        while IFS= read -r line; do
-          # Remove leading/trailing whitespace
-          line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-          # Skip blank lines and comments
-          if [ -z "$line" ] || [[ "$line" == \#* ]]; then
-            continue
-          fi
-          KEEP_UNMATCHED_PATTERNS+=("$(glob_to_regex "$line")")
-        done <<< "$CHECK_CHANGED_FILES_KEEP_UNMATCHED"
 
         # Check if we have any valid patterns
         if [ ${#PATTERNS[@]} -eq 0 ]; then
@@ -176,25 +152,14 @@ runs:
               continue
             fi
 
-            KEEP_UNMATCHED=false
-            for pattern in "${KEEP_UNMATCHED_PATTERNS[@]}"; do
+            MATCHED=false
+            for pattern in "${PATTERNS[@]}"; do
               # Use safe regex matching with error handling
               if [[ "$file" =~ $pattern ]] 2>/dev/null; then
-                KEEP_UNMATCHED=true
+                MATCHED=true
                 break
               fi
             done
-
-            MATCHED=false
-            if [ "$KEEP_UNMATCHED" = false ]; then
-              for pattern in "${PATTERNS[@]}"; do
-                # Use safe regex matching with error handling
-                if [[ "$file" =~ $pattern ]] 2>/dev/null; then
-                  MATCHED=true
-                  break
-                fi
-              done
-            fi
 
             if [ "$MATCHED" = true ]; then
               MATCHED_FILES+=("$file")
