@@ -1,4 +1,7 @@
 import * as assert from 'assert';
+import childProcess = require('child_process');
+import { EventEmitter } from 'events';
+import * as nodePath from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { createProjectDebuggerExtension, projectDebuggerExtension } from '../debugger/languages/dotnet';
@@ -246,6 +249,47 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(dotNetService.buildDotNetProjectStub.called, true);
     });
 
+    test('project-scoped dotnet commands use the project directory as their working directory', async () => {
+        const projectPath = nodePath.join(process.cwd(), '.test-temp', `dotnet-cwd-${process.pid}-${Date.now()}`, 'TestProject.csproj');
+        const outputPath = nodePath.join(nodePath.dirname(projectPath), 'bin', 'Debug', 'net10.0', 'TestProject.dll');
+        const projectDirectory = nodePath.dirname(projectPath);
+        const buildProcess = Object.assign(new EventEmitter(), {
+            stdout: new EventEmitter(),
+            stderr: new EventEmitter()
+        });
+
+        const execFileStub = sinon.stub(childProcess, 'execFile').yields(null, { stdout: outputPath, stderr: '' });
+        const spawnStub = sinon.stub(childProcess, 'spawn').callsFake(() => {
+            setImmediate(() => buildProcess.emit('close', 0));
+            return buildProcess as unknown as childProcess.ChildProcessWithoutNullStreams;
+        });
+
+        const launchConfig: ProjectLaunchConfiguration = {
+            type: 'project',
+            project_path: projectPath
+        };
+
+        const debugConfig: AspireResourceExtendedDebugConfiguration = {
+            runId: '1',
+            debugSessionId: '1',
+            type: 'coreclr',
+            name: 'Test Debug Config',
+            request: 'launch'
+        };
+
+        const fakeAspireDebugSession = sinon.createStubInstance(AspireDebugSession);
+
+        await projectDebuggerExtension.createDebugSessionConfigurationCallback!(
+            launchConfig,
+            [],
+            [],
+            { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession },
+            debugConfig);
+
+        assert.strictEqual(execFileStub.firstCall.args[2]?.cwd, projectDirectory);
+        assert.strictEqual(spawnStub.firstCall.args[2]?.cwd, projectDirectory);
+    });
+
     test('project is not built when C# dev kit is installed and executable found', async () => {
         const outputPath = 'C:\\temp\\bin\\Debug\\net7.0\\TestProject.dll';
         const { extension, dotNetService } = createDebuggerExtension(outputPath, null, true, true);
@@ -285,6 +329,118 @@ suite('Dotnet Debugger Extension Tests', () => {
         const fileBasedConfig: ProjectLaunchConfiguration = { type: 'project', project_path: '/tmp/app.cs' };
         assert.strictEqual(projectDebuggerExtension.getProjectFile(csprojConfig), '/tmp/Worker.csproj');
         assert.strictEqual(projectDebuggerExtension.getProjectFile(fileBasedConfig), '/tmp/app.cs');
+    });
+
+    test('file-based AppHost follows CLI build ownership', async () => {
+        const executablePath = '/tmp/obj/Debug/net10.0/apphost';
+        const { extension, dotNetService } = createDebuggerExtension('unused-build-output', null, true, true);
+        dotNetService.runApiOutput = JSON.stringify({
+            $type: 'RunCommand',
+            Version: 1,
+            ExecutablePath: executablePath,
+            CommandLineArguments: '',
+            WorkingDirectory: '',
+            EnvironmentVariables: {}
+        });
+
+        const launchConfig: ProjectLaunchConfiguration = {
+            type: 'project',
+            project_path: '/tmp/apphost.cs'
+        };
+
+        const fakeAspireDebugSession = sinon.createStubInstance(AspireDebugSession);
+
+        const createDebugConfig = (): AspireResourceExtendedDebugConfiguration => ({
+            runId: '1',
+            debugSessionId: '1',
+            type: 'coreclr',
+            name: 'Test Debug Config',
+            request: 'launch'
+        });
+
+        await extension.createDebugSessionConfigurationCallback!(
+            launchConfig,
+            [],
+            [],
+            { debug: true, forceBuild: false, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
+            createDebugConfig());
+
+        assert.strictEqual(dotNetService.buildDotNetProjectStub.notCalled, true);
+
+        await extension.createDebugSessionConfigurationCallback!(
+            launchConfig,
+            [],
+            [],
+            { debug: true, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
+            createDebugConfig());
+
+        assert.strictEqual(dotNetService.buildDotNetProjectStub.calledOnce, true);
+
+        await extension.createDebugSessionConfigurationCallback!(
+            launchConfig,
+            [],
+            [],
+            { debug: true, forceBuild: true, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
+            createDebugConfig());
+
+        assert.strictEqual(dotNetService.buildDotNetProjectStub.calledTwice, true);
+
+        await extension.createDebugSessionConfigurationCallback!(
+            launchConfig,
+            [],
+            [],
+            { debug: true, forceBuild: false, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession },
+            createDebugConfig());
+
+        assert.strictEqual(dotNetService.buildDotNetProjectStub.callCount, 3);
+    });
+
+    test('file-based AppHost with selected Executable profile follows CLI build ownership', async () => {
+        const fs = require('fs');
+        const tempRoot = nodePath.join(process.cwd(), '.test-temp', `dotnet-executable-apphost-${process.pid}-${Date.now()}`);
+        fs.mkdirSync(tempRoot, { recursive: true });
+
+        try {
+            const projectPath = nodePath.join(tempRoot, 'apphost.cs');
+            fs.writeFileSync(projectPath, '// file-based AppHost');
+            fs.writeFileSync(nodePath.join(tempRoot, 'apphost.run.json'), JSON.stringify({
+                profiles: {
+                    tool: {
+                        commandName: 'Executable',
+                        executablePath: 'dotnet',
+                        commandLineArgs: '--info'
+                    }
+                }
+            }));
+
+            const { extension, dotNetService } = createDebuggerExtension('unused-build-output', null, true, true);
+            const launchConfig: ProjectLaunchConfiguration = {
+                type: 'project',
+                project_path: projectPath
+            };
+            const debugConfig: AspireResourceExtendedDebugConfiguration = {
+                runId: '1',
+                debugSessionId: '1',
+                type: 'coreclr',
+                name: 'Test Debug Config',
+                request: 'launch',
+                launchProfile: 'tool'
+            };
+            const fakeAspireDebugSession = sinon.createStubInstance(AspireDebugSession);
+
+            await extension.createDebugSessionConfigurationCallback!(
+                launchConfig,
+                undefined,
+                [],
+                { debug: true, forceBuild: false, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
+                debugConfig);
+
+            assert.strictEqual(dotNetService.buildDotNetProjectStub.notCalled, true);
+            assert.strictEqual(debugConfig.program, 'dotnet');
+            assert.strictEqual(debugConfig.args, '--info');
+        } finally {
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
     });
 
     test('file-based .cs project launches the dotnet run-api executable under coreclr', async () => {
@@ -804,6 +960,28 @@ suite('Dotnet Debugger Extension Tests', () => {
             assert.strictEqual(debugConfig.noDebug, true);
             assert.strictEqual(debugConfig.cwd, tempRoot);
             assert.deepStrictEqual(debugConfig.env, {});
+
+            dotNetService.buildDotNetProjectStub.resetHistory();
+            const appHostDebugConfig: AspireResourceExtendedDebugConfiguration = {
+                runId: '1',
+                debugSessionId: '1',
+                type: 'coreclr',
+                name: 'Test AppHost Debug Config',
+                request: 'launch',
+                disableLaunchProfile: true
+            };
+
+            await extension.createDebugSessionConfigurationCallback!(
+                launchConfig,
+                [],
+                [],
+                { debug: true, forceBuild: false, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
+                appHostDebugConfig);
+
+            assert.strictEqual(dotNetService.buildDotNetProjectStub.notCalled, true);
+            assert.strictEqual(appHostDebugConfig.program, 'dotnet');
+            assert.deepStrictEqual(appHostDebugConfig.args, ['run', '--file', projectPath, '--no-build', '--no-launch-profile']);
+            assert.strictEqual(appHostDebugConfig.noDebug, true);
         } finally {
             fs.rmSync(tempRoot, { recursive: true, force: true });
         }
