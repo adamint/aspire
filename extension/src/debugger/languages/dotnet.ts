@@ -29,7 +29,7 @@ interface IDotNetService {
     getAndActivateDevKit(): Promise<boolean>
     buildDotNetProject(projectFile: string): Promise<void>;
     getDotNetTargetPath(projectFile: string): Promise<string>;
-    getDotNetRunApiOutput(projectFile: string): Promise<string>;
+    getDotNetRunApiOutput(projectFile: string, environment?: NodeJS.ProcessEnv): Promise<string>;
 }
 
 class DotNetService implements IDotNetService {
@@ -137,7 +137,7 @@ class DotNetService implements IDotNetService {
         }
     }
 
-    async getDotNetRunApiOutput(projectPath: string): Promise<string> {
+    async getDotNetRunApiOutput(projectPath: string, environment?: NodeJS.ProcessEnv): Promise<string> {
         let childProcess: ChildProcessWithoutNullStreams;
 
         return new Promise<string>(async (resolve, reject) => {
@@ -151,7 +151,7 @@ class DotNetService implements IDotNetService {
 
                 childProcess = spawn('dotnet', ['run-api'], {
                     cwd: path.dirname(projectPath),
-                    env: createAspireCliPathProcessEnvironment(),
+                    env: createAspireCliPathProcessEnvironment({ ...process.env, ...environment }),
                     stdio: ['pipe', 'pipe', 'pipe']
                 });
 
@@ -312,21 +312,37 @@ async function shouldLaunchProjectWithDotNetRun(outputPath: string): Promise<boo
     }
 }
 
-function quoteCommandLineArgument(argument: string): string {
-    return `"${argument.replace(/"/g, '\\"')}"`;
+export function quoteCommandLineArgument(argument: string): string {
+    // Backslashes before a quote must be doubled so the command-line parser does not consume the
+    // quote itself. The closing quote follows the same rule when the argument ends in backslashes.
+    // https://learn.microsoft.com/cpp/c-language/parsing-c-command-line-arguments
+    const escapedArgument = argument
+        .replace(/(\\*)"/g, '$1$1\\"')
+        .replace(/(\\+)$/, '$1$1');
+    return `"${escapedArgument}"`;
 }
 
-function createDotNetRunBaseArguments(projectPath: string, fileBased: boolean, skipBuild: boolean = false): string[] {
+function createDotNetRunBaseArguments(projectPath: string, fileBased: boolean, skipBuild: boolean = false, runWorkingDirectory?: string, suppressCliRunHook: boolean = false): string[] {
     // File-based resources use --no-cache to avoid stale SDK cache entries. When the CLI already built a
     // file-based AppHost, use --no-build so this fallback launches that output without rebuilding it.
     // Project files launch with `dotnet run --project <proj>`.
-    return fileBased
+    const dotnetRunArgs = fileBased
         ? ['run', '--file', projectPath, skipBuild ? '--no-build' : '--no-cache', '--no-launch-profile']
         : ['run', '--project', projectPath, '--no-launch-profile'];
+
+    if (suppressCliRunHook) {
+        dotnetRunArgs.push('--property:_AspireSuppressCliRunHook=true');
+    }
+
+    if (runWorkingDirectory) {
+        dotnetRunArgs.push(`--property:RunWorkingDirectory=${runWorkingDirectory}`);
+    }
+
+    return dotnetRunArgs;
 }
 
-function createDotNetRunArguments(projectPath: string, baseProfileArgs: string | undefined, runSessionArgs: string[] | undefined, fileBased: boolean = false, skipBuild: boolean = false): string[] | string {
-    const dotnetRunArgs = createDotNetRunBaseArguments(projectPath, fileBased, skipBuild);
+function createDotNetRunArguments(projectPath: string, baseProfileArgs: string | undefined, runSessionArgs: string[] | undefined, fileBased: boolean = false, skipBuild: boolean = false, runWorkingDirectory?: string, suppressCliRunHook: boolean = false): string[] | string {
+    const dotnetRunArgs = createDotNetRunBaseArguments(projectPath, fileBased, skipBuild, runWorkingDirectory, suppressCliRunHook);
     if (runSessionArgs !== undefined) {
         if (runSessionArgs.length > 0) {
             dotnetRunArgs.push('--', ...runSessionArgs);
@@ -340,7 +356,12 @@ function createDotNetRunArguments(projectPath: string, baseProfileArgs: string |
         //   --path "value with spaces" --flag
         // Preserve that string instead of reparsing it here so debugger command-line parsing
         // handles escaping consistently with normal project launches. Only the path token needs quoting.
-        const quotedRunArgs = createDotNetRunBaseArguments(quoteCommandLineArgument(projectPath), fileBased, skipBuild);
+        const quotedRunArgs = createDotNetRunBaseArguments(
+            quoteCommandLineArgument(projectPath),
+            fileBased,
+            skipBuild,
+            runWorkingDirectory ? quoteCommandLineArgument(runWorkingDirectory) : undefined,
+            suppressCliRunHook);
         return `${quotedRunArgs.join(' ')} -- ${baseProfileArgs}`;
     }
 
@@ -351,16 +372,18 @@ function configureDotNetRunDebugConfiguration(
     debugConfiguration: AspireResourceExtendedDebugConfiguration,
     args: string[] | string,
     baseProfileEnvironmentVariables: { [key: string]: string } | undefined,
-    runSessionEnvironmentVariables: EnvVar[]): void {
+    runSessionEnvironmentVariables: EnvVar[],
+    processWorkingDirectory?: string): void {
     debugConfiguration.program = 'dotnet';
     debugConfiguration.args = args;
-    // Intentionally do NOT set cwd here. The caller already resolved debugConfiguration.cwd from the
+    // Unless the caller provides a separate process directory, keep the cwd already resolved from the
     // selected launch profile via determineWorkingDirectory (which falls back to the project directory
     // when the profile sets no workingDirectory). Because this fallback launches with --no-launch-profile,
     // `dotnet run` will not re-apply the profile's workingDirectory itself, so overwriting cwd here would
     // silently discard a custom profile workingDirectory and launch the app from the wrong directory.
     debugConfiguration.executablePath = undefined;
     debugConfiguration.noDebug = true;
+    debugConfiguration.cwd = processWorkingDirectory ?? debugConfiguration.cwd;
     debugConfiguration.env = Object.fromEntries(mergeEnvironmentVariables(
         baseProfileEnvironmentVariables,
         debugConfiguration.env,
@@ -523,6 +546,8 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                         await dotNetService.buildDotNetProject(projectPath);
                     }
 
+                    const projectDirectory = path.dirname(projectPath);
+                    const runWorkingDirectory = debugConfiguration.cwd === projectDirectory ? undefined : debugConfiguration.cwd;
                     configureDotNetRunDebugConfiguration(
                         debugConfiguration,
                         createDotNetRunArguments(
@@ -530,14 +555,20 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                             baseProfile?.commandLineArgs,
                             args,
                             /* fileBased */ true,
-                            /* skipBuild */ !shouldBuildProject),
+                            /* skipBuild */ !shouldBuildProject,
+                            runWorkingDirectory,
+                            /* suppressCliRunHook */ launchOptions.isApphost),
                         baseProfile?.environmentVariables,
-                        env);
+                        env,
+                        projectDirectory);
                 }
                 else {
                     // The default profile is a 'Project' profile (or there is none), so run-api's program is the
                     // file-based app itself and can be trusted.
-                    const runApiOutput = await dotNetService.getDotNetRunApiOutput(projectPath);
+                    // The Aspire SDK run hook would rewrite an AppHost RunCommand to `aspire run`, but the CLI
+                    // already owns this launch. Suppress the hook so run-api returns the generated executable.
+                    const runApiEnvironment = launchOptions.isApphost ? { ASPIRE_SUPPRESS_CLI_RUN_HOOK: 'true' } : undefined;
+                    const runApiOutput = await dotNetService.getDotNetRunApiOutput(projectPath, runApiEnvironment);
                     const runApiConfig = getRunApiConfigFromOutput(runApiOutput);
 
                     if (shouldBuildProject) {

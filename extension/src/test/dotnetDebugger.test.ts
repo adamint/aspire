@@ -4,7 +4,7 @@ import { EventEmitter } from 'events';
 import * as nodePath from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { createProjectDebuggerExtension, projectDebuggerExtension } from '../debugger/languages/dotnet';
+import { createProjectDebuggerExtension, projectDebuggerExtension, quoteCommandLineArgument } from '../debugger/languages/dotnet';
 import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, ProjectLaunchConfiguration } from '../dcp/types';
 import * as io from '../utils/io';
 import { ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
@@ -19,6 +19,7 @@ class TestDotNetService {
     // `dotnet run-api` output returned for file-based (.cs) apps. Tests override this with a serialized
     // RunCommand payload; the default empty string mirrors the not-configured case.
     public runApiOutput: string = '';
+    public runApiEnvironment: NodeJS.ProcessEnv | undefined;
 
     constructor(outputPath: string, rejectBuild: Error | null, hasDevKit: boolean) {
         this._getDotNetTargetPathStub = sinon.stub();
@@ -46,7 +47,8 @@ class TestDotNetService {
         return Promise.resolve(this._hasDevKit);
     }
 
-    getDotNetRunApiOutput(projectPath: string): Promise<string> {
+    getDotNetRunApiOutput(projectPath: string, environment?: NodeJS.ProcessEnv): Promise<string> {
+        this.runApiEnvironment = environment;
         return Promise.resolve(this.runApiOutput);
     }
 }
@@ -393,6 +395,43 @@ suite('Dotnet Debugger Extension Tests', () => {
             createDebugConfig());
 
         assert.strictEqual(dotNetService.buildDotNetProjectStub.callCount, 3);
+    });
+
+    test('file-based AppHost suppresses the CLI run hook when resolving the run command', async () => {
+        const executablePath = '/tmp/obj/Debug/net10.0/apphost';
+        const { extension, dotNetService } = createDebuggerExtension('unused-build-output', null, true, true);
+        dotNetService.runApiOutput = JSON.stringify({
+            $type: 'RunCommand',
+            Version: 1,
+            ExecutablePath: executablePath,
+            CommandLineArguments: '',
+            WorkingDirectory: '/tmp',
+            EnvironmentVariables: {}
+        });
+
+        const launchConfig: ProjectLaunchConfiguration = {
+            type: 'project',
+            project_path: '/tmp/apphost.cs'
+        };
+        const debugConfig: AspireResourceExtendedDebugConfiguration = {
+            runId: '1',
+            debugSessionId: '1',
+            type: 'coreclr',
+            name: 'Test Debug Config',
+            request: 'launch'
+        };
+        const fakeAspireDebugSession = sinon.createStubInstance(AspireDebugSession);
+
+        await extension.createDebugSessionConfigurationCallback!(
+            launchConfig,
+            [],
+            [],
+            { debug: true, forceBuild: false, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
+            debugConfig);
+
+        assert.strictEqual(dotNetService.runApiEnvironment?.ASPIRE_SUPPRESS_CLI_RUN_HOOK, 'true');
+        assert.strictEqual(debugConfig.program, executablePath);
+        assert.strictEqual(dotNetService.buildDotNetProjectStub.notCalled, true);
     });
 
     test('file-based AppHost with selected Executable profile follows CLI build ownership', async () => {
@@ -980,7 +1019,7 @@ suite('Dotnet Debugger Extension Tests', () => {
 
             assert.strictEqual(dotNetService.buildDotNetProjectStub.notCalled, true);
             assert.strictEqual(appHostDebugConfig.program, 'dotnet');
-            assert.deepStrictEqual(appHostDebugConfig.args, ['run', '--file', projectPath, '--no-build', '--no-launch-profile']);
+            assert.deepStrictEqual(appHostDebugConfig.args, ['run', '--file', projectPath, '--no-build', '--no-launch-profile', '--property:_AspireSuppressCliRunHook=true']);
             assert.strictEqual(appHostDebugConfig.noDebug, true);
         } finally {
             fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -1116,11 +1155,15 @@ suite('Dotnet Debugger Extension Tests', () => {
         }
     });
 
-    test('file-based .cs dotnet run fallback preserves the selected Project profile working directory', async () => {
+    test('quotes a Windows root without escaping the closing quote', () => {
+        assert.strictEqual(quoteCommandLineArgument('C:\\'), '"C:\\\\"');
+    });
+
+    test('file-based .cs dotnet run fallback selects the SDK from the file directory and preserves the profile working directory', async () => {
         // Same fallback as above (an Executable default profile forces `dotnet run --file ... --no-launch-profile`),
-        // but the selected Project profile sets a custom workingDirectory. Because --no-launch-profile stops
-        // `dotnet run` from applying the profile's workingDirectory itself, the extension must keep the cwd it
-        // resolved from the selected profile; the fallback must NOT reset it to the .cs file's own directory.
+        // but the selected Project profile sets a custom workingDirectory. The dotnet muxer must run from the
+        // .cs file's directory so it selects that directory's SDK, while RunWorkingDirectory separately applies
+        // the profile directory to the launched app because --no-launch-profile prevents the SDK from doing so.
         const fs = require('fs');
         const path = require('path');
 
@@ -1148,7 +1191,7 @@ suite('Dotnet Debugger Extension Tests', () => {
                 }
             }));
 
-            const { extension } = createDebuggerExtension('unused-build-output', null, true, true);
+            const { extension, dotNetService } = createDebuggerExtension('unused-build-output', null, true, true);
 
             const launchConfig: ProjectLaunchConfiguration = {
                 type: 'project',
@@ -1169,12 +1212,30 @@ suite('Dotnet Debugger Extension Tests', () => {
             await extension.createDebugSessionConfigurationCallback!(launchConfig, undefined, [], { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession }, debugConfig);
 
             assert.strictEqual(debugConfig.program, 'dotnet');
-            assert.strictEqual(debugConfig.args, `run --file "${projectPath}" --no-cache --no-launch-profile -- --from-profile`);
+            assert.strictEqual(debugConfig.args, `run --file "${projectPath}" --no-cache --no-launch-profile --property:RunWorkingDirectory="${path.join(tempRoot, 'custom')}" -- --from-profile`);
             assert.strictEqual(debugConfig.noDebug, true);
-            // The selected profile's relative workingDirectory is resolved against the .cs file's directory and
-            // preserved through the fallback (it must NOT be reset to the file's own directory).
-            assert.strictEqual(debugConfig.cwd, path.join(tempRoot, 'custom'));
+            assert.strictEqual(debugConfig.cwd, tempRoot);
             assert.deepStrictEqual(debugConfig.env, { APP_ENV: 'from-project-profile' });
+
+            const appHostDebugConfig: AspireResourceExtendedDebugConfiguration = {
+                runId: '1',
+                debugSessionId: '1',
+                type: 'coreclr',
+                name: 'Test AppHost Debug Config',
+                request: 'launch',
+                launchProfile: 'app'
+            };
+
+            await extension.createDebugSessionConfigurationCallback!(
+                launchConfig,
+                undefined,
+                [],
+                { debug: true, forceBuild: false, runId: '1', debugSessionId: '1', isApphost: true, debugSession: fakeAspireDebugSession },
+                appHostDebugConfig);
+
+            assert.strictEqual(dotNetService.buildDotNetProjectStub.calledOnce, true);
+            assert.strictEqual(appHostDebugConfig.args, `run --file "${projectPath}" --no-build --no-launch-profile --property:_AspireSuppressCliRunHook=true --property:RunWorkingDirectory="${path.join(tempRoot, 'custom')}" -- --from-profile`);
+            assert.strictEqual(appHostDebugConfig.cwd, tempRoot);
         } finally {
             fs.rmSync(tempRoot, { recursive: true, force: true });
         }
