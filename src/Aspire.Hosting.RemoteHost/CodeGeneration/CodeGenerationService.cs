@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text.Json;
 using Aspire.TypeSystem;
 using Aspire.Hosting.RemoteHost.Diagnostics;
 using Microsoft.Extensions.Logging;
@@ -15,6 +16,7 @@ internal sealed class CodeGenerationService
 {
     private const string GetCapabilitiesMethodName = "getCapabilities";
     private const string GenerateCodeMethodName = "generateCode";
+    private const string ExportApiMethodName = "exportApi";
 
     private readonly JsonRpcAuthenticationState _authenticationState;
     private readonly AtsContextFactory _atsContextFactory;
@@ -266,6 +268,79 @@ internal sealed class CodeGenerationService
             }
             throw;
         }
+    }
+
+    /// <summary>
+    /// Exports the canonical API reference for the specified language and package.
+    /// </summary>
+    /// <param name="language">The target language (e.g., "TypeScript").</param>
+    /// <param name="packageName">The package to export documentation for.</param>
+    /// <param name="packageVersion">The exact resolved version of <paramref name="packageName"/>.</param>
+    /// <returns>The language provider's API reference document, verbatim.</returns>
+    [JsonRpcMethod(ExportApiMethodName)]
+    public JsonElement ExportApi(string language, string packageName, string packageVersion)
+    {
+        using var rpcActivity = _profilingTelemetry.StartJsonRpcServerCall(ExportApiMethodName);
+        using var activity = _profilingTelemetry.StartCodeGenerationExportApi(language);
+        try
+        {
+            _authenticationState.ThrowIfNotAuthenticated();
+            ArgumentException.ThrowIfNullOrWhiteSpace(packageName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(packageVersion);
+
+            _logger.LogDebug(">> exportApi({Language}, {PackageName}, {PackageVersion})", language, packageName, packageVersion);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
+            var generator = _resolver.GetCodeGenerator(language);
+            if (generator is null)
+            {
+                throw new ArgumentException(BuildNoCodeGeneratorMessage(language));
+            }
+
+            if (generator is not IApiReferenceExporter exporter)
+            {
+                throw new NotSupportedException(
+                    $"The '{generator.Language}' code generator does not implement {nameof(IApiReferenceExporter)}, " +
+                    "so it cannot produce an API reference export. " +
+                    $"Supported languages for API export: {BuildApiExportLanguageList()}.");
+            }
+
+            // The reference closure is required for the exported declarations to be self-contained,
+            // but the exporter still needs the unexpanded set to know which symbols this package
+            // actually owns and should document.
+            var context = AtsContextFilter.FilterByExportingAssembliesWithReferences(
+                _atsContextFactory.GetContext(),
+                [packageName]);
+
+            var export = exporter.ExportApi(context, new ApiReferenceExportOptions(packageName, packageVersion, [packageName]));
+
+            _logger.LogDebug("<< exportApi({Language}, {PackageName}) completed in {ElapsedMs}ms", language, packageName, sw.ElapsedMilliseconds);
+
+            // Returned verbatim: the payload schema belongs to the language provider, and reshaping
+            // it here would silently fork the contract documentation consumers bind to.
+            return export;
+        }
+        catch (Exception ex)
+        {
+            activity.SetError(ex);
+            _logger.LogError(ex, "<< exportApi({Language}, {PackageName}) failed", language, packageName);
+            var wrapped = CodeGenerationDiagnosticBuilder.TryCreateRpcException(ex, _assemblyLoader, _logger);
+            if (wrapped is not null)
+            {
+                throw wrapped;
+            }
+            throw;
+        }
+    }
+
+    private string BuildApiExportLanguageList()
+    {
+        var exportable = _resolver.GetSupportedLanguages()
+            .Where(language => _resolver.GetApiReferenceExporter(language) is not null)
+            .OrderBy(language => language, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        return exportable.Length == 0 ? "(none)" : string.Join(", ", exportable);
     }
 
     private string BuildNoCodeGeneratorMessage(string language)

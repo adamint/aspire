@@ -72,6 +72,92 @@ public class AtsContextFilterTests
     }
 
     [Fact]
+    public void FilterByExportingAssemblies_CodeGenerationFilterExpandsOwnedDtoPropertyTypes()
+    {
+        // An owned DTO is seeded into the included set up front rather than discovered by walking a
+        // capability signature, so its own property types used to be skipped entirely. That dropped
+        // types the generated SDK still emits — in the real context, HealthStatus from
+        // Microsoft.Extensions.Diagnostics.HealthChecks — and code generation then failed on the
+        // dangling reference. See https://github.com/microsoft/aspire/issues/17608.
+        var foreignEnum = new AtsEnumTypeInfo
+        {
+            TypeId = AtsConstants.EnumTypeId("Some.Foreign.Dependency.ForeignMode"),
+            Name = "ForeignMode",
+            ClrType = typeof(DistributedApplicationOperation),
+            Values = Enum.GetNames<DistributedApplicationOperation>()
+        };
+
+        var foreignCallbackEnum = new AtsEnumTypeInfo
+        {
+            TypeId = AtsConstants.EnumTypeId("Some.Foreign.Dependency.ForeignCallbackMode"),
+            Name = "ForeignCallbackMode",
+            ClrType = typeof(DistributedApplicationOperation),
+            Values = Enum.GetNames<DistributedApplicationOperation>()
+        };
+
+        // Owned by the test assembly and referenced by no capability, so only the ownership seed
+        // pulls it in.
+        var ownedDtoType = new AtsDtoTypeInfo
+        {
+            TypeId = "Aspire.Hosting.RemoteHost.Tests/UnreferencedOptions",
+            Name = "UnreferencedOptions",
+            ClrType = typeof(TestOptions),
+            Properties =
+            [
+                new AtsDtoPropertyInfo
+                {
+                    Name = "Mode",
+                    Type = new AtsTypeRef
+                    {
+                        TypeId = foreignEnum.TypeId,
+                        ClrType = foreignEnum.ClrType,
+                        Category = AtsTypeCategory.Enum
+                    },
+                    IsOptional = false
+                },
+                new AtsDtoPropertyInfo
+                {
+                    Name = "OnConfigure",
+                    Type = new AtsTypeRef { TypeId = AtsConstants.Void, Category = AtsTypeCategory.Primitive },
+                    IsCallback = true,
+                    CallbackParameters =
+                    [
+                        new AtsCallbackParameterInfo
+                        {
+                            Name = "mode",
+                            Type = new AtsTypeRef
+                            {
+                                TypeId = foreignCallbackEnum.TypeId,
+                                ClrType = foreignCallbackEnum.ClrType,
+                                Category = AtsTypeCategory.Enum
+                            }
+                        }
+                    ],
+                    IsOptional = true
+                }
+            ]
+        };
+
+        var context = new AtsContext
+        {
+            Capabilities = [],
+            HandleTypes = [],
+            DtoTypes = [ownedDtoType],
+            EnumTypes = [foreignEnum, foreignCallbackEnum],
+            ExportedValues = [],
+            Diagnostics = []
+        };
+
+        var filteredContext = AtsContextFilter.FilterByExportingAssembliesWithReferences(
+            context,
+            [typeof(AtsContextFilterTests).Assembly.GetName().Name!]);
+
+        Assert.Contains(filteredContext.DtoTypes, type => type.TypeId == ownedDtoType.TypeId);
+        Assert.Contains(filteredContext.EnumTypes, type => type.TypeId == foreignEnum.TypeId);
+        Assert.Contains(filteredContext.EnumTypes, type => type.TypeId == foreignCallbackEnum.TypeId);
+    }
+
+    [Fact]
     public void FilterByExportingAssemblies_ScannedAssemblies_OnlyReturnsSpecifiedAssemblyExports()
     {
         // End-to-end: scan real assemblies through the capability scanner, then filter

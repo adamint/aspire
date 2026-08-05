@@ -8,6 +8,17 @@
 //------------------------------------------------------------------------------
 namespace Aspire.TypeSystem
 {
+    public sealed partial class ApiReferenceExportOptions
+    {
+        public ApiReferenceExportOptions(string packageName, string packageVersion, System.Collections.Generic.IReadOnlyCollection<string> exportingAssemblyNames) { }
+
+        public System.Collections.Generic.IReadOnlyCollection<string> ExportingAssemblyNames { get { throw null; } }
+
+        public string PackageName { get { throw null; } }
+
+        public string PackageVersion { get { throw null; } }
+    }
+
     public sealed partial class AspireExportData
     {
         public string? Description { get { throw null; } init { } }
@@ -457,6 +468,13 @@ namespace Aspire.TypeSystem
         public const string ResourceBuilderInterface = "Aspire.Hosting.ApplicationModel.IResourceBuilder`1";
         public const string ResourceInterface = "Aspire.Hosting.ApplicationModel.IResource";
         public const string ValueProviderInterface = "Aspire.Hosting.ApplicationModel.IValueProvider";
+    }
+
+    public partial interface IApiReferenceExporter
+    {
+        string Language { get; }
+
+        System.Text.Json.JsonElement ExportApi(AtsContext context, ApiReferenceExportOptions options);
     }
 
     public partial interface ICodeGenerator

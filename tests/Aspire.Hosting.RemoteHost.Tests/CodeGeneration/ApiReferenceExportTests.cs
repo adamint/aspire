@@ -1,0 +1,162 @@
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+
+using Aspire.Hosting.RemoteHost.CodeGeneration;
+using Aspire.Hosting.RemoteHost.Diagnostics;
+using Aspire.TypeSystem;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+
+namespace Aspire.Hosting.RemoteHost.Tests;
+
+/// <summary>
+/// Covers the canonical API export RPC. The export is what documentation sites bind to, so the
+/// contract it enforces matters as much as the payload: exports must be scoped to the requested
+/// package, must fail loudly for languages that cannot produce one, and must never be reshaped by
+/// RemoteHost.
+/// </summary>
+public class ApiReferenceExportTests
+{
+    [Fact]
+    public void ExportApi_TypeScript_ReturnsCanonicalSchemaForRequestedPackage()
+    {
+        var service = CreateCodeGenerationService();
+
+        var export = service.ExportApi("TypeScript", "Aspire.Hosting", "13.5.0");
+
+        Assert.Equal(1, export.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("typescript", export.GetProperty("language").GetString());
+        Assert.Equal("Aspire.Hosting", export.GetProperty("package").GetProperty("name").GetString());
+        Assert.Equal("13.5.0", export.GetProperty("package").GetProperty("version").GetString());
+
+        var modules = export.GetProperty("modules").EnumerateArray().ToList();
+        Assert.NotEmpty(modules);
+
+        var items = modules.SelectMany(module => module.GetProperty("items").EnumerateArray()).ToList();
+        Assert.NotEmpty(items);
+
+        // The whole point of the export is that documented declarations are final TypeScript, not
+        // ATS type identifiers.
+        Assert.All(items, item => Assert.DoesNotContain(
+            "Aspire.Hosting/",
+            item.GetProperty("declaration").GetString()!,
+            StringComparison.Ordinal));
+
+        Assert.NotEmpty(export.GetProperty("declarations").EnumerateArray());
+    }
+
+    [Fact]
+    public void ExportApi_ScopesDocumentedItemsToRequestedPackage()
+    {
+        var service = CreateCodeGenerationService();
+
+        var export = service.ExportApi("TypeScript", "Aspire.Hosting", "13.5.0");
+
+        // Referenced types reach the export through the closure so the declarations type-check, but
+        // they must not be documented here: the package that owns them publishes them.
+        var declarationOwners = export.GetProperty("declarations").EnumerateArray()
+            .Select(declaration => declaration.GetProperty("owningAssembly").GetString())
+            .ToHashSet(StringComparer.Ordinal);
+
+        var itemOwners = export.GetProperty("modules").EnumerateArray()
+            .SelectMany(module => module.GetProperty("items").EnumerateArray())
+            .Select(item => item.GetProperty("owningAssembly").GetString())
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.All(itemOwners, owner => Assert.Equal("Aspire.Hosting", owner));
+        Assert.Contains("Aspire.Hosting", declarationOwners);
+    }
+
+    [Fact]
+    public void ExportApi_UnknownLanguage_ListsAvailableLanguages()
+    {
+        var service = CreateCodeGenerationService();
+
+        var ex = Assert.Throws<ArgumentException>(() => service.ExportApi("klingon", "Aspire.Hosting", "13.5.0"));
+
+        Assert.Contains("No code generator found for language: klingon", ex.Message);
+        Assert.Contains("Available languages:", ex.Message);
+    }
+
+    [Fact]
+    public void ExportApi_GeneratorWithoutExporter_ReportsUnsupportedLanguage()
+    {
+        var service = CreateCodeGenerationService();
+
+        // Go generates runtime source but does not implement IApiReferenceExporter, so asking it for
+        // an API export has to fail with a message that names the gap rather than returning an empty
+        // document that a documentation site would silently publish.
+        var ex = Assert.Throws<NotSupportedException>(() => service.ExportApi("Go", "Aspire.Hosting", "13.5.0"));
+
+        Assert.Contains("Go", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(IApiReferenceExporter), ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void ExportApi_MissingPackageName_Throws(string? packageName)
+    {
+        var service = CreateCodeGenerationService();
+
+        Assert.ThrowsAny<ArgumentException>(() => service.ExportApi("TypeScript", packageName!, "13.5.0"));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void ExportApi_MissingPackageVersion_Throws(string? packageVersion)
+    {
+        var service = CreateCodeGenerationService();
+
+        Assert.ThrowsAny<ArgumentException>(() => service.ExportApi("TypeScript", "Aspire.Hosting", packageVersion!));
+    }
+
+    [Fact]
+    public void ExportApi_RequiresAuthentication()
+    {
+        var service = CreateCodeGenerationService(authenticated: false);
+
+        Assert.ThrowsAny<Exception>(() => service.ExportApi("TypeScript", "Aspire.Hosting", "13.5.0"));
+    }
+
+    private static CodeGenerationService CreateCodeGenerationService(bool authenticated = true)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["AtsAssemblies:0"] = "Aspire.Hosting.CodeGeneration.Go",
+                ["AtsAssemblies:1"] = "Aspire.Hosting.CodeGeneration.TypeScript",
+            })
+            .Build();
+
+        var telemetry = new RemoteHostProfilingTelemetry(new ConfigurationBuilder().Build());
+        var loader = new AssemblyLoader(configuration, NullLogger<AssemblyLoader>.Instance, telemetry);
+
+        // Do not dispose: the resolver lazily instantiates generators through ActivatorUtilities.
+        var services = new ServiceCollection().BuildServiceProvider();
+        var resolver = new CodeGeneratorResolver(services, loader, NullLogger<CodeGeneratorResolver>.Instance);
+        var atsContextFactory = new AtsContextFactory(loader, NullLogger<AtsContextFactory>.Instance, telemetry);
+
+        return new CodeGenerationService(
+            CreateAuthenticationState(authenticated),
+            atsContextFactory,
+            resolver,
+            loader,
+            NullLogger<CodeGenerationService>.Instance,
+            telemetry);
+    }
+
+    // The state starts authenticated when no token is configured, so building an unauthenticated
+    // service means configuring a token the test never presents.
+    private static JsonRpcAuthenticationState CreateAuthenticationState(bool authenticated)
+        => new(authenticated
+            ? new ConfigurationBuilder().Build()
+            : new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["ASPIRE_REMOTE_APPHOST_TOKEN"] = "test-token" })
+                .Build());
+}

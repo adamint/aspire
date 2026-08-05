@@ -80,6 +80,23 @@ internal static class AtsContextFilter
 
         if (includeReferencedTypes)
         {
+            // Types owned by the selected assemblies were seeded into the included sets directly,
+            // which means CollectReferencedType's "was this newly added?" guard will refuse to walk
+            // their own members if a capability later references them. Expand the seeds explicitly so
+            // an owned DTO's property types survive the filter. Without this, a DTO owned by
+            // Aspire.Hosting that exposes an enum declared in a non-Aspire dependency (for example
+            // HealthStatus from Microsoft.Extensions.Diagnostics.HealthChecks) is retained while the
+            // enum it references is dropped, and code generation then fails on the dangling type.
+            foreach (var handleType in context.HandleTypes.Where(type => includedHandleTypeIds.Contains(type.AtsTypeId)).ToList())
+            {
+                CollectHandleTypeMembers(handleType, handleTypesById, dtoTypesById, enumTypesById, includedHandleTypeIds, includedDtoTypeIds, includedEnumTypeIds);
+            }
+
+            foreach (var dtoType in context.DtoTypes.Where(type => includedDtoTypeIds.Contains(type.TypeId)).ToList())
+            {
+                CollectDtoTypeMembers(dtoType, handleTypesById, dtoTypesById, enumTypesById, includedHandleTypeIds, includedDtoTypeIds, includedEnumTypeIds);
+            }
+
             foreach (var capability in filteredCapabilities)
             {
                 CollectReferencedType(capability.TargetType, handleTypesById, dtoTypesById, enumTypesById, includedHandleTypeIds, includedDtoTypeIds, includedEnumTypeIds);
@@ -156,23 +173,12 @@ internal static class AtsContextFilter
 
         if (handleTypesById.TryGetValue(typeRef.TypeId, out var handleType) && includedHandleTypeIds.Add(handleType.AtsTypeId))
         {
-            foreach (var implementedInterface in handleType.ImplementedInterfaces)
-            {
-                CollectReferencedType(implementedInterface, handleTypesById, dtoTypesById, enumTypesById, includedHandleTypeIds, includedDtoTypeIds, includedEnumTypeIds);
-            }
-
-            foreach (var baseType in handleType.BaseTypeHierarchy)
-            {
-                CollectReferencedType(baseType, handleTypesById, dtoTypesById, enumTypesById, includedHandleTypeIds, includedDtoTypeIds, includedEnumTypeIds);
-            }
+            CollectHandleTypeMembers(handleType, handleTypesById, dtoTypesById, enumTypesById, includedHandleTypeIds, includedDtoTypeIds, includedEnumTypeIds);
         }
 
         if (dtoTypesById.TryGetValue(typeRef.TypeId, out var dtoType) && includedDtoTypeIds.Add(dtoType.TypeId))
         {
-            foreach (var property in dtoType.Properties)
-            {
-                CollectReferencedType(property.Type, handleTypesById, dtoTypesById, enumTypesById, includedHandleTypeIds, includedDtoTypeIds, includedEnumTypeIds);
-            }
+            CollectDtoTypeMembers(dtoType, handleTypesById, dtoTypesById, enumTypesById, includedHandleTypeIds, includedDtoTypeIds, includedEnumTypeIds);
         }
 
         if (enumTypesById.ContainsKey(typeRef.TypeId))
@@ -190,6 +196,53 @@ internal static class AtsContextFilter
             {
                 CollectReferencedType(unionType, handleTypesById, dtoTypesById, enumTypesById, includedHandleTypeIds, includedDtoTypeIds, includedEnumTypeIds);
             }
+        }
+    }
+
+    private static void CollectHandleTypeMembers(
+        AtsTypeInfo handleType,
+        IReadOnlyDictionary<string, AtsTypeInfo> handleTypesById,
+        IReadOnlyDictionary<string, AtsDtoTypeInfo> dtoTypesById,
+        IReadOnlyDictionary<string, AtsEnumTypeInfo> enumTypesById,
+        HashSet<string> includedHandleTypeIds,
+        HashSet<string> includedDtoTypeIds,
+        HashSet<string> includedEnumTypeIds)
+    {
+        foreach (var implementedInterface in handleType.ImplementedInterfaces)
+        {
+            CollectReferencedType(implementedInterface, handleTypesById, dtoTypesById, enumTypesById, includedHandleTypeIds, includedDtoTypeIds, includedEnumTypeIds);
+        }
+
+        foreach (var baseType in handleType.BaseTypeHierarchy)
+        {
+            CollectReferencedType(baseType, handleTypesById, dtoTypesById, enumTypesById, includedHandleTypeIds, includedDtoTypeIds, includedEnumTypeIds);
+        }
+    }
+
+    private static void CollectDtoTypeMembers(
+        AtsDtoTypeInfo dtoType,
+        IReadOnlyDictionary<string, AtsTypeInfo> handleTypesById,
+        IReadOnlyDictionary<string, AtsDtoTypeInfo> dtoTypesById,
+        IReadOnlyDictionary<string, AtsEnumTypeInfo> enumTypesById,
+        HashSet<string> includedHandleTypeIds,
+        HashSet<string> includedDtoTypeIds,
+        HashSet<string> includedEnumTypeIds)
+    {
+        foreach (var property in dtoType.Properties)
+        {
+            CollectReferencedType(property.Type, handleTypesById, dtoTypesById, enumTypesById, includedHandleTypeIds, includedDtoTypeIds, includedEnumTypeIds);
+
+            // Callback properties are emitted as function signatures, so their parameter and return
+            // types are just as load-bearing as the declared property type.
+            if (property.CallbackParameters is not null)
+            {
+                foreach (var callbackParameter in property.CallbackParameters)
+                {
+                    CollectReferencedType(callbackParameter.Type, handleTypesById, dtoTypesById, enumTypesById, includedHandleTypeIds, includedDtoTypeIds, includedEnumTypeIds);
+                }
+            }
+
+            CollectReferencedType(property.CallbackReturnType, handleTypesById, dtoTypesById, enumTypesById, includedHandleTypeIds, includedDtoTypeIds, includedEnumTypeIds);
         }
     }
 
