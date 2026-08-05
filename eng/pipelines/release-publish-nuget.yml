@@ -1119,7 +1119,7 @@ extends:
                   displayName: 'Skip NuGet Publish (flagged)'
 
               # ===== PUBLISH TO npm =====
-              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false)) }}:
+              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false))) }}:
                 - task: NodeTool@0
                   displayName: 'Install Node.js for npm Validation'
                   inputs:
@@ -1459,7 +1459,12 @@ extends:
                     Write-Host "Dry run skipped installing '$packageSpec' because the package has not been published."
                   displayName: 'Dry Run - Validate npm Registry Reachability'
 
-              - ${{ if and(eq(parameters.DryRun, false), or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false)), eq(parameters.IsPrerelease, false)) }}:
+              - ${{ if and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true)) }}:
+                - powershell: |
+                    Write-Host "=== Skipping npm Publishing (SkipNpmRidPublish=true and SkipNpmPointerPublish=true) ==="
+                  displayName: 'Skip npm Packages (flagged)'
+
+              - ${{ if and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false)) }}:
                 - pwsh: |
                     $ErrorActionPreference = 'Stop'
 
@@ -1644,7 +1649,7 @@ extends:
 
                 - ${{ if eq(parameters.SkipNpmRidPublish, true) }}:
                   - powershell: |
-                      Write-Host "Skipping npm RID package publish because SkipNpmRidPublish=true. The pointer package will still be submitted."
+                      Write-Host "Skipping npm RID packages. Pointer package handling follows SkipNpmPointerPublish."
                     displayName: 'Skip npm RID Publish (flagged)'
 
                 - ${{ if eq(parameters.SkipNpmPointerPublish, false) }}:
@@ -1968,6 +1973,7 @@ extends:
                       }
 
                       Write-Host "aspire --version output matched the published npm package version: $versionLine"
+                      Write-Host "##vso[task.setvariable variable=NpmPublishedPointerVersion]$packageVersion"
                     }
                     finally {
                       if (Test-Path -LiteralPath $npmRoot) {
@@ -1985,10 +1991,113 @@ extends:
                     }
                   displayName: 'Validate Published npm Package from Registry'
 
-              - ${{ if and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true)) }}:
-                - powershell: |
-                    Write-Host "=== Skipping npm Publishing (SkipNpmRidPublish=true and SkipNpmPointerPublish=true) ==="
-                  displayName: 'Skip npm Packages (flagged)'
+                - pwsh: |
+                    $npmrcPath = "$(Agent.TempDirectory)\aspire-cli-internal-mirror.npmrc"
+                    "registry=$(NPM_REGISTRY)" |
+                      Set-Content -LiteralPath $npmrcPath -Encoding utf8NoBOM
+                  displayName: 'Prepare npm Internal Mirror Authentication'
+
+                - task: npmAuthenticate@0
+                  displayName: 'Authenticate to npm Internal Mirror'
+                  inputs:
+                    workingFile: '$(Agent.TempDirectory)\aspire-cli-internal-mirror.npmrc'
+
+                - pwsh: |
+                    $ErrorActionPreference = 'Stop'
+
+                    $packageName = '@microsoft/aspire-cli'
+                    $packageVersion = "$(NpmPublishedPointerVersion)"
+                    $internalRegistry = "$(NPM_REGISTRY)"
+                    $authenticatedNpmrc = "$(Agent.TempDirectory)\aspire-cli-internal-mirror.npmrc"
+
+                    if ([string]::IsNullOrWhiteSpace($packageVersion) -or $packageVersion -like '$(*)') {
+                      throw "NpmPublishedPointerVersion was not set by the public npm smoke test."
+                    }
+
+                    if ($packageVersion -notmatch '^\d+\.\d+\.\d+$') {
+                      throw "Expected a stable npm package version, but received '$packageVersion'."
+                    }
+
+                    if ([string]::IsNullOrWhiteSpace($internalRegistry) -or $internalRegistry -like '$(*)') {
+                      throw "NPM_REGISTRY was not provided."
+                    }
+
+                    $workRoot = Join-Path "$(Agent.TempDirectory)" 'aspire-cli-npm-mirror'
+                    $seedDirectory = Join-Path $workRoot 'seed'
+                    $authenticatedCache = Join-Path $workRoot 'authenticated-cache'
+                    $anonymousCache = Join-Path $workRoot 'anonymous-cache'
+                    $anonymousNpmrc = Join-Path $workRoot 'anonymous.npmrc'
+                    $packageSpec = "$packageName@$packageVersion"
+
+                    if (Test-Path -LiteralPath $workRoot) {
+                      Remove-Item -LiteralPath $workRoot -Recurse -Force
+                    }
+
+                    New-Item -ItemType Directory -Path $seedDirectory -Force | Out-Null
+                    New-Item -ItemType Directory -Path $authenticatedCache -Force | Out-Null
+                    New-Item -ItemType Directory -Path $anonymousCache -Force | Out-Null
+                    "registry=$internalRegistry" |
+                      Set-Content -LiteralPath $anonymousNpmrc -Encoding utf8NoBOM
+
+                    try {
+                      Write-Host "Seeding $packageSpec into $internalRegistry through its configured upstream."
+                      $env:NPM_CONFIG_USERCONFIG = $authenticatedNpmrc
+                      $env:npm_config_cache = $authenticatedCache
+
+                      Push-Location $seedDirectory
+                      try {
+                        $seedOutput = npm install --ignore-scripts --no-audit --no-fund --no-save --package-lock=false --loglevel=warn --registry=$internalRegistry $packageSpec 2>&1
+                        $seedExitCode = $LASTEXITCODE
+                      }
+                      finally {
+                        Pop-Location
+                      }
+
+                      $seedOutput | ForEach-Object { Write-Host $_ }
+                      if ($seedExitCode -ne 0) {
+                        throw "Failed to install $packageSpec through the internal npm mirror (exit code $seedExitCode)."
+                      }
+
+                      # Use a credential-free npmrc and a separate empty cache so this
+                      # proves anonymous visibility instead of cached authenticated data.
+                      $env:NPM_CONFIG_USERCONFIG = $anonymousNpmrc
+                      $env:npm_config_cache = $anonymousCache
+
+                      $maxAttempts = 10
+                      for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+                        Write-Host "Anonymous mirror verification attempt $attempt of $maxAttempts."
+                        $viewOutput = npm view "$packageName@latest" version --registry=$internalRegistry --loglevel=warn 2>&1
+                        $viewExitCode = $LASTEXITCODE
+                        $viewOutput | ForEach-Object { Write-Host $_ }
+
+                        $mirroredVersion = $viewOutput |
+                          ForEach-Object { "$_".Trim() } |
+                          Where-Object { $_ -match '^\d+\.\d+\.\d+$' } |
+                          Select-Object -First 1
+
+                        if ($viewExitCode -eq 0 -and
+                            $mirroredVersion -and
+                            [version]$mirroredVersion -ge [version]$packageVersion) {
+                          Write-Host "Anonymous internal npm latest is $mirroredVersion, satisfying released version $packageVersion."
+                          break
+                        }
+
+                        if ($attempt -eq $maxAttempts) {
+                          throw "Internal npm mirror did not anonymously expose $packageName@latest at or above $packageVersion after $maxAttempts attempts."
+                        }
+
+                        Start-Sleep -Seconds 30
+                      }
+                    }
+                    finally {
+                      Remove-Item Env:NPM_CONFIG_USERCONFIG -ErrorAction SilentlyContinue
+                      Remove-Item Env:npm_config_cache -ErrorAction SilentlyContinue
+
+                      if (Test-Path -LiteralPath $workRoot) {
+                        Remove-Item -LiteralPath $workRoot -Recurse -Force
+                      }
+                    }
+                  displayName: 'Seed and Validate npm Internal Mirror'
 
               # ===== PROMOTE TO CHANNEL =====
               - ${{ if eq(parameters.SkipChannelPromotion, false) }}:

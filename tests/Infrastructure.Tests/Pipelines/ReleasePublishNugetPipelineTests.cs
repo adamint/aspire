@@ -311,6 +311,100 @@ public sealed class ReleasePublishNugetPipelineTests
     }
 
     [Fact]
+    public async Task SeedsAndAnonymouslyValidatesNpmInternalMirrorBeforePromotion()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        var publicValidationIndex = FindRequiredText(
+            pipeline,
+            "displayName: 'Validate Published npm Package from Registry'");
+        var prepareAuthenticationIndex = FindRequiredText(
+            pipeline,
+            "displayName: 'Prepare npm Internal Mirror Authentication'");
+        var authenticateIndex = FindRequiredText(
+            pipeline,
+            "displayName: 'Authenticate to npm Internal Mirror'");
+        var seedIndex = FindRequiredText(
+            pipeline,
+            "displayName: 'Seed and Validate npm Internal Mirror'");
+        var promotionIndex = FindRequiredText(
+            pipeline,
+            "# ===== PROMOTE TO CHANNEL =====");
+
+        Assert.True(publicValidationIndex < prepareAuthenticationIndex);
+        Assert.True(prepareAuthenticationIndex < authenticateIndex);
+        Assert.True(authenticateIndex < seedIndex);
+        Assert.True(seedIndex < promotionIndex);
+
+        Assert.Contains("task: npmAuthenticate@0", pipeline, StringComparison.Ordinal);
+        Assert.Contains(
+            "workingFile: '$(Agent.TempDirectory)\\aspire-cli-internal-mirror.npmrc'",
+            pipeline,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "npm install --ignore-scripts --no-audit --no-fund --no-save --package-lock=false",
+            pipeline,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$env:NPM_CONFIG_USERCONFIG = $anonymousNpmrc",
+            pipeline,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$env:npm_config_cache = $anonymousCache",
+            pipeline,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "npm view \"$packageName@latest\" version",
+            pipeline,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "[version]$mirroredVersion -ge [version]$packageVersion",
+            pipeline,
+            StringComparison.Ordinal);
+        Assert.Contains("$maxAttempts = 10", pipeline, StringComparison.Ordinal);
+        Assert.Contains("Start-Sleep -Seconds 30", pipeline, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NpmRegistryValidationRunsWhenBothNpmPublishFlagsAreSkipped()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        var nodeSetupGate =
+            "- ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false))) }}:";
+        var stableRealGate =
+            "- ${{ if and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false)) }}:";
+        var bothSkippedMessageIndex = FindRequiredText(
+            pipeline,
+            "displayName: 'Skip npm Packages (flagged)'");
+        var nodeSetupGateIndex = FindRequiredText(pipeline, nodeSetupGate);
+        var stableRealGateIndex = FindRequiredText(pipeline, stableRealGate);
+        var publicValidationIndex = FindRequiredText(
+            pipeline,
+            "displayName: 'Validate Published npm Package from Registry'");
+        var mirrorValidationIndex = FindRequiredText(
+            pipeline,
+            "displayName: 'Seed and Validate npm Internal Mirror'");
+
+        Assert.True(nodeSetupGateIndex < bothSkippedMessageIndex);
+        Assert.True(bothSkippedMessageIndex < stableRealGateIndex);
+        Assert.True(stableRealGateIndex < publicValidationIndex);
+        Assert.True(publicValidationIndex < mirrorValidationIndex);
+        Assert.Contains(
+            "##vso[task.setvariable variable=NpmPublishedPointerVersion]$packageVersion",
+            pipeline,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$packageVersion = \"$(NpmPublishedPointerVersion)\"",
+            pipeline,
+            StringComparison.Ordinal);
+
+        var obsoleteGate =
+            "and(eq(parameters.DryRun, false), or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false)), eq(parameters.IsPrerelease, false))";
+        Assert.Equal(-1, pipeline.IndexOf(obsoleteGate, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task PrepareNpmCliPackagesScriptIsBash32Compatible()
     {
         var template = await ReadRepoFileAsync("eng/pipelines/templates/prepare-npm-cli-packages.yml");
