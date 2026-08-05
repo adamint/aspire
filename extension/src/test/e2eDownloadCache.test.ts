@@ -198,6 +198,25 @@ function setPathModifiedTime(candidatePath: string, modifiedTime: Date): void {
     fs.utimesSync(candidatePath, modifiedTime, modifiedTime);
 }
 
+/**
+ * Finds a process id that is not currently claimed, so a fixture can stand in for a candidate
+ * whose owner has exited.
+ */
+function getUnusedProcessId(): number {
+    for (let candidateProcessId = 60000; candidateProcessId < 65000; candidateProcessId++) {
+        try {
+            process.kill(candidateProcessId, 0);
+        }
+        catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
+                return candidateProcessId;
+            }
+        }
+    }
+
+    throw new Error('Unable to find an unused process id for the abandoned candidate fixture.');
+}
+
 function createDirectoryLink(linkPath: string, targetPath: string): void {
     ensureParentDirectory(linkPath);
 
@@ -1218,6 +1237,113 @@ suite('E2E download cache', () => {
         assert.strictEqual(fs.existsSync(abandonedCandidateDirectory), false);
         assert.strictEqual(fs.existsSync(recentCandidateDirectory), true);
         assert.deepStrictEqual(getCandidateNames(groupDirectory), [path.basename(recentCandidateDirectory)]);
+    });
+
+    test('leaves a candidate alone while the process that created it is still running', () => {
+        const root = createTestRoot('live-candidate-sweep');
+        const cacheRoot = path.join(root, 'cache');
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const liveCandidateDirectory = path.join(groupDirectory, `candidate-${process.pid}-live`);
+        const deadCandidateDirectory = path.join(groupDirectory, `candidate-${getUnusedProcessId()}-dead`);
+
+        fs.mkdirSync(liveCandidateDirectory, { recursive: true });
+        fs.mkdirSync(deadCandidateDirectory, { recursive: true });
+
+        // A candidate's mtime only moves when its immediate children change, so an extraction
+        // working deep inside a subdirectory looks untouched for hours while it is still running.
+        const staleTime = new Date(Date.now() - 7 * 60 * 60 * 1000);
+        setPathModifiedTime(liveCandidateDirectory, staleTime);
+        setPathModifiedTime(deadCandidateDirectory, staleTime);
+
+        const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+            },
+        }));
+
+        assert.strictEqual(result.cacheHit, false);
+        assert.strictEqual(fs.existsSync(liveCandidateDirectory), true);
+        assert.strictEqual(fs.existsSync(deadCandidateDirectory), false);
+        assert.deepStrictEqual(getCandidateNames(groupDirectory), [path.basename(liveCandidateDirectory)]);
+    });
+
+    test('names candidates after the creating process so a live download is never swept', () => {
+        const root = createTestRoot('candidate-owner-name');
+        const cacheRoot = path.join(root, 'cache');
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        let observedCandidateName = '';
+
+        cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                observedCandidateName = path.basename(stagingDirectory);
+                populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+            },
+        }));
+
+        assert.strictEqual(observedCandidateName.startsWith(`candidate-${process.pid}-`), true, observedCandidateName);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), [getCacheEntryName(1)]);
+    });
+
+    test('repairs a group directory that cannot be listed instead of wedging the key', () => {
+        const root = createTestRoot('unreadable-group');
+        const cacheRoot = path.join(root, 'cache');
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+
+        fs.mkdirSync(path.dirname(groupDirectory), { recursive: true });
+        // A symbolic link pointing at itself fails `readdir` with ELOOP. Before the group is
+        // validated there is nothing else to distinguish this from any other unlistable leaf, and
+        // letting the error escape would make the key unusable until somebody deleted it by hand.
+        fs.symlinkSync(groupDirectory, groupDirectory);
+
+        const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+            },
+        }));
+
+        assert.strictEqual(result.cacheHit, false);
+        assert.strictEqual(result.cacheDirectory, getCacheEntryDirectory(groupDirectory, 1));
+        assert.strictEqual(fs.lstatSync(groupDirectory).isDirectory(), true);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), [getCacheEntryName(1)]);
+    });
+
+    test('rejects an entry whose artifacts are empty and publishes a new generation', () => {
+        const root = createTestRoot('empty-artifact-entry');
+        const cacheRoot = path.join(root, 'cache');
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const truncatedEntryDirectory = getCacheEntryDirectory(groupDirectory, 1);
+
+        publishValidCacheEntry(truncatedEntryDirectory, {
+            ...defaultCacheKey,
+            markerFileName: 'truncated.txt',
+        });
+        // Extraction can leave an ordinary, correctly named, single-link file with nothing in it.
+        // Every structural check still passes, so without a size check this entry would be served
+        // as a hit forever and fail VS Code's offline startup on every later run.
+        fs.writeFileSync(path.join(truncatedEntryDirectory, 'chromedriver-linux-x64', 'chromedriver'), '');
+
+        const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+            },
+        }));
+
+        assert.strictEqual(result.cacheHit, false);
+        assert.strictEqual(result.cacheDirectory, getCacheEntryDirectory(groupDirectory, 2));
+        assert.strictEqual(fs.existsSync(path.join(truncatedEntryDirectory, 'truncated.txt')), true);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), [getCacheEntryName(1), getCacheEntryName(2)]);
     });
 
     test('sweeps abandoned candidates on a cache hit but never a published generation', () => {

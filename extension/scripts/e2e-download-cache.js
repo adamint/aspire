@@ -13,7 +13,15 @@ const CACHE_MANIFEST_NAME = 'cache-manifest.json';
 // published in the meantime.
 const CACHE_ENTRY_NAME_PATTERN = /^entry-(\d{1,15})$/;
 const CACHE_ENTRY_GENERATION_DIGITS = 6;
+
+// A candidate carries the process id that created it so the sweep can tell an in-flight download
+// from debris without waiting for a timestamp to age out. See isCandidateOwnedByLiveProcess.
 const CANDIDATE_DIRECTORY_PREFIX = 'candidate-';
+const CANDIDATE_DIRECTORY_NAME_PATTERN = /^candidate-(\d{1,15})-/;
+
+// `readdir` on a group leaf that is a file, a symlink loop, or a link into a directory this user
+// cannot open has to read as "no entries here" so the miss path can detach and rebuild the leaf.
+const UNREADABLE_DIRECTORY_ERROR_CODES = new Set(['ENOENT', 'ENOTDIR', 'ELOOP', 'EACCES', 'EPERM']);
 
 // A publish only ever loses to a concurrent run, and a loser either adopts the winner or moves on
 // to the next generation, so needing more than a couple of attempts means something structural is
@@ -195,7 +203,12 @@ function readCacheEntryGroup(groupDirectory) {
   try {
     dirents = fs.readdirSync(groupDirectory, { withFileTypes: true });
   } catch (error) {
-    if (error && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) {
+    // Anything that makes the leaf unreadable -- missing, a file, a symlink loop, or a link to a
+    // directory this user cannot open -- has to read as an empty group rather than propagate.
+    // Propagating would wedge the key permanently, because the repair that detaches a bad leaf
+    // only runs further down the miss path. A genuine permission problem on a real directory
+    // still surfaces: the candidate that gets created there fails loudly.
+    if (isUnreadableDirectoryError(error)) {
       return { highestGeneration: 0, entryNames: [] };
     }
 
@@ -236,7 +249,7 @@ function createCacheEntryCandidate(cacheRoot, groupDirectory) {
     sweepAbandonedGroupChildren(groupDirectory);
 
     try {
-      return fs.mkdtempSync(path.join(groupDirectory, CANDIDATE_DIRECTORY_PREFIX));
+      return fs.mkdtempSync(path.join(groupDirectory, `${CANDIDATE_DIRECTORY_PREFIX}${process.pid}-`));
     } catch (error) {
       // A concurrent run repairing a tampered-with group directory detaches and recreates it,
       // which shows up here as a transient ENOENT. Rebuilding it and retrying is enough.
@@ -383,7 +396,7 @@ function sweepAbandonedGroupChildren(groupDirectory) {
   try {
     dirents = fs.readdirSync(groupDirectory, { withFileTypes: true });
   } catch (error) {
-    if (error && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) {
+    if (isUnreadableDirectoryError(error)) {
       return;
     }
 
@@ -395,8 +408,20 @@ function sweepAbandonedGroupChildren(groupDirectory) {
       continue;
     }
 
+    // A candidate names the process that created it, and a live owner is proof that the download
+    // is still in flight no matter what the timestamp says. That matters because a candidate's
+    // mtime only moves when its immediate children change, so an extraction working deep inside a
+    // subdirectory -- or a populate that is retrying with a generous timeout -- can look untouched
+    // for hours while it is very much alive.
+    if (isCandidateOwnedByLiveProcess(dirent.name)) {
+      continue;
+    }
+
     const candidatePath = path.join(groupDirectory, dirent.name);
     try {
+      // The age gate stays as the backstop for the cases liveness cannot settle: a candidate from
+      // an older layout that carries no owner, and a recycled process id that makes a dead owner
+      // look alive.
       if (Date.now() - fs.lstatSync(candidatePath).mtimeMs < ABANDONED_GROUP_CHILD_AGE_MS) {
         continue;
       }
@@ -410,6 +435,36 @@ function sweepAbandonedGroupChildren(groupDirectory) {
 
     removeDirectoryBestEffort(candidatePath);
   }
+}
+
+/**
+ * Reports whether a group child is a candidate whose creating process is still running.
+ *
+ * Only this machine ever writes to the cache -- it lives inside the repository's Git directory --
+ * so a process id is meaningful here. `kill(pid, 0)` sends no signal; it only reports whether the
+ * id is claimed. `EPERM` means it is claimed by another user, which still counts as alive.
+ */
+function isCandidateOwnedByLiveProcess(name) {
+  const match = CANDIDATE_DIRECTORY_NAME_PATTERN.exec(name);
+  if (!match) {
+    return false;
+  }
+
+  const ownerProcessId = Number(match[1]);
+  if (!Number.isSafeInteger(ownerProcessId) || ownerProcessId <= 0) {
+    return false;
+  }
+
+  try {
+    process.kill(ownerProcessId, 0);
+    return true;
+  } catch (error) {
+    return Boolean(error) && error.code === 'EPERM';
+  }
+}
+
+function isUnreadableDirectoryError(error) {
+  return Boolean(error) && UNREADABLE_DIRECTORY_ERROR_CODES.has(error.code);
 }
 
 function removeDirectoryBestEffort(directoryPath) {
@@ -929,6 +984,15 @@ function assertOrdinaryRelativePath(rootDirectory, realRootDirectory, relativePa
 
     if (expectedType === 'file' && candidateStats.nlink !== 1) {
       throw new Error(`${fieldName} must point to a single-link file at '${relativePath}', but found link count ${candidateStats.nlink}.`);
+    }
+
+    // Structure alone does not prove the download survived. A truncated write leaves an empty but
+    // otherwise ordinary file, and because entries are never revalidated by running them, an empty
+    // executable here would be served as a hit forever and fail VS Code's offline startup on every
+    // later run. Rejecting it routes this run onto the miss path, where a fresh generation is
+    // published beside the bad one.
+    if (expectedType === 'file' && candidateStats.size === 0) {
+      throw new Error(`${fieldName} points to an empty file at '${relativePath}'.`);
     }
   }
 

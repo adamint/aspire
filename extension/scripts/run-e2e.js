@@ -22,6 +22,11 @@ const resultsDir = path.join(extensionRoot, '.test-results', 'e2e', shardName);
 const runId = `${process.pid}-${Date.now()}`;
 const diagnosticsStorageRoot = path.join(extensionRoot, '.test-storage');
 const requestedTempRoot = verifyExtesterFeedOnly ? '' : process.env.ASPIRE_EXTENSION_E2E_TEMP_ROOT || os.tmpdir();
+// Resolved before the per-run root exists so a failure here -- Git missing, or this tree not being
+// a checkout -- cannot strand an `aev-*` directory that nothing is left alive to clean up.
+// The feed preflight must not touch the shared cache: it runs before any download and only
+// verifies package availability, so resolving the cache root there would be wasted Git discovery.
+const downloadCacheRoot = verifyExtesterFeedOnly ? '' : resolveDownloadCacheRoot(repoRoot);
 if (!verifyExtesterFeedOnly) {
   fs.mkdirSync(requestedTempRoot, { recursive: true });
 }
@@ -42,7 +47,7 @@ const stateFile = path.join(resultsDir, 'extension-state.json');
 const controlFile = path.join(resultsDir, 'extension-control.json');
 const testSpec = process.env.ASPIRE_EXTENSION_E2E_SPEC || 'out/test-e2e/**/*.e2e.test.js';
 const matchedTestSpecs = verifyExtesterFeedOnly ? [] : findSpecMatches(testSpec);
-const vscodeVersion = process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.122.1';
+const vscodeVersion = resolveCachedVsCodeVersion(process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.122.1');
 const extesterVersion = extensionPackageJson.devDependencies?.['vscode-extension-tester'];
 if (!extesterVersion) {
   throw new Error('vscode-extension-tester must be pinned in extension/package.json devDependencies.');
@@ -50,9 +55,6 @@ if (!extesterVersion) {
 const extesterNodeModules = path.join(extensionRoot, 'node_modules');
 const extesterModule = path.join(extesterNodeModules, 'vscode-extension-tester');
 const extesterCli = path.join(extesterModule, 'out', 'cli.js');
-// The feed preflight must not touch the shared cache: it runs before any download and only
-// verifies package availability, so resolving the cache root there would be wasted Git discovery.
-const downloadCacheRoot = verifyExtesterFeedOnly ? '' : resolveDownloadCacheRoot(repoRoot);
 const primaryAppHostProject = path.join(workspaceRoot, 'AspireE2E.AppHost', 'AspireE2E.AppHost.csproj');
 const workspaceNuGetConfigPath = path.join(workspaceRoot, 'NuGet.config');
 let cliPathForCleanup;
@@ -562,6 +564,11 @@ async function main() {
       LANG: 'C.UTF-8',
       LC_ALL: 'C.UTF-8',
       NODE_PATH: [extesterNodeModules, process.env.NODE_PATH].filter(Boolean).join(path.delimiter),
+      // ExTester's loadCodeVersion prefers CODE_VERSION over the --code_version argument, so an
+      // ambient value would make it download a version the cache key does not describe and leave
+      // a later run reusing the wrong install offline. Pinning it here makes the argument and the
+      // key authoritative. See node_modules/vscode-extension-tester/out/extester.js.
+      CODE_VERSION: vscodeVersion,
     });
     if (process.env.ASPIRE_EXTENSION_E2E_UNSET_CLI_START_TIMEOUT === 'true') {
       extestEnv.ASPIRE_CLI_START_TIMEOUT = undefined;
@@ -1001,6 +1008,24 @@ function resolveAppHostSdkVersion(resolvedCliPath) {
   const patch = getXmlProperty(versionsProps, 'PatchVersion');
   const prerelease = getXmlProperty(versionsProps, 'PreReleaseVersionLabel');
   return `${major}.${minor}.${patch}-${prerelease}`;
+}
+
+/**
+ * Pins the VS Code version the cached runner keys on.
+ *
+ * ExTester accepts `latest`, which resolves to whatever Microsoft is shipping the moment it asks.
+ * Keying on that literal would freeze the first release ever downloaded into `vscode-latest` and
+ * quietly serve it forever, which is the opposite of what somebody asking for `latest` wants.
+ * `min` and `max` are safe to key literally because ExTester resolves them from the version pinned
+ * in package.json, and that version is already part of the cache key.
+ */
+function resolveCachedVsCodeVersion(requestedVersion) {
+  const normalizedVersion = requestedVersion.trim().toLowerCase();
+  if (normalizedVersion === 'min' || normalizedVersion === 'max' || /^\d+\.\d+(\.\d+)?$/.test(normalizedVersion)) {
+    return normalizedVersion;
+  }
+
+  throw new Error(`ASPIRE_EXTENSION_E2E_VSCODE_VERSION must be a concrete version such as '1.122.1', or 'min'/'max', but was '${requestedVersion}'. Moving aliases cannot be cached because the cache key would never change when the alias does.`);
 }
 
 function getAspireCliEnvironment(extraEnv = {}) {

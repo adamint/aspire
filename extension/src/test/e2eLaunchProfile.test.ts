@@ -538,4 +538,38 @@ suite('E2E launch profile', () => {
         assert.ok(!cleanupBody.includes('removePath(shortRunRoot'));
         assert.ok(!cleanupBody.includes('fs.rmSync('));
     });
+
+    test('pins the VS Code version the download cache is keyed on', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+
+        // ExTester's loadCodeVersion prefers CODE_VERSION over --code_version, so an inherited
+        // value would download a version the cache key does not describe and leave a later run
+        // reusing the wrong install offline.
+        assert.ok(runner.includes('CODE_VERSION: vscodeVersion,'));
+        assert.ok(runner.includes('const vscodeVersion = resolveCachedVsCodeVersion('));
+    });
+
+    test('rejects moving VS Code aliases that a cache key could never invalidate', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const resolverStart = runner.indexOf('function resolveCachedVsCodeVersion(');
+        const resolverBody = runner.slice(resolverStart, runner.indexOf('\n}', resolverStart));
+
+        // `latest` would freeze the first release ever downloaded into `vscode-latest`. `min` and
+        // `max` resolve from the pinned ExTester version, which is already part of the key.
+        assert.ok(resolverStart >= 0);
+        assert.ok(resolverBody.includes("normalizedVersion === 'min' || normalizedVersion === 'max'"));
+        assert.ok(resolverBody.includes('/^\\d+\\.\\d+(\\.\\d+)?$/.test(normalizedVersion)'));
+        assert.ok(resolverBody.includes('throw new Error('));
+    });
+
+    test('resolves the download cache root before creating the per-run temporary root', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+
+        // Cache root resolution shells out to Git and runs at module scope, outside the cleanup
+        // scope `main()` installs, so a failure after the run root exists would strand it.
+        assert.ok(runner.indexOf('const downloadCacheRoot =') < runner.indexOf('const shortRunRoot ='));
+    });
 });
