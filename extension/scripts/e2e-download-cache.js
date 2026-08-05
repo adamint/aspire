@@ -13,6 +13,9 @@ const CACHE_MANIFEST_NAME = 'cache-manifest.json';
 // published in the meantime.
 const CACHE_ENTRY_NAME_PATTERN = /^entry-(\d{1,15})$/;
 const CACHE_ENTRY_GENERATION_DIGITS = 6;
+// The widest generation `CACHE_ENTRY_NAME_PATTERN` can read back. It is comfortably below
+// `Number.MAX_SAFE_INTEGER`, so parsing and incrementing a generation is always exact.
+const MAX_CACHE_ENTRY_GENERATION = 999999999999999;
 
 // A candidate carries the process id that created it so the sweep can tell an in-flight download
 // from debris without waiting for a timestamp to age out. See isCandidateOwnedByLiveProcess.
@@ -161,7 +164,13 @@ function publishCacheEntryCandidate(groupDirectory, candidateDirectory, expected
       return { published: false, ...adoptedEntry };
     }
 
-    const entryDirectory = path.join(groupDirectory, formatCacheEntryName(group.highestGeneration + 1));
+    let entryDirectory;
+    try {
+      entryDirectory = path.join(groupDirectory, formatCacheEntryName(group.highestGeneration + 1));
+    } catch (error) {
+      throw new Error(`Unable to publish an E2E download cache entry under '${groupDirectory}': ${error.message}`);
+    }
+
     try {
       fs.renameSync(candidateDirectory, entryDirectory);
       return { published: true, cacheDirectory: entryDirectory, manifest: null };
@@ -243,6 +252,18 @@ function readCacheEntryGroup(groupDirectory) {
 }
 
 function formatCacheEntryName(generation) {
+  // Publishing a name `CACHE_ENTRY_NAME_PATTERN` cannot read back would wedge the key in the worst
+  // possible way: the rename succeeds, so this run pays for a full download and then uses it, but
+  // every later run skips the unreadable entry, computes the same occupied name, and exhausts
+  // MAX_PUBLISH_ATTEMPTS against it. Generations only advance by one per publish, so a group
+  // cannot arrive here on its own -- reaching the ceiling means a hand-made or tampered directory
+  // name is sitting in the group. There is no safe automatic repair, because published entries are
+  // never deleted (a concurrent run may be executing VS Code straight out of one), so fail with
+  // the directory to remove rather than silently corrupt the key.
+  if (!Number.isInteger(generation) || generation < 1 || generation > MAX_CACHE_ENTRY_GENERATION) {
+    throw new Error(`Cache entry generation ${generation} is outside the range 1-${MAX_CACHE_ENTRY_GENERATION} that cache entry names can express. Delete the entry group directory to reset it.`);
+  }
+
   return `entry-${String(generation).padStart(CACHE_ENTRY_GENERATION_DIGITS, '0')}`;
 }
 

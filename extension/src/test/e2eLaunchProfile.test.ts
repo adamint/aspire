@@ -78,7 +78,7 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes("ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_TIMEOUT_MS', 240000"));
         assert.ok(runner.includes("'get-chromedriver'"));
         assert.ok(runner.includes('const setupDownloadRetryOptions = getSetupDownloadRetryOptions(stagingDirectory, downloadDirectory);'));
-        assert.ok(runner.includes('run(command, args, extraEnv, options);'));
+        assert.ok(runner.includes('runWithRetries(() => run(command, args, extraEnv, options), {'));
     });
 
     test('guards destructive E2E workspace cleanup', () => {
@@ -637,50 +637,26 @@ suite('E2E launch profile', () => {
         }
     });
 
-    test('terminates orphaned unpack processes when a setup download times out', () => {
+    test('cleans up orphaned unpack processes before a setup download can be retried', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
-        const terminateStart = runner.indexOf('function terminateOrphanedDescendants(');
-        const terminateBody = runner.slice(terminateStart, runner.indexOf('\n}\n', terminateStart));
+        const runStart = runner.indexOf('function run(command, args, extraEnv = {}, options = {}) {');
+        const runBody = runner.slice(runStart, runner.indexOf('\n}\n', runStart));
 
         // spawnSync's timeout signals only the process it started, so ExTester's shelled-out
         // `unzip` survives and keeps writing into a staging directory that is about to be
-        // published as an immutable cache entry.
-        assert.ok(terminateStart >= 0);
+        // published as an immutable cache entry. The behaviour of the cleanup itself is covered
+        // functionally in e2eDownloadRetry.test.ts; this pins the wiring that reaches it.
+        assert.ok(runStart >= 0);
+        assert.ok(runner.includes("} = require('./e2e-download-retry');"));
         assert.ok(runner.includes('terminateOrphansUnder: downloadDirectory,'));
-        assert.ok(runner.includes("result.error?.code === 'ETIMEDOUT' && options.terminateOrphansUnder"));
-        assert.ok(terminateBody.includes("signalProcesses(orphanPids, 'SIGTERM')"));
-        assert.ok(terminateBody.includes("signalProcesses(remainingPids, 'SIGKILL')"));
+        assert.ok(runBody.includes("result.error?.code === 'ETIMEDOUT' && options.terminateOrphansUnder"));
+        assert.ok(runBody.includes('terminateOrphanedDescendants(options.terminateOrphansUnder);'));
 
-        // Signalling the pids captured before the grace period would risk hitting whatever the
-        // kernel recycled those pids into, so the survivors are re-matched by path.
-        assert.ok(terminateBody.includes('const remainingPids = listProcessesWorkingUnder(storagePath);'));
-        assert.ok(terminateBody.includes('are still writing to ${storagePath} after SIGKILL.'));
-    });
-
-    test('abandons the staging directory when orphaned unpack processes cannot be accounted for', () => {
-        const extensionRoot = path.resolve(__dirname, '..', '..');
-        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
-        const listingStart = runner.indexOf('function listProcessesWorkingUnder(');
-        const listingBody = runner.slice(listingStart, runner.indexOf('\n}\n', listingStart));
-        const retryStart = runner.indexOf('function runWithRetry(');
-        const retryBody = runner.slice(retryStart, runner.indexOf('\n}\n', retryStart));
-
-        // An empty match is the answer that lets the caller wipe and reuse the staging directory.
-        // Every way `ps` can fail has to be raised instead of quietly producing that answer.
-        assert.ok(listingStart >= 0);
-        assert.ok(listingBody.includes("spawnSync('ps', ['-Awwo', 'pid=,args=']"));
-        assert.ok(listingBody.includes('if (listing.error) {'));
-        assert.ok(listingBody.includes('if (listing.signal) {'));
-        assert.ok(listingBody.includes('if (listing.status !== 0) {'));
-        assert.ok(listingBody.includes("if (typeof listing.stdout !== 'string') {"));
-        assert.ok(!listingBody.includes('console.warn('));
-
-        // Retrying after a failed cleanup would let `beforeRetry` delete, and a later attempt
-        // publish, a directory a live `unzip` is still writing into.
-        assert.ok(runner.includes('throw markErrorNonRetryable(new Error('));
-        assert.ok(retryStart >= 0);
-        assert.ok(retryBody.includes('if (attempt === options.attempts || isNonRetryableError(error)) {'));
+        // A cleanup that cannot account for the orphans must not fall through to another attempt,
+        // because `beforeRetry` would then wipe a directory something may still be writing into.
+        assert.ok(runBody.includes('throw markErrorNonRetryable(new Error('));
+        assert.ok(runner.includes('beforeRetry: options.beforeRetry,'));
     });
 
     test('keeps setup downloads in the terminal foreground process group', () => {

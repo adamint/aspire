@@ -1288,6 +1288,41 @@ suite('E2E download cache', () => {
         assert.deepStrictEqual(getGroupChildNames(groupDirectory), []);
     });
 
+    test('refuses to publish a generation name later runs could not read back', () => {
+        const root = createTestRoot('generation-ceiling');
+        const cacheRoot = path.join(root, 'cache');
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        // `entry-<15 digits>` is the widest name CACHE_ENTRY_NAME_PATTERN matches, so the next
+        // generation needs 16 and would be invisible to every later run. Publishing it anyway
+        // succeeds once and then wedges the key: each later run misses, recomputes the same
+        // occupied name, and exhausts its publish attempts against it.
+        const unreadableNeighbour = path.join(groupDirectory, 'entry-999999999999999');
+        fs.mkdirSync(unreadableNeighbour, { recursive: true });
+        let populateCalls = 0;
+
+        assert.throws(() => cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                populateCalls++;
+                populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+            },
+        })), /outside the range 1-999999999999999 that cache entry names can express/);
+
+        assert.strictEqual(populateCalls, 1);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), ['entry-999999999999999']);
+    });
+
+    test('formats generation names only within the range they can be read back from', () => {
+        assert.strictEqual(getCacheEntryName(1), 'entry-000001');
+        assert.strictEqual(getCacheEntryName(1000000), 'entry-1000000');
+        assert.strictEqual(getCacheEntryName(999999999999999), 'entry-999999999999999');
+        assert.throws(() => getCacheEntryName(1000000000000000), /outside the range/);
+        assert.throws(() => getCacheEntryName(0), /outside the range/);
+        assert.throws(() => getCacheEntryName(1.5), /outside the range/);
+    });
+
     test('removes abandoned group children while preserving recent ones', () => {
         const root = createTestRoot('abandoned-child-sweep');
         const cacheRoot = path.join(root, 'cache');
