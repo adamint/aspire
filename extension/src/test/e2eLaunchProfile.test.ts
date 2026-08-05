@@ -1,8 +1,78 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import { spawnSync } from 'child_process';
+
+function readSourcePattern(source: string, name: string): RegExp {
+    const declaration = new RegExp(`const ${name} = /(.+)/;`).exec(source);
+    assert.ok(declaration, `run-e2e.js must define ${name}`);
+    return new RegExp(declaration[1]);
+}
+
+/**
+ * Removes block and line comments so a statement-level assertion is not satisfied or defeated by
+ * prose. The comments in `run-e2e.js` discuss `throw` and `fs.` precisely because the code around
+ * them must not use either.
+ */
+function stripComments(source: string): string {
+    return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
 
 suite('E2E launch profile', () => {
+    test('creates nothing in the per-run root that a later module-scope throw could strand', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runRootDeclaration = runner.indexOf('const shortRunRoot =');
+        const moduleScopeAfterRunRoot = stripComments(runner.slice(runner.indexOf('\n', runRootDeclaration), runner.indexOf('\nfunction ')));
+
+        // Module scope runs outside the cleanup `finally` that `main()` installs, so anything
+        // between `mkdtempSync` and the first function declaration that can throw leaves an
+        // `aev-*` directory behind with no owner. Everything here must be string joining.
+        assert.ok(runRootDeclaration >= 0);
+        assert.ok(!/\bfs\./.test(moduleScopeAfterRunRoot), 'module scope must not touch the filesystem after the run root exists');
+        assert.ok(!/\bthrow\b/.test(moduleScopeAfterRunRoot), 'module scope must not throw after the run root exists');
+        assert.ok(!moduleScopeAfterRunRoot.includes('removePath('), 'module scope must not remove paths after the run root exists');
+
+        // The validations that reject the environment, and the spec walk, have to come first.
+        assert.ok(runner.indexOf('const matchedTestSpecs =') < runRootDeclaration);
+        assert.ok(runner.indexOf("throw new Error('vscode-extension-tester must be pinned") < runRootDeclaration);
+        assert.ok(runner.indexOf('const downloadCacheRoot =') < runRootDeclaration);
+        assert.ok(runner.indexOf('const vscodeVersion = resolveCachedVsCodeVersion(') < runRootDeclaration);
+
+        // The directory preparation that used to sit at module scope is now called from `main()`,
+        // inside the `try` whose `finally` tears the run root down.
+        const mainStart = runner.indexOf('async function main()');
+        const mainBody = runner.slice(mainStart, runner.indexOf('\n  finally {', mainStart));
+        assert.ok(mainBody.includes('prepareRunDirectories();'));
+    });
+
+    test('removes the per-run root when the environment is rejected before any download', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const tempRoot = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'aev-guard-'));
+        try {
+            // `latest` is rejected by resolveCachedVsCodeVersion because no cache key can
+            // invalidate it. The rejection has to happen before `mkdtempSync`, otherwise this
+            // temporary root is left holding an orphaned `aev-*` directory forever.
+            const result = spawnSync(process.execPath, [path.join(extensionRoot, 'scripts', 'run-e2e.js')], {
+                encoding: 'utf8',
+                timeout: 120000,
+                env: {
+                    ...process.env,
+                    ASPIRE_EXTENSION_E2E_TEMP_ROOT: tempRoot,
+                    ASPIRE_EXTENSION_E2E_VSCODE_VERSION: 'latest',
+                },
+            });
+
+            assert.notStrictEqual(result.status, 0);
+            assert.match(result.stderr, /latest/);
+            assert.deepStrictEqual(fs.readdirSync(tempRoot), []);
+        }
+        finally {
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
     test('uses in-memory secret storage so VS Code does not prompt for OS keychain access', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
@@ -521,8 +591,8 @@ suite('E2E launch profile', () => {
         assert.ok(populateStart >= 0);
         assert.ok(populateEnd > populateStart);
         // The storage path handed to ExTester is derived from the staging directory rather than
-        // being it verbatim, because ExTester cannot unpack into a path containing whitespace.
-        assert.ok(populateBody.includes('projectShellSafeStagingDirectory(stagingDirectory)'));
+        // being it verbatim, because ExTester interpolates it unquoted into shell commands.
+        assert.ok(populateBody.includes('projectCommandSafeStagingDirectory(stagingDirectory)'));
         assert.ok(populateBody.includes("'get-vscode', '--storage', downloadDirectory"));
         assert.ok(populateBody.includes("'get-chromedriver', '--storage', downloadDirectory"));
         assert.ok(!populateBody.includes('--storage\', storageDir'));
@@ -586,24 +656,25 @@ suite('E2E launch profile', () => {
         assert.ok(resolverBody.includes('throw new Error('));
     });
 
-    test('hands ExTester a storage path that /bin/sh cannot reinterpret', () => {
+    test('hands ExTester a storage path the command interpreter cannot reinterpret', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
-        const projectionStart = runner.indexOf('function projectShellSafeStagingDirectory(');
+        const projectionStart = runner.indexOf('function projectCommandSafeStagingDirectory(');
         const projectionBody = runner.slice(projectionStart, runner.indexOf('\n}', projectionStart));
 
-        // ExTester unpacks zips on macOS and Linux by interpolating the archive path into an
-        // unquoted `unzip -qo` shell command, and the cache now lives wherever the repository was
-        // cloned, so anything the shell acts on has to be projected away -- not just whitespace.
+        // ExTester interpolates this path unquoted into `unzip -qo` on macOS and Linux and into
+        // `<chromedriver> -v` on every platform, and the cache now lives wherever the repository
+        // was cloned, so anything the interpreter acts on has to be projected away -- on Windows
+        // too, and not just whitespace.
         assert.ok(projectionStart >= 0);
-        assert.ok(projectionBody.includes("process.platform === 'win32' || SHELL_INERT_PATH_PATTERN.test(stagingDirectory)"));
-        assert.ok(projectionBody.includes('!SHELL_INERT_PATH_PATTERN.test(linkPath)'));
-        assert.ok(projectionBody.includes("fs.symlinkSync(stagingDirectory, linkPath, 'dir')"));
+        assert.ok(projectionBody.includes('COMMAND_INERT_PATH_PATTERN.test(stagingDirectory)'));
+        assert.ok(!projectionBody.includes("process.platform === 'win32' ||"));
+        assert.ok(projectionBody.includes('!COMMAND_INERT_PATH_PATTERN.test(linkPath)'));
+        assert.ok(projectionBody.includes("fs.symlinkSync(stagingDirectory, linkPath, isWindows ? 'junction' : 'dir')"));
         assert.ok(projectionBody.includes('removePathWithoutFollowingLinks(linkPath)'));
 
-        const patternSource = /const SHELL_INERT_PATH_PATTERN = \/(.+)\/;/.exec(runner);
-        assert.ok(patternSource, 'run-e2e.js must define SHELL_INERT_PATH_PATTERN');
-        const shellInertPathPattern = new RegExp(patternSource[1]);
+        const posixPattern = readSourcePattern(runner, 'POSIX_SHELL_INERT_PATH_PATTERN');
+        const windowsPattern = readSourcePattern(runner, 'WINDOWS_COMMAND_INERT_PATH_PATTERN');
 
         // None of these contain whitespace, so a whitespace-only guard would hand every one of
         // them straight to `/bin/sh -c`.
@@ -625,7 +696,7 @@ suite('E2E launch profile', () => {
             '/home/dev/repo!1/cache',
             '/home/dev/my repo/cache',
         ]) {
-            assert.ok(!shellInertPathPattern.test(shellActivePath), `${shellActivePath} must be projected`);
+            assert.ok(!posixPattern.test(shellActivePath), `${shellActivePath} must be projected`);
         }
 
         for (const inertPath of [
@@ -633,7 +704,37 @@ suite('E2E launch profile', () => {
             '/var/folders/f9/T/aspire-e2e-Xa1B2c',
             '/home/dev/repo-1.2.3_x86+64@host/cache',
         ]) {
-            assert.ok(shellInertPathPattern.test(inertPath), `${inertPath} must not be projected`);
+            assert.ok(posixPattern.test(inertPath), `${inertPath} must not be projected`);
+        }
+
+        // `cmd.exe /d /s /c` strips the quotes Node wraps the command in, so a space, a `&`, or
+        // any of the token separators `,`, `;` and `=` breaks or redirects `<chromedriver> -v`.
+        for (const commandActivePath of [
+            'C:\\src\\my repo\\.cache',
+            'C:\\src\\R&D\\.cache',
+            'C:\\src\\repo(1)\\.cache',
+            'C:\\src\\repo%PATH%\\.cache',
+            'C:\\src\\repo!x!\\.cache',
+            'C:\\src\\repo^x\\.cache',
+            'C:\\src\\repo|tee\\.cache',
+            'C:\\src\\repo>out\\.cache',
+            'C:\\src\\repo,x\\.cache',
+            'C:\\src\\repo;x\\.cache',
+            'C:\\src\\repo=x\\.cache',
+            'C:\\src\\repo"x\\.cache',
+        ]) {
+            assert.ok(!windowsPattern.test(commandActivePath), `${commandActivePath} must be projected`);
+        }
+
+        // `~` has to stay legal on Windows: hosted runners put TEMP under an 8.3 short name, and
+        // rejecting it would push every run onto a projection whose own path is equally rejected,
+        // turning a warm cache into a hard failure.
+        for (const inertPath of [
+            'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\aev-Xa1B2c',
+            'C:\\src\\aspire\\.git\\aspire-extension-e2e-cache',
+            'D:\\a\\aspire\\aspire\\extension\\.cache-1.2.3_x86+64@host',
+        ]) {
+            assert.ok(windowsPattern.test(inertPath), `${inertPath} must not be projected`);
         }
     });
 

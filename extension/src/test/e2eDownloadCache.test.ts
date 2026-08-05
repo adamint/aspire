@@ -199,23 +199,16 @@ function setPathModifiedTime(candidatePath: string, modifiedTime: Date): void {
 }
 
 /**
- * Finds a process id that is not currently claimed, so a fixture can stand in for a candidate
- * whose owner has exited.
+ * A process id the kernel can never hand out, so a candidate directory can name an owner that is
+ * guaranteed to be gone.
+ *
+ * Probing for a currently free pid and then naming it is a race: nothing reserves it, and a pid
+ * recycled between the probe and the liveness check would make the fixture look live and quietly
+ * invert the assertion. This value cannot be recycled, because it is above every ceiling the two
+ * platforms allow - Linux caps `/proc/sys/kernel/pid_max` at 2^22 and macOS at 99998 - while still
+ * fitting the int32 `process.kill` requires.
  */
-function getUnusedProcessId(): number {
-    for (let candidateProcessId = 60000; candidateProcessId < 65000; candidateProcessId++) {
-        try {
-            process.kill(candidateProcessId, 0);
-        }
-        catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
-                return candidateProcessId;
-            }
-        }
-    }
-
-    throw new Error('Unable to find an unused process id for the abandoned candidate fixture.');
-}
+const UNALLOCATABLE_PROCESS_ID = 2147483646;
 
 function createDirectoryLink(linkPath: string, targetPath: string): void {
     ensureParentDirectory(linkPath);
@@ -1354,7 +1347,7 @@ suite('E2E download cache', () => {
         const cacheRoot = path.join(root, 'cache');
         const groupDirectory = getDefaultGroupDirectory(cacheRoot);
         const liveCandidateDirectory = path.join(groupDirectory, `candidate-${process.pid}-live`);
-        const deadCandidateDirectory = path.join(groupDirectory, `candidate-${getUnusedProcessId()}-dead`);
+        const deadCandidateDirectory = path.join(groupDirectory, `candidate-${UNALLOCATABLE_PROCESS_ID}-dead`);
 
         fs.mkdirSync(liveCandidateDirectory, { recursive: true });
         fs.mkdirSync(deadCandidateDirectory, { recursive: true });

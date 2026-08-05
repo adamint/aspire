@@ -56,20 +56,17 @@ function startOrphanedWriter(storagePath: string): number {
     return pid;
 }
 
-function getUnusedProcessId(): number {
-    for (let candidateProcessId = 60000; candidateProcessId < 65000; candidateProcessId++) {
-        try {
-            process.kill(candidateProcessId, 0);
-        }
-        catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'ESRCH') {
-                return candidateProcessId;
-            }
-        }
-    }
-
-    throw new Error('Unable to find an unused process id for the unkillable orphan fixture.');
-}
+/**
+ * A process id the kernel can never hand out, so a fixture can stand in for a process without ever
+ * naming a real one.
+ *
+ * Probing for a free pid and then using it is a race: nothing reserves it, and the pid can be
+ * recycled between the probe and the signal. This value cannot be, because it is above every
+ * ceiling the two platforms allow - Linux caps `/proc/sys/kernel/pid_max` at 2^22 and macOS at
+ * 99998 - while still fitting the int32 `process.kill` requires. Signalling it always fails with
+ * ESRCH.
+ */
+const UNALLOCATABLE_PROCESS_ID = 2147483646;
 
 function waitForFile(filePath: string, timeoutMs = 10000): void {    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -224,11 +221,12 @@ suite('E2E download retry and orphan cleanup', () => {
     (isPosix ? test : test.skip)('raises when ps succeeds but the orphan survives SIGKILL', () => {
         const root = createTestRoot('unkillable');
         // A stub that keeps reporting a pid nothing owns stands in for a process that cannot be
-        // killed, which is otherwise unreachable in a test. Signalling an unused pid fails with
-        // ESRCH and cannot disturb anything else on the machine -- naming a real pid here (1, for
-        // instance) would kill it outright on any runner that happens to be root.
-        const unusedProcessId = getUnusedProcessId();
-        stubProcessListing(root, `#!/bin/sh\necho "    ${unusedProcessId} unzip -qo ${root}/vscode.zip"\n`);
+        // killed, which is otherwise unreachable in a test: no process survives SIGKILL. The pid
+        // is one the kernel can never allocate, so the SIGTERM and SIGKILL this drives fail with
+        // ESRCH and cannot reach anything else on the machine. Probing for a merely unused pid
+        // would leave a window for it to be recycled before the signal lands, and naming a real
+        // one (1, for instance) would kill it outright on any runner that happens to be root.
+        stubProcessListing(root, `#!/bin/sh\necho "    ${UNALLOCATABLE_PROCESS_ID} unzip -qo ${root}/vscode.zip"\n`);
 
         assert.throws(() => retry.terminateOrphanedDescendants(root), /are still writing to .* after SIGKILL/);
     });

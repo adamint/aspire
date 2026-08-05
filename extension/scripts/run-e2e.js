@@ -27,9 +27,17 @@ const resultsDir = path.join(extensionRoot, '.test-results', 'e2e', shardName);
 const runId = `${process.pid}-${Date.now()}`;
 const diagnosticsStorageRoot = path.join(extensionRoot, '.test-storage');
 const requestedTempRoot = verifyExtesterFeedOnly ? '' : process.env.ASPIRE_EXTENSION_E2E_TEMP_ROOT || os.tmpdir();
-// Everything that can reject the environment runs before the per-run root exists. Module scope is
-// outside the cleanup `finally` that `main()` installs, so a throw after `mkdtempSync` leaves an
-// `aev-*` directory behind with nothing alive to remove it.
+// Everything below that can reject the environment runs before the per-run root exists, and
+// nothing after `mkdtempSync` does more than join strings. Module scope is outside the cleanup
+// `finally` that `main()` installs, so a throw once the root exists leaves an `aev-*` directory
+// behind with nothing alive to remove it; work that can fail belongs in `main()` instead, which is
+// why `prepareRunDirectories` is a function rather than a module-scope block.
+const testSpec = process.env.ASPIRE_EXTENSION_E2E_SPEC || 'out/test-e2e/**/*.e2e.test.js';
+const matchedTestSpecs = verifyExtesterFeedOnly ? [] : findSpecMatches(testSpec);
+const extesterVersion = extensionPackageJson.devDependencies?.['vscode-extension-tester'];
+if (!extesterVersion) {
+  throw new Error('vscode-extension-tester must be pinned in extension/package.json devDependencies.');
+}
 // The feed preflight must not touch the shared cache: it runs before any download and only
 // verifies package availability, so resolving the cache root there would be wasted Git discovery.
 const downloadCacheRoot = verifyExtesterFeedOnly ? '' : resolveDownloadCacheRoot(repoRoot);
@@ -52,12 +60,6 @@ const recordingsDir = path.join(extensionRoot, '.test-recordings', shardName);
 const defaultVsixPath = path.join(artifactsDir, 'aspire-extension-e2e.vsix');
 const stateFile = path.join(resultsDir, 'extension-state.json');
 const controlFile = path.join(resultsDir, 'extension-control.json');
-const testSpec = process.env.ASPIRE_EXTENSION_E2E_SPEC || 'out/test-e2e/**/*.e2e.test.js';
-const matchedTestSpecs = verifyExtesterFeedOnly ? [] : findSpecMatches(testSpec);
-const extesterVersion = extensionPackageJson.devDependencies?.['vscode-extension-tester'];
-if (!extesterVersion) {
-  throw new Error('vscode-extension-tester must be pinned in extension/package.json devDependencies.');
-}
 const extesterNodeModules = path.join(extensionRoot, 'node_modules');
 const extesterModule = path.join(extesterNodeModules, 'vscode-extension-tester');
 const extesterCli = path.join(extesterModule, 'out', 'cli.js');
@@ -69,7 +71,19 @@ const EXTESTER_UNPACK_DIRECTORY_PREFIX = 'vscode-temp-';
 // command, no `*`, `?` or `[` to glob, and no quote or backslash to change the parse. This is an
 // allowlist rather than a metacharacter blocklist so a character whose meaning depends on position
 // (`~`, `#`, `!`) forces a projection instead of having to be reasoned about.
-const SHELL_INERT_PATH_PATTERN = /^[A-Za-z0-9._/+,=:@%-]+$/;
+const POSIX_SHELL_INERT_PATH_PATTERN = /^[A-Za-z0-9._/+,=:@%-]+$/;
+// Windows needs the same allowlist over a different alphabet, because `cmd.exe /d /s /c` strips
+// the quotes Node wraps the command in and parses whatever is left. `\` and `:` are ordinary path
+// characters rather than escapes there, and `~` has to stay legal: the 8.3 short names Windows
+// hands out (`C:\Users\RUNNER~1\AppData\Local\Temp` on hosted runners) would otherwise be unable
+// to host the projection that stands in for a rejected path. Excluded are `%` and `!` (variable
+// and delayed expansion), `^` (escape), `&`, `|`, `<`, `>`, `(`, `)` and quotes (command syntax),
+// and space, `,`, `;` and `=`, every one of which terminates the command token.
+const WINDOWS_COMMAND_INERT_PATH_PATTERN = /^[A-Za-z0-9._\\/:+@~-]+$/;
+const isWindows = process.platform === 'win32';
+const COMMAND_INERT_PATH_PATTERN = isWindows ? WINDOWS_COMMAND_INERT_PATH_PATTERN : POSIX_SHELL_INERT_PATH_PATTERN;
+const COMMAND_INTERPRETER_NAME = isWindows ? 'cmd.exe' : '/bin/sh';
+const COMMAND_INERT_PATH_ALPHABET = isWindows ? '._-+@~:\\/' : '._-+,=:@%/';
 const primaryAppHostProject = path.join(workspaceRoot, 'AspireE2E.AppHost', 'AspireE2E.AppHost.csproj');
 const workspaceNuGetConfigPath = path.join(workspaceRoot, 'NuGet.config');
 let cliPathForCleanup;
@@ -78,7 +92,15 @@ const csharpFileHeader = `// Licensed to the .NET Foundation under one or more a
 
 `;
 
-if (!verifyExtesterFeedOnly) {
+/**
+ * Clears the previous run's results and creates the directories this run writes into.
+ *
+ * This is deliberately not module scope even though everything it needs is: it removes and creates
+ * directories, and every one of those calls can fail on a stale Windows file lock or a read-only
+ * mount. Module scope is outside the cleanup `finally` that `main()` installs, so a throw there
+ * would strand the `aev-*` root that `mkdtempSync` had already created.
+ */
+function prepareRunDirectories() {
   removePath(resultsDir, { recursive: true, force: true });
   removePath(recordingsDir, { recursive: true, force: true });
   for (const directory of [artifactsDir, resultsDir, diagnosticsStorageRoot, isolatedAspireHome, storageDir, extensionsDir]) {
@@ -172,31 +194,46 @@ function getRunTestsTimeoutMs() {
 }
 
 /**
- * Returns a path ExTester can be given for its storage folder that `/bin/sh` will not reinterpret.
+ * Returns a path ExTester can be given for its storage folder that the platform's command
+ * interpreter will not reinterpret.
  *
- * ExTester 8.23 unpacks `.zip` archives on macOS and Linux with
- * `exec(`unzip -qo ${input}`, { cwd: target })` -- see
- * `node_modules/vscode-extension-tester/out/util/unpack.js`. `exec` runs the string through
- * `/bin/sh -c` and the archive path is interpolated into it unquoted, so every shell construct in
- * that path is live: a space splits it into two arguments, `repo(1)` is a syntax error, and
- * `repo;touch marker` or `repo$(id)` runs whatever follows. That path is now the download cache,
- * which lives inside the repository, so it is wherever the developer cloned rather than something
- * this runner chooses. Standing a symlink from the run's own temporary root in front of it keeps
- * the shell command a single inert word. Windows unpacks with the `unzipper` library in-process
- * and needs no projection.
+ * ExTester 8.23 builds shell command strings out of this path and interpolates it unquoted into
+ * each of them:
+ *
+ * - `exec(`unzip -qo ${input}`, { cwd: target })` unpacks `.zip` archives on macOS and Linux --
+ *   see `node_modules/vscode-extension-tester/out/util/unpack.js`.
+ * - `exec(`${this.getChromeDriverBinaryPath(version)} -v`)` reads the version of an already
+ *   downloaded ChromeDriver on every platform, Windows included -- see
+ *   `node_modules/vscode-extension-tester/out/util/driverUtil.js`.
+ *
+ * `exec` hands its string to `/bin/sh -c` or `cmd.exe /d /s /c`, so every construct in the path is
+ * live: a space splits it into two arguments, `repo(1)` is a syntax error under `sh`, and
+ * `repo&whoami` runs a second command under `cmd`. That path is now the download cache, which
+ * lives inside the repository, so it is wherever the developer cloned rather than something this
+ * runner chooses.
+ *
+ * The ChromeDriver check is why this has to happen on Windows even though Windows unpacks
+ * in-process with `unzipper`. `downloadChromeDriver` runs it whenever the binary already exists,
+ * which is exactly the warm hit this cache is built to produce, and it swallows the failure and
+ * downloads again. A checkout under `C:\src\my repo` would therefore never get a warm ChromeDriver
+ * and would never say why.
+ *
+ * Standing a link from the run's own temporary root in front of the cache keeps the command a
+ * single inert word. Windows gets a junction rather than a symlink because junctions need neither
+ * elevation nor Developer Mode.
  */
-function projectShellSafeStagingDirectory(stagingDirectory) {
-  if (process.platform === 'win32' || SHELL_INERT_PATH_PATTERN.test(stagingDirectory)) {
+function projectCommandSafeStagingDirectory(stagingDirectory) {
+  if (COMMAND_INERT_PATH_PATTERN.test(stagingDirectory)) {
     return stagingDirectory;
   }
 
   const linkPath = path.join(shortRunRoot, 'cache-staging');
-  if (!SHELL_INERT_PATH_PATTERN.test(linkPath)) {
-    throw new Error(`The download cache path '${stagingDirectory}' contains characters '/bin/sh' would reinterpret, which ExTester cannot unpack into, and the per-run temporary root '${shortRunRoot}' cannot stand in for it because it has the same problem. Point ASPIRE_EXTENSION_E2E_TEMP_ROOT or ASPIRE_EXTENSION_E2E_CACHE_ROOT at a path built only from letters, digits and '._/+,=:@%-'.`);
+  if (!COMMAND_INERT_PATH_PATTERN.test(linkPath)) {
+    throw new Error(`The download cache path '${stagingDirectory}' contains characters '${COMMAND_INTERPRETER_NAME}' would reinterpret, which ExTester cannot be pointed at, and the per-run temporary root '${shortRunRoot}' cannot stand in for it because it has the same problem. Point ASPIRE_EXTENSION_E2E_TEMP_ROOT or ASPIRE_EXTENSION_E2E_CACHE_ROOT at a path built only from letters, digits and '${COMMAND_INERT_PATH_ALPHABET}'.`);
   }
 
   removePathWithoutFollowingLinks(linkPath);
-  fs.symlinkSync(stagingDirectory, linkPath, 'dir');
+  fs.symlinkSync(stagingDirectory, linkPath, isWindows ? 'junction' : 'dir');
   return linkPath;
 }
 
@@ -207,7 +244,7 @@ function getSetupDownloadRetryOptions(stagingDirectory, downloadDirectory) {
     beforeRetry: () => cleanPartialExtesterDownloads(stagingDirectory),
     timeout: getPositiveIntegerEnvironmentVariable('ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_TIMEOUT_MS', 240000),
     // Orphans are matched by the path ExTester was actually given, which is the projection rather
-    // than the candidate whenever the cache path contains whitespace.
+    // than the candidate whenever the cache path is not inert to the command interpreter.
     terminateOrphansUnder: downloadDirectory,
   };
 }
@@ -572,6 +609,7 @@ async function main() {
     }
 
     assertSpecMatches(testSpec);
+    prepareRunDirectories();
     logE2eConfiguration();
 
     const cliPath = isolateCliPath(resolveCliPath());
@@ -632,7 +670,7 @@ async function main() {
       platform: process.platform,
       architecture: process.arch,
       populate(stagingDirectory) {
-        const downloadDirectory = projectShellSafeStagingDirectory(stagingDirectory);
+        const downloadDirectory = projectCommandSafeStagingDirectory(stagingDirectory);
         const setupDownloadRetryOptions = getSetupDownloadRetryOptions(stagingDirectory, downloadDirectory);
         logStep('Downloading VS Code');
         runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', downloadDirectory, '--code_version', vscodeVersion], extestEnv, setupDownloadRetryOptions);
