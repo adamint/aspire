@@ -68,10 +68,6 @@ function ensureDownloadCache(options) {
     return { cacheHit: true, cacheDirectory, manifest: existingManifest };
   }
 
-  // A directory that exists but failed validation is unusable. Move it aside before renaming a
-  // fresh entry into place, because rename cannot replace a non-empty directory.
-  discardUnusableCacheEntry(cacheDirectory);
-
   // Verify the ancestor chain before creating anything: a symlinked parent would otherwise make
   // populate() download into, and publish through, a directory outside the cache root.
   assertTrustedEntryAncestry(normalizedOptions.cacheRoot, cacheDirectory);
@@ -84,12 +80,29 @@ function ensureDownloadCache(options) {
   let published = false;
   try {
     normalizedOptions.populate(stagingDirectory);
+    pruneDownloadArchives(stagingDirectory);
 
     const artifacts = discoverCacheArtifacts(stagingDirectory, normalizedOptions.platform, normalizedOptions.architecture);
     writeCacheManifest(stagingDirectory, { ...expectedManifest, ...artifacts });
     assertCacheEntryTreeIsContained(stagingDirectory);
 
     published = tryPublishStagingDirectory(stagingDirectory, cacheDirectory);
+
+    if (!published) {
+      // Losing the rename means something already occupies the entry. Re-read it now rather than
+      // acting on the stale observation from the top of this function: usually a concurrent run
+      // published a usable entry while this one was downloading, and it must be adopted, not
+      // deleted. Only an occupant that still fails validation is safe to discard, which keeps a
+      // run that merely observed a miss from destroying a later publication.
+      const occupantManifest = tryReadCacheManifest(cacheDirectory, expectedManifest, {
+        cacheRoot: normalizedOptions.cacheRoot,
+        warnOnInvalid: false,
+      });
+      if (!occupantManifest) {
+        discardUnusableCacheEntry(cacheDirectory);
+        published = tryPublishStagingDirectory(stagingDirectory, cacheDirectory);
+      }
+    }
   } finally {
     if (!published) {
       removeDirectoryBestEffort(stagingDirectory);
@@ -126,6 +139,62 @@ function tryPublishStagingDirectory(stagingDirectory, cacheDirectory) {
 
     throw error;
   }
+}
+
+/**
+ * Deletes the archives ExTester leaves in the storage root after unpacking them.
+ *
+ * ExTester downloads `<version>-stable.zip` (or `.tar.gz` on Linux) and
+ * `<version>-chromedriver-<platform>.zip`, unpacks them next to themselves, and never removes
+ * them. On a real macOS entry that is 352 MB of a 1.3 GB entry, kept forever and multiplied by
+ * every cached version combination.
+ *
+ * Dropping them is safe because ExTester only consults an archive when it is about to download:
+ * `downloadVSCode` skips the whole download-and-unpack block once the executable exists and
+ * reports a matching version, and `downloadChromeDriver` returns before touching the archive once
+ * the driver binary reports a matching version. ExTester deletes these archives itself when run
+ * with `--no_cache`, for the same reason.
+ *
+ * This runs against the staging directory only. A published entry is shared with concurrent runs
+ * that are validating and reading it, so it is never mutated in place.
+ */
+function pruneDownloadArchives(stagingDirectory) {
+  let entries;
+  try {
+    entries = fs.readdirSync(stagingDirectory, { withFileTypes: true });
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return 0;
+    }
+
+    throw error;
+  }
+
+  let reclaimedBytes = 0;
+  for (const entry of entries) {
+    // Only plain files directly in the storage root are archives ExTester downloaded. Nested
+    // archives belong to the unpacked applications, and a link is never ours to delete.
+    if (!entry.isFile() || !isDownloadArchiveName(entry.name)) {
+      continue;
+    }
+
+    const archivePath = path.join(stagingDirectory, entry.name);
+    try {
+      reclaimedBytes += fs.statSync(archivePath).size;
+      fs.unlinkSync(archivePath);
+    } catch (error) {
+      // The cache entry is perfectly usable with the archive still present, so a failure here is
+      // only a missed saving.
+      writeWarning(`Unable to remove downloaded archive '${archivePath}': ${describeOperationError(error)}`);
+    }
+  }
+
+  return reclaimedBytes;
+}
+
+function isDownloadArchiveName(name) {
+  const lowerCaseName = name.toLowerCase();
+  return lowerCaseName.endsWith('.zip') || lowerCaseName.endsWith('.tar.gz') || lowerCaseName.endsWith('.tgz');
 }
 
 function discardUnusableCacheEntry(cacheDirectory) {
@@ -187,10 +256,70 @@ function sweepStaleStagingDirectories(entryParentDirectory, entryLeafName) {
 
 function removeDirectoryBestEffort(directoryPath) {
   try {
-    fs.rmSync(directoryPath, { recursive: true, force: true });
+    removePathWithoutFollowingLinks(directoryPath);
   } catch (error) {
     // Losing a staging or discarded directory is not fatal; the next sweep retries it.
     writeWarning(`Unable to remove '${directoryPath}': ${describeOperationError(error)}`);
+  }
+}
+
+/**
+ * Deletes a path, treating every link as a leaf instead of descending into its target.
+ *
+ * `fs.rmSync(..., { recursive: true })` descends through Windows junctions, so using it here would
+ * delete data the cache does not own. Two call sites make that reachable: discarding a cache entry
+ * that someone replaced with a junction wipes the junction's target, and re-projecting into a
+ * storage directory deletes the previous run's junction, which points at the shared cache itself.
+ *
+ * The walk is written by hand rather than delegating subdirectories to `fs.rmSync`, because a
+ * rejected cache entry is exactly the kind of tree that contains an escaping link - that is why it
+ * failed validation - and those links can sit at any depth.
+ */
+function removePathWithoutFollowingLinks(targetPath) {
+  let stats;
+  try {
+    stats = fs.lstatSync(targetPath);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return;
+    }
+
+    throw error;
+  }
+
+  if (stats.isSymbolicLink()) {
+    removeLink(targetPath);
+    return;
+  }
+
+  if (!stats.isDirectory()) {
+    fs.unlinkSync(targetPath);
+    return;
+  }
+
+  for (const entry of fs.readdirSync(targetPath)) {
+    removePathWithoutFollowingLinks(path.join(targetPath, entry));
+  }
+
+  fs.rmdirSync(targetPath);
+}
+
+function removeLink(linkPath) {
+  try {
+    fs.unlinkSync(linkPath);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return;
+    }
+
+    // Windows reports EPERM for unlink on a directory symlink or junction; both are reparse points
+    // on a directory and are removed with rmdir, which detaches the link without touching what it
+    // points at.
+    try {
+      fs.rmdirSync(linkPath);
+    } catch {
+      throw error;
+    }
   }
 }
 
@@ -399,7 +528,13 @@ function assertTrustedEntryAncestry(cacheRoot, cacheDirectory) {
 
   let candidatePath = cacheRoot;
   const segments = relativeEntryPath.split(path.sep).filter(segment => segment.length > 0);
-  for (let index = 0; index < segments.length; index++) {
+
+  // Only the ancestors are checked, not the entry itself. Staging directories are created in the
+  // entry's parent, so a compromised ancestor is what would redirect a download outside the cache.
+  // The entry leaf is only ever a rename target, and rename does not follow a link in its final
+  // component - it fails with ENOTDIR, which routes into the publish-race path where the link is
+  // detached and replaced. Rejecting it here instead would make a symlinked entry unrecoverable.
+  for (let index = 0; index < segments.length - 1; index++) {
     candidatePath = path.join(candidatePath, segments[index]);
     const relativeCandidatePath = path.join(...segments.slice(0, index + 1));
 
@@ -856,7 +991,9 @@ function projectDownloadCache(result, storageDirectory) {
 }
 
 function projectCacheEntry(sourcePath, destinationPath) {
-  fs.rmSync(destinationPath, { recursive: true, force: true });
+  // A previous run leaves a link here that points into the shared cache, so the stale destination
+  // must be detached rather than deleted recursively.
+  removePathWithoutFollowingLinks(destinationPath);
 
   const source = fs.statSync(sourcePath);
   if (!source.isDirectory()) {

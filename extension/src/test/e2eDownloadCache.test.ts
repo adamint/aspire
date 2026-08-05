@@ -830,8 +830,109 @@ suite('E2E download cache', () => {
         assert.strictEqual(secondResult.cacheDirectory, expectedCacheDirectory);
         assert.deepStrictEqual(firstResult.manifest, secondResult.manifest);
         assert.deepStrictEqual(readManifest(expectedCacheDirectory), firstResult.manifest);
-        assert.ok(fs.existsSync(path.join(expectedCacheDirectory, 'vscode-download.zip')));
-        assert.ok(fs.existsSync(path.join(expectedCacheDirectory, 'chromedriver-download.tgz')));
+        assert.strictEqual(fs.existsSync(path.join(expectedCacheDirectory, 'vscode-download.zip')), false);
+        assert.strictEqual(fs.existsSync(path.join(expectedCacheDirectory, 'chromedriver-download.tgz')), false);
+    });
+
+    test('removes downloaded archives from the published entry but keeps everything else', () => {
+        const root = createTestRoot('prune-archives');
+        const cacheRoot = path.join(root, 'cache');
+
+        const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                const artifacts = populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+
+                writeFile(path.join(stagingDirectory, '1.122.1-stable.zip'), 'vscode archive');
+                writeFile(path.join(stagingDirectory, '1.122.1-stable.tar.gz'), 'linux vscode archive');
+                writeFile(path.join(stagingDirectory, '142.0.7444.175-chromedriver-linux64.zip'), 'driver archive');
+                writeFile(path.join(stagingDirectory, 'driverVersion'), '142.0.7444.175');
+                writeFile(path.join(stagingDirectory, 'manifest.json'), '{}');
+                writeFile(path.join(stagingDirectory, artifacts.vscodeDirectory, 'resources', 'bundled.zip'), 'shipped by vscode');
+            },
+        }));
+
+        assert.strictEqual(result.cacheHit, false);
+        assert.strictEqual(fs.existsSync(path.join(result.cacheDirectory, '1.122.1-stable.zip')), false);
+        assert.strictEqual(fs.existsSync(path.join(result.cacheDirectory, '1.122.1-stable.tar.gz')), false);
+        assert.strictEqual(fs.existsSync(path.join(result.cacheDirectory, '142.0.7444.175-chromedriver-linux64.zip')), false);
+
+        // Archives that belong to the unpacked application, and the metadata ExTester reads to
+        // decide whether a download can be skipped, must survive the prune.
+        assert.ok(fs.existsSync(path.join(result.cacheDirectory, result.manifest.vscodeDirectory, 'resources', 'bundled.zip')));
+        assert.strictEqual(fs.readFileSync(path.join(result.cacheDirectory, 'driverVersion'), 'utf8'), '142.0.7444.175');
+        assert.ok(fs.existsSync(path.join(result.cacheDirectory, 'manifest.json')));
+        assert.ok(fs.existsSync(path.join(result.cacheDirectory, result.manifest.chromeDriverBinary)));
+    });
+
+    test('adopts an entry published while this run was downloading instead of discarding it', () => {
+        const root = createTestRoot('publish-after-miss');
+        const cacheRoot = path.join(root, 'cache');
+        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
+            platform: 'linux',
+            architecture: 'x64',
+            vscodeVersion: '1.122.1',
+            extesterVersion: '8.23.0',
+        });
+        let populateCalls = 0;
+
+        // This run observes a miss and only then does a concurrent run publish. Acting on the
+        // stale miss would delete the winner; the winner has to be adopted instead.
+        const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                populateCalls++;
+                populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+                publishValidCacheEntry(entryDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                    vscodeVersion: '1.122.1',
+                    extesterVersion: '8.23.0',
+                    markerFileName: 'winner.txt',
+                });
+            },
+        }));
+
+        assert.strictEqual(populateCalls, 1);
+        assert.strictEqual(result.cacheHit, true);
+        assert.strictEqual(result.cacheDirectory, entryDirectory);
+        assert.strictEqual(fs.readFileSync(path.join(entryDirectory, 'winner.txt'), 'utf8'), 'winner.txt');
+        assert.deepStrictEqual(readManifest(entryDirectory), result.manifest);
+        assertNoStagingSiblings(entryDirectory);
+        assert.deepStrictEqual(getDiscardedSiblingNames(entryDirectory), []);
+    });
+
+    test('re-projecting into the same storage directory leaves the shared cache intact', () => {
+        const root = createTestRoot('reproject');
+        const cacheRoot = path.join(root, 'cache');
+        const storageDirectory = path.join(root, 'storage');
+
+        const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+            },
+        }));
+
+        const cachedExecutable = path.join(
+            result.cacheDirectory,
+            getVsCodeExecutableRelativePath('linux', 'x64'));
+
+        cache.projectDownloadCache(result, storageDirectory);
+        // The first projection leaves a link pointing into the shared cache. Clearing it
+        // recursively would delete the cached install that every other run depends on.
+        cache.projectDownloadCache(result, storageDirectory);
+
+        assert.ok(fs.existsSync(cachedExecutable));
+        assert.strictEqual(fs.readFileSync(cachedExecutable, 'utf8'), 'fake vscode executable');
+        assert.ok(fs.existsSync(path.join(storageDirectory, getVsCodeExecutableRelativePath('linux', 'x64'))));
+        assert.ok(fs.existsSync(path.join(storageDirectory, result.manifest.chromeDriverBinary)));
     });
 
     test('allows racing processes to converge on one published cache entry', async function () {
@@ -916,7 +1017,7 @@ suite('E2E download cache', () => {
         assertNoStagingSiblings(entryDirectory);
     });
 
-    test('publish race fails clearly when the winner is unusable', () => {
+    test('replaces an unusable published entry instead of failing every later run', () => {
         const root = createTestRoot('publish-race-invalid-winner');
         const cacheRoot = path.join(root, 'cache');
         const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
@@ -926,7 +1027,10 @@ suite('E2E download cache', () => {
             extesterVersion: '8.23.0',
         });
 
-        assert.throws(() => cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+        // The winner publishes a manifest-less entry, so it can never be adopted. Leaving it in
+        // place would fail this run and every run after it, which is the wedge the rename-wins
+        // design exists to avoid, so the unusable occupant is discarded and replaced.
+        const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
             populate(stagingDirectory) {
                 const winnerStagingDirectory = fs.mkdtempSync(path.join(path.dirname(entryDirectory), `${path.basename(entryDirectory)}-staging-invalid-winner-`));
                 populateFakeDownload(winnerStagingDirectory, {
@@ -940,9 +1044,13 @@ suite('E2E download cache', () => {
                     architecture: 'x64',
                 });
             },
-        })), /published an unusable/);
+        }));
 
+        assert.strictEqual(result.cacheHit, false);
+        assert.strictEqual(result.cacheDirectory, entryDirectory);
+        assert.deepStrictEqual(readManifest(entryDirectory), result.manifest);
         assertNoStagingSiblings(entryDirectory);
+        assert.deepStrictEqual(getDiscardedSiblingNames(entryDirectory), []);
     });
 
     test('recovers from repeated population crashes without wedging the cache entry', () => {
@@ -1320,7 +1428,7 @@ suite('E2E download cache', () => {
                     architecture: 'x64',
                 });
             },
-        })), /Cache entry path component 'v1[\/]linux-x64' is a symbolic link or junction/i);
+        })), /Cache entry path component 'v1[\\/]linux-x64' is a symbolic link or junction/i);
 
         assert.strictEqual(populateCalls, 0);
         assert.strictEqual(fs.lstatSync(linkedPlatformParent).isSymbolicLink(), true);
