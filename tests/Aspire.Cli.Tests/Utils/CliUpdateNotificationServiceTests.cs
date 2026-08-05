@@ -551,18 +551,20 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
         using var provider = services.BuildServiceProvider();
         var notifier = provider.GetRequiredService<ICliUpdateNotifier>();
 
-        var canceledWaiter = notifier.CheckForCliUpdatesAsync(
-            workspace.WorkspaceRoot,
-            cancellationTokenSource.Token);
-        await resolutionStarted.Task.DefaultTimeout();
-
         var successfulWaiter = notifier.GetVersionStatusAsync(
             workspace.WorkspaceRoot,
             CancellationToken.None);
+        await resolutionStarted.Task.DefaultTimeout();
+
+        var canceledWaiter = notifier.GetVersionStatusAsync(
+            workspace.WorkspaceRoot,
+            cancellationTokenSource.Token);
+        Assert.Equal(1, Volatile.Read(ref resolveCallCount));
 
         await cancellationTokenSource.CancelAsync();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            async () => await canceledWaiter).DefaultTimeout();
+            () => canceledWaiter).DefaultTimeout();
+        Assert.False(successfulWaiter.IsCompleted);
 
         resolution.SetResult(CreateNpmPackageInfo("9.5.0"));
         var successfulStatus = await successfulWaiter.DefaultTimeout();
