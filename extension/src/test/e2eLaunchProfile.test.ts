@@ -548,6 +548,25 @@ suite('E2E launch profile', () => {
         // reusing the wrong install offline.
         assert.ok(runner.includes('CODE_VERSION: vscodeVersion,'));
         assert.ok(runner.includes('const vscodeVersion = resolveCachedVsCodeVersion('));
+
+        // ExTester's codeStream falls back to CODE_TYPE when --type is absent, and an Insiders
+        // build unpacks into directory names this cache does not discover.
+        assert.ok(runner.includes("CODE_TYPE: 'stable',"));
+    });
+
+    test('cleans only ExTester download archives between setup retries', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const cleanupStart = runner.indexOf('function cleanPartialExtesterDownloads(');
+        const cleanupBody = runner.slice(cleanupStart, runner.indexOf('\n}', cleanupStart));
+
+        // A ChromeDriver retry runs after VS Code has been unpacked into the same staging
+        // directory, so a recursive sweep would strip archives out of the application tree and
+        // publish a damaged entry to the shared cache.
+        assert.ok(cleanupStart >= 0);
+        assert.ok(!cleanupBody.includes('getFilesRecursive('));
+        assert.ok(cleanupBody.includes("readdirSync(storageDirectory, { withFileTypes: true })"));
+        assert.ok(cleanupBody.includes('!entry.isFile()'));
     });
 
     test('rejects moving VS Code aliases that a cache key could never invalidate', () => {

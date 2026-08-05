@@ -569,6 +569,10 @@ async function main() {
       // a later run reusing the wrong install offline. Pinning it here makes the argument and the
       // key authoritative. See node_modules/vscode-extension-tester/out/extester.js.
       CODE_VERSION: vscodeVersion,
+      // The cache discovers stable install layouts (`VSCode-linux-x64`, `Visual Studio Code.app`)
+      // and the stream is not part of its key, so an ambient CODE_TYPE=insider would download an
+      // Insiders build that artifact discovery then cannot find. Nothing here asks for Insiders.
+      CODE_TYPE: 'stable',
     });
     if (process.env.ASPIRE_EXTENSION_E2E_UNSET_CLI_START_TIMEOUT === 'true') {
       extestEnv.ASPIRE_CLI_START_TIMEOUT = undefined;
@@ -1317,12 +1321,42 @@ function terminateProcessTree(pid, signal) {
   }
 }
 
+/**
+ * Deletes the archives a failed ExTester download left behind, so the retry starts clean.
+ *
+ * Only ordinary files directly under the staging root are ExTester's downloads. Archives nested
+ * deeper belong to an application that has already been unpacked -- VS Code ships some of its own
+ * -- and deleting those would publish a permanently damaged entry to the shared cache, because a
+ * ChromeDriver retry runs after VS Code has been unpacked into the same directory. This mirrors
+ * `pruneDownloadArchives` in the cache module for the same reason.
+ */
 function cleanPartialExtesterDownloads(storageDirectory) {
-  for (const file of getFilesRecursive(storageDirectory)) {
-    if (file.endsWith('.zip') || file.endsWith('.tar.gz') || file.endsWith('.tgz') || file.endsWith('.gz')) {
-      fs.rmSync(file, { force: true });
+  let entries;
+  try {
+    entries = fs.readdirSync(storageDirectory, { withFileTypes: true });
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return;
     }
+
+    throw error;
   }
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !isPartialDownloadArchiveName(entry.name)) {
+      continue;
+    }
+
+    fs.rmSync(path.join(storageDirectory, entry.name), { force: true });
+  }
+}
+
+function isPartialDownloadArchiveName(name) {
+  const lowerCaseName = name.toLowerCase();
+  return lowerCaseName.endsWith('.zip')
+    || lowerCaseName.endsWith('.tar.gz')
+    || lowerCaseName.endsWith('.tgz')
+    || lowerCaseName.endsWith('.gz');
 }
 
 function sleepSynchronously(milliseconds) {
