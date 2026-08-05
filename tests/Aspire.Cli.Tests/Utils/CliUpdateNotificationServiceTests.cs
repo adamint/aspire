@@ -522,7 +522,7 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task NpmResolution_CallerCancellationDoesNotCancelSharedResolution()
+    public async Task NpmResolution_WhenLaterCallerIsCanceled_OnlyLaterCallerThrowsWhileSharedResolutionSucceeds()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
@@ -559,6 +559,62 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
         var canceledWaiter = notifier.GetVersionStatusAsync(
             workspace.WorkspaceRoot,
             cancellationTokenSource.Token);
+        Assert.Equal(1, Volatile.Read(ref resolveCallCount));
+
+        await cancellationTokenSource.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => canceledWaiter).DefaultTimeout();
+        Assert.False(successfulWaiter.IsCompleted);
+
+        resolution.SetResult(CreateNpmPackageInfo("9.5.0"));
+        var successfulStatus = await successfulWaiter.DefaultTimeout();
+        var laterStatus = await notifier.GetVersionStatusAsync(
+            workspace.WorkspaceRoot,
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal(1, Volatile.Read(ref resolveCallCount));
+        Assert.Equal("9.5.0", successfulStatus.LatestVersion);
+        Assert.Equal("9.5.0", laterStatus.LatestVersion);
+    }
+
+    [Fact]
+    public async Task NpmResolution_WhenFirstCallerIsCanceled_OnlyFirstCallerThrowsWhileSharedResolutionSucceeds()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
+        using var cancellationTokenSource = new CancellationTokenSource();
+
+        var resolveCallCount = 0;
+        var resolutionStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var resolution = new TaskCompletionSource<NpmPackageInfo?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
+        {
+            configure.NpmRunnerFactory = _ => new FakeNpmRunner
+            {
+                ResolvePackageAsyncCallback = (_, _, cancellationToken) =>
+                {
+                    Interlocked.Increment(ref resolveCallCount);
+                    resolutionStarted.TrySetResult();
+                    return resolution.Task.WaitAsync(cancellationToken);
+                }
+            };
+            configure.CliUpdateNotifierFactory = sp => CreateCliUpdateNotifier(sp, "9.4.0");
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var notifier = provider.GetRequiredService<ICliUpdateNotifier>();
+
+        var canceledWaiter = notifier.GetVersionStatusAsync(
+            workspace.WorkspaceRoot,
+            cancellationTokenSource.Token);
+        await resolutionStarted.Task.DefaultTimeout();
+
+        var successfulWaiter = notifier.GetVersionStatusAsync(
+            workspace.WorkspaceRoot,
+            CancellationToken.None);
         Assert.Equal(1, Volatile.Read(ref resolveCallCount));
 
         await cancellationTokenSource.CancelAsync();
