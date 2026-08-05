@@ -1270,6 +1270,31 @@ suite('E2E download cache', () => {
         assert.deepStrictEqual(getCandidateNames(groupDirectory), [path.basename(liveCandidateDirectory)]);
     });
 
+    test('sweeps a candidate whose owner is still answering long after any download could run', () => {
+        const root = createTestRoot('recycled-owner-sweep');
+        const cacheRoot = path.join(root, 'cache');
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const recycledOwnerCandidateDirectory = path.join(groupDirectory, `candidate-${process.pid}-recycled`);
+
+        fs.mkdirSync(recycledOwnerCandidateDirectory, { recursive: true });
+        // Process ids are reused, so an owner that still answers a week later is an unrelated
+        // process rather than a download. Without a ceiling this candidate would be pinned forever.
+        setPathModifiedTime(recycledOwnerCandidateDirectory, new Date(Date.now() - 8 * 24 * 60 * 60 * 1000));
+
+        const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+            },
+        }));
+
+        assert.strictEqual(result.cacheHit, false);
+        assert.strictEqual(fs.existsSync(recycledOwnerCandidateDirectory), false);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), [getCacheEntryName(1)]);
+    });
+
     test('names candidates after the creating process so a live download is never swept', () => {
         const root = createTestRoot('candidate-owner-name');
         const cacheRoot = path.join(root, 'cache');

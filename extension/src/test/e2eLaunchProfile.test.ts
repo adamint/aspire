@@ -586,9 +586,12 @@ suite('E2E launch profile', () => {
     test('resolves the download cache root before creating the per-run temporary root', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runRootIndex = runner.indexOf('const shortRunRoot =');
 
-        // Cache root resolution shells out to Git and runs at module scope, outside the cleanup
-        // scope `main()` installs, so a failure after the run root exists would strand it.
-        assert.ok(runner.indexOf('const downloadCacheRoot =') < runner.indexOf('const shortRunRoot ='));
+        // These run at module scope, outside the cleanup scope `main()` installs, so anything that
+        // can reject the environment has to run before the run root exists or a throw strands it.
+        assert.ok(runRootIndex > 0);
+        assert.ok(runner.indexOf('const downloadCacheRoot =') < runRootIndex);
+        assert.ok(runner.indexOf('const vscodeVersion = resolveCachedVsCodeVersion(') < runRootIndex);
     });
 });

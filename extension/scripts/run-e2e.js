@@ -22,11 +22,13 @@ const resultsDir = path.join(extensionRoot, '.test-results', 'e2e', shardName);
 const runId = `${process.pid}-${Date.now()}`;
 const diagnosticsStorageRoot = path.join(extensionRoot, '.test-storage');
 const requestedTempRoot = verifyExtesterFeedOnly ? '' : process.env.ASPIRE_EXTENSION_E2E_TEMP_ROOT || os.tmpdir();
-// Resolved before the per-run root exists so a failure here -- Git missing, or this tree not being
-// a checkout -- cannot strand an `aev-*` directory that nothing is left alive to clean up.
+// Everything that can reject the environment runs before the per-run root exists. Module scope is
+// outside the cleanup `finally` that `main()` installs, so a throw after `mkdtempSync` leaves an
+// `aev-*` directory behind with nothing alive to remove it.
 // The feed preflight must not touch the shared cache: it runs before any download and only
 // verifies package availability, so resolving the cache root there would be wasted Git discovery.
 const downloadCacheRoot = verifyExtesterFeedOnly ? '' : resolveDownloadCacheRoot(repoRoot);
+const vscodeVersion = resolveCachedVsCodeVersion(process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.122.1');
 if (!verifyExtesterFeedOnly) {
   fs.mkdirSync(requestedTempRoot, { recursive: true });
 }
@@ -47,7 +49,6 @@ const stateFile = path.join(resultsDir, 'extension-state.json');
 const controlFile = path.join(resultsDir, 'extension-control.json');
 const testSpec = process.env.ASPIRE_EXTENSION_E2E_SPEC || 'out/test-e2e/**/*.e2e.test.js';
 const matchedTestSpecs = verifyExtesterFeedOnly ? [] : findSpecMatches(testSpec);
-const vscodeVersion = resolveCachedVsCodeVersion(process.env.ASPIRE_EXTENSION_E2E_VSCODE_VERSION || '1.122.1');
 const extesterVersion = extensionPackageJson.devDependencies?.['vscode-extension-tester'];
 if (!extesterVersion) {
   throw new Error('vscode-extension-tester must be pinned in extension/package.json devDependencies.');

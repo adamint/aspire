@@ -34,6 +34,11 @@ const MAX_CANDIDATE_CREATE_ATTEMPTS = 3;
 // age; see sweepAbandonedGroupChildren.
 const ABANDONED_GROUP_CHILD_AGE_MS = 6 * 60 * 60 * 1000;
 
+// Past this, a candidate is swept even when its recorded owner still answers, because no download
+// runs for a week and a process id is only unique until the operating system recycles it. Without
+// a ceiling, a recycled id pinned to a long-lived process would hold roughly a gigabyte forever.
+const ABANDONED_GROUP_CHILD_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
 // A candidate holding roughly a gigabyte would otherwise sit on disk for six hours if a Windows
 // lock outlived one removal attempt, so the cache's own cleanup gets the same retry budget the
 // runner uses for its per-run root.
@@ -408,29 +413,32 @@ function sweepAbandonedGroupChildren(groupDirectory) {
       continue;
     }
 
-    // A candidate names the process that created it, and a live owner is proof that the download
-    // is still in flight no matter what the timestamp says. That matters because a candidate's
-    // mtime only moves when its immediate children change, so an extraction working deep inside a
-    // subdirectory -- or a populate that is retrying with a generous timeout -- can look untouched
-    // for hours while it is very much alive.
-    if (isCandidateOwnedByLiveProcess(dirent.name)) {
-      continue;
-    }
-
     const candidatePath = path.join(groupDirectory, dirent.name);
+    let ageMs;
     try {
-      // The age gate stays as the backstop for the cases liveness cannot settle: a candidate from
-      // an older layout that carries no owner, and a recycled process id that makes a dead owner
-      // look alive.
-      if (Date.now() - fs.lstatSync(candidatePath).mtimeMs < ABANDONED_GROUP_CHILD_AGE_MS) {
-        continue;
-      }
+      ageMs = Date.now() - fs.lstatSync(candidatePath).mtimeMs;
     } catch (error) {
       if (error && error.code === 'ENOENT') {
         continue;
       }
 
       throw error;
+    }
+
+    if (ageMs < ABANDONED_GROUP_CHILD_AGE_MS) {
+      continue;
+    }
+
+    // A candidate names the process that created it, and a live owner keeps it out of reach of the
+    // age gate, because a candidate's mtime only moves when its immediate children change: an
+    // extraction working deep inside a subdirectory, or a populate retrying with a generous
+    // timeout, can look untouched for hours while it is very much alive.
+    //
+    // A process id is only unique until the operating system recycles it, so an owner that still
+    // answers days later is far more likely to be an unrelated process than a download. The
+    // ceiling is what keeps that from pinning roughly a gigabyte on disk forever.
+    if (ageMs < ABANDONED_GROUP_CHILD_MAX_AGE_MS && isCandidateOwnedByLiveProcess(dirent.name)) {
+      continue;
     }
 
     removeDirectoryBestEffort(candidatePath);
