@@ -21,9 +21,9 @@ const CANDIDATE_DIRECTORY_PREFIX = 'candidate-';
 const MAX_PUBLISH_ATTEMPTS = 8;
 const MAX_CANDIDATE_CREATE_ATTEMPTS = 3;
 
-// Candidates only exist while a download is in flight, and a group child that is neither the
-// selected entry nor a live candidate is debris left by a crash, a race, or an older cache
-// layout. Sweep the ones that are clearly older than any plausible download or E2E run.
+// Candidates only exist while a download is in flight, so a non-generation group child this old is
+// debris left by a crash or by an older cache layout. Published generations are never swept on
+// age; see sweepAbandonedGroupChildren.
 const ABANDONED_GROUP_CHILD_AGE_MS = 6 * 60 * 60 * 1000;
 
 // A candidate holding roughly a gigabyte would otherwise sit on disk for six hours if a Windows
@@ -95,8 +95,8 @@ function ensureDownloadCache(options) {
   const publishedEntry = selectPublishedCacheEntry(groupDirectory, expectedManifest, { ...cacheRootOptions, warnOnInvalid: true });
   if (publishedEntry) {
     // Sweeping on the hit path as well as the miss path matters: once a key is warm the miss path
-    // never runs again, so debris left beside the entry would otherwise stay forever.
-    sweepAbandonedGroupChildren(groupDirectory, path.basename(publishedEntry.cacheDirectory));
+    // never runs again, so a candidate abandoned by a crash would otherwise stay forever.
+    sweepAbandonedGroupChildren(groupDirectory);
     return { cacheHit: true, cacheDirectory: publishedEntry.cacheDirectory, manifest: publishedEntry.manifest };
   }
 
@@ -233,7 +233,7 @@ function createCacheEntryCandidate(cacheRoot, groupDirectory) {
 
   for (let attempt = 0; attempt < MAX_CANDIDATE_CREATE_ATTEMPTS; attempt++) {
     ensureTrustedCacheEntryGroupDirectory(cacheRoot, groupDirectory);
-    sweepAbandonedGroupChildren(groupDirectory, null);
+    sweepAbandonedGroupChildren(groupDirectory);
 
     try {
       return fs.mkdtempSync(path.join(groupDirectory, CANDIDATE_DIRECTORY_PREFIX));
@@ -360,15 +360,25 @@ function isDownloadArchiveName(name) {
 }
 
 /**
- * Removes group children that are neither the selected entry nor plausibly still in use.
+ * Removes group children that are not published generations and have not been touched for hours.
  *
- * Only age decides, and only because there is nothing else to decide on: an entry directory is not
- * touched while it is being read, so its timestamp says when it was created rather than when it
- * was last used. Anything this old is an abandoned candidate, a redundant generation left by a
- * cold-start race, or debris from an older cache layout, and no E2E run lives long enough to still
- * be holding one.
+ * Published generations are deliberately out of scope. An entry is never written to after it is
+ * published, so its timestamp records when it was created rather than when it was last used, and a
+ * warm entry that has served every run for a day is indistinguishable from abandoned debris by
+ * age alone. Two things would go wrong if one were swept: a run whose projections point straight
+ * at it would have its VS Code and ChromeDriver deleted mid-test, and the freed generation number
+ * would be republished with different content, which is the single assumption the rest of this
+ * module rests on. Neither is hypothetical - validation failures route a run onto the miss path,
+ * and `tryReadCacheManifest` cannot tell a genuinely corrupt entry from a transient EMFILE or a
+ * momentary antivirus lock during the full-tree walk, so a healthy entry can look invalid to one
+ * run while another is happily using it.
+ *
+ * Reclaiming superseded generations safely would need reader leases, which is not worth building
+ * for the occasional duplicate a cold-start race leaves behind. What is swept instead is
+ * candidates abandoned by a crash and debris from an older cache layout, neither of which a live
+ * run holds, and the age gate is what keeps this from racing a candidate still being downloaded.
  */
-function sweepAbandonedGroupChildren(groupDirectory, selectedEntryName) {
+function sweepAbandonedGroupChildren(groupDirectory) {
   let dirents;
   try {
     dirents = fs.readdirSync(groupDirectory, { withFileTypes: true });
@@ -381,7 +391,7 @@ function sweepAbandonedGroupChildren(groupDirectory, selectedEntryName) {
   }
 
   for (const dirent of dirents) {
-    if (dirent.name === selectedEntryName) {
+    if (CACHE_ENTRY_NAME_PATTERN.test(dirent.name)) {
       continue;
     }
 

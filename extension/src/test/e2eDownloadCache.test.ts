@@ -1220,27 +1220,32 @@ suite('E2E download cache', () => {
         assert.deepStrictEqual(getCandidateNames(groupDirectory), [path.basename(recentCandidateDirectory)]);
     });
 
-    test('sweeps abandoned group children on a cache hit without touching the selected entry', () => {
+    test('sweeps abandoned candidates on a cache hit but never a published generation', () => {
         const root = createTestRoot('cache-hit-sweep');
         const cacheRoot = path.join(root, 'cache');
         const groupDirectory = getDefaultGroupDirectory(cacheRoot);
         const selectedEntryDirectory = getCacheEntryDirectory(groupDirectory, 1);
-        const abandonedEntryDirectory = getCacheEntryDirectory(groupDirectory, 2);
+        const supersededEntryDirectory = getCacheEntryDirectory(groupDirectory, 2);
         const abandonedCandidateDirectory = path.join(groupDirectory, 'candidate-old');
+        const legacyLayoutDebrisDirectory = path.join(groupDirectory, 'VSCode-linux-x64');
 
         publishValidCacheEntry(selectedEntryDirectory, {
             ...defaultCacheKey,
             markerFileName: 'selected.txt',
         });
-        fs.mkdirSync(abandonedEntryDirectory, { recursive: true });
+        fs.mkdirSync(supersededEntryDirectory, { recursive: true });
         fs.mkdirSync(abandonedCandidateDirectory, { recursive: true });
+        fs.mkdirSync(legacyLayoutDebrisDirectory, { recursive: true });
 
-        // Once a key is warm the miss path never runs again, so debris is only ever reclaimed by
-        // the hit path. Age gating is what keeps this from racing a run that is still downloading.
+        // Entries are never written to after they are published, so age says when one was created,
+        // not when it was last used - a warm entry and abandoned debris are indistinguishable by
+        // age, and a run may be executing VS Code from junctions pointing straight into either
+        // generation. Only non-generation children are safe to reclaim.
         const staleTime = new Date(Date.now() - 7 * 60 * 60 * 1000);
         setPathModifiedTime(selectedEntryDirectory, staleTime);
-        setPathModifiedTime(abandonedEntryDirectory, staleTime);
+        setPathModifiedTime(supersededEntryDirectory, staleTime);
         setPathModifiedTime(abandonedCandidateDirectory, staleTime);
+        setPathModifiedTime(legacyLayoutDebrisDirectory, staleTime);
 
         const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
             populate() {
@@ -1251,7 +1256,39 @@ suite('E2E download cache', () => {
         assert.strictEqual(result.cacheHit, true);
         assert.strictEqual(result.cacheDirectory, selectedEntryDirectory);
         assert.strictEqual(fs.readFileSync(path.join(selectedEntryDirectory, 'selected.txt'), 'utf8'), 'selected.txt');
-        assert.deepStrictEqual(getGroupChildNames(groupDirectory), [getCacheEntryName(1)]);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), [getCacheEntryName(1), getCacheEntryName(2)]);
+    });
+
+    test('never sweeps a published generation that a concurrent run could be using', () => {
+        const root = createTestRoot('no-sweep-of-published-generation');
+        const cacheRoot = path.join(root, 'cache');
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const warmEntryDirectory = getCacheEntryDirectory(groupDirectory, 1);
+
+        publishValidCacheEntry(warmEntryDirectory, {
+            ...defaultCacheKey,
+            markerFileName: 'in-use.txt',
+        });
+        setPathModifiedTime(warmEntryDirectory, new Date(Date.now() - 7 * 60 * 60 * 1000));
+
+        // Validation catches every error, so a transient EMFILE or a momentary antivirus lock
+        // during the full-tree walk looks exactly like corruption and routes this run onto the
+        // miss path. Nothing on that path is allowed to touch the entry another run is using.
+        fs.writeFileSync(path.join(warmEntryDirectory, cache.CACHE_MANIFEST_NAME), 'not json at all');
+
+        const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+            },
+        }));
+
+        assert.strictEqual(result.cacheHit, false);
+        assert.strictEqual(result.cacheDirectory, getCacheEntryDirectory(groupDirectory, 2));
+        assert.strictEqual(fs.readFileSync(path.join(warmEntryDirectory, 'in-use.txt'), 'utf8'), 'in-use.txt');
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), [getCacheEntryName(1), getCacheEntryName(2)]);
     });
 
     test('never deletes an entry published after this run observed a miss', () => {
