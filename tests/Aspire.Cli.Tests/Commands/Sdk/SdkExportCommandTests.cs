@@ -80,7 +80,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         using var provider = CreateProvider(interactionService, out var workspace, out _);
         using var _2 = workspace;
 
-        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting@13.5.0");
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0");
 
         Assert.Equal(CliExitCodes.Success, exitCode);
         Assert.DoesNotContain(
@@ -96,7 +96,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         var appHostServerProject = new CapturingAppHostServerProject(workspace.WorkspaceRoot.FullName);
         using var provider = CreateProvider(interactionService, workspace, new StubExportRpcClient(), appHostServerProject);
 
-        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting@13.5.0 --source /tmp/aspire-hive");
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0 --source /tmp/aspire-hive");
 
         Assert.Equal(CliExitCodes.Success, exitCode);
         Assert.Equal("/tmp/aspire-hive", appHostServerProject.PackageSourceOverride);
@@ -115,7 +115,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         var appHostServerProject = new CapturingAppHostServerProject(workspace.WorkspaceRoot.FullName);
         using var provider = CreateProvider(interactionService, workspace, new StubExportRpcClient(), appHostServerProject);
 
-        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting@13.5.0");
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0");
 
         Assert.Equal(CliExitCodes.Success, exitCode);
         Assert.Contains(
@@ -139,6 +139,38 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
 
         Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
         Assert.Empty(interactionService.DisplayedRawText);
+    }
+
+    [Fact]
+    public async Task SdkExportWithMismatchedCoreVersionReturnsInvalidCommand()
+    {
+        var interactionService = new TestInteractionService();
+        using var provider = CreateProvider(interactionService, out var workspace, out _);
+        using var _2 = workspace;
+
+        // The scanner loads the core assemblies this CLI ships with, so honouring a different core
+        // version would export this CLI's surface under someone else's version number — the same
+        // stale-signature problem this command exists to fix.
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting@1.0.0");
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.Empty(interactionService.DisplayedRawText);
+    }
+
+    [Fact]
+    public async Task SdkExportAcceptsCoreVersionThatDiffersOnlyByBuildMetadata()
+    {
+        var interactionService = new TestInteractionService();
+        using var provider = CreateProvider(interactionService, out var workspace, out _);
+        using var _2 = workspace;
+
+        var executionContext = provider.GetRequiredService<Aspire.Cli.CliExecutionContext>();
+
+        var exitCode = await InvokeAsync(
+            provider,
+            $"sdk export --language typescript --package Aspire.Hosting@{executionContext.IdentitySdkVersion}+build.5");
+
+        Assert.Equal(0, exitCode);
     }
 
     [Theory]

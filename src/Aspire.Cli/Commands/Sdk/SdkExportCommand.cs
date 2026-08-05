@@ -113,7 +113,23 @@ internal sealed class SdkExportCommand : BaseCommand
 
             // The core package is always restored by the scanner AppHost, so adding it again would
             // produce a duplicate package reference.
-            if (!string.Equals(packageName, CorePackageName, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(packageName, CorePackageName, StringComparison.OrdinalIgnoreCase))
+            {
+                // The scanner loads the core assemblies this CLI was built against, so a different
+                // requested version would be exported as this CLI's surface under someone else's
+                // version number. That is the same stale-signature problem this command exists to
+                // fix, so refuse instead of labelling the export with a version it does not describe.
+                var requested = StripBuildMetadata(packageVersion);
+                if (!string.Equals(requested, ExecutionContext.IdentitySdkVersion, StringComparison.OrdinalIgnoreCase))
+                {
+                    return CommandResult.Failure(
+                        CliExitCodes.InvalidCommand,
+                        $"This CLI can only export {CorePackageName}@{ExecutionContext.IdentitySdkVersion}, but {packageVersion} was requested. " +
+                        $"The scanner loads the core assemblies this CLI ships with, so exporting a different version would describe the wrong API surface. " +
+                        $"Run the export with the {requested} CLI instead.");
+                }
+            }
+            else
             {
                 integrations.Add(reference);
             }
@@ -165,6 +181,16 @@ internal sealed class SdkExportCommand : BaseCommand
             _logger.LogDebug(ex, "Failed to resolve the code generation package for language {Language}", language);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Drops SemVer build metadata so <c>13.5.0+abc123</c> and <c>13.5.0</c> compare equal, matching
+    /// how <see cref="CliExecutionContext.IdentitySdkVersion"/> normalizes this CLI's own version.
+    /// </summary>
+    private static string StripBuildMetadata(string version)
+    {
+        var plusIndex = version.IndexOf('+', StringComparison.Ordinal);
+        return plusIndex < 0 ? version : version[..plusIndex];
     }
 
     private async Task<int> ExportApiAsync(
