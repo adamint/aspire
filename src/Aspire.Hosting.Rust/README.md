@@ -121,7 +121,6 @@ contains a `Dockerfile`, that file is used as-is. Otherwise a multi-stage Docker
 ```dockerfile
 FROM rust:1.89-alpine AS build
 WORKDIR /app
-RUN apk add --no-cache musl-dev gcc
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --locked --release --target-dir /build/target
@@ -167,6 +166,11 @@ used instead: cargo refuses to build with an older toolchain than the declared m
 
 Both defaults are musl-based, so the binary and the runtime image share a libc by construction and
 there is no glibc-version skew between the two stages.
+
+The build stage installs no extra packages, so it provides exactly what the official image ships. The
+Alpine images have carried `gcc` for years but only gained `musl-dev` in Rust 1.92.0, so a crate with
+native dependencies (or a build script) that pins an older toolchain has to supply a build image that
+provides them through `WithDockerfileBaseImage`, or take over the build with its own `Dockerfile`.
 
 rustup channel names are not container image tags, so they are mapped: `stable` becomes `rust:alpine`
 (the unversioned tag that tracks current stable, since there is no `rust:stable-alpine`), and

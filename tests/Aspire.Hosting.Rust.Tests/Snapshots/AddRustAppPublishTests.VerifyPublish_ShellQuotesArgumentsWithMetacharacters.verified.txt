@@ -1,6 +1,5 @@
 ﻿FROM rust:1.89-alpine AS build
 WORKDIR /app
-RUN apk add --no-cache musl-dev gcc
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --config 'build.rustflags=["--cfg", '\''has_quote'\'']' --release --target-dir /build/target && \

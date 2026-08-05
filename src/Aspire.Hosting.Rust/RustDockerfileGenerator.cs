@@ -132,16 +132,6 @@ internal static class RustDockerfileGenerator
             .From(images.BuildImage, "build")
             .WorkDir("/app");
 
-        if (images.BuildImageIsPossiblyAlpine)
-        {
-            // The rust:*-alpine images ship the Rust toolchain but no C toolchain. Any crate with native
-            // dependencies (ring and aws-lc-sys via rustls, openssl-sys, and anything using the cc crate)
-            // fails to link without these. Installing them unconditionally keeps the common TLS/OTLP
-            // configuration working out of the box.
-            // See https://github.com/rust-lang/docker-rust/issues/85
-            buildStage.Run("apk add --no-cache musl-dev gcc");
-        }
-
         if (target.Target is { } triple)
         {
             // A cross target's standard library is not present in the base image, so it has to be installed

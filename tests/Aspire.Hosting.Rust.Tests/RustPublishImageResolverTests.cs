@@ -112,7 +112,6 @@ public class RustPublishImageResolverTests
 
         Assert.Equal($"rust:{RustToolchainDetector.DefaultChannel}-alpine", images.BuildImage);
         Assert.Equal(RustPublishImageResolver.DefaultRuntimeImage, images.RuntimeImage);
-        Assert.True(images.BuildImageIsPossiblyAlpine);
         Assert.True(images.RuntimeImageIsPossiblyAlpine);
     }
 
@@ -125,7 +124,6 @@ public class RustPublishImageResolverTests
 
         Assert.Equal("rust:1.89-bookworm", images.BuildImage);
         Assert.Equal("debian:bookworm-slim", images.RuntimeImage);
-        Assert.False(images.BuildImageIsPossiblyAlpine);
         Assert.False(images.RuntimeImageIsPossiblyAlpine);
     }
 }

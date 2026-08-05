@@ -11,12 +11,6 @@ namespace Aspire.Hosting.Rust;
 internal sealed record RustPublishImages(string BuildImage, string RuntimeImage)
 {
     /// <summary>
-    /// Whether the build stage looks Alpine-based, which determines whether a C toolchain has to be
-    /// installed.
-    /// </summary>
-    public bool BuildImageIsPossiblyAlpine => IsPossiblyAlpine(BuildImage);
-
-    /// <summary>
     /// Whether the runtime stage looks Alpine-based, which determines whether BusyBox user/package
     /// management commands can be emitted.
     /// </summary>
