@@ -375,6 +375,41 @@ function assertNoCandidateSiblings(entryDirectory: string): void {
     assertNoCandidates(path.dirname(entryDirectory));
 }
 
+/**
+ * Runs `body` with `fs.rmdirSync` failing on `directoryPath` with a Windows-style transient lock
+ * error for the first `failureCount` calls, and returns how many times it was called.
+ *
+ * The module under test resolves `fs` through `require`, and the raw module object is patchable
+ * where the TypeScript namespace import is not - `__importStar` copies its members as getters.
+ */
+function withLockedDirectoryRemoval(directoryPath: string, failureCount: number, body: () => void): number {
+    const nodeFs = require('fs') as typeof fs;
+    const realRmdirSync = nodeFs.rmdirSync;
+    let attempts = 0;
+
+    try {
+        nodeFs.rmdirSync = ((target: fs.PathLike, ...rest: unknown[]) => {
+            if (target !== directoryPath) {
+                return (realRmdirSync as (...args: unknown[]) => void)(target, ...rest);
+            }
+
+            if (attempts++ < failureCount) {
+                const lockError = new Error('resource busy') as NodeJS.ErrnoException;
+                lockError.code = 'EBUSY';
+                throw lockError;
+            }
+
+            return (realRmdirSync as (...args: unknown[]) => void)(target, ...rest);
+        }) as typeof fs.rmdirSync;
+
+        body();
+    } finally {
+        nodeFs.rmdirSync = realRmdirSync;
+    }
+
+    return attempts;
+}
+
 async function waitForPaths(pathsToCheck: string[], timeoutMs: number): Promise<void> {
     const deadline = Date.now() + timeoutMs;
 
@@ -1672,6 +1707,33 @@ suite('E2E download cache', () => {
         assert.ok(fs.existsSync(path.join(result.cacheDirectory, result.manifest.vscodeDirectory)));
         assert.ok(fs.existsSync(path.join(result.cacheDirectory, result.manifest.chromeDriverBinary)));
         assert.deepStrictEqual(readManifest(result.cacheDirectory), result.manifest);
+    });
+
+    test('retries locked leaf removals instead of relying on ignored fs options', () => {
+        const root = createTestRoot('link-safe-removal-retries');
+        const lockedDirectory = path.join(root, 'locked');
+        fs.mkdirSync(lockedDirectory, { recursive: true });
+
+        // Node applies maxRetries/retryDelay only to recursive removals, and every removal here is
+        // non-recursive so links are never followed, so the retry loop has to be explicit.
+        const attempts = withLockedDirectoryRemoval(lockedDirectory, 3, () => {
+            cache.removePathWithoutFollowingLinks(lockedDirectory, { maxRetries: 5, retryDelay: 1 });
+        });
+
+        assert.strictEqual(attempts, 4);
+        assert.strictEqual(fs.existsSync(lockedDirectory), false);
+    });
+
+    test('gives up on a locked leaf removal once the retry budget is spent', () => {
+        const root = createTestRoot('link-safe-removal-retry-budget');
+        const lockedDirectory = path.join(root, 'locked');
+        fs.mkdirSync(lockedDirectory, { recursive: true });
+
+        const attempts = withLockedDirectoryRemoval(lockedDirectory, Number.POSITIVE_INFINITY, () => {
+            assert.throws(() => cache.removePathWithoutFollowingLinks(lockedDirectory, { maxRetries: 2, retryDelay: 1 }), /resource busy/);
+        });
+
+        assert.strictEqual(attempts, 3);
     });
 
     test('replaces stale projected entries so a reused storage directory tracks the cache', () => {        const root = createTestRoot('replaces-stale-projection');

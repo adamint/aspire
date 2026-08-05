@@ -26,6 +26,11 @@ const MAX_CANDIDATE_CREATE_ATTEMPTS = 3;
 // layout. Sweep the ones that are clearly older than any plausible download or E2E run.
 const ABANDONED_GROUP_CHILD_AGE_MS = 6 * 60 * 60 * 1000;
 
+// A candidate holding roughly a gigabyte would otherwise sit on disk for six hours if a Windows
+// lock outlived one removal attempt, so the cache's own cleanup gets the same retry budget the
+// runner uses for its per-run root.
+const BEST_EFFORT_REMOVAL_RETRY_OPTIONS = { maxRetries: process.platform === 'win32' ? 20 : 0, retryDelay: 250 };
+
 const GIT_REPOSITORY_LOCATION_ENVIRONMENT_KEYS = new Set([
   'GIT_DIR',
   'GIT_WORK_TREE',
@@ -399,7 +404,7 @@ function sweepAbandonedGroupChildren(groupDirectory, selectedEntryName) {
 
 function removeDirectoryBestEffort(directoryPath) {
   try {
-    removePathWithoutFollowingLinks(directoryPath);
+    removePathWithoutFollowingLinks(directoryPath, BEST_EFFORT_REMOVAL_RETRY_OPTIONS);
   } catch (error) {
     // Losing a candidate or an abandoned generation is not fatal; the next sweep retries it.
     writeWarning(`Unable to remove '${directoryPath}': ${describeOperationError(error)}`);
@@ -420,9 +425,9 @@ function removeDirectoryBestEffort(directoryPath) {
  * rejected cache entry is exactly the kind of tree that contains an escaping link - that is why it
  * failed validation - and those links can sit at any depth.
  *
- * `maxRetries`/`retryDelay` are passed through to the individual removals so callers on Windows,
- * where a file can stay briefly locked after the process holding it exits, get the same retry
- * behaviour `fs.rmSync` offers.
+ * `maxRetries`/`retryDelay` behave the way `fs.rmSync` documents them for recursive removals, but
+ * they are applied by an explicit loop here: Node ignores both options unless `recursive` is set,
+ * and every removal below is deliberately non-recursive so links are never followed.
  */
 function removePathWithoutFollowingLinks(targetPath, options = {}) {
   let stats;
@@ -442,7 +447,7 @@ function removePathWithoutFollowingLinks(targetPath, options = {}) {
   }
 
   if (!stats.isDirectory()) {
-    fs.rmSync(targetPath, { force: true, ...getRemovalRetryOptions(options) });
+    removeWithRetries(() => fs.rmSync(targetPath, { force: true }), options);
     return;
   }
 
@@ -455,7 +460,7 @@ function removePathWithoutFollowingLinks(targetPath, options = {}) {
 
 function removeEmptyDirectory(directoryPath, options) {
   try {
-    fs.rmdirSync(directoryPath, getRemovalRetryOptions(options));
+    removeWithRetries(() => fs.rmdirSync(directoryPath), options);
   } catch (error) {
     if (error && error.code === 'ENOENT') {
       return;
@@ -466,6 +471,13 @@ function removeEmptyDirectory(directoryPath, options) {
 }
 
 function removeLink(linkPath, options = {}) {
+  // Retry the pair rather than the unlink alone. Windows reports EPERM for unlink on a directory
+  // junction, which is the signal to use rmdir instead, not a transient lock - retrying the unlink
+  // first would burn the whole backoff budget on every junction before ever reaching the fallback.
+  removeWithRetries(() => detachLink(linkPath), options);
+}
+
+function detachLink(linkPath) {
   try {
     fs.unlinkSync(linkPath);
   } catch (error) {
@@ -473,19 +485,53 @@ function removeLink(linkPath, options = {}) {
       return;
     }
 
-    // Windows reports EPERM for unlink on a directory symlink or junction; both are reparse points
-    // on a directory and are removed with rmdir, which detaches the link without touching what it
-    // points at.
+    // A directory symlink and a junction are both reparse points on a directory, and rmdir removes
+    // them without touching what they point at.
     try {
-      fs.rmdirSync(linkPath, getRemovalRetryOptions(options));
+      fs.rmdirSync(linkPath);
     } catch {
       throw error;
     }
   }
 }
 
-function getRemovalRetryOptions({ maxRetries, retryDelay } = {}) {
-  return maxRetries ? { maxRetries, retryDelay } : {};
+/**
+ * Retries a removal the way `fs.rmSync` retries recursive ones: linear backoff, growing by
+ * `retryDelay` on each attempt, over the error codes that indicate a transient lock.
+ *
+ * Node applies `maxRetries`/`retryDelay` only when `recursive` is true
+ * (https://nodejs.org/api/fs.html#fsrmsyncpath-options), so passing them to the single-path
+ * removals in this module would silently do nothing. That matters on Windows, where a file can
+ * stay locked for a moment after the process holding it exits, which is exactly the case the
+ * per-run temporary root cleanup hits.
+ */
+function removeWithRetries(remove, { maxRetries = 0, retryDelay = 100 } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      remove();
+      return;
+    } catch (error) {
+      if (attempt >= maxRetries || !isRetryableRemovalError(error)) {
+        throw error;
+      }
+
+      sleepSync((attempt + 1) * retryDelay);
+    }
+  }
+}
+
+function isRetryableRemovalError(error) {
+  return Boolean(error) && ['EBUSY', 'EMFILE', 'ENFILE', 'ENOTEMPTY', 'EPERM'].includes(error.code);
+}
+
+function sleepSync(durationMs) {
+  if (durationMs <= 0) {
+    return;
+  }
+
+  // Everything else in this module is synchronous, so there is no event loop to yield to.
+  // `Atomics.wait` on a throwaway buffer is the only synchronous sleep Node offers.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, durationMs);
 }
 
 function normalizeEnsureDownloadCacheOptions(options) {
