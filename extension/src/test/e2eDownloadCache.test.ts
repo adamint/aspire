@@ -1848,6 +1848,43 @@ suite('E2E download cache', () => {
         assert.deepStrictEqual(readManifest(result.cacheDirectory), result.manifest);
     });
 
+    test('rejects a cache manifest hard-linked to a sibling inside the same cache entry', () => {
+        const root = createTestRoot('internally-hard-linked-manifest');
+        const cacheRoot = path.join(root, 'cache');
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const entryDirectory = getCacheEntryDirectory(groupDirectory, 1);
+        const manifestPath = path.join(entryDirectory, cache.CACHE_MANIFEST_NAME);
+        let populateCalls = 0;
+
+        publishValidCacheEntry(entryDirectory, {
+            platform: 'linux',
+            architecture: 'x64',
+            vscodeVersion: '1.122.1',
+            extesterVersion: '8.23.0',
+        });
+        // Both links are inside the entry, so the containment walk that judges extracted artifacts
+        // would accept this. The manifest is held to the stricter rule instead: it is written by
+        // writeCacheManifest into a private candidate and is never an archive member, so its link
+        // count is 1 by construction and anything else means the entry was altered after it was
+        // published -- which matters because the manifest is what names everything else.
+        createHardFileLink(path.join(entryDirectory, 'manifest-alias.json'), manifestPath);
+
+        const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                populateCalls++;
+                populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+            },
+        }));
+
+        assert.strictEqual(populateCalls, 1);
+        assert.strictEqual(result.cacheHit, false);
+        assert.notStrictEqual(result.cacheDirectory, entryDirectory);
+        assert.strictEqual(fs.lstatSync(path.join(result.cacheDirectory, cache.CACHE_MANIFEST_NAME)).nlink, 1);
+    });
+
     test('rejects hard-linked VS Code executables on cache hits and keeps the external sentinel content untouched', () => {
         const root = createTestRoot('hard-linked-vscode-executable');
         const cacheRoot = path.join(root, 'cache');

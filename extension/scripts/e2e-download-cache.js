@@ -751,8 +751,9 @@ function readCacheManifest(cacheDirectory, expectedManifest, { cacheRoot }) {
 }
 
 /**
- * Walks the whole cache entry and rejects any symlink whose target escapes it, plus any regular
- * file reachable through more than one directory entry.
+ * Walks the whole cache entry and rejects any symlink whose target escapes it, plus any hard link
+ * the entry does not fully own -- a file is refused when it is reachable through a directory entry
+ * that the walk never sees, not merely because it has more than one.
  *
  * Validating only the manifest paths would leave the rest of the projected tree unchecked, and
  * VS Code loads far more than the executable named in the manifest.
@@ -979,6 +980,17 @@ function normalizeManifestRelativePath(value, fieldName) {
   return path.join(...segments);
 }
 
+/**
+ * Rejects a manifest-named path that is not an ordinary, contained file or directory of the
+ * expected type.
+ *
+ * Link count is deliberately not checked here. These paths are archive members, and tar recreates
+ * an internal hard link on extraction, so an executable sharing an inode with a sibling inside the
+ * same entry is a legitimate artifact rather than tampering. What makes a hard link dangerous is a
+ * link the entry does not own, and that is decided by `assertCacheEntryTreeIsContained`, which
+ * walks every path in the entry and can tell the two apart. Repeating a raw `nlink === 1` rule
+ * here would reject the legitimate case without adding a guarantee the walk does not already make.
+ */
 function assertOrdinaryRelativePath(rootDirectory, realRootDirectory, relativePath, fieldName, expectedType) {
   let candidatePath = rootDirectory;
   const segments = relativePath.split(/[\\/]+/);
