@@ -100,9 +100,13 @@ internal static partial class RustPublishImageResolver
             };
         }
 
-        // A version channel may carry a host suffix (1.89.0-x86_64-unknown-linux-gnu). Only the version part
-        // is a valid image tag, and the host suffix is irrelevant because the build always runs in a Linux
-        // container.
+        // A version channel may carry a host suffix (1.89.0-x86_64-unknown-linux-gnu), which is not part of
+        // any image tag, so only the version is usable here. The suffix still applies inside the image:
+        // rustup refuses a fully qualified channel name in a toolchain file unless that exact toolchain is
+        // installed, so a pin naming anything other than the image's own toolchain fails at `cargo build`
+        // with rustup's own message naming the offending value. Whether it matches depends on the builder's
+        // architecture, which is unknown here, so that verdict is left to rustup rather than guessed at.
+        // See https://github.com/rust-lang/rustup/blob/master/src/config.rs ("target tuple in channel name")
         var version = VersionPrefixRegex().Match(channel) is { Success: true } match ? match.Groups[1].Value : channel;
 
         return $"rust:{version}-alpine";
