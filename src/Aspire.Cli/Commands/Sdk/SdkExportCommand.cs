@@ -1,0 +1,209 @@
+// Licensed to the .NET Foundation under one or more agreements.
+// The .NET Foundation licenses this file to you under the MIT license.
+
+using System.CommandLine;
+using System.Text.Json;
+using Aspire.Cli.Configuration;
+using Aspire.Cli.Interaction;
+using Aspire.Cli.Projects;
+using Microsoft.Extensions.Logging;
+using StreamJsonRpc;
+
+namespace Aspire.Cli.Commands.Sdk;
+
+/// <summary>
+/// Command for exporting the canonical API reference of an Aspire package for a target language.
+///
+/// Usage:
+///   aspire sdk export --language typescript                                     # Core Aspire.Hosting at this CLI's SDK version
+///   aspire sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0
+/// </summary>
+/// <remarks>
+/// The output is consumed by documentation pipelines, so stdout carries exactly one JSON document
+/// and nothing else. Every status message, warning, and error goes to stderr, which is what makes
+/// <c>aspire sdk export ... &gt; api.json</c> produce a usable file.
+/// </remarks>
+internal sealed class SdkExportCommand : BaseCommand
+{
+    private const string CorePackageName = "Aspire.Hosting";
+
+    private readonly IAppHostServerProjectFactory _appHostServerProjectFactory;
+    private readonly IAppHostServerSessionFactory _serverSessionFactory;
+    private readonly ILogger<SdkExportCommand> _logger;
+
+    private static readonly Option<string> s_languageOption = new("--language", "-l")
+    {
+        Description = "Target language for the API export (e.g., typescript).",
+        Required = true
+    };
+    private static readonly Option<string?> s_packageOption = new("--package", "-p")
+    {
+        Description = "Package to export in PackageName@Version format. Defaults to the core Aspire.Hosting package at this CLI's SDK version."
+    };
+    private static readonly Option<string?> s_sourceOption = new("--source", "-s")
+    {
+        Description = "NuGet package source to restore the package from."
+    };
+    private static readonly Option<FileInfo?> s_outputOption = new("--output", "-o")
+    {
+        Description = "Output file. If not specified, the document is written to stdout."
+    };
+
+    public SdkExportCommand(
+        IAppHostServerProjectFactory appHostServerProjectFactory,
+        IAppHostServerSessionFactory serverSessionFactory,
+        ILogger<SdkExportCommand> logger,
+        CommonCommandServices services)
+        : base("export", "Export the canonical API reference for an Aspire package in a target language.", services)
+    {
+        _appHostServerProjectFactory = appHostServerProjectFactory;
+        _serverSessionFactory = serverSessionFactory;
+        _logger = logger;
+
+        Hidden = true;
+
+        Options.Add(s_languageOption);
+        Options.Add(s_packageOption);
+        Options.Add(s_sourceOption);
+        Options.Add(s_outputOption);
+    }
+
+    protected override async Task<CommandResult> ExecuteAsync(ParseResult parseResult, CancellationToken cancellationToken)
+    {
+        var language = parseResult.GetValue(s_languageOption)!;
+        var package = parseResult.GetValue(s_packageOption);
+        var packageSource = parseResult.GetValue(s_sourceOption);
+        var outputFile = parseResult.GetValue(s_outputOption);
+
+        string packageName;
+        string packageVersion;
+        var integrations = new List<IntegrationReference>();
+
+        if (string.IsNullOrWhiteSpace(package))
+        {
+            // Documentation has to describe the SDK this CLI generates against, so the default is
+            // the CLI's own identity version rather than whatever the feed currently calls latest.
+            packageName = CorePackageName;
+            packageVersion = ExecutionContext.IdentityVersion;
+        }
+        else
+        {
+            if (!SdkCommandPreparation.TryParseIntegrationArgument(
+                    package,
+                    requireExactVersion: true,
+                    out var reference,
+                    out var errorExitCode,
+                    out var errorMessage))
+            {
+                return CommandResult.Failure(errorExitCode, errorMessage!);
+            }
+
+            if (reference!.Version is null)
+            {
+                return CommandResult.Failure(
+                    CliExitCodes.InvalidCommand,
+                    $"Invalid package '{package}'. Expected PackageName@Version (e.g. Aspire.Hosting.Redis@13.5.0); project references are not supported by sdk export.");
+            }
+
+            packageName = reference.Name;
+            packageVersion = reference.Version;
+
+            // The core package is always restored by the scanner AppHost, so adding it again would
+            // produce a duplicate package reference.
+            if (!string.Equals(packageName, CorePackageName, StringComparison.OrdinalIgnoreCase))
+            {
+                integrations.Add(reference);
+            }
+        }
+
+        return CommandResult.FromExitCode(await ExportApiAsync(
+            language,
+            packageName,
+            packageVersion,
+            integrations,
+            packageSource,
+            outputFile,
+            cancellationToken));
+    }
+
+    private async Task<int> ExportApiAsync(
+        string language,
+        string packageName,
+        string packageVersion,
+        List<IntegrationReference> integrations,
+        string? packageSource,
+        FileInfo? outputFile,
+        CancellationToken cancellationToken)
+    {
+        // The AppHost is restored at the version being documented so the export describes that exact
+        // SDK, not the CLI's bundled one.
+        var sdkVersion = string.Equals(packageName, CorePackageName, StringComparison.OrdinalIgnoreCase)
+            ? packageVersion
+            : ExecutionContext.IdentityVersion;
+
+        await using var session = await SdkCommandPreparation.PrepareSessionAsync(
+            _appHostServerProjectFactory,
+            _serverSessionFactory,
+            InteractionService,
+            _logger,
+            "aspire-sdk-export-",
+            sdkVersion,
+            integrations,
+            packageSource,
+            cancellationToken);
+
+        if (session is null)
+        {
+            return CliExitCodes.FailedToBuildArtifacts;
+        }
+
+        JsonElement export;
+        try
+        {
+            _logger.LogDebug("Exporting {Language} API reference for {PackageName}@{PackageVersion} via RPC", language, packageName, packageVersion);
+            export = await session.RpcClient.ExportApiAsync(language, packageName, packageVersion, cancellationToken);
+        }
+        catch (RemoteInvocationException ex)
+        {
+            InteractionService.DisplayError(ex.Message);
+
+            // An unsupported language is a usage error the caller can fix by choosing another
+            // language, so it is worth distinguishing from the AppHost genuinely falling over.
+            return IsUnsupportedLanguage(ex)
+                ? CliExitCodes.InvalidCommand
+                : CliExitCodes.FailedToBuildArtifacts;
+        }
+        catch (NotSupportedException ex)
+        {
+            InteractionService.DisplayError(ex.Message);
+            return CliExitCodes.InvalidCommand;
+        }
+
+        // GetRawText is the document exactly as the language provider wrote it. Re-serializing would
+        // reshape whitespace and property order for no benefit, and the whole contract here is that
+        // the payload passes through untouched.
+        var json = export.GetRawText();
+
+        if (outputFile is not null)
+        {
+            var outputDir = outputFile.Directory;
+            if (outputDir is not null && !outputDir.Exists)
+            {
+                outputDir.Create();
+            }
+
+            await File.WriteAllTextAsync(outputFile.FullName, json, cancellationToken);
+            InteractionService.DisplaySuccess($"API reference written to {outputFile.FullName}");
+            return CliExitCodes.Success;
+        }
+
+        InteractionService.DisplayRawText(json, consoleOverride: ConsoleOutput.Standard);
+        return CliExitCodes.Success;
+    }
+
+    // RemoteHost raises NotSupportedException for a generator that cannot export; StreamJsonRpc
+    // flattens that to a message string, so the type name is the only marker that survives the wire.
+    private static bool IsUnsupportedLanguage(RemoteInvocationException ex)
+        => ex.Message.Contains("IApiReferenceExporter", StringComparison.Ordinal)
+           || ex.Message.Contains("No code generator found for language", StringComparison.Ordinal);
+}
