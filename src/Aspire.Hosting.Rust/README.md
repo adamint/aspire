@@ -32,7 +32,7 @@ either C# or TypeScript:
 ```csharp
 var builder = DistributedApplication.CreateBuilder(args);
 
-var api = builder.AddRustApp("api", "../rust-api")
+builder.AddRustApp("api", "../rust-api")
     .WithHttpEndpoint(env: "PORT")
     .WithExternalHttpEndpoints();
 
@@ -46,7 +46,7 @@ import { createBuilder } from "./.aspire/modules/aspire.mjs";
 
 const builder = await createBuilder();
 
-const api = await builder.addRustApp("api", "../rust-api")
+await builder.addRustApp("api", "../rust-api")
     .withHttpEndpoint({ env: "PORT" })
     .withExternalHttpEndpoints();
 
@@ -60,14 +60,14 @@ await builder.build().run();
 
 ```csharp
 builder.AddRustApp("api", "../rust-api")
-    .WithCargoBinTarget("worker");
+    .WithCargoBinTarget("worker")
     .WithCargoFeatures("grpc-tonic", "tls-ring")
     .WithCargoArgs("--no-default-features");
 ```
 
 | Method | Effect |
 | --- | --- |
-| `WithCargoArgs(params string[] args)` | Appends raw arguments to the cargo command line |
+| `WithCargoArgs(params string[] args)` | Appends raw arguments to the cargo command line. Use the methods below to select a target, since debugging and publishing read those to work out which binary cargo produces |
 | `WithCargoArgs(Action<RustCargoArgsCallbackContext> callback)` | Computes cargo arguments when the resource starts. An async `Func<RustCargoArgsCallbackContext, Task>` overload is also available |
 | `WithCargoReleaseBuild(bool releaseBuild = true)` | Adds `--release`. Publishing adds it by default, so pass `false` to publish an unoptimized image |
 | `WithCargoLocked(bool locked = true)` | Adds `--locked`, which fails rather than updating `Cargo.lock`. Publishing adds it by default whenever the crate has a lock file, so pass `false` to opt out |
@@ -88,8 +88,8 @@ VS Code.
 
 `aspire publish` and `aspire deploy` build the app into a container. An app that runs should publish
 with no extra configuration: if the app directory contains a `Dockerfile` it is used as-is, otherwise
-one is generated that compiles the crate inside the container.
-The container runs as a non-root `app` user with uid and gid `999`.
+one is generated that compiles the crate inside the container. The container runs as a non-root `app`
+user with uid and gid `999`.
 
 #### Base images
 
