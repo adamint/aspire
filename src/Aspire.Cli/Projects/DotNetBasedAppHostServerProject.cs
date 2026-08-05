@@ -217,10 +217,14 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
 
         if (otherPackages.Count > 0)
         {
+            // This project always gets a generated Directory.Packages.props that turns central package
+            // management on, so an inline Version attribute is rejected with NU1008. VersionOverride is
+            // the CPM-sanctioned way to pin a single reference, and it lets us scan an integration that
+            // the repo's Directory.Packages.props has no PackageVersion entry for.
             doc.Root!.Add(new XElement("ItemGroup",
                 otherPackages.Select(p => new XElement("PackageReference",
                     new XAttribute("Include", p.Name),
-                    new XAttribute("Version", p.Version)))));
+                    new XAttribute("VersionOverride", p.Version)))));
         }
 
         // Add imports for in-repo AppHost building
