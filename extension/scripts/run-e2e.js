@@ -59,6 +59,17 @@ const extesterCli = path.join(extesterModule, 'out', 'cli.js');
 // ExTester unpacks VS Code into `<storage>/vscode-temp-<random>` and removes it in a `finally`
 // that a killed process never reaches. See node_modules/vscode-extension-tester/out/util/codeUtil.js.
 const EXTESTER_UNPACK_DIRECTORY_PREFIX = 'vscode-temp-';
+// `/bin/sh` leaves a word alone only when every character in it is inert: no whitespace to split
+// on, no `$` or backtick to expand, no `;`, `&`, `|`, `(`, `)`, `<`, `>` or newline to end the
+// command, no `*`, `?` or `[` to glob, and no quote or backslash to change the parse. This is an
+// allowlist rather than a metacharacter blocklist so a character whose meaning depends on position
+// (`~`, `#`, `!`) forces a projection instead of having to be reasoned about.
+const SHELL_INERT_PATH_PATTERN = /^[A-Za-z0-9._/+,=:@%-]+$/;
+const PROCESS_LISTING_TIMEOUT_MS = 15000;
+const ORPHAN_TERMINATION_GRACE_MS = 2000;
+const ORPHAN_TERMINATION_CONFIRMATION_TIMEOUT_MS = 5000;
+const ORPHAN_TERMINATION_POLL_INTERVAL_MS = 250;
+const NON_RETRYABLE_ERROR_FLAG = Symbol('aspireNonRetryableError');
 const primaryAppHostProject = path.join(workspaceRoot, 'AspireE2E.AppHost', 'AspireE2E.AppHost.csproj');
 const workspaceNuGetConfigPath = path.join(workspaceRoot, 'NuGet.config');
 let cliPathForCleanup;
@@ -161,24 +172,27 @@ function getRunTestsTimeoutMs() {
 }
 
 /**
- * Returns a path ExTester can be given for its storage folder that contains no whitespace.
+ * Returns a path ExTester can be given for its storage folder that `/bin/sh` will not reinterpret.
  *
  * ExTester 8.23 unpacks `.zip` archives on macOS and Linux with
  * `exec(`unzip -qo ${input}`, { cwd: target })` -- see
- * `node_modules/vscode-extension-tester/out/util/unpack.js`. The archive path is interpolated into
- * a shell command without quoting, so a single space in it splits into separate arguments and the
- * unpack fails. That path is now the download cache, which lives inside the repository, so it is
- * wherever the developer cloned rather than something this runner chooses. Windows unpacks with
- * the `unzipper` library in-process and needs no projection.
+ * `node_modules/vscode-extension-tester/out/util/unpack.js`. `exec` runs the string through
+ * `/bin/sh -c` and the archive path is interpolated into it unquoted, so every shell construct in
+ * that path is live: a space splits it into two arguments, `repo(1)` is a syntax error, and
+ * `repo;touch marker` or `repo$(id)` runs whatever follows. That path is now the download cache,
+ * which lives inside the repository, so it is wherever the developer cloned rather than something
+ * this runner chooses. Standing a symlink from the run's own temporary root in front of it keeps
+ * the shell command a single inert word. Windows unpacks with the `unzipper` library in-process
+ * and needs no projection.
  */
-function projectWhitespaceFreeStagingDirectory(stagingDirectory) {
-  if (process.platform === 'win32' || !/\s/.test(stagingDirectory)) {
+function projectShellSafeStagingDirectory(stagingDirectory) {
+  if (process.platform === 'win32' || SHELL_INERT_PATH_PATTERN.test(stagingDirectory)) {
     return stagingDirectory;
   }
 
   const linkPath = path.join(shortRunRoot, 'cache-staging');
-  if (/\s/.test(linkPath)) {
-    throw new Error(`The download cache path '${stagingDirectory}' contains whitespace, which ExTester cannot unpack into, and the per-run temporary root '${shortRunRoot}' cannot stand in for it because it contains whitespace too. Point ASPIRE_EXTENSION_E2E_TEMP_ROOT or ASPIRE_EXTENSION_E2E_CACHE_ROOT at a path without spaces.`);
+  if (!SHELL_INERT_PATH_PATTERN.test(linkPath)) {
+    throw new Error(`The download cache path '${stagingDirectory}' contains characters '/bin/sh' would reinterpret, which ExTester cannot unpack into, and the per-run temporary root '${shortRunRoot}' cannot stand in for it because it has the same problem. Point ASPIRE_EXTENSION_E2E_TEMP_ROOT or ASPIRE_EXTENSION_E2E_CACHE_ROOT at a path built only from letters, digits and '._/+,=:@%-'.`);
   }
 
   removePathWithoutFollowingLinks(linkPath);
@@ -618,7 +632,7 @@ async function main() {
       platform: process.platform,
       architecture: process.arch,
       populate(stagingDirectory) {
-        const downloadDirectory = projectWhitespaceFreeStagingDirectory(stagingDirectory);
+        const downloadDirectory = projectShellSafeStagingDirectory(stagingDirectory);
         const setupDownloadRetryOptions = getSetupDownloadRetryOptions(stagingDirectory, downloadDirectory);
         logStep('Downloading VS Code');
         runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', downloadDirectory, '--code_version', vscodeVersion], extestEnv, setupDownloadRetryOptions);
@@ -1248,7 +1262,15 @@ function run(command, args, extraEnv = {}, options = {}) {
   });
 
   if (result.error?.code === 'ETIMEDOUT' && options.terminateOrphansUnder) {
-    terminateOrphanedDescendants(options.terminateOrphansUnder);
+    try {
+      terminateOrphanedDescendants(options.terminateOrphansUnder);
+    } catch (cleanupError) {
+      // Falling through to a retry here would let `beforeRetry` delete, and a later attempt
+      // validate and publish, a directory an unpack process may still be writing into -- exactly
+      // the corruption this cleanup exists to prevent. Nothing is known about the directory once
+      // the orphans cannot be accounted for, so abandon the candidate instead of reusing it.
+      throw markErrorNonRetryable(new Error(`${command} ${args.join(' ')} timed out and the unpack processes it left behind under ${options.terminateOrphansUnder} could not be confirmed dead: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`));
+    }
   }
 
   if (result.error) {
@@ -1262,7 +1284,7 @@ function run(command, args, extraEnv = {}, options = {}) {
 
 /**
  * Kills processes still working inside a directory after the process this runner started has been
- * killed for exceeding its timeout.
+ * killed for exceeding its timeout, and throws unless it can prove none are left.
  *
  * Node reports a `spawnSync` timeout as `ETIMEDOUT` after signalling only the process it started.
  * ExTester unpacks zips on macOS and Linux by shelling out (`exec` runs `/bin/sh -c 'unzip ...'`),
@@ -1274,21 +1296,76 @@ function run(command, args, extraEnv = {}, options = {}) {
  * Ctrl-C from reaching a download. The path is a `mkdtemp` name unique to this run, so the match
  * cannot pick up an unrelated process. Windows unpacks in-process and leaves nothing behind.
  *
- * `ps -Awwo pid=,args=` prints one process per line with no header and untruncated arguments:
- *   57231 unzip -qo /var/folders/f9/T/aev-Xa1/cache-staging/1.122.1-stable.zip
+ * "Probably clean" is not good enough here: the caller decides whether the staging directory is
+ * safe to wipe and reuse, so anything short of an empty match after SIGKILL is reported as a
+ * failure rather than logged and swallowed.
  */
 function terminateOrphanedDescendants(storagePath) {
   if (process.platform === 'win32') {
     return;
   }
 
-  const listing = spawnSync('ps', ['-Awwo', 'pid=,args='], { encoding: 'utf8', timeout: 15000 });
-  if (listing.error || typeof listing.stdout !== 'string') {
-    console.warn(`Unable to list processes to clean up after a setup timeout: ${listing.error?.message ?? 'no output'}`);
+  const orphanPids = listProcessesWorkingUnder(storagePath);
+  if (orphanPids.length === 0) {
     return;
   }
 
-  const orphanPids = [];
+  console.warn(`Terminating ${orphanPids.length} process(es) still writing to ${storagePath} after a setup timeout.`);
+  signalProcesses(orphanPids, 'SIGTERM');
+  sleepSynchronously(ORPHAN_TERMINATION_GRACE_MS);
+
+  const confirmationDeadline = Date.now() + ORPHAN_TERMINATION_CONFIRMATION_TIMEOUT_MS;
+  let escalated = false;
+  for (;;) {
+    // Re-match by path on every pass instead of reusing the first list. A process that has already
+    // exited must not be signalled again, because the kernel can have handed its pid to something
+    // unrelated by then.
+    const remainingPids = listProcessesWorkingUnder(storagePath);
+    if (remainingPids.length === 0) {
+      return;
+    }
+
+    if (!escalated) {
+      signalProcesses(remainingPids, 'SIGKILL');
+      escalated = true;
+    } else if (Date.now() >= confirmationDeadline) {
+      throw new Error(`process(es) ${remainingPids.join(', ')} are still writing to ${storagePath} after SIGKILL.`);
+    }
+
+    sleepSynchronously(ORPHAN_TERMINATION_POLL_INTERVAL_MS);
+  }
+}
+
+/**
+ * Returns the pids of processes whose command line mentions `storagePath`, excluding this runner
+ * and whatever started it.
+ *
+ * `ps -Awwo pid=,args=` prints one process per line with no header and untruncated arguments:
+ *   57231 unzip -qo /var/folders/f9/T/aev-Xa1/cache-staging/1.122.1-stable.zip
+ *
+ * Every way `ps` can fail is raised rather than reported as "nothing found". An empty list is the
+ * answer that lets the caller reuse the directory, and claiming it when the process table was
+ * never read is how a live `unzip` ends up inside a published cache entry.
+ */
+function listProcessesWorkingUnder(storagePath) {
+  const listing = spawnSync('ps', ['-Awwo', 'pid=,args='], { encoding: 'utf8', timeout: PROCESS_LISTING_TIMEOUT_MS });
+  if (listing.error) {
+    throw new Error(`'ps' could not be run: ${listing.error.message}`);
+  }
+
+  if (listing.signal) {
+    throw new Error(`'ps' was terminated by ${listing.signal}.`);
+  }
+
+  if (listing.status !== 0) {
+    throw new Error(`'ps' exited with code ${listing.status}: ${String(listing.stderr ?? '').trim() || 'no diagnostics'}`);
+  }
+
+  if (typeof listing.stdout !== 'string') {
+    throw new Error(`'ps' produced no output.`);
+  }
+
+  const pids = [];
   for (const line of listing.stdout.split('\n')) {
     const match = /^\s*(\d+)\s+(.+)$/.exec(line);
     if (!match) {
@@ -1300,17 +1377,10 @@ function terminateOrphanedDescendants(storagePath) {
       continue;
     }
 
-    orphanPids.push(pid);
+    pids.push(pid);
   }
 
-  if (orphanPids.length === 0) {
-    return;
-  }
-
-  console.warn(`Terminating ${orphanPids.length} process(es) still writing to ${storagePath} after a setup timeout.`);
-  signalProcesses(orphanPids, 'SIGTERM');
-  sleepSynchronously(2000);
-  signalProcesses(orphanPids, 'SIGKILL');
+  return pids;
 }
 
 function signalProcesses(pids, signal) {
@@ -1318,9 +1388,19 @@ function signalProcesses(pids, signal) {
     try {
       process.kill(pid, signal);
     } catch {
-      // ESRCH is the expected outcome once the process has exited.
+      // ESRCH is the expected outcome once the process has exited. Whether the signal landed is
+      // not decided here: `terminateOrphanedDescendants` re-reads the process table instead.
     }
   }
+}
+
+function markErrorNonRetryable(error) {
+  error[NON_RETRYABLE_ERROR_FLAG] = true;
+  return error;
+}
+
+function isNonRetryableError(error) {
+  return Boolean(error) && error[NON_RETRYABLE_ERROR_FLAG] === true;
 }
 
 function quoteWindowsShellArgument(value) {
@@ -1340,7 +1420,7 @@ function runWithRetry(command, args, extraEnv = {}, options) {
     }
     catch (error) {
       lastError = error;
-      if (attempt === options.attempts) {
+      if (attempt === options.attempts || isNonRetryableError(error)) {
         break;
       }
 

@@ -1213,6 +1213,81 @@ suite('E2E download cache', () => {
         assertNoCandidateSiblings(result.cacheDirectory);
     });
 
+    test('accepts internal hard links inside the cache entry', () => {
+        const root = createTestRoot('deep-internal-hard-link');
+        const cacheRoot = path.join(root, 'cache');
+
+        // tar stores repeated content as a link entry and GNU/BSD tar recreate it as a hard link,
+        // so a real archive can hand the cache two paths sharing one inode with nothing outside
+        // the entry able to reach either of them.
+        const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                const artifacts = populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+                const deepDirectory = path.join(stagingDirectory, artifacts.vscodeDirectory, 'resources', 'app', 'out');
+                const targetPath = path.join(deepDirectory, 'target.txt');
+                writeFile(targetPath, 'internal content');
+                createHardFileLink(path.join(deepDirectory, 'alias.txt'), targetPath);
+            },
+        }));
+
+        const outDirectory = path.join(result.cacheDirectory, result.manifest.vscodeDirectory, 'resources', 'app', 'out');
+
+        assert.strictEqual(result.cacheHit, false);
+        assert.strictEqual(fs.lstatSync(path.join(outDirectory, 'target.txt')).nlink, 2);
+        assert.strictEqual(fs.readFileSync(path.join(outDirectory, 'alias.txt'), 'utf8'), 'internal content');
+        assertNoCandidateSiblings(result.cacheDirectory);
+    });
+
+    test('accepts a VS Code executable that is hard-linked from elsewhere inside the cache entry', () => {
+        const root = createTestRoot('internal-hard-linked-executable');
+        const cacheRoot = path.join(root, 'cache');
+        const vscodeExecutableRelativePath = getVsCodeExecutableRelativePath('linux', 'x64');
+
+        const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+                const executablePath = path.join(stagingDirectory, vscodeExecutableRelativePath);
+                createHardFileLink(path.join(path.dirname(executablePath), 'code-alias'), executablePath);
+            },
+        }));
+
+        assert.strictEqual(result.cacheHit, false);
+        assert.strictEqual(fs.lstatSync(path.join(result.cacheDirectory, vscodeExecutableRelativePath)).nlink, 2);
+        assert.deepStrictEqual(readManifest(result.cacheDirectory), result.manifest);
+        assertNoCandidateSiblings(result.cacheDirectory);
+    });
+
+    test('rejects a hard-linked file whose links are only partly inside the cache entry', () => {
+        const root = createTestRoot('partly-internal-hard-link');
+        const cacheRoot = path.join(root, 'cache');
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const externalTargetPath = path.join(root, 'external-hard-link-target.txt');
+        writeFile(externalTargetPath, 'external content');
+
+        // Two of the three links live inside the entry, so counting links found during the walk is
+        // what separates this from the fully internal case rather than the raw link count.
+        assert.throws(() => cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                const artifacts = populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+                const deepDirectory = path.join(stagingDirectory, artifacts.vscodeDirectory, 'resources', 'app', 'out');
+                createHardFileLink(path.join(deepDirectory, 'linked.txt'), externalTargetPath);
+                createHardFileLink(path.join(deepDirectory, 'linked-again.txt'), externalTargetPath);
+            },
+        })), /hard-linked file reachable from outside it .*link count 3, but only 2 of its links are inside the entry/);
+
+        assert.strictEqual(fs.readFileSync(externalTargetPath, 'utf8'), 'external content');
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), []);
+    });
+
     test('removes abandoned group children while preserving recent ones', () => {
         const root = createTestRoot('abandoned-child-sweep');
         const cacheRoot = path.join(root, 'cache');

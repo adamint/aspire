@@ -739,11 +739,25 @@ function readCacheManifest(cacheDirectory, expectedManifest, { cacheRoot }) {
  * Genuine artifacts contain internal symlinks -- a macOS VS Code bundle has framework links such
  * as `Contents/Frameworks/Electron Framework.framework/Versions/Current`, plus the
  * `Contents/MacOS/Electron -> Code` link ExTester creates while unpacking -- so links are allowed
- * as long as they resolve inside the entry. Real bundles contain no hard-linked files, so a link
- * count above one means the content is also reachable (and mutable) from outside the cache.
+ * as long as they resolve inside the entry.
+ *
+ * Hard links are judged by reachability too, not by link count. `nlink` counts directory entries
+ * filesystem-wide, and an archive can legitimately carry links that are entirely internal: tar
+ * stores repeated content as a link entry (POSIX ustar type flag `1`, see
+ * https://pubs.opengroup.org/onlinepubs/9699919799/utilities/pax.html#tag_20_92_13_06) and GNU and
+ * BSD tar both recreate it as a hard link on extraction. Two files inside one entry can therefore
+ * share an inode with `nlink === 2` while nothing outside the cache can reach or mutate either,
+ * so rejecting on `nlink > 1` alone would make every run against such an archive download, reject
+ * and abort. Instead each multiply-linked inode is tallied across the walk and rejected only when
+ * its links are not all accounted for inside the entry, because the unaccounted ones are exactly
+ * the paths that could rewrite cached content from outside.
  */
 function assertCacheEntryTreeIsContained(cacheDirectory, realCacheDirectory = resolveRealPath(cacheDirectory)) {
   const pendingDirectories = [cacheDirectory];
+
+  // Keyed by device and inode so links to the same content are recognised as one file no matter
+  // which paths inside the entry reach it.
+  const multiplyLinkedFiles = new Map();
 
   while (pendingDirectories.length > 0) {
     const currentDirectory = pendingDirectories.pop();
@@ -804,8 +818,24 @@ function assertCacheEntryTreeIsContained(cacheDirectory, realCacheDirectory = re
       }
 
       if (entryStats.nlink !== 1) {
-        throw new Error(`Cache entry contains a hard-linked file reachable from outside it at '${path.relative(cacheDirectory, entryPath)}' (link count ${entryStats.nlink}).`);
+        const identity = `${entryStats.dev}:${entryStats.ino}`;
+        const knownLinks = multiplyLinkedFiles.get(identity);
+        if (knownLinks) {
+          // A link can be created while the walk is in flight, so trust the highest count seen.
+          // Erring upwards only ever rejects, never accepts something unreachable.
+          knownLinks.linkCount = Math.max(knownLinks.linkCount, entryStats.nlink);
+          knownLinks.paths.push(entryPath);
+        } else {
+          multiplyLinkedFiles.set(identity, { linkCount: entryStats.nlink, paths: [entryPath] });
+        }
       }
+    }
+  }
+
+  for (const knownLinks of multiplyLinkedFiles.values()) {
+    if (knownLinks.paths.length < knownLinks.linkCount) {
+      const relativePath = path.relative(cacheDirectory, knownLinks.paths[0]);
+      throw new Error(`Cache entry contains a hard-linked file reachable from outside it at '${relativePath}' (link count ${knownLinks.linkCount}, but only ${knownLinks.paths.length} of its links are inside the entry).`);
     }
   }
 }
@@ -990,10 +1020,6 @@ function assertOrdinaryRelativePath(rootDirectory, realRootDirectory, relativePa
       throw new Error(`${fieldName} must point to a file at '${relativePath}'.`);
     }
 
-    if (expectedType === 'file' && candidateStats.nlink !== 1) {
-      throw new Error(`${fieldName} must point to a single-link file at '${relativePath}', but found link count ${candidateStats.nlink}.`);
-    }
-
     // Structure alone does not prove the download survived. A truncated write leaves an empty but
     // otherwise ordinary file, and because entries are never revalidated by running them, an empty
     // executable here would be served as a hit forever and fail VS Code's offline startup on every
@@ -1018,6 +1044,15 @@ function resolveTrustBoundaryRootDirectory(rootDirectory) {
   return fs.existsSync(rootDirectory) ? resolveRealPath(rootDirectory) : path.resolve(rootDirectory);
 }
 
+/**
+ * Rejects a manifest that is not an ordinary, singly-linked file.
+ *
+ * Unlike the extracted artifacts around it, the manifest is written by `writeCacheManifest` into a
+ * private candidate directory and is never an archive member, so it cannot pick up an internal
+ * hard link the way tar-extracted content can. Its link count is 1 by construction and anything
+ * else means the entry was tampered with, which is why the strict rule stays here while
+ * `assertCacheEntryTreeIsContained` judges the rest of the tree by reachability instead.
+ */
 function assertOrdinaryFileWithSingleLink(filePath, description) {
   let fileStats;
   try {

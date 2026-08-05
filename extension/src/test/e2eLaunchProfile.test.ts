@@ -522,7 +522,7 @@ suite('E2E launch profile', () => {
         assert.ok(populateEnd > populateStart);
         // The storage path handed to ExTester is derived from the staging directory rather than
         // being it verbatim, because ExTester cannot unpack into a path containing whitespace.
-        assert.ok(populateBody.includes('projectWhitespaceFreeStagingDirectory(stagingDirectory)'));
+        assert.ok(populateBody.includes('projectShellSafeStagingDirectory(stagingDirectory)'));
         assert.ok(populateBody.includes("'get-vscode', '--storage', downloadDirectory"));
         assert.ok(populateBody.includes("'get-chromedriver', '--storage', downloadDirectory"));
         assert.ok(!populateBody.includes('--storage\', storageDir'));
@@ -586,26 +586,62 @@ suite('E2E launch profile', () => {
         assert.ok(resolverBody.includes('throw new Error('));
     });
 
-    test('hands ExTester a whitespace-free storage path for downloads', () => {
+    test('hands ExTester a storage path that /bin/sh cannot reinterpret', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
-        const projectionStart = runner.indexOf('function projectWhitespaceFreeStagingDirectory(');
+        const projectionStart = runner.indexOf('function projectShellSafeStagingDirectory(');
         const projectionBody = runner.slice(projectionStart, runner.indexOf('\n}', projectionStart));
 
         // ExTester unpacks zips on macOS and Linux by interpolating the archive path into an
         // unquoted `unzip -qo` shell command, and the cache now lives wherever the repository was
-        // cloned, so a checkout under a path with spaces would fail acquisition outright.
+        // cloned, so anything the shell acts on has to be projected away -- not just whitespace.
         assert.ok(projectionStart >= 0);
-        assert.ok(projectionBody.includes("process.platform === 'win32' || !/\\s/.test(stagingDirectory)"));
+        assert.ok(projectionBody.includes("process.platform === 'win32' || SHELL_INERT_PATH_PATTERN.test(stagingDirectory)"));
+        assert.ok(projectionBody.includes('!SHELL_INERT_PATH_PATTERN.test(linkPath)'));
         assert.ok(projectionBody.includes("fs.symlinkSync(stagingDirectory, linkPath, 'dir')"));
         assert.ok(projectionBody.includes('removePathWithoutFollowingLinks(linkPath)'));
+
+        const patternSource = /const SHELL_INERT_PATH_PATTERN = \/(.+)\/;/.exec(runner);
+        assert.ok(patternSource, 'run-e2e.js must define SHELL_INERT_PATH_PATTERN');
+        const shellInertPathPattern = new RegExp(patternSource[1]);
+
+        // None of these contain whitespace, so a whitespace-only guard would hand every one of
+        // them straight to `/bin/sh -c`.
+        for (const shellActivePath of [
+            '/home/dev/repo;touch-marker/cache',
+            '/home/dev/repo$(id)/cache',
+            '/home/dev/repo`id`/cache',
+            '/home/dev/repo(1)/cache',
+            '/home/dev/R&D/cache',
+            '/home/dev/repo|tee/cache',
+            '/home/dev/repo>out/cache',
+            '/home/dev/repo*/cache',
+            '/home/dev/repo?/cache',
+            "/home/dev/it's/cache",
+            '/home/dev/repo"x/cache',
+            '/home/dev/repo\\x/cache',
+            '/home/dev/~repo/cache',
+            '/home/dev/repo#1/cache',
+            '/home/dev/repo!1/cache',
+            '/home/dev/my repo/cache',
+        ]) {
+            assert.ok(!shellInertPathPattern.test(shellActivePath), `${shellActivePath} must be projected`);
+        }
+
+        for (const inertPath of [
+            '/home/dev/aspire/extension/.e2e-download-cache',
+            '/var/folders/f9/T/aspire-e2e-Xa1B2c',
+            '/home/dev/repo-1.2.3_x86+64@host/cache',
+        ]) {
+            assert.ok(shellInertPathPattern.test(inertPath), `${inertPath} must not be projected`);
+        }
     });
 
     test('terminates orphaned unpack processes when a setup download times out', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
         const terminateStart = runner.indexOf('function terminateOrphanedDescendants(');
-        const terminateBody = runner.slice(terminateStart, runner.indexOf('\n}', terminateStart));
+        const terminateBody = runner.slice(terminateStart, runner.indexOf('\n}\n', terminateStart));
 
         // spawnSync's timeout signals only the process it started, so ExTester's shelled-out
         // `unzip` survives and keeps writing into a staging directory that is about to be
@@ -613,8 +649,38 @@ suite('E2E launch profile', () => {
         assert.ok(terminateStart >= 0);
         assert.ok(runner.includes('terminateOrphansUnder: downloadDirectory,'));
         assert.ok(runner.includes("result.error?.code === 'ETIMEDOUT' && options.terminateOrphansUnder"));
-        assert.ok(terminateBody.includes("spawnSync('ps', ['-Awwo', 'pid=,args=']"));
-        assert.ok(terminateBody.includes("signalProcesses(orphanPids, 'SIGKILL')"));
+        assert.ok(terminateBody.includes("signalProcesses(orphanPids, 'SIGTERM')"));
+        assert.ok(terminateBody.includes("signalProcesses(remainingPids, 'SIGKILL')"));
+
+        // Signalling the pids captured before the grace period would risk hitting whatever the
+        // kernel recycled those pids into, so the survivors are re-matched by path.
+        assert.ok(terminateBody.includes('const remainingPids = listProcessesWorkingUnder(storagePath);'));
+        assert.ok(terminateBody.includes('are still writing to ${storagePath} after SIGKILL.'));
+    });
+
+    test('abandons the staging directory when orphaned unpack processes cannot be accounted for', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const listingStart = runner.indexOf('function listProcessesWorkingUnder(');
+        const listingBody = runner.slice(listingStart, runner.indexOf('\n}\n', listingStart));
+        const retryStart = runner.indexOf('function runWithRetry(');
+        const retryBody = runner.slice(retryStart, runner.indexOf('\n}\n', retryStart));
+
+        // An empty match is the answer that lets the caller wipe and reuse the staging directory.
+        // Every way `ps` can fail has to be raised instead of quietly producing that answer.
+        assert.ok(listingStart >= 0);
+        assert.ok(listingBody.includes("spawnSync('ps', ['-Awwo', 'pid=,args=']"));
+        assert.ok(listingBody.includes('if (listing.error) {'));
+        assert.ok(listingBody.includes('if (listing.signal) {'));
+        assert.ok(listingBody.includes('if (listing.status !== 0) {'));
+        assert.ok(listingBody.includes("if (typeof listing.stdout !== 'string') {"));
+        assert.ok(!listingBody.includes('console.warn('));
+
+        // Retrying after a failed cleanup would let `beforeRetry` delete, and a later attempt
+        // publish, a directory a live `unzip` is still writing into.
+        assert.ok(runner.includes('throw markErrorNonRetryable(new Error('));
+        assert.ok(retryStart >= 0);
+        assert.ok(retryBody.includes('if (attempt === options.attempts || isNonRetryableError(error)) {'));
     });
 
     test('keeps setup downloads in the terminal foreground process group', () => {
