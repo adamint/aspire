@@ -111,7 +111,7 @@ internal static class RustDockerfileGenerator
         // WithCargoArgs/WithCargoFeatures configuration silently changes meaning at publish time. They are
         // read from `resource` rather than context.Resource because the latter is the ContainerResource that
         // PublishAsDockerFile substitutes in, which does not carry the Rust annotations.
-        var cargoArgs = await ResolvePublishCargoArgsAsync(resource, options, metadata, context.CancellationToken).ConfigureAwait(false);
+        var cargoArgs = await ResolvePublishCargoArgsAsync(resource, context.CancellationToken).ConfigureAwait(false);
 
         // A manifest path configured for the host points somewhere that does not exist in the container, so
         // the copy of it that reaches `cargo build` has to be rewritten to sit under /app.
@@ -177,14 +177,11 @@ internal static class RustDockerfileGenerator
             .Entrypoint([$"/app/{target.Name}"]);
     }
 
-    // Evaluates every cargo args callback exactly as run mode does, then applies the defaults that only
-    // publishing opts into. Both are appended only when the resource expressed no preference: an explicit
-    // WithCargoReleaseBuild/WithCargoLocked has already put its flag in the list, and an explicit `false`
-    // means the published image deliberately does without.
+    // Evaluates every cargo args callback exactly as run mode does — the publish-only defaults are added by
+    // AddInitialCargoArgs, which sees the same execution context — then applies the arguments that exist
+    // solely because the build runs in a container.
     private static async Task<List<string>> ResolvePublishCargoArgsAsync(
         RustAppResource resource,
-        RustCargoOptionsAnnotation options,
-        CargoMetadata metadata,
         CancellationToken cancellationToken)
     {
         var args = new List<string>();
@@ -196,22 +193,6 @@ internal static class RustDockerfileGenerator
 
         var cargoArgs = args.Where(static arg => arg.Length > 0).ToList();
 
-        // --locked fails the build rather than writing a lock file, so a published image can only build the
-        // dependency versions that were committed. It is only safe to add when a lock file actually exists;
-        // cargo errors out with "the lock file needs to be updated but --locked was passed" otherwise, which
-        // would break publishing for crates that deliberately do not commit one (libraries, mostly).
-        if (options.Locked is null && HasLockFile(metadata))
-        {
-            cargoArgs.Add("--locked");
-        }
-
-        // Cargo rejects --release alongside --profile, so a resource that named a profile is already optimized
-        // as it asked to be.
-        if (options.Profile is null && options.ReleaseBuild is null)
-        {
-            cargoArgs.Add("--release");
-        }
-
         // Appended last because cargo takes the last occurrence of a flag, so this overrides a --target-dir
         // that reached the list some other way as well as the crate's own configuration.
         cargoArgs.Add("--target-dir");
@@ -219,12 +200,6 @@ internal static class RustDockerfileGenerator
 
         return cargoArgs;
     }
-
-    // Cargo keeps a single lock file for the whole workspace, next to the root manifest.
-    // See https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
-    private static bool HasLockFile(CargoMetadata metadata)
-        => metadata.WorkspaceRoot is { Length: > 0 } workspaceRoot
-            && File.Exists(Path.Combine(workspaceRoot, "Cargo.lock"));
 
     // The two-token form is what WithCargoManifestPath emits, so match on the pair rather than reformatting
     // the argument list. A --manifest-path passed as a raw string through WithCargoArgs is left alone, in

@@ -81,7 +81,7 @@ public static class RustHostingExtensions
         return builder.AddResource(resource)
             .WithRequiredCommand("cargo", "https://www.rust-lang.org/tools/install")
             .WithRustDefaults()
-            .WithCargoArgs(context => AddInitialCargoArgs(resource, context.Args))
+            .WithCargoArgs(context => AddInitialCargoArgs(resource, appDirectory, builder.ExecutionContext, context.Args))
             .WithArgs(async context =>
             {
                 // Resolve the cargo arguments once and record them: the debug launch configuration
@@ -430,12 +430,17 @@ public static class RustHostingExtensions
         return options;
     }
 
-    private static void AddInitialCargoArgs(RustAppResource resource, IList<string> args)
+    private static void AddInitialCargoArgs(
+        RustAppResource resource,
+        string appDirectory,
+        DistributedApplicationExecutionContext executionContext,
+        IList<string> args)
     {
-        if (!resource.TryGetLastAnnotation<RustCargoOptionsAnnotation>(out var options))
-        {
-            return;
-        }
+        // A resource that called no WithCargo* method still takes the publish defaults below, so carry on
+        // with an empty set of options rather than returning.
+        var options = resource.TryGetLastAnnotation<RustCargoOptionsAnnotation>(out var cargoOptions)
+            ? cargoOptions
+            : new RustCargoOptionsAnnotation();
 
         if (options.Features is { Count: > 0 } features)
         {
@@ -488,6 +493,62 @@ public static class RustHostingExtensions
         {
             args.Add("--release");
         }
+
+        if (executionContext.IsRunMode)
+        {
+            return;
+        }
+
+        // The defaults below apply to publishing only. Run mode leaves cargo's own defaults alone: a debug
+        // build is what a developer iterating on the app wants, and a lock file that needs updating should
+        // update rather than fail. A published image is the opposite on both counts.
+
+        // --locked fails the build rather than writing a lock file, so a published image can only build the
+        // dependency versions that were committed. It is only safe to add when a lock file actually exists;
+        // cargo errors out with "the lock file needs to be updated but --locked was passed" otherwise, which
+        // would break publishing for crates that deliberately do not commit one (libraries, mostly).
+        if (options.Locked is null && HasLockFile(appDirectory, options.ManifestPath))
+        {
+            args.Add("--locked");
+        }
+
+        // Cargo rejects --release alongside --profile, so a resource that named a profile is already
+        // optimized as it asked to be. An explicit `false` means the image deliberately does without.
+        if (options.Profile is null && options.ReleaseBuild is null)
+        {
+            args.Add("--release");
+        }
+    }
+
+    // Cargo keeps a single lock file per workspace, next to the root manifest, which sits at or above the
+    // package being built. Publishing requires that root to be inside the app directory, since the container
+    // build copies nothing else, so searching from the manifest up to the app directory covers every layout
+    // publishing supports.
+    // See https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
+    private static bool HasLockFile(string appDirectory, string? manifestPath)
+    {
+        appDirectory = Path.GetFullPath(appDirectory);
+
+        var directory = manifestPath is { } path
+            ? Path.GetDirectoryName(Path.GetFullPath(path, appDirectory))
+            : appDirectory;
+
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory, "Cargo.lock")))
+            {
+                return true;
+            }
+
+            if (string.Equals(directory, appDirectory, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            directory = Path.GetDirectoryName(directory);
+        }
+
+        return false;
     }
 
     [Experimental("ASPIREEXTENSION001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
