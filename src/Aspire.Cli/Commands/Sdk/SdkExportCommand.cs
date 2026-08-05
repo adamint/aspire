@@ -73,6 +73,12 @@ internal sealed class SdkExportCommand : BaseCommand
 
     protected override async Task<CommandResult> ExecuteAsync(ParseResult parseResult, CancellationToken cancellationToken)
     {
+        // This command always emits machine-readable JSON, so it has no --format option for
+        // BaseCommand's json redirect to key off. Without this, preparation diagnostics and the
+        // --output success message land on stdout and corrupt the document a caller is piping.
+        // The JSON write overrides back to stdout explicitly, and an explicit override wins.
+        InteractionService.Console = ConsoleOutput.Error;
+
         var language = parseResult.GetValue(s_languageOption)!;
         var package = parseResult.GetValue(s_packageOption);
         var packageSource = parseResult.GetValue(s_sourceOption);

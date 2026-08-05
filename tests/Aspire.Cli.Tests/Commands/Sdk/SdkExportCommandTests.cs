@@ -80,12 +80,20 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         using var provider = CreateProvider(interactionService, out var workspace, out _);
         using var _2 = workspace;
 
-        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0");
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0 --output " + Path.Combine(workspace.WorkspaceRoot.FullName, "api.json"));
 
         Assert.Equal(CliExitCodes.Success, exitCode);
+
+        // A null per-call override means the message follows the service's Console, so asserting on
+        // the override alone passes vacuously. Resolve the effective destination instead.
+        Assert.Equal(ConsoleOutput.Error, interactionService.Console);
         Assert.DoesNotContain(
             interactionService.DisplayedMessages,
-            message => message.ConsoleOverride == ConsoleOutput.Standard);
+            message => (message.ConsoleOverride ?? interactionService.Console) == ConsoleOutput.Standard);
+
+        // DisplaySuccess cannot be overridden per call, so the --output confirmation would land on
+        // stdout and corrupt a piped document if the service were not routed to stderr.
+        Assert.NotEmpty(interactionService.DisplayedSuccess);
     }
 
     [Fact]
