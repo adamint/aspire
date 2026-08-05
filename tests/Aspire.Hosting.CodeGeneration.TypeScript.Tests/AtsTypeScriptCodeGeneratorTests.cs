@@ -4,6 +4,7 @@
 #pragma warning disable ASPIREBROWSERLOGS001 // Type is for evaluation purposes only
 
 using System.Reflection;
+using System.Text.RegularExpressions;
 using Aspire.Hosting.Azure;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.RemoteHost;
@@ -776,8 +777,7 @@ public class AtsTypeScriptCodeGeneratorTests
     [Fact]
     public void MapInputUnionTypeToTypeScript_ThrowsOnEmptyUnion()
     {
-        var method = typeof(AtsTypeScriptCodeGenerator).GetMethod("MapInputUnionTypeToTypeScript", BindingFlags.Instance | BindingFlags.NonPublic);
-        Assert.NotNull(method);
+        var projector = new TypeScriptApiProjector(CreateContextFromTestAssembly());
 
         var typeRef = new AtsTypeRef
         {
@@ -786,9 +786,8 @@ public class AtsTypeScriptCodeGeneratorTests
             UnionTypes = [],
         };
 
-        var ex = Assert.Throws<TargetInvocationException>(() => method.Invoke(_generator, [typeRef]));
-        Assert.IsType<InvalidOperationException>(ex.InnerException);
-        Assert.Equal("Union input types must define at least one member type.", ex.InnerException.Message);
+        var ex = Assert.Throws<InvalidOperationException>(() => projector.MapInputUnionTypeToTypeScript(typeRef));
+        Assert.Equal("Union input types must define at least one member type.", ex.Message);
     }
 
     [Fact]
@@ -1883,5 +1882,211 @@ public class AtsTypeScriptCodeGeneratorTests
                && !id.Contains("ViteApp", StringComparison.Ordinal));
         Assert.Contains(expandedTypeIds, id => id.Contains(nameof(JavaScript.NodeAppResource), StringComparison.Ordinal));
         Assert.Contains(expandedTypeIds, id => id.Contains(nameof(JavaScript.ViteAppResource), StringComparison.Ordinal));
+    }
+
+    // ===== Canonical API export =====
+    //
+    // The canonical export is the contract aspire.dev consumes to render TypeScript API
+    // documentation. It must be produced from the same resolved projection the source
+    // emitter uses, because documentation that reconstructs signatures from raw ATS
+    // drifts from the SDK that actually ships (microsoft/aspire#17608).
+
+    /// <summary>
+    /// The exporting package for the canonical export tests. The test assembly owns the
+    /// documented symbols; Aspire.Hosting contributes referenced types through the closure.
+    /// </summary>
+    private const string TestPackageName = "Aspire.Hosting.CodeGeneration.TypeScript.Tests";
+
+    private const string TestPackageVersion = "13.5.0";
+
+    [Fact]
+    public async Task ApiExportUsesTheSameResolvedSignaturesAsGeneratedSource()
+    {
+        var atsContext = CreateOwnershipFilteredContext();
+
+        var projector = new TypeScriptApiProjector(atsContext);
+        var model = projector.BuildApiModel(
+            new TypeScriptApiPackageIdentity(TestPackageName, TestPackageVersion),
+            [TestPackageName]);
+
+        var exportJson = TypeScriptApiExportWriter.WriteToJson(model, indented: true);
+
+        await Verify(exportJson, extension: "json")
+            .UseFileName("AtsTypeScriptCodeGeneratorTests.ApiExport");
+
+        // Declaration fragments are snapshotted separately: aspire.dev concatenates them in
+        // stable-ID order and type-checks the result, so their exact text is a contract.
+        var declarations = string.Join(
+            "\n\n",
+            model.Declarations.Select(declaration => $"// {declaration.Id}\n{declaration.Content}"));
+
+        await Verify(declarations, extension: "txt")
+            .UseFileName("AtsTypeScriptCodeGeneratorTests.ApiDeclarations");
+    }
+
+    [Fact]
+    public void ApiExportDeclarationsAppearInGeneratedPublicInterfaces()
+    {
+        var atsContext = CreateOwnershipFilteredContext();
+
+        var projector = new TypeScriptApiProjector(atsContext);
+        var model = projector.BuildApiModel(
+            new TypeScriptApiPackageIdentity(TestPackageName, TestPackageVersion),
+            [TestPackageName]);
+
+        var generatedSource = new AtsTypeScriptCodeGenerator()
+            .GenerateDistributedApplication(atsContext)["aspire.mts"];
+
+        // Keep this assertion narrow. It proves both emitters consume the same resolved
+        // projection without snapshotting all runtime implementation code: every method
+        // signature the export publishes must be present verbatim in the generated public
+        // interface for the type that owns it.
+        var generatedInterfaceMembers = ParsePublicInterfaceMembers(generatedSource);
+
+        var checkedDeclarations = 0;
+        foreach (var module in model.Modules)
+        {
+            foreach (var item in module.Items)
+            {
+                foreach (var member in item.Members.Where(m => m.Kind == TypeScriptApiItemKind.Method))
+                {
+                    Assert.True(
+                        generatedInterfaceMembers.TryGetValue(item.Name, out var members),
+                        $"Exported type '{item.Name}' has no generated public interface.");
+
+                    Assert.True(
+                        members.Contains(member.Declaration),
+                        $"Exported declaration '{member.Declaration}' on '{item.Name}' does not appear in the generated public interface. " +
+                        $"Generated members: {string.Join(", ", members)}");
+
+                    checkedDeclarations++;
+                }
+            }
+        }
+
+        Assert.True(checkedDeclarations > 0, "The canonical export produced no method declarations to compare.");
+    }
+
+    [Fact]
+    public void ApiExportSeparatesReferencedTypesFromPackageOwnedItems()
+    {
+        var atsContext = CreateOwnershipFilteredContext();
+
+        var projector = new TypeScriptApiProjector(atsContext);
+        var model = projector.BuildApiModel(
+            new TypeScriptApiPackageIdentity(TestPackageName, TestPackageVersion),
+            [TestPackageName]);
+
+        var documentedItems = model.Modules.SelectMany(module => module.Items).ToList();
+
+        // Every documented item must be something this package published: either it owns the type,
+        // or it contributes members to a type another package owns. Anything else would republish
+        // another package's surface under this package's version.
+        Assert.All(documentedItems, item =>
+            Assert.True(
+                item.TypeId.StartsWith($"{TestPackageName}/", StringComparison.Ordinal) ||
+                item.OwningAssemblyName == TestPackageName,
+                $"Item '{item.Id}' ({item.TypeId}) is neither package-owned nor a package contribution."));
+
+        // Members are owned per capability, so no documented member may come from another assembly.
+        Assert.All(
+            documentedItems.SelectMany(item => item.Members),
+            member => Assert.Equal(TestPackageName, member.OwningAssemblyName));
+
+        // The closure must reach types this package does not own; otherwise the fixture would not
+        // exercise cross-package references at all.
+        var referencedTypeIds = atsContext.HandleTypes
+            .Select(type => type.AtsTypeId)
+            .Where(typeId => !typeId.StartsWith($"{TestPackageName}/", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.NotEmpty(referencedTypeIds);
+
+        var declarationIds = model.Declarations.Select(declaration => declaration.Id).ToList();
+        Assert.Equal(declarationIds.Count, declarationIds.Distinct(StringComparer.Ordinal).Count());
+
+        // Referenced types must reach the declaration fragments under their real owner, otherwise
+        // the concatenated declarations would not type-check.
+        Assert.Contains(model.Declarations, declaration => declaration.OwningAssemblyName == "Aspire.Hosting");
+
+        // Every type name the declarations reference must also be declared by the declarations.
+        var declaredNames = model.Declarations
+            .SelectMany(declaration => Regex.Matches(declaration.Content, @"export (?:interface|enum|type) (\w+)"))
+            .Select(match => match.Groups[1].Value)
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Contains("ResourceBuilderBase", declaredNames);
+        Assert.Contains("ContainerResource", declaredNames);
+    }
+
+    /// <summary>
+    /// Builds the context the canonical exporter sees for a single package: the package's own
+    /// capabilities plus the transitive closure of types they reference from other assemblies.
+    /// This mirrors what RemoteHost passes to the exporter for one <c>Name@Version</c> request.
+    /// </summary>
+    private static AtsContext CreateOwnershipFilteredContext()
+    {
+        return AtsContextFilter.FilterByExportingAssembliesWithReferences(
+            CreateContextFromBothAssemblies(),
+            [TestPackageName]);
+    }
+
+    /// <summary>
+    /// Extracts the member signature lines of every generated <c>export interface</c> block.
+    /// </summary>
+    /// <remarks>
+    /// The generated source declares public surface as interfaces, for example:
+    /// <code>
+    /// export interface TestRedisResourceBuilder extends ResourceBuilderBase {
+    ///     /** doc comment */
+    ///     withPersistence(options?: WithPersistenceOptions): TestRedisResourceBuilderPromise;
+    /// }
+    /// </code>
+    /// Only lines that terminate with <c>;</c> at brace depth 1 are member signatures; doc
+    /// comments, blank lines, and nested object literals are skipped. Signatures are stored
+    /// without the trailing semicolon so they compare directly against exported declarations.
+    /// </remarks>
+    private static Dictionary<string, HashSet<string>> ParsePublicInterfaceMembers(string generatedSource)
+    {
+        var membersByInterface = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+
+        string? currentInterface = null;
+        var depth = 0;
+
+        foreach (var rawLine in generatedSource.Split('\n'))
+        {
+            var line = rawLine.Trim();
+
+            if (currentInterface is null)
+            {
+                // Matches "export interface Name {" and "export interface Name extends Base {".
+                if (!line.StartsWith("export interface ", StringComparison.Ordinal) || !line.EndsWith('{'))
+                {
+                    continue;
+                }
+
+                var header = line["export interface ".Length..^1].Trim();
+                var extendsIndex = header.IndexOf(" extends ", StringComparison.Ordinal);
+                currentInterface = (extendsIndex >= 0 ? header[..extendsIndex] : header).Trim();
+                membersByInterface.TryAdd(currentInterface, new HashSet<string>(StringComparer.Ordinal));
+                depth = 1;
+                continue;
+            }
+
+            depth += line.Count(c => c == '{') - line.Count(c => c == '}');
+
+            if (depth <= 0)
+            {
+                currentInterface = null;
+                continue;
+            }
+
+            if (depth == 1 && line.EndsWith(';') && !line.StartsWith('*') && !line.StartsWith("//", StringComparison.Ordinal))
+            {
+                membersByInterface[currentInterface].Add(line[..^1].Trim());
+            }
+        }
+
+        return membersByInterface;
     }
 }
