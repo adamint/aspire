@@ -10,178 +10,11 @@
       "name": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
       "items": [
         {
-          "id": "dto:TestConfigDto",
-          "kind": "dto",
-          "name": "TestConfigDto",
-          "typeId": "Aspire.Hosting.CodeGeneration.TypeScript.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestConfigDto",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
-          "declaration": "export interface TestConfigDto",
-          "summary": "Test DTO to verify [AspireDto] generates TypeScript interfaces.",
-          "members": [
-            {
-              "id": "property:TestConfigDto.name",
-              "kind": "property",
-              "name": "name",
-              "declaration": "name?: string",
-              "summary": "The name of the test config."
-            },
-            {
-              "id": "property:TestConfigDto.port",
-              "kind": "property",
-              "name": "port",
-              "declaration": "port?: number",
-              "summary": "The port used by the test config."
-            },
-            {
-              "id": "property:TestConfigDto.enabled",
-              "kind": "property",
-              "name": "enabled",
-              "declaration": "enabled?: boolean",
-              "summary": "A value indicating whether the test config is enabled."
-            },
-            {
-              "id": "property:TestConfigDto.optionalField",
-              "kind": "property",
-              "name": "optionalField",
-              "declaration": "optionalField?: string | null",
-              "summary": "An optional test config field."
-            }
-          ]
-        },
-        {
-          "id": "dto:TestDeeplyNestedDto",
-          "kind": "dto",
-          "name": "TestDeeplyNestedDto",
-          "typeId": "Aspire.Hosting.CodeGeneration.TypeScript.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestDeeplyNestedDto",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
-          "declaration": "export interface TestDeeplyNestedDto",
-          "summary": "Test DTO with deeply nested generic types.",
-          "members": [
-            {
-              "id": "property:TestDeeplyNestedDto.nestedData",
-              "kind": "property",
-              "name": "nestedData",
-              "declaration": "nestedData?: Record\u003Cstring, TestConfigDto[]\u003E",
-              "summary": "Deeply nested generic: Dictionary containing List of DTOs."
-            },
-            {
-              "id": "property:TestDeeplyNestedDto.metadataArray",
-              "kind": "property",
-              "name": "metadataArray",
-              "declaration": "metadataArray?: Record\u003Cstring, string\u003E[]",
-              "summary": "Array of dictionaries."
-            }
-          ]
-        },
-        {
-          "id": "dto:TestNestedDto",
-          "kind": "dto",
-          "name": "TestNestedDto",
-          "typeId": "Aspire.Hosting.CodeGeneration.TypeScript.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestNestedDto",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
-          "declaration": "export interface TestNestedDto",
-          "summary": "Test DTO with complex nested types.",
-          "members": [
-            {
-              "id": "property:TestNestedDto.id",
-              "kind": "property",
-              "name": "id",
-              "declaration": "id?: string"
-            },
-            {
-              "id": "property:TestNestedDto.config",
-              "kind": "property",
-              "name": "config",
-              "declaration": "config?: TestConfigDto"
-            },
-            {
-              "id": "property:TestNestedDto.tags",
-              "kind": "property",
-              "name": "tags",
-              "declaration": "tags?: string[]"
-            },
-            {
-              "id": "property:TestNestedDto.counts",
-              "kind": "property",
-              "name": "counts",
-              "declaration": "counts?: Record\u003Cstring, number\u003E"
-            }
-          ]
-        },
-        {
-          "id": "enum:TestPersistenceMode",
-          "kind": "enum",
-          "name": "TestPersistenceMode",
-          "typeId": "enum:Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestPersistenceMode",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
-          "declaration": "export enum TestPersistenceMode",
-          "summary": "Test persistence mode enum.",
-          "members": [
-            {
-              "id": "enumValue:TestPersistenceMode.None",
-              "kind": "property",
-              "name": "None",
-              "declaration": "None = \u0022None\u0022"
-            },
-            {
-              "id": "enumValue:TestPersistenceMode.Volume",
-              "kind": "property",
-              "name": "Volume",
-              "declaration": "Volume = \u0022Volume\u0022"
-            },
-            {
-              "id": "enumValue:TestPersistenceMode.Bind",
-              "kind": "property",
-              "name": "Bind",
-              "declaration": "Bind = \u0022Bind\u0022"
-            }
-          ]
-        },
-        {
-          "id": "enum:TestResourceStatus",
-          "kind": "enum",
-          "name": "TestResourceStatus",
-          "typeId": "enum:Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestResourceStatus",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
-          "declaration": "export enum TestResourceStatus",
-          "summary": "Test enum for type generation verification.",
-          "members": [
-            {
-              "id": "enumValue:TestResourceStatus.Pending",
-              "kind": "property",
-              "name": "Pending",
-              "declaration": "Pending = \u0022Pending\u0022",
-              "summary": "The resource is pending."
-            },
-            {
-              "id": "enumValue:TestResourceStatus.Running",
-              "kind": "property",
-              "name": "Running",
-              "declaration": "Running = \u0022Running\u0022",
-              "summary": "The resource is running."
-            },
-            {
-              "id": "enumValue:TestResourceStatus.Stopped",
-              "kind": "property",
-              "name": "Stopped",
-              "declaration": "Stopped = \u0022Stopped\u0022",
-              "summary": "The resource is stopped."
-            },
-            {
-              "id": "enumValue:TestResourceStatus.Failed",
-              "kind": "property",
-              "name": "Failed",
-              "declaration": "Failed = \u0022Failed\u0022",
-              "summary": "The resource failed."
-            }
-          ]
-        },
-        {
-          "id": "interface:CSharpAppResource",
-          "kind": "interface",
+          "id": "augmentation:CSharpAppResource",
+          "kind": "augmentation",
           "name": "CSharpAppResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.CSharpAppResource",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "owningAssembly": "Aspire.Hosting",
           "declaration": "export interface CSharpAppResource extends ResourceBuilderBase",
           "extends": [
             "ResourceBuilderBase"
@@ -659,11 +492,11 @@
           ]
         },
         {
-          "id": "interface:ContainerRegistryResource",
-          "kind": "interface",
+          "id": "augmentation:ContainerRegistryResource",
+          "kind": "augmentation",
           "name": "ContainerRegistryResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.ContainerRegistryResource",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "owningAssembly": "Aspire.Hosting",
           "declaration": "export interface ContainerRegistryResource extends ResourceBuilderBase",
           "extends": [
             "ResourceBuilderBase"
@@ -1109,11 +942,11 @@
           ]
         },
         {
-          "id": "interface:ContainerResource",
-          "kind": "interface",
+          "id": "augmentation:ContainerResource",
+          "kind": "augmentation",
           "name": "ContainerResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.ContainerResource",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "owningAssembly": "Aspire.Hosting",
           "declaration": "export interface ContainerResource extends ResourceBuilderBase",
           "summary": "A resource that represents a specified container.",
           "extends": [
@@ -1592,11 +1425,11 @@
           ]
         },
         {
-          "id": "interface:DistributedApplicationBuilder",
-          "kind": "interface",
+          "id": "augmentation:DistributedApplicationBuilder",
+          "kind": "augmentation",
           "name": "DistributedApplicationBuilder",
           "typeId": "Aspire.Hosting/Aspire.Hosting.IDistributedApplicationBuilder",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "owningAssembly": "Aspire.Hosting",
           "declaration": "export interface DistributedApplicationBuilder",
           "summary": "A builder for creating instances of {@ats-ref type:DistributedApplication}.",
           "members": [
@@ -1641,11 +1474,11 @@
           ]
         },
         {
-          "id": "interface:DotnetToolResource",
-          "kind": "interface",
+          "id": "augmentation:DotnetToolResource",
+          "kind": "augmentation",
           "name": "DotnetToolResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.DotnetToolResource",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "owningAssembly": "Aspire.Hosting",
           "declaration": "export interface DotnetToolResource extends ResourceBuilderBase",
           "extends": [
             "ResourceBuilderBase"
@@ -2123,11 +1956,11 @@
           ]
         },
         {
-          "id": "interface:ExecutableResource",
-          "kind": "interface",
+          "id": "augmentation:ExecutableResource",
+          "kind": "augmentation",
           "name": "ExecutableResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.ExecutableResource",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "owningAssembly": "Aspire.Hosting",
           "declaration": "export interface ExecutableResource extends ResourceBuilderBase",
           "summary": "A resource that represents a specified executable process.",
           "remarks": "You can run any executable command using its full path.\nAs a security feature, Aspire doesn\u0027t run executable unless the command is located in a path listed in the PATH environment variable.\nTo run an executable file that\u0027s in the current directory, specify the full path or use the relative path \u0060./\u0060 to represent the current directory.",
@@ -2607,11 +2440,11 @@
           ]
         },
         {
-          "id": "interface:ExternalServiceResource",
-          "kind": "interface",
+          "id": "augmentation:ExternalServiceResource",
+          "kind": "augmentation",
           "name": "ExternalServiceResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ExternalServiceResource",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "owningAssembly": "Aspire.Hosting",
           "declaration": "export interface ExternalServiceResource extends ResourceBuilderBase",
           "extends": [
             "ResourceBuilderBase"
@@ -3057,11 +2890,11 @@
           ]
         },
         {
-          "id": "interface:ParameterResource",
-          "kind": "interface",
+          "id": "augmentation:ParameterResource",
+          "kind": "augmentation",
           "name": "ParameterResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.ParameterResource",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "owningAssembly": "Aspire.Hosting",
           "declaration": "export interface ParameterResource extends ResourceBuilderBase",
           "summary": "Represents a parameter resource.",
           "extends": [
@@ -3508,11 +3341,11 @@
           ]
         },
         {
-          "id": "interface:ProjectResource",
-          "kind": "interface",
+          "id": "augmentation:ProjectResource",
+          "kind": "augmentation",
           "name": "ProjectResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.ProjectResource",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "owningAssembly": "Aspire.Hosting",
           "declaration": "export interface ProjectResource extends ResourceBuilderBase",
           "summary": "A resource that represents a specified .NET project.",
           "extends": [
@@ -3991,11 +3824,11 @@
           ]
         },
         {
-          "id": "interface:Resource",
-          "kind": "interface",
+          "id": "augmentation:Resource",
+          "kind": "augmentation",
           "name": "Resource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.IResource",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "owningAssembly": "Aspire.Hosting",
           "declaration": "export interface Resource extends ResourceBuilderBase",
           "summary": "Represents a resource that can be hosted by an application.",
           "extends": [
@@ -4442,11 +4275,11 @@
           ]
         },
         {
-          "id": "interface:ResourceWithConnectionString",
-          "kind": "interface",
+          "id": "augmentation:ResourceWithConnectionString",
+          "kind": "augmentation",
           "name": "ResourceWithConnectionString",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.IResourceWithConnectionString",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "owningAssembly": "Aspire.Hosting",
           "declaration": "export interface ResourceWithConnectionString extends ResourceBuilderBase",
           "summary": "Represents a resource that has a connection string associated with it.",
           "extends": [
@@ -4488,11 +4321,11 @@
           ]
         },
         {
-          "id": "interface:ResourceWithEnvironment",
-          "kind": "interface",
+          "id": "augmentation:ResourceWithEnvironment",
+          "kind": "augmentation",
           "name": "ResourceWithEnvironment",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.IResourceWithEnvironment",
-          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "owningAssembly": "Aspire.Hosting",
           "declaration": "export interface ResourceWithEnvironment extends ResourceBuilderBase",
           "summary": "Represents a resource that is associated with an environment.",
           "extends": [
@@ -4530,6 +4363,173 @@
                   "optional": false
                 }
               ]
+            }
+          ]
+        },
+        {
+          "id": "dto:TestConfigDto",
+          "kind": "dto",
+          "name": "TestConfigDto",
+          "typeId": "Aspire.Hosting.CodeGeneration.TypeScript.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestConfigDto",
+          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "declaration": "export interface TestConfigDto",
+          "summary": "Test DTO to verify [AspireDto] generates TypeScript interfaces.",
+          "members": [
+            {
+              "id": "property:TestConfigDto.name",
+              "kind": "property",
+              "name": "name",
+              "declaration": "name?: string",
+              "summary": "The name of the test config."
+            },
+            {
+              "id": "property:TestConfigDto.port",
+              "kind": "property",
+              "name": "port",
+              "declaration": "port?: number",
+              "summary": "The port used by the test config."
+            },
+            {
+              "id": "property:TestConfigDto.enabled",
+              "kind": "property",
+              "name": "enabled",
+              "declaration": "enabled?: boolean",
+              "summary": "A value indicating whether the test config is enabled."
+            },
+            {
+              "id": "property:TestConfigDto.optionalField",
+              "kind": "property",
+              "name": "optionalField",
+              "declaration": "optionalField?: string | null",
+              "summary": "An optional test config field."
+            }
+          ]
+        },
+        {
+          "id": "dto:TestDeeplyNestedDto",
+          "kind": "dto",
+          "name": "TestDeeplyNestedDto",
+          "typeId": "Aspire.Hosting.CodeGeneration.TypeScript.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestDeeplyNestedDto",
+          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "declaration": "export interface TestDeeplyNestedDto",
+          "summary": "Test DTO with deeply nested generic types.",
+          "members": [
+            {
+              "id": "property:TestDeeplyNestedDto.nestedData",
+              "kind": "property",
+              "name": "nestedData",
+              "declaration": "nestedData?: Record\u003Cstring, TestConfigDto[]\u003E",
+              "summary": "Deeply nested generic: Dictionary containing List of DTOs."
+            },
+            {
+              "id": "property:TestDeeplyNestedDto.metadataArray",
+              "kind": "property",
+              "name": "metadataArray",
+              "declaration": "metadataArray?: Record\u003Cstring, string\u003E[]",
+              "summary": "Array of dictionaries."
+            }
+          ]
+        },
+        {
+          "id": "dto:TestNestedDto",
+          "kind": "dto",
+          "name": "TestNestedDto",
+          "typeId": "Aspire.Hosting.CodeGeneration.TypeScript.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestNestedDto",
+          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "declaration": "export interface TestNestedDto",
+          "summary": "Test DTO with complex nested types.",
+          "members": [
+            {
+              "id": "property:TestNestedDto.id",
+              "kind": "property",
+              "name": "id",
+              "declaration": "id?: string"
+            },
+            {
+              "id": "property:TestNestedDto.config",
+              "kind": "property",
+              "name": "config",
+              "declaration": "config?: TestConfigDto"
+            },
+            {
+              "id": "property:TestNestedDto.tags",
+              "kind": "property",
+              "name": "tags",
+              "declaration": "tags?: string[]"
+            },
+            {
+              "id": "property:TestNestedDto.counts",
+              "kind": "property",
+              "name": "counts",
+              "declaration": "counts?: Record\u003Cstring, number\u003E"
+            }
+          ]
+        },
+        {
+          "id": "enum:TestPersistenceMode",
+          "kind": "enum",
+          "name": "TestPersistenceMode",
+          "typeId": "enum:Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestPersistenceMode",
+          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "declaration": "export enum TestPersistenceMode",
+          "summary": "Test persistence mode enum.",
+          "members": [
+            {
+              "id": "enumValue:TestPersistenceMode.None",
+              "kind": "property",
+              "name": "None",
+              "declaration": "None = \u0022None\u0022"
+            },
+            {
+              "id": "enumValue:TestPersistenceMode.Volume",
+              "kind": "property",
+              "name": "Volume",
+              "declaration": "Volume = \u0022Volume\u0022"
+            },
+            {
+              "id": "enumValue:TestPersistenceMode.Bind",
+              "kind": "property",
+              "name": "Bind",
+              "declaration": "Bind = \u0022Bind\u0022"
+            }
+          ]
+        },
+        {
+          "id": "enum:TestResourceStatus",
+          "kind": "enum",
+          "name": "TestResourceStatus",
+          "typeId": "enum:Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.TestResourceStatus",
+          "owningAssembly": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
+          "declaration": "export enum TestResourceStatus",
+          "summary": "Test enum for type generation verification.",
+          "members": [
+            {
+              "id": "enumValue:TestResourceStatus.Pending",
+              "kind": "property",
+              "name": "Pending",
+              "declaration": "Pending = \u0022Pending\u0022",
+              "summary": "The resource is pending."
+            },
+            {
+              "id": "enumValue:TestResourceStatus.Running",
+              "kind": "property",
+              "name": "Running",
+              "declaration": "Running = \u0022Running\u0022",
+              "summary": "The resource is running."
+            },
+            {
+              "id": "enumValue:TestResourceStatus.Stopped",
+              "kind": "property",
+              "name": "Stopped",
+              "declaration": "Stopped = \u0022Stopped\u0022",
+              "summary": "The resource is stopped."
+            },
+            {
+              "id": "enumValue:TestResourceStatus.Failed",
+              "kind": "property",
+              "name": "Failed",
+              "declaration": "Failed = \u0022Failed\u0022",
+              "summary": "The resource failed."
             }
           ]
         },

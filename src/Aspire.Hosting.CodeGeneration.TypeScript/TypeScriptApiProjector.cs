@@ -617,7 +617,7 @@ internal sealed partial class TypeScriptApiProjector
                 });
             }
 
-            return (BuildInterfaceItem(builderModel, interfaceName, extends, typeOwner, documentation, members), declarations);
+            return (BuildInterfaceItem(builderModel, interfaceName, extends, typeOwner, documentation, members, TypeScriptApiItemKind.Interface), declarations);
         }
 
         // The referenced type gets an opaque stub keyed by its real owner so every package that
@@ -665,7 +665,10 @@ internal sealed partial class TypeScriptApiProjector
             });
         }
 
-        return (BuildInterfaceItem(builderModel, interfaceName, extends, package.Name, documentation, contributedMembers), declarations);
+        // The item carries the real owner and a distinct ID: the owning package already publishes a
+        // page for this type, and reusing "interface:{name}" here would collide with it across a
+        // manifest and claim the type belongs to whichever package happened to extend it.
+        return (BuildInterfaceItem(builderModel, interfaceName, extends, typeOwner, documentation, contributedMembers, TypeScriptApiItemKind.Augmentation), declarations);
     }
 
     private static TypeScriptApiItem BuildInterfaceItem(
@@ -674,12 +677,15 @@ internal sealed partial class TypeScriptApiProjector
         string[] extends,
         string owningAssemblyName,
         AtsDocumentationInfo? documentation,
-        List<TypeScriptApiMember> members)
+        List<TypeScriptApiMember> members,
+        TypeScriptApiItemKind kind)
         => new()
         {
-            Id = $"interface:{interfaceName}",
+            Id = kind == TypeScriptApiItemKind.Augmentation
+                ? $"augmentation:{interfaceName}"
+                : $"interface:{interfaceName}",
             TypeId = builderModel.TypeId,
-            Kind = TypeScriptApiItemKind.Interface,
+            Kind = kind,
             Name = interfaceName,
             Declaration = BuildInterfaceHeader(interfaceName, extends),
             OwningAssemblyName = owningAssemblyName,

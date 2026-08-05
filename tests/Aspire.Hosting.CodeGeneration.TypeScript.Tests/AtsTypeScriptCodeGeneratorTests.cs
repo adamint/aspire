@@ -2095,8 +2095,20 @@ public partial class AtsTypeScriptCodeGeneratorTests
         Assert.All(documentedItems, item =>
             Assert.True(
                 item.TypeId.StartsWith($"{TestPackageName}/", StringComparison.Ordinal) ||
-                item.OwningAssemblyName == TestPackageName,
+                item.OwningAssemblyName == TestPackageName ||
+                item.Kind == TypeScriptApiItemKind.Augmentation,
                 $"Item '{item.Id}' ({item.TypeId}) is neither package-owned nor a package contribution."));
+
+        // A package that extends another package's type must not publish a second page for it. The
+        // owning package's export uses "interface:{name}" for that type, so an augmentation reusing
+        // that ID would collide across a manifest and claim ownership it does not have.
+        Assert.All(
+            documentedItems.Where(item => item.Kind == TypeScriptApiItemKind.Augmentation),
+            item =>
+            {
+                Assert.StartsWith("augmentation:", item.Id, StringComparison.Ordinal);
+                Assert.NotEqual(TestPackageName, item.OwningAssemblyName);
+            });
 
         // Members are owned per capability, so no documented member may come from another assembly.
         Assert.All(

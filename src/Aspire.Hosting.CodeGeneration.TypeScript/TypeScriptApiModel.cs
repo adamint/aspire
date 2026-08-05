@@ -22,6 +22,12 @@ internal enum TypeScriptApiItemKind
     /// <summary>A generated options bag interface for a method's optional parameters.</summary>
     Options,
 
+    /// <summary>
+    /// The members this package contributes to an interface another package owns. The owning package
+    /// publishes the type itself, so this is deliberately not a second page for that type.
+    /// </summary>
+    Augmentation,
+
     /// <summary>A method on a generated interface, or a module-level entry point function.</summary>
     Method,
 

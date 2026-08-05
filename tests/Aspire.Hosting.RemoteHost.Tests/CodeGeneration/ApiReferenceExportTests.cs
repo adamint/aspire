@@ -60,12 +60,28 @@ public class ApiReferenceExportTests
             .Select(declaration => declaration.GetProperty("owningAssembly").GetString())
             .ToHashSet(StringComparer.Ordinal);
 
-        var itemOwners = export.GetProperty("modules").EnumerateArray()
+        var items = export.GetProperty("modules").EnumerateArray()
             .SelectMany(module => module.GetProperty("items").EnumerateArray())
+            .ToList();
+
+        // Augmentations are the exception: they carry the members this package contributes to a type
+        // another package owns, so they report that owner and use a distinct stable ID rather than
+        // publishing a second page for someone else's type.
+        var ownedItemOwners = items
+            .Where(item => item.GetProperty("kind").GetString() != "augmentation")
             .Select(item => item.GetProperty("owningAssembly").GetString())
             .ToHashSet(StringComparer.Ordinal);
 
-        Assert.All(itemOwners, owner => Assert.Equal("Aspire.Hosting", owner));
+        Assert.All(ownedItemOwners, owner => Assert.Equal("Aspire.Hosting", owner));
+
+        Assert.All(
+            items.Where(item => item.GetProperty("kind").GetString() == "augmentation"),
+            item =>
+            {
+                Assert.StartsWith("augmentation:", item.GetProperty("id").GetString(), StringComparison.Ordinal);
+                Assert.NotEqual("Aspire.Hosting", item.GetProperty("owningAssembly").GetString());
+            });
+
         Assert.Contains("Aspire.Hosting", declarationOwners);
     }
 

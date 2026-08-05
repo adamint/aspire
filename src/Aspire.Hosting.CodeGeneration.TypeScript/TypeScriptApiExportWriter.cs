@@ -157,6 +157,7 @@ internal static class TypeScriptApiExportWriter
         TypeScriptApiItemKind.Enum => "enum",
         TypeScriptApiItemKind.Dto => "dto",
         TypeScriptApiItemKind.Options => "options",
+        TypeScriptApiItemKind.Augmentation => "augmentation",
         TypeScriptApiItemKind.Method => "method",
         TypeScriptApiItemKind.Property => "property",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown API item kind.")
