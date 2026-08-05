@@ -81,7 +81,7 @@ public static class RustHostingExtensions
         return builder.AddResource(resource)
             .WithRequiredCommand("cargo", "https://www.rust-lang.org/tools/install")
             .WithRustDefaults()
-            .WithCargoArgs(context => AddInitialCargoArgs(resource, appDirectory, builder.ExecutionContext, context.Args))
+            .WithCargoArgs(context => AddInitialCargoArgs(resource, builder.ExecutionContext, context.Args))
             .WithArgs(async context =>
             {
                 // Resolve the cargo arguments once and record them: the debug launch configuration
@@ -432,7 +432,6 @@ public static class RustHostingExtensions
 
     private static void AddInitialCargoArgs(
         RustAppResource resource,
-        string appDirectory,
         DistributedApplicationExecutionContext executionContext,
         IList<string> args)
     {
@@ -507,7 +506,7 @@ public static class RustHostingExtensions
         // dependency versions that were committed. It is only safe to add when a lock file actually exists;
         // cargo errors out with "the lock file needs to be updated but --locked was passed" otherwise, which
         // would break publishing for crates that deliberately do not commit one (libraries, mostly).
-        if (options.Locked is null && HasLockFile(appDirectory, options.ManifestPath))
+        if (options.Locked is null && HasLockFile(resource.WorkingDirectory, options.ManifestPath))
         {
             args.Add("--locked");
         }
@@ -521,17 +520,19 @@ public static class RustHostingExtensions
     }
 
     // Cargo keeps a single lock file per workspace, next to the root manifest, which sits at or above the
-    // package being built. Publishing requires that root to be inside the app directory, since the container
-    // build copies nothing else, so searching from the manifest up to the app directory covers every layout
-    // publishing supports.
+    // package being built. Publishing requires that root to be inside the directory cargo runs in, since the
+    // container build copies nothing else, so searching from the manifest up to the working directory covers
+    // every layout publishing supports.
     // See https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
-    private static bool HasLockFile(string appDirectory, string? manifestPath)
+    private static bool HasLockFile(string workingDirectory, string? manifestPath)
     {
-        appDirectory = Path.GetFullPath(appDirectory);
+        workingDirectory = Path.GetFullPath(workingDirectory);
 
+        // A relative manifest path is resolved the same way cargo resolves it: against the directory the
+        // process is launched in.
         var directory = manifestPath is { } path
-            ? Path.GetDirectoryName(Path.GetFullPath(path, appDirectory))
-            : appDirectory;
+            ? Path.GetDirectoryName(Path.GetFullPath(path, workingDirectory))
+            : workingDirectory;
 
         while (directory is not null)
         {
@@ -540,7 +541,7 @@ public static class RustHostingExtensions
                 return true;
             }
 
-            if (string.Equals(directory, appDirectory, StringComparison.Ordinal))
+            if (string.Equals(directory, workingDirectory, StringComparison.Ordinal))
             {
                 return false;
             }
