@@ -22,9 +22,31 @@ internal sealed class FakeCargoMetadataReader(string metadataJson, string worksp
     /// </summary>
     public IReadOnlyDictionary<string, string> LastEnvironment { get; private set; } = new Dictionary<string, string>();
 
-    public Task<CargoMetadata> ReadAsync(string appDirectory, string? manifestPath, string resourceName, IReadOnlyDictionary<string, string> environment, CancellationToken cancellationToken)
+    /// <summary>
+    /// How many times the reader has been asked for metadata.
+    /// </summary>
+    /// <remarks>
+    /// The debug launch configuration is produced more than once per resource, and a real <c>cargo metadata</c>
+    /// is slow, so tests assert that the query is not repeated.
+    /// </remarks>
+    public int ReadCount => _readCount;
+
+    /// <summary>
+    /// Optional hook invoked before the canned document is returned, so a test can stand in for a slow cargo.
+    /// </summary>
+    public Func<CancellationToken, Task>? OnRead { get; set; }
+
+    private int _readCount;
+
+    public async Task<CargoMetadata> ReadAsync(string appDirectory, string? manifestPath, string resourceName, IReadOnlyDictionary<string, string> environment, CancellationToken cancellationToken)
     {
+        Interlocked.Increment(ref _readCount);
         LastEnvironment = environment;
+
+        if (OnRead is { } onRead)
+        {
+            await onRead(cancellationToken).ConfigureAwait(false);
+        }
 
         var workspaceRoot = Path.GetFullPath(workspaceRootRelativePath, appDirectory);
         var rebased = metadataJson.Replace(
@@ -42,6 +64,6 @@ internal sealed class FakeCargoMetadataReader(string metadataJson, string worksp
                 StringComparison.Ordinal);
         }
 
-        return Task.FromResult(CargoMetadata.Parse(rebased));
+        return CargoMetadata.Parse(rebased);
     }
 }

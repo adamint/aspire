@@ -18,13 +18,23 @@ interface RecordedEvent {
 class FakeTelemetryReporter {
     public events: RecordedEvent[] = [];
 
+    public telemetryLevel: 'all' | 'error' | 'crash' | 'off' = 'all';
+
     sendTelemetryEvent(name: string, properties?: Record<string, string>, measurements?: Record<string, number>): void {
-        this.events.push({ name, properties, measurements });
+        // Extension code now bypasses this path; recording here would only
+        // see a regression to the prefixed channel. Kept as a typed no-op
+        // so the fake still satisfies the TelemetryReporter shape.
     }
 
     sendTelemetryErrorEvent(): void { /* not used here */ }
-    sendDangerousTelemetryEvent(): void { /* not used here */ }
-    sendDangerousTelemetryErrorEvent(): void { /* not used here */ }
+
+    sendDangerousTelemetryEvent(name: string, properties?: Record<string, string>, measurements?: Record<string, number>): void {
+        this.events.push({ name, properties, measurements });
+    }
+
+    sendDangerousTelemetryErrorEvent(name: string, properties?: Record<string, string>, measurements?: Record<string, number>): void {
+        this.events.push({ name, properties, measurements });
+    }
     sendRawTelemetryEvent(): void { /* not used here */ }
 
     dispose(): Promise<void> { return Promise.resolve(); }
@@ -87,6 +97,115 @@ suite('AspireDebugSession tests', () => {
         ]);
     });
 
+    test('describes a no-debug launch as an Aspire run session', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        const spawnStub = sinon.stub(aspireDebugSession, 'spawnAspireCommand').resolves();
+        const messages: any[] = [];
+        const subscription = aspireDebugSession.onDidSendMessage(message => messages.push(message));
+
+        try {
+            aspireDebugSession.handleMessage({ command: 'launch', seq: 1, arguments: { noDebug: true } });
+
+            await waitFor(() => spawnStub.calledOnce);
+            const launchOutput = messages.find(message => message.event === 'output')?.body.output;
+            assert.strictEqual(launchOutput, '📂  Launching Aspire run session for AppHost /workspace/apphost.cs...\n');
+        }
+        finally {
+            subscription.dispose();
+        }
+    });
+
+    test('continues to describe a debug launch as an Aspire debug session', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        const spawnStub = sinon.stub(aspireDebugSession, 'spawnAspireCommand').resolves();
+        const messages: any[] = [];
+        const subscription = aspireDebugSession.onDidSendMessage(message => messages.push(message));
+
+        try {
+            aspireDebugSession.handleMessage({ command: 'launch', seq: 1, arguments: { noDebug: false } });
+
+            await waitFor(() => spawnStub.calledOnce);
+            const launchOutput = messages.find(message => message.event === 'output')?.body.output;
+            assert.strictEqual(launchOutput, '📂  Launching Aspire debug session for AppHost /workspace/apphost.cs...\n');
+        }
+        finally {
+            subscription.dispose();
+        }
+    });
+
+    test('describes a no-debug directory launch as an Aspire run session', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        sinon.stub(aspireDebugSession as any, 'isDirectory').resolves(true);
+        const spawnStub = sinon.stub(aspireDebugSession, 'spawnAspireCommand').resolves();
+        const messages: any[] = [];
+        const subscription = aspireDebugSession.onDidSendMessage(message => messages.push(message));
+
+        try {
+            aspireDebugSession.handleMessage({ command: 'launch', seq: 1, arguments: { noDebug: true } });
+
+            await waitFor(() => spawnStub.calledOnce);
+            const launchOutput = messages.find(message => message.event === 'output')?.body.output;
+            assert.strictEqual(launchOutput, '📁  Launching Aspire run session using directory /workspace: attempting to determine effective AppHost...\n');
+        }
+        finally {
+            subscription.dispose();
+        }
+    });
+
     test('omits AppHost target version in start telemetry before async enrichment', async () => {
         const fake = new FakeTelemetryReporter();
         const restoreReporter = __setReporterForTests(fake as unknown as TelemetryReporter);
@@ -119,8 +238,8 @@ suite('AspireDebugSession tests', () => {
         try {
             aspireDebugSession.handleMessage({ command: 'launch', seq: 1, arguments: { noDebug: false } });
 
-            await waitFor(() => fake.events.some(event => event.name === 'debug/apphost/start'));
-            const event = fake.events.find(event => event.name === 'debug/apphost/start');
+            await waitFor(() => fake.events.some(event => event.name === 'aspire/vscode/debug/apphost/start'));
+            const event = fake.events.find(event => event.name === 'aspire/vscode/debug/apphost/start');
             assert.ok(event);
             assert.strictEqual(event.properties?.apphost_language, 'csharp');
             assert.strictEqual(Object.prototype.hasOwnProperty.call(event.properties ?? {}, 'apphost_target_version'), false);
@@ -175,7 +294,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             aspireDebugSession.handleMessage({ command: 'launch', seq: 1, arguments: { noDebug: false } });
 
             await waitFor(() => spawnStub.calledOnce);
-            const event = eventsAtSpawn.find(event => event.name === 'debug/apphost/start');
+            const event = eventsAtSpawn.find(event => event.name === 'aspire/vscode/debug/apphost/start');
             assert.ok(event, 'Expected debug/apphost/start to be emitted before spawnAspireCommand.');
             assert.strictEqual(event.properties?.apphost_language, 'csharp');
             assert.strictEqual(Object.prototype.hasOwnProperty.call(event.properties ?? {}, 'apphost_target_version'), false);
@@ -224,9 +343,9 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             aspireDebugSession.handleMessage({ command: 'launch', seq: 1, arguments: { noDebug: false } });
             aspireDebugSession.dispose();
 
-            await waitForWithFakeClock(clock, () => fake.events.some(event => event.name === 'debug/apphost/end'));
+            await waitForWithFakeClock(clock, () => fake.events.some(event => event.name === 'aspire/vscode/debug/apphost/end'));
 
-            const event = fake.events.find(event => event.name === 'debug/apphost/end');
+            const event = fake.events.find(event => event.name === 'aspire/vscode/debug/apphost/end');
             assert.ok(event, 'Expected debug/apphost/end when disposal races with launch startup.');
             assert.strictEqual(event.properties?.apphost_language, 'csharp');
             assert.strictEqual(event.properties?.apphost_target_version, 'unknown');
@@ -636,9 +755,9 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             await targetVersionPromise;
             const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
             aspireDebugSession.dispose();
-            await waitForWithFakeClock(clock, () => fake.events.some(event => event.name === 'debug/apphost/end'));
+            await waitForWithFakeClock(clock, () => fake.events.some(event => event.name === 'aspire/vscode/debug/apphost/end'));
 
-            const event = fake.events.find(event => event.name === 'debug/apphost/end');
+            const event = fake.events.find(event => event.name === 'aspire/vscode/debug/apphost/end');
             assert.ok(event);
             assert.strictEqual(event.properties?.apphost_language, 'csharp');
             assert.strictEqual(event.properties?.apphost_target_version, '13.6.0');
@@ -694,9 +813,9 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             await clock.tickAsync(500);
             await clock.tickAsync(10_000);
             resolveTargetVersion!('13.6.0');
-            await waitForWithFakeClock(clock, () => fake.events.some(event => event.name === 'debug/apphost/end'));
+            await waitForWithFakeClock(clock, () => fake.events.some(event => event.name === 'aspire/vscode/debug/apphost/end'));
 
-            const event = fake.events.find(event => event.name === 'debug/apphost/end');
+            const event = fake.events.find(event => event.name === 'aspire/vscode/debug/apphost/end');
             assert.ok(event);
             assert.strictEqual(event.properties?.apphost_target_version, '13.6.0');
             assert.ok(event.measurements?.duration_ms !== undefined);
@@ -750,7 +869,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         try {
             aspireDebugSession.handleMessage({ command: 'launch', seq: 1, arguments: { noDebug: false } });
             await waitFor(() => spawnStub.calledOnce);
-            const startEvent = fake.events.find(event => event.name === 'debug/apphost/start');
+            const startEvent = fake.events.find(event => event.name === 'aspire/vscode/debug/apphost/start');
             assert.ok(startEvent);
             assert.strictEqual(Object.prototype.hasOwnProperty.call(startEvent.properties ?? {}, 'apphost_is_directory'), false);
 
@@ -758,9 +877,9 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             await languagePromise;
             const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
             aspireDebugSession.dispose();
-            await waitForWithFakeClock(clock, () => fake.events.some(event => event.name === 'debug/apphost/end'));
+            await waitForWithFakeClock(clock, () => fake.events.some(event => event.name === 'aspire/vscode/debug/apphost/end'));
 
-            const endEvent = fake.events.find(event => event.name === 'debug/apphost/end');
+            const endEvent = fake.events.find(event => event.name === 'aspire/vscode/debug/apphost/end');
             assert.ok(endEvent);
             assert.strictEqual(endEvent.properties?.apphost_language, 'typescript');
             assert.strictEqual(endEvent.properties?.apphost_is_directory, 'true');
@@ -820,17 +939,17 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             ]);
             assert.strictEqual(spawnStub.firstCall.args[1], workspaceDir);
 
-            await waitFor(() => fake.events.some(event => event.name === 'debug/apphost/start'));
-            const startEvent = fake.events.find(event => event.name === 'debug/apphost/start');
+            await waitFor(() => fake.events.some(event => event.name === 'aspire/vscode/debug/apphost/start'));
+            const startEvent = fake.events.find(event => event.name === 'aspire/vscode/debug/apphost/start');
             assert.ok(startEvent);
             assert.strictEqual(startEvent.properties?.apphost_language, 'typescript');
             assert.strictEqual(Object.prototype.hasOwnProperty.call(startEvent.properties ?? {}, 'apphost_target_version'), false);
 
             const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
             aspireDebugSession.dispose();
-            await waitForWithFakeClock(clock, () => fake.events.some(event => event.name === 'debug/apphost/end'));
+            await waitForWithFakeClock(clock, () => fake.events.some(event => event.name === 'aspire/vscode/debug/apphost/end'));
 
-            const endEvent = fake.events.find(event => event.name === 'debug/apphost/end');
+            const endEvent = fake.events.find(event => event.name === 'aspire/vscode/debug/apphost/end');
             assert.ok(endEvent);
             assert.strictEqual(endEvent.properties?.apphost_language, 'typescript');
             assert.strictEqual(endEvent.properties?.apphost_target_version, '13.6.0');

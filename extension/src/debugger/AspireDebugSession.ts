@@ -255,7 +255,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     this._appHostTargetVersionAtLaunch = 'unknown';
     this._appHostTargetVersionAtLaunchPromise = this.resolveAppHostTargetVersionAtLaunch(appHostTelemetryTargetPath ?? appHostPath);
     this._appHostIsDirectoryAtLaunch = 'unknown';
-    sendTelemetryEvent('debug/apphost/start', {
+    sendTelemetryEvent('aspire/vscode/debug/apphost/start', {
       mode: this._appHostModeAtLaunch,
       apphost_language: this._appHostLanguageAtLaunch,
       command: bucketAspireCommand(command),
@@ -302,14 +302,15 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
     const args = buildAspireCommandArgs(command, commandArgs, extensionArgs);
     const commandLabel = `aspire ${command}`;
+    const sessionType = noDebug ? 'run' : 'debug';
 
     if (appHostIsDirectory) {
-      this.sendMessageWithEmoji("📁", launchingWithDirectory(appHostPath));
+      this.sendMessageWithEmoji("📁", launchingWithDirectory(sessionType, appHostPath));
 
       void this.spawnAspireCommand(args, appHostPath, noDebug, commandLabel);
     }
     else {
-      this.sendMessageWithEmoji("📂", launchingWithAppHost(appHostPath));
+      this.sendMessageWithEmoji("📂", launchingWithAppHost(sessionType, appHostPath));
 
       const workspaceFolder = path.dirname(appHostPath);
       void this.spawnAspireCommand(args, workspaceFolder, noDebug, commandLabel);
@@ -843,7 +844,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
           const resolvedLanguage = await languagePromise ?? language;
           const resolvedTargetVersion = await targetVersionPromise ?? targetVersion;
           const aggregate = dcpServer.takeDebugSessionAggregateStats(debugSessionId);
-          sendTelemetryEvent('debug/apphost/end', {
+          sendTelemetryEvent('aspire/vscode/debug/apphost/end', {
             mode,
             apphost_language: resolvedLanguage,
             apphost_target_version: resolvedTargetVersion,

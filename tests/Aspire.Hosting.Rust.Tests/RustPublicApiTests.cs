@@ -242,11 +242,66 @@ public class RustPublicApiTests
 
         Assert.True(app.Resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebugging));
 
-        var exception = Assert.Throws<InvalidOperationException>(
-            () => supportsDebugging.LaunchConfigurationAnnotator(Executable.Create("test", "cargo"), ExecutableLaunchMode.Debug));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => supportsDebugging.LaunchConfigurationAnnotator(Executable.Create("test", "cargo"), ExecutableLaunchMode.Debug, CancellationToken.None));
 
         Assert.Contains("have not been resolved", exception.Message);
-        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task LaunchConfigurationQueriesCargoMetadataOnlyOncePerResource()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var app = builder.AddRustApp("api", builder.AppHostDirectory);
+
+        var reader = new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service"));
+        builder.Services.AddSingleton<ICargoMetadataReader>(reader);
+
+        await using var built = builder.Build();
+        await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
+
+        Assert.True(app.Resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebugging));
+
+        // Aspire asks for the launch configuration more than once per resource, and cargo metadata is slow
+        // enough on a cold machine to matter, so the resolved path has to be reused.
+        await supportsDebugging.LaunchConfigurationAnnotator(Executable.Create("test", "cargo"), ExecutableLaunchMode.Debug, CancellationToken.None);
+        await supportsDebugging.LaunchConfigurationAnnotator(Executable.Create("test", "cargo"), ExecutableLaunchMode.Debug, CancellationToken.None);
+
+        Assert.Equal(1, reader.ReadCount);
+    }
+
+    [Fact]
+    public async Task LaunchConfigurationCancelsCargoMetadataWhenCancellationIsRequested()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var app = builder.AddRustApp("api", builder.AppHostDirectory);
+
+        using var cargoStarted = new SemaphoreSlim(0, 1);
+        var reader = new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service"))
+        {
+            // Stands in for a cold `cargo metadata` that outlives the app host: it only completes when the
+            // caller's token is cancelled.
+            OnRead = async cancellationToken =>
+            {
+                cargoStarted.Release();
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+        };
+
+        builder.Services.AddSingleton<ICargoMetadataReader>(reader);
+
+        await using var built = builder.Build();
+        await ArgumentEvaluator.GetArgumentListAsync(app.Resource);
+
+        Assert.True(app.Resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebugging));
+
+        using var cts = new CancellationTokenSource();
+        var launchTask = supportsDebugging.LaunchConfigurationAnnotator(Executable.Create("test", "cargo"), ExecutableLaunchMode.Debug, cts.Token);
+
+        await cargoStarted.WaitAsync(TimeSpan.FromSeconds(30));
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => launchTask);
     }
 
     private static async Task<RustLaunchConfiguration> InvokeLaunchConfigurationAnnotatorAsync(IDistributedApplicationBuilder builder, RustAppResource resource)
@@ -266,7 +321,7 @@ public class RustPublicApiTests
         await ArgumentEvaluator.GetArgumentListAsync(resource);
 
         var exe = Executable.Create("test", "cargo");
-        supportsDebugging.LaunchConfigurationAnnotator(exe, ExecutableLaunchMode.Debug);
+        await supportsDebugging.LaunchConfigurationAnnotator(exe, ExecutableLaunchMode.Debug, CancellationToken.None);
 
         Assert.True(exe.TryGetAnnotationAsObjectList<RustLaunchConfiguration>(
             Executable.LaunchConfigurationsAnnotation,

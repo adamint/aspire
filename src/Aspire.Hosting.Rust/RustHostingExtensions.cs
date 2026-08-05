@@ -497,7 +497,7 @@ public static class RustHostingExtensions
         ArgumentNullException.ThrowIfNull(builder);
 
         return builder.WithDebugSupport(
-            mode =>
+            async (mode, cancellationToken) =>
             {
                 // DCP resolves the resource's arguments before it asks for the launch configuration
                 // (ExecutableCreator.CreateObjectAsync builds the args, then invokes this annotator),
@@ -509,6 +509,11 @@ public static class RustHostingExtensions
                         "The debug launch configuration must be created after the resource's arguments are evaluated.");
 
                 var workingDirectory = Path.GetFullPath(builder.Resource.WorkingDirectory);
+                var executablePath = await ResolveDebugExecutablePathAsync(
+                    builder.Resource,
+                    workingDirectory,
+                    builder.ApplicationBuilder.ExecutionContext,
+                    cancellationToken).ConfigureAwait(false);
 
                 return new RustLaunchConfiguration
                 {
@@ -520,7 +525,7 @@ public static class RustHostingExtensions
                         // (`--bin`, `--example`, `--package`) narrows the debug build the same way it
                         // narrows `cargo run`.
                         Args = ["build", .. cargoArgs],
-                        ExecutablePath = ResolveDebugExecutablePath(builder.Resource, workingDirectory, builder.ApplicationBuilder.ExecutionContext)
+                        ExecutablePath = executablePath
                     }
                 };
             },
@@ -552,7 +557,36 @@ public static class RustHostingExtensions
     // and the published container run the same binary. It is also strictly better than reading the build's
     // artifacts: `cargo build` ignores `default-run` and therefore reports every binary in the package,
     // whereas metadata reports `default-run` itself and so matches what `cargo run` launches.
-    private static string ResolveDebugExecutablePath(RustAppResource resource, string workingDirectory, DistributedApplicationExecutionContext executionContext)
+    private static async Task<string> ResolveDebugExecutablePathAsync(RustAppResource resource, string workingDirectory, DistributedApplicationExecutionContext executionContext, CancellationToken cancellationToken)
+    {
+        // The crate layout is fixed for the lifetime of the app host, so the first successful resolution is
+        // reused. Without this, every launch configuration request would pay for another `cargo metadata`.
+        if (resource.ResolvedDebugExecutablePath is { } cached)
+        {
+            return cached;
+        }
+
+        await resource.DebugExecutablePathGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            if (resource.ResolvedDebugExecutablePath is { } resolvedWhileWaiting)
+            {
+                return resolvedWhileWaiting;
+            }
+
+            var executablePath = await ResolveDebugExecutablePathCoreAsync(resource, workingDirectory, executionContext, cancellationToken).ConfigureAwait(false);
+            resource.ResolvedDebugExecutablePath = executablePath;
+
+            return executablePath;
+        }
+        finally
+        {
+            resource.DebugExecutablePathGate.Release();
+        }
+    }
+
+    private static async Task<string> ResolveDebugExecutablePathCoreAsync(RustAppResource resource, string workingDirectory, DistributedApplicationExecutionContext executionContext, CancellationToken cancellationToken)
     {
         var options = resource.TryGetLastAnnotation<RustCargoOptionsAnnotation>(out var cargoOptions)
             ? cargoOptions
@@ -568,18 +602,15 @@ public static class RustHostingExtensions
         // materialises environment variables into an MSBuild targets file.
         // Remove once the producer receives the resolved configuration:
         // https://github.com/microsoft/aspire/issues/18956
-        var environment = ExecutionConfigurationBuilder.Create(resource)
+        var environment = (await ExecutionConfigurationBuilder.Create(resource)
             .WithEnvironmentVariablesConfig()
-            .BuildAsync(executionContext)
-            .GetAwaiter()
-            .GetResult()
+            .BuildAsync(executionContext, cancellationToken: cancellationToken).ConfigureAwait(false))
             .EnvironmentVariables
             .ToDictionary(StringComparer.Ordinal);
 
-        var metadata = executionContext.Services.GetRequiredService<ICargoMetadataReader>()
-            .ReadAsync(workingDirectory, options.ManifestPath, resource.Name, environment, CancellationToken.None)
-            .GetAwaiter()
-            .GetResult();
+        var metadata = await executionContext.Services.GetRequiredService<ICargoMetadataReader>()
+            .ReadAsync(workingDirectory, options.ManifestPath, resource.Name, environment, cancellationToken)
+            .ConfigureAwait(false);
 
         var target = RustCargoTargetResolver.Resolve(metadata, options, executionContext, resource.Name);
 

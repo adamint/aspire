@@ -30,7 +30,11 @@ internal interface ICargoMetadataReader
 /// </remarks>
 internal sealed class CargoMetadataReader : ICargoMetadataReader
 {
-    private static readonly TimeSpan s_timeout = TimeSpan.FromSeconds(10);
+    // A cold `cargo metadata --format-version 1 --no-deps` has been measured at close to 15 seconds on a
+    // machine whose cargo caches are empty, so a short timeout would fail valid apps rather than protect
+    // them. This is only a backstop against a cargo process that never exits; ordinary shutdown flows
+    // through the caller's cancellation token instead.
+    private static readonly TimeSpan s_timeout = TimeSpan.FromMinutes(2);
 
     /// <summary>
     /// Builds the argument vector passed to cargo.
