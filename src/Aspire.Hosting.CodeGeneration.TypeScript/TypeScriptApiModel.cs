@@ -173,11 +173,23 @@ internal sealed record TypeScriptApiModule
 /// </remarks>
 internal sealed record TypeScriptApiDeclaration
 {
+    private readonly string _content = string.Empty;
+
     /// <summary>Gets the stable, generator-owned identifier used for ordering and deduplication.</summary>
     public required string Id { get; init; }
 
     /// <summary>Gets the TypeScript declaration text.</summary>
-    public required string Content { get; init; }
+    /// <remarks>
+    /// Line endings are normalized to <c>\n</c>. Some fragments come from raw string literals, which
+    /// carry whatever line endings the source file was checked out with, and consumers deduplicate
+    /// fragments by comparing content across packages — so a CLI built on Windows would otherwise
+    /// disagree with one built on Linux about the very same declaration.
+    /// </remarks>
+    public required string Content
+    {
+        get => _content;
+        init => _content = value.ReplaceLineEndings("\n");
+    }
 
     /// <summary>Gets the assembly that owns the declared symbol.</summary>
     public required string OwningAssemblyName { get; init; }
