@@ -60,8 +60,8 @@ internal sealed class SdkExportCommand : BaseCommand
         _serverSessionFactory = serverSessionFactory;
         _logger = logger;
 
-        Hidden = true;
-
+        // Not marked Hidden: the parent `sdk` command already hides the whole subtree, and setting
+        // Hidden here additionally suppresses this command's own --help output.
         Options.Add(s_languageOption);
         Options.Add(s_packageOption);
         Options.Add(s_sourceOption);

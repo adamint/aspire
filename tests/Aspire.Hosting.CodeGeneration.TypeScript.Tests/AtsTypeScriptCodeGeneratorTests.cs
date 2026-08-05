@@ -15,7 +15,7 @@ using Azure.Provisioning.AppService;
 
 namespace Aspire.Hosting.CodeGeneration.TypeScript.Tests;
 
-public class AtsTypeScriptCodeGeneratorTests
+public partial class AtsTypeScriptCodeGeneratorTests
 {
     private readonly AtsTypeScriptCodeGenerator _generator = new();
 
@@ -1923,6 +1923,116 @@ public class AtsTypeScriptCodeGeneratorTests
         await Verify(declarations, extension: "txt")
             .UseFileName("AtsTypeScriptCodeGeneratorTests.ApiDeclarations");
     }
+
+    /// <summary>
+    /// The export contract promises that concatenating a manifest's declaration fragments type-checks
+    /// without site-authored shims, so every symbol a fragment names must be declared by some fragment.
+    /// This caught a real gap: handle types with no wrapper class surface in signatures under their raw
+    /// <c>XHandle</c> alias, but the fragment pass derived a different name and declared nothing.
+    /// </summary>
+    [Fact]
+    public void ApiExportDeclarationFragmentsReferenceOnlyDeclaredOrBuiltInSymbols()
+    {
+        var atsContext = CreateOwnershipFilteredContext();
+
+        var projector = new TypeScriptApiProjector(atsContext);
+        var model = projector.BuildApiModel(
+            new TypeScriptApiPackageIdentity(TestPackageName, TestPackageVersion),
+            [TestPackageName]);
+
+        var declaredNames = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var declaration in model.Declarations)
+        {
+            foreach (Match match in DeclaredNameRegex().Matches(declaration.Content))
+            {
+                declaredNames.Add(match.Groups[1].Value);
+            }
+        }
+
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var declaration in model.Declarations)
+        {
+            foreach (var name in ExtractReferencedTypeNames(declaration.Content))
+            {
+                referenced.Add(name);
+            }
+        }
+
+        // Rendered item and member signatures are scanned too: they name the same symbols the
+        // fragments must supply, and they are where an alias the fragments never declared shows up.
+        // Enum items are excluded: their members are value names declared by the enum itself, not
+        // references to other symbols.
+        foreach (var item in model.Modules
+            .SelectMany(module => module.Items)
+            .Where(item => item.Kind != TypeScriptApiItemKind.Enum))
+        {
+            var signatures = item.Members
+                .Select(member => member.Declaration)
+                .Append(item.Declaration)
+                .Concat(item.Extends);
+
+            foreach (var name in signatures.SelectMany(ExtractReferencedTypeNames))
+            {
+                referenced.Add(name);
+            }
+        }
+
+        referenced.ExceptWith(declaredNames);
+        referenced.ExceptWith(s_typeScriptBuiltInNames);
+
+        Assert.True(
+            referenced.Count == 0,
+            $"Declaration fragments reference undeclared symbols: {string.Join(", ", referenced.OrderBy(name => name, StringComparer.Ordinal))}");
+    }
+
+    /// <summary>
+    /// TypeScript symbols the language itself provides, so fragments may reference them without
+    /// declaring them.
+    /// </summary>
+    private static readonly HashSet<string> s_typeScriptBuiltInNames = new(StringComparer.Ordinal)
+    {
+        "Promise", "PromiseLike", "Record", "Partial", "Readonly", "Array", "Function", "Date", "Error"
+    };
+
+    /// <summary>
+    /// Collects the type names a declaration fragment references. Enum bodies are dropped first because
+    /// their members are declared by the enum itself, then string literals are removed so that handle
+    /// aliases such as <c>export type XHandle = Handle&lt;'Assembly/Namespace.Type'&gt;;</c> do not look
+    /// like type references.
+    /// </summary>
+    private static IEnumerable<string> ExtractReferencedTypeNames(string content)
+    {
+        var withoutEnums = EnumDeclarationRegex().Replace(content, string.Empty);
+        var withoutLiterals = StringLiteralRegex().Replace(withoutEnums, "\"\"");
+
+        foreach (Match match in IdentifierRegex().Matches(withoutLiterals))
+        {
+            var name = match.Value;
+
+            // Conventional generic parameter names (T, TKey, TValue) are introduced by the
+            // declaration that uses them, so they are never resolved against other fragments.
+            if (name is "T" || (name.Length > 1 && name[0] == 'T' && char.IsUpper(name[1])))
+            {
+                continue;
+            }
+
+            yield return name;
+        }
+    }
+
+    [GeneratedRegex(@"^export (?:interface|enum|type) (\w+)", RegexOptions.Multiline)]
+    private static partial Regex DeclaredNameRegex();
+
+    [GeneratedRegex(@"enum \w+ \{[^}]*\}")]
+    private static partial Regex EnumDeclarationRegex();
+
+    [GeneratedRegex(@"'[^']*'|""[^""]*""")]
+    private static partial Regex StringLiteralRegex();
+
+    [GeneratedRegex(@"\b[A-Z][A-Za-z0-9_]*\b")]
+    private static partial Regex IdentifierRegex();
 
     [Fact]
     public void ApiExportDeclarationsAppearInGeneratedPublicInterfaces()

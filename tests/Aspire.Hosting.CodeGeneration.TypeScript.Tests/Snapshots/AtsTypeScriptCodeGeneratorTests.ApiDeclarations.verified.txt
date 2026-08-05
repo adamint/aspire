@@ -559,6 +559,9 @@ export enum TestResourceStatus {
     Failed = "Failed",
 }
 
+// Aspire.Hosting.CodeGeneration.TypeScript.Tests:handle:ITestVaultResourceHandle
+export type ITestVaultResourceHandle = Handle<'Aspire.Hosting.CodeGeneration.TypeScript.Tests/Aspire.Hosting.CodeGeneration.TypeScript.Tests.TestTypes.ITestVaultResource'>;
+
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:interface:TestCallbackContext
 export interface TestCallbackContext {
     toJSON(): MarshalledHandle;
@@ -865,6 +868,9 @@ export interface WithPersistenceOptions {
     mode?: TestPersistenceMode;
 }
 
+// Aspire.Hosting:handle:ReferenceExpressionHandle
+export type ReferenceExpressionHandle = Handle<'Aspire.Hosting/Aspire.Hosting.ApplicationModel.ReferenceExpression'>;
+
 // Aspire.Hosting:opaque:CSharpAppResource
 export interface CSharpAppResource extends ResourceBuilderBase {}
 
@@ -939,9 +945,12 @@ export interface ResourceWithEnvironmentPromise extends PromiseLike<ResourceWith
 
 // aspire:runtime:base
 export type Awaitable<T> = T | PromiseLike<T>;
-export interface MarshalledHandle { $handle: string; }
+export interface MarshalledHandle { $handle: string; $type: string; }
+export interface Handle<T extends string = string> { readonly $handle: string; readonly $type: T; toJSON(): MarshalledHandle; }
 export interface HandleReference { toJSON(): MarshalledHandle; }
+export interface AbortSignal { readonly aborted: boolean; }
 export interface CancellationToken { readonly aborted: boolean; }
+export enum InputType { Text = 'Text', SecretText = 'SecretText', Choice = 'Choice', Boolean = 'Boolean', Number = 'Number' }
 export interface ReferenceExpression { readonly value: Promise<string>; }
 export interface AspireList<T> extends HandleReference { get(index: number): Promise<T>; }
 export interface AspireDict<TKey, TValue> extends HandleReference { get(key: TKey): Promise<TValue>; }

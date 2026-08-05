@@ -43,16 +43,19 @@ internal sealed partial class TypeScriptApiProjector
     /// <summary>The symbol names <see cref="RuntimeDeclarationContent"/> already declares.</summary>
     private static readonly HashSet<string> s_runtimeDeclaredNames = new(StringComparer.Ordinal)
     {
-        "Awaitable", "MarshalledHandle", "HandleReference", "CancellationToken", "ReferenceExpression",
-        "AspireList", "AspireDict", "ResourceBuilderBase", "InteractionInput",
-        "InteractionInputCollection", "InteractionInputCollectionPromise"
+        "Awaitable", "MarshalledHandle", "Handle", "HandleReference", "AbortSignal", "CancellationToken",
+        "ReferenceExpression", "AspireList", "AspireDict", "ResourceBuilderBase", "InputType",
+        "InteractionInput", "InteractionInputCollection", "InteractionInputCollectionPromise"
     };
 
     private const string RuntimeDeclarationContent = """
         export type Awaitable<T> = T | PromiseLike<T>;
-        export interface MarshalledHandle { $handle: string; }
+        export interface MarshalledHandle { $handle: string; $type: string; }
+        export interface Handle<T extends string = string> { readonly $handle: string; readonly $type: T; toJSON(): MarshalledHandle; }
         export interface HandleReference { toJSON(): MarshalledHandle; }
+        export interface AbortSignal { readonly aborted: boolean; }
         export interface CancellationToken { readonly aborted: boolean; }
+        export enum InputType { Text = 'Text', SecretText = 'SecretText', Choice = 'Choice', Boolean = 'Boolean', Number = 'Number' }
         export interface ReferenceExpression { readonly value: Promise<string>; }
         export interface AspireList<T> extends HandleReference { get(index: number): Promise<T>; }
         export interface AspireDict<TKey, TValue> extends HandleReference { get(key: TKey): Promise<TValue>; }
@@ -462,7 +465,31 @@ internal sealed partial class TypeScriptApiProjector
 
         foreach (var typeId in _resolved.HandleTypeIds.OrderBy(id => id, StringComparer.Ordinal))
         {
-            var name = GetInterfaceName(_wrapperClassNames.GetValueOrDefault(typeId) ?? DeriveClassName(typeId));
+            var wrapperClassName = _wrapperClassNames.GetValueOrDefault(typeId);
+            var owningAssembly = GetTypeOwningAssemblyName(typeId);
+
+            // Handle types without a generated wrapper class surface in signatures under their raw
+            // handle alias name, so the fragment has to declare that exact alias. Deriving a class
+            // name here instead would declare a symbol no signature ever references and leave the
+            // referenced one undefined.
+            if (wrapperClassName is null)
+            {
+                var handleName = GetHandleTypeName(typeId);
+
+                if (declaredNames.Add(handleName))
+                {
+                    declarations[$"{owningAssembly}:handle:{handleName}"] = new TypeScriptApiDeclaration
+                    {
+                        Id = $"{owningAssembly}:handle:{handleName}",
+                        Content = $"export type {handleName} = Handle<'{typeId}'>;",
+                        OwningAssemblyName = owningAssembly
+                    };
+                }
+
+                continue;
+            }
+
+            var name = GetInterfaceName(wrapperClassName);
 
             if (!declaredNames.Add(name))
             {
@@ -472,7 +499,6 @@ internal sealed partial class TypeScriptApiProjector
             var baseType = _typeRefsById.GetValueOrDefault(typeId)?.IsResourceBuilder == true
                 ? "ResourceBuilderBase"
                 : "HandleReference";
-            var owningAssembly = GetTypeOwningAssemblyName(typeId);
 
             declarations[$"{owningAssembly}:opaque:{name}"] = new TypeScriptApiDeclaration
             {
@@ -486,7 +512,7 @@ internal sealed partial class TypeScriptApiProjector
                 continue;
             }
 
-            var promiseName = GetPromiseInterfaceName(_wrapperClassNames.GetValueOrDefault(typeId) ?? DeriveClassName(typeId));
+            var promiseName = GetPromiseInterfaceName(wrapperClassName);
             if (!declaredNames.Add(promiseName))
             {
                 continue;
