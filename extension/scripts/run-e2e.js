@@ -157,12 +157,39 @@ function getRunTestsTimeoutMs() {
   return configured;
 }
 
+/**
+ * Returns a path ExTester can be given for its storage folder that contains no whitespace.
+ *
+ * ExTester 8.23 unpacks `.zip` archives on macOS and Linux with
+ * `exec(`unzip -qo ${input}`, { cwd: target })` -- see
+ * `node_modules/vscode-extension-tester/out/util/unpack.js`. The archive path is interpolated into
+ * a shell command without quoting, so a single space in it splits into separate arguments and the
+ * unpack fails. That path is now the download cache, which lives inside the repository, so it is
+ * wherever the developer cloned rather than something this runner chooses. Windows unpacks with
+ * the `unzipper` library in-process and needs no projection.
+ */
+function projectWhitespaceFreeStagingDirectory(stagingDirectory) {
+  if (process.platform === 'win32' || !/\s/.test(stagingDirectory)) {
+    return stagingDirectory;
+  }
+
+  const linkPath = path.join(shortRunRoot, 'cache-staging');
+  if (/\s/.test(linkPath)) {
+    throw new Error(`The download cache path '${stagingDirectory}' contains whitespace, which ExTester cannot unpack into, and the per-run temporary root '${shortRunRoot}' cannot stand in for it because it contains whitespace too. Point ASPIRE_EXTENSION_E2E_TEMP_ROOT or ASPIRE_EXTENSION_E2E_CACHE_ROOT at a path without spaces.`);
+  }
+
+  removePathWithoutFollowingLinks(linkPath);
+  fs.symlinkSync(stagingDirectory, linkPath, 'dir');
+  return linkPath;
+}
+
 function getSetupDownloadRetryOptions(stagingDirectory) {
   return {
     attempts: getPositiveIntegerEnvironmentVariable('ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_RETRY_ATTEMPTS', 5),
     retryDelayMs: getPositiveIntegerEnvironmentVariable('ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_RETRY_DELAY_MS', 15000),
     beforeRetry: () => cleanPartialExtesterDownloads(stagingDirectory),
     timeout: getPositiveIntegerEnvironmentVariable('ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_TIMEOUT_MS', 240000),
+    terminateProcessGroupOnTimeout: true,
   };
 }
 
@@ -587,10 +614,11 @@ async function main() {
       architecture: process.arch,
       populate(stagingDirectory) {
         const setupDownloadRetryOptions = getSetupDownloadRetryOptions(stagingDirectory);
+        const downloadDirectory = projectWhitespaceFreeStagingDirectory(stagingDirectory);
         logStep('Downloading VS Code');
-        runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', stagingDirectory, '--code_version', vscodeVersion], extestEnv, setupDownloadRetryOptions);
+        runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', downloadDirectory, '--code_version', vscodeVersion], extestEnv, setupDownloadRetryOptions);
         logStep('Downloading ChromeDriver');
-        runWithRetry(process.execPath, [extesterCli, 'get-chromedriver', '--storage', stagingDirectory, '--code_version', vscodeVersion], extestEnv, setupDownloadRetryOptions);
+        runWithRetry(process.execPath, [extesterCli, 'get-chromedriver', '--storage', downloadDirectory, '--code_version', vscodeVersion], extestEnv, setupDownloadRetryOptions);
       },
     });
     console.log(`Extension E2E download cache ${downloadCache.cacheHit ? 'hit' : 'populated'}: ${downloadCache.cacheDirectory}`);
@@ -1198,11 +1226,17 @@ function getXmlProperty(xml, name) {
 
 function run(command, args, extraEnv = {}, options = {}) {
   const useShell = shouldUseShellForCommand(command);
+  // `spawnSync`'s timeout signals the process it started and nothing below it, so a grandchild
+  // outlives the timeout and keeps writing. Giving the child its own process group is what makes
+  // the whole tree reachable afterwards. Windows has no process groups to detach into, and
+  // `detached` there means a new console instead.
+  const ownProcessGroup = options.terminateProcessGroupOnTimeout === true && process.platform !== 'win32';
   const spawnOptions = {
     cwd: extensionRoot,
     env: { ...process.env, ...extraEnv },
     stdio: 'inherit',
     timeout: options.timeout,
+    detached: ownProcessGroup,
   };
   const result = useShell
     ? spawnSync([command, ...args].map(quoteWindowsShellArgument).join(' '), [], {
@@ -1214,12 +1248,45 @@ function run(command, args, extraEnv = {}, options = {}) {
     shell: false,
   });
 
+  if (ownProcessGroup && result.error?.code === 'ETIMEDOUT' && result.pid) {
+    terminateProcessGroup(result.pid);
+  }
+
   if (result.error) {
     throw result.error;
   }
 
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} exited with code ${result.status ?? `signal ${result.signal ?? 'unknown'}`}. Diagnostics are under ${path.relative(extensionRoot, resultsDir)} and ${path.relative(extensionRoot, storageDiagnosticsDir)}.`);
+  }
+}
+
+/**
+ * Kills everything left in a timed-out child's process group.
+ *
+ * Node reports a `spawnSync` timeout as `ETIMEDOUT` after signalling only the process it started.
+ * Anything that process spawned -- ExTester shells out to `unzip` on macOS and Linux -- is
+ * reparented and keeps running, which for a download step means it keeps writing into a directory
+ * this runner is about to hand to the cache and publish as an immutable entry.
+ */
+function terminateProcessGroup(processGroupId) {
+  try {
+    process.kill(-processGroupId, 'SIGTERM');
+  } catch (error) {
+    if (error?.code === 'ESRCH') {
+      return;
+    }
+
+    console.warn(`Unable to terminate process group ${processGroupId}: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+
+  sleepSynchronously(2000);
+
+  try {
+    process.kill(-processGroupId, 'SIGKILL');
+  } catch {
+    // ESRCH here is the expected outcome: everything in the group has already exited.
   }
 }
 

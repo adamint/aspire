@@ -1270,6 +1270,35 @@ suite('E2E download cache', () => {
         assert.deepStrictEqual(getCandidateNames(groupDirectory), [path.basename(liveCandidateDirectory)]);
     });
 
+    test('populates and reuses a cache root whose path contains spaces', () => {
+        const root = createTestRoot('spaced-cache-root');
+        const cacheRoot = path.join(root, 'My Cache Root');
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        let populateCount = 0;
+
+        const populated = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                populateCount++;
+                populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+            },
+        }));
+
+        const reused = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate() {
+                populateCount++;
+            },
+        }));
+
+        assert.strictEqual(populateCount, 1);
+        assert.strictEqual(populated.cacheHit, false);
+        assert.strictEqual(reused.cacheHit, true);
+        assert.strictEqual(reused.cacheDirectory, populated.cacheDirectory);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), [getCacheEntryName(1)]);
+    });
+
     test('sweeps a candidate whose owner is still answering long after any download could run', () => {
         const root = createTestRoot('recycled-owner-sweep');
         const cacheRoot = path.join(root, 'cache');

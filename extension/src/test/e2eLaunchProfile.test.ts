@@ -520,8 +520,11 @@ suite('E2E launch profile', () => {
 
         assert.ok(populateStart >= 0);
         assert.ok(populateEnd > populateStart);
-        assert.ok(populateBody.includes("'get-vscode', '--storage', stagingDirectory"));
-        assert.ok(populateBody.includes("'get-chromedriver', '--storage', stagingDirectory"));
+        // The storage path handed to ExTester is derived from the staging directory rather than
+        // being it verbatim, because ExTester cannot unpack into a path containing whitespace.
+        assert.ok(populateBody.includes('projectWhitespaceFreeStagingDirectory(stagingDirectory)'));
+        assert.ok(populateBody.includes("'get-vscode', '--storage', downloadDirectory"));
+        assert.ok(populateBody.includes("'get-chromedriver', '--storage', downloadDirectory"));
         assert.ok(!populateBody.includes('--storage\', storageDir'));
     });
 
@@ -581,6 +584,34 @@ suite('E2E launch profile', () => {
         assert.ok(resolverBody.includes("normalizedVersion === 'min' || normalizedVersion === 'max'"));
         assert.ok(resolverBody.includes('/^\\d+\\.\\d+(\\.\\d+)?$/.test(normalizedVersion)'));
         assert.ok(resolverBody.includes('throw new Error('));
+    });
+
+    test('hands ExTester a whitespace-free storage path for downloads', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const projectionStart = runner.indexOf('function projectWhitespaceFreeStagingDirectory(');
+        const projectionBody = runner.slice(projectionStart, runner.indexOf('\n}', projectionStart));
+
+        // ExTester unpacks zips on macOS and Linux by interpolating the archive path into an
+        // unquoted `unzip -qo` shell command, and the cache now lives wherever the repository was
+        // cloned, so a checkout under a path with spaces would fail acquisition outright.
+        assert.ok(projectionStart >= 0);
+        assert.ok(projectionBody.includes("process.platform === 'win32' || !/\\s/.test(stagingDirectory)"));
+        assert.ok(projectionBody.includes("fs.symlinkSync(stagingDirectory, linkPath, 'dir')"));
+        assert.ok(projectionBody.includes('removePathWithoutFollowingLinks(linkPath)'));
+    });
+
+    test('terminates the whole setup process group when a download times out', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+
+        // spawnSync's timeout signals only the process it started, so ExTester's `unzip` child
+        // survives and keeps writing into a staging directory that is about to be published as an
+        // immutable cache entry.
+        assert.ok(runner.includes('terminateProcessGroupOnTimeout: true,'));
+        assert.ok(runner.includes("result.error?.code === 'ETIMEDOUT'"));
+        assert.ok(runner.includes('terminateProcessGroup(result.pid)'));
+        assert.ok(runner.includes("process.kill(-processGroupId, 'SIGKILL')"));
     });
 
     test('resolves the download cache root before creating the per-run temporary root', () => {
