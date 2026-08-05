@@ -7,6 +7,7 @@ using Aspire.Cli.Telemetry;
 using Aspire.Cli.Tests.Acquisition;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
+using Aspire.Cli.Utils;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -185,6 +186,55 @@ public class NpmRunnerTests
     }
 
     [Fact]
+    public async Task ResolvePackageAsync_UsesInternalRegistryForAspireCliLatest()
+    {
+        var tempDirectory = Directory.CreateTempSubdirectory("aspire-npm-runner-test-");
+
+        try
+        {
+            WriteFakeNpm(tempDirectory);
+            var argumentsPath = Path.Combine(tempDirectory.FullName, "arguments.txt");
+            var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            using var pathOverride = new EnvVarOverride(
+                "PATH",
+                $"{tempDirectory.FullName}{Path.PathSeparator}{existingPath}");
+            using var pathExtensionsOverride = OperatingSystem.IsWindows()
+                ? new EnvVarOverride("PATHEXT", ".CMD")
+                : null;
+            using var argumentsPathOverride = new EnvVarOverride("NPM_ARGS_FILE", argumentsPath);
+            using var stdoutOverride = new EnvVarOverride("NPM_STDOUT", "13.4.6");
+            using var profilingTelemetry = new ProfilingTelemetry(new ConfigurationBuilder().Build());
+            var runner = new NpmRunner(
+                new TestEnvironment(),
+                NullLogger<NpmRunner>.Instance,
+                profilingTelemetry);
+
+            var package = await runner.ResolvePackageAsync(
+                NpmInstallDetection.ExpectedPackageName,
+                "latest",
+                TestContext.Current.CancellationToken);
+
+            Assert.NotNull(package);
+            Assert.Equal("13.4.6", package.Version.ToString());
+            Assert.Equal(
+                [
+                    "view",
+                    "@microsoft/aspire-cli@latest",
+                    "version",
+                    "--registry",
+                    "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/"
+                ],
+                await File.ReadAllLinesAsync(
+                    argumentsPath,
+                    TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            tempDirectory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public void TryExtractLastVersion_SingleVersion_ReturnsTrimmedVersion()
     {
         var result = NpmRunner.TryExtractLastVersion("0.1.1\n", out var version);
@@ -253,10 +303,13 @@ public class NpmRunnerTests
                 @echo off
                 type nul > "%NPM_ARGS_FILE%"
                 :loop
-                if "%~1"=="" exit /b 0
+                if "%~1"=="" goto output
                 >> "%NPM_ARGS_FILE%" echo %~1
                 shift
                 goto loop
+                :output
+                if defined NPM_STDOUT echo %NPM_STDOUT%
+                exit /b 0
                 """);
             return;
         }
@@ -267,6 +320,10 @@ public class NpmRunnerTests
             """
             #!/bin/sh
             printf '%s\n' "$@" > "$NPM_ARGS_FILE"
+            if [ -n "$NPM_STDOUT" ]; then
+              printf '%s\n' "$NPM_STDOUT"
+            fi
+            exit 0
             """);
         File.SetUnixFileMode(
             npmPath,

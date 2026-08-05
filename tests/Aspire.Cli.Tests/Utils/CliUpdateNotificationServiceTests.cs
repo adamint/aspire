@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using Aspire.Cli.Interaction;
+using Aspire.Cli.Npm;
 using Aspire.Cli.NuGet;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Utils;
@@ -287,10 +288,11 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task NotifyIfUpdateAvailable_UsesNpmCommandForNpmInstall()
+    public async Task NotifyIfUpdateAvailable_UsesNpmRegistryVersionForNpmInstall()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
+        var nuGetCallCount = 0;
         TestInteractionService? interactionService = null;
 
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
@@ -299,14 +301,32 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
 
             configure.NuGetPackageCacheFactory = _ => new FakeNuGetPackageCache
             {
-                GetCliPackagesAsyncCallback = (_, _, _, _) => Task.FromResult<IEnumerable<NuGetPackage>>([
-                    new NuGetPackage { Id = "Aspire.Cli", Version = "9.5.0", Source = "nuget.org" }
-                ])
+                GetCliPackagesAsyncCallback = (_, _, _, _) =>
+                {
+                    Interlocked.Increment(ref nuGetCallCount);
+                    return Task.FromResult<IEnumerable<NuGetPackage>>(
+                    [
+                        new NuGetPackage { Id = "Aspire.Cli", Version = "99.0.0", Source = "nuget.org" }
+                    ]);
+                }
+            };
+
+            configure.NpmRunnerFactory = _ => new FakeNpmRunner
+            {
+                ResolvePackageAsyncCallback = (packageName, versionRange, _) =>
+                {
+                    Assert.Equal(NpmInstallDetection.ExpectedPackageName, packageName);
+                    Assert.Equal("latest", versionRange);
+                    return Task.FromResult<NpmPackageInfo?>(CreateNpmPackageInfo("9.5.0"));
+                }
             };
 
             configure.InteractionServiceFactory = _ =>
             {
-                interactionService = new TestInteractionService();
+                interactionService = new TestInteractionService
+                {
+                    DisplayVersionUpdateNotificationCallback = version => Assert.Equal("9.5.0", version)
+                };
                 return interactionService;
             };
 
@@ -320,7 +340,144 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
         notifier.NotifyIfUpdateAvailable();
 
         Assert.NotNull(interactionService);
+        Assert.Equal(0, nuGetCallCount);
         Assert.Equal("npm install -g @microsoft/aspire-cli@latest", interactionService.LastVersionUpdateCommand);
+        Assert.True(notifier.IsUpdateAvailable());
+    }
+
+    [Theory]
+    [InlineData("9.4.0")]
+    [InlineData("9.3.0")]
+    public async Task NotifyIfUpdateAvailable_DoesNotNotifyWhenNpmLatestIsNotNewer(
+        string latestVersion)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
+        {
+            configure.NpmRunnerFactory = _ => new FakeNpmRunner
+            {
+                ResolvePackageAsyncCallback = (_, _, _) =>
+                    Task.FromResult<NpmPackageInfo?>(CreateNpmPackageInfo(latestVersion))
+            };
+            configure.InteractionServiceFactory = _ => new TestInteractionService
+            {
+                DisplayVersionUpdateNotificationCallback = _ =>
+                    Assert.Fail("An equal or older npm latest version must not produce an update notification.")
+            };
+            configure.CliUpdateNotifierFactory = sp => CreateCliUpdateNotifier(sp, "9.4.0");
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var notifier = provider.GetRequiredService<ICliUpdateNotifier>();
+
+        await notifier.CheckForCliUpdatesAsync(
+            workspace.WorkspaceRoot,
+            CancellationToken.None).DefaultTimeout();
+        notifier.NotifyIfUpdateAvailable();
+
+        Assert.False(notifier.IsUpdateAvailable());
+    }
+
+    [Fact]
+    public async Task GetVersionStatusAsync_NpmResolutionFailureReturnsErrorAndCanRetry()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
+        var resolveCallCount = 0;
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
+        {
+            configure.NpmRunnerFactory = _ => new FakeNpmRunner
+            {
+                ResolvePackageAsyncCallback = (_, _, _) =>
+                {
+                    var call = Interlocked.Increment(ref resolveCallCount);
+                    return Task.FromResult<NpmPackageInfo?>(
+                        call == 1 ? null : CreateNpmPackageInfo("9.5.0"));
+                }
+            };
+            configure.InteractionServiceFactory = _ => new TestInteractionService
+            {
+                DisplayVersionUpdateNotificationCallback = _ =>
+                    Assert.Fail("A failed npm lookup must not produce an update notification.")
+            };
+            configure.CliUpdateNotifierFactory = sp => CreateCliUpdateNotifier(sp, "9.4.0");
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var notifier = provider.GetRequiredService<ICliUpdateNotifier>();
+
+        var failedStatus = await notifier.GetVersionStatusAsync(
+            workspace.WorkspaceRoot,
+            CancellationToken.None).DefaultTimeout();
+        notifier.NotifyIfUpdateAvailable();
+
+        Assert.Equal(
+            "Unable to resolve @microsoft/aspire-cli@latest from the internal npm registry.",
+            failedStatus.UpdateCheckError);
+        Assert.Null(failedStatus.LatestVersion);
+
+        var retryStatus = await notifier.GetVersionStatusAsync(
+            workspace.WorkspaceRoot,
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal(2, resolveCallCount);
+        Assert.Null(retryStatus.UpdateCheckError);
+        Assert.Equal("9.5.0", retryStatus.LatestVersion);
+    }
+
+    [Fact]
+    public async Task NpmResolutionIsSharedAcrossConcurrentAndLaterChecks()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
+
+        var resolveCallCount = 0;
+        var resolutionStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var resolution = new TaskCompletionSource<NpmPackageInfo?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
+        {
+            configure.NpmRunnerFactory = _ => new FakeNpmRunner
+            {
+                ResolvePackageAsyncCallback = (_, _, _) =>
+                {
+                    Interlocked.Increment(ref resolveCallCount);
+                    resolutionStarted.TrySetResult();
+                    return resolution.Task;
+                }
+            };
+            configure.CliUpdateNotifierFactory = sp => CreateCliUpdateNotifier(sp, "9.4.0");
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var notifier = provider.GetRequiredService<ICliUpdateNotifier>();
+
+        var prefetchTask = notifier.CheckForCliUpdatesAsync(
+            workspace.WorkspaceRoot,
+            CancellationToken.None);
+        await resolutionStarted.Task.DefaultTimeout();
+
+        var doctorTask = notifier.GetVersionStatusAsync(
+            workspace.WorkspaceRoot,
+            CancellationToken.None);
+        Assert.Equal(1, Volatile.Read(ref resolveCallCount));
+
+        resolution.SetResult(CreateNpmPackageInfo("9.5.0"));
+        await prefetchTask.DefaultTimeout();
+        var doctorStatus = await doctorTask.DefaultTimeout();
+
+        var laterStatus = await notifier.GetVersionStatusAsync(
+            workspace.WorkspaceRoot,
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal(1, Volatile.Read(ref resolveCallCount));
+        Assert.Equal("9.5.0", doctorStatus.LatestVersion);
+        Assert.Equal("9.5.0", laterStatus.LatestVersion);
     }
 
     [Fact]
@@ -453,9 +610,18 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
             currentVersion,
             serviceProvider.GetRequiredService<ILogger<CliUpdateNotifier>>(),
             serviceProvider.GetRequiredService<INuGetPackageCache>(),
+            serviceProvider.GetRequiredService<INpmRunner>(),
             serviceProvider.GetRequiredService<IInteractionService>(),
             serviceProvider.GetRequiredService<IProcessPathProvider>(),
             serviceProvider.GetRequiredService<CliExecutionContext>());
+    }
+
+    private static NpmPackageInfo CreateNpmPackageInfo(string version)
+    {
+        return new NpmPackageInfo
+        {
+            Version = SemVersion.Parse(version, SemVersionStyles.Strict)
+        };
     }
 }
 
@@ -463,9 +629,17 @@ internal sealed class CliUpdateNotifierWithPackageVersionOverride(
     string currentVersion,
     ILogger<CliUpdateNotifier> logger,
     INuGetPackageCache nuGetPackageCache,
+    INpmRunner npmRunner,
     IInteractionService interactionService,
     IProcessPathProvider processPathProvider,
-    CliExecutionContext executionContext) : CliUpdateNotifier(logger, nuGetPackageCache, interactionService, processPathProvider, executionContext)
+    CliExecutionContext executionContext)
+    : CliUpdateNotifier(
+        logger,
+        nuGetPackageCache,
+        npmRunner,
+        interactionService,
+        processPathProvider,
+        executionContext)
 {
     protected override SemVersion? GetCurrentVersion()
     {

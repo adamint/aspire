@@ -4,6 +4,7 @@
 using System.Diagnostics;
 using Aspire.Cli.Commands;
 using Aspire.Cli.Interaction;
+using Aspire.Cli.Npm;
 using Aspire.Cli.NuGet;
 using Aspire.Shared;
 using Microsoft.Extensions.Logging;
@@ -27,14 +28,12 @@ internal sealed record CliVersionStatus(
     string? LatestVersionChannel = null);
 
 /// <summary>
-/// Coarse-grained labels for the channel a recommended CLI update is being
-/// pulled from. <see cref="PackageUpdateHelpers.GetNewerVersion"/> picks
-/// between <c>newestStable</c> and <c>newestPrerelease</c> when computing
-/// the recommendation, so labelling by stable vs prerelease is faithful to
-/// the underlying decision rule. We deliberately don't try to distinguish
-/// staging from daily here — the version string alone can't reliably do so,
-/// and the user-visible doctor message only needs to convey "where to
-/// look", not the specific feed identity.
+/// Coarse-grained labels for the channel a recommended CLI update is pulled
+/// from. NuGet discovery selects between stable and prerelease candidates,
+/// while npm's <c>latest</c> dist-tag already identifies one concrete version.
+/// Both paths classify the selected version by its prerelease flag. We
+/// deliberately don't try to distinguish staging from daily here because the
+/// version string alone cannot reliably identify the feed.
 /// </summary>
 internal static class PackageUpdateRecommendationChannels
 {
@@ -45,14 +44,28 @@ internal static class PackageUpdateRecommendationChannels
 internal class CliUpdateNotifier(
     ILogger<CliUpdateNotifier> logger,
     INuGetPackageCache nuGetPackageCache,
+    INpmRunner npmRunner,
     IInteractionService interactionService,
     IProcessPathProvider processPathProvider,
     CliExecutionContext executionContext) : ICliUpdateNotifier
 {
+    private const string LatestNpmVersionRange = "latest";
+
+    private readonly object _npmResolutionLock = new();
     private IEnumerable<Shared.NuGetPackageCli>? _availablePackages;
+    private NpmPackageInfo? _availableNpmPackage;
+    private Task<NpmPackageInfo>? _npmResolutionTask;
 
     public async Task CheckForCliUpdatesAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
     {
+        if (NpmInstallDetection.IsRunningFromNpm())
+        {
+            _availablePackages = null;
+            _availableNpmPackage = await GetLatestNpmPackageAsync(cancellationToken);
+            return;
+        }
+
+        _availableNpmPackage = null;
         _availablePackages = await GetCliPackagesAsync(workingDirectory, cancellationToken);
     }
 
@@ -113,6 +126,47 @@ internal class CliUpdateNotifier(
         return PackageUpdateHelpers.GetCurrentPackageVersion();
     }
 
+    private async Task<NpmPackageInfo> GetLatestNpmPackageAsync(
+        CancellationToken cancellationToken)
+    {
+        Task<NpmPackageInfo> resolutionTask;
+
+        lock (_npmResolutionLock)
+        {
+            resolutionTask = _npmResolutionTask ??= ResolveLatestNpmPackageAsync(cancellationToken);
+        }
+
+        try
+        {
+            return await resolutionTask;
+        }
+        catch
+        {
+            // Background notification checks may fail before an explicit doctor check.
+            // Clear only this failed or cancelled task so doctor can make a fresh attempt.
+            lock (_npmResolutionLock)
+            {
+                if (ReferenceEquals(_npmResolutionTask, resolutionTask))
+                {
+                    _npmResolutionTask = null;
+                }
+            }
+
+            throw;
+        }
+    }
+
+    private async Task<NpmPackageInfo> ResolveLatestNpmPackageAsync(
+        CancellationToken cancellationToken)
+    {
+        return await npmRunner.ResolvePackageAsync(
+            NpmInstallDetection.ExpectedPackageName,
+            LatestNpmVersionRange,
+            cancellationToken)
+            ?? throw new InvalidOperationException(
+                $"Unable to resolve {NpmPackageInfo.FormatPackageSpecifier(NpmInstallDetection.ExpectedPackageName, LatestNpmVersionRange)} from the internal npm registry.");
+    }
+
     private CliVersionStatus GetCachedVersionStatus(string? updateCheckError = null)
     {
         // Keep all version comparison and update-command selection in one place so
@@ -125,7 +179,7 @@ internal class CliUpdateNotifier(
             return new CliVersionStatus(currentVersionString, null, null, updateCheckError);
         }
 
-        if (_availablePackages is null)
+        if (_availablePackages is null && _availableNpmPackage is null)
         {
             return new CliVersionStatus(currentVersionString, null, null);
         }
@@ -136,22 +190,48 @@ internal class CliUpdateNotifier(
             return new CliVersionStatus(currentVersionString, null, null);
         }
 
-        var newerVersion = PackageUpdateHelpers.GetNewerVersion(logger, currentVersion, _availablePackages);
+        var newerVersion = _availableNpmPackage is { } npmPackage
+            ? GetNewerNpmVersion(currentVersion, npmPackage.Version)
+            : PackageUpdateHelpers.GetNewerVersion(logger, currentVersion, _availablePackages!);
         var updateCommand = newerVersion is null
             ? null
             : DotNetToolDetection.GetDotNetToolUpdateCommand(processPathProvider.ProcessPath)
-                ?? NpmInstallDetection.GetNpmUpdateCommand()
-                ?? "aspire update";
-        // Derive the lane the recommendation comes from so doctor can show
-        // 'Latest version is X (channel: stable)' vs '(channel: prerelease)'.
-        // GetNewerVersion picks between newestStable and newestPrerelease
-        // by exactly this rule, so re-classifying from the returned
-        // version's prerelease flag is faithful to the decision the
-        // package helper made.
+            ?? NpmInstallDetection.GetNpmUpdateCommand()
+            ?? "aspire update";
         var latestChannel = newerVersion is null
             ? null
-            : (newerVersion.IsPrerelease ? PackageUpdateRecommendationChannels.Prerelease : PackageUpdateRecommendationChannels.Stable);
-        return new CliVersionStatus(currentVersionString, newerVersion?.ToString(), updateCommand, UpdateCheckError: null, LatestVersionChannel: latestChannel);
+            : (newerVersion.IsPrerelease
+                ? PackageUpdateRecommendationChannels.Prerelease
+                : PackageUpdateRecommendationChannels.Stable);
+
+        return new CliVersionStatus(
+            currentVersionString,
+            newerVersion?.ToString(),
+            updateCommand,
+            UpdateCheckError: null,
+            LatestVersionChannel: latestChannel);
+    }
+
+    private SemVersion? GetNewerNpmVersion(
+        SemVersion currentVersion,
+        SemVersion latestVersion)
+    {
+        logger.LogDebug(
+            "Current CLI version: {CurrentVersion}. Latest npm version: {LatestVersion}.",
+            currentVersion,
+            latestVersion);
+
+        if (SemVersion.PrecedenceComparer.Compare(currentVersion, latestVersion) < 0)
+        {
+            logger.LogDebug(
+                "Newer CLI version available from npm: {CurrentVersion} -> {LatestVersion}",
+                currentVersion,
+                latestVersion);
+            return latestVersion;
+        }
+
+        logger.LogDebug("No newer CLI version is available from npm.");
+        return null;
     }
 
     private async Task<IEnumerable<Shared.NuGetPackageCli>> GetCliPackagesAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
