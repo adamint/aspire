@@ -29,6 +29,7 @@ internal sealed class SdkExportCommand : BaseCommand
 
     private readonly IAppHostServerProjectFactory _appHostServerProjectFactory;
     private readonly IAppHostServerSessionFactory _serverSessionFactory;
+    private readonly ILanguageDiscovery _languageDiscovery;
     private readonly ILogger<SdkExportCommand> _logger;
 
     private static readonly Option<string> s_languageOption = new("--language", "-l")
@@ -52,12 +53,14 @@ internal sealed class SdkExportCommand : BaseCommand
     public SdkExportCommand(
         IAppHostServerProjectFactory appHostServerProjectFactory,
         IAppHostServerSessionFactory serverSessionFactory,
+        ILanguageDiscovery languageDiscovery,
         ILogger<SdkExportCommand> logger,
         CommonCommandServices services)
         : base("export", "Export the canonical API reference for an Aspire package in a target language.", services)
     {
         _appHostServerProjectFactory = appHostServerProjectFactory;
         _serverSessionFactory = serverSessionFactory;
+        _languageDiscovery = languageDiscovery;
         _logger = logger;
 
         // Not marked Hidden: the parent `sdk` command already hides the whole subtree, and setting
@@ -116,6 +119,15 @@ internal sealed class SdkExportCommand : BaseCommand
             }
         }
 
+        // The code generator lives in a separate package that the scanner AppHost does not reference
+        // by default, so without this the server loads no generators and every export fails with
+        // "No code generator found". `sdk generate` adds the same package for the same reason.
+        var codeGenPackage = await GetCodeGenerationPackageAsync(language, cancellationToken);
+        if (codeGenPackage is not null)
+        {
+            integrations.Add(IntegrationReference.FromPackage(codeGenPackage, ExecutionContext.IdentityVersion));
+        }
+
         return CommandResult.FromExitCode(await ExportApiAsync(
             language,
             packageName,
@@ -124,6 +136,35 @@ internal sealed class SdkExportCommand : BaseCommand
             packageSource,
             outputFile,
             cancellationToken));
+    }
+
+    /// <summary>
+    /// Resolves the code generation package that provides the requested language, matching the way
+    /// <c>sdk generate</c> resolves it. Returns <see langword="null"/> when the language is unknown so
+    /// that the server produces the authoritative unsupported-language error.
+    /// </summary>
+    private async Task<string?> GetCodeGenerationPackageAsync(string language, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var languages = await _languageDiscovery.GetAvailableLanguagesAsync(cancellationToken);
+
+            var languageInfo = languages.FirstOrDefault(l =>
+                l.LanguageId.Value.StartsWith(language, StringComparison.OrdinalIgnoreCase) ||
+                l.CodeGenerator.Equals(language, StringComparison.OrdinalIgnoreCase));
+
+            if (languageInfo is null)
+            {
+                return null;
+            }
+
+            return await _languageDiscovery.GetPackageForLanguageAsync(languageInfo.LanguageId, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Failed to resolve the code generation package for language {Language}", language);
+            return null;
+        }
     }
 
     private async Task<int> ExportApiAsync(

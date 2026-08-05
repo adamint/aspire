@@ -102,6 +102,27 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal("/tmp/aspire-hive", appHostServerProject.PackageSourceOverride);
     }
 
+    /// <summary>
+    /// The code generator ships in its own package that the scanner AppHost does not reference by
+    /// default. Without adding it the server loads no generators and every export fails with
+    /// "No code generator found", which is exactly how this regressed once already.
+    /// </summary>
+    [Fact]
+    public async Task SdkExportAddsTheCodeGenerationPackageForTheRequestedLanguage()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new CapturingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        using var provider = CreateProvider(interactionService, workspace, new StubExportRpcClient(), appHostServerProject);
+
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting@13.5.0");
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Contains(
+            appHostServerProject.Integrations,
+            integration => integration.Name.Contains("CodeGeneration", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Theory]
     [InlineData("Aspire.Hosting")]
     [InlineData("Aspire.Hosting@")]
@@ -286,6 +307,8 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
 
         public string? PackageSourceOverride { get; private set; }
 
+        public IReadOnlyList<IntegrationReference> Integrations { get; private set; } = [];
+
         public string GetInstanceIdentifier() => AppDirectoryPath;
 
         public Task<AppHostServerPrepareResult> PrepareAsync(
@@ -296,6 +319,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
             CancellationToken cancellationToken = default)
         {
             PackageSourceOverride = packageSourceOverride;
+            Integrations = [.. integrations];
             return Task.FromResult(new AppHostServerPrepareResult(Success: true, Output: null));
         }
 
