@@ -10,7 +10,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cp "$bin" /build/bin/my-service
 
 FROM alpine:3.22
-RUN apk --no-cache add ca-certificates tzdata
 RUN (addgroup -g 999 -S app || groupadd --system --gid 999 app) && (adduser -u 999 -S -G app app || useradd --system --uid 999 --gid 999 --no-create-home app)
 WORKDIR /app
 COPY --from=build /build/bin/my-service /app/my-service

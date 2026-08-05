@@ -126,7 +126,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --locked --release --target-dir /build/target
 
 FROM alpine:3.22
-RUN apk --no-cache add ca-certificates tzdata
 RUN (addgroup -g 999 -S app || groupadd --system --gid 999 app) && \
     (adduser -u 999 -S -G app app || useradd --system --uid 999 --gid 999 --no-create-home app)
 WORKDIR /app
@@ -168,10 +167,19 @@ used instead: cargo refuses to build with an older toolchain than the declared m
 Both defaults are musl-based, so the binary and the runtime image share a libc by construction and
 there is no glibc-version skew between the two stages.
 
-The build stage installs no extra packages, so it provides exactly what the official image ships. The
-Alpine images have carried `gcc` for years but only gained `musl-dev` in Rust 1.92.0, so a crate with
-native dependencies (or a build script) that pins an older toolchain has to supply a build image that
-provides them through `WithDockerfileBaseImage`, or take over the build with its own `Dockerfile`.
+Neither stage installs any package, so each image provides exactly what it ships and nothing is
+presumed about what the crate needs — very much the Rust position that you pay only for what you ask
+for. A crate wanting TLS usually says so itself, and the common `rustls` and `webpki-roots` pairing
+compiles the roots into the binary rather than reading a system bundle. One that does need something
+from the image — a CA bundle, a zoneinfo database, or a C toolchain at build time — should name an
+image carrying it through `WithDockerfileBaseImage`, or take over the build with its own `Dockerfile`.
+Worth knowing when choosing: `alpine:3.22` ships no CA bundle and no zoneinfo database,
+`debian:bookworm-slim` ships no CA bundle either, and the official Alpine build images have carried
+`gcc` for years but only gained `musl-dev` in Rust 1.92.0.
+
+The non-root `app` user is created in every generated Dockerfile, trying the BusyBox commands and
+falling back to shadow-utils, with uid and gid pinned to `999` so a mounted volume sees the same owner
+on any distro.
 
 rustup channel names are not container image tags, so they are mapped: `stable` becomes `rust:alpine`
 (the unversioned tag that tracks current stable, since there is no `rust:stable-alpine`), and
@@ -184,13 +192,6 @@ Override either stage to move to glibc:
 builder.AddRustApp("api", "../rust-api")
     .WithDockerfileBaseImage(buildImage: "rust:1.89-bookworm", runtimeImage: "debian:bookworm-slim");
 ```
-
-`ca-certificates` and `tzdata` are installed into the default runtime image only, because that is the
-one whose contents are known: `alpine:3.22` ships neither, and a service that cannot verify a TLS
-certificate is of little use. A runtime image passed to `WithDockerfileBaseImage` is used exactly as
-given, so it has to provide those itself — `debian:bookworm-slim`, for one, carries no CA bundle. The
-non-root `app` user is created in either case, trying the BusyBox commands and falling back to
-shadow-utils, with uid and gid pinned to `999` so a mounted volume sees the same owner on any distro.
 
 `WithCargoTarget(...)` adds `rustup target add <triple>` to the build stage and follows cargo's
 `target/<triple>/<profile>/` layout. Pairing the triple with base images that can build and run the

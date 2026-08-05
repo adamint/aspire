@@ -155,20 +155,13 @@ internal static class RustDockerfileGenerator
 
         var runtimeStage = context.Builder.From(images.RuntimeImage);
 
-        // Packages are only installed into the default runtime image, whose contents are known exactly
-        // because this integration picked it: alpine:3.22 ships neither a CA bundle nor a zoneinfo database,
-        // and a service that cannot verify a TLS certificate or resolve a time zone is of little use. A
-        // caller-supplied image is left alone: it may be any distro, `apk` may not exist, and what belongs
-        // in it is the caller's decision.
-        if (images.RuntimeImageIsDefault)
-        {
-            runtimeStage.Run("apk --no-cache add ca-certificates tzdata");
-        }
-
-        // BusyBox (Alpine) and shadow-utils (Debian, Fedora, and most others) disagree on both the command
-        // names and their flags, and the runtime image can be either, so try one and fall back to the other
-        // rather than guessing from the image name. The ids are pinned so a mounted volume sees the same
-        // owner whichever branch of the fallback ran.
+        // Nothing is installed into the runtime image. It provides exactly what it ships, whether it is the
+        // default or one the caller chose, so a crate needing a CA bundle, a zoneinfo database or any other
+        // package has to select an image that carries it or take over the build with its own Dockerfile.
+        //
+        // BusyBox and shadow-utils disagree on both the command names and their flags, and the runtime image
+        // may ship either, so try one and fall back to the other rather than guessing from the image name.
+        // The ids are pinned so a mounted volume sees the same owner whichever branch of the fallback ran.
         runtimeStage.Run(
             "(addgroup -g 999 -S app || groupadd --system --gid 999 app) && " +
             "(adduser -u 999 -S -G app app || useradd --system --uid 999 --gid 999 --no-create-home app)");

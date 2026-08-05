@@ -10,13 +10,13 @@ namespace Aspire.Hosting.Rust;
 /// </summary>
 /// <param name="BuildImage">The image the crate is compiled in.</param>
 /// <param name="RuntimeImage">The image the compiled binary is copied into.</param>
-/// <param name="RuntimeImageIsDefault">
-/// Whether the runtime image is the one this resolver picked rather than one the caller supplied. Its
-/// contents are therefore known exactly, which is what makes it safe to install packages into it. The
-/// image name is deliberately not inspected instead: a name is free-form, so a musl-based image can be
-/// called anything and an image whose name says otherwise can be glibc-based underneath.
-/// </param>
-internal sealed record RustPublishImages(string BuildImage, string RuntimeImage, bool RuntimeImageIsDefault);
+/// <remarks>
+/// Both are used exactly as given. Neither is inspected to work out what it contains, and nothing is
+/// installed into either: a name is free-form, so a musl-based image can be called anything and an image
+/// whose name says otherwise can be glibc-based underneath, and what belongs in an image is a decision for
+/// whoever built it.
+/// </remarks>
+internal sealed record RustPublishImages(string BuildImage, string RuntimeImage);
 
 /// <summary>
 /// Chooses the base images for a generated Rust Dockerfile.
@@ -54,7 +54,7 @@ internal static partial class RustPublishImageResolver
         var buildImage = explicitBuildImage ?? ResolveDefaultBuildImage(appDirectory, minimumRustVersion, resourceName);
         var runtimeImage = explicitRuntimeImage ?? DefaultRuntimeImage;
 
-        return new RustPublishImages(buildImage, runtimeImage, RuntimeImageIsDefault: explicitRuntimeImage is null);
+        return new RustPublishImages(buildImage, runtimeImage);
     }
 
     /// <summary>
