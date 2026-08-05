@@ -36,9 +36,6 @@ var api = builder.AddRustApp("api", "../rust-api")
     .WithHttpEndpoint(env: "PORT")
     .WithExternalHttpEndpoints();
 
-var web = builder.AddProject<Projects.Web>("web")
-                 .WithReference(api);
-
 builder.Build().Run();
 ```
 
@@ -53,24 +50,17 @@ const api = await builder.addRustApp("api", "../rust-api")
     .withHttpEndpoint({ env: "PORT" })
     .withExternalHttpEndpoints();
 
-const web = await builder.addNodeApp("web", "../web", "server.js")
-    .withReference(api);
-
 await builder.build().run();
 ```
 
 `appDirectory` is the directory containing `Cargo.toml`. Arguments for your program are passed with
 `.WithArgs(...)`; arguments for cargo itself are passed with `.WithCargoArgs(...)`.
 
-Read the listening port from the environment variable named by `WithHttpEndpoint(env: ...)` rather
-than hard-coding one, so Aspire can assign a free port and wire up service discovery.
-
 ### Cargo options
 
 ```csharp
 builder.AddRustApp("api", "../rust-api")
-    .WithCargoReleaseBuild()
-    .WithCargoLocked()
+    .WithCargoBinTarget("worker");
     .WithCargoFeatures("grpc-tonic", "tls-ring")
     .WithCargoArgs("--no-default-features");
 ```
@@ -89,43 +79,17 @@ builder.AddRustApp("api", "../rust-api")
 | `WithCargoManifestPath(string manifestPath)` | Adds `--manifest-path`. Only needed when the manifest is not the one cargo finds from the app directory. Must be inside the app directory so publishing can copy it into the image |
 | `WithCargoProfile(string profileName)` | Adds `--profile`. Takes precedence over `WithCargoReleaseBuild()`, which cargo rejects alongside `--profile` |
 
-These options apply to local execution, debugging, and publishing alike, except that publishing turns
-on `--release` and (when a `Cargo.lock` exists) `--locked` unless the resource said otherwise: a
-published image should be optimized and should build the dependency versions that were committed,
-while local runs keep cargo's own defaults so they stay fast and behave like running `cargo run` from
-the terminal. Target selection in particular must go through the dedicated methods rather than
-`WithCargoArgs`, because debugging and publishing use them to work out which file cargo produces:
-
-```csharp
-builder.AddRustApp("api", "../rust-api")
-    .WithCargoBinTarget("worker");
-```
-
 ### Debugging
 
 Debugging is enabled automatically by `AddRustApp` — use the normal Aspire "Start Debugging" flow in
-VS Code. Library-only crates produce no executable and cannot be debugged.
-
-Debugging builds the crate with the same cargo arguments used to run it, so any `--bin`/`--example`
-selection carries over. The AppHost works out the executable cargo will produce — from the same
-`cargo metadata` query publishing uses — and hands the path to the debugger, so the debugged process
-and the published container run the same binary. That resolution honours the `default-run` manifest
-key, which `cargo build` itself ignores.
+VS Code.
 
 ### Publishing
 
 `aspire publish` and `aspire deploy` build the app into a container. An app that runs should publish
 with no extra configuration: if the app directory contains a `Dockerfile` it is used as-is, otherwise
-one is generated that compiles the crate inside the container — nothing is built on your machine —
-and copies the binary into a small runtime image. The container runs as a non-root `app` user with uid
-and gid `999`, so anything it writes to a mounted volume is owned by `999`.
-
-The only thing publishing may need help with is which binary to ship, when the crate itself is
-ambiguous: a package with several `[[bin]]` targets needs `WithCargoBinTarget`, and a workspace with
-several default members that each produce a binary needs `WithCargoPackage`. `default-run` is honoured,
-so publish otherwise produces the same binary `cargo run` does. Only the `WithCargo*` options feed that
-choice — a target selected with a raw `WithCargoArgs` string changes what cargo builds without moving
-the file publish copies.
+one is generated that compiles the crate inside the container.
+The container runs as a non-root `app` user with uid and gid `999`.
 
 #### Base images
 
@@ -133,9 +97,6 @@ the file publish copies.
 | --- | --- |
 | Build | `rust:<version>-alpine`, where `<version>` comes from `rust-toolchain.toml`/`rust-toolchain`, the crate's `rust-version`, or `1.89` when the crate pins nothing |
 | Runtime | `alpine:3.22` |
-
-Nothing is installed into either image, so each provides exactly what it ships: a crate needing a CA
-bundle, a zoneinfo database, or a C toolchain to build should name an image carrying it.
 
 If you change either image with `WithDockerfileBaseImage`, or name an explicit target with
 `WithCargoTarget`, it is on you to keep the libc compatible across the three — the defaults are all
