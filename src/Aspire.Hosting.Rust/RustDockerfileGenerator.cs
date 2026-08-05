@@ -155,25 +155,23 @@ internal static class RustDockerfileGenerator
 
         var runtimeStage = context.Builder.From(images.RuntimeImage);
 
-        // The default runtime image is Alpine, so the hardening steps below use apk and BusyBox
-        // adduser/addgroup flags. A caller-supplied runtime image can be any distro (for example
-        // debian:bookworm-slim when pairing with a glibc build image), where `apk` does not exist and
-        // `adduser -S` is not valid syntax.
-        if (images.RuntimeImageIsPossiblyAlpine)
+        // Packages are only installed into the default runtime image, whose contents are known exactly
+        // because this integration picked it: alpine:3.22 ships neither a CA bundle nor a zoneinfo database,
+        // and a service that cannot verify a TLS certificate or resolve a time zone is of little use. A
+        // caller-supplied image is left alone: it may be any distro, `apk` may not exist, and what belongs
+        // in it is the caller's decision.
+        if (images.RuntimeImageIsDefault)
         {
-            runtimeStage
-                .Run("apk --no-cache add ca-certificates tzdata")
-                .Run("addgroup -S app && adduser -S -G app app");
+            runtimeStage.Run("apk --no-cache add ca-certificates tzdata");
         }
-        else
-        {
-            // The image name is only a hint — a private image can be built on Alpine and named anything — so
-            // try the BusyBox commands first and fall back to shadow-utils rather than assuming the glibc
-            // tooling. The ids are pinned so a mounted volume sees the same owner either way.
-            runtimeStage.Run(
-                "(addgroup -g 999 -S app || groupadd --system --gid 999 app) && " +
-                "(adduser -u 999 -S -G app app || useradd --system --uid 999 --gid 999 --no-create-home app)");
-        }
+
+        // BusyBox (Alpine) and shadow-utils (Debian, Fedora, and most others) disagree on both the command
+        // names and their flags, and the runtime image can be either, so try one and fall back to the other
+        // rather than guessing from the image name. The ids are pinned so a mounted volume sees the same
+        // owner whichever branch of the fallback ran.
+        runtimeStage.Run(
+            "(addgroup -g 999 -S app || groupadd --system --gid 999 app) && " +
+            "(adduser -u 999 -S -G app app || useradd --system --uid 999 --gid 999 --no-create-home app)");
 
         runtimeStage
             .WorkDir("/app")

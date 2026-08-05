@@ -112,7 +112,20 @@ public class RustPublishImageResolverTests
 
         Assert.Equal($"rust:{RustToolchainDetector.DefaultChannel}-alpine", images.BuildImage);
         Assert.Equal(RustPublishImageResolver.DefaultRuntimeImage, images.RuntimeImage);
-        Assert.True(images.RuntimeImageIsPossiblyAlpine);
+        Assert.True(images.RuntimeImageIsDefault);
+    }
+
+    [Fact]
+    public void ASuppliedRuntimeImageIsNotTreatedAsTheDefault()
+    {
+        using var crate = new TempCrateDirectory();
+
+        // Supplying the default image explicitly still counts as the caller's choice: the flag records who
+        // decided, not what was decided, and the caller may go on to change it.
+        var images = RustPublishImageResolver.Resolve(null, RustPublishImageResolver.DefaultRuntimeImage, crate.Path, minimumRustVersion: null, "api");
+
+        Assert.Equal(RustPublishImageResolver.DefaultRuntimeImage, images.RuntimeImage);
+        Assert.False(images.RuntimeImageIsDefault);
     }
 
     [Fact]
@@ -124,6 +137,6 @@ public class RustPublishImageResolverTests
 
         Assert.Equal("rust:1.89-bookworm", images.BuildImage);
         Assert.Equal("debian:bookworm-slim", images.RuntimeImage);
-        Assert.False(images.RuntimeImageIsPossiblyAlpine);
+        Assert.False(images.RuntimeImageIsDefault);
     }
 }

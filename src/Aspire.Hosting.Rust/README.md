@@ -127,7 +127,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM alpine:3.22
 RUN apk --no-cache add ca-certificates tzdata
-RUN addgroup -S app && adduser -S -G app app
+RUN (addgroup -g 999 -S app || groupadd --system --gid 999 app) && \
+    (adduser -u 999 -S -G app app || useradd --system --uid 999 --gid 999 --no-create-home app)
 WORKDIR /app
 COPY --from=build /build/target/release/my-service /app/my-service
 USER app
@@ -183,6 +184,13 @@ Override either stage to move to glibc:
 builder.AddRustApp("api", "../rust-api")
     .WithDockerfileBaseImage(buildImage: "rust:1.89-bookworm", runtimeImage: "debian:bookworm-slim");
 ```
+
+`ca-certificates` and `tzdata` are installed into the default runtime image only, because that is the
+one whose contents are known: `alpine:3.22` ships neither, and a service that cannot verify a TLS
+certificate is of little use. A runtime image passed to `WithDockerfileBaseImage` is used exactly as
+given, so it has to provide those itself — `debian:bookworm-slim`, for one, carries no CA bundle. The
+non-root `app` user is created in either case, trying the BusyBox commands and falling back to
+shadow-utils, with uid and gid pinned to `999` so a mounted volume sees the same owner on any distro.
 
 `WithCargoTarget(...)` adds `rustup target add <triple>` to the build stage and follows cargo's
 `target/<triple>/<profile>/` layout. Pairing the triple with base images that can build and run the

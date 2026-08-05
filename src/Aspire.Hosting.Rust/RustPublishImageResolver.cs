@@ -8,23 +8,15 @@ namespace Aspire.Hosting.Rust;
 /// <summary>
 /// The build and runtime base images used by a generated Rust Dockerfile.
 /// </summary>
-internal sealed record RustPublishImages(string BuildImage, string RuntimeImage)
-{
-    /// <summary>
-    /// Whether the runtime stage looks Alpine-based, which determines whether BusyBox user/package
-    /// management commands can be emitted.
-    /// </summary>
-    public bool RuntimeImageIsPossiblyAlpine => IsPossiblyAlpine(RuntimeImage);
-
-    /// <remarks>
-    /// A hint, never a guarantee. An image name is free-form, so a private image built on Alpine can be
-    /// called anything and an image called <c>alpine-tools</c> can be Debian underneath. Callers must
-    /// therefore treat the answer as a preference for which commands to try first, and must not refuse to
-    /// generate a Dockerfile on the strength of it: a wrong guess should at worst cost a container build,
-    /// whereas a rejection blocks a configuration that may well have worked.
-    /// </remarks>
-    private static bool IsPossiblyAlpine(string image) => image.Contains("alpine", StringComparison.OrdinalIgnoreCase);
-}
+/// <param name="BuildImage">The image the crate is compiled in.</param>
+/// <param name="RuntimeImage">The image the compiled binary is copied into.</param>
+/// <param name="RuntimeImageIsDefault">
+/// Whether the runtime image is the one this resolver picked rather than one the caller supplied. Its
+/// contents are therefore known exactly, which is what makes it safe to install packages into it. The
+/// image name is deliberately not inspected instead: a name is free-form, so a private image built on
+/// Alpine can be called anything and an image called <c>alpine-tools</c> can be Debian underneath.
+/// </param>
+internal sealed record RustPublishImages(string BuildImage, string RuntimeImage, bool RuntimeImageIsDefault);
 
 /// <summary>
 /// Chooses the base images for a generated Rust Dockerfile.
@@ -62,7 +54,7 @@ internal static partial class RustPublishImageResolver
         var buildImage = explicitBuildImage ?? ResolveDefaultBuildImage(appDirectory, minimumRustVersion, resourceName);
         var runtimeImage = explicitRuntimeImage ?? DefaultRuntimeImage;
 
-        return new RustPublishImages(buildImage, runtimeImage);
+        return new RustPublishImages(buildImage, runtimeImage, RuntimeImageIsDefault: explicitRuntimeImage is null);
     }
 
     /// <summary>
