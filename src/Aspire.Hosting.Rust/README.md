@@ -134,20 +134,12 @@ the file publish copies.
 | Build | `rust:<version>-alpine`, where `<version>` comes from `rust-toolchain.toml`/`rust-toolchain`, the crate's `rust-version`, or `1.89` when the crate pins nothing |
 | Runtime | `alpine:3.22` |
 
-Both defaults are musl-based, so the binary and the runtime image share a libc by construction.
 Nothing is installed into either image, so each provides exactly what it ships: a crate needing a CA
 bundle, a zoneinfo database, or a C toolchain to build should name an image carrying it.
 
-Overriding a stage makes matching the pair yours to get right — a glibc (`-gnu`) build image needs a
-glibc runtime image, and a musl one needs musl:
-
-```csharp
-builder.AddRustApp("api", "../rust-api")
-    .WithDockerfileBaseImage(buildImage: "rust:1.89-bookworm", runtimeImage: "debian:bookworm-slim");
-```
-
-The same applies to a triple passed to `WithCargoTarget`, which must match the runtime image's libc,
-and needs a build image carrying a cross-linker when it targets another architecture.
+If you change either image with `WithDockerfileBaseImage`, or name an explicit target with
+`WithCargoTarget`, it is on you to keep the libc compatible across the three — the defaults are all
+musl.
 
 ## Additional documentation
 
