@@ -13,8 +13,8 @@ namespace Aspire.Hosting.Rust;
 /// <param name="RuntimeImageIsDefault">
 /// Whether the runtime image is the one this resolver picked rather than one the caller supplied. Its
 /// contents are therefore known exactly, which is what makes it safe to install packages into it. The
-/// image name is deliberately not inspected instead: a name is free-form, so a private image built on
-/// Alpine can be called anything and an image called <c>alpine-tools</c> can be Debian underneath.
+/// image name is deliberately not inspected instead: a name is free-form, so a musl-based image can be
+/// called anything and an image whose name says otherwise can be glibc-based underneath.
 /// </param>
 internal sealed record RustPublishImages(string BuildImage, string RuntimeImage, bool RuntimeImageIsDefault);
 
@@ -26,7 +26,7 @@ internal sealed record RustPublishImages(string BuildImage, string RuntimeImage,
 /// The default pairing is <c>rust:&lt;version&gt;-alpine</c> for the build stage and
 /// <c>alpine:&lt;version&gt;</c> for the runtime stage. Both are musl-based, so the produced binary and the
 /// runtime image share a libc by construction and there is no glibc-version skew to reason about. That is the
-/// main reason the default is Alpine rather than a Debian pair, where a binary built against a newer glibc
+/// main reason the default is a musl pair rather than a glibc one, where a binary built against a newer glibc
 /// silently fails at startup on an older runtime image.
 /// </para>
 /// <para>
@@ -39,7 +39,7 @@ internal sealed record RustPublishImages(string BuildImage, string RuntimeImage,
 internal static partial class RustPublishImageResolver
 {
     /// <summary>
-    /// The runtime image paired with the default Alpine build image. Pinned rather than <c>alpine:latest</c>
+    /// The runtime image paired with the default musl build image. Pinned rather than <c>alpine:latest</c>
     /// so a generated Dockerfile keeps producing the same image over time.
     /// </summary>
     public const string DefaultRuntimeImage = "alpine:3.22";
