@@ -6,11 +6,25 @@ const { spawnSync } = require('child_process');
 
 const CACHE_SCHEMA_VERSION = 1;
 const CACHE_MANIFEST_NAME = 'cache-manifest.json';
-const STAGING_DIRECTORY_INFIX = '-staging-';
 
-// Staging directories only exist while a populate is in flight. A crashed run leaves one
-// behind, so sweep siblings that are clearly older than any plausible in-flight download.
-const STALE_STAGING_DIRECTORY_AGE_MS = 6 * 60 * 60 * 1000;
+// Published entries are numbered generations under the key's group directory, and a generation
+// name is only ever created, never reused for different content. That is what makes every
+// deletion in this module safe: nothing a run deletes can turn out to be an entry another run
+// published in the meantime.
+const CACHE_ENTRY_NAME_PATTERN = /^entry-(\d{1,15})$/;
+const CACHE_ENTRY_GENERATION_DIGITS = 6;
+const CANDIDATE_DIRECTORY_PREFIX = 'candidate-';
+
+// A publish only ever loses to a concurrent run, and a loser either adopts the winner or moves on
+// to the next generation, so needing more than a couple of attempts means something structural is
+// wrong rather than contended.
+const MAX_PUBLISH_ATTEMPTS = 8;
+const MAX_CANDIDATE_CREATE_ATTEMPTS = 3;
+
+// Candidates only exist while a download is in flight, and a group child that is neither the
+// selected entry nor a live candidate is debris left by a crash, a race, or an older cache
+// layout. Sweep the ones that are clearly older than any plausible download or E2E run.
+const ABANDONED_GROUP_CHILD_AGE_MS = 6 * 60 * 60 * 1000;
 
 const GIT_REPOSITORY_LOCATION_ENVIRONMENT_KEYS = new Set([
   'GIT_DIR',
@@ -33,7 +47,7 @@ function resolveDownloadCacheRoot(repoRoot, environment = process.env) {
   return path.join(gitCommonDir, 'aspire-extension-e2e-cache');
 }
 
-function getDownloadCacheEntryDirectory(cacheRoot, { platform, architecture, vscodeVersion, extesterVersion }) {
+function getDownloadCacheEntryGroupDirectory(cacheRoot, { platform, architecture, vscodeVersion, extesterVersion }) {
   return path.join(
     cacheRoot,
     `v${CACHE_SCHEMA_VERSION}`,
@@ -44,100 +58,243 @@ function getDownloadCacheEntryDirectory(cacheRoot, { platform, architecture, vsc
 }
 
 /**
- * Returns the shared cache entry holding the VS Code and ChromeDriver downloads, populating it
- * first when it is missing or unusable.
+ * Returns a cache entry holding the VS Code and ChromeDriver downloads for one key, populating a
+ * new one first when none of the existing entries is usable.
  *
- * Concurrency is handled by publishing with `fs.renameSync`, which cannot overwrite a non-empty
- * directory: every run populates its own staging directory, and the first run to rename wins.
- * Runs that lose the race discard their staging copy and reuse the winner's entry. That costs a
- * duplicate download in the rare case where several runs cold-start at once, which is far cheaper
- * than a lock protocol whose failure modes (abandoned locks, half-released generations) can wedge
- * every later run until a human deletes the cache by hand.
+ * Entries are immutable and are never replaced in place. Each key owns a group directory whose
+ * children are numbered generations (`entry-000001`, `entry-000002`, ...), and a generation is
+ * published by renaming a fully populated candidate onto a name that does not exist yet. Readers
+ * take the highest generation that validates, so a corrupt entry is stepped over by publishing the
+ * next generation beside it instead of being deleted and replaced.
+ *
+ * That is what makes concurrency safe here without a lock: nothing this function deletes is
+ * shared. A run only ever removes its own candidate, which has never been visible to anyone else,
+ * or a group child that has been abandoned for hours. A run that observed a miss therefore cannot
+ * destroy an entry another run published while it was downloading -- there is no canonical path
+ * for it to overwrite, and the losing side of a publish adopts the winner.
+ *
+ * Two runs that cold-start at once still converge on a single entry. The generation a run
+ * publishes to is derived from the same directory listing that failed to produce a usable entry,
+ * so a run that cannot see an existing entry always aims at the generation that entry occupies and
+ * collides with it rather than landing beside it. That costs a duplicate download when several
+ * runs cold-start together, which is far cheaper than a lock protocol whose failure modes
+ * (abandoned locks, half-released generations) can wedge every later run until a human deletes the
+ * cache by hand.
  */
 function ensureDownloadCache(options) {
   const normalizedOptions = normalizeEnsureDownloadCacheOptions(options);
   const expectedManifest = getExpectedManifestIdentity(normalizedOptions);
-  const cacheDirectory = getDownloadCacheEntryDirectory(normalizedOptions.cacheRoot, expectedManifest);
-  const entryParentDirectory = path.dirname(cacheDirectory);
+  const groupDirectory = getDownloadCacheEntryGroupDirectory(normalizedOptions.cacheRoot, expectedManifest);
+  const cacheRootOptions = { cacheRoot: normalizedOptions.cacheRoot };
 
-  const existingManifest = tryReadCacheManifest(cacheDirectory, expectedManifest, {
-    cacheRoot: normalizedOptions.cacheRoot,
-    warnOnInvalid: true,
-  });
-  if (existingManifest) {
-    return { cacheHit: true, cacheDirectory, manifest: existingManifest };
+  const publishedEntry = selectPublishedCacheEntry(groupDirectory, expectedManifest, { ...cacheRootOptions, warnOnInvalid: true });
+  if (publishedEntry) {
+    // Sweeping on the hit path as well as the miss path matters: once a key is warm the miss path
+    // never runs again, so debris left beside the entry would otherwise stay forever.
+    sweepAbandonedGroupChildren(groupDirectory, path.basename(publishedEntry.cacheDirectory));
+    return { cacheHit: true, cacheDirectory: publishedEntry.cacheDirectory, manifest: publishedEntry.manifest };
   }
 
-  // Verify the ancestor chain before creating anything: a symlinked parent would otherwise make
-  // populate() download into, and publish through, a directory outside the cache root.
-  assertTrustedEntryAncestry(normalizedOptions.cacheRoot, cacheDirectory);
+  const candidateDirectory = createCacheEntryCandidate(normalizedOptions.cacheRoot, groupDirectory);
 
-  fs.mkdirSync(entryParentDirectory, { recursive: true });
-  sweepStaleStagingDirectories(entryParentDirectory, path.basename(cacheDirectory));
-
-  const stagingDirectory = fs.mkdtempSync(path.join(entryParentDirectory, `${path.basename(cacheDirectory)}${STAGING_DIRECTORY_INFIX}`));
-
-  let published = false;
+  let publishedCandidate = false;
   try {
-    normalizedOptions.populate(stagingDirectory);
-    pruneDownloadArchives(stagingDirectory);
+    normalizedOptions.populate(candidateDirectory);
+    pruneDownloadArchives(candidateDirectory);
 
-    const artifacts = discoverCacheArtifacts(stagingDirectory, normalizedOptions.platform, normalizedOptions.architecture);
-    writeCacheManifest(stagingDirectory, { ...expectedManifest, ...artifacts });
-    assertCacheEntryTreeIsContained(stagingDirectory);
+    const artifacts = discoverCacheArtifacts(candidateDirectory, normalizedOptions.platform, normalizedOptions.architecture);
+    assertCacheEntryTreeIsContained(candidateDirectory);
+    writeCacheManifest(candidateDirectory, { ...expectedManifest, ...artifacts });
 
-    published = tryPublishStagingDirectory(stagingDirectory, cacheDirectory);
+    const publishResult = publishCacheEntryCandidate(groupDirectory, candidateDirectory, expectedManifest, cacheRootOptions);
+    publishedCandidate = publishResult.published;
 
-    if (!published) {
-      // Losing the rename means something already occupies the entry. Re-read it now rather than
-      // acting on the stale observation from the top of this function: usually a concurrent run
-      // published a usable entry while this one was downloading, and it must be adopted, not
-      // deleted. Only an occupant that still fails validation is safe to discard, which keeps a
-      // run that merely observed a miss from destroying a later publication.
-      const occupantManifest = tryReadCacheManifest(cacheDirectory, expectedManifest, {
-        cacheRoot: normalizedOptions.cacheRoot,
-        warnOnInvalid: false,
-      });
-      if (!occupantManifest) {
-        discardUnusableCacheEntry(cacheDirectory);
-        published = tryPublishStagingDirectory(stagingDirectory, cacheDirectory);
-      }
+    if (!publishedCandidate) {
+      return { cacheHit: true, cacheDirectory: publishResult.cacheDirectory, manifest: publishResult.manifest };
     }
+
+    const manifest = readCacheManifest(publishResult.cacheDirectory, expectedManifest, cacheRootOptions);
+    return { cacheHit: false, cacheDirectory: publishResult.cacheDirectory, manifest };
   } finally {
-    if (!published) {
-      removeDirectoryBestEffort(stagingDirectory);
+    if (!publishedCandidate) {
+      // The candidate was never published, so no other run can have observed it. This is the only
+      // directory `ensureDownloadCache` deletes on the hot path, whether population failed or this
+      // run adopted somebody else's entry.
+      removeDirectoryBestEffort(candidateDirectory);
     }
   }
-
-  if (!published) {
-    // Another run published first. Its entry is equivalent, so adopt it rather than retrying.
-    const winningManifest = tryReadCacheManifest(cacheDirectory, expectedManifest, {
-      cacheRoot: normalizedOptions.cacheRoot,
-      warnOnInvalid: true,
-    });
-    if (winningManifest) {
-      return { cacheHit: true, cacheDirectory, manifest: winningManifest };
-    }
-
-    throw new Error(`Another process published an unusable E2E download cache entry at '${cacheDirectory}'. Delete it and re-run.`);
-  }
-
-  const manifest = readCacheManifest(cacheDirectory, expectedManifest, { cacheRoot: normalizedOptions.cacheRoot });
-  return { cacheHit: false, cacheDirectory, manifest };
 }
 
-function tryPublishStagingDirectory(stagingDirectory, cacheDirectory) {
+/**
+ * Renames a populated candidate onto the next unused generation, or adopts an entry another run
+ * published first.
+ *
+ * The listing that decides whether to adopt is the same listing that decides which generation to
+ * take. Re-reading the directory to pick a target would reopen the duplicate-publish window this
+ * closes: a run that has just failed to find an entry would see the winner's generation, skip past
+ * it, and publish a redundant multi-hundred-megabyte copy beside it instead of colliding with it.
+ */
+function publishCacheEntryCandidate(groupDirectory, candidateDirectory, expectedManifest, { cacheRoot }) {
+  for (let attempt = 0; attempt < MAX_PUBLISH_ATTEMPTS; attempt++) {
+    const group = readCacheEntryGroup(groupDirectory);
+
+    const adoptedEntry = selectValidCacheEntry(groupDirectory, group.entryNames, expectedManifest, { cacheRoot, warnOnInvalid: false });
+    if (adoptedEntry) {
+      return { published: false, ...adoptedEntry };
+    }
+
+    const entryDirectory = path.join(groupDirectory, formatCacheEntryName(group.highestGeneration + 1));
+    try {
+      fs.renameSync(candidateDirectory, entryDirectory);
+      return { published: true, cacheDirectory: entryDirectory, manifest: null };
+    } catch (error) {
+      // Renaming onto an existing non-empty directory fails (ENOTEMPTY on POSIX, EEXIST/EPERM on
+      // Windows), and onto a link it fails with ENOTDIR. Both mean a concurrent run took this
+      // generation, so re-read and either adopt what it published or step to the next one.
+      if (!isPublishRaceError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error(`Unable to publish an E2E download cache entry under '${groupDirectory}' after ${MAX_PUBLISH_ATTEMPTS} attempts.`);
+}
+
+function selectPublishedCacheEntry(groupDirectory, expectedManifest, { cacheRoot, warnOnInvalid }) {
+  const group = readCacheEntryGroup(groupDirectory);
+  return selectValidCacheEntry(groupDirectory, group.entryNames, expectedManifest, { cacheRoot, warnOnInvalid });
+}
+
+function selectValidCacheEntry(groupDirectory, entryNames, expectedManifest, { cacheRoot, warnOnInvalid }) {
+  for (const entryName of entryNames) {
+    const cacheDirectory = path.join(groupDirectory, entryName);
+    const manifest = tryReadCacheManifest(cacheDirectory, expectedManifest, { cacheRoot, warnOnInvalid });
+    if (manifest) {
+      return { cacheDirectory, manifest };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Lists the generations under a group directory, newest first, along with the highest generation
+ * number seen.
+ *
+ * Names that are not ordinary directories still reserve their generation number even though they
+ * cannot hold an entry. Skipping them there would make a publish aim at a name that is already
+ * taken and can never be adopted, which turns a tampered-with entry into an unrecoverable one.
+ */
+function readCacheEntryGroup(groupDirectory) {
+  let dirents;
   try {
-    fs.renameSync(stagingDirectory, cacheDirectory);
-    return true;
+    dirents = fs.readdirSync(groupDirectory, { withFileTypes: true });
   } catch (error) {
-    // rename onto an existing non-empty directory fails (ENOTEMPTY on POSIX, EEXIST/EPERM on
-    // Windows), which is exactly how a concurrent publish is detected.
-    if (isPublishRaceError(error)) {
-      return false;
+    if (error && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) {
+      return { highestGeneration: 0, entryNames: [] };
     }
 
     throw error;
+  }
+
+  let highestGeneration = 0;
+  const entries = [];
+
+  for (const dirent of dirents) {
+    const match = CACHE_ENTRY_NAME_PATTERN.exec(dirent.name);
+    if (!match) {
+      continue;
+    }
+
+    const generation = Number(match[1]);
+    highestGeneration = Math.max(highestGeneration, generation);
+
+    if (dirent.isDirectory()) {
+      entries.push({ name: dirent.name, generation });
+    }
+  }
+
+  entries.sort((left, right) => right.generation - left.generation);
+
+  return { highestGeneration, entryNames: entries.map(entry => entry.name) };
+}
+
+function formatCacheEntryName(generation) {
+  return `entry-${String(generation).padStart(CACHE_ENTRY_GENERATION_DIGITS, '0')}`;
+}
+
+function createCacheEntryCandidate(cacheRoot, groupDirectory) {
+  let lastError;
+
+  for (let attempt = 0; attempt < MAX_CANDIDATE_CREATE_ATTEMPTS; attempt++) {
+    ensureTrustedCacheEntryGroupDirectory(cacheRoot, groupDirectory);
+    sweepAbandonedGroupChildren(groupDirectory, null);
+
+    try {
+      return fs.mkdtempSync(path.join(groupDirectory, CANDIDATE_DIRECTORY_PREFIX));
+    } catch (error) {
+      // A concurrent run repairing a tampered-with group directory detaches and recreates it,
+      // which shows up here as a transient ENOENT. Rebuilding it and retrying is enough.
+      if (!error || error.code !== 'ENOENT') {
+        throw error;
+      }
+
+      lastError = error;
+    }
+  }
+
+  throw lastError;
+}
+
+/**
+ * Makes sure the group directory exists as an ordinary directory inside the cache root.
+ *
+ * Every candidate is created inside this directory, so a link or a squatting file here would send
+ * the whole download outside the cache root. Rejecting it outright would wedge the cache for
+ * everyone until a human intervened, so the offending leaf is detached instead -- never its
+ * target, and never as a recursive delete, so nothing the cache does not own can be destroyed.
+ */
+function ensureTrustedCacheEntryGroupDirectory(cacheRoot, groupDirectory) {
+  assertTrustedEntryAncestry(cacheRoot, groupDirectory);
+  detachUntrustedCacheEntryGroupDirectory(groupDirectory);
+  fs.mkdirSync(groupDirectory, { recursive: true });
+  assertTrustedCacheEntryDirectory(groupDirectory, cacheRoot);
+}
+
+function detachUntrustedCacheEntryGroupDirectory(groupDirectory) {
+  let stats;
+  try {
+    stats = fs.lstatSync(groupDirectory);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return;
+    }
+
+    throw error;
+  }
+
+  // `lstat` reports a link as a link rather than as the directory it points at, so an ordinary
+  // directory is the only case that needs nothing done to it.
+  if (stats.isDirectory()) {
+    return;
+  }
+
+  try {
+    if (stats.isSymbolicLink()) {
+      removeLink(groupDirectory);
+      return;
+    }
+
+    fs.unlinkSync(groupDirectory);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return;
+    }
+
+    // A concurrent run may have replaced the link with a real directory between the check above
+    // and this removal. Reporting the failure here would be misleading; the trust check that runs
+    // after the directory is created decides whether the result is usable.
+    writeWarning(`Unable to detach untrusted E2E download cache path '${groupDirectory}': ${describeOperationError(error)}`);
   }
 }
 
@@ -155,13 +312,13 @@ function tryPublishStagingDirectory(stagingDirectory, cacheDirectory) {
  * the driver binary reports a matching version. ExTester deletes these archives itself when run
  * with `--no_cache`, for the same reason.
  *
- * This runs against the staging directory only. A published entry is shared with concurrent runs
+ * This runs against a candidate directory only. A published entry is shared with concurrent runs
  * that are validating and reading it, so it is never mutated in place.
  */
-function pruneDownloadArchives(stagingDirectory) {
+function pruneDownloadArchives(candidateDirectory) {
   let entries;
   try {
-    entries = fs.readdirSync(stagingDirectory, { withFileTypes: true });
+    entries = fs.readdirSync(candidateDirectory, { withFileTypes: true });
   } catch (error) {
     if (error && error.code === 'ENOENT') {
       return 0;
@@ -178,7 +335,7 @@ function pruneDownloadArchives(stagingDirectory) {
       continue;
     }
 
-    const archivePath = path.join(stagingDirectory, entry.name);
+    const archivePath = path.join(candidateDirectory, entry.name);
     try {
       reclaimedBytes += fs.statSync(archivePath).size;
       fs.unlinkSync(archivePath);
@@ -197,49 +354,35 @@ function isDownloadArchiveName(name) {
   return lowerCaseName.endsWith('.zip') || lowerCaseName.endsWith('.tar.gz') || lowerCaseName.endsWith('.tgz');
 }
 
-function discardUnusableCacheEntry(cacheDirectory) {
-  if (!fs.existsSync(cacheDirectory)) {
-    return;
-  }
-
-  // Rename out of the way first so a concurrent reader never observes a partially deleted entry.
-  const discardedPath = `${cacheDirectory}.discarded-${process.pid}-${Date.now()}`;
+/**
+ * Removes group children that are neither the selected entry nor plausibly still in use.
+ *
+ * Only age decides, and only because there is nothing else to decide on: an entry directory is not
+ * touched while it is being read, so its timestamp says when it was created rather than when it
+ * was last used. Anything this old is an abandoned candidate, a redundant generation left by a
+ * cold-start race, or debris from an older cache layout, and no E2E run lives long enough to still
+ * be holding one.
+ */
+function sweepAbandonedGroupChildren(groupDirectory, selectedEntryName) {
+  let dirents;
   try {
-    fs.renameSync(cacheDirectory, discardedPath);
+    dirents = fs.readdirSync(groupDirectory, { withFileTypes: true });
   } catch (error) {
-    if (error && error.code === 'ENOENT') {
+    if (error && (error.code === 'ENOENT' || error.code === 'ENOTDIR')) {
       return;
     }
 
     throw error;
   }
 
-  removeDirectoryBestEffort(discardedPath);
-}
-
-function sweepStaleStagingDirectories(entryParentDirectory, entryLeafName) {
-  const stagingPrefix = `${entryLeafName}${STAGING_DIRECTORY_INFIX}`;
-  const discardedPrefix = `${entryLeafName}.discarded-`;
-
-  let entries;
-  try {
-    entries = fs.readdirSync(entryParentDirectory, { withFileTypes: true });
-  } catch (error) {
-    if (error && error.code === 'ENOENT') {
-      return;
-    }
-
-    throw error;
-  }
-
-  for (const entry of entries) {
-    if (!entry.name.startsWith(stagingPrefix) && !entry.name.startsWith(discardedPrefix)) {
+  for (const dirent of dirents) {
+    if (dirent.name === selectedEntryName) {
       continue;
     }
 
-    const candidatePath = path.join(entryParentDirectory, entry.name);
+    const candidatePath = path.join(groupDirectory, dirent.name);
     try {
-      if (Date.now() - fs.lstatSync(candidatePath).mtimeMs < STALE_STAGING_DIRECTORY_AGE_MS) {
+      if (Date.now() - fs.lstatSync(candidatePath).mtimeMs < ABANDONED_GROUP_CHILD_AGE_MS) {
         continue;
       }
     } catch (error) {
@@ -258,7 +401,7 @@ function removeDirectoryBestEffort(directoryPath) {
   try {
     removePathWithoutFollowingLinks(directoryPath);
   } catch (error) {
-    // Losing a staging or discarded directory is not fatal; the next sweep retries it.
+    // Losing a candidate or an abandoned generation is not fatal; the next sweep retries it.
     writeWarning(`Unable to remove '${directoryPath}': ${describeOperationError(error)}`);
   }
 }
@@ -267,15 +410,21 @@ function removeDirectoryBestEffort(directoryPath) {
  * Deletes a path, treating every link as a leaf instead of descending into its target.
  *
  * `fs.rmSync(..., { recursive: true })` descends through Windows junctions, so using it here would
- * delete data the cache does not own. Two call sites make that reachable: discarding a cache entry
- * that someone replaced with a junction wipes the junction's target, and re-projecting into a
- * storage directory deletes the previous run's junction, which points at the shared cache itself.
+ * delete data the cache does not own. Three call sites make that reachable: removing a candidate
+ * or an abandoned generation that someone replaced with a junction wipes the junction's target,
+ * re-projecting into a storage directory deletes the previous run's junction, and cleaning up a
+ * per-run temporary root deletes the junctions it was just given - all of which point at the
+ * shared cache itself.
  *
  * The walk is written by hand rather than delegating subdirectories to `fs.rmSync`, because a
  * rejected cache entry is exactly the kind of tree that contains an escaping link - that is why it
  * failed validation - and those links can sit at any depth.
+ *
+ * `maxRetries`/`retryDelay` are passed through to the individual removals so callers on Windows,
+ * where a file can stay briefly locked after the process holding it exits, get the same retry
+ * behaviour `fs.rmSync` offers.
  */
-function removePathWithoutFollowingLinks(targetPath) {
+function removePathWithoutFollowingLinks(targetPath, options = {}) {
   let stats;
   try {
     stats = fs.lstatSync(targetPath);
@@ -288,23 +437,35 @@ function removePathWithoutFollowingLinks(targetPath) {
   }
 
   if (stats.isSymbolicLink()) {
-    removeLink(targetPath);
+    removeLink(targetPath, options);
     return;
   }
 
   if (!stats.isDirectory()) {
-    fs.unlinkSync(targetPath);
+    fs.rmSync(targetPath, { force: true, ...getRemovalRetryOptions(options) });
     return;
   }
 
   for (const entry of fs.readdirSync(targetPath)) {
-    removePathWithoutFollowingLinks(path.join(targetPath, entry));
+    removePathWithoutFollowingLinks(path.join(targetPath, entry), options);
   }
 
-  fs.rmdirSync(targetPath);
+  removeEmptyDirectory(targetPath, options);
 }
 
-function removeLink(linkPath) {
+function removeEmptyDirectory(directoryPath, options) {
+  try {
+    fs.rmdirSync(directoryPath, getRemovalRetryOptions(options));
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      return;
+    }
+
+    throw error;
+  }
+}
+
+function removeLink(linkPath, options = {}) {
   try {
     fs.unlinkSync(linkPath);
   } catch (error) {
@@ -316,11 +477,15 @@ function removeLink(linkPath) {
     // on a directory and are removed with rmdir, which detaches the link without touching what it
     // points at.
     try {
-      fs.rmdirSync(linkPath);
+      fs.rmdirSync(linkPath, getRemovalRetryOptions(options));
     } catch {
       throw error;
     }
   }
+}
+
+function getRemovalRetryOptions({ maxRetries, retryDelay } = {}) {
+  return maxRetries ? { maxRetries, retryDelay } : {};
 }
 
 function normalizeEnsureDownloadCacheOptions(options) {
@@ -372,8 +537,19 @@ function getExpectedManifestIdentity(options) {
   };
 }
 
+/**
+ * Writes the manifest that turns a populated candidate into a publishable entry.
+ *
+ * The manifest is written under a temporary name and renamed into place so a reader validating a
+ * generation can never observe a half-written file. Rejecting an otherwise fine entry over a torn
+ * read would cost a needless multi-hundred-megabyte re-download.
+ */
 function writeCacheManifest(cacheDirectory, manifest) {
-  fs.writeFileSync(path.join(cacheDirectory, CACHE_MANIFEST_NAME), `${JSON.stringify(manifest, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+  // The candidate is private to this process until it is published, so a single temporary name is
+  // enough to keep this collision-free.
+  const temporaryManifestPath = path.join(cacheDirectory, `${CACHE_MANIFEST_NAME}.${process.pid}.tmp`);
+  fs.writeFileSync(temporaryManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+  fs.renameSync(temporaryManifestPath, path.join(cacheDirectory, CACHE_MANIFEST_NAME));
 }
 
 function tryReadCacheManifest(cacheDirectory, expectedManifest, { cacheRoot, warnOnInvalid }) {
@@ -516,8 +692,8 @@ function assertCacheEntryTreeIsContained(cacheDirectory, realCacheDirectory = re
 }
 
 /**
- * Rejects a cache entry whose existing ancestors are not ordinary directories inside the cache
- * root. Missing ancestors are fine; they are created during population.
+ * Rejects a cache entry group whose existing ancestors are not ordinary directories inside the
+ * cache root. Missing ancestors are fine; they are created during population.
  */
 function assertTrustedEntryAncestry(cacheRoot, cacheDirectory) {
   const realCacheRoot = resolveTrustBoundaryRootDirectory(cacheRoot);
@@ -529,11 +705,10 @@ function assertTrustedEntryAncestry(cacheRoot, cacheDirectory) {
   let candidatePath = cacheRoot;
   const segments = relativeEntryPath.split(path.sep).filter(segment => segment.length > 0);
 
-  // Only the ancestors are checked, not the entry itself. Staging directories are created in the
-  // entry's parent, so a compromised ancestor is what would redirect a download outside the cache.
-  // The entry leaf is only ever a rename target, and rename does not follow a link in its final
-  // component - it fails with ENOTDIR, which routes into the publish-race path where the link is
-  // detached and replaced. Rejecting it here instead would make a symlinked entry unrecoverable.
+  // Only the ancestors are checked here, not the group directory itself. A tampered-with group
+  // directory has to be repaired rather than reported, or one bad link would wedge every later
+  // run, so `ensureTrustedCacheEntryGroupDirectory` detaches and recreates the leaf and then
+  // validates it. Rejecting it here would take that recovery away.
   for (let index = 0; index < segments.length - 1; index++) {
     candidatePath = path.join(candidatePath, segments[index]);
     const relativeCandidatePath = path.join(...segments.slice(0, index + 1));
@@ -1017,14 +1192,16 @@ module.exports = {
   CACHE_SCHEMA_VERSION,
   CACHE_MANIFEST_NAME,
   resolveDownloadCacheRoot,
-  getDownloadCacheEntryDirectory,
+  getDownloadCacheEntryGroupDirectory,
   ensureDownloadCache,
   projectDownloadCache,
+  removePathWithoutFollowingLinks,
   __testOnly__: {
     resolveGitCommonDir,
     assertCacheEntryTreeIsContained,
     discoverCacheArtifacts,
     encodePathSegment,
+    formatCacheEntryName,
     mergeEnvironment,
   },
 };

@@ -524,4 +524,18 @@ suite('E2E launch profile', () => {
         assert.ok(populateBody.includes("'get-chromedriver', '--storage', stagingDirectory"));
         assert.ok(!populateBody.includes('--storage\', storageDir'));
     });
+
+    test('tears down the per-run root without following projections into the shared cache', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const cleanupStart = runner.indexOf('function cleanupTemporaryRunRoot()');
+        const cleanupBody = runner.slice(cleanupStart, runner.indexOf('\n}', cleanupStart));
+
+        // The run root holds junctions into the shared download cache, and recursive deletion
+        // descends junctions on Windows, so this teardown has to detach links instead.
+        assert.ok(cleanupStart >= 0);
+        assert.ok(cleanupBody.includes('removePathWithoutFollowingLinks(shortRunRoot, {'));
+        assert.ok(!cleanupBody.includes('removePath(shortRunRoot'));
+        assert.ok(!cleanupBody.includes('fs.rmSync('));
+    });
 });

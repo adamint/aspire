@@ -73,7 +73,7 @@ const cache = require(path.join(extensionRoot, 'scripts', 'e2e-download-cache.js
     CACHE_SCHEMA_VERSION: number;
     CACHE_MANIFEST_NAME: string;
     resolveDownloadCacheRoot(repoRoot: string, environment?: NodeJS.ProcessEnv): string;
-    getDownloadCacheEntryDirectory(cacheRoot: string, options: {
+    getDownloadCacheEntryGroupDirectory(cacheRoot: string, options: {
         platform: NodeJS.Platform;
         architecture: string;
         vscodeVersion: string;
@@ -81,6 +81,7 @@ const cache = require(path.join(extensionRoot, 'scripts', 'e2e-download-cache.js
     }): string;
     ensureDownloadCache(options: EnsureDownloadCacheOptions): EnsureDownloadCacheResult;
     projectDownloadCache(result: EnsureDownloadCacheResult, storageDirectory: string): void;
+    removePathWithoutFollowingLinks(targetPath: string, options?: { maxRetries?: number; retryDelay?: number }): void;
     __testOnly__?: {
         resolveGitCommonDir(repoRoot: string, gitRunner?: GitRunner, environment?: NodeJS.ProcessEnv, platform?: NodeJS.Platform): string;
         assertCacheEntryTreeIsContained(cacheDirectory: string): void;
@@ -90,9 +91,29 @@ const cache = require(path.join(extensionRoot, 'scripts', 'e2e-download-cache.js
             chromeDriverBinary: string;
         };
         encodePathSegment(value: string): string;
+        formatCacheEntryName(generation: number): string;
         mergeEnvironment(baseEnvironment: NodeJS.ProcessEnv, overrideEnvironment: NodeJS.ProcessEnv, platform?: NodeJS.Platform): NodeJS.ProcessEnv;
     };
 };
+
+const defaultCacheKey = {
+    platform: 'linux',
+    architecture: 'x64',
+    vscodeVersion: '1.122.1',
+    extesterVersion: '8.23.0',
+} as const;
+
+function getDefaultGroupDirectory(cacheRoot: string): string {
+    return cache.getDownloadCacheEntryGroupDirectory(cacheRoot, { ...defaultCacheKey });
+}
+
+function getCacheEntryName(generation: number): string {
+    return cache.__testOnly__!.formatCacheEntryName(generation);
+}
+
+function getCacheEntryDirectory(groupDirectory: string, generation: number): string {
+    return path.join(groupDirectory, getCacheEntryName(generation));
+}
 
 function withEnvironment(overrides: NodeJS.ProcessEnv, callback: () => void): void {
     const previousValues = new Map<string, string | undefined>();
@@ -330,27 +351,28 @@ function readManifest(cacheDirectory: string): CacheManifest {
 }
 
 
-function getEntrySiblingNames(entryDirectory: string, prefix: string): string[] {
-    const entryParentDirectory = path.dirname(entryDirectory);
-    if (!fs.existsSync(entryParentDirectory)) {
+function getGroupChildNames(groupDirectory: string): string[] {
+    if (!fs.existsSync(groupDirectory)) {
         return [];
     }
 
-    return fs.readdirSync(entryParentDirectory)
-        .filter((entry) => entry.startsWith(prefix))
-        .sort();
+    return fs.readdirSync(groupDirectory).sort();
 }
 
-function getStagingSiblingNames(entryDirectory: string): string[] {
-    return getEntrySiblingNames(entryDirectory, `${path.basename(entryDirectory)}-staging-`);
+function getPublishedEntryNames(groupDirectory: string): string[] {
+    return getGroupChildNames(groupDirectory).filter((name) => /^entry-\d+$/.test(name));
 }
 
-function getDiscardedSiblingNames(entryDirectory: string): string[] {
-    return getEntrySiblingNames(entryDirectory, `${path.basename(entryDirectory)}.discarded-`);
+function getCandidateNames(groupDirectory: string): string[] {
+    return getGroupChildNames(groupDirectory).filter((name) => name.startsWith('candidate-'));
 }
 
-function assertNoStagingSiblings(entryDirectory: string): void {
-    assert.deepStrictEqual(getStagingSiblingNames(entryDirectory), []);
+function assertNoCandidates(groupDirectory: string): void {
+    assert.deepStrictEqual(getCandidateNames(groupDirectory), []);
+}
+
+function assertNoCandidateSiblings(entryDirectory: string): void {
+    assertNoCandidates(path.dirname(entryDirectory));
 }
 
 async function waitForPaths(pathsToCheck: string[], timeoutMs: number): Promise<void> {
@@ -741,27 +763,28 @@ suite('E2E download cache', () => {
             'assertCacheEntryTreeIsContained',
             'discoverCacheArtifacts',
             'encodePathSegment',
+            'formatCacheEntryName',
             'mergeEnvironment',
             'resolveGitCommonDir',
         ]);
     });
 
     test('partitions cache entries by schema, platform, architecture, version, and sanitizes unsafe characters', () => {
-        const entryDirectory = cache.getDownloadCacheEntryDirectory('/cache-root', {
+        const entryDirectory = cache.getDownloadCacheEntryGroupDirectory('/cache-root', {
             platform: 'win32',
             architecture: 'arm64',
             vscodeVersion: '1.122.1/insiders',
             extesterVersion: '8.23.0/alpha',
         });
 
-        const slashVersionDirectory = cache.getDownloadCacheEntryDirectory('/cache-root', {
+        const slashVersionDirectory = cache.getDownloadCacheEntryGroupDirectory('/cache-root', {
             platform: 'win32',
             architecture: 'arm64',
             vscodeVersion: '1/2',
             extesterVersion: '8.23.0/alpha',
         });
 
-        const tildeVersionDirectory = cache.getDownloadCacheEntryDirectory('/cache-root', {
+        const tildeVersionDirectory = cache.getDownloadCacheEntryGroupDirectory('/cache-root', {
             platform: 'win32',
             architecture: 'arm64',
             vscodeVersion: '1~2f~2',
@@ -775,14 +798,14 @@ suite('E2E download cache', () => {
     });
 
     test('keeps cache directories distinct after lowercasing uppercase VS Code versions', () => {
-        const uppercaseVersionDirectory = cache.getDownloadCacheEntryDirectory('/cache-root', {
+        const uppercaseVersionDirectory = cache.getDownloadCacheEntryGroupDirectory('/cache-root', {
             platform: 'win32',
             architecture: 'arm64',
             vscodeVersion: '1.2.3-Beta',
             extesterVersion: '8.23.0/alpha',
         });
 
-        const lowercaseVersionDirectory = cache.getDownloadCacheEntryDirectory('/cache-root', {
+        const lowercaseVersionDirectory = cache.getDownloadCacheEntryGroupDirectory('/cache-root', {
             platform: 'win32',
             architecture: 'arm64',
             vscodeVersion: '1.2.3-beta',
@@ -796,12 +819,8 @@ suite('E2E download cache', () => {
     test('populates the cache once and reuses the immutable entry on subsequent calls', () => {
         const root = createTestRoot('cache-hit');
         const cacheRoot = path.join(root, 'cache');
-        const expectedCacheDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
-        });
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const expectedCacheDirectory = getCacheEntryDirectory(groupDirectory, 1);
         let populateCalls = 0;
 
         const firstResult = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
@@ -832,6 +851,7 @@ suite('E2E download cache', () => {
         assert.deepStrictEqual(readManifest(expectedCacheDirectory), firstResult.manifest);
         assert.strictEqual(fs.existsSync(path.join(expectedCacheDirectory, 'vscode-download.zip')), false);
         assert.strictEqual(fs.existsSync(path.join(expectedCacheDirectory, 'chromedriver-download.tgz')), false);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), [getCacheEntryName(1)]);
     });
 
     test('removes downloaded archives from the published entry but keeps everything else', () => {
@@ -870,12 +890,8 @@ suite('E2E download cache', () => {
     test('adopts an entry published while this run was downloading instead of discarding it', () => {
         const root = createTestRoot('publish-after-miss');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
-        });
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const winnerDirectory = getCacheEntryDirectory(groupDirectory, 1);
         let populateCalls = 0;
 
         // This run observes a miss and only then does a concurrent run publish. Acting on the
@@ -887,11 +903,8 @@ suite('E2E download cache', () => {
                     platform: 'linux',
                     architecture: 'x64',
                 });
-                publishValidCacheEntry(entryDirectory, {
-                    platform: 'linux',
-                    architecture: 'x64',
-                    vscodeVersion: '1.122.1',
-                    extesterVersion: '8.23.0',
+                publishValidCacheEntry(winnerDirectory, {
+                    ...defaultCacheKey,
                     markerFileName: 'winner.txt',
                 });
             },
@@ -899,11 +912,10 @@ suite('E2E download cache', () => {
 
         assert.strictEqual(populateCalls, 1);
         assert.strictEqual(result.cacheHit, true);
-        assert.strictEqual(result.cacheDirectory, entryDirectory);
-        assert.strictEqual(fs.readFileSync(path.join(entryDirectory, 'winner.txt'), 'utf8'), 'winner.txt');
-        assert.deepStrictEqual(readManifest(entryDirectory), result.manifest);
-        assertNoStagingSiblings(entryDirectory);
-        assert.deepStrictEqual(getDiscardedSiblingNames(entryDirectory), []);
+        assert.strictEqual(result.cacheDirectory, winnerDirectory);
+        assert.strictEqual(fs.readFileSync(path.join(winnerDirectory, 'winner.txt'), 'utf8'), 'winner.txt');
+        assert.deepStrictEqual(readManifest(winnerDirectory), result.manifest);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), [getCacheEntryName(1)]);
     });
 
     test('re-projecting into the same storage directory leaves the shared cache intact', () => {
@@ -970,74 +982,61 @@ suite('E2E download cache', () => {
         const cacheHits = results.map((result) => result.cacheHit).sort((left, right) => Number(left) - Number(right));
         const publishedEntryDirectory = results[0].cacheDirectory;
 
-        // Rename-wins may duplicate cold-start download work; the invariant is one durable winner.
+        // Publishing immutable generations may duplicate cold-start download work; the invariant
+        // is that the group converges on a single durable entry.
         assert.strictEqual(populationCount >= 1 && populationCount <= 2, true);
         assert.deepStrictEqual(cacheHits, [false, true]);
         assert.deepStrictEqual(results.map((result) => result.cacheDirectory), [publishedEntryDirectory, publishedEntryDirectory]);
         assert.deepStrictEqual(results.map((result) => result.manifest), [results[0].manifest, results[0].manifest]);
         assert.deepStrictEqual(readManifest(publishedEntryDirectory), results[0].manifest);
-        assert.deepStrictEqual(fs.readdirSync(path.dirname(publishedEntryDirectory)).filter((entry) => entry === path.basename(publishedEntryDirectory)), [path.basename(publishedEntryDirectory)]);
-        assertNoStagingSiblings(publishedEntryDirectory);
+        assert.deepStrictEqual(getGroupChildNames(path.dirname(publishedEntryDirectory)), [path.basename(publishedEntryDirectory)]);
     });
 
-    test('publish race loser adopts the winner', () => {
-        const root = createTestRoot('publish-race-adopts-winner');
+    test('reuses the highest valid generation and steps over a newer unusable one', () => {
+        const root = createTestRoot('highest-valid-generation');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+
+        publishValidCacheEntry(getCacheEntryDirectory(groupDirectory, 1), {
+            ...defaultCacheKey,
+            markerFileName: 'usable.txt',
+        });
+
+        // A newer generation that never got a manifest must not wedge the cache: selection falls
+        // back to the newest generation that actually validates.
+        populateFakeDownload(getCacheEntryDirectory(groupDirectory, 2), {
             platform: 'linux',
             architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
         });
 
         const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
-            populate(stagingDirectory) {
-                const winnerStagingDirectory = fs.mkdtempSync(path.join(path.dirname(entryDirectory), `${path.basename(entryDirectory)}-staging-winner-`));
-                publishValidCacheEntry(winnerStagingDirectory, {
-                    platform: 'linux',
-                    architecture: 'x64',
-                    vscodeVersion: '1.122.1',
-                    extesterVersion: '8.23.0',
-                    markerFileName: 'winner-marker.txt',
-                });
-                fs.renameSync(winnerStagingDirectory, entryDirectory);
-
-                populateFakeDownload(stagingDirectory, {
-                    platform: 'linux',
-                    architecture: 'x64',
-                });
-                writeFile(path.join(stagingDirectory, 'loser-marker.txt'), 'loser');
+            populate() {
+                throw new Error('populate should not run when an older generation is usable');
             },
         }));
 
         assert.strictEqual(result.cacheHit, true);
-        assert.strictEqual(fs.readFileSync(path.join(result.cacheDirectory, 'winner-marker.txt'), 'utf8'), 'winner-marker.txt');
-        assert.strictEqual(fs.existsSync(path.join(result.cacheDirectory, 'loser-marker.txt')), false);
-        assert.deepStrictEqual(readManifest(result.cacheDirectory), result.manifest);
-        assertNoStagingSiblings(entryDirectory);
+        assert.strictEqual(result.cacheDirectory, getCacheEntryDirectory(groupDirectory, 1));
+        assert.strictEqual(fs.readFileSync(path.join(result.cacheDirectory, 'usable.txt'), 'utf8'), 'usable.txt');
+        assert.deepStrictEqual(getPublishedEntryNames(groupDirectory), [getCacheEntryName(1), getCacheEntryName(2)]);
     });
 
-    test('replaces an unusable published entry instead of failing every later run', () => {
+    test('publishes a new generation beside an unusable entry instead of deleting it', () => {
         const root = createTestRoot('publish-race-invalid-winner');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
-        });
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const unusableDirectory = getCacheEntryDirectory(groupDirectory, 1);
 
-        // The winner publishes a manifest-less entry, so it can never be adopted. Leaving it in
-        // place would fail this run and every run after it, which is the wedge the rename-wins
-        // design exists to avoid, so the unusable occupant is discarded and replaced.
+        // The concurrent run publishes a manifest-less entry, so it can never be adopted. Deleting
+        // it would mean acting on state this run last observed before it started downloading, so
+        // the replacement is published as the next generation and the occupant is left alone.
         const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
             populate(stagingDirectory) {
-                const winnerStagingDirectory = fs.mkdtempSync(path.join(path.dirname(entryDirectory), `${path.basename(entryDirectory)}-staging-invalid-winner-`));
-                populateFakeDownload(winnerStagingDirectory, {
+                populateFakeDownload(unusableDirectory, {
                     platform: 'linux',
                     architecture: 'x64',
                 });
-                fs.renameSync(winnerStagingDirectory, entryDirectory);
+                writeFile(path.join(unusableDirectory, 'unusable-marker.txt'), 'unusable');
 
                 populateFakeDownload(stagingDirectory, {
                     platform: 'linux',
@@ -1047,21 +1046,16 @@ suite('E2E download cache', () => {
         }));
 
         assert.strictEqual(result.cacheHit, false);
-        assert.strictEqual(result.cacheDirectory, entryDirectory);
-        assert.deepStrictEqual(readManifest(entryDirectory), result.manifest);
-        assertNoStagingSiblings(entryDirectory);
-        assert.deepStrictEqual(getDiscardedSiblingNames(entryDirectory), []);
+        assert.strictEqual(result.cacheDirectory, getCacheEntryDirectory(groupDirectory, 2));
+        assert.deepStrictEqual(readManifest(result.cacheDirectory), result.manifest);
+        assert.strictEqual(fs.readFileSync(path.join(unusableDirectory, 'unusable-marker.txt'), 'utf8'), 'unusable');
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), [getCacheEntryName(1), getCacheEntryName(2)]);
     });
 
     test('recovers from repeated population crashes without wedging the cache entry', () => {
         const root = createTestRoot('crash-resilience');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
-        });
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
         let populateCalls = 0;
 
         const options = getDefaultCacheOptions(cacheRoot, {
@@ -1080,27 +1074,23 @@ suite('E2E download cache', () => {
         });
 
         assert.throws(() => cache.ensureDownloadCache(options), /synthetic populate crash 1/);
-        assertNoStagingSiblings(entryDirectory);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), []);
         assert.throws(() => cache.ensureDownloadCache(options), /synthetic populate crash 2/);
-        assertNoStagingSiblings(entryDirectory);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), []);
 
         const result = cache.ensureDownloadCache(options);
 
         assert.strictEqual(result.cacheHit, false);
         assert.strictEqual(populateCalls, 3);
+        assert.strictEqual(result.cacheDirectory, getCacheEntryDirectory(groupDirectory, 1));
         assert.deepStrictEqual(readManifest(result.cacheDirectory), result.manifest);
-        assertNoStagingSiblings(entryDirectory);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), [getCacheEntryName(1)]);
     });
 
     test('rejects a deep non-manifest symlink that escapes the cache entry', () => {
         const root = createTestRoot('deep-escaping-symlink');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
-        });
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
         const externalTargetPath = path.join(root, 'external-target.txt');
         writeFile(externalTargetPath, 'external content');
 
@@ -1117,19 +1107,13 @@ suite('E2E download cache', () => {
         })), /escapes it/);
 
         assert.strictEqual(fs.readFileSync(externalTargetPath, 'utf8'), 'external content');
-        assert.strictEqual(fs.existsSync(entryDirectory), false);
-        assertNoStagingSiblings(entryDirectory);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), []);
     });
 
     test('rejects a deep non-manifest hard-linked file reachable from outside the cache entry', () => {
         const root = createTestRoot('deep-hard-link');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
-        });
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
         const externalTargetPath = path.join(root, 'external-hard-link-target.txt');
         writeFile(externalTargetPath, 'external content');
 
@@ -1145,8 +1129,7 @@ suite('E2E download cache', () => {
         })), /hard-linked file reachable from outside it/);
 
         assert.strictEqual(fs.readFileSync(externalTargetPath, 'utf8'), 'external content');
-        assert.strictEqual(fs.existsSync(entryDirectory), false);
-        assertNoStagingSiblings(entryDirectory);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), []);
     });
 
     test('accepts an internal deep symlink inside the cache entry', () => {
@@ -1173,24 +1156,19 @@ suite('E2E download cache', () => {
         assert.strictEqual(result.cacheHit, false);
         assert.strictEqual(fs.realpathSync(linkPath), fs.realpathSync(targetPath));
         assert.strictEqual(fs.readFileSync(linkPath, 'utf8'), 'internal content');
-        assertNoStagingSiblings(result.cacheDirectory);
+        assertNoCandidateSiblings(result.cacheDirectory);
     });
 
-    test('removes stale staging siblings while preserving recent staging siblings', () => {
-        const root = createTestRoot('stale-staging-sweep');
+    test('removes abandoned group children while preserving recent ones', () => {
+        const root = createTestRoot('abandoned-child-sweep');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
-        });
-        const staleStagingDirectory = path.join(path.dirname(entryDirectory), `${path.basename(entryDirectory)}-staging-old`);
-        const recentStagingDirectory = path.join(path.dirname(entryDirectory), `${path.basename(entryDirectory)}-staging-recent`);
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const abandonedCandidateDirectory = path.join(groupDirectory, 'candidate-old');
+        const recentCandidateDirectory = path.join(groupDirectory, 'candidate-recent');
 
-        fs.mkdirSync(staleStagingDirectory, { recursive: true });
-        fs.mkdirSync(recentStagingDirectory, { recursive: true });
-        setPathModifiedTime(staleStagingDirectory, new Date(Date.now() - 7 * 60 * 60 * 1000));
+        fs.mkdirSync(abandonedCandidateDirectory, { recursive: true });
+        fs.mkdirSync(recentCandidateDirectory, { recursive: true });
+        setPathModifiedTime(abandonedCandidateDirectory, new Date(Date.now() - 7 * 60 * 60 * 1000));
 
         const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
             populate(stagingDirectory) {
@@ -1202,24 +1180,77 @@ suite('E2E download cache', () => {
         }));
 
         assert.strictEqual(result.cacheHit, false);
-        assert.strictEqual(fs.existsSync(staleStagingDirectory), false);
-        assert.strictEqual(fs.existsSync(recentStagingDirectory), true);
-        assert.deepStrictEqual(getStagingSiblingNames(entryDirectory), [path.basename(recentStagingDirectory)]);
+        assert.strictEqual(fs.existsSync(abandonedCandidateDirectory), false);
+        assert.strictEqual(fs.existsSync(recentCandidateDirectory), true);
+        assert.deepStrictEqual(getCandidateNames(groupDirectory), [path.basename(recentCandidateDirectory)]);
     });
 
-    test('discards unusable pre-existing entries and repopulates the cache', () => {
-        const root = createTestRoot('discard-unusable-entry');
+    test('sweeps abandoned group children on a cache hit without touching the selected entry', () => {
+        const root = createTestRoot('cache-hit-sweep');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const selectedEntryDirectory = getCacheEntryDirectory(groupDirectory, 1);
+        const abandonedEntryDirectory = getCacheEntryDirectory(groupDirectory, 2);
+        const abandonedCandidateDirectory = path.join(groupDirectory, 'candidate-old');
+
+        publishValidCacheEntry(selectedEntryDirectory, {
+            ...defaultCacheKey,
+            markerFileName: 'selected.txt',
         });
+        fs.mkdirSync(abandonedEntryDirectory, { recursive: true });
+        fs.mkdirSync(abandonedCandidateDirectory, { recursive: true });
+
+        // Once a key is warm the miss path never runs again, so debris is only ever reclaimed by
+        // the hit path. Age gating is what keeps this from racing a run that is still downloading.
+        const staleTime = new Date(Date.now() - 7 * 60 * 60 * 1000);
+        setPathModifiedTime(selectedEntryDirectory, staleTime);
+        setPathModifiedTime(abandonedEntryDirectory, staleTime);
+        setPathModifiedTime(abandonedCandidateDirectory, staleTime);
+
+        const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate() {
+                throw new Error('populate should not run on a cache hit');
+            },
+        }));
+
+        assert.strictEqual(result.cacheHit, true);
+        assert.strictEqual(result.cacheDirectory, selectedEntryDirectory);
+        assert.strictEqual(fs.readFileSync(path.join(selectedEntryDirectory, 'selected.txt'), 'utf8'), 'selected.txt');
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), [getCacheEntryName(1)]);
+    });
+
+    test('never deletes an entry published after this run observed a miss', () => {
+        const root = createTestRoot('no-delete-after-stale-miss');
+        const cacheRoot = path.join(root, 'cache');
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const winnerDirectory = getCacheEntryDirectory(groupDirectory, 1);
+
+        // The publish arrives after this run decided it had a miss, and the entry it publishes is
+        // deliberately unusable so no code path can mistake it for something worth adopting. It
+        // still has to survive: this run only ever gets to delete its own candidate.
+        cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
+            populate(stagingDirectory) {
+                populateFakeDownload(stagingDirectory, {
+                    platform: 'linux',
+                    architecture: 'x64',
+                });
+                fs.mkdirSync(winnerDirectory, { recursive: true });
+                writeFile(path.join(winnerDirectory, 'winner.txt'), 'winner');
+            },
+        }));
+
+        assert.strictEqual(fs.readFileSync(path.join(winnerDirectory, 'winner.txt'), 'utf8'), 'winner');
+    });
+
+    test('ignores an unusable pre-existing entry and publishes a new generation', () => {
+        const root = createTestRoot('unusable-pre-existing-entry');
+        const cacheRoot = path.join(root, 'cache');
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const unusableDirectory = getCacheEntryDirectory(groupDirectory, 1);
         let populateCalls = 0;
 
-        fs.mkdirSync(entryDirectory, { recursive: true });
-        writeFile(path.join(entryDirectory, 'old-marker.txt'), 'old corrupt entry');
+        fs.mkdirSync(unusableDirectory, { recursive: true });
+        writeFile(path.join(unusableDirectory, 'old-marker.txt'), 'old corrupt entry');
 
         const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
             populate(stagingDirectory) {
@@ -1233,21 +1264,16 @@ suite('E2E download cache', () => {
 
         assert.strictEqual(result.cacheHit, false);
         assert.strictEqual(populateCalls, 1);
+        assert.strictEqual(result.cacheDirectory, getCacheEntryDirectory(groupDirectory, 2));
         assert.strictEqual(fs.existsSync(path.join(result.cacheDirectory, 'old-marker.txt')), false);
         assert.deepStrictEqual(readManifest(result.cacheDirectory), result.manifest);
-        assert.deepStrictEqual(getDiscardedSiblingNames(entryDirectory), []);
-        assertNoStagingSiblings(entryDirectory);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), [getCacheEntryName(1), getCacheEntryName(2)]);
     });
 
-    test('cleans up staging directories when population fails', () => {
+    test('cleans up the candidate directory when population fails', () => {
         const root = createTestRoot('populate-failure');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
-        });
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
 
         assert.throws(() => cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
             populate(stagingDirectory) {
@@ -1256,19 +1282,14 @@ suite('E2E download cache', () => {
             },
         })), /populate failed/);
 
-        assert.strictEqual(fs.existsSync(entryDirectory), false);
-        assertNoStagingSiblings(entryDirectory);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), []);
     });
 
     test('rejects incomplete manifests and repopulates the cache entry', () => {
         const root = createTestRoot('corrupt-manifest');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
-        });
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const entryDirectory = getCacheEntryDirectory(groupDirectory, 1);
         let populateCalls = 0;
 
         fs.mkdirSync(entryDirectory, { recursive: true });
@@ -1309,12 +1330,8 @@ suite('E2E download cache', () => {
     test('rejects linked cached artifacts and repopulates the cache entry', () => {
         const root = createTestRoot('linked-artifacts');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
-        });
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const entryDirectory = getCacheEntryDirectory(groupDirectory, 1);
         const escapedArtifactsRoot = path.join(root, 'escaped-artifacts');
         const escapedArtifacts = populateFakeDownload(escapedArtifactsRoot, {
             platform: 'linux',
@@ -1355,24 +1372,21 @@ suite('E2E download cache', () => {
         assert.deepStrictEqual(readManifest(result.cacheDirectory), result.manifest);
     });
 
-    test('rejects cache-entry directory symlinks on cache hits and replaces only the local link', () => {
+    test('rejects a symlinked cache entry group and replaces only the local link', () => {
         const root = createTestRoot('linked-cache-entry');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
-        });
-        const externalEntry = path.join(root, 'external-cache-entry');
-        const externalArtifacts = populateFakeDownload(externalEntry, {
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const externalGroup = path.join(root, 'external-cache-entry');
+        const externalArtifacts = populateFakeDownload(path.join(externalGroup, 'entry-000001'), {
             platform: 'linux',
             architecture: 'x64',
         });
-        const externalSentinelPath = path.join(externalEntry, 'external-sentinel.txt');
+        const externalSentinelPath = path.join(externalGroup, 'external-sentinel.txt');
         let populateCalls = 0;
 
-        writeFile(path.join(externalEntry, cache.CACHE_MANIFEST_NAME), JSON.stringify({
+        // Candidates are created inside the group with mkdtemp, so a symlinked group would send
+        // hundreds of megabytes of downloads outside the cache root.
+        writeFile(path.join(externalGroup, 'entry-000001', cache.CACHE_MANIFEST_NAME), JSON.stringify({
             schemaVersion: cache.CACHE_SCHEMA_VERSION,
             platform: 'linux',
             architecture: 'x64',
@@ -1383,7 +1397,7 @@ suite('E2E download cache', () => {
             chromeDriverBinary: externalArtifacts.chromeDriverBinary,
         }, null, 2));
         writeFile(externalSentinelPath, 'leave external entry alone');
-        createDirectoryLink(entryDirectory, externalEntry);
+        createDirectoryLink(groupDirectory, externalGroup);
 
         const result = cache.ensureDownloadCache(getDefaultCacheOptions(cacheRoot, {
             populate(stagingDirectory) {
@@ -1397,20 +1411,19 @@ suite('E2E download cache', () => {
 
         assert.strictEqual(populateCalls, 1);
         assert.strictEqual(result.cacheHit, false);
-        assert.strictEqual(fs.lstatSync(entryDirectory).isSymbolicLink(), false);
+        assert.strictEqual(fs.lstatSync(groupDirectory).isSymbolicLink(), false);
+        assert.strictEqual(result.cacheDirectory, getCacheEntryDirectory(groupDirectory, 1));
         assert.strictEqual(fs.readFileSync(externalSentinelPath, 'utf8'), 'leave external entry alone');
+        assert.ok(fs.existsSync(path.join(externalGroup, 'entry-000001', cache.CACHE_MANIFEST_NAME)));
         assert.deepStrictEqual(readManifest(result.cacheDirectory), result.manifest);
+        assert.deepStrictEqual(getGroupChildNames(groupDirectory), [getCacheEntryName(1)]);
     });
 
     test('rejects symlinked intermediate cache-entry parents before population and keeps external data untouched', () => {
         const root = createTestRoot('linked-entry-parent');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
-        });
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const entryDirectory = getCacheEntryDirectory(groupDirectory, 1);
         const linkedPlatformParent = path.join(cacheRoot, 'v1', 'linux-x64');
         const externalPlatformParent = path.join(root, 'external-platform-parent');
         const externalSentinelPath = path.join(externalPlatformParent, 'external-sentinel.txt');
@@ -1434,18 +1447,14 @@ suite('E2E download cache', () => {
         assert.strictEqual(fs.lstatSync(linkedPlatformParent).isSymbolicLink(), true);
         assert.strictEqual(fs.readFileSync(externalSentinelPath, 'utf8'), 'leave platform parent alone');
         assert.strictEqual(fs.existsSync(path.join(externalPlatformParent, 'vscode-1.122.1')), false);
-        assertNoStagingSiblings(entryDirectory);
+        assertNoCandidateSiblings(entryDirectory);
     });
 
     test('rejects linked cache manifests on cache hits and keeps external sentinel content untouched', () => {
         const root = createTestRoot('linked-cache-manifest');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
-        });
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const entryDirectory = getCacheEntryDirectory(groupDirectory, 1);
         const externalManifestPath = path.join(root, process.platform === 'win32' ? 'external-manifest-hardlink.json' : 'external-manifest-symlink-target.json');
         const sentinelContent = JSON.stringify({
             schemaVersion: cache.CACHE_SCHEMA_VERSION,
@@ -1487,12 +1496,8 @@ suite('E2E download cache', () => {
     test('rejects hard-linked VS Code executables on cache hits and keeps the external sentinel content untouched', () => {
         const root = createTestRoot('hard-linked-vscode-executable');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
-        });
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const entryDirectory = getCacheEntryDirectory(groupDirectory, 1);
         const externalExecutablePath = path.join(root, 'external-vscode-executable');
         const vscodeExecutableRelativePath = getVsCodeExecutableRelativePath('linux', 'x64');
         const vscodeExecutablePath = path.join(entryDirectory, vscodeExecutableRelativePath);
@@ -1528,12 +1533,8 @@ suite('E2E download cache', () => {
     test('rejects hard-linked ChromeDriver binaries on cache hits and keeps the external sentinel content untouched', () => {
         const root = createTestRoot('hard-linked-chromedriver');
         const cacheRoot = path.join(root, 'cache');
-        const entryDirectory = cache.getDownloadCacheEntryDirectory(cacheRoot, {
-            platform: 'linux',
-            architecture: 'x64',
-            vscodeVersion: '1.122.1',
-            extesterVersion: '8.23.0',
-        });
+        const groupDirectory = getDefaultGroupDirectory(cacheRoot);
+        const entryDirectory = getCacheEntryDirectory(groupDirectory, 1);
         const externalChromeDriverPath = path.join(root, 'external-chromedriver');
         const chromeDriverBinaryPath = path.join(entryDirectory, 'chromedriver-linux-x64', 'chromedriver');
         let populateCalls = 0;
@@ -1649,8 +1650,31 @@ suite('E2E download cache', () => {
         assert.ok(!fs.existsSync(path.join(storageDirectory, cache.CACHE_MANIFEST_NAME)));
     });
 
-    test('replaces stale projected entries so a reused storage directory tracks the cache', () => {
-        const root = createTestRoot('replaces-stale-projection');
+    test('removes a projected run root without following links into the shared cache', () => {
+        const root = createTestRoot('link-safe-run-root-cleanup');
+        const result = cache.ensureDownloadCache(getDefaultCacheOptions(path.join(root, 'cache'), {
+            populate(stagingDirectory) {
+                populateFakeDownload(stagingDirectory, { platform: 'linux', architecture: 'x64' });
+            },
+        }));
+        const runRoot = path.join(root, 'run-root');
+        const storageDirectory = path.join(runRoot, 'storage');
+
+        cache.projectDownloadCache(result, storageDirectory);
+        writeFile(path.join(storageDirectory, 'settings', 'User', 'settings.json'), '{}');
+        writeFile(path.join(runRoot, 'extensions', 'marker.txt'), 'extension');
+
+        // Recursive deletion descends junctions on Windows, so tearing the run root down that way
+        // would take the shared cache with it.
+        cache.removePathWithoutFollowingLinks(runRoot);
+
+        assert.strictEqual(fs.existsSync(runRoot), false);
+        assert.ok(fs.existsSync(path.join(result.cacheDirectory, result.manifest.vscodeDirectory)));
+        assert.ok(fs.existsSync(path.join(result.cacheDirectory, result.manifest.chromeDriverBinary)));
+        assert.deepStrictEqual(readManifest(result.cacheDirectory), result.manifest);
+    });
+
+    test('replaces stale projected entries so a reused storage directory tracks the cache', () => {        const root = createTestRoot('replaces-stale-projection');
         const result = cache.ensureDownloadCache(getDefaultCacheOptions(path.join(root, 'cache'), {
             populate(stagingDirectory) {
                 populateFakeDownload(stagingDirectory, { platform: 'linux', architecture: 'x64' });

@@ -8,6 +8,7 @@ const { spawn, spawnSync } = require('child_process');
 const {
   ensureDownloadCache,
   projectDownloadCache,
+  removePathWithoutFollowingLinks,
   resolveDownloadCacheRoot,
 } = require('./e2e-download-cache');
 
@@ -1494,7 +1495,24 @@ function cleanupTemporaryRunRoot() {
     return;
   }
 
-  removePath(shortRunRoot, { recursive: true, force: true, warnOnWindowsLock: true });
+  // The storage directory under this root holds the projected VS Code and ChromeDriver artifacts,
+  // which are junctions on Windows, and recursive removal descends junctions there. Tearing this
+  // tree down recursively would delete the shared download cache every other run depends on, so
+  // remove it link by link and detach those projections instead of following them.
+  try {
+    removePathWithoutFollowingLinks(shortRunRoot, {
+      maxRetries: process.platform === 'win32' ? 20 : 0,
+      retryDelay: 250,
+    });
+  }
+  catch (error) {
+    if (process.platform === 'win32' && isRetryableWindowsFileLock(error)) {
+      console.warn(`Warning: unable to remove locked E2E path '${shortRunRoot}': ${error.message}`);
+      return;
+    }
+
+    throw error;
+  }
 }
 
 function sanitizePathSegment(value) {
@@ -1502,22 +1520,11 @@ function sanitizePathSegment(value) {
 }
 
 function removePath(targetPath, options = {}) {
-  const { warnOnWindowsLock, ...rmOptions } = options;
-  try {
-    fs.rmSync(targetPath, {
-      maxRetries: process.platform === 'win32' ? 20 : 0,
-      retryDelay: 250,
-      ...rmOptions,
-    });
-  }
-  catch (error) {
-    if (warnOnWindowsLock && process.platform === 'win32' && isRetryableWindowsFileLock(error)) {
-      console.warn(`Warning: unable to remove locked E2E path '${targetPath}': ${error.message}`);
-      return;
-    }
-
-    throw error;
-  }
+  fs.rmSync(targetPath, {
+    maxRetries: process.platform === 'win32' ? 20 : 0,
+    retryDelay: 250,
+    ...options,
+  });
 }
 
 function isRetryableWindowsFileLock(error) {
