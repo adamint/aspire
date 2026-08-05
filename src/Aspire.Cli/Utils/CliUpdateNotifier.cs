@@ -129,18 +129,22 @@ internal class CliUpdateNotifier(
     private async Task<NpmPackageInfo> GetLatestNpmPackageAsync(
         CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+
         Task<NpmPackageInfo> resolutionTask;
 
         lock (_npmResolutionLock)
         {
-            resolutionTask = _npmResolutionTask ??= ResolveLatestNpmPackageAsync(cancellationToken);
+            resolutionTask = _npmResolutionTask ??= ResolveLatestNpmPackageAsync();
         }
 
         try
         {
-            return await resolutionTask;
+            // The npm lookup is shared for the process lifetime, so one caller cannot own its
+            // cancellation. Apply cancellation only while each caller waits for the shared result.
+            return await resolutionTask.WaitAsync(cancellationToken);
         }
-        catch
+        catch when (resolutionTask.IsFaulted || resolutionTask.IsCanceled)
         {
             // Background notification checks may fail before an explicit doctor check.
             // Clear only this failed or cancelled task so doctor can make a fresh attempt.
@@ -156,13 +160,12 @@ internal class CliUpdateNotifier(
         }
     }
 
-    private async Task<NpmPackageInfo> ResolveLatestNpmPackageAsync(
-        CancellationToken cancellationToken)
+    private async Task<NpmPackageInfo> ResolveLatestNpmPackageAsync()
     {
         return await npmRunner.ResolvePackageAsync(
             NpmInstallDetection.ExpectedPackageName,
             LatestNpmVersionRange,
-            cancellationToken)
+            CancellationToken.None)
             ?? throw new InvalidOperationException(
                 $"Unable to resolve {NpmPackageInfo.FormatPackageSpecifier(NpmInstallDetection.ExpectedPackageName, LatestNpmVersionRange)} from the internal npm registry.");
     }

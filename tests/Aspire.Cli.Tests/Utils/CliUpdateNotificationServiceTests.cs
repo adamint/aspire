@@ -429,6 +429,47 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task GetVersionStatusAsync_ThrownNpmResolutionFailureReturnsErrorAndCanRetry()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
+        var resolveCallCount = 0;
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
+        {
+            configure.NpmRunnerFactory = _ => new FakeNpmRunner
+            {
+                ResolvePackageAsyncCallback = (_, _, _) =>
+                {
+                    if (Interlocked.Increment(ref resolveCallCount) == 1)
+                    {
+                        throw new InvalidOperationException("The npm registry is unavailable.");
+                    }
+
+                    return Task.FromResult<NpmPackageInfo?>(CreateNpmPackageInfo("9.5.0"));
+                }
+            };
+            configure.CliUpdateNotifierFactory = sp => CreateCliUpdateNotifier(sp, "9.4.0");
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var notifier = provider.GetRequiredService<ICliUpdateNotifier>();
+
+        var failedStatus = await notifier.GetVersionStatusAsync(
+            workspace.WorkspaceRoot,
+            CancellationToken.None).DefaultTimeout();
+        var retryStatus = await notifier.GetVersionStatusAsync(
+            workspace.WorkspaceRoot,
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal(2, Volatile.Read(ref resolveCallCount));
+        Assert.Equal("The npm registry is unavailable.", failedStatus.UpdateCheckError);
+        Assert.Null(failedStatus.LatestVersion);
+        Assert.Null(retryStatus.UpdateCheckError);
+        Assert.Equal("9.5.0", retryStatus.LatestVersion);
+    }
+
+    [Fact]
     public async Task NpmResolutionIsSharedAcrossConcurrentAndLaterChecks()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -477,6 +518,103 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
 
         Assert.Equal(1, Volatile.Read(ref resolveCallCount));
         Assert.Equal("9.5.0", doctorStatus.LatestVersion);
+        Assert.Equal("9.5.0", laterStatus.LatestVersion);
+    }
+
+    [Fact]
+    public async Task NpmResolution_CallerCancellationDoesNotCancelSharedResolution()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
+        using var cancellationTokenSource = new CancellationTokenSource();
+
+        var resolveCallCount = 0;
+        var resolutionStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var resolution = new TaskCompletionSource<NpmPackageInfo?>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
+        {
+            configure.NpmRunnerFactory = _ => new FakeNpmRunner
+            {
+                ResolvePackageAsyncCallback = (_, _, cancellationToken) =>
+                {
+                    Interlocked.Increment(ref resolveCallCount);
+                    resolutionStarted.TrySetResult();
+                    return resolution.Task.WaitAsync(cancellationToken);
+                }
+            };
+            configure.CliUpdateNotifierFactory = sp => CreateCliUpdateNotifier(sp, "9.4.0");
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var notifier = provider.GetRequiredService<ICliUpdateNotifier>();
+
+        var canceledWaiter = notifier.CheckForCliUpdatesAsync(
+            workspace.WorkspaceRoot,
+            cancellationTokenSource.Token);
+        await resolutionStarted.Task.DefaultTimeout();
+
+        var successfulWaiter = notifier.GetVersionStatusAsync(
+            workspace.WorkspaceRoot,
+            CancellationToken.None);
+
+        await cancellationTokenSource.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () => await canceledWaiter).DefaultTimeout();
+
+        resolution.SetResult(CreateNpmPackageInfo("9.5.0"));
+        var successfulStatus = await successfulWaiter.DefaultTimeout();
+        var laterStatus = await notifier.GetVersionStatusAsync(
+            workspace.WorkspaceRoot,
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal(1, Volatile.Read(ref resolveCallCount));
+        Assert.Equal("9.5.0", successfulStatus.LatestVersion);
+        Assert.Equal("9.5.0", laterStatus.LatestVersion);
+    }
+
+    [Fact]
+    public async Task GetVersionStatusAsync_PreCanceledTokenIsObservedAfterNpmResolutionIsCached()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
+        using var cancellationTokenSource = new CancellationTokenSource();
+        var resolveCallCount = 0;
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
+        {
+            configure.NpmRunnerFactory = _ => new FakeNpmRunner
+            {
+                ResolvePackageAsyncCallback = (_, _, _) =>
+                {
+                    Interlocked.Increment(ref resolveCallCount);
+                    return Task.FromResult<NpmPackageInfo?>(CreateNpmPackageInfo("9.5.0"));
+                }
+            };
+            configure.CliUpdateNotifierFactory = sp => CreateCliUpdateNotifier(sp, "9.4.0");
+        });
+
+        using var provider = services.BuildServiceProvider();
+        var notifier = provider.GetRequiredService<ICliUpdateNotifier>();
+
+        var initialStatus = await notifier.GetVersionStatusAsync(
+            workspace.WorkspaceRoot,
+            CancellationToken.None).DefaultTimeout();
+
+        await cancellationTokenSource.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => notifier.GetVersionStatusAsync(
+                workspace.WorkspaceRoot,
+                cancellationTokenSource.Token)).DefaultTimeout();
+
+        var laterStatus = await notifier.GetVersionStatusAsync(
+            workspace.WorkspaceRoot,
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal(1, Volatile.Read(ref resolveCallCount));
+        Assert.Equal("9.5.0", initialStatus.LatestVersion);
         Assert.Equal("9.5.0", laterStatus.LatestVersion);
     }
 
