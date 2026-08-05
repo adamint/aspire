@@ -162,15 +162,25 @@ internal static class SdkCommandPreparation
 
             var serverSession = serverSessionFactory.Create(appHostServerProject, environmentVariables: null, debug: false, gracefulShutdownSignaler: null, shutdownService: null, isolateConsole: false, cancellationToken);
 
-            // Short-lived RPC session: StartAsync() spawns the server. We never observe the
-            // exit-code task (WaitForExitAsync) because disposal flows the exit code through the
-            // activity scope and the only failure mode we care about surfaces via the RPC call.
-            await serverSession.StartAsync();
+            try
+            {
+                // Short-lived RPC session: StartAsync() spawns the server. We never observe the
+                // exit-code task (WaitForExitAsync) because disposal flows the exit code through the
+                // activity scope and the only failure mode we care about surfaces via the RPC call.
+                await serverSession.StartAsync();
 
-            var rpcClient = await serverSession.GetRpcClientAsync(cancellationToken);
+                var rpcClient = await serverSession.GetRpcClientAsync(cancellationToken);
 
-            disposeTempDirectory = false;
-            return new PreparedSdkSession(serverSession, rpcClient, tempDir, logger);
+                disposeTempDirectory = false;
+                return new PreparedSdkSession(serverSession, rpcClient, tempDir, logger);
+            }
+            catch
+            {
+                // Ownership only transfers to PreparedSdkSession once we return one. Until then a
+                // failed start leaves the scanner process alive and holding the temp directory.
+                await serverSession.DisposeAsync();
+                throw;
+            }
         }
         finally
         {
