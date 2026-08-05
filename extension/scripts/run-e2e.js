@@ -56,6 +56,9 @@ if (!extesterVersion) {
 const extesterNodeModules = path.join(extensionRoot, 'node_modules');
 const extesterModule = path.join(extesterNodeModules, 'vscode-extension-tester');
 const extesterCli = path.join(extesterModule, 'out', 'cli.js');
+// ExTester unpacks VS Code into `<storage>/vscode-temp-<random>` and removes it in a `finally`
+// that a killed process never reaches. See node_modules/vscode-extension-tester/out/util/codeUtil.js.
+const EXTESTER_UNPACK_DIRECTORY_PREFIX = 'vscode-temp-';
 const primaryAppHostProject = path.join(workspaceRoot, 'AspireE2E.AppHost', 'AspireE2E.AppHost.csproj');
 const workspaceNuGetConfigPath = path.join(workspaceRoot, 'NuGet.config');
 let cliPathForCleanup;
@@ -183,13 +186,15 @@ function projectWhitespaceFreeStagingDirectory(stagingDirectory) {
   return linkPath;
 }
 
-function getSetupDownloadRetryOptions(stagingDirectory) {
+function getSetupDownloadRetryOptions(stagingDirectory, downloadDirectory) {
   return {
     attempts: getPositiveIntegerEnvironmentVariable('ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_RETRY_ATTEMPTS', 5),
     retryDelayMs: getPositiveIntegerEnvironmentVariable('ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_RETRY_DELAY_MS', 15000),
     beforeRetry: () => cleanPartialExtesterDownloads(stagingDirectory),
     timeout: getPositiveIntegerEnvironmentVariable('ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_TIMEOUT_MS', 240000),
-    terminateProcessGroupOnTimeout: true,
+    // Orphans are matched by the path ExTester was actually given, which is the projection rather
+    // than the candidate whenever the cache path contains whitespace.
+    terminateOrphansUnder: downloadDirectory,
   };
 }
 
@@ -613,8 +618,8 @@ async function main() {
       platform: process.platform,
       architecture: process.arch,
       populate(stagingDirectory) {
-        const setupDownloadRetryOptions = getSetupDownloadRetryOptions(stagingDirectory);
         const downloadDirectory = projectWhitespaceFreeStagingDirectory(stagingDirectory);
+        const setupDownloadRetryOptions = getSetupDownloadRetryOptions(stagingDirectory, downloadDirectory);
         logStep('Downloading VS Code');
         runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', downloadDirectory, '--code_version', vscodeVersion], extestEnv, setupDownloadRetryOptions);
         logStep('Downloading ChromeDriver');
@@ -1226,17 +1231,11 @@ function getXmlProperty(xml, name) {
 
 function run(command, args, extraEnv = {}, options = {}) {
   const useShell = shouldUseShellForCommand(command);
-  // `spawnSync`'s timeout signals the process it started and nothing below it, so a grandchild
-  // outlives the timeout and keeps writing. Giving the child its own process group is what makes
-  // the whole tree reachable afterwards. Windows has no process groups to detach into, and
-  // `detached` there means a new console instead.
-  const ownProcessGroup = options.terminateProcessGroupOnTimeout === true && process.platform !== 'win32';
   const spawnOptions = {
     cwd: extensionRoot,
     env: { ...process.env, ...extraEnv },
     stdio: 'inherit',
     timeout: options.timeout,
-    detached: ownProcessGroup,
   };
   const result = useShell
     ? spawnSync([command, ...args].map(quoteWindowsShellArgument).join(' '), [], {
@@ -1248,8 +1247,8 @@ function run(command, args, extraEnv = {}, options = {}) {
     shell: false,
   });
 
-  if (ownProcessGroup && result.error?.code === 'ETIMEDOUT' && result.pid) {
-    terminateProcessGroup(result.pid);
+  if (result.error?.code === 'ETIMEDOUT' && options.terminateOrphansUnder) {
+    terminateOrphanedDescendants(options.terminateOrphansUnder);
   }
 
   if (result.error) {
@@ -1262,31 +1261,65 @@ function run(command, args, extraEnv = {}, options = {}) {
 }
 
 /**
- * Kills everything left in a timed-out child's process group.
+ * Kills processes still working inside a directory after the process this runner started has been
+ * killed for exceeding its timeout.
  *
  * Node reports a `spawnSync` timeout as `ETIMEDOUT` after signalling only the process it started.
- * Anything that process spawned -- ExTester shells out to `unzip` on macOS and Linux -- is
- * reparented and keeps running, which for a download step means it keeps writing into a directory
- * this runner is about to hand to the cache and publish as an immutable entry.
+ * ExTester unpacks zips on macOS and Linux by shelling out (`exec` runs `/bin/sh -c 'unzip ...'`),
+ * so those two processes are reparented and keep extracting into a directory that is about to be
+ * validated and published as an immutable cache entry.
+ *
+ * They are matched by the storage path in their command line rather than by process group, because
+ * putting the child in its own group would take it out of the terminal's foreground group and stop
+ * Ctrl-C from reaching a download. The path is a `mkdtemp` name unique to this run, so the match
+ * cannot pick up an unrelated process. Windows unpacks in-process and leaves nothing behind.
+ *
+ * `ps -Awwo pid=,args=` prints one process per line with no header and untruncated arguments:
+ *   57231 unzip -qo /var/folders/f9/T/aev-Xa1/cache-staging/1.122.1-stable.zip
  */
-function terminateProcessGroup(processGroupId) {
-  try {
-    process.kill(-processGroupId, 'SIGTERM');
-  } catch (error) {
-    if (error?.code === 'ESRCH') {
-      return;
-    }
-
-    console.warn(`Unable to terminate process group ${processGroupId}: ${error instanceof Error ? error.message : String(error)}`);
+function terminateOrphanedDescendants(storagePath) {
+  if (process.platform === 'win32') {
     return;
   }
 
-  sleepSynchronously(2000);
+  const listing = spawnSync('ps', ['-Awwo', 'pid=,args='], { encoding: 'utf8', timeout: 15000 });
+  if (listing.error || typeof listing.stdout !== 'string') {
+    console.warn(`Unable to list processes to clean up after a setup timeout: ${listing.error?.message ?? 'no output'}`);
+    return;
+  }
 
-  try {
-    process.kill(-processGroupId, 'SIGKILL');
-  } catch {
-    // ESRCH here is the expected outcome: everything in the group has already exited.
+  const orphanPids = [];
+  for (const line of listing.stdout.split('\n')) {
+    const match = /^\s*(\d+)\s+(.+)$/.exec(line);
+    if (!match) {
+      continue;
+    }
+
+    const pid = Number(match[1]);
+    if (pid === process.pid || pid === process.ppid || !match[2].includes(storagePath)) {
+      continue;
+    }
+
+    orphanPids.push(pid);
+  }
+
+  if (orphanPids.length === 0) {
+    return;
+  }
+
+  console.warn(`Terminating ${orphanPids.length} process(es) still writing to ${storagePath} after a setup timeout.`);
+  signalProcesses(orphanPids, 'SIGTERM');
+  sleepSynchronously(2000);
+  signalProcesses(orphanPids, 'SIGKILL');
+}
+
+function signalProcesses(pids, signal) {
+  for (const pid of pids) {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // ESRCH is the expected outcome once the process has exited.
+    }
   }
 }
 
@@ -1390,9 +1423,16 @@ function terminateProcessTree(pid, signal) {
 }
 
 /**
- * Deletes the archives a failed ExTester download left behind, so the retry starts clean.
+ * Deletes what a failed ExTester download left behind, so the retry starts clean.
  *
- * Only ordinary files directly under the staging root are ExTester's downloads. Archives nested
+ * Two kinds of debris land directly in the storage root. The first is the downloaded archive.
+ * The second is `vscode-temp-<random>`, which ExTester unpacks VS Code into before moving it into
+ * place and removes in a `finally` -- a `finally` that never runs when the process is killed for
+ * exceeding its timeout, leaving a full unpacked copy behind. Nothing rejects that copy later, so
+ * a retry that succeeds would publish several hundred extra megabytes per timed-out attempt into
+ * an entry that is supposed to have been pruned.
+ *
+ * Only ordinary files and these known directories at the top level are touched. Archives nested
  * deeper belong to an application that has already been unpacked -- VS Code ships some of its own
  * -- and deleting those would publish a permanently damaged entry to the shared cache, because a
  * ChromeDriver retry runs after VS Code has been unpacked into the same directory. This mirrors
@@ -1411,11 +1451,17 @@ function cleanPartialExtesterDownloads(storageDirectory) {
   }
 
   for (const entry of entries) {
-    if (!entry.isFile() || !isPartialDownloadArchiveName(entry.name)) {
+    const entryPath = path.join(storageDirectory, entry.name);
+    if (entry.isFile() && isPartialDownloadArchiveName(entry.name)) {
+      fs.rmSync(entryPath, { force: true });
       continue;
     }
 
-    fs.rmSync(path.join(storageDirectory, entry.name), { force: true });
+    if (entry.isDirectory() && entry.name.startsWith(EXTESTER_UNPACK_DIRECTORY_PREFIX)) {
+      // Never recursive: an abandoned extraction holds the VS Code bundle's internal links, and
+      // the shared cache sits on the other end of the projections in this tree.
+      removePathWithoutFollowingLinks(entryPath);
+    }
   }
 }
 

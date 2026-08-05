@@ -77,7 +77,7 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes("ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_RETRY_DELAY_MS', 15000"));
         assert.ok(runner.includes("ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_TIMEOUT_MS', 240000"));
         assert.ok(runner.includes("'get-chromedriver'"));
-        assert.ok(runner.includes('const setupDownloadRetryOptions = getSetupDownloadRetryOptions(stagingDirectory);'));
+        assert.ok(runner.includes('const setupDownloadRetryOptions = getSetupDownloadRetryOptions(stagingDirectory, downloadDirectory);'));
         assert.ok(runner.includes('run(command, args, extraEnv, options);'));
     });
 
@@ -569,7 +569,7 @@ suite('E2E launch profile', () => {
         assert.ok(cleanupStart >= 0);
         assert.ok(!cleanupBody.includes('getFilesRecursive('));
         assert.ok(cleanupBody.includes("readdirSync(storageDirectory, { withFileTypes: true })"));
-        assert.ok(cleanupBody.includes('!entry.isFile()'));
+        assert.ok(cleanupBody.includes('entry.isFile() && isPartialDownloadArchiveName(entry.name)'));
     });
 
     test('rejects moving VS Code aliases that a cache key could never invalidate', () => {
@@ -601,17 +601,48 @@ suite('E2E launch profile', () => {
         assert.ok(projectionBody.includes('removePathWithoutFollowingLinks(linkPath)'));
     });
 
-    test('terminates the whole setup process group when a download times out', () => {
+    test('terminates orphaned unpack processes when a setup download times out', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const terminateStart = runner.indexOf('function terminateOrphanedDescendants(');
+        const terminateBody = runner.slice(terminateStart, runner.indexOf('\n}', terminateStart));
 
-        // spawnSync's timeout signals only the process it started, so ExTester's `unzip` child
-        // survives and keeps writing into a staging directory that is about to be published as an
-        // immutable cache entry.
-        assert.ok(runner.includes('terminateProcessGroupOnTimeout: true,'));
-        assert.ok(runner.includes("result.error?.code === 'ETIMEDOUT'"));
-        assert.ok(runner.includes('terminateProcessGroup(result.pid)'));
-        assert.ok(runner.includes("process.kill(-processGroupId, 'SIGKILL')"));
+        // spawnSync's timeout signals only the process it started, so ExTester's shelled-out
+        // `unzip` survives and keeps writing into a staging directory that is about to be
+        // published as an immutable cache entry.
+        assert.ok(terminateStart >= 0);
+        assert.ok(runner.includes('terminateOrphansUnder: downloadDirectory,'));
+        assert.ok(runner.includes("result.error?.code === 'ETIMEDOUT' && options.terminateOrphansUnder"));
+        assert.ok(terminateBody.includes("spawnSync('ps', ['-Awwo', 'pid=,args=']"));
+        assert.ok(terminateBody.includes("signalProcesses(orphanPids, 'SIGKILL')"));
+    });
+
+    test('keeps setup downloads in the terminal foreground process group', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const runStart = runner.indexOf('function run(command, args, extraEnv = {}, options = {}) {');
+        const runBody = runner.slice(runStart, runner.indexOf('\n}', runStart));
+
+        // Detaching would take the child out of the foreground group and stop Ctrl-C from
+        // reaching a download, which is why timed-out unpack processes are matched by path
+        // instead of by process group.
+        assert.ok(runStart >= 0);
+        assert.ok(!runBody.includes('detached'));
+    });
+
+    test('removes ExTester unpack directories abandoned by a killed setup attempt', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const cleanupStart = runner.indexOf('function cleanPartialExtesterDownloads(');
+        const cleanupBody = runner.slice(cleanupStart, runner.indexOf('\n}', cleanupStart));
+
+        // ExTester removes `vscode-temp-*` in a `finally` that a killed process never reaches, so
+        // a later successful retry would publish a whole abandoned VS Code copy alongside the
+        // real one.
+        assert.ok(cleanupStart >= 0);
+        assert.ok(cleanupBody.includes('EXTESTER_UNPACK_DIRECTORY_PREFIX'));
+        assert.ok(cleanupBody.includes('removePathWithoutFollowingLinks(entryPath)'));
+        assert.ok(runner.includes("const EXTESTER_UNPACK_DIRECTORY_PREFIX = 'vscode-temp-';"));
     });
 
     test('resolves the download cache root before creating the per-run temporary root', () => {
