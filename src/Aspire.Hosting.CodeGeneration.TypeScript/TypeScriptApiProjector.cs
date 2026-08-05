@@ -617,7 +617,7 @@ internal sealed partial class TypeScriptApiProjector
                 });
             }
 
-            return (BuildInterfaceItem(builderModel, interfaceName, extends, typeOwner, documentation, members, TypeScriptApiItemKind.Interface), declarations);
+            return (BuildInterfaceItem(builderModel, $"interface:{interfaceName}", interfaceName, extends, typeOwner, documentation, members, TypeScriptApiItemKind.Interface), declarations);
         }
 
         // The referenced type gets an opaque stub keyed by its real owner so every package that
@@ -667,12 +667,15 @@ internal sealed partial class TypeScriptApiProjector
 
         // The item carries the real owner and a distinct ID: the owning package already publishes a
         // page for this type, and reusing "interface:{name}" here would collide with it across a
-        // manifest and claim the type belongs to whichever package happened to extend it.
-        return (BuildInterfaceItem(builderModel, interfaceName, extends, typeOwner, documentation, contributedMembers, TypeScriptApiItemKind.Augmentation), declarations);
+        // manifest and claim the type belongs to whichever package happened to extend it. The
+        // contributing package is part of the ID because every integration that extends
+        // DistributedApplicationBuilder produces an augmentation for the same interface name.
+        return (BuildInterfaceItem(builderModel, $"augmentation:{package.Name}:{interfaceName}", interfaceName, extends, typeOwner, documentation, contributedMembers, TypeScriptApiItemKind.Augmentation), declarations);
     }
 
     private static TypeScriptApiItem BuildInterfaceItem(
         BuilderModel builderModel,
+        string id,
         string interfaceName,
         string[] extends,
         string owningAssemblyName,
@@ -681,9 +684,7 @@ internal sealed partial class TypeScriptApiProjector
         TypeScriptApiItemKind kind)
         => new()
         {
-            Id = kind == TypeScriptApiItemKind.Augmentation
-                ? $"augmentation:{interfaceName}"
-                : $"interface:{interfaceName}",
+            Id = id,
             TypeId = builderModel.TypeId,
             Kind = kind,
             Name = interfaceName,
@@ -884,6 +885,26 @@ internal sealed partial class TypeScriptApiProjector
         });
     }
 
+    /// <summary>
+    /// Properties the TypeScript client adds to a DTO that has no C# counterpart. The emitter used to
+    /// own this list, so the exported interface described fewer properties than the module we actually
+    /// ship. Both paths read it from here now.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, IReadOnlyList<ClientOnlyDtoProperty>> s_clientOnlyDtoProperties =
+        new Dictionary<string, IReadOnlyList<ClientOnlyDtoProperty>>(StringComparer.Ordinal)
+        {
+            ["CreateBuilderOptions"] =
+            [
+                new ClientOnlyDtoProperty(
+                    "throwOnPendingRejections",
+                    "boolean",
+                    "When false, pre-flush rejected promises are not re-thrown by build(). Default: true.")
+            ]
+        };
+
+    internal static IReadOnlyList<ClientOnlyDtoProperty> GetClientOnlyDtoProperties(string interfaceName)
+        => s_clientOnlyDtoProperties.TryGetValue(interfaceName, out var properties) ? properties : [];
+
     private (TypeScriptApiItem Item, TypeScriptApiDeclaration Declaration) ProjectDto(AtsDtoTypeInfo dtoType)
     {
         var interfaceName = GetDtoInterfaceName(dtoType.TypeId);
@@ -907,6 +928,16 @@ internal sealed partial class TypeScriptApiProjector
                 };
             })
             .ToList();
+
+        members.AddRange(GetClientOnlyDtoProperties(interfaceName).Select(property => new TypeScriptApiMember
+        {
+            Id = $"property:{interfaceName}.{property.Name}",
+            Kind = TypeScriptApiItemKind.Property,
+            Name = property.Name,
+            Declaration = $"{property.Name}?: {property.Type}",
+            Summary = property.Summary,
+            OwningAssemblyName = owningAssemblyName
+        }));
 
         var item = new TypeScriptApiItem
         {
@@ -2359,3 +2390,9 @@ internal sealed partial class TypeScriptApiProjector
         return $"({paramsString}) => Promise<{returnType}>";
     }
 }
+
+/// <summary>
+/// A DTO property that exists only on the TypeScript side, with the type and summary both the module
+/// emitter and the API export render.
+/// </summary>
+internal sealed record ClientOnlyDtoProperty(string Name, string Type, string Summary);

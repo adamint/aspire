@@ -2077,6 +2077,82 @@ public partial class AtsTypeScriptCodeGeneratorTests
         Assert.True(checkedDeclarations > 0, "The canonical export produced no method declarations to compare.");
     }
 
+    /// <summary>
+    /// DTO interfaces carry properties that have no C# counterpart, such as the client-only
+    /// <c>throwOnPendingRejections</c> on <c>CreateBuilderOptions</c>. Those used to be appended by the
+    /// module emitter alone, so the exported interface described fewer properties than the module we
+    /// ship and aspire.dev documented a DTO nobody could actually pass.
+    /// </summary>
+    [Fact]
+    public void ApiExportDtoPropertiesMatchTheGeneratedDtoInterfaces()
+    {
+        var atsContext = CreateOwnershipFilteredContext();
+
+        var projector = new TypeScriptApiProjector(atsContext);
+        var model = projector.BuildApiModel(
+            new TypeScriptApiPackageIdentity(TestPackageName, TestPackageVersion),
+            [TestPackageName]);
+
+        var generatedSource = new AtsTypeScriptCodeGenerator()
+            .GenerateDistributedApplication(atsContext)["aspire.mts"];
+
+        var checkedDtos = 0;
+        foreach (var item in model.Modules.SelectMany(module => module.Items).Where(item => item.Kind == TypeScriptApiItemKind.Dto))
+        {
+            var body = ExtractExportedInterfaceBody(generatedSource, item.Name);
+            Assert.NotNull(body);
+
+            var generatedProperties = body!
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+                .Select(line => line.Trim())
+                .Where(line => line.EndsWith(';') && !line.StartsWith("//", StringComparison.Ordinal) && !line.StartsWith("*", StringComparison.Ordinal) && !line.StartsWith("/*", StringComparison.Ordinal))
+                .Select(line => line[..^1])
+                .ToList();
+
+            Assert.Equal(generatedProperties, item.Members.Select(member => member.Declaration).ToList());
+            checkedDtos++;
+        }
+
+        Assert.True(checkedDtos > 0, "The canonical export produced no DTO items to compare.");
+    }
+
+    /// <summary>
+    /// Returns the body of <c>export interface {name} { ... }</c> from generated module source, or
+    /// <see langword="null" /> when the generated source declares no such interface.
+    /// </summary>
+    private static string? ExtractExportedInterfaceBody(string generatedSource, string interfaceName)
+    {
+        var header = $"export interface {interfaceName} {{";
+        var start = generatedSource.IndexOf(header, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return null;
+        }
+
+        var bodyStart = start + header.Length;
+        var end = generatedSource.IndexOf("\n}", bodyStart, StringComparison.Ordinal);
+        return end < 0 ? null : generatedSource[bodyStart..end];
+    }
+
+    /// <summary>
+    /// Consumers deduplicate declaration fragments by comparing content for the same ID across packages,
+    /// so the text has to be byte-identical no matter which OS produced the export. Some fragments come
+    /// from raw string literals, which pick up CRLF when the repository is checked out on Windows.
+    /// </summary>
+    [Fact]
+    public void ApiExportDeclarationContentUsesPlatformIndependentLineEndings()
+    {
+        var atsContext = CreateOwnershipFilteredContext();
+
+        var projector = new TypeScriptApiProjector(atsContext);
+        var model = projector.BuildApiModel(
+            new TypeScriptApiPackageIdentity(TestPackageName, TestPackageVersion),
+            [TestPackageName]);
+
+        Assert.All(model.Declarations, declaration =>
+            Assert.DoesNotContain('\r', declaration.Content));
+    }
+
     [Fact]
     public void ApiExportSeparatesReferencedTypesFromPackageOwnedItems()
     {
@@ -2101,14 +2177,20 @@ public partial class AtsTypeScriptCodeGeneratorTests
 
         // A package that extends another package's type must not publish a second page for it. The
         // owning package's export uses "interface:{name}" for that type, so an augmentation reusing
-        // that ID would collide across a manifest and claim ownership it does not have.
+        // that ID would collide across a manifest and claim ownership it does not have. The
+        // contributing package is part of the ID as well, because every integration that extends
+        // DistributedApplicationBuilder augments the same interface name.
         Assert.All(
             documentedItems.Where(item => item.Kind == TypeScriptApiItemKind.Augmentation),
             item =>
             {
-                Assert.StartsWith("augmentation:", item.Id, StringComparison.Ordinal);
+                Assert.StartsWith($"augmentation:{TestPackageName}:", item.Id, StringComparison.Ordinal);
                 Assert.NotEqual(TestPackageName, item.OwningAssemblyName);
             });
+
+        // Item IDs are what aspire.dev deduplicates a manifest on, so a repeat would silently drop a page.
+        var itemIds = documentedItems.Select(item => item.Id).ToList();
+        Assert.Equal(itemIds.Count, itemIds.Distinct(StringComparer.Ordinal).Count());
 
         // Members are owned per capability, so no documented member may come from another assembly.
         Assert.All(

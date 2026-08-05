@@ -10,7 +10,7 @@
       "name": "Aspire.Hosting.CodeGeneration.TypeScript.Tests",
       "items": [
         {
-          "id": "augmentation:CSharpAppResource",
+          "id": "augmentation:Aspire.Hosting.CodeGeneration.TypeScript.Tests:CSharpAppResource",
           "kind": "augmentation",
           "name": "CSharpAppResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.CSharpAppResource",
@@ -492,7 +492,7 @@
           ]
         },
         {
-          "id": "augmentation:ContainerRegistryResource",
+          "id": "augmentation:Aspire.Hosting.CodeGeneration.TypeScript.Tests:ContainerRegistryResource",
           "kind": "augmentation",
           "name": "ContainerRegistryResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.ContainerRegistryResource",
@@ -942,7 +942,7 @@
           ]
         },
         {
-          "id": "augmentation:ContainerResource",
+          "id": "augmentation:Aspire.Hosting.CodeGeneration.TypeScript.Tests:ContainerResource",
           "kind": "augmentation",
           "name": "ContainerResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.ContainerResource",
@@ -1425,7 +1425,7 @@
           ]
         },
         {
-          "id": "augmentation:DistributedApplicationBuilder",
+          "id": "augmentation:Aspire.Hosting.CodeGeneration.TypeScript.Tests:DistributedApplicationBuilder",
           "kind": "augmentation",
           "name": "DistributedApplicationBuilder",
           "typeId": "Aspire.Hosting/Aspire.Hosting.IDistributedApplicationBuilder",
@@ -1474,7 +1474,7 @@
           ]
         },
         {
-          "id": "augmentation:DotnetToolResource",
+          "id": "augmentation:Aspire.Hosting.CodeGeneration.TypeScript.Tests:DotnetToolResource",
           "kind": "augmentation",
           "name": "DotnetToolResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.DotnetToolResource",
@@ -1956,7 +1956,7 @@
           ]
         },
         {
-          "id": "augmentation:ExecutableResource",
+          "id": "augmentation:Aspire.Hosting.CodeGeneration.TypeScript.Tests:ExecutableResource",
           "kind": "augmentation",
           "name": "ExecutableResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.ExecutableResource",
@@ -2440,7 +2440,7 @@
           ]
         },
         {
-          "id": "augmentation:ExternalServiceResource",
+          "id": "augmentation:Aspire.Hosting.CodeGeneration.TypeScript.Tests:ExternalServiceResource",
           "kind": "augmentation",
           "name": "ExternalServiceResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ExternalServiceResource",
@@ -2890,7 +2890,7 @@
           ]
         },
         {
-          "id": "augmentation:ParameterResource",
+          "id": "augmentation:Aspire.Hosting.CodeGeneration.TypeScript.Tests:ParameterResource",
           "kind": "augmentation",
           "name": "ParameterResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.ParameterResource",
@@ -3341,7 +3341,7 @@
           ]
         },
         {
-          "id": "augmentation:ProjectResource",
+          "id": "augmentation:Aspire.Hosting.CodeGeneration.TypeScript.Tests:ProjectResource",
           "kind": "augmentation",
           "name": "ProjectResource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.ProjectResource",
@@ -3824,7 +3824,7 @@
           ]
         },
         {
-          "id": "augmentation:Resource",
+          "id": "augmentation:Aspire.Hosting.CodeGeneration.TypeScript.Tests:Resource",
           "kind": "augmentation",
           "name": "Resource",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.IResource",
@@ -4275,7 +4275,7 @@
           ]
         },
         {
-          "id": "augmentation:ResourceWithConnectionString",
+          "id": "augmentation:Aspire.Hosting.CodeGeneration.TypeScript.Tests:ResourceWithConnectionString",
           "kind": "augmentation",
           "name": "ResourceWithConnectionString",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.IResourceWithConnectionString",
@@ -4321,7 +4321,7 @@
           ]
         },
         {
-          "id": "augmentation:ResourceWithEnvironment",
+          "id": "augmentation:Aspire.Hosting.CodeGeneration.TypeScript.Tests:ResourceWithEnvironment",
           "kind": "augmentation",
           "name": "ResourceWithEnvironment",
           "typeId": "Aspire.Hosting/Aspire.Hosting.ApplicationModel.IResourceWithEnvironment",

@@ -701,11 +701,12 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
                 WriteLine($"    {propName}?: {tsType};");
             }
 
-            // Add client-only properties that don't exist in the C# DTO
-            if (dto.Name == "CreateBuilderOptions")
+            // Client-only properties have no C# counterpart. The list lives on the projector so the
+            // exported API surface describes the same interface this emits.
+            foreach (var clientOnly in TypeScriptApiProjector.GetClientOnlyDtoProperties(interfaceName))
             {
-                WriteLine("    /** When false, pre-flush rejected promises are not re-thrown by build(). Default: true. */");
-                WriteLine("    throwOnPendingRejections?: boolean;");
+                WriteLine($"    /** {clientOnly.Summary} */");
+                WriteLine($"    {clientOnly.Name}?: {clientOnly.Type};");
             }
 
             WriteLine("}");
