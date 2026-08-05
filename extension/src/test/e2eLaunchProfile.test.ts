@@ -77,7 +77,7 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes("ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_RETRY_DELAY_MS', 15000"));
         assert.ok(runner.includes("ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_TIMEOUT_MS', 240000"));
         assert.ok(runner.includes("'get-chromedriver'"));
-        assert.ok(runner.includes('const setupDownloadRetryOptions = getSetupDownloadRetryOptions();'));
+        assert.ok(runner.includes('const setupDownloadRetryOptions = getSetupDownloadRetryOptions(stagingDirectory);'));
         assert.ok(runner.includes('run(command, args, extraEnv, options);'));
     });
 
@@ -496,5 +496,32 @@ suite('E2E launch profile', () => {
         assert.ok(resourceLifecycleCommands.includes('await setTerminalCommandExecutionSuppressedForE2E(true);'));
         assert.ok(resourceLifecycleCommands.includes('await setTerminalCommandExecutionSuppressedForE2E(false);'));
         assert.ok(!resourceLifecycleCommands.includes("['Stopped', 'Finished', 'Exited']"));
+    });
+    test('reuses immutable VS Code downloads while keeping ExTester state per run', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+
+        assert.ok(runner.includes("require('./e2e-download-cache')"));
+        assert.ok(runner.includes('resolveDownloadCacheRoot(repoRoot)'));
+        assert.ok(runner.includes('ensureDownloadCache({'));
+        assert.ok(runner.includes('projectDownloadCache(downloadCache, storageDir);'));
+        assert.ok(runner.includes('cleanPartialExtesterDownloads(stagingDirectory)'));
+        assert.ok(runner.includes("'--offline'"));
+        assert.ok(runner.includes("const storageDir = path.join(shortRunRoot, 'storage');"));
+        assert.ok(runner.includes("const extensionsDir = path.join(shortRunRoot, 'extensions');"));
+    });
+
+    test('downloads into the cache staging directory rather than the per-run storage directory', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const populateStart = runner.indexOf('populate(stagingDirectory) {');
+        const populateEnd = runner.indexOf('projectDownloadCache(downloadCache, storageDir);');
+        const populateBody = runner.slice(populateStart, populateEnd);
+
+        assert.ok(populateStart >= 0);
+        assert.ok(populateEnd > populateStart);
+        assert.ok(populateBody.includes("'get-vscode', '--storage', stagingDirectory"));
+        assert.ok(populateBody.includes("'get-chromedriver', '--storage', stagingDirectory"));
+        assert.ok(!populateBody.includes('--storage\', storageDir'));
     });
 });

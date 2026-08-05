@@ -5,6 +5,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
+const {
+  ensureDownloadCache,
+  projectDownloadCache,
+  resolveDownloadCacheRoot,
+} = require('./e2e-download-cache');
 
 const extensionRoot = path.resolve(__dirname, '..');
 const extensionPackageJson = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'package.json'), 'utf8'));
@@ -44,6 +49,9 @@ if (!extesterVersion) {
 const extesterNodeModules = path.join(extensionRoot, 'node_modules');
 const extesterModule = path.join(extesterNodeModules, 'vscode-extension-tester');
 const extesterCli = path.join(extesterModule, 'out', 'cli.js');
+// The feed preflight must not touch the shared cache: it runs before any download and only
+// verifies package availability, so resolving the cache root there would be wasted Git discovery.
+const downloadCacheRoot = verifyExtesterFeedOnly ? '' : resolveDownloadCacheRoot(repoRoot);
 const primaryAppHostProject = path.join(workspaceRoot, 'AspireE2E.AppHost', 'AspireE2E.AppHost.csproj');
 const workspaceNuGetConfigPath = path.join(workspaceRoot, 'NuGet.config');
 let cliPathForCleanup;
@@ -145,11 +153,11 @@ function getRunTestsTimeoutMs() {
   return configured;
 }
 
-function getSetupDownloadRetryOptions() {
+function getSetupDownloadRetryOptions(stagingDirectory) {
   return {
     attempts: getPositiveIntegerEnvironmentVariable('ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_RETRY_ATTEMPTS', 5),
     retryDelayMs: getPositiveIntegerEnvironmentVariable('ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_RETRY_DELAY_MS', 15000),
-    beforeRetry: cleanPartialExtesterDownloads,
+    beforeRetry: () => cleanPartialExtesterDownloads(stagingDirectory),
     timeout: getPositiveIntegerEnvironmentVariable('ASPIRE_EXTENSION_E2E_SETUP_DOWNLOAD_TIMEOUT_MS', 240000),
   };
 }
@@ -244,6 +252,7 @@ function logE2eConfiguration() {
   console.log(`  matched specs: ${matchedTestSpecs.map(file => path.relative(extensionRoot, file)).join(', ')}`);
   console.log(`  VS Code: ${vscodeVersion}`);
   console.log(`  ExTester: ${extesterVersion}`);
+  console.log(`  download cache: ${downloadCacheRoot}`);
   console.log(`  current CLI regressions: ${process.env.ASPIRE_EXTENSION_E2E_SKIP_CURRENT_CLI_REGRESSIONS === 'true' ? 'skipped' : 'included'}`);
   console.log(`  results: ${path.relative(extensionRoot, resultsDir)}`);
   console.log(`  storage diagnostics: ${path.relative(extensionRoot, storageDiagnosticsDir)}`);
@@ -557,18 +566,30 @@ async function main() {
       extestEnv.ASPIRE_CLI_START_TIMEOUT = undefined;
     }
 
-    const setupDownloadRetryOptions = getSetupDownloadRetryOptions();
-    logStep('Downloading VS Code');
-    runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, setupDownloadRetryOptions);
-    logStep('Downloading ChromeDriver');
-    runWithRetry(process.execPath, [extesterCli, 'get-chromedriver', '--storage', storageDir, '--code_version', vscodeVersion], extestEnv, setupDownloadRetryOptions);
+    const downloadCache = ensureDownloadCache({
+      cacheRoot: downloadCacheRoot,
+      vscodeVersion,
+      extesterVersion,
+      platform: process.platform,
+      architecture: process.arch,
+      populate(stagingDirectory) {
+        const setupDownloadRetryOptions = getSetupDownloadRetryOptions(stagingDirectory);
+        logStep('Downloading VS Code');
+        runWithRetry(process.execPath, [extesterCli, 'get-vscode', '--storage', stagingDirectory, '--code_version', vscodeVersion], extestEnv, setupDownloadRetryOptions);
+        logStep('Downloading ChromeDriver');
+        runWithRetry(process.execPath, [extesterCli, 'get-chromedriver', '--storage', stagingDirectory, '--code_version', vscodeVersion], extestEnv, setupDownloadRetryOptions);
+      },
+    });
+    console.log(`Extension E2E download cache ${downloadCache.cacheHit ? 'hit' : 'populated'}: ${downloadCache.cacheDirectory}`);
+    projectDownloadCache(downloadCache, storageDir);
+
     logStep('Installing VSIX');
     run(process.execPath, [extesterCli, 'install-vsix', '--storage', storageDir, '--extensions_dir', extensionsDir, '--vsix_file', vsixPath], extestEnv, { timeout: 300000 });
 
     recording = startRecording();
     try {
       logStep('Running VS Code extension E2E tests');
-      await runWithProcessTreeTimeout(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js')], extestEnv, getRunTestsTimeoutMs());
+      await runWithProcessTreeTimeout(process.execPath, [extesterCli, 'run-tests', testSpec, '--storage', storageDir, '--extensions_dir', extensionsDir, '--code_version', vscodeVersion, '--code_settings', path.join(extensionRoot, 'test-e2e', 'settings.json'), '--mocha_config', path.join(extensionRoot, '.mocharc.e2e.js'), '--offline'], extestEnv, getRunTestsTimeoutMs());
     }
     catch (error) {
       testFailure = error;
@@ -1270,8 +1291,8 @@ function terminateProcessTree(pid, signal) {
   }
 }
 
-function cleanPartialExtesterDownloads() {
-  for (const file of getFilesRecursive(storageDir)) {
+function cleanPartialExtesterDownloads(storageDirectory) {
+  for (const file of getFilesRecursive(storageDirectory)) {
     if (file.endsWith('.zip') || file.endsWith('.tar.gz') || file.endsWith('.tgz') || file.endsWith('.gz')) {
       fs.rmSync(file, { force: true });
     }
