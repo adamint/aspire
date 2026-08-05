@@ -114,90 +114,40 @@ key, which `cargo build` itself ignores.
 
 ### Publishing
 
-`aspire publish` and `aspire deploy` build the app into a container. If the app directory already
-contains a `Dockerfile`, that file is used as-is. Otherwise a multi-stage Dockerfile is generated
-(`--locked` appears only when the crate has a `Cargo.lock`):
+`aspire publish` and `aspire deploy` build the app into a container. An app that runs should publish
+with no extra configuration: if the app directory contains a `Dockerfile` it is used as-is, otherwise
+one is generated that compiles the crate inside the container — nothing is built on your machine —
+and copies the binary into a small runtime image. The container runs as a non-root `app` user with uid
+and gid `999`, so anything it writes to a mounted volume is owned by `999`.
 
-```dockerfile
-FROM rust:1.89-alpine AS build
-WORKDIR /app
-COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    cargo build --locked --release --target-dir /build/target
-
-FROM alpine:3.22
-RUN (addgroup -g 999 -S app || groupadd --system --gid 999 app) && \
-    (adduser -u 999 -S -G app app || useradd --system --uid 999 --gid 999 --no-create-home app)
-WORKDIR /app
-COPY --from=build /build/target/release/my-service /app/my-service
-USER app
-ENTRYPOINT ["/app/my-service"]
-```
-
-The crate is **only ever compiled inside the container**. The AppHost does not run `cargo build`
-during publish; it runs `cargo metadata`, a manifest query that neither compiles nor downloads
-dependencies, purely to learn the name of the binary cargo will produce.
-
-Publishing assumes the app already runs, so it does not re-validate anything cargo would itself have
-rejected at `cargo run` time. It only reports the cases where run mode works but the produced file
-name is still unknowable: a package with several `[[bin]]` targets that no option selects (call
-`WithCargoBinTarget`), or a workspace with several default members that each produce a binary (call
-`WithCargoPackage`). A workspace that pairs one app crate with library crates resolves on its own.
-`default-run` is honoured, so publish produces the same binary `cargo run` does. The same reasoning
-applies to debugging, which shares this resolution.
-
-Only the `WithCargo*` options feed that resolution. Values passed through `WithCargoArgs` are
-forwarded to cargo verbatim and are not parsed, so a target selection made with a raw `--bin`,
-`--example`, `--package`, `--target`, `--release` or `--profile` changes what cargo builds without
-moving the file publish copies or the debugger launches. Use the dedicated method for those.
-
-The container build pins `--target-dir`, so a `build.target-dir` in the crate's `.cargo/config.toml`
-moves the local build output without moving what the image copies.
+The only thing publishing may need help with is which binary to ship, when the crate itself is
+ambiguous: a package with several `[[bin]]` targets needs `WithCargoBinTarget`, and a workspace with
+several default members that each produce a binary needs `WithCargoPackage`. `default-run` is honoured,
+so publish otherwise produces the same binary `cargo run` does. Only the `WithCargo*` options feed that
+choice — a target selected with a raw `WithCargoArgs` string changes what cargo builds without moving
+the file publish copies.
 
 #### Base images
 
 | Stage | Default |
 | --- | --- |
-| Build | `rust:<version>-alpine`, where `<version>` comes from `rust-toolchain.toml`/`rust-toolchain`, or `rust:1.89-alpine` when the crate pins nothing |
+| Build | `rust:<version>-alpine`, where `<version>` comes from `rust-toolchain.toml`/`rust-toolchain`, the crate's `rust-version`, or `1.89` when the crate pins nothing |
 | Runtime | `alpine:3.22` |
 
-When the crate pins no toolchain but declares a `rust-version` newer than `1.89`, that version is
-used instead: cargo refuses to build with an older toolchain than the declared minimum.
+Both defaults are musl-based, so the binary and the runtime image share a libc by construction.
+Nothing is installed into either image, so each provides exactly what it ships: a crate needing a CA
+bundle, a zoneinfo database, or a C toolchain to build should name an image carrying it.
 
-Both defaults are musl-based, so the binary and the runtime image share a libc by construction and
-there is no glibc-version skew between the two stages.
-
-Neither stage installs any package, so each image provides exactly what it ships and nothing is
-presumed about what the crate needs — very much the Rust position that you pay only for what you ask
-for. A crate wanting TLS usually says so itself, and the common `rustls` and `webpki-roots` pairing
-compiles the roots into the binary rather than reading a system bundle. One that does need something
-from the image — a CA bundle, a zoneinfo database, or a C toolchain at build time — should name an
-image carrying it through `WithDockerfileBaseImage`, or take over the build with its own `Dockerfile`.
-Worth knowing when choosing: `alpine:3.22` ships no CA bundle and no zoneinfo database,
-`debian:bookworm-slim` ships no CA bundle either, and the official Alpine build images have carried
-`gcc` for years but only gained `musl-dev` in Rust 1.92.0.
-
-The non-root `app` user is created in every generated Dockerfile, trying the BusyBox commands and
-falling back to shadow-utils, with uid and gid pinned to `999` so a mounted volume sees the same owner
-on any distro.
-
-rustup channel names are not container image tags, so they are mapped: `stable` becomes `rust:alpine`
-(the unversioned tag that tracks current stable, since there is no `rust:stable-alpine`), and
-`nightly`/`nightly-<date>` become `rustlang/rust:nightly-alpine`/`rustlang/rust:nightly-<date>-alpine`.
-`beta` publishes no image, so it fails with a message pointing at `WithDockerfileBaseImage`.
-
-Override either stage to move to glibc:
+Overriding a stage makes matching the pair yours to get right — a glibc (`-gnu`) build image needs a
+glibc runtime image, and a musl one needs musl:
 
 ```csharp
 builder.AddRustApp("api", "../rust-api")
     .WithDockerfileBaseImage(buildImage: "rust:1.89-bookworm", runtimeImage: "debian:bookworm-slim");
 ```
 
-`WithCargoTarget(...)` adds `rustup target add <triple>` to the build stage and follows cargo's
-`target/<triple>/<profile>/` layout. Pairing the triple with base images that can build and run the
-result is yours to get right — a glibc (`-gnu`) triple needs glibc base images, and a triple for
-another architecture needs a cross-linker in the build image, since `rustup target add` installs only
-the target's standard library. `WithDockerfileBaseImage` supplies both.
+The same applies to a triple passed to `WithCargoTarget`, which must match the runtime image's libc,
+and needs a build image carrying a cross-linker when it targets another architecture.
 
 ## Additional documentation
 
