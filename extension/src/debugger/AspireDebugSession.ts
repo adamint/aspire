@@ -30,20 +30,39 @@ import { appHostTelemetryTargetPathConfigKey } from "./AspireDebugConfigurationM
 export type DashboardLaunchBehavior = 'none' | 'notification' | DashboardBrowserType;
 export type DashboardBrowserType = 'openExternalBrowser' | 'integratedBrowser' | 'debugChrome' | 'debugEdge' | 'debugFirefox';
 
+/**
+ * Debug configuration keys whose values must never reach a log or an uploaded artifact.
+ *
+ * Shared by the two independent redactors (`getLoggableDebugConfiguration` here and
+ * `redactDebugAdapterArguments` in the E2E state bridge) because they previously drifted: the DAP
+ * `launch` arguments ARE the resolved debug configuration, so anything sensitive added to one has to
+ * be redacted from both.
+ */
+export const redactedDebugConfigurationKeys = ['env', 'environmentVariables', 'brokeredServicePipeName'] as const;
+
 export function getLoggableDebugConfiguration(debugConfig: AspireResourceExtendedDebugConfiguration, includeEnvironment: boolean): vscode.DebugConfiguration {
+  // The brokered service pipe name addresses a live C# Dev Kit service endpoint, so it is redacted
+  // from every shape below. The Aspire output channel is the artifact users paste into bug reports.
+  const brokeredServicePipeName = debugConfig.brokeredServicePipeName ? '<redacted>' : undefined;
+
   if (includeEnvironment && debugConfig.type !== 'maui') {
-    return debugConfig;
+    return {
+      ...debugConfig,
+      brokeredServicePipeName,
+    };
   }
 
   if (includeEnvironment) {
     return {
       ...debugConfig,
+      brokeredServicePipeName,
       environmentVariables: debugConfig.environmentVariables ? '<redacted>' : undefined,
     };
   }
 
   return {
     ...debugConfig,
+    brokeredServicePipeName,
     env: debugConfig.env ? '<redacted>' : undefined,
     environmentVariables: debugConfig.environmentVariables ? '<redacted>' : undefined,
     msbuildProperties: debugConfig.msbuildProperties instanceof Map ? Object.fromEntries(debugConfig.msbuildProperties) : debugConfig.msbuildProperties,

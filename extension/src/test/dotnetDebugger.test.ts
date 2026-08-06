@@ -56,7 +56,20 @@ class TestDotNetService {
 }
 
 suite('Dotnet Debugger Extension Tests', () => {
-    teardown(() => sinon.restore());
+    setup(() => {
+        // Several tests in this suite stub C# Dev Kit as installed and active. Without the Hot
+        // Reload setting registered in the test host, that makes the launch path reach the enable
+        // prompt, which would raise a REAL notification that never dismisses and would flip the
+        // module-scoped "already prompted" flag for every later suite. Neutralize both here so no
+        // individual test can leak that state.
+        sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+        initializeHotReloadPromptState(createTestMemento());
+    });
+
+    teardown(() => {
+        sinon.restore();
+        initializeHotReloadPromptState(undefined);
+    });
 
     function createDebuggerExtension(outputPath: string, rejectBuild: Error | null, hasDevKit: boolean, doesOutputFileExist: boolean): { dotNetService: TestDotNetService, extension: ResourceDebuggerExtension, doesFileExistStub: sinon.SinonStub } {
         const fakeDotNetService = new TestDotNetService(outputPath, rejectBuild, hasDevKit);
@@ -361,7 +374,6 @@ suite('Dotnet Debugger Extension Tests', () => {
         // A VS Code notification carrying buttons stays up until the user interacts with it, so
         // awaiting one on the launch path would stall the resource - potentially forever - behind a
         // purely advisory message. The prompt must never gate the debug session.
-        initializeHotReloadPromptState(createTestMemento());
         stubCsDevKitExtension({
             hasServerProcessLoaded: () => true,
             getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
@@ -372,8 +384,8 @@ suite('Dotnet Debugger Extension Tests', () => {
         } as unknown as vscode.WorkspaceConfiguration);
 
         let resolveNotification: ((value: string | undefined) => void) | undefined;
-        const notification = sinon.stub(vscode.window, 'showInformationMessage')
-            .returns(new Promise<string | undefined>(resolve => { resolveNotification = resolve; }) as unknown as Thenable<vscode.MessageItem | undefined>);
+        const notification = vscode.window.showInformationMessage as sinon.SinonStub;
+        notification.returns(new Promise<string | undefined>(resolve => { resolveNotification = resolve; }));
 
         const debugConfig = await createProjectDebugConfiguration();
 
@@ -387,7 +399,6 @@ suite('Dotnet Debugger Extension Tests', () => {
         // Dev Kit is a third-party optional dependency. Nothing it does may turn a working .NET
         // debug session into a failed one, so a throw from its exports has to degrade to "no Hot
         // Reload" rather than propagating out of the launch path.
-        initializeHotReloadPromptState(createTestMemento());
         stubCsDevKitExtension({
             hasServerProcessLoaded: () => { throw new Error('dev kit exploded'); },
             getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
@@ -404,9 +415,8 @@ suite('Dotnet Debugger Extension Tests', () => {
         // the coreclr debugger carries nothing this feature added. Compare the whole key set rather
         // than one property so a stray field cannot slip in unnoticed, and assert the Hot Reload
         // property is absent entirely rather than merely undefined.
-        initializeHotReloadPromptState(createTestMemento());
         sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
-        const notification = sinon.stub(vscode.window, 'showInformationMessage');
+        const notification = vscode.window.showInformationMessage as sinon.SinonStub;
 
         const debugConfig = await createProjectDebugConfiguration();
 
@@ -1772,7 +1782,7 @@ suite('Dotnet Debugger Extension Tests', () => {
                 }
             }));
 
-            const showInformationMessageStub = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+            const showInformationMessageStub = vscode.window.showInformationMessage as sinon.SinonStub;
             const { extension } = createDebuggerExtension(outputPath, null, true, true);
             const launchConfig: ProjectLaunchConfiguration = {
                 type: 'project',
@@ -1791,6 +1801,70 @@ suite('Dotnet Debugger Extension Tests', () => {
 
             await extension.createDebugSessionConfigurationCallback!(launchConfig, undefined, [], { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession }, debugConfig);
 
+            assert.strictEqual(showInformationMessageStub.calledOnce, true);
+            assert.match(showInformationMessageStub.firstCall.args[0], /breakpoints/i);
+        } finally {
+            fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+    });
+
+    test('does not offer Hot Reload when the dotnet CLI fallback disables the debugger', async () => {
+        // Pins the gate to the configuration's own noDebug rather than the requested launch mode.
+        // This fallback sets noDebug = true while launchOptions.debug stays true, and the one-time
+        // Hot Reload offer must not be spent on a resource that was just told its debugger is off.
+        const fs = require('fs');
+        const path = require('path');
+
+        const tempRoot = path.join(process.cwd(), '.test-temp', `dotnet-hotreload-nodebug-${process.pid}-${Date.now()}`);
+        const projectDir = path.join(tempRoot, 'Frontend Without Debugger');
+        const outputDir = path.join(projectDir, 'bin', 'Debug', 'net10.0');
+        fs.mkdirSync(outputDir, { recursive: true });
+
+        try {
+            const projectPath = path.join(projectDir, 'Frontend.csproj');
+            const outputPath = path.join(outputDir, 'Frontend.dll');
+            fs.writeFileSync(projectPath, '<Project></Project>');
+            fs.writeFileSync(outputPath, '');
+            // No `framework` section, which is what forces the `dotnet run` fallback.
+            fs.writeFileSync(path.join(outputDir, 'Frontend.runtimeconfig.json'), JSON.stringify({
+                runtimeOptions: {
+                    tfm: 'net10.0'
+                }
+            }));
+
+            // Dev Kit present and active with the Hot Reload setting off: every precondition for the
+            // prompt is met EXCEPT that the debugger was disabled.
+            stubCsDevKitExtension({
+                hasServerProcessLoaded: () => true,
+                getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
+            });
+            sinon.stub(vscode.workspace, 'getConfiguration').returns({
+                get: () => false,
+                update: async () => undefined
+            } as unknown as vscode.WorkspaceConfiguration);
+
+            const showInformationMessageStub = vscode.window.showInformationMessage as sinon.SinonStub;
+            const { extension } = createDebuggerExtension(outputPath, null, true, true);
+            const launchConfig: ProjectLaunchConfiguration = {
+                type: 'project',
+                project_path: projectPath
+            };
+
+            const debugConfig: AspireResourceExtendedDebugConfiguration = {
+                runId: '1',
+                debugSessionId: '1',
+                type: 'coreclr',
+                name: 'Test Debug Config',
+                request: 'launch'
+            };
+
+            const fakeAspireDebugSession = sinon.createStubInstance(AspireDebugSession);
+
+            await extension.createDebugSessionConfigurationCallback!(launchConfig, undefined, [], { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession }, debugConfig);
+
+            assert.strictEqual(debugConfig.noDebug, true, 'the fallback must have disabled the debugger');
+            // Exactly one notification: the debugger-disabled warning. A second one would be the
+            // Hot Reload offer, which is what gating on launchOptions.debug would produce.
             assert.strictEqual(showInformationMessageStub.calledOnce, true);
             assert.match(showInformationMessageStub.firstCall.args[0], /breakpoints/i);
         } finally {

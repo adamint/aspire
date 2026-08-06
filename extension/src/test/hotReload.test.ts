@@ -1,11 +1,12 @@
 import * as assert from 'assert';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { applyDevKitHotReloadSupport, initializeHotReloadPromptState, isHotReloadSettingEnabled, logHotReloadDiagnostics, promptToEnableHotReloadIfNeeded, tryGetDevKitBrokeredServicePipeName } from '../debugger/hotReload';
+import { applyDevKitHotReloadSupport, initializeHotReloadPromptState, isHotReloadSettingEnabled, logHotReloadDiagnostics, logResolvedHotReloadState, promptToEnableHotReloadIfNeeded, tryGetDevKitBrokeredServicePipeName } from '../debugger/hotReload';
 import { hotReloadPromptSuppressedKey } from '../utils/hotReloadNotificationState';
 import { createTestMemento } from './common';
 import { hotReloadAvailablePrompt, hotReloadEnabled } from '../loc/strings';
 import { AspireResourceExtendedDebugConfiguration } from '../dcp/types';
+import { extensionLogOutputChannel } from '../utils/logging';
 
 suite('Hot Reload Tests', () => {
     teardown(() => sinon.restore());
@@ -259,7 +260,9 @@ suite('Hot Reload Tests', () => {
         assert.strictEqual(isHotReloadSettingEnabled(), false);
     });
 
-    test('logging diagnostics never throws', () => {
+    test('explains why Hot Reload is unavailable when the setting is off', () => {
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+
         logHotReloadDiagnostics('api', {
             devKitInstalled: true,
             devKitActive: true,
@@ -269,6 +272,16 @@ suite('Hot Reload Tests', () => {
             pipeNameInjected: true
         });
 
+        const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
+        // The machine-scope caveat is the whole point of the message: users otherwise put the
+        // setting in workspace settings, where VS Code silently ignores it.
+        assert.ok(logged.includes('csharp.experimental.debug.hotReload=false'), logged);
+        assert.ok(logged.includes('machine-scoped'), logged);
+    });
+
+    test('says nothing at all when C# Dev Kit is not installed', () => {
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+
         logHotReloadDiagnostics('api', {
             devKitInstalled: false,
             devKitActive: false,
@@ -276,6 +289,107 @@ suite('Hot Reload Tests', () => {
             devKitServerLoaded: false,
             settingEnabled: false,
             pipeNameInjected: false
+        });
+
+        assert.strictEqual(info.called, false, 'running .NET resources without Dev Kit is fully supported and must not be reported as a problem');
+    });
+
+    suite('launch path is bounded', () => {
+        test('gives up on a wedged C# Dev Kit instead of stalling the resource launch', async () => {
+            // This bound is the only thing between a wedged Dev Kit and a resource that never
+            // launches: createDebugSessionConfigurationCallback is awaited BEFORE the debug session
+            // is created, so an unbounded await here hangs the resource indefinitely.
+            const clock = sinon.useFakeTimers();
+            try {
+                stubDevKit({
+                    exports: {
+                        hasServerProcessLoaded: () => true,
+                        getBrokeredServiceServerPipeName: () => new Promise<string>(() => { /* never settles */ })
+                    }
+                });
+
+                const pending = tryGetDevKitBrokeredServicePipeName();
+                await clock.tickAsync(5000);
+
+                assert.strictEqual(await pending, undefined);
+            }
+            finally {
+                clock.restore();
+            }
+        });
+
+        test('does not leave a pending timer behind on the fast path', async () => {
+            const clock = sinon.useFakeTimers();
+            try {
+                stubDevKit({
+                    exports: {
+                        hasServerProcessLoaded: () => true,
+                        getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
+                    }
+                });
+
+                assert.strictEqual(await tryGetDevKitBrokeredServicePipeName(), 'devkit-broker-pipe');
+                // A leaked timeout keeps the event loop busy and, under a fake clock, is directly
+                // observable as a still-scheduled timer.
+                assert.strictEqual(clock.countTimers(), 0, 'the timeout timer must be cleared once the pipe name resolves');
+            }
+            finally {
+                clock.restore();
+            }
+        });
+    });
+
+    suite('resolved state logging', () => {
+        function createSession(type: string): vscode.DebugSession {
+            return { type, name: `session-${type}` } as vscode.DebugSession;
+        }
+
+        test('ignores debug sessions that are not coreclr', () => {
+            stubDevKit();
+            const info = sinon.stub(extensionLogOutputChannel, 'info');
+
+            // This runs inside the DAP tracker attached to every Aspire debug session, so a Node or
+            // Python resource must not produce .NET diagnostics.
+            logResolvedHotReloadState(createSession('pwa-node'), { brokeredServicePipeName: 'pipe' });
+
+            assert.strictEqual(info.called, false);
+        });
+
+        test('says nothing when C# Dev Kit is not installed', () => {
+            stubNoExtensions();
+            const info = sinon.stub(extensionLogOutputChannel, 'info');
+
+            logResolvedHotReloadState(createSession('coreclr'), {});
+
+            assert.strictEqual(info.called, false);
+        });
+
+        test('never logs the pipe name itself', () => {
+            stubDevKit();
+            const info = sinon.stub(extensionLogOutputChannel, 'info');
+
+            logResolvedHotReloadState(createSession('coreclr'), { brokeredServicePipeName: 'secret-pipe-value' });
+
+            const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
+            assert.ok(logged.includes('present'), `expected the pipe to be reported as present, got: ${logged}`);
+            assert.strictEqual(logged.includes('secret-pipe-value'), false, 'the pipe name addresses a live endpoint and must never be logged');
+        });
+
+        test('reports a missing pipe for malformed launch arguments', () => {
+            stubDevKit();
+            const info = sinon.stub(extensionLogOutputChannel, 'info');
+
+            // The arguments come off the wire, so nothing about their shape is guaranteed. A throw
+            // here would escape into VS Code's DAP tracker for every Aspire debug session, and a
+            // silent early return would make the diagnostic useless.
+            const malformed = [undefined, null, 'a string', 42, [], { brokeredServicePipeName: 17 }, { brokeredServicePipeName: '' }];
+            for (const launchArguments of malformed) {
+                info.resetHistory();
+                logResolvedHotReloadState(createSession('coreclr'), launchArguments);
+
+                const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
+                assert.ok(logged.includes('absent'), `expected '${JSON.stringify(launchArguments)}' to be reported as absent, got: ${logged}`);
+            }
         });
     });
 
@@ -312,13 +426,57 @@ suite('Hot Reload Tests', () => {
 
         test('only prompts once even when several project resources launch together', async () => {
             initializeHotReloadPromptState(createTestMemento());
-            const prompt = stubPrompt(undefined);
 
-            await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true);
-            await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true);
-            await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true);
+            // Genuinely concurrent, with a prompt that does not settle until every caller has
+            // entered the function. An Aspire app launches its resources in parallel, so awaiting
+            // the calls one at a time would pass even if the "already prompted" guard were placed
+            // after the first await, which is exactly the bug worth catching.
+            let resolvePrompt: ((value: string | undefined) => void) | undefined;
+            const pending = new Promise<string | undefined>(resolve => { resolvePrompt = resolve; });
+            const prompt = sinon.stub(vscode.window, 'showInformationMessage').returns(pending as unknown as Thenable<vscode.MessageItem | undefined>);
 
+            const inFlight = Promise.all([
+                promptToEnableHotReloadIfNeeded(enabledDiagnostics, true),
+                promptToEnableHotReloadIfNeeded(enabledDiagnostics, true),
+                promptToEnableHotReloadIfNeeded(enabledDiagnostics, true)
+            ]);
+
+            assert.strictEqual(prompt.callCount, 1, 'a second concurrent resource must not raise its own notification');
+
+            resolvePrompt?.(undefined);
+            assert.deepStrictEqual(await inFlight, [false, false, false]);
             assert.strictEqual(prompt.callCount, 1);
+        });
+
+        test('does not offer Hot Reload for a resource whose debugger was disabled', async () => {
+            // The `dotnet run` and file-based-executable fallbacks force noDebug while the caller's
+            // requested mode stays "debug". Hot Reload is applied by the debugger, so prompting
+            // there would spend the single one-time offer on a resource that cannot use it.
+            initializeHotReloadPromptState(createTestMemento());
+            const prompt = stubPrompt('Enable Hot Reload');
+
+            const enabled = await promptToEnableHotReloadIfNeeded(enabledDiagnostics, false);
+
+            assert.strictEqual(enabled, false);
+            assert.strictEqual(prompt.called, false);
+        });
+
+        test('still confirms the setting was enabled when persisting the dismissal fails', async () => {
+            // The memento write is bookkeeping. Losing it must not skip the confirmation telling the
+            // user to restart, because the setting itself was written successfully.
+            const failingMemento = createTestMemento();
+            sinon.stub(failingMemento, 'update').rejects(new Error('storage is full'));
+            initializeHotReloadPromptState(failingMemento);
+            const prompt = stubPrompt('Enable Hot Reload');
+            sinon.stub(vscode.workspace, 'getConfiguration').returns({
+                get: () => false,
+                update: async () => undefined
+            } as unknown as vscode.WorkspaceConfiguration);
+
+            const enabled = await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true);
+
+            assert.strictEqual(enabled, true);
+            assert.strictEqual(prompt.lastCall.args[0], hotReloadEnabled);
         });
 
         test('stops offering after the user dismisses it permanently', async () => {

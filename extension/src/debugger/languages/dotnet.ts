@@ -630,7 +630,12 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 // Deliberately NOT awaited. A VS Code notification carrying buttons stays up until
                 // the user interacts with it, and this callback runs before the debug session is
                 // created, so awaiting it would stall the resource behind an advisory message.
-                void promptToEnableHotReloadIfNeeded(hotReloadDiagnostics, launchOptions.debug === true)
+                // Gated on the configuration's own `noDebug`, not `launchOptions.debug`. The
+                // `dotnet run` and file-based-executable fallbacks above force `noDebug = true`
+                // while `launchOptions.debug` stays true, and Hot Reload is applied by the debugger.
+                // Offering it there would burn the single one-time prompt on a resource that just
+                // told the user its debugger was disabled.
+                void promptToEnableHotReloadIfNeeded(hotReloadDiagnostics, debugConfiguration.noDebug !== true)
                     .catch(err => extensionLogOutputChannel.warn(`Hot Reload prompt failed: ${err instanceof Error ? err.message : String(err)}`));
             }
             catch (err) {

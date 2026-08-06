@@ -34,10 +34,6 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
 
             return {
                 onWillReceiveMessage: message => {
-                    if (message.command === 'launch') {
-                        logResolvedHotReloadState(session, message.arguments);
-                    }
-
                     // Detect restart requests on app host debug sessions.
                     // When the user clicks "restart" on the app host child session,
                     // suppress VS Code's automatic child restart so the Aspire debug
@@ -50,6 +46,18 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
                         const shouldSuppress = onAppHostRestartRequested(debugSessionId);
                         if (shouldSuppress) {
                             message.arguments.restart = false;
+                        }
+                    }
+
+                    // Diagnostics only, so it runs last and cannot preempt the functional work
+                    // above. This tracker is attached to every Aspire debug session, including
+                    // resources that have nothing to do with .NET, so nothing here may escape.
+                    if (message.command === 'launch') {
+                        try {
+                            logResolvedHotReloadState(session, message.arguments);
+                        }
+                        catch (err) {
+                            extensionLogOutputChannel.warn(`Failed to log Hot Reload state: ${err instanceof Error ? err.message : String(err)}`);
                         }
                     }
                 },

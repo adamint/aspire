@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 import { AspireExtensionContext } from '../AspireExtensionContext';
-import { getLoggableDebugConfiguration, type AspireDebugSession } from '../debugger/AspireDebugSession';
+import { getLoggableDebugConfiguration, redactedDebugConfigurationKeys, type AspireDebugSession } from '../debugger/AspireDebugSession';
 import { createDebugSessionConfiguration, getResourceDebuggerExtensions } from '../debugger/debuggerExtensions';
 import { spawnCliProcess } from '../debugger/languages/cli';
 import { cleanupRun } from '../debugger/runCleanupRegistry';
@@ -1012,11 +1012,10 @@ function redactDebugAdapterArguments(value: unknown): unknown {
   }
 
   const copy = { ...(value as Record<string, unknown>) };
-  if ('env' in copy) {
-    copy.env = '<redacted>';
-  }
-  if ('environmentVariables' in copy) {
-    copy.environmentVariables = '<redacted>';
+  for (const key of redactedDebugConfigurationKeys) {
+    if (key in copy) {
+      copy[key] = '<redacted>';
+    }
   }
 
   return copy;

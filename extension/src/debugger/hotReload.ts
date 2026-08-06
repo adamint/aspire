@@ -300,6 +300,22 @@ export function initializeHotReloadPromptState(memento: vscode.Memento | undefin
 }
 
 /**
+ * Records that the prompt should not be shown again in future windows.
+ *
+ * Failures are contained: this is bookkeeping, and letting a rejected memento write propagate would
+ * skip the user-visible confirmation that the setting was actually applied. The worst outcome of a
+ * failed write is that the offer is made again on a later run.
+ */
+async function suppressHotReloadPrompt(): Promise<void> {
+    try {
+        await hotReloadPromptState?.update(hotReloadPromptSuppressedKey, true);
+    }
+    catch (err) {
+        extensionLogOutputChannel.warn(`Failed to persist the Hot Reload prompt dismissal: ${err instanceof Error ? err.message : String(err)}`);
+    }
+}
+
+/**
  * Offers to turn on C# Dev Kit's Hot Reload gate when a .NET resource launches with Dev Kit present
  * but the feature switched off.
  *
@@ -331,12 +347,18 @@ export async function promptToEnableHotReloadIfNeeded(diagnostics: HotReloadDiag
         return false;
     }
 
+    if (hotReloadPromptState === undefined) {
+        // Not fatal — the prompt still works — but "Don't show again" cannot be honored across
+        // windows, so say so rather than letting the user re-dismiss it forever with no explanation.
+        extensionLogOutputChannel.warn('Hot Reload prompt state was never initialized; a dismissal will not persist across windows.');
+    }
+
     hotReloadPromptShownThisWindow = true;
 
     const selection = await vscode.window.showInformationMessage(hotReloadAvailablePrompt, enableHotReloadLabel, dontShowAgainLabel);
 
     if (selection === dontShowAgainLabel) {
-        await hotReloadPromptState?.update(hotReloadPromptSuppressedKey, true);
+        await suppressHotReloadPrompt();
         return false;
     }
 
@@ -361,7 +383,7 @@ export async function promptToEnableHotReloadIfNeeded(diagnostics: HotReloadDiag
         return false;
     }
 
-    await hotReloadPromptState?.update(hotReloadPromptSuppressedKey, true);
+    await suppressHotReloadPrompt();
     extensionLogOutputChannel.info(`Enabled '${hotReloadConfigurationSection}.${hotReloadConfigurationName}' in user settings at the user's request.`);
 
     // Dev Kit reads the gate when it starts a hot reload session, so the resource that is already

@@ -998,6 +998,49 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(loggableConfig.environmentVariables, '<redacted>');
     });
 
+    test('redacts the brokered service pipe name from logs in every configuration shape', () => {
+        // The pipe name addresses a live C# Dev Kit service endpoint. The Aspire output channel is
+        // the artifact users paste into bug reports, so it must never appear there — including on
+        // the coreclr path, where environment logging returns the configuration almost verbatim.
+        const shapes: Array<{ type: string; includeEnvironment: boolean }> = [
+            { type: 'coreclr', includeEnvironment: true },
+            { type: 'coreclr', includeEnvironment: false },
+            { type: 'maui', includeEnvironment: true },
+            { type: 'maui', includeEnvironment: false }
+        ];
+
+        for (const shape of shapes) {
+            const debugConfig = {
+                runId: 'run-1',
+                debugSessionId: 'debug-1',
+                type: shape.type,
+                name: 'api',
+                request: 'launch',
+                brokeredServicePipeName: 'devkit-broker-pipe-secret',
+            } as AspireResourceExtendedDebugConfiguration;
+
+            const loggableConfig = getLoggableDebugConfiguration(debugConfig, shape.includeEnvironment);
+
+            assert.strictEqual(loggableConfig.brokeredServicePipeName, '<redacted>', JSON.stringify(shape));
+            assert.strictEqual(
+                JSON.stringify(loggableConfig).includes('devkit-broker-pipe-secret'),
+                false,
+                `the pipe name leaked for ${JSON.stringify(shape)}`);
+        }
+    });
+
+    test('leaves the brokered service pipe name undefined when there is none to redact', () => {
+        const debugConfig = {
+            runId: 'run-1',
+            debugSessionId: 'debug-1',
+            type: 'coreclr',
+            name: 'api',
+            request: 'launch',
+        } as AspireResourceExtendedDebugConfiguration;
+
+        assert.strictEqual(getLoggableDebugConfiguration(debugConfig, true).brokeredServicePipeName, undefined);
+    });
+
     test('responds to breakpoint requests with a DAP breakpoint body', () => {
         const parentDebugSession = {
             id: 'aspire-session',

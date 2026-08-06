@@ -93,6 +93,14 @@ reload claims easy to get wrong.
   different reason: Roslyn read the already-edited file as the baseline. Three fast-starting
   resources reach the edit step roughly two seconds after launch, which no human would, so the test
   waits `ASPIRE_HOT_RELOAD_PROOF_SETTLE_MS` (default 20000) first.
+- **Give C# Dev Kit time to finish its design-time build after a rebuild.** A third failure mode,
+  distinct from the two above and reported differently: the Hot Reload log says
+  `Project '...' ignored for EnC: no generated files output directory` for every project, then
+  `Solution update status: None` and `Document unchanged` for edits that were definitely made.
+  Nothing is wrong with the edit; Roslyn simply has no Edit-and-Continue state for those projects
+  yet. It shows up when the proof runs immediately after `dotnet build`, which invalidates `obj/`
+  and sends Dev Kit back through project loading. Re-running the proof clears it. Check
+  `grep -c 'ignored for EnC'` in the Hot Reload log before concluding a run proved anything.
 - **Do not put the fixture in `/tmp` on macOS.** The PDB records the real `/private/tmp` path while
   the workspace opens as `/tmp`, and Dev Kit rejects the edit with
   `Source '...' doesn't match output PDB: no document`.
