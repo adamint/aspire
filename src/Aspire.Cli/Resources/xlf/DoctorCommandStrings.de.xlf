@@ -486,6 +486,11 @@ The current layout continues to work — this is a non-blocking warning.</target
         <target state="new">Aspire extension for VS Code is installed</target>
         <note />
       </trans-unit>
+      <trans-unit id="VsCodeExtensionLatestVersionCheckFailedMessage">
+        <source>Could not check the latest Aspire extension version</source>
+        <target state="new">Could not check the latest Aspire extension version</target>
+        <note />
+      </trans-unit>
       <trans-unit id="VsCodeExtensionMissingFix">
         <source>Install the Aspire extension from the VS Code Marketplace for an integrated Aspire experience.</source>
         <target state="new">Install the Aspire extension from the VS Code Marketplace for an integrated Aspire experience.</target>
@@ -495,6 +500,16 @@ The current layout continues to work — this is a non-blocking warning.</target
         <source>VS Code is installed, but the Aspire extension is not installed</source>
         <target state="new">VS Code is installed, but the Aspire extension is not installed</target>
         <note />
+      </trans-unit>
+      <trans-unit id="VsCodeExtensionOutOfDateFix">
+        <source>Update the Aspire extension from the VS Code Marketplace.</source>
+        <target state="new">Update the Aspire extension from the VS Code Marketplace.</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="VsCodeExtensionOutOfDateMessageFormat">
+        <source>Aspire extension for VS Code version {0} is out of date. Latest version is {1}</source>
+        <target state="new">Aspire extension for VS Code version {0} is out of date. Latest version is {1}</target>
+        <note>{0} is the installed extension version. {1} is the latest Marketplace version.</note>
       </trans-unit>
     </body>
   </file>

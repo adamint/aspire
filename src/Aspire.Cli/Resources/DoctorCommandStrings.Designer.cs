@@ -168,6 +168,33 @@ namespace Aspire.Cli.Resources {
         }
 
         /// <summary>
+        ///   Looks up a localized string similar to Aspire extension for VS Code version {0} is out of date. Latest version is {1}.
+        /// </summary>
+        public static string VsCodeExtensionOutOfDateMessageFormat {
+            get {
+                return ResourceManager.GetString("VsCodeExtensionOutOfDateMessageFormat", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Update the Aspire extension from the VS Code Marketplace..
+        /// </summary>
+        public static string VsCodeExtensionOutOfDateFix {
+            get {
+                return ResourceManager.GetString("VsCodeExtensionOutOfDateFix", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Could not check the latest Aspire extension version.
+        /// </summary>
+        public static string VsCodeExtensionLatestVersionCheckFailedMessage {
+            get {
+                return ResourceManager.GetString("VsCodeExtensionLatestVersionCheckFailedMessage", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to Summary: {0} passed, {1} warnings, {2} failed.
         /// </summary>
         public static string SummaryFormat {

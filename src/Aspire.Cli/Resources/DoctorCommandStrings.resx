@@ -94,6 +94,16 @@
   <data name="VsCodeExtensionMissingFix" xml:space="preserve">
     <value>Install the Aspire extension from the VS Code Marketplace for an integrated Aspire experience.</value>
   </data>
+  <data name="VsCodeExtensionOutOfDateMessageFormat" xml:space="preserve">
+    <value>Aspire extension for VS Code version {0} is out of date. Latest version is {1}</value>
+    <comment>{0} is the installed extension version. {1} is the latest Marketplace version.</comment>
+  </data>
+  <data name="VsCodeExtensionOutOfDateFix" xml:space="preserve">
+    <value>Update the Aspire extension from the VS Code Marketplace.</value>
+  </data>
+  <data name="VsCodeExtensionLatestVersionCheckFailedMessage" xml:space="preserve">
+    <value>Could not check the latest Aspire extension version</value>
+  </data>
   <data name="SummaryFormat" xml:space="preserve">
     <value>Summary: {0} passed, {1} warnings, {2} failed</value>
   </data>

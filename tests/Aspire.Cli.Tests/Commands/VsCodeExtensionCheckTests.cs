@@ -1,9 +1,14 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Globalization;
+using System.Net;
+using System.Text.Json;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Cli.Utils.EnvironmentChecker;
+using Microsoft.Extensions.Logging.Abstractions;
+using Semver;
 
 namespace Aspire.Cli.Tests.Commands;
 
@@ -17,11 +22,21 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         // No TERM_PROGRAM and nothing resolvable on PATH, so real detection reports VS Code absent.
         var environment = new TestEnvironment(new Dictionary<string, string?>());
         var executionContext = TestExecutionContextHelper.CreateExecutionContext(home, homeDirectory: home);
-        var check = new VsCodeExtensionCheck(environment, executionContext, _ => null);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            GetLatestStableVersionAsyncCallback = _ => throw new InvalidOperationException("Marketplace must not be queried.")
+        };
+        var check = new VsCodeExtensionCheck(
+            environment,
+            executionContext,
+            marketplaceClient,
+            NullLogger<VsCodeExtensionCheck>.Instance,
+            _ => null);
 
         var results = await check.CheckAsync(TestContext.Current.CancellationToken);
 
         Assert.Empty(results);
+        Assert.Equal(0, marketplaceClient.CallCount);
     }
 
     [Fact]
@@ -37,7 +52,16 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
             ["VSCODE_EXTENSIONS"] = extensions.FullName
         });
         var executionContext = TestExecutionContextHelper.CreateExecutionContext(home, homeDirectory: home);
-        var check = new VsCodeExtensionCheck(environment, executionContext, _ => null);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            GetLatestStableVersionAsyncCallback = _ => throw new InvalidOperationException("Marketplace must not be queried.")
+        };
+        var check = new VsCodeExtensionCheck(
+            environment,
+            executionContext,
+            marketplaceClient,
+            NullLogger<VsCodeExtensionCheck>.Instance,
+            _ => null);
 
         var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
 
@@ -51,6 +75,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         Assert.True(result.Metadata["vsCodeInstalled"]!.GetValue<bool>());
         Assert.False(result.Metadata["extensionInstalled"]!.GetValue<bool>());
         Assert.Equal(VsCodeExtensionCheck.ExtensionId, result.Metadata["extensionId"]!.GetValue<string>());
+        Assert.Equal(0, marketplaceClient.CallCount);
     }
 
     [Fact]
@@ -67,7 +92,16 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
             ["VSCODE_EXTENSIONS"] = extensions.FullName
         });
         var executionContext = TestExecutionContextHelper.CreateExecutionContext(home, homeDirectory: home);
-        var check = new VsCodeExtensionCheck(environment, executionContext, _ => null);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            GetLatestStableVersionAsyncCallback = _ => Task.FromResult(SemVersion.Parse("1.2.3", SemVersionStyles.Strict))
+        };
+        var check = new VsCodeExtensionCheck(
+            environment,
+            executionContext,
+            marketplaceClient,
+            NullLogger<VsCodeExtensionCheck>.Instance,
+            _ => null);
 
         var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
 
@@ -80,6 +114,210 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         Assert.True(result.Metadata["vsCodeInstalled"]!.GetValue<bool>());
         Assert.True(result.Metadata["extensionInstalled"]!.GetValue<bool>());
         Assert.Equal(VsCodeExtensionCheck.ExtensionId, result.Metadata["extensionId"]!.GetValue<string>());
+        Assert.Equal("1.2.3", result.Metadata["extensionVersion"]!.GetValue<string>());
+        Assert.Equal("1.2.3", result.Metadata["latestVersion"]!.GetValue<string>());
+        Assert.False(result.Metadata["updateAvailable"]!.GetValue<bool>());
+        Assert.Equal(1, marketplaceClient.CallCount);
+    }
+
+    [Fact]
+    public async Task CheckAsync_ReturnsWarning_WhenInstalledExtensionIsOutOfDate()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        Directory.CreateDirectory(Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-1.2.3"));
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = extensions.FullName
+        });
+        var executionContext = TestExecutionContextHelper.CreateExecutionContext(home, homeDirectory: home);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            GetLatestStableVersionAsyncCallback = _ => Task.FromResult(SemVersion.Parse("1.3.0", SemVersionStyles.Strict))
+        };
+        var check = new VsCodeExtensionCheck(
+            environment,
+            executionContext,
+            marketplaceClient,
+            NullLogger<VsCodeExtensionCheck>.Instance,
+            _ => null);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal(
+            string.Format(
+                CultureInfo.CurrentCulture,
+                DoctorCommandStrings.VsCodeExtensionOutOfDateMessageFormat,
+                "1.2.3",
+                "1.3.0"),
+            result.Message);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionOutOfDateFix, result.Fix);
+        Assert.Equal(VsCodeExtensionCheck.MarketplaceUrl, result.Link);
+        Assert.NotNull(result.Metadata);
+        Assert.Equal("1.2.3", result.Metadata["extensionVersion"]!.GetValue<string>());
+        Assert.Equal("1.3.0", result.Metadata["latestVersion"]!.GetValue<string>());
+        Assert.True(result.Metadata["updateAvailable"]!.GetValue<bool>());
+        Assert.Equal(1, marketplaceClient.CallCount);
+    }
+
+    [Fact]
+    public async Task CheckAsync_ReturnsPass_WhenInstalledExtensionIsNewerThanMarketplaceVersion()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        Directory.CreateDirectory(Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-2.0.0"));
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = extensions.FullName
+        });
+        var executionContext = TestExecutionContextHelper.CreateExecutionContext(home, homeDirectory: home);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            GetLatestStableVersionAsyncCallback = _ => Task.FromResult(SemVersion.Parse("1.3.0", SemVersionStyles.Strict))
+        };
+        var check = new VsCodeExtensionCheck(
+            environment,
+            executionContext,
+            marketplaceClient,
+            NullLogger<VsCodeExtensionCheck>.Instance,
+            _ => null);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionInstalledMessage, result.Message);
+        Assert.Null(result.Fix);
+        Assert.Null(result.Link);
+        Assert.NotNull(result.Metadata);
+        Assert.Equal("2.0.0", result.Metadata["extensionVersion"]!.GetValue<string>());
+        Assert.Equal("1.3.0", result.Metadata["latestVersion"]!.GetValue<string>());
+        Assert.False(result.Metadata["updateAvailable"]!.GetValue<bool>());
+        Assert.Equal(1, marketplaceClient.CallCount);
+    }
+
+    [Fact]
+    public async Task CheckAsync_ReturnsPassWithoutMarketplaceCall_WhenInstalledVersionCannotBeParsed()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        Directory.CreateDirectory(Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-1.invalid"));
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = extensions.FullName
+        });
+        var executionContext = TestExecutionContextHelper.CreateExecutionContext(home, homeDirectory: home);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            GetLatestStableVersionAsyncCallback = _ => throw new InvalidOperationException("Marketplace must not be queried.")
+        };
+        var check = new VsCodeExtensionCheck(
+            environment,
+            executionContext,
+            marketplaceClient,
+            NullLogger<VsCodeExtensionCheck>.Instance,
+            _ => null);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionInstalledMessage, result.Message);
+        Assert.Null(result.Fix);
+        Assert.Null(result.Link);
+        Assert.NotNull(result.Metadata);
+        Assert.Equal("1.invalid", result.Metadata["extensionVersion"]!.GetValue<string>());
+        Assert.Equal(0, marketplaceClient.CallCount);
+    }
+
+    [Theory]
+    [InlineData("dns")]
+    [InlineData("http")]
+    [InlineData("json")]
+    [InlineData("timeout")]
+    public async Task CheckAsync_ReturnsPassWithDiagnostics_WhenMarketplaceLookupFails(string failureKind)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        Directory.CreateDirectory(Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-1.2.3"));
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = extensions.FullName
+        });
+        var executionContext = TestExecutionContextHelper.CreateExecutionContext(home, homeDirectory: home);
+        Exception failure = failureKind switch
+        {
+            "dns" => new HttpRequestException("Name resolution failed."),
+            "http" => new HttpRequestException("Marketplace returned 503.", null, HttpStatusCode.ServiceUnavailable),
+            "json" => new JsonException("Marketplace response was invalid JSON."),
+            "timeout" => new TimeoutException("Marketplace request timed out."),
+            _ => throw new ArgumentOutOfRangeException(nameof(failureKind))
+        };
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            GetLatestStableVersionAsyncCallback = _ => Task.FromException<SemVersion>(failure)
+        };
+        var check = new VsCodeExtensionCheck(
+            environment,
+            executionContext,
+            marketplaceClient,
+            NullLogger<VsCodeExtensionCheck>.Instance,
+            _ => null);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionInstalledMessage, result.Message);
+        Assert.Equal(
+            $"{DoctorCommandStrings.VsCodeExtensionLatestVersionCheckFailedMessage}: {failure.Message}",
+            result.Details);
+        Assert.Null(result.Fix);
+        Assert.Null(result.Link);
+        Assert.NotNull(result.Metadata);
+        Assert.Equal("1.2.3", result.Metadata["extensionVersion"]!.GetValue<string>());
+        Assert.Equal(failure.Message, result.Metadata["latestVersionError"]!.GetValue<string>());
+        Assert.Equal(1, marketplaceClient.CallCount);
+    }
+
+    [Fact]
+    public async Task CheckAsync_PropagatesCallerCancellationDuringMarketplaceLookup()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        Directory.CreateDirectory(Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-1.2.3"));
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = extensions.FullName
+        });
+        var executionContext = TestExecutionContextHelper.CreateExecutionContext(home, homeDirectory: home);
+        using var cancellationTokenSource = new CancellationTokenSource();
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            GetLatestStableVersionAsyncCallback = cancellationToken =>
+            {
+                cancellationTokenSource.Cancel();
+                return Task.FromCanceled<SemVersion>(cancellationToken);
+            }
+        };
+        var check = new VsCodeExtensionCheck(
+            environment,
+            executionContext,
+            marketplaceClient,
+            NullLogger<VsCodeExtensionCheck>.Instance,
+            _ => null);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => check.CheckAsync(cancellationTokenSource.Token));
+        Assert.Equal(1, marketplaceClient.CallCount);
     }
 
     [Fact]
@@ -100,6 +338,122 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
 
         Assert.True(detection.VsCodeInstalled);
         Assert.True(detection.ExtensionInstalled);
+    }
+
+    [Fact]
+    public void Detect_PrefersPackageJsonVersionOverFolderVersion()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        var extensionDirectory = Directory.CreateDirectory(
+            Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-1.2.3"));
+        File.WriteAllText(
+            Path.Combine(extensionDirectory.FullName, "package.json"),
+            """{"version":"2.3.4"}""");
+
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = extensions.FullName
+        });
+
+        var detection = VsCodeExtensionCheck.Detect(environment, home);
+
+        Assert.True(detection.ExtensionInstalled);
+        Assert.Equal("2.3.4", detection.ExtensionVersion);
+    }
+
+    [Fact]
+    public void Detect_FallsBackToFolderVersion_WhenPackageJsonCannotBeParsed()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        var extensionDirectory = Directory.CreateDirectory(
+            Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-1.2.3-darwin-arm64"));
+        File.WriteAllText(Path.Combine(extensionDirectory.FullName, "package.json"), "{");
+
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = extensions.FullName
+        });
+
+        var detection = VsCodeExtensionCheck.Detect(environment, home);
+
+        Assert.True(detection.ExtensionInstalled);
+        Assert.Equal("1.2.3", detection.ExtensionVersion);
+    }
+
+    [Fact]
+    public void Detect_FallsBackToFolderVersion_WhenPackageVersionIsInvalid()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        var extensionDirectory = Directory.CreateDirectory(
+            Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-1.2.3"));
+        File.WriteAllText(
+            Path.Combine(extensionDirectory.FullName, "package.json"),
+            """{"version":"not-a-version"}""");
+
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = extensions.FullName
+        });
+
+        var detection = VsCodeExtensionCheck.Detect(environment, home);
+
+        Assert.True(detection.ExtensionInstalled);
+        Assert.Equal("1.2.3", detection.ExtensionVersion);
+    }
+
+    [Fact]
+    public void Detect_SelectsHighestValidInstalledVersion()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        Directory.CreateDirectory(
+            Path.Combine(home.FullName, ".vscode", "extensions", "microsoft-aspire.aspire-vscode-1.2.3"));
+        Directory.CreateDirectory(
+            Path.Combine(home.FullName, ".vscode-insiders", "extensions", "microsoft-aspire.aspire-vscode-2.0.0"));
+
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode"
+        });
+
+        var detection = VsCodeExtensionCheck.Detect(environment, home);
+
+        Assert.True(detection.ExtensionInstalled);
+        Assert.Equal("2.0.0", detection.ExtensionVersion);
+    }
+
+    [Fact]
+    public void Detect_IgnoresVersionsMarkedObsoleteByVsCode()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        Directory.CreateDirectory(Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-1.2.3"));
+        Directory.CreateDirectory(Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-1.5.0"));
+        Directory.CreateDirectory(Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-2.0.0"));
+        File.WriteAllText(
+            Path.Combine(extensions.FullName, ".obsolete"),
+            """{"microsoft-aspire.aspire-vscode-2.0.0":true}""");
+
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = extensions.FullName
+        });
+
+        var detection = VsCodeExtensionCheck.Detect(environment, home);
+
+        Assert.True(detection.ExtensionInstalled);
+        Assert.Equal("1.5.0", detection.ExtensionVersion);
     }
 
     [Theory]
