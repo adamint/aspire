@@ -561,6 +561,68 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ResourceRestarted_RetriesLaunchConfigurationAfterTransientProducerFailure()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var producerCallCount = 0;
+        var resource = builder.AddExecutable("app", "command", ".")
+            .WithDebugSupport(
+                context =>
+                {
+                    if (Interlocked.Increment(ref producerCallCount) == 1)
+                    {
+                        throw new InvalidOperationException("transient producer failure");
+                    }
+
+                    return Task.FromResult(
+                        new ExecutableLaunchConfiguration("test") { Mode = context.Mode });
+                },
+                "test")
+            .Resource;
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [DcpExecutor.DebugSessionPortVar] = "12345",
+                [KnownConfigNames.DebugSessionInfo] = JsonSerializer.Serialize(new RunSessionInfo
+                {
+                    ProtocolsSupported = ["test"],
+                    SupportedLaunchConfigurations = ["test"]
+                }),
+                [KnownConfigNames.DebugSessionRunMode] = ExecutableLaunchMode.Debug
+            })
+            .Build();
+        var kubernetesService = new TestKubernetesService();
+
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(
+            distributedAppModel,
+            kubernetesService: kubernetesService,
+            configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        var firstExecutable = Assert.Single(
+            GetCreatedExecutablesForResource(kubernetesService, resource.Name));
+        Assert.Equal(ExecutionType.Process, firstExecutable.Spec.ExecutionType);
+
+        var reference = appExecutor.GetResource(firstExecutable.Metadata.Name);
+        await appExecutor.StopResourceAsync(reference, CancellationToken.None);
+        await appExecutor.StartResourceAsync(reference, CancellationToken.None);
+
+        var executables = GetCreatedExecutablesForResource(kubernetesService, resource.Name);
+        Assert.Equal(2, executables.Count);
+        var secondExecutable = executables[1];
+        Assert.Equal(2, producerCallCount);
+        Assert.Equal(ExecutionType.IDE, secondExecutable.Spec.ExecutionType);
+        Assert.True(secondExecutable.TryGetAnnotationAsObjectList<ExecutableLaunchConfiguration>(
+            Executable.LaunchConfigurationsAnnotation,
+            out var launchConfigurations));
+        Assert.Single(launchConfigurations);
+    }
+
+    [Fact]
     public async Task EndpointPortsExecutableNotReplicatedProxiedNoPortNoTargetPort()
     {
         var builder = DistributedApplication.CreateBuilder();

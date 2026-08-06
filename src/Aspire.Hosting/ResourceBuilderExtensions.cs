@@ -4855,6 +4855,7 @@ public static class ResourceBuilderExtensions
     /// <returns>The <see cref="IResourceBuilder{T}"/>.</returns>
     [Experimental("ASPIREEXTENSION001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
     [AspireExportIgnore(Reason = "Generic debug launch configuration support is not part of the ATS surface.")]
+    [OverloadResolutionPriority(1)]
     public static IResourceBuilder<T> WithDebugSupport<T, TLaunchConfiguration>(
         this IResourceBuilder<T> builder,
         Func<LaunchConfigurationCallbackContext, Task<TLaunchConfiguration>> launchConfigurationProducer,

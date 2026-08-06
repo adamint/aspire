@@ -144,6 +144,22 @@ public class ExecutableResourceBuilderExtensionTests
     }
 
     [Fact]
+    public async Task WithDebugSupportBindsAContextIgnoringAsyncProducerToTheContextOverload()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
+        var executable = builder.AddExecutable("async", "command", "workingdirectory")
+            .WithDebugSupport(
+                static _ => Task.FromResult(new ExecutableLaunchConfiguration("go")),
+                "go");
+
+        var launchConfiguration = Assert.IsType<ExecutableLaunchConfiguration>(
+            await executable.Resource.CreateLaunchConfigurationAsync(
+                LaunchConfigurationTestHelpers.CreateCallbackContext(executable.Resource)));
+
+        Assert.Equal("go", launchConfiguration.Type);
+    }
+
+    [Fact]
     public void WithDebugSupportRejectsATaskReturningSynchronousProducer()
     {
         // `mode => Task.FromResult(...)` binds to the synchronous overload (overload resolution only

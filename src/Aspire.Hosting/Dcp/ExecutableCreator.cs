@@ -162,10 +162,14 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         // Invoke the active launch configuration producer only after the resource execution configuration
         // has been resolved. This gives every launch type, including "project", the exact arguments and
         // environment used for this executable creation.
-        if (exe.Spec.ExecutionType == ExecutionType.IDE
+        if (!HasProjectLaunchArgsOverride(er.ModelResource)
             && !er.ModelResource.HasAnnotationOfType<ForceProcessExecutionAnnotation>()
             && er.ModelResource.SupportsDebugging(_configuration, out var supportsDebuggingAnnotation))
         {
+            // A transient producer failure may have changed the reused executable to Process on a prior
+            // creation. Recompute the intended execution type from the immutable resource model each time.
+            exe.Spec.ExecutionType = ExecutionType.IDE;
+
             var isProjectLaunchConfiguration =
                 supportsDebuggingAnnotation.LaunchConfigurationType is KnownLaunchConfigurationTypes.Project;
 
