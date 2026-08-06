@@ -10,12 +10,7 @@ namespace Aspire.Hosting.Rust.Tests;
 /// can exercise publishing and debugging on machines with no Rust toolchain installed.
 /// </summary>
 /// <param name="metadataJson">The document to answer with.</param>
-/// <param name="workspaceRootRelativePath">
-/// Where the workspace's root manifest sits relative to the app directory. Real cargo reports absolute host
-/// paths, and publishing checks the workspace root against the build context, so the canned document's
-/// placeholder root is rebased onto the directory the reader is actually asked about.
-/// </param>
-internal sealed class FakeCargoMetadataReader(string metadataJson, string workspaceRootRelativePath = ".") : ICargoMetadataReader
+internal sealed class FakeCargoMetadataReader(string metadataJson) : ICargoMetadataReader
 {
     /// <summary>
     /// The environment the reader was last asked to query with.
@@ -54,11 +49,7 @@ internal sealed class FakeCargoMetadataReader(string metadataJson, string worksp
             await onRead(cancellationToken).ConfigureAwait(false);
         }
 
-        var workspaceRoot = Path.GetFullPath(workspaceRootRelativePath, workingDirectory);
-        var rebased = metadataJson.Replace(
-            "\"workspace_root\": \"/app\"",
-            $"\"workspace_root\": {JsonSerializer.Serialize(workspaceRoot)}",
-            StringComparison.Ordinal);
+        var rebased = metadataJson;
 
         // Real cargo honours CARGO_TARGET_DIR when reporting target_directory, and the debug executable path
         // is derived from it, so the fake reflects it too.

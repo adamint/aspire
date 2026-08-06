@@ -141,25 +141,52 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task VerifyPublish_RebasesTheManifestPathIntoTheContainer()
+    public async Task VerifyPublish_KeepsTheManifestPathRelative()
     {
-        // A manifest path is a host path, so it has to be rewritten to where the app directory lands in the
-        // image. The build output stays at the pinned target directory regardless of where the manifest sits.
+        // Cargo runs from the app directory inside the image, so a relative manifest path names the same file
+        // there as it does on the host and is passed through unchanged.
         var content = await PublishDockerfileAsync(
-            workspaceRootRelativePath: "crates/api",
             configureResource: app => app.WithCargoManifestPath("crates/api/Cargo.toml"));
 
         await Verify(content);
     }
 
     [Fact]
-    public async Task PublishFailsWhenTheManifestIsOutsideTheAppDirectory()
+    public async Task VerifyPublish_RewritesWindowsSeparatorsInTheManifestPath()
+    {
+        // A backslash is an ordinary filename character on Linux rather than a separator, so a manifest path
+        // authored on Windows would name a file that does not exist in the image.
+        var content = await PublishDockerfileAsync(
+            configureResource: app => app.WithCargoManifestPath(@"crates\api\Cargo.toml"));
+
+        await Verify(content);
+    }
+
+    [Theory]
+    [InlineData("../elsewhere/Cargo.toml")]
+    [InlineData("crates/../../elsewhere/Cargo.toml")]
+    [InlineData("crates/api/../../../../../../Cargo.toml")]
+    [InlineData("../appsuffix/Cargo.toml")]
+    public async Task PublishFailsWhenTheManifestIsOutsideTheAppDirectory(string manifestPath)
     {
         // Only the app directory is copied into the image, so a manifest above it could never be built there.
+        // The .. segments are collapsed before the path is judged, so an escape buried mid-path is caught too.
         // The publish pipeline reports the failure through the host rather than rethrowing, so the observable
         // result is that no Dockerfile is produced.
         var exception = await Record.ExceptionAsync(
-            () => PublishDockerfileAsync(configureResource: app => app.WithCargoManifestPath("../elsewhere/Cargo.toml")));
+            () => PublishDockerfileAsync(configureResource: app => app.WithCargoManifestPath(manifestPath)));
+
+        Assert.IsType<FileNotFoundException>(exception);
+    }
+
+    [Fact]
+    public async Task PublishFailsWhenTheManifestPathIsAbsolute()
+    {
+        // An absolute path is fine when running, but publishing copies only the app directory into the image,
+        // and an absolute path can spell that directory differently to the app host.
+        var exception = await Record.ExceptionAsync(
+            () => PublishDockerfileAsync(
+                configureResource: app => app.WithCargoManifestPath(Path.Combine(Path.GetTempPath(), "Cargo.toml"))));
 
         Assert.IsType<FileNotFoundException>(exception);
     }
@@ -204,25 +231,13 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         var outputDir = workspace.CreateDirectory("output");
 
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
-        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service"), "."));
+        builder.Services.AddSingleton<ICargoMetadataReader>(new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service")));
         builder.AddRustApp("api", sourceDir.FullName);
         builder.Build().Run();
 
         var ignore = await File.ReadAllTextAsync(Path.Combine(outputDir.FullName, "api.Dockerfile.dockerignore"), TestContext.Current.CancellationToken);
 
         await Verify(ignore);
-    }
-
-    [Fact]
-    public async Task PublishFailsWhenTheWorkspaceRootIsAboveTheAppDirectory()
-    {
-        // Only the app directory is copied into the image, so a workspace member whose root manifest sits
-        // above it could never build there: inherited fields, path dependencies and the lock file are all
-        // missing. The publish pipeline reports the failure through the host rather than rethrowing, so the
-        // observable result is that no Dockerfile is produced.
-        var exception = await Record.ExceptionAsync(() => PublishDockerfileAsync(workspaceRootRelativePath: ".."));
-
-        Assert.IsType<FileNotFoundException>(exception);
     }
 
     [Fact]
@@ -268,7 +283,6 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
     private async Task<string> PublishDockerfileAsync(
         Action<string>? configureSource = null,
         string? metadata = null,
-        string workspaceRootRelativePath = ".",
         Func<IResourceBuilder<RustAppResource>, IResourceBuilder<RustAppResource>>? configureResource = null)
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
@@ -282,7 +296,7 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         // Answer cargo metadata from a canned document so these tests exercise Dockerfile generation on
         // machines without a Rust toolchain installed.
         builder.Services.AddSingleton<ICargoMetadataReader>(
-            new FakeCargoMetadataReader(metadata ?? CargoMetadataFactory.SinglePackage("my-service"), workspaceRootRelativePath));
+            new FakeCargoMetadataReader(metadata ?? CargoMetadataFactory.SinglePackage("my-service")));
 
         var app = builder.AddRustApp("api", sourceDir.FullName);
 

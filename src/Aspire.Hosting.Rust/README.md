@@ -75,7 +75,7 @@ builder.AddRustApp("api", "../rust-api")
 | `WithCargoExample(string exampleName)` | Adds `--example` to run an example instead of a binary |
 | `WithCargoPackage(string packageName)` | Adds `--package` to select a workspace member |
 | `WithCargoTarget(string target)` | Adds `--target` to cross-compile for a specific triple |
-| `WithCargoManifestPath(string manifestPath)` | Adds `--manifest-path`. Only needed when the manifest is not the one cargo finds from the app directory. Must be inside the app directory so publishing can copy it into the image |
+| `WithCargoManifestPath(string manifestPath)` | Adds `--manifest-path`. Only needed when the manifest is not the one cargo finds from the app directory. Publishing requires a path relative to the app directory so the manifest can be copied into the image |
 | `WithCargoProfile(string profileName)` | Adds `--profile`. Takes precedence over `WithCargoReleaseBuild()`, which cargo rejects alongside `--profile` |
 
 ### Debugging
@@ -89,6 +89,10 @@ VS Code.
 with no extra configuration: if the app directory contains a `Dockerfile` it is used as-is, otherwise
 one is generated that compiles the crate inside the container. The container runs as a non-root `app`
 user.
+
+Only the app directory is copied into the image, so it has to hold everything the build needs. For a
+crate that inherits from a workspace or depends on a sibling by path, point the app directory at the
+workspace root and select the crate with `WithCargoPackage("<name>")`.
 
 #### Base images
 

@@ -70,20 +70,13 @@ internal static class RustDockerfileGenerator
             ? cargoOptions
             : new RustCargoOptionsAnnotation();
 
+        ValidateManifestPath(options.ManifestPath, workingDirectory, resource.Name);
+
         var metadata = await context.Services.GetRequiredService<ICargoMetadataReader>()
             // Empty environment: the resource's environment applies to the process the container runs, not to
             // this host-side manifest query.
             .ReadAsync(workingDirectory, options.ManifestPath, resource.Name, ReadOnlyDictionary<string, string>.Empty, context.CancellationToken)
             .ConfigureAwait(false);
-
-        if (metadata.WorkspaceRoot is { Length: > 0 } workspaceRoot && !IsInsideWorkingDirectory(workspaceRoot, workingDirectory))
-        {
-            throw new DistributedApplicationException(
-                $"The Rust app '{resource.Name}' is a member of the cargo workspace rooted at '{workspaceRoot}', which is outside its " +
-                $"app directory '{workingDirectory}'. Publishing copies only the app directory into the container image, so point the app " +
-                $"directory at the workspace root and select the member with WithCargoPackage(\"<name>\"), or add a Dockerfile next to " +
-                $"Cargo.toml to take over the container build.");
-        }
 
         var target = RustCargoTargetResolver.Resolve(
             metadata,
@@ -95,9 +88,12 @@ internal static class RustDockerfileGenerator
         // PublishAsDockerFile substitutes in, which does not carry the Rust annotations.
         var cargoArgs = await ResolvePublishCargoArgsAsync(resource, context.CancellationToken).ConfigureAwait(false);
 
-        if (options.ManifestPath is { } manifestPath)
+        if (options.ManifestPath is { } path)
         {
-            RewriteManifestPath(cargoArgs, manifestPath, ToContainerPath(manifestPath, workingDirectory, resource.Name));
+            // Cargo runs from /app with the app directory copied in, so a relative path already points at the
+            // right file. Only the separators need swapping, since a backslash is an ordinary filename
+            // character on Linux rather than a separator.
+            RewriteManifestPath(cargoArgs, path, path.Replace('\\', '/'));
         }
 
         // Images are used exactly as given and nothing is installed into either: a name is free-form, so an
@@ -170,44 +166,43 @@ internal static class RustDockerfileGenerator
 
     // Matches the two-token form WithCargoManifestPath emits. A --manifest-path passed as a raw string
     // through WithCargoArgs is left alone, in keeping with raw arguments being forwarded verbatim.
-    private static void RewriteManifestPath(List<string> cargoArgs, string hostPath, string containerPath)
+    private static void RewriteManifestPath(List<string> cargoArgs, string manifestPath, string containerPath)
     {
         for (var i = 0; i < cargoArgs.Count - 1; i++)
         {
-            if (cargoArgs[i] == "--manifest-path" && cargoArgs[i + 1] == hostPath)
+            if (cargoArgs[i] == "--manifest-path" && cargoArgs[i + 1] == manifestPath)
             {
                 cargoArgs[i + 1] = containerPath;
             }
         }
     }
 
-    // The working directory is the build context and is copied to /app, so only a path inside it has a
-    // container equivalent.
-    private static string ToContainerPath(string hostPath, string workingDirectory, string resourceName)
+    // Only the app directory is copied into the image, so the manifest has to sit inside it. Paths are
+    // required to be relative because an absolute one can spell that same directory differently to us.
+    private static void ValidateManifestPath(string? manifestPath, string workingDirectory, string resourceName)
     {
-        if (!IsInsideWorkingDirectory(hostPath, workingDirectory))
+        if (manifestPath is null)
         {
-            throw new DistributedApplicationException(
-                $"The Rust app '{resourceName}' builds from '{hostPath}', which is outside its app directory '{workingDirectory}'. " +
-                $"Publishing copies only the app directory into the container image, so point the app directory at a location that " +
-                $"contains the whole crate, or add a Dockerfile next to Cargo.toml to take over the container build.");
+            return;
         }
 
-        var relative = Path.GetRelativePath(workingDirectory, Path.GetFullPath(hostPath, workingDirectory));
+        if (Path.IsPathRooted(manifestPath))
+        {
+            throw new DistributedApplicationException(
+                $"The Rust app '{resourceName}' builds from the absolute path '{manifestPath}'. Publishing needs a path " +
+                $"relative to its app directory '{workingDirectory}'.");
+        }
 
-        return relative is "." ? "/app" : $"/app/{relative.Replace('\\', '/')}";
-    }
+        // Trailing separators on both sides stop /work/app matching a sibling /work/app2.
+        var fullyQualifiedWorkingDirectory = Path.GetFullPath(workingDirectory + Path.DirectorySeparatorChar);
+        var fullyQualifiedManifest = Path.GetFullPath(manifestPath, workingDirectory) + Path.DirectorySeparatorChar;
 
-    private static bool IsInsideWorkingDirectory(string hostPath, string workingDirectory)
-    {
-        var relative = Path.GetRelativePath(workingDirectory, Path.GetFullPath(hostPath, workingDirectory));
-
-        // GetRelativePath returns a rooted path when the two share no common root (different drives on
-        // Windows), and a ..-prefixed path when the target is above the working directory.
-        return !Path.IsPathRooted(relative)
-            && relative != ".."
-            && !relative.StartsWith("../", StringComparison.Ordinal)
-            && !relative.StartsWith(@"..\", StringComparison.Ordinal);
+        if (!fullyQualifiedManifest.StartsWith(fullyQualifiedWorkingDirectory, StringComparison.Ordinal))
+        {
+            throw new DistributedApplicationException(
+                $"The Rust app '{resourceName}' builds from '{manifestPath}', which resolves outside its app directory " +
+                $"'{workingDirectory}'. Only the app directory is copied into the image.");
+        }
     }
 
     private static string BuildCargoCommand(List<string> cargoArgs)
@@ -219,7 +214,11 @@ internal static class RustDockerfileGenerator
     // resource environment — so both layouts are searched:
     //   /build/target/release/api            (no target selected)
     //   /build/target/x86_64-.../release/api (some target selected, by whatever means)
-    // The emptiness test reports the miss directly; without it the failure is a bare `cp: cannot stat ''`.
+    // The target directory is cache mounted, so a triple change between builds leaves both layouts populated
+    // with nothing on disk to say which belongs to this build. Failing beats shipping the stale one.
+    //
+    // Only shell builtins plus mkdir and cp are used, because the build image is overridable and ls, head,
+    // grep and sed may not be there. That also rules out reading the path out of `cargo --message-format=json`.
     private static string BuildCollectArtifactCommand(RustCargoTarget target)
     {
         // Quoting only the suffix keeps the wildcard live: quoting the whole path would make the `*` literal.
@@ -230,8 +229,13 @@ internal static class RustDockerfileGenerator
         return string.Join(
             CommandContinuation,
             [
-                $"bin=\"$(ls -1d {candidates} 2>/dev/null | head -n1)\"",
-                $"[ -n \"$bin\" ] || {{ echo \"cargo build produced no binary under {ContainerTargetDirectory}\" >&2; exit 1; }}",
+                "count=0",
+                // An unmatched glob stays literal, so each candidate is tested rather than counted.
+                $"for candidate in {candidates}; do if [ -f \"$candidate\" ]; then bin=\"$candidate\"; count=$((count+1)); fi; done",
+                // `if` rather than `[ ... ] || { ... }`: && and || share precedence and associate left to right,
+                // so a trailing || catches the whole preceding chain and reports this on top of cargo's own error.
+                $"if [ \"$count\" = 0 ]; then echo \"no {ShellQuote(target.Name)} under {ContainerTargetDirectory}\" >&2; exit 1; fi",
+                $"if [ \"$count\" != 1 ]; then echo \"found $count {ShellQuote(target.Name)} under {ContainerTargetDirectory}; rebuild with --no-cache\" >&2; exit 1; fi",
                 $"mkdir -p {ContainerArtifactDirectory}",
                 $"cp \"$bin\" {destination}"
             ]);

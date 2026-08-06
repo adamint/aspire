@@ -378,7 +378,8 @@ public static class RustHostingExtensions
     /// workspace root.
     /// <para>
     /// Publishing copies the app directory into the container image and rewrites the manifest path to match,
-    /// so the manifest has to live inside the app directory.
+    /// so the manifest has to live inside the app directory and the path has to be relative to it. An absolute
+    /// path is accepted when running and rejected when publishing.
     /// </para>
     /// </remarks>
     [AspireExport]

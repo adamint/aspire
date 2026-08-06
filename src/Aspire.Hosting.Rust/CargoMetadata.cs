@@ -33,15 +33,6 @@ internal sealed class CargoMetadata
     public required string TargetDirectory { get; init; }
 
     /// <summary>
-    /// The absolute path of the directory holding the workspace's root manifest.
-    /// </summary>
-    /// <remarks>
-    /// For a crate that is not in a workspace this is the crate directory. Cargo keeps a single lock file
-    /// here for the whole workspace.
-    /// </remarks>
-    public required string WorkspaceRoot { get; init; }
-
-    /// <summary>
     /// Parses the JSON emitted by <c>cargo metadata --format-version 1 --no-deps</c>.
     /// </summary>
     /// <remarks>
@@ -63,8 +54,7 @@ internal sealed class CargoMetadata
     ///   "workspace_members": ["path+file:///app#my-app@0.1.0"],
     ///   "workspace_default_members": ["path+file:///app#my-app@0.1.0"],
     ///   "resolve": null,
-    ///   "target_directory": "/app/target",
-    ///   "workspace_root": "/app"
+    ///   "target_directory": "/app/target"
     /// }
     /// </code>
     /// Notes on the shape that the parser has to tolerate:
@@ -107,9 +97,6 @@ internal sealed class CargoMetadata
             DefaultMemberIds = defaultMembers,
             TargetDirectory = root.TryGetProperty("target_directory", out var targetDirectoryElement)
                 ? targetDirectoryElement.GetString() ?? string.Empty
-                : string.Empty,
-            WorkspaceRoot = root.TryGetProperty("workspace_root", out var workspaceRootElement)
-                ? workspaceRootElement.GetString() ?? string.Empty
                 : string.Empty
         };
     }
