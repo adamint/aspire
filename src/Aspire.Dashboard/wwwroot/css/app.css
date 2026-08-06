@@ -84,6 +84,14 @@ fluent-toolbar::part(end) {
     row-gap: calc(var(--design-unit) * 1.5px);
 }
 
+/* Native controls do not consume Fluent design tokens. Give links, form controls, and explicitly
+   tabbable elements the same keyboard-focus treatment as Fluent shadow controls. :where() keeps the
+   rule easy to override for specialized controls, such as the non-interactive dialog title anchor. */
+:where(a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])):focus-visible {
+    outline: calc(var(--focus-stroke-width) * 1px) solid var(--focus-stroke-outer);
+    outline-offset: calc(var(--focus-stroke-width) * 1px);
+}
+
 /* Hide any web components that haven't been */
 :not(:defined),
 .before-upgrade {
@@ -145,14 +153,6 @@ fluent-select:focus-within::part(control),
 fluent-combobox:focus-within::part(control),
 fluent-text-area:focus-within::part(control) {
     outline: 1px solid var(--dash-focus-ring-color);
-}
-
-/* Fluent delegates focus to the shadow-DOM button, where its internal :focus-visible rule draws the
-   outline from these inherited tokens. Override the tokens on the host so the internal rule keeps its
-   keyboard-only behavior while using the dashboard focus treatment. */
-fluent-button {
-    --focus-stroke-width: 1;
-    --focus-stroke-outer: var(--dash-focus-ring-color);
 }
 
 /*
@@ -230,10 +230,16 @@ fluent-combobox {
     --kbd-background-color: var(--neutral-layer-4);
     --dialog-background-color: #ffffff;
     --dialog-border-color: #e5e5e5;
-     /* Focus ring color shared by inputs, checkboxes, dropdowns, buttons, and scroll buttons. Ring width
-         and focus state are control-specific. Defaults to the accent fill (a dark violet on light theme,
-         which reads fine on white); dark theme overrides it to a tamed violet because the dark accent fill
-         (--accent-fill-rest #e5bfff) is a near-white lavender that paints a loud halo on the violet panels. */
+    /* Global focus defaults inherited by Fluent shadow controls. app-theme.js also wires the matching
+       Fluent design tokens to these values so token consumers and CSS consumers stay aligned. Inputs,
+       checkboxes, and dropdowns use the ring color for their explicit part outlines; scroll buttons use
+       it for their native outline. Focus state remains control-specific. */
+    --focus-stroke-width: var(--aspire-focus-stroke-width);
+    --focus-stroke-outer: var(--dash-focus-ring-color);
+    --focus-stroke-inner: var(--dash-focus-ring-color);
+    /* Defaults to the accent fill (a dark violet on light theme, which reads fine on white); dark theme
+       overrides it to a tamed violet because the dark accent fill (--accent-fill-rest #e5bfff) is a
+       near-white lavender that paints a loud halo on violet panels. */
     --dash-focus-ring-color: var(--accent-fill-rest);
     /* Message bar surfaces derive from the shared --aspire-status-* seeds (tokens.css)
        so each intent hue is defined once and every theme mixes its own surface from it.
@@ -357,7 +363,7 @@ fluent-combobox {
     --kbd-background-color: var(--neutral-fill-secondary-rest);
     /* Keep the blue-violet undertone from the generated ramp while setting dialogs one step darker.
        Their nested neutral-layer-1 surfaces then regain the hierarchy visible in light mode. */
-    --dialog-background-color: color-mix(in srgb, var(--neutral-layer-1) 75%, #000000);
+    --dialog-background-color: color-mix(in srgb, var(--neutral-layer-2) 75%, #000000);
     --dialog-border-color: var(--neutral-stroke-rest);
     /* A mid periwinkle-violet keeps the focus ring above the WCAG 1.4.11 3:1 non-text contrast
        minimum on the generated dark surfaces without becoming a near-white halo. */
@@ -1655,8 +1661,6 @@ fluent-switch.table-switch::part(label) {
 }
 
 .scroll-button:focus-visible {
-    outline: 2px solid var(--dash-focus-ring-color);
-    outline-offset: 2px;
     opacity: 1;
     visibility: visible;
 }
