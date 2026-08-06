@@ -96,7 +96,7 @@ user.
 | Stage | Default |
 | --- | --- |
 | Build | `rust:alpine` (current stable; a `rust-toolchain.toml` pin is installed by rustup inside the image) |
-| Runtime | `alpine:3.22` |
+| Runtime | `alpine:3.24` |
 
 If you change either image with `WithDockerfileBaseImage`, or name an explicit target with
 `WithCargoTarget`, it is on you to keep the libc compatible across the three — the defaults are all

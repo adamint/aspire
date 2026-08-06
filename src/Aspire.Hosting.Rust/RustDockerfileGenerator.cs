@@ -21,6 +21,16 @@ namespace Aspire.Hosting.Rust;
 /// </remarks>
 internal static class RustDockerfileGenerator
 {
+    // Build stage default. The unversioned tag tracks current stable, and the toolchain it carries is only a
+    // starting point: rustup is present in the official image and installs whatever a rust-toolchain.toml
+    // pins, so an older version, a dated nightly or beta is all honoured from this one image.
+    private const string DefaultBuildImage = "rust:alpine";
+
+    // Runtime stage default, paired with the musl build image above so the binary and the image it runs in
+    // share a libc by construction. Pinned to a release rather than alpine:latest so a generated Dockerfile
+    // does not silently cross a major version, while still floating patches.
+    private const string DefaultRuntimeImage = "alpine:3.24";
+
     // Cargo's output directory inside the build stage. The build context is copied wholesale, so a crate's
     // .cargo/config.toml comes with it and its build.target-dir would otherwise move the binary somewhere the
     // COPY --from below does not look. Pinning it to a path outside /app also keeps build output away from the
@@ -120,13 +130,14 @@ internal static class RustDockerfileGenerator
             RewriteManifestPath(cargoArgs, manifestPath, ToContainerPath(manifestPath, appDirectory, resource.Name));
         }
 
+        // Base images are used exactly as given. Neither is inspected to work out what it contains, and
+        // nothing is installed into either: a name is free-form, so a musl-based image can be called anything
+        // and an image whose name says otherwise can be glibc-based underneath. Pairing images that can run
+        // what they build, including against any --target, belongs to whoever overrides them.
         var baseImageAnnotation = ResolveBaseImageAnnotation(resource, context);
-        var images = RustPublishImageResolver.Resolve(
-            baseImageAnnotation?.BuildImage,
-            baseImageAnnotation?.RuntimeImage);
 
         var buildStage = context.Builder
-            .From(images.BuildImage, "build")
+            .From(baseImageAnnotation?.BuildImage ?? DefaultBuildImage, "build")
             .WorkDir("/app");
 
         if (target.Target is { } triple)
@@ -154,7 +165,7 @@ internal static class RustDockerfileGenerator
         // Add intermediate FROM stages for any container files sources (e.g. FROM frontend AS frontend_stage).
         context.Builder.AddContainerFilesStages(context.Resource, logger);
 
-        var runtimeStage = context.Builder.From(images.RuntimeImage);
+        var runtimeStage = context.Builder.From(baseImageAnnotation?.RuntimeImage ?? DefaultRuntimeImage);
 
         // Nothing is installed into the runtime image. It provides exactly what it ships, whether it is the
         // default or one the caller chose, so a crate needing a CA bundle, a zoneinfo database or any other
@@ -165,7 +176,7 @@ internal static class RustDockerfileGenerator
         //
         // The ids are left to the tool to allocate. Pinning one looks appealing, since it would give a
         // mounted volume the same owner whichever branch ran, but there is no id that is free on every image:
-        // alpine:3.22 already uses gid 999 for `ping`, and asking for it fails outright rather than falling
+        // alpine already uses gid 999 for `ping`, and asking for it fails outright rather than falling
         // through to the next command. An image that needs a particular id can create the user itself and
         // supply its own Dockerfile.
         runtimeStage.Run(
