@@ -55,11 +55,12 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         _appResources = appResources;
     }
 
-    public async Task<IEnumerable<RenderedModelResource<Executable>>> PrepareObjectsAsync(CancellationToken cancellationToken)
+    public Task<IEnumerable<RenderedModelResource<Executable>>> PrepareObjectsAsync(CancellationToken cancellationToken)
     {
-        await PrepareProjectExecutablesAsync(cancellationToken).ConfigureAwait(false);
+        PrepareProjectExecutables(cancellationToken);
         PreparePlainExecutables();
-        return _appResources.Get().OfType<RenderedModelResource<Executable>>();
+        return Task.FromResult<IEnumerable<RenderedModelResource<Executable>>>(
+            _appResources.Get().OfType<RenderedModelResource<Executable>>());
     }
 
     public bool IsReadyToCreate(RenderedModelResource<Executable> resource, EmptyCreationContext context)
@@ -158,65 +159,69 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             throw new FailedToApplyEnvironmentException($"Failed to apply configuration to executable {er.ModelResource.Name}", configuration.Exception);
         }
 
-        // Invoke the debug configuration callback now that endpoints are allocated.
-        // This allows launch configurations to access endpoint URLs that were not
-        // available during PrepareExecutables().
-        // "project" launch types on ProjectResources configure their launch configs in
-        // PrepareProjectExecutables() directly. Plain executables that carry IProjectMetadata and a
-        // "project" SupportsDebuggingAnnotation (e.g. DotnetProjectResource) are prepared as plain executables, 
-        // so their "project" launch configuration is applied here for IDE/F5 parity with AddProject. 
-        // All other types (plain executables and project subtypes like azure-functions) are also handled here.
-        if (!er.ModelResource.HasAnnotationOfType<ForceProcessExecutionAnnotation>()
+        // Invoke the active launch configuration producer only after the resource execution configuration
+        // has been resolved. This gives every launch type, including "project", the exact arguments and
+        // environment used for this executable creation.
+        if (exe.Spec.ExecutionType == ExecutionType.IDE
+            && !er.ModelResource.HasAnnotationOfType<ForceProcessExecutionAnnotation>()
             && er.ModelResource.SupportsDebugging(_configuration, out var supportsDebuggingAnnotation))
         {
-            if (supportsDebuggingAnnotation.LaunchConfigurationType is KnownLaunchConfigurationTypes.Project)
-            {
-                // ProjectResources already applied the "project" launch config in PrepareProjectExecutables().
-                // Only plain executables carrying project metadata need it applied here.
-                if (er.ModelResource is not ProjectResource)
-                {
-                    if (er.ModelResource.TryGetProjectMetadata(out var plainProjectMetadata))
-                    {
-                        // Clear and re-apply the launch configuration to ensure proper restart behavior.
-                        await ApplyProjectLaunchConfigurationAsync(exe, er.ModelResource, plainProjectMetadata, supportsDebuggingAnnotation, cancellationToken).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        throw new FailedToApplyEnvironmentException(
-                            $"Resource '{er.ModelResource.Name}' declares \"project\" debug launch support (WithDebugSupport) but has no project metadata. " +
-                            $"The \"project\" launch configuration type is reserved for .NET project resources; use a resource that carries {nameof(IProjectMetadata)} or a different launch configuration type.");
-                    }
-                }
-            }
-            else
-            {
-                // We have non-project Executable that supports debugging; need to annotate it properly.
+            var isProjectLaunchConfiguration =
+                supportsDebuggingAnnotation.LaunchConfigurationType is KnownLaunchConfigurationTypes.Project;
 
-                var mode = _configuration[KnownConfigNames.DebugSessionRunMode] ?? ExecutableLaunchMode.NoDebug;
-                try
-                {
-                    // Clear any existing launch configurations (needed for restart scenarios).
-                    exe.Annotate(Executable.LaunchConfigurationsAnnotation, string.Empty);
-                    await supportsDebuggingAnnotation.LaunchConfigurationAnnotator(exe, mode, cancellationToken).ConfigureAwait(false);
-                }
-                // Only fall back to Process when Spec.Args still forms a runnable command.
-                catch (Exception ex) when (!supportsDebuggingAnnotation.RewritesArgumentsForDebugging)
-                {
-                    _logger.LogWarning(ex, "Failed to apply launch configuration for resource '{ResourceName}'. Falling back to process execution.", er.ModelResource.Name);
-                    exe.Spec.ExecutionType = ExecutionType.Process;
-                }
+            if (isProjectLaunchConfiguration && !er.ModelResource.TryGetProjectMetadata(out _))
+            {
+                throw new FailedToApplyEnvironmentException(
+                    $"Resource '{er.ModelResource.Name}' declares \"project\" debug launch support (WithDebugSupport) but has no project metadata. " +
+                    $"The \"project\" launch configuration type is reserved for .NET project resources; use a resource that carries {nameof(IProjectMetadata)} or a different launch configuration type.");
+            }
+
+            var mode = isProjectLaunchConfiguration
+                ? GetProjectLaunchConfigurationMode()
+                : _configuration[KnownConfigNames.DebugSessionRunMode] ?? ExecutableLaunchMode.NoDebug;
+            var callbackContext = new LaunchConfigurationCallbackContext
+            {
+                Mode = mode,
+                Resource = er.ModelResource,
+                ExecutionConfiguration = configuration,
+                ExecutionContext = _executionContext,
+                Logger = resourceLogger,
+                CancellationToken = cancellationToken
+            };
+
+            try
+            {
+                // Executable objects are reused for restarts. Clear the prior launch configuration before
+                // applying the freshly resolved producer result.
+                exe.Annotate(Executable.LaunchConfigurationsAnnotation, string.Empty);
+                await supportsDebuggingAnnotation
+                    .LaunchConfigurationAnnotator(exe, callbackContext)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (
+                (exception is not OperationCanceledException || !callbackContext.CancellationToken.IsCancellationRequested)
+                && !isProjectLaunchConfiguration
+                && !supportsDebuggingAnnotation.RewritesArgumentsForDebugging)
+            {
+                _logger.LogWarning(
+                    exception,
+                    "Failed to apply launch configuration for resource '{ResourceName}'. Falling back to process execution.",
+                    er.ModelResource.Name);
+                exe.Spec.ExecutionType = ExecutionType.Process;
             }
         }
 
         await factory.CreateDcpObjectsAsync([exe], cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task PrepareProjectExecutablesAsync(CancellationToken cancellationToken)
+    private void PrepareProjectExecutables(CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var modelProjectResources = _model.GetProjectResources();
 
         foreach (var project in modelProjectResources)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (!project.TryGetProjectMetadata(out var projectMetadata))
             {
                 throw new InvalidOperationException($"Project resource '{project.Name}' is missing required metadata."); // Should never happen.
@@ -291,15 +296,6 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
                         exe.Spec.FallbackExecutionTypes = [ExecutionType.Process];
                     }
 
-                    if (supportsDebuggingAnnotation.LaunchConfigurationType is KnownLaunchConfigurationTypes.Project)
-                    {
-                        // We want this annotation even if we are not using IDE execution; see ToSnapshot() for details.
-                        await ApplyProjectLaunchConfigurationAsync(exe, project, projectMetadata, supportsDebuggingAnnotation, cancellationToken).ConfigureAwait(false);
-                    }
-                    // Non-project launch types (e.g. azure-functions) have their launch configuration
-                    // applied later in CreateExecutableAsync() after endpoints are allocated,
-                    // unless the IDE didn't send DEBUG_SESSION_INFO (handled by the fallback branch below).
-
                     // File-based apps (.cs files) are not supported by all IDEs (e.g. Visual Studio
                     // returns 500 for them). Populate fallback process args so that when the IDE
                     // rejects the launch request and DCP falls back to ExecutionType.Process, the
@@ -337,7 +333,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
                     exe.Spec.ExecutionType = ExecutionType.IDE;
                     exe.Spec.FallbackExecutionTypes = [ExecutionType.Process];
 
-                    await ApplyProjectLaunchConfigurationAsync(exe, project, projectMetadata, supportsDebuggingAnnotation: null, cancellationToken).ConfigureAwait(false);
+                    ApplyProjectLaunchConfiguration(exe, project, projectMetadata);
                 }
                 else
                 {
@@ -813,17 +809,8 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         return true;
     }
 
-    private async Task ApplyProjectLaunchConfigurationAsync(Executable exe, IResource project, IProjectMetadata projectMetadata, SupportsDebuggingAnnotation? supportsDebuggingAnnotation, CancellationToken cancellationToken)
+    private void ApplyProjectLaunchConfiguration(Executable exe, IResource project, IProjectMetadata projectMetadata)
     {
-        if (supportsDebuggingAnnotation?.LaunchConfigurationType is KnownLaunchConfigurationTypes.Project)
-        {
-            // The producer builds the complete configuration, so it is annotated as-is. Clearing first is
-            // what makes restarts (where the Executable object is reused) end up with a single entry.
-            exe.Annotate(Executable.LaunchConfigurationsAnnotation, string.Empty);
-            await supportsDebuggingAnnotation.LaunchConfigurationAnnotator(exe, GetProjectLaunchConfigurationMode(), cancellationToken).ConfigureAwait(false);
-            return;
-        }
-
         exe.SetProjectLaunchConfiguration(CreateProjectLaunchConfiguration(project, projectMetadata));
     }
 

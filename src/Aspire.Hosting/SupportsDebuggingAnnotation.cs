@@ -25,8 +25,8 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
 {
     private SupportsDebuggingAnnotation(
         string launchConfigurationType,
-        Func<Executable, string, CancellationToken, Task> launchConfigurationAnnotator,
-        Func<string, CancellationToken, Task<object>> launchConfigurationProducer,
+        Func<Executable, LaunchConfigurationCallbackContext, Task> launchConfigurationAnnotator,
+        Func<LaunchConfigurationCallbackContext, Task<object>> launchConfigurationProducer,
         bool rewritesArgumentsForDebugging)
     {
         LaunchConfigurationType = launchConfigurationType;
@@ -51,12 +51,12 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
     public string LaunchConfigurationType { get; }
 
     // Takes the internal DCP Executable object, so it stays internal even though the annotation is public.
-    internal Func<Executable, string, CancellationToken, Task> LaunchConfigurationAnnotator { get; }
+    internal Func<Executable, LaunchConfigurationCallbackContext, Task> LaunchConfigurationAnnotator { get; }
 
     // The producer callback passed to WithDebugSupport, with the launch configuration boxed as object.
     // Internal because it hands out an untyped object; DebugSupportExtensions.CreateLaunchConfigurationAsync is
     // the supported way to reach it.
-    internal Func<string, CancellationToken, Task<object>> LaunchConfigurationProducer { get; }
+    internal Func<LaunchConfigurationCallbackContext, Task<object>> LaunchConfigurationProducer { get; }
 
     /// <summary>
     /// Indicates that the debug support rewrites the resource's command-line arguments while a debug
@@ -80,21 +80,50 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
     /// </remarks>
     public bool RewritesArgumentsForDebugging { get; }
 
-    internal static SupportsDebuggingAnnotation Create<T>(string resourceName, string launchConfigurationType, Func<string, CancellationToken, Task<T>> launchProfileProducer, bool rewritesArgumentsForDebugging = false)
+    internal static SupportsDebuggingAnnotation Create<T>(
+        string resourceName,
+        string launchConfigurationType,
+        Func<LaunchConfigurationCallbackContext, Task<T>> launchConfigurationProducer,
+        bool rewritesArgumentsForDebugging = false)
     {
-        // The annotator stays generic over T so the DCP annotation is serialized against the concrete
-        // launch configuration type rather than a boxed object, which would change the emitted JSON.
         return new SupportsDebuggingAnnotation(
             launchConfigurationType,
-            async (exe, mode, ct) => exe.AnnotateAsObjectList(Executable.LaunchConfigurationsAnnotation, await ProduceAsync(mode, ct).ConfigureAwait(false)),
-            // The suppression is safe because ProduceAsync throws rather than returning null; the
-            // compiler cannot see that because T is unconstrained and so may be a nullable type.
-            async (mode, ct) => (await ProduceAsync(mode, ct).ConfigureAwait(false))!,
+            async (exe, context) =>
+                exe.AnnotateAsObjectList(
+                    Executable.LaunchConfigurationsAnnotation,
+                    await ProduceAsync(context).ConfigureAwait(false)),
+            async context => (await ProduceAsync(context).ConfigureAwait(false))!,
             rewritesArgumentsForDebugging);
 
-        async Task<T> ProduceAsync(string mode, CancellationToken cancellationToken)
+        async Task<T> ProduceAsync(LaunchConfigurationCallbackContext context)
         {
-            var launchConfiguration = await launchProfileProducer(mode, cancellationToken).ConfigureAwait(false);
+            Task<T>? producerTask;
+            try
+            {
+                producerTask = launchConfigurationProducer(context);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !context.CancellationToken.IsCancellationRequested)
+            {
+                throw CreateProducerException(exception);
+            }
+
+            if (producerTask is null)
+            {
+                throw new InvalidOperationException(
+                    $"The \"{launchConfigurationType}\" launch configuration producer for resource '{resourceName}' returned a null task. " +
+                    "The producer must return a task that produces the complete launch configuration.");
+            }
+
+            T launchConfiguration;
+            try
+            {
+                launchConfiguration = await producerTask.ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !context.CancellationToken.IsCancellationRequested)
+            {
+                throw CreateProducerException(exception);
+            }
+
             if (launchConfiguration is null)
             {
                 throw new InvalidOperationException(
@@ -103,6 +132,13 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
             }
 
             return launchConfiguration;
+        }
+
+        InvalidOperationException CreateProducerException(Exception innerException)
+        {
+            return new InvalidOperationException(
+                $"The \"{launchConfigurationType}\" launch configuration producer for resource '{resourceName}' failed.",
+                innerException);
         }
     }
 }

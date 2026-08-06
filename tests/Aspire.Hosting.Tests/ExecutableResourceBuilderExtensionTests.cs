@@ -97,7 +97,10 @@ public class ExecutableResourceBuilderExtensionTests
         var annotation = executable.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().SingleOrDefault();
         Assert.NotNull(annotation);
         var exe = new Executable(new ExecutableSpec());
-        await annotation.LaunchConfigurationAnnotator(exe, "NoDebug", CancellationToken.None);
+        var callbackContext = LaunchConfigurationTestHelpers.CreateCallbackContext(
+            executable.Resource,
+            ExecutableLaunchMode.NoDebug);
+        await annotation.LaunchConfigurationAnnotator(exe, callbackContext);
         Assert.Equal("ms-python.python", annotation.LaunchConfigurationType);
 
         Assert.True(exe.TryGetAnnotationAsObjectList<ExecutableLaunchConfiguration>(Executable.LaunchConfigurationsAnnotation, out var annotations));
@@ -129,8 +132,12 @@ public class ExecutableResourceBuilderExtensionTests
                 return new ExecutableLaunchConfiguration("go") { Mode = mode };
             }, "go");
 
-        var syncConfiguration = Assert.IsType<ExecutableLaunchConfiguration>(await syncExecutable.Resource.CreateLaunchConfigurationAsync(ExecutableLaunchMode.Debug));
-        var asyncConfiguration = Assert.IsType<ExecutableLaunchConfiguration>(await asyncExecutable.Resource.CreateLaunchConfigurationAsync(ExecutableLaunchMode.Debug));
+        var syncConfiguration = Assert.IsType<ExecutableLaunchConfiguration>(
+            await syncExecutable.Resource.CreateLaunchConfigurationAsync(
+                LaunchConfigurationTestHelpers.CreateCallbackContext(syncExecutable.Resource, ExecutableLaunchMode.Debug)));
+        var asyncConfiguration = Assert.IsType<ExecutableLaunchConfiguration>(
+            await asyncExecutable.Resource.CreateLaunchConfigurationAsync(
+                LaunchConfigurationTestHelpers.CreateCallbackContext(asyncExecutable.Resource, ExecutableLaunchMode.Debug)));
 
         Assert.Equal(asyncConfiguration.Type, syncConfiguration.Type);
         Assert.Equal(asyncConfiguration.Mode, syncConfiguration.Mode);
