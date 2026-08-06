@@ -318,6 +318,19 @@ If ESRP published the RID packages but failed before publishing `@microsoft/aspi
 
 If the pointer package published but the live npm registry validation failed afterward, re-run with `SkipNpmRidPublish: true` and `SkipNpmPointerPublish: true` so the pipeline retries the install smoke without resubmitting already-published packages.
 
+### npm internal mirror seeding or anonymous validation fails
+
+The release pipeline seeds `@microsoft/aspire-cli` into `dotnet-public-npm` only after the public npm package smoke test succeeds. It then verifies `@microsoft/aspire-cli@latest` with a credential-free npm configuration and cache before channel promotion.
+
+If public npm publication already succeeded, rerun the release with both `SkipNpmRidPublish=true` and `SkipNpmPointerPublish=true`. Keep `DryRun=false` so the public-registry smoke test and internal-mirror gate run, and set `SkipChannelPromotion=true` when validating a pipeline change or retrying the mirror independently. The rerun does not republish npm packages; it validates the existing public package, triggers authenticated upstream ingestion, and repeats anonymous verification.
+
+If the authenticated install fails, verify that the release build identity still has contributor access to `dotnet-public-npm` and that the feed's npm.org upstream is enabled. If anonymous verification exhausts its retries, check the package version directly with a credential-free npm configuration:
+
+```bash
+NPM_CONFIG_USERCONFIG=/dev/null npm view @microsoft/aspire-cli@latest version \
+  --registry https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/
+```
+
 ### Tag already exists but points to different commit
 
 This indicates a mismatch between the expected release commit and an existing tag. Resolution:
