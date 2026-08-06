@@ -3,7 +3,7 @@ import { findResource, getCommandInvocationCount, waitForAppHostLaunching, waitF
 import { executeE2eControlCommand, runE2eTeardown, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath } from './helpers/paths';
 import { openAspireView } from './helpers/vscode';
-import type { NodeLaunchConfiguration, ProjectLaunchConfiguration } from '../dcp/types';
+import type { BrowserLaunchConfiguration, NodeLaunchConfiguration, ProjectLaunchConfiguration } from '../dcp/types';
 
 /**
  * End-to-end coverage for the C# Dev Kit Hot Reload integration.
@@ -24,6 +24,7 @@ suite('Aspire Hot Reload E2E', function () {
     this.timeout(600000);
 
     const nodeLaunchConfig: NodeLaunchConfiguration = { type: 'node', script_path: 'index.js' };
+    const browserLaunchConfig: BrowserLaunchConfiguration = { type: 'browser', url: 'http://localhost:3000' };
 
     teardown(async () => {
         await runE2eTeardown([
@@ -95,6 +96,38 @@ suite('Aspire Hot Reload E2E', function () {
             /hotreload|brokeredservicepipename/i.test(serialized),
             false,
             `A launch configuration must carry nothing Hot Reload related: ${serialized}`);
+    });
+
+    test('registers exactly the polyglot debuggers when no .NET tooling is installed', async () => {
+        await openAspireView();
+        await waitForRepositoryIdle();
+
+        const debuggerExtensions = (await executeE2eControlCommand({ name: 'getResourceDebuggerExtensions' })).result as ReadonlyArray<{
+            resourceType: string;
+        }>;
+
+        // Node and browser debugging use VS Code's built-in js-debug, so a polyglot Aspire app is
+        // fully debuggable in an environment with no .NET tooling at all. Asserted as an exact set
+        // rather than a membership check so an unexpected registration cannot slip through.
+        assert.deepStrictEqual(
+            debuggerExtensions.map(extension => extension.resourceType).sort(),
+            ['browser', 'node']);
+    });
+
+    test('a browser resource debug configuration carries nothing Hot Reload related', async () => {
+        await openAspireView();
+        await waitForRepositoryIdle();
+
+        const configuration = (await executeE2eControlCommand({
+            name: 'createResourceDebugConfiguration',
+            launchConfig: browserLaunchConfig,
+        })).result as Record<string, unknown>;
+
+        const serialized = JSON.stringify(configuration);
+        assert.strictEqual(
+            /hotreload|brokeredservicepipename/i.test(serialized),
+            false,
+            `A browser launch configuration must carry nothing Hot Reload related: ${serialized}`);
     });
 
     test('contributes no Hot Reload settings, commands, or UI of its own', async () => {
