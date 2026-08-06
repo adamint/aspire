@@ -361,9 +361,8 @@ fluent-combobox {
     --reconnection-ui-bg: #D6D6D6;
     --error-counter-badge-foreground-color: #ffffff;
     --kbd-background-color: var(--neutral-fill-secondary-rest);
-    /* Keep the blue-violet undertone from the generated ramp while setting dialogs one step darker.
-       Their nested neutral-layer-1 surfaces then regain the hierarchy visible in light mode. */
-    --dialog-background-color: color-mix(in srgb, var(--neutral-layer-2) 75%, #000000);
+    /* A 10% black mix subtly darkens dialogs while preserving the ramp's blue-violet undertone. */
+    --dialog-background-color: color-mix(in srgb, var(--neutral-layer-2) 90%, #000000);
     --dialog-border-color: var(--neutral-stroke-rest);
     /* A mid periwinkle-violet keeps the focus ring above the WCAG 1.4.11 3:1 non-text contrast
        minimum on the generated dark surfaces without becoming a near-white halo. */
