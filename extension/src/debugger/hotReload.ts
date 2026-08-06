@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 import { isCsDevKitInstalled } from '../capabilities';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { AspireResourceExtendedDebugConfiguration } from '../dcp/types';
+import { dontShowAgainLabel, enableHotReloadLabel, hotReloadAvailablePrompt, hotReloadEnableFailed, hotReloadEnabled } from '../loc/strings';
+import { hotReloadPromptSuppressedKey } from '../utils/hotReloadNotificationState';
 
 const csDevKitExtensionId = 'ms-dotnettools.csdevkit';
 
@@ -224,4 +226,102 @@ export function logResolvedHotReloadState(session: vscode.DebugSession, launchAr
             'Without a brokered service pipe the debugger cannot reach C# Dev Kit, so Hot Reload will not be offered for this session. ' +
             "See the '.NET Hot Reload' output channel for the availability status reported by the debugger.");
     }
+}
+
+/**
+ * Memento used to remember that the user dismissed the Hot Reload prompt.
+ *
+ * Held at module scope, and initialized from `activate`, because the resource launch path that
+ * discovers the disabled state has no access to the extension context.
+ */
+let hotReloadPromptState: vscode.Memento | undefined;
+
+/**
+ * True once the prompt has been shown in this window.
+ *
+ * An Aspire app commonly launches several .NET project resources at once, and every one of them
+ * takes the same code path. Without this, starting a five-project app would show five identical
+ * notifications.
+ */
+let hotReloadPromptShownThisWindow = false;
+
+/**
+ * Supplies the storage used to suppress the Hot Reload prompt once the user dismisses it.
+ */
+export function initializeHotReloadPromptState(memento: vscode.Memento | undefined): void {
+    hotReloadPromptState = memento;
+    hotReloadPromptShownThisWindow = false;
+}
+
+/**
+ * Offers to turn on C# Dev Kit's Hot Reload gate when a .NET resource launches with Dev Kit present
+ * but the feature switched off.
+ *
+ * This is the difference between Hot Reload silently never working and being one click away. The
+ * toolbar button is contributed by Dev Kit and gated only on the `hotReloadEnabled` context key,
+ * which is driven by `csharp.experimental.debug.hotReload`. That setting shipped defaulting to
+ * `false` (it defaults to `true` in newer Dev Kit builds), so on many installations no Aspire session
+ * will ever offer Hot Reload and there is nothing in the UI explaining why.
+ *
+ * Only prompts when acting on it would actually help, so users who cannot use Hot Reload are never
+ * interrupted:
+ * - Dev Kit must be installed and active. Hot Reload does not exist in the base C# extension, so
+ *   prompting a C#-extension-only user would advertise a feature they cannot get.
+ * - Dev Kit must not be in limited activation, which it uses for an untrusted workspace. In that
+ *   mode it exposes no service broker at all and the setting would change nothing.
+ * - The session must be debugging. Hot Reload is applied by the debugger, so a "run" session can
+ *   never use it.
+ */
+export async function promptToEnableHotReloadIfNeeded(diagnostics: HotReloadDiagnostics, isDebugSession: boolean): Promise<boolean> {
+    if (!isDebugSession || diagnostics.settingEnabled) {
+        return false;
+    }
+
+    if (!diagnostics.devKitInstalled || !diagnostics.devKitActive || diagnostics.devKitLimitedActivation) {
+        return false;
+    }
+
+    if (hotReloadPromptShownThisWindow || hotReloadPromptState?.get<boolean>(hotReloadPromptSuppressedKey, false) === true) {
+        return false;
+    }
+
+    hotReloadPromptShownThisWindow = true;
+
+    const selection = await vscode.window.showInformationMessage(hotReloadAvailablePrompt, enableHotReloadLabel, dontShowAgainLabel);
+
+    if (selection === dontShowAgainLabel) {
+        await hotReloadPromptState?.update(hotReloadPromptSuppressedKey, true);
+        return false;
+    }
+
+    if (selection !== enableHotReloadLabel) {
+        // Dismissed without choosing. Leave the suppression flag alone so the offer can be made
+        // again on a later run, but do not ask again in this window.
+        return false;
+    }
+
+    try {
+        // MUST be written at Global scope. The setting is declared `"scope": "machine"`, so VS Code
+        // silently discards a workspace-scoped write and the user would see the prompt succeed while
+        // Hot Reload stayed off.
+        await vscode.workspace
+            .getConfiguration(hotReloadConfigurationSection)
+            .update(hotReloadConfigurationName, true, vscode.ConfigurationTarget.Global);
+    }
+    catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        extensionLogOutputChannel.error(`Failed to enable '${hotReloadConfigurationSection}.${hotReloadConfigurationName}': ${message}`);
+        vscode.window.showErrorMessage(hotReloadEnableFailed(message));
+        return false;
+    }
+
+    await hotReloadPromptState?.update(hotReloadPromptSuppressedKey, true);
+    extensionLogOutputChannel.info(`Enabled '${hotReloadConfigurationSection}.${hotReloadConfigurationName}' in user settings at the user's request.`);
+
+    // Dev Kit reads the gate when it starts a hot reload session, so the resource that is already
+    // launching will not pick it up. Say so rather than letting the user hunt for a button that is
+    // not there yet.
+    vscode.window.showInformationMessage(hotReloadEnabled);
+
+    return true;
 }

@@ -1,7 +1,10 @@
 import * as assert from 'assert';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { applyDevKitHotReloadSupport, isHotReloadSettingEnabled, logHotReloadDiagnostics, tryGetDevKitBrokeredServicePipeName } from '../debugger/hotReload';
+import { applyDevKitHotReloadSupport, initializeHotReloadPromptState, isHotReloadSettingEnabled, logHotReloadDiagnostics, promptToEnableHotReloadIfNeeded, tryGetDevKitBrokeredServicePipeName } from '../debugger/hotReload';
+import { hotReloadPromptSuppressedKey } from '../utils/hotReloadNotificationState';
+import { createTestMemento } from './common';
+import { hotReloadAvailablePrompt, hotReloadEnabled } from '../loc/strings';
 import { AspireResourceExtendedDebugConfiguration } from '../dcp/types';
 
 suite('Hot Reload Tests', () => {
@@ -273,6 +276,108 @@ suite('Hot Reload Tests', () => {
             devKitServerLoaded: false,
             settingEnabled: false,
             pipeNameInjected: false
+        });
+    });
+
+    suite('enable prompt', () => {
+        const enabledDiagnostics = {
+            devKitInstalled: true,
+            devKitActive: true,
+            devKitLimitedActivation: false,
+            devKitServerLoaded: true,
+            settingEnabled: false,
+            pipeNameInjected: true
+        };
+
+        function stubPrompt(selection: string | undefined): sinon.SinonStub {
+            return sinon.stub(vscode.window, 'showInformationMessage').resolves(selection as unknown as vscode.MessageItem);
+        }
+
+        test('offers to enable Hot Reload when Dev Kit is present but the setting is off', async () => {
+            initializeHotReloadPromptState(createTestMemento());
+            const prompt = stubPrompt('Enable Hot Reload');
+            const update = sinon.stub().resolves();
+            sinon.stub(vscode.workspace, 'getConfiguration').returns({ get: () => false, update } as unknown as vscode.WorkspaceConfiguration);
+
+            const enabled = await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true);
+
+            assert.strictEqual(enabled, true);
+            // Two messages are shown: the offer, then the confirmation that it takes effect on the
+            // next session. Assert on the offer specifically rather than the call count.
+            assert.strictEqual(prompt.firstCall.args[0], hotReloadAvailablePrompt);
+            assert.strictEqual(prompt.lastCall.args[0], hotReloadEnabled);
+            // The setting is machine-scoped, so a workspace-scoped write would be silently discarded.
+            assert.deepStrictEqual(update.firstCall.args, ['hotReload', true, vscode.ConfigurationTarget.Global]);
+        });
+
+        test('only prompts once even when several project resources launch together', async () => {
+            initializeHotReloadPromptState(createTestMemento());
+            const prompt = stubPrompt(undefined);
+
+            await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true);
+            await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true);
+            await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true);
+
+            assert.strictEqual(prompt.callCount, 1);
+        });
+
+        test('stops offering after the user dismisses it permanently', async () => {
+            const memento = createTestMemento();
+            initializeHotReloadPromptState(memento);
+            stubPrompt("Don't Show Again");
+
+            const enabled = await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true);
+
+            assert.strictEqual(enabled, false);
+            assert.strictEqual(memento.get(hotReloadPromptSuppressedKey), true);
+        });
+
+        test('does not prompt again in a later window once suppressed', async () => {
+            const memento = createTestMemento();
+            await memento.update(hotReloadPromptSuppressedKey, true);
+            initializeHotReloadPromptState(memento);
+            const prompt = stubPrompt('Enable Hot Reload');
+
+            const enabled = await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true);
+
+            assert.strictEqual(enabled, false);
+            assert.strictEqual(prompt.called, false);
+        });
+
+        test('stays silent for cases where enabling the setting would not help', async () => {
+            const cases: { name: string; diagnostics: typeof enabledDiagnostics; isDebug: boolean }[] = [
+                { name: 'Dev Kit not installed', diagnostics: { ...enabledDiagnostics, devKitInstalled: false, devKitActive: false }, isDebug: true },
+                { name: 'Dev Kit not active', diagnostics: { ...enabledDiagnostics, devKitActive: false }, isDebug: true },
+                { name: 'untrusted workspace', diagnostics: { ...enabledDiagnostics, devKitLimitedActivation: true }, isDebug: true },
+                { name: 'setting already enabled', diagnostics: { ...enabledDiagnostics, settingEnabled: true }, isDebug: true },
+                { name: 'run without debugging', diagnostics: enabledDiagnostics, isDebug: false }
+            ];
+
+            for (const testCase of cases) {
+                sinon.restore();
+                initializeHotReloadPromptState(createTestMemento());
+                const prompt = stubPrompt('Enable Hot Reload');
+
+                const enabled = await promptToEnableHotReloadIfNeeded(testCase.diagnostics, testCase.isDebug);
+
+                assert.strictEqual(enabled, false, testCase.name);
+                assert.strictEqual(prompt.called, false, testCase.name);
+            }
+        });
+
+        test('reports failure instead of claiming success when the setting cannot be written', async () => {
+            initializeHotReloadPromptState(createTestMemento());
+            stubPrompt('Enable Hot Reload');
+            const error = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+            sinon.stub(vscode.workspace, 'getConfiguration').returns({
+                get: () => false,
+                update: sinon.stub().rejects(new Error('settings are read-only'))
+            } as unknown as vscode.WorkspaceConfiguration);
+
+            const enabled = await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true);
+
+            assert.strictEqual(enabled, false);
+            assert.strictEqual(error.calledOnce, true);
         });
     });
 });

@@ -24,7 +24,7 @@ import {
 } from '../launchProfiles';
 import { AspireDebugSession } from '../AspireDebugSession';
 import { createAspireCliPathProcessEnvironment } from '../../utils/cliPathEnvironment';
-import { applyDevKitHotReloadSupport, logHotReloadDiagnostics } from '../hotReload';
+import { applyDevKitHotReloadSupport, logHotReloadDiagnostics, promptToEnableHotReloadIfNeeded } from '../hotReload';
 
 interface IDotNetService {
     getAndActivateDevKit(): Promise<boolean>
@@ -617,6 +617,11 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
             // debugging never gains a dependency on Dev Kit.
             const hotReloadDiagnostics = await applyDevKitHotReloadSupport(debugConfiguration);
             logHotReloadDiagnostics(path.basename(projectPath), hotReloadDiagnostics);
+
+            // Dev Kit ships Hot Reload behind an opt-in that older builds default to off, so a user
+            // with Dev Kit installed can debug an Aspire app forever without the feature ever being
+            // offered. Surface it once instead of leaving it undiscoverable.
+            await promptToEnableHotReloadIfNeeded(hotReloadDiagnostics, launchOptions.debug === true);
         }
     };
 }
