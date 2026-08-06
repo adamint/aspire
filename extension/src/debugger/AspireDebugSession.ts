@@ -31,38 +31,52 @@ export type DashboardLaunchBehavior = 'none' | 'notification' | DashboardBrowser
 export type DashboardBrowserType = 'openExternalBrowser' | 'integratedBrowser' | 'debugChrome' | 'debugEdge' | 'debugFirefox';
 
 /**
- * Debug configuration keys whose values must never reach a log or an uploaded artifact.
+ * Debug configuration keys whose values must never reach a log or an uploaded artifact, regardless
+ * of any opt-in. `brokeredServicePipeName` addresses a live C# Dev Kit service endpoint.
  *
- * Shared by the two independent redactors (`getLoggableDebugConfiguration` here and
- * `redactDebugAdapterArguments` in the E2E state bridge) because they previously drifted: the DAP
- * `launch` arguments ARE the resolved debug configuration, so anything sensitive added to one has to
- * be redacted from both.
+ * Consumed by both independent redactors — `getLoggableDebugConfiguration` here and
+ * `redactDebugAdapterArguments` in the E2E state bridge — because the DAP `launch` arguments ARE the
+ * resolved debug configuration, so anything added here has to be redacted from both. They drifted
+ * once already, which is how the pipe name reached the Aspire output channel.
  */
-export const redactedDebugConfigurationKeys = ['env', 'environmentVariables', 'brokeredServicePipeName'] as const;
+export const alwaysRedactedDebugConfigurationKeys = ['brokeredServicePipeName'] as const;
+
+/**
+ * Keys carrying environment values. These are redacted by default but deliberately left intact for
+ * non-MAUI configurations when `aspire.enableDebugConfigEnvironmentLogging` is on, so they cannot be
+ * folded into {@link alwaysRedactedDebugConfigurationKeys}.
+ */
+export const environmentDebugConfigurationKeys = ['env', 'environmentVariables'] as const;
+
+function withAlwaysRedactedKeys<T extends object>(debugConfig: T): T {
+  const copy = { ...debugConfig };
+  for (const key of alwaysRedactedDebugConfigurationKeys) {
+    if (key in copy && (copy as Record<string, unknown>)[key] !== undefined) {
+      (copy as Record<string, unknown>)[key] = '<redacted>';
+    }
+  }
+
+  return copy;
+}
 
 export function getLoggableDebugConfiguration(debugConfig: AspireResourceExtendedDebugConfiguration, includeEnvironment: boolean): vscode.DebugConfiguration {
-  // The brokered service pipe name addresses a live C# Dev Kit service endpoint, so it is redacted
-  // from every shape below. The Aspire output channel is the artifact users paste into bug reports.
-  const brokeredServicePipeName = debugConfig.brokeredServicePipeName ? '<redacted>' : undefined;
+  // Redact on a copy: the caller's configuration is live and is handed to the debugger to start the
+  // session, so mutating it here would corrupt the launch.
+  const redacted = withAlwaysRedactedKeys(debugConfig);
 
   if (includeEnvironment && debugConfig.type !== 'maui') {
-    return {
-      ...debugConfig,
-      brokeredServicePipeName,
-    };
+    return redacted;
   }
 
   if (includeEnvironment) {
     return {
-      ...debugConfig,
-      brokeredServicePipeName,
+      ...redacted,
       environmentVariables: debugConfig.environmentVariables ? '<redacted>' : undefined,
     };
   }
 
   return {
-    ...debugConfig,
-    brokeredServicePipeName,
+    ...redacted,
     env: debugConfig.env ? '<redacted>' : undefined,
     environmentVariables: debugConfig.environmentVariables ? '<redacted>' : undefined,
     msbuildProperties: debugConfig.msbuildProperties instanceof Map ? Object.fromEntries(debugConfig.msbuildProperties) : debugConfig.msbuildProperties,

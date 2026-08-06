@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { join } from 'node:path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { AspireDebugSession, buildAspireCommandArgs, getLoggableDebugConfiguration } from '../debugger/AspireDebugSession';
+import { AspireDebugSession, alwaysRedactedDebugConfigurationKeys, buildAspireCommandArgs, getLoggableDebugConfiguration } from '../debugger/AspireDebugSession';
 import { appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { AspireResourceExtendedDebugConfiguration } from '../dcp/types';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
@@ -1010,22 +1010,28 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         ];
 
         for (const shape of shapes) {
-            const debugConfig = {
-                runId: 'run-1',
-                debugSessionId: 'debug-1',
-                type: shape.type,
-                name: 'api',
-                request: 'launch',
-                brokeredServicePipeName: 'devkit-broker-pipe-secret',
-            } as AspireResourceExtendedDebugConfiguration;
+            for (const key of alwaysRedactedDebugConfigurationKeys) {
+                const debugConfig = {
+                    runId: 'run-1',
+                    debugSessionId: 'debug-1',
+                    type: shape.type,
+                    name: 'api',
+                    request: 'launch',
+                    [key]: 'devkit-broker-pipe-secret',
+                } as unknown as AspireResourceExtendedDebugConfiguration;
 
-            const loggableConfig = getLoggableDebugConfiguration(debugConfig, shape.includeEnvironment);
+                const loggableConfig = getLoggableDebugConfiguration(debugConfig, shape.includeEnvironment);
 
-            assert.strictEqual(loggableConfig.brokeredServicePipeName, '<redacted>', JSON.stringify(shape));
-            assert.strictEqual(
-                JSON.stringify(loggableConfig).includes('devkit-broker-pipe-secret'),
-                false,
-                `the pipe name leaked for ${JSON.stringify(shape)}`);
+                assert.strictEqual((loggableConfig as Record<string, unknown>)[key], '<redacted>', `${key} ${JSON.stringify(shape)}`);
+                assert.strictEqual(
+                    JSON.stringify(loggableConfig).includes('devkit-broker-pipe-secret'),
+                    false,
+                    `${key} leaked for ${JSON.stringify(shape)}`);
+                assert.strictEqual(
+                    (debugConfig as unknown as Record<string, unknown>)[key],
+                    'devkit-broker-pipe-secret',
+                    `redaction mutated the caller's live configuration for ${key}`);
+            }
         }
     });
 
