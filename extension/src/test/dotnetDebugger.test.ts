@@ -333,34 +333,25 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(dotNetService.buildDotNetProjectStub.notCalled, true);
     });
 
-    test('project debug configuration receives the brokered service pipe name when C# Dev Kit is ready', async () => {
-        stubCsDevKitExtension({
-            hasServerProcessLoaded: () => true,
-            getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
-        });
+    test('project debug configuration is byte-identical whether or not C# Dev Kit is installed', async () => {
+        // The strongest statement of "Hot Reload changes nothing about how resources launch": Hot
+        // Reload is implemented entirely by Dev Kit and vsdbg, so Aspire only reads state. If a
+        // future change starts mutating the configuration for Dev Kit users, this fails.
+        //
+        // One stub flipped between the two runs, rather than restoring sinon mid-test, so the
+        // suite-level notification stub stays installed throughout.
+        let devKitInstalled = false;
+        sinon.stub(vscode.extensions, 'getExtension').callsFake((extensionId: string) =>
+            devKitInstalled && extensionId === 'ms-dotnettools.csdevkit'
+                ? { id: extensionId, isActive: true, exports: { isLimitedActivation: false } } as unknown as vscode.Extension<unknown>
+                : undefined);
 
-        const debugConfig = await createProjectDebugConfiguration();
+        const withoutDevKit = await createProjectDebugConfiguration();
 
-        assert.strictEqual(debugConfig.brokeredServicePipeName, 'devkit-broker-pipe');
-    });
+        devKitInstalled = true;
+        const withDevKit = await createProjectDebugConfiguration();
 
-    test('project debug configuration omits the brokered service pipe name without C# Dev Kit', async () => {
-        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
-
-        const debugConfig = await createProjectDebugConfiguration();
-
-        assert.strictEqual(debugConfig.brokeredServicePipeName, undefined);
-    });
-
-    test('project debug configuration omits the brokered service pipe name for a no-debug session', async () => {
-        stubCsDevKitExtension({
-            hasServerProcessLoaded: () => true,
-            getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
-        });
-
-        const debugConfig = await createProjectDebugConfiguration({ debug: false });
-
-        assert.strictEqual(debugConfig.brokeredServicePipeName, undefined);
+        assert.deepStrictEqual(withDevKit, withoutDevKit);
     });
 
     function stubCsDevKitExtension(exports: unknown): void {
@@ -374,10 +365,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         // A VS Code notification carrying buttons stays up until the user interacts with it, so
         // awaiting one on the launch path would stall the resource - potentially forever - behind a
         // purely advisory message. The prompt must never gate the debug session.
-        stubCsDevKitExtension({
-            hasServerProcessLoaded: () => true,
-            getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
-        });
+        stubCsDevKitExtension({ isLimitedActivation: false });
         sinon.stub(vscode.workspace, 'getConfiguration').returns({
             get: () => false,
             update: async () => undefined
@@ -390,7 +378,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         const debugConfig = await createProjectDebugConfiguration();
 
         assert.strictEqual(notification.called, true, 'the prompt should have been raised');
-        assert.strictEqual(debugConfig.brokeredServicePipeName, 'devkit-broker-pipe', 'launch must still complete');
+        assert.ok(debugConfig.program, 'launch must still complete while the prompt is unanswered');
 
         resolveNotification?.(undefined);
     });
@@ -400,13 +388,11 @@ suite('Dotnet Debugger Extension Tests', () => {
         // debug session into a failed one, so a throw from its exports has to degrade to "no Hot
         // Reload" rather than propagating out of the launch path.
         stubCsDevKitExtension({
-            hasServerProcessLoaded: () => { throw new Error('dev kit exploded'); },
-            getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
+            get isLimitedActivation(): boolean { throw new Error('dev kit exploded'); }
         });
 
         const debugConfig = await createProjectDebugConfiguration();
 
-        assert.strictEqual(debugConfig.brokeredServicePipeName, undefined);
         assert.strictEqual(debugConfig.program, 'C:\\temp\\bin\\Debug\\net7.0\\TestProject.dll');
     });
 
@@ -435,13 +421,12 @@ suite('Dotnet Debugger Extension Tests', () => {
             'serverReadyAction',
             'type'
         ]);
-        assert.strictEqual('brokeredServicePipeName' in debugConfig, false);
         assert.strictEqual(notification.called, false, 'a user without Dev Kit must never be prompted');
     });
 
     async function createProjectDebugConfiguration(options: { debug?: boolean } = {}): Promise<AspireResourceExtendedDebugConfiguration> {
         const outputPath = 'C:\\temp\\bin\\Debug\\net7.0\\TestProject.dll';
-        const { extension } = createDebuggerExtension(outputPath, null, true, true);
+        const { extension, doesFileExistStub } = createDebuggerExtension(outputPath, null, true, true);
 
         const launchConfig: ProjectLaunchConfiguration = {
             type: 'project',
@@ -464,6 +449,10 @@ suite('Dotnet Debugger Extension Tests', () => {
             [],
             { debug, runId: '1', debugSessionId: '1', isApphost: false, debugSession: sinon.createStubInstance(AspireDebugSession) },
             debugConfig);
+
+        // Restored so a caller can build a second configuration in the same test; sinon refuses to
+        // wrap an already-wrapped method.
+        doesFileExistStub.restore();
 
         return debugConfig;
     }

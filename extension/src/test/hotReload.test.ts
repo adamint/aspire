@@ -1,28 +1,14 @@
 import * as assert from 'assert';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { announceHotReloadForSessionIfNeeded, applyDevKitHotReloadSupport, initializeHotReloadPromptState, isHotReloadSettingEnabled, logHotReloadDiagnostics, logResolvedHotReloadState, promptToEnableHotReloadIfNeeded, tryGetDevKitBrokeredServicePipeName } from '../debugger/hotReload';
+import { announceHotReloadForSessionIfNeeded, getHotReloadDiagnostics, initializeHotReloadPromptState, isHotReloadSettingEnabled, logHotReloadDiagnostics, promptToEnableHotReloadIfNeeded } from '../debugger/hotReload';
 import { hotReloadPromptSuppressedKey, hotReloadSessionNoticeShownKey } from '../utils/hotReloadNotificationState';
 import { createTestMemento } from './common';
 import { hotReloadActiveNotice, hotReloadAvailablePrompt, hotReloadEnabled } from '../loc/strings';
-import { AspireResourceExtendedDebugConfiguration } from '../dcp/types';
 import { extensionLogOutputChannel } from '../utils/logging';
 
 suite('Hot Reload Tests', () => {
     teardown(() => sinon.restore());
-
-    function createDebugConfig(overrides: Partial<AspireResourceExtendedDebugConfiguration> = {}): AspireResourceExtendedDebugConfiguration {
-        return {
-            type: 'coreclr',
-            request: 'launch',
-            name: 'Debug api',
-            program: '/workspace/api/bin/Debug/net10.0/api.dll',
-            noDebug: false,
-            runId: '1',
-            debugSessionId: '1',
-            ...overrides
-        };
-    }
 
     /**
      * Stubs extension lookup so only C# Dev Kit resolves, with a caller-controlled exports shape and
@@ -46,200 +32,83 @@ suite('Hot Reload Tests', () => {
         sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
     }
 
-    test('does not modify the debug configuration when C# Dev Kit is not installed', async () => {
+    test('reports Hot Reload as unavailable when C# Dev Kit is not installed', () => {
         stubNoExtensions();
 
-        const debugConfig = createDebugConfig();
-        const diagnostics = await applyDevKitHotReloadSupport(debugConfig);
+        const diagnostics = getHotReloadDiagnostics();
 
-        assert.strictEqual(debugConfig.brokeredServicePipeName, undefined);
         assert.strictEqual(diagnostics.devKitInstalled, false);
         assert.strictEqual(diagnostics.devKitActive, false);
-        assert.strictEqual(diagnostics.devKitServerLoaded, false);
-        assert.strictEqual(diagnostics.pipeNameInjected, false);
+        assert.strictEqual(diagnostics.devKitLimitedActivation, false);
     });
 
-    test('leaves the rest of the debug configuration untouched without C# Dev Kit', async () => {
-        stubNoExtensions();
+    test('does not activate C# Dev Kit when it has not activated itself', () => {
+        // Activating Dev Kit from the resource launch path would add startup cost for a purely
+        // optional enhancement, so an installed-but-dormant Dev Kit must be reported as inactive
+        // rather than woken up.
+        const activate = sinon.spy();
+        sinon.stub(vscode.extensions, 'getExtension').callsFake((extensionId: string) =>
+            extensionId === 'ms-dotnettools.csdevkit'
+                ? ({ id: extensionId, isActive: false, exports: undefined, activate } as unknown as vscode.Extension<unknown>)
+                : undefined);
 
-        const debugConfig = createDebugConfig();
-        const before = JSON.stringify(debugConfig);
+        const diagnostics = getHotReloadDiagnostics();
 
-        await applyDevKitHotReloadSupport(debugConfig);
-
-        assert.strictEqual(JSON.stringify(debugConfig), before);
-    });
-
-    test('does not activate C# Dev Kit when it has not activated itself', async () => {
-        stubDevKit({
-            active: false,
-            exports: {
-                hasServerProcessLoaded: () => true,
-                getBrokeredServiceServerPipeName: async () => 'pipe-should-not-be-read'
-            }
-        });
-
-        const debugConfig = createDebugConfig();
-        const diagnostics = await applyDevKitHotReloadSupport(debugConfig);
-
-        assert.strictEqual(debugConfig.brokeredServicePipeName, undefined);
         assert.strictEqual(diagnostics.devKitInstalled, true);
         assert.strictEqual(diagnostics.devKitActive, false);
-        assert.strictEqual(diagnostics.pipeNameInjected, false);
+        assert.strictEqual(activate.called, false, 'Dev Kit must never be activated from the resource launch path');
     });
 
-    test('does not inject a pipe name before the C# Dev Kit server process has loaded', async () => {
-        stubDevKit({
-            exports: {
-                hasServerProcessLoaded: () => false,
-                getBrokeredServiceServerPipeName: async () => 'pipe-should-not-be-read'
-            }
-        });
+    test('never reaches into C# Dev Kit private services to set up Hot Reload', () => {
+        // Hot Reload is wired up entirely by Dev Kit and the C# extension. Aspire reads state and
+        // nothing more, so no brokered service call may appear on the launch path. Calling into
+        // Dev Kit's service broker would couple Aspire to an unversioned internal contract.
+        const getBrokeredServiceServerPipeName = sinon.spy();
+        const hasServerProcessLoaded = sinon.spy();
+        const ensureInitialized = sinon.spy();
+        stubDevKit({ exports: { getBrokeredServiceServerPipeName, hasServerProcessLoaded, ensureInitialized, serviceBroker: {} } });
 
-        const debugConfig = createDebugConfig();
-        const diagnostics = await applyDevKitHotReloadSupport(debugConfig);
+        getHotReloadDiagnostics();
 
-        assert.strictEqual(debugConfig.brokeredServicePipeName, undefined);
-        assert.strictEqual(diagnostics.devKitActive, true);
-        assert.strictEqual(diagnostics.devKitServerLoaded, false);
-        assert.strictEqual(diagnostics.pipeNameInjected, false);
+        assert.strictEqual(getBrokeredServiceServerPipeName.called, false);
+        assert.strictEqual(hasServerProcessLoaded.called, false);
+        assert.strictEqual(ensureInitialized.called, false);
     });
 
-    test('injects the brokered service pipe name when C# Dev Kit is ready', async () => {
-        stubDevKit({
-            exports: {
-                hasServerProcessLoaded: () => true,
-                getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
-            }
-        });
-
-        const debugConfig = createDebugConfig();
-        const diagnostics = await applyDevKitHotReloadSupport(debugConfig);
-
-        assert.strictEqual(debugConfig.brokeredServicePipeName, 'devkit-broker-pipe');
-        assert.strictEqual(diagnostics.devKitInstalled, true);
-        assert.strictEqual(diagnostics.devKitActive, true);
-        assert.strictEqual(diagnostics.devKitServerLoaded, true);
-        assert.strictEqual(diagnostics.pipeNameInjected, true);
-    });
-
-    test('does not inject a pipe name for a no-debug session', async () => {
-        stubDevKit({
-            exports: {
-                hasServerProcessLoaded: () => true,
-                getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
-            }
-        });
-
-        const debugConfig = createDebugConfig({ noDebug: true });
-        const diagnostics = await applyDevKitHotReloadSupport(debugConfig);
-
-        assert.strictEqual(debugConfig.brokeredServicePipeName, undefined);
-        assert.strictEqual(diagnostics.pipeNameInjected, false);
-    });
-
-    test('preserves an existing brokered service pipe name', async () => {
-        stubDevKit({
-            exports: {
-                hasServerProcessLoaded: () => true,
-                getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
-            }
-        });
-
-        const debugConfig = createDebugConfig({ brokeredServicePipeName: 'already-set-pipe' });
-        const diagnostics = await applyDevKitHotReloadSupport(debugConfig);
-
-        assert.strictEqual(debugConfig.brokeredServicePipeName, 'already-set-pipe');
-        assert.strictEqual(diagnostics.pipeNameInjected, true);
-    });
-
-    test('ignores an empty pipe name', async () => {
-        stubDevKit({
-            exports: {
-                hasServerProcessLoaded: () => true,
-                getBrokeredServiceServerPipeName: async () => ''
-            }
-        });
-
-        const debugConfig = createDebugConfig();
-        const diagnostics = await applyDevKitHotReloadSupport(debugConfig);
-
-        assert.strictEqual(debugConfig.brokeredServicePipeName, undefined);
-        assert.strictEqual(diagnostics.pipeNameInjected, false);
-    });
-
-    test('does not fail the launch when C# Dev Kit throws while resolving the pipe name', async () => {
-        stubDevKit({
-            exports: {
-                hasServerProcessLoaded: () => true,
-                getBrokeredServiceServerPipeName: async () => { throw new Error('broker unavailable'); }
-            }
-        });
-
-        const debugConfig = createDebugConfig();
-        const diagnostics = await applyDevKitHotReloadSupport(debugConfig);
-
-        assert.strictEqual(debugConfig.brokeredServicePipeName, undefined);
-        assert.strictEqual(diagnostics.pipeNameInjected, false);
-    });
-
-    test('tolerates an unexpected C# Dev Kit exports shape', async () => {
-        stubDevKit({ exports: { somethingElse: true } });
-
-        const debugConfig = createDebugConfig();
-        const diagnostics = await applyDevKitHotReloadSupport(debugConfig);
-
-        assert.strictEqual(debugConfig.brokeredServicePipeName, undefined);
-        assert.strictEqual(diagnostics.devKitInstalled, true);
-        assert.strictEqual(diagnostics.devKitActive, true);
-        assert.strictEqual(diagnostics.devKitServerLoaded, false);
-        assert.strictEqual(diagnostics.pipeNameInjected, false);
-    });
-
-    test('reports limited activation when C# Dev Kit activated for an untrusted workspace', async () => {
-        // In limited activation Dev Kit returns ONLY this flag: no service broker, no pipe name.
+    test('reports limited activation when C# Dev Kit activated for an untrusted workspace', () => {
+        // In limited activation Dev Kit returns ONLY this flag, and Hot Reload cannot work at all
+        // until the workspace is trusted.
         stubDevKit({ exports: { isLimitedActivation: true } });
 
-        const debugConfig = createDebugConfig();
-        const diagnostics = await applyDevKitHotReloadSupport(debugConfig);
+        const diagnostics = getHotReloadDiagnostics();
 
-        assert.strictEqual(debugConfig.brokeredServicePipeName, undefined);
         assert.strictEqual(diagnostics.devKitInstalled, true);
         assert.strictEqual(diagnostics.devKitActive, true);
         assert.strictEqual(diagnostics.devKitLimitedActivation, true);
-        assert.strictEqual(diagnostics.pipeNameInjected, false);
     });
 
-    test('does not report limited activation for a fully activated C# Dev Kit', async () => {
-        stubDevKit({
-            exports: {
-                isLimitedActivation: false,
-                hasServerProcessLoaded: () => true,
-                getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
-            }
-        });
+    test('does not report limited activation for a fully activated C# Dev Kit', () => {
+        stubDevKit({ exports: { isLimitedActivation: false } });
 
-        const debugConfig = createDebugConfig();
-        const diagnostics = await applyDevKitHotReloadSupport(debugConfig);
-
-        assert.strictEqual(diagnostics.devKitLimitedActivation, false);
-        assert.strictEqual(diagnostics.pipeNameInjected, true);
+        assert.strictEqual(getHotReloadDiagnostics().devKitLimitedActivation, false);
     });
 
-    test('tolerates undefined C# Dev Kit exports', async () => {
+    test('tolerates undefined C# Dev Kit exports', () => {
         stubDevKit({ exports: undefined });
 
-        const debugConfig = createDebugConfig();
-        const diagnostics = await applyDevKitHotReloadSupport(debugConfig);
+        const diagnostics = getHotReloadDiagnostics();
 
-        assert.strictEqual(debugConfig.brokeredServicePipeName, undefined);
-        assert.strictEqual(diagnostics.pipeNameInjected, false);
+        assert.strictEqual(diagnostics.devKitActive, true);
+        assert.strictEqual(diagnostics.devKitLimitedActivation, false);
     });
 
-    test('returns no pipe name when C# Dev Kit is not installed', async () => {
-        stubNoExtensions();
+    test('tolerates an unexpected C# Dev Kit exports shape', () => {
+        stubDevKit({ exports: { somethingElse: true } });
 
-        assert.strictEqual(await tryGetDevKitBrokeredServicePipeName(), undefined);
+        const diagnostics = getHotReloadDiagnostics();
+
+        assert.strictEqual(diagnostics.devKitInstalled, true);
+        assert.strictEqual(diagnostics.devKitLimitedActivation, false);
     });
 
     test('reads the hot reload setting from the csharp.experimental.debug section', () => {
@@ -267,9 +136,7 @@ suite('Hot Reload Tests', () => {
             devKitInstalled: true,
             devKitActive: true,
             devKitLimitedActivation: false,
-            devKitServerLoaded: true,
-            settingEnabled: false,
-            pipeNameInjected: true
+            settingEnabled: false
         });
 
         const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
@@ -279,6 +146,37 @@ suite('Hot Reload Tests', () => {
         assert.ok(logged.includes('machine-scoped'), logged);
     });
 
+    test('names the resource Hot Reload covers when the setting is on', () => {
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+
+        logHotReloadDiagnostics('api', {
+            devKitInstalled: true,
+            devKitActive: true,
+            devKitLimitedActivation: false,
+            settingEnabled: true
+        });
+
+        const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
+        assert.ok(logged.includes('Hot Reload covers api'), logged);
+        // Saving is the primary gesture and is on by default; the toolbar button is the fallback.
+        assert.ok(logged.includes('hotReloadOnSave'), logged);
+    });
+
+    test('reports an untrusted workspace instead of blaming the setting', () => {
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+
+        logHotReloadDiagnostics('api', {
+            devKitInstalled: true,
+            devKitActive: true,
+            devKitLimitedActivation: true,
+            settingEnabled: true
+        });
+
+        const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
+        assert.ok(logged.includes('limited mode'), logged);
+        assert.ok(logged.includes('trusted'), logged);
+    });
+
     test('says nothing at all when C# Dev Kit is not installed', () => {
         const info = sinon.stub(extensionLogOutputChannel, 'info');
 
@@ -286,111 +184,10 @@ suite('Hot Reload Tests', () => {
             devKitInstalled: false,
             devKitActive: false,
             devKitLimitedActivation: false,
-            devKitServerLoaded: false,
-            settingEnabled: false,
-            pipeNameInjected: false
+            settingEnabled: false
         });
 
         assert.strictEqual(info.called, false, 'running .NET resources without Dev Kit is fully supported and must not be reported as a problem');
-    });
-
-    suite('launch path is bounded', () => {
-        test('gives up on a wedged C# Dev Kit instead of stalling the resource launch', async () => {
-            // This bound is the only thing between a wedged Dev Kit and a resource that never
-            // launches: createDebugSessionConfigurationCallback is awaited BEFORE the debug session
-            // is created, so an unbounded await here hangs the resource indefinitely.
-            const clock = sinon.useFakeTimers();
-            try {
-                stubDevKit({
-                    exports: {
-                        hasServerProcessLoaded: () => true,
-                        getBrokeredServiceServerPipeName: () => new Promise<string>(() => { /* never settles */ })
-                    }
-                });
-
-                const pending = tryGetDevKitBrokeredServicePipeName();
-                await clock.tickAsync(5000);
-
-                assert.strictEqual(await pending, undefined);
-            }
-            finally {
-                clock.restore();
-            }
-        });
-
-        test('does not leave a pending timer behind on the fast path', async () => {
-            const clock = sinon.useFakeTimers();
-            try {
-                stubDevKit({
-                    exports: {
-                        hasServerProcessLoaded: () => true,
-                        getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
-                    }
-                });
-
-                assert.strictEqual(await tryGetDevKitBrokeredServicePipeName(), 'devkit-broker-pipe');
-                // A leaked timeout keeps the event loop busy and, under a fake clock, is directly
-                // observable as a still-scheduled timer.
-                assert.strictEqual(clock.countTimers(), 0, 'the timeout timer must be cleared once the pipe name resolves');
-            }
-            finally {
-                clock.restore();
-            }
-        });
-    });
-
-    suite('resolved state logging', () => {
-        function createSession(type: string): vscode.DebugSession {
-            return { type, name: `session-${type}` } as vscode.DebugSession;
-        }
-
-        test('ignores debug sessions that are not coreclr', () => {
-            stubDevKit();
-            const info = sinon.stub(extensionLogOutputChannel, 'info');
-
-            // This runs inside the DAP tracker attached to every Aspire debug session, so a Node or
-            // Python resource must not produce .NET diagnostics.
-            logResolvedHotReloadState(createSession('pwa-node'), { brokeredServicePipeName: 'pipe' });
-
-            assert.strictEqual(info.called, false);
-        });
-
-        test('says nothing when C# Dev Kit is not installed', () => {
-            stubNoExtensions();
-            const info = sinon.stub(extensionLogOutputChannel, 'info');
-
-            logResolvedHotReloadState(createSession('coreclr'), {});
-
-            assert.strictEqual(info.called, false);
-        });
-
-        test('never logs the pipe name itself', () => {
-            stubDevKit();
-            const info = sinon.stub(extensionLogOutputChannel, 'info');
-
-            logResolvedHotReloadState(createSession('coreclr'), { brokeredServicePipeName: 'secret-pipe-value' });
-
-            const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
-            assert.ok(logged.includes('present'), `expected the pipe to be reported as present, got: ${logged}`);
-            assert.strictEqual(logged.includes('secret-pipe-value'), false, 'the pipe name addresses a live endpoint and must never be logged');
-        });
-
-        test('reports a missing pipe for malformed launch arguments', () => {
-            stubDevKit();
-            const info = sinon.stub(extensionLogOutputChannel, 'info');
-
-            // The arguments come off the wire, so nothing about their shape is guaranteed. A throw
-            // here would escape into VS Code's DAP tracker for every Aspire debug session, and a
-            // silent early return would make the diagnostic useless.
-            const malformed = [undefined, null, 'a string', 42, [], { brokeredServicePipeName: 17 }, { brokeredServicePipeName: '' }];
-            for (const launchArguments of malformed) {
-                info.resetHistory();
-                logResolvedHotReloadState(createSession('coreclr'), launchArguments);
-
-                const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
-                assert.ok(logged.includes('absent'), `expected '${JSON.stringify(launchArguments)}' to be reported as absent, got: ${logged}`);
-            }
-        });
     });
 
     suite('active session notice', () => {
@@ -398,9 +195,7 @@ suite('Hot Reload Tests', () => {
             devKitInstalled: true,
             devKitActive: true,
             devKitLimitedActivation: false,
-            devKitServerLoaded: true,
-            settingEnabled: true,
-            pipeNameInjected: true
+            settingEnabled: true
         };
 
         // The notice body is fire-and-forget so it cannot block the launch path, so let the
@@ -527,9 +322,7 @@ suite('Hot Reload Tests', () => {
             devKitInstalled: true,
             devKitActive: true,
             devKitLimitedActivation: false,
-            devKitServerLoaded: true,
-            settingEnabled: false,
-            pipeNameInjected: true
+            settingEnabled: false
         };
 
         function stubPrompt(selection: string | undefined): sinon.SinonStub {

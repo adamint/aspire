@@ -24,3 +24,10 @@ vsc-extension-quickstart.md
 **/*.ts
 **/.vscode-test.*
 **/*.js.map
+
+# Local Hot Reload proof harness artifacts (see src/test-proof/README.md). These hold full copies of
+# real VS Code extensions and user-data dirs and run to well over a gigabyte, which otherwise lands
+# in the packaged VSIX and makes `vsce package` time out.
+.proof-extensions*/**
+.proof-user-data*/**
+.vscode-test-*.mjs

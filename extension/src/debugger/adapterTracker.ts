@@ -4,7 +4,6 @@ import { extensionLogOutputChannel } from "../utils/logging";
 import AspireDcpServer from '../dcp/AspireDcpServer';
 import { removeTrailingNewline } from '../utils/strings';
 import { dcpServerNotInitialized } from '../loc/strings';
-import { logResolvedHotReloadState } from './hotReload';
 
 /**
  * Callback invoked when a restart is requested on an app host debug session.
@@ -46,18 +45,6 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
                         const shouldSuppress = onAppHostRestartRequested(debugSessionId);
                         if (shouldSuppress) {
                             message.arguments.restart = false;
-                        }
-                    }
-
-                    // Diagnostics only, so it runs last and cannot preempt the functional work
-                    // above. This tracker is attached to every Aspire debug session, including
-                    // resources that have nothing to do with .NET, so nothing here may escape.
-                    if (message.command === 'launch') {
-                        try {
-                            logResolvedHotReloadState(session, message.arguments);
-                        }
-                        catch (err) {
-                            extensionLogOutputChannel.warn(`Failed to log Hot Reload state: ${err instanceof Error ? err.message : String(err)}`);
                         }
                     }
                 },

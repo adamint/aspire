@@ -30,53 +30,20 @@ import { appHostTelemetryTargetPathConfigKey } from "./AspireDebugConfigurationM
 export type DashboardLaunchBehavior = 'none' | 'notification' | DashboardBrowserType;
 export type DashboardBrowserType = 'openExternalBrowser' | 'integratedBrowser' | 'debugChrome' | 'debugEdge' | 'debugFirefox';
 
-/**
- * Debug configuration keys whose values must never reach a log or an uploaded artifact, regardless
- * of any opt-in. `brokeredServicePipeName` addresses a live C# Dev Kit service endpoint.
- *
- * Consumed by both independent redactors — `getLoggableDebugConfiguration` here and
- * `redactDebugAdapterArguments` in the E2E state bridge — because the DAP `launch` arguments ARE the
- * resolved debug configuration, so anything added here has to be redacted from both. They drifted
- * once already, which is how the pipe name reached the Aspire output channel.
- */
-export const alwaysRedactedDebugConfigurationKeys = ['brokeredServicePipeName'] as const;
-
-/**
- * Keys carrying environment values. These are redacted by default but deliberately left intact for
- * non-MAUI configurations when `aspire.enableDebugConfigEnvironmentLogging` is on, so they cannot be
- * folded into {@link alwaysRedactedDebugConfigurationKeys}.
- */
-export const environmentDebugConfigurationKeys = ['env', 'environmentVariables'] as const;
-
-function withAlwaysRedactedKeys<T extends object>(debugConfig: T): T {
-  const copy = { ...debugConfig };
-  for (const key of alwaysRedactedDebugConfigurationKeys) {
-    if (key in copy && (copy as Record<string, unknown>)[key] !== undefined) {
-      (copy as Record<string, unknown>)[key] = '<redacted>';
-    }
-  }
-
-  return copy;
-}
-
 export function getLoggableDebugConfiguration(debugConfig: AspireResourceExtendedDebugConfiguration, includeEnvironment: boolean): vscode.DebugConfiguration {
-  // Redact on a copy: the caller's configuration is live and is handed to the debugger to start the
-  // session, so mutating it here would corrupt the launch.
-  const redacted = withAlwaysRedactedKeys(debugConfig);
-
   if (includeEnvironment && debugConfig.type !== 'maui') {
-    return redacted;
+    return debugConfig;
   }
 
   if (includeEnvironment) {
     return {
-      ...redacted,
+      ...debugConfig,
       environmentVariables: debugConfig.environmentVariables ? '<redacted>' : undefined,
     };
   }
 
   return {
-    ...redacted,
+    ...debugConfig,
     env: debugConfig.env ? '<redacted>' : undefined,
     environmentVariables: debugConfig.environmentVariables ? '<redacted>' : undefined,
     msbuildProperties: debugConfig.msbuildProperties instanceof Map ? Object.fromEntries(debugConfig.msbuildProperties) : debugConfig.msbuildProperties,

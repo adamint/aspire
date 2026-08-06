@@ -196,12 +196,6 @@ export interface AspireResourceExtendedDebugConfiguration extends vscode.DebugCo
     debugSessionId: string | null;
     projectFile?: string;
     isApphost?: boolean;
-    /**
-     * Named pipe that vsdbg uses to reach C# Dev Kit's brokered services, which is what enables
-     * .NET Hot Reload. Only ever set when C# Dev Kit is installed and active; see
-     * `debugger/hotReload.ts`.
-     */
-    brokeredServicePipeName?: string;
 }
 
 export type AspireCommandType = 'run' | 'deploy' | 'publish' | 'do';

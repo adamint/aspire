@@ -24,7 +24,7 @@ import {
 } from '../launchProfiles';
 import { AspireDebugSession } from '../AspireDebugSession';
 import { createAspireCliPathProcessEnvironment } from '../../utils/cliPathEnvironment';
-import { announceHotReloadForSessionIfNeeded, applyDevKitHotReloadSupport, logHotReloadDiagnostics, promptToEnableHotReloadIfNeeded } from '../hotReload';
+import { announceHotReloadForSessionIfNeeded, getHotReloadDiagnostics, logHotReloadDiagnostics, promptToEnableHotReloadIfNeeded } from '../hotReload';
 
 interface IDotNetService {
     getAndActivateDevKit(): Promise<boolean>
@@ -612,15 +612,14 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 debugConfiguration.env['DOTNET_LAUNCH_PROFILE'] = profileName;
             }
 
-            // Opt into C# Dev Kit's Hot Reload when it is available. This is a no-op (and the
-            // configuration is left untouched) when only the C# extension is installed, so .NET
-            // debugging never gains a dependency on Dev Kit.
-            //
-            // The whole block is guarded because it is the only part of this callback that calls
-            // into a third-party optional extension. Hot Reload is an enhancement; nothing it does
-            // may turn a working .NET debug session into a failed one.
+            // Hot Reload for .NET resources is provided entirely by C# Dev Kit and vsdbg; Aspire
+            // launches a normal `coreclr` session and inherits it. Nothing here configures the
+            // feature — it only reports the state and, when the feature is switched off, offers to
+            // turn it on. The whole block is guarded because it is the only part of this callback
+            // that reads a third-party optional extension, and Hot Reload is an enhancement:
+            // nothing it does may turn a working .NET debug session into a failed one.
             try {
-                const hotReloadDiagnostics = await applyDevKitHotReloadSupport(debugConfiguration);
+                const hotReloadDiagnostics = getHotReloadDiagnostics();
                 logHotReloadDiagnostics(path.basename(projectPath), hotReloadDiagnostics);
 
                 // Dev Kit ships Hot Reload behind an opt-in that older builds default to off, so a
@@ -641,9 +640,6 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 // Complements the prompt above rather than duplicating it. The prompt only fires when
                 // Hot Reload is off; this fires when it is already on, which is the case where the
                 // user gets no signal at all that the feature exists or what it covers.
-                //
-                // Synchronous and non-blocking by construction: it only records the resource and
-                // schedules a timer, so it cannot delay the debug configuration being returned.
                 announceHotReloadForSessionIfNeeded(hotReloadDiagnostics, debugConfiguration.noDebug !== true);
             }
             catch (err) {

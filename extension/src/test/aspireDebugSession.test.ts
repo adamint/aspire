@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { join } from 'node:path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { AspireDebugSession, alwaysRedactedDebugConfigurationKeys, buildAspireCommandArgs, getLoggableDebugConfiguration } from '../debugger/AspireDebugSession';
+import { AspireDebugSession, buildAspireCommandArgs, getLoggableDebugConfiguration } from '../debugger/AspireDebugSession';
 import { appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { AspireResourceExtendedDebugConfiguration } from '../dcp/types';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
@@ -996,55 +996,6 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         assert.deepStrictEqual(loggableConfig.env, { SECRET_TOKEN: 'env-secret' });
         assert.strictEqual(loggableConfig.environmentVariables, '<redacted>');
-    });
-
-    test('redacts the brokered service pipe name from logs in every configuration shape', () => {
-        // The pipe name addresses a live C# Dev Kit service endpoint. The Aspire output channel is
-        // the artifact users paste into bug reports, so it must never appear there — including on
-        // the coreclr path, where environment logging returns the configuration almost verbatim.
-        const shapes: Array<{ type: string; includeEnvironment: boolean }> = [
-            { type: 'coreclr', includeEnvironment: true },
-            { type: 'coreclr', includeEnvironment: false },
-            { type: 'maui', includeEnvironment: true },
-            { type: 'maui', includeEnvironment: false }
-        ];
-
-        for (const shape of shapes) {
-            for (const key of alwaysRedactedDebugConfigurationKeys) {
-                const debugConfig = {
-                    runId: 'run-1',
-                    debugSessionId: 'debug-1',
-                    type: shape.type,
-                    name: 'api',
-                    request: 'launch',
-                    [key]: 'devkit-broker-pipe-secret',
-                } as unknown as AspireResourceExtendedDebugConfiguration;
-
-                const loggableConfig = getLoggableDebugConfiguration(debugConfig, shape.includeEnvironment);
-
-                assert.strictEqual((loggableConfig as Record<string, unknown>)[key], '<redacted>', `${key} ${JSON.stringify(shape)}`);
-                assert.strictEqual(
-                    JSON.stringify(loggableConfig).includes('devkit-broker-pipe-secret'),
-                    false,
-                    `${key} leaked for ${JSON.stringify(shape)}`);
-                assert.strictEqual(
-                    (debugConfig as unknown as Record<string, unknown>)[key],
-                    'devkit-broker-pipe-secret',
-                    `redaction mutated the caller's live configuration for ${key}`);
-            }
-        }
-    });
-
-    test('leaves the brokered service pipe name undefined when there is none to redact', () => {
-        const debugConfig = {
-            runId: 'run-1',
-            debugSessionId: 'debug-1',
-            type: 'coreclr',
-            name: 'api',
-            request: 'launch',
-        } as AspireResourceExtendedDebugConfiguration;
-
-        assert.strictEqual(getLoggableDebugConfiguration(debugConfig, true).brokeredServicePipeName, undefined);
     });
 
     test('responds to breakpoint requests with a DAP breakpoint body', () => {

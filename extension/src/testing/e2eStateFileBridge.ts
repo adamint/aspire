@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 import { AspireExtensionContext } from '../AspireExtensionContext';
-import { getLoggableDebugConfiguration, alwaysRedactedDebugConfigurationKeys, environmentDebugConfigurationKeys, type AspireDebugSession } from '../debugger/AspireDebugSession';
+import { getLoggableDebugConfiguration, type AspireDebugSession } from '../debugger/AspireDebugSession';
 import { createDebugSessionConfiguration, getResourceDebuggerExtensions } from '../debugger/debuggerExtensions';
 import { spawnCliProcess } from '../debugger/languages/cli';
 import { cleanupRun } from '../debugger/runCleanupRegistry';
@@ -1011,14 +1011,12 @@ function redactDebugAdapterArguments(value: unknown): unknown {
     return value;
   }
 
-  // This runs on the live DAP message VS Code is about to send, so redact a copy. There is no
-  // environment-logging opt-in on this path — the captured state file is uploaded as a CI artifact —
-  // so both key groups are redacted unconditionally.
   const copy = { ...(value as Record<string, unknown>) };
-  for (const key of [...alwaysRedactedDebugConfigurationKeys, ...environmentDebugConfigurationKeys]) {
-    if (key in copy) {
-      copy[key] = '<redacted>';
-    }
+  if ('env' in copy) {
+    copy.env = '<redacted>';
+  }
+  if ('environmentVariables' in copy) {
+    copy.environmentVariables = '<redacted>';
   }
 
   return copy;

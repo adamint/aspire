@@ -10,7 +10,6 @@ support stays reproducible.
 
 | File | What it proves |
 |------|----------------|
-| `devkitHotReload.proof.ts` | Dev Kit exports a brokered service pipe name, and the value the extension injects is byte-identical to Dev Kit's own. |
 | `aspireHotReloadE2E.proof.ts` | Edits to **three concurrently running** project resources are applied to the running processes: every HTTP response changes while every process id stays the same. |
 | `aspireNoDevKit.proof.ts` | The same Aspire app is **unaffected** when Dev Kit is absent — with only the C# extension, and with neither extension installed. |
 
@@ -18,7 +17,6 @@ support stays reproducible.
 
 ```bash
 yarn run compile-tests
-yarn vscode-test --config .vscode-test-devkit.mjs     # pipe-name proof
 yarn vscode-test --config .vscode-test-e2eproof.mjs   # end-to-end proof
 
 # no-degradation proofs
