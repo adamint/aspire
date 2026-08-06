@@ -14,11 +14,12 @@ import type { BrowserLaunchConfiguration, NodeLaunchConfiguration, ProjectLaunch
  * extension and the majority of users do not have Dev Kit. Every assertion here pins the guarantee
  * that a user without those extensions is no worse off than before Hot Reload support existed.
  *
- * The Dev Kit-present behavior (pipe name injection, the enable prompt, the active-session notice,
- * and edits actually being applied to running resources) cannot run here: Dev Kit is a licensed
- * closed-source extension that is not installed in CI. That half is covered by the real-Dev-Kit
- * proof harness in `src/test-proof/`, which drives a real Aspire app under VS Code with Dev Kit
- * installed. See `src/test-proof/README.md`.
+ * The Dev Kit-present behavior (the enable prompt and the active-session notice) cannot be exercised
+ * here, because Dev Kit is a licensed closed-source extension that cannot be installed in CI. That
+ * behavior is covered by unit tests in `src/test/hotReload.test.ts` and by the regression suite in
+ * `src/test/hotReloadRegressions.test.ts`, both of which drive the real debugger registry. Whether
+ * Dev Kit then actually applies a delta is Dev Kit's own behavior, not Aspire's, and is verified by
+ * hand against a real Aspire app rather than asserted here.
  */
 suite('Aspire Hot Reload E2E', function () {
     this.timeout(600000);
