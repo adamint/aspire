@@ -1,7 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 
 namespace Aspire.Hosting.Rust;
@@ -41,18 +40,6 @@ internal sealed class CargoMetadata
     /// here for the whole workspace.
     /// </remarks>
     public required string WorkspaceRoot { get; init; }
-
-    /// <summary>
-    /// The highest <c>rust-version</c> declared by any package in the workspace, or <see langword="null"/>
-    /// when no package declares one.
-    /// </summary>
-    /// <remarks>
-    /// <c>rust-version</c> is the oldest toolchain a package supports, and cargo refuses to build with
-    /// anything older, so publishing uses it to raise its default toolchain image when the crate needs a
-    /// newer one. The highest value wins because every workspace member is built by the same toolchain.
-    /// See https://doc.rust-lang.org/cargo/reference/manifest.html#the-rust-version-field
-    /// </remarks>
-    public string? MinimumRustVersion { get; init; }
 
     /// <summary>
     /// Parses the JSON emitted by <c>cargo metadata --format-version 1 --no-deps</c>.
@@ -123,43 +110,8 @@ internal sealed class CargoMetadata
                 : string.Empty,
             WorkspaceRoot = root.TryGetProperty("workspace_root", out var workspaceRootElement)
                 ? workspaceRootElement.GetString() ?? string.Empty
-                : string.Empty,
-            MinimumRustVersion = ResolveMinimumRustVersion(packages)
+                : string.Empty
         };
-    }
-
-    // Every workspace member is built by the same toolchain, so the newest declared MSRV is the binding one.
-    private static string? ResolveMinimumRustVersion(List<CargoPackage> packages)
-    {
-        string? highest = null;
-        Version? highestVersion = null;
-
-        foreach (var package in packages)
-        {
-            if (package.RustVersion is { } rustVersion
-                && TryParseRustVersion(rustVersion, out var version)
-                && (highestVersion is null || version > highestVersion))
-            {
-                highest = rustVersion;
-                highestVersion = version;
-            }
-        }
-
-        return highest;
-    }
-
-    // rust-version is written "1", "1.89" or "1.89.0", and Version treats an absent component as -1, so the
-    // components are padded before comparing: without that "1.89" would sort below "1.89.0".
-    public static bool TryParseRustVersion(string value, [NotNullWhen(true)] out Version? version)
-    {
-        var padded = value.Count(static c => c == '.') switch
-        {
-            0 => $"{value}.0.0",
-            1 => $"{value}.0",
-            _ => value
-        };
-
-        return Version.TryParse(padded, out version);
     }
 
     private static CargoPackage ParsePackage(JsonElement element)
@@ -183,9 +135,6 @@ internal sealed class CargoMetadata
             Id = element.TryGetProperty("id", out var idElement) ? idElement.GetString() ?? string.Empty : string.Empty,
             DefaultRun = element.TryGetProperty("default_run", out var defaultRunElement) && defaultRunElement.ValueKind == JsonValueKind.String
                 ? defaultRunElement.GetString()
-                : null,
-            RustVersion = element.TryGetProperty("rust_version", out var rustVersionElement) && rustVersionElement.ValueKind == JsonValueKind.String
-                ? rustVersionElement.GetString()
                 : null,
             BinTargetNames = binTargets
         };
@@ -252,11 +201,6 @@ internal sealed class CargoPackage
     /// See https://doc.rust-lang.org/cargo/reference/manifest.html#the-default-run-field
     /// </remarks>
     public string? DefaultRun { get; init; }
-
-    /// <summary>
-    /// The <c>[package] rust-version</c> value, if the manifest declares one.
-    /// </summary>
-    public string? RustVersion { get; init; }
 
     /// <summary>
     /// The names of the package's <c>bin</c> targets, in the order cargo reported them.

@@ -123,10 +123,7 @@ internal static class RustDockerfileGenerator
         var baseImageAnnotation = ResolveBaseImageAnnotation(resource, context);
         var images = RustPublishImageResolver.Resolve(
             baseImageAnnotation?.BuildImage,
-            baseImageAnnotation?.RuntimeImage,
-            appDirectory,
-            metadata.MinimumRustVersion,
-            resource.Name);
+            baseImageAnnotation?.RuntimeImage);
 
         var buildStage = context.Builder
             .From(images.BuildImage, "build")
@@ -145,7 +142,11 @@ internal static class RustDockerfileGenerator
             // cache mount: cache mounts are not part of the resulting layer, so the COPY --from below would
             // not be able to see the binary.
             // CARGO_HOME is /usr/local/cargo in the official rust images; a cache mount on a path a custom
-            // build image does not use is harmless.
+            // build image does not use is harmless. RUSTUP_HOME is deliberately not cached either: a cache
+            // mount starts empty and shadows the directory it covers, so mounting one over /usr/local/rustup
+            // hides the toolchains the image ships and rustup then fails with no default toolchain
+            // configured. A crate pinning a toolchain the image does not carry therefore re-downloads it
+            // whenever this COPY is invalidated.
             .RunWithMounts(
                 $"{BuildCargoCommand(cargoArgs)}{CommandContinuation}{BuildCollectArtifactCommand(target)}",
                 "type=cache,target=/usr/local/cargo/registry");

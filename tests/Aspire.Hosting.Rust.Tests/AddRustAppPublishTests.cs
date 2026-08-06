@@ -21,10 +21,11 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task VerifyPublish_UsesVersionFromToolchainToml()
+    public async Task VerifyPublish_LeavesAPinnedToolchainToRustupInsideTheImage()
     {
-        // A patch-level pin must be preserved verbatim: rust:1.89.0-alpine is a real tag, so rewriting it to
-        // 1.89 would silently float the patch version the user deliberately pinned.
+        // A pinned toolchain deliberately does not change the build image. rustup is present in the official
+        // image and installs whatever the toolchain file names, so the pin is honoured inside the container
+        // without the host having to map channel names onto image tags.
         var content = await PublishDockerfileAsync(configureSource: source =>
             File.WriteAllText(Path.Combine(source, "rust-toolchain.toml"), """
                 [toolchain]
@@ -137,17 +138,6 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         builder.Build().Run();
 
         Assert.False(File.Exists(Path.Combine(outputDir.FullName, "api.Dockerfile")));
-    }
-
-    [Fact]
-    public async Task VerifyPublish_RaisesTheDefaultToolchainToTheCrateMsrv()
-    {
-        // The crate pins no toolchain but declares an MSRV newer than the default image, and cargo refuses
-        // to build with an older toolchain, so the default has to move up rather than produce a broken image.
-        var content = await PublishDockerfileAsync(
-            metadata: CargoMetadataFactory.Workspace(new CargoPackageSpec("my-service", ["my-service"], RustVersion: "1.90")));
-
-        await Verify(content);
     }
 
     [Fact]

@@ -95,7 +95,7 @@ user.
 
 | Stage | Default |
 | --- | --- |
-| Build | `rust:<version>-alpine`, where `<version>` comes from `rust-toolchain.toml`/`rust-toolchain`, the crate's `rust-version`, or `1.89` when the crate pins nothing |
+| Build | `rust:alpine` (current stable; a `rust-toolchain.toml` pin is installed by rustup inside the image) |
 | Runtime | `alpine:3.22` |
 
 If you change either image with `WithDockerfileBaseImage`, or name an explicit target with
