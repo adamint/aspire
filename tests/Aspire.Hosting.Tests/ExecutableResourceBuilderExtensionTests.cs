@@ -92,7 +92,7 @@ public class ExecutableResourceBuilderExtensionTests
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
         var launchConfig = new ExecutableLaunchConfiguration("python");
         var executable = builder.AddExecutable("myexe", "command", "workingdirectory")
-            .WithDebugSupport(_ => launchConfig, "ms-python.python");
+            .WithDebugSupport(_ => Task.FromResult(launchConfig), "ms-python.python");
 
         var annotation = executable.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().SingleOrDefault();
         Assert.NotNull(annotation);
@@ -113,38 +113,16 @@ public class ExecutableResourceBuilderExtensionTests
     {
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish);
         var executable = builder.AddExecutable("myexe", "command", "workingdirectory")
-            .WithDebugSupport(_ => new ExecutableLaunchConfiguration("python"), "ms-python.python");
+            .WithDebugSupport(
+                static _ => Task.FromResult(new ExecutableLaunchConfiguration("python")),
+                "ms-python.python");
 
         var annotation = executable.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().SingleOrDefault();
         Assert.Null(annotation);
     }
 
     [Fact]
-    public async Task WithDebugSupportAsynchronousProducerProducesTheSameAnnotationAsTheSynchronousOne()
-    {
-        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
-        var syncExecutable = builder.AddExecutable("sync", "command", "workingdirectory")
-            .WithDebugSupport(mode => new ExecutableLaunchConfiguration("go") { Mode = mode }, "go");
-        var asyncExecutable = builder.AddExecutable("async", "command", "workingdirectory")
-            .WithDebugSupport(async (mode, ct) =>
-            {
-                await Task.Yield();
-                return new ExecutableLaunchConfiguration("go") { Mode = mode };
-            }, "go");
-
-        var syncConfiguration = Assert.IsType<ExecutableLaunchConfiguration>(
-            await syncExecutable.Resource.CreateLaunchConfigurationAsync(
-                LaunchConfigurationTestHelpers.CreateCallbackContext(syncExecutable.Resource, ExecutableLaunchMode.Debug)));
-        var asyncConfiguration = Assert.IsType<ExecutableLaunchConfiguration>(
-            await asyncExecutable.Resource.CreateLaunchConfigurationAsync(
-                LaunchConfigurationTestHelpers.CreateCallbackContext(asyncExecutable.Resource, ExecutableLaunchMode.Debug)));
-
-        Assert.Equal(asyncConfiguration.Type, syncConfiguration.Type);
-        Assert.Equal(asyncConfiguration.Mode, syncConfiguration.Mode);
-    }
-
-    [Fact]
-    public async Task WithDebugSupportBindsAContextIgnoringAsyncProducerToTheContextOverload()
+    public async Task WithDebugSupportSupportsAContextIgnoringProducer()
     {
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
         var executable = builder.AddExecutable("async", "command", "workingdirectory")
@@ -157,34 +135,6 @@ public class ExecutableResourceBuilderExtensionTests
                 LaunchConfigurationTestHelpers.CreateCallbackContext(executable.Resource)));
 
         Assert.Equal("go", launchConfiguration.Type);
-    }
-
-    [Fact]
-    public void WithDebugSupportRejectsATaskReturningSynchronousProducer()
-    {
-        // `mode => Task.FromResult(...)` binds to the synchronous overload (overload resolution only
-        // looks at the lambda's parameter count) with TLaunchConfiguration inferred as Task<T>, so the
-        // task itself would be serialized as the launch configuration. It must be rejected up front.
-        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
-        var executable = builder.AddExecutable("myexe", "command", "workingdirectory");
-
-        var exception = Assert.Throws<ArgumentException>(
-            () => executable.WithDebugSupport(mode => Task.FromResult(new ExecutableLaunchConfiguration("go") { Mode = mode }), "go"));
-
-        Assert.Equal("launchConfigurationProducer", exception.ParamName);
-        Assert.Contains(nameof(CancellationToken), exception.Message);
-    }
-
-    [Fact]
-    public void WithDebugSupportRejectsAValueTaskReturningSynchronousProducer()
-    {
-        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
-        var executable = builder.AddExecutable("myexe", "command", "workingdirectory");
-
-        var exception = Assert.Throws<ArgumentException>(
-            () => executable.WithDebugSupport(mode => ValueTask.FromResult(new ExecutableLaunchConfiguration("go") { Mode = mode }), "go"));
-
-        Assert.Equal("launchConfigurationProducer", exception.ParamName);
     }
 
     [Fact]
@@ -204,7 +154,10 @@ public class ExecutableResourceBuilderExtensionTests
 
         var executable = builder.AddExecutable("myexe", "command", "workingdirectory")
             .WithArgs("base-arg")
-            .WithDebugSupport(_ => new ExecutableLaunchConfiguration("go"), "go", ctx => ctx.Args.Add("rewritten-arg"));
+            .WithDebugSupport(
+                static _ => Task.FromResult(new ExecutableLaunchConfiguration("go")),
+                "go",
+                ctx => ctx.Args.Add("rewritten-arg"));
 
         var args = await ArgumentEvaluator.GetArgumentListAsync(executable.Resource);
 
@@ -234,8 +187,13 @@ public class ExecutableResourceBuilderExtensionTests
 
         var executable = builder.AddExecutable("myexe", "command", "workingdirectory")
             .WithArgs("base-arg")
-            .WithDebugSupport(_ => new ExecutableLaunchConfiguration("go"), "go", ctx => ctx.Args.Add("rewritten-arg"))
-            .WithDebugSupport(_ => new ExecutableLaunchConfiguration("project"), "project");
+            .WithDebugSupport(
+                static _ => Task.FromResult(new ExecutableLaunchConfiguration("go")),
+                "go",
+                ctx => ctx.Args.Add("rewritten-arg"))
+            .WithDebugSupport(
+                static _ => Task.FromResult(new ExecutableLaunchConfiguration("project")),
+                "project");
 
         var args = await ArgumentEvaluator.GetArgumentListAsync(executable.Resource);
 
@@ -251,7 +209,10 @@ public class ExecutableResourceBuilderExtensionTests
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
 
         var executable = builder.AddExecutable("myexe", "command", "workingdirectory")
-            .WithDebugSupport(_ => new ExecutableLaunchConfiguration("go"), "go", ctx => ctx.Args.Add("rewritten-arg"));
+            .WithDebugSupport(
+                static _ => Task.FromResult(new ExecutableLaunchConfiguration("go")),
+                "go",
+                ctx => ctx.Args.Add("rewritten-arg"));
 
         var annotation = executable.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().Single();
         Assert.True(annotation.RewritesArgumentsForDebugging);
@@ -266,7 +227,10 @@ public class ExecutableResourceBuilderExtensionTests
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
 
         var resource = builder.AddResource(new DebuggableResourceWithoutArgs("noargs"))
-            .WithDebugSupport(_ => new ExecutableLaunchConfiguration("go"), "go", ctx => ctx.Args.Add("rewritten-arg"));
+            .WithDebugSupport(
+                static _ => Task.FromResult(new ExecutableLaunchConfiguration("go")),
+                "go",
+                ctx => ctx.Args.Add("rewritten-arg"));
 
         var annotation = resource.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().Single();
         Assert.False(annotation.RewritesArgumentsForDebugging);
@@ -278,7 +242,9 @@ public class ExecutableResourceBuilderExtensionTests
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
 
         var executable = builder.AddExecutable("myexe", "command", "workingdirectory")
-            .WithDebugSupport(_ => new ExecutableLaunchConfiguration("go"), "go");
+            .WithDebugSupport(
+                static _ => Task.FromResult(new ExecutableLaunchConfiguration("go")),
+                "go");
 
         var annotation = executable.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().Single();
         Assert.False(annotation.RewritesArgumentsForDebugging);

@@ -12,9 +12,8 @@ namespace Aspire.Hosting.ApplicationModel;
 /// instead of being started as a plain process by Aspire.
 /// </summary>
 /// <remarks>
-/// Added by <see cref="ResourceBuilderExtensions.WithDebugSupport{T, TLaunchConfiguration}(IResourceBuilder{T}, Func{string, TLaunchConfiguration}, string, Action{CommandLineArgsCallbackContext})"/>
-/// (or its asynchronous overload). The
-/// annotation is only honored while a debug session is active; use
+/// Added by <see cref="ResourceBuilderExtensions.WithDebugSupport{T, TLaunchConfiguration}(IResourceBuilder{T}, Func{LaunchConfigurationCallbackContext, Task{TLaunchConfiguration}}, string, Action{CommandLineArgsCallbackContext})"/>.
+/// The annotation is only honored while a debug session is active; use
 /// <see cref="DebugSupportExtensions.SupportsDebugging"/> to test for that, and
 /// <see cref="DebugSupportExtensions.CreateLaunchConfigurationAsync"/> to inspect the launch configuration
 /// the resource will send.
