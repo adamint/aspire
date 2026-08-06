@@ -315,15 +315,24 @@ public sealed class ReleasePublishNugetPipelineTests
     {
         var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
 
+        var stableRealGate =
+            "- ${{ if and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false)) }}:";
+        const string anonymousViewCommand =
+            "$viewOutput = npm view \"$packageName@latest\" version --registry=$internalRegistry --loglevel=warn 2>&1";
+        var stableRealGateIndex = FindRequiredText(pipeline, stableRealGate);
+        var stableRealGateEndIndex = FindYamlIndentedBlockEnd(pipeline, stableRealGate);
         var publicValidationIndex = FindRequiredText(
             pipeline,
             "displayName: 'Validate Published npm Package from Registry'");
         var prepareAuthenticationIndex = FindRequiredText(
             pipeline,
             "displayName: 'Prepare npm Internal Mirror Authentication'");
+        var authenticateTaskIndex = FindRequiredText(pipeline, "task: npmAuthenticate@0");
         var authenticateIndex = FindRequiredText(
             pipeline,
             "displayName: 'Authenticate to npm Internal Mirror'");
+        var seedScriptIndex = FindRequiredText(pipeline, "$packageName = '@microsoft/aspire-cli'");
+        var anonymousViewIndex = FindRequiredText(pipeline, anonymousViewCommand);
         var seedIndex = FindRequiredText(
             pipeline,
             "displayName: 'Seed and Validate npm Internal Mirror'");
@@ -331,38 +340,96 @@ public sealed class ReleasePublishNugetPipelineTests
             pipeline,
             "# ===== PROMOTE TO CHANNEL =====");
 
+        Assert.Equal(promotionIndex, stableRealGateEndIndex);
+        Assert.True(stableRealGateIndex < publicValidationIndex);
         Assert.True(publicValidationIndex < prepareAuthenticationIndex);
-        Assert.True(prepareAuthenticationIndex < authenticateIndex);
-        Assert.True(authenticateIndex < seedIndex);
+        Assert.True(prepareAuthenticationIndex < authenticateTaskIndex);
+        Assert.True(authenticateTaskIndex < authenticateIndex);
+        Assert.True(authenticateIndex < seedScriptIndex);
+        Assert.True(seedScriptIndex < anonymousViewIndex);
+        Assert.True(anonymousViewIndex < seedIndex);
         Assert.True(seedIndex < promotionIndex);
 
-        Assert.Contains("task: npmAuthenticate@0", pipeline, StringComparison.Ordinal);
+        var seedScript = ExtractSection(
+            pipeline,
+            "$packageName = '@microsoft/aspire-cli'",
+            "displayName: 'Seed and Validate npm Internal Mirror'");
+
         Assert.Contains(
             "workingFile: '$(Agent.TempDirectory)\\aspire-cli-internal-mirror.npmrc'",
             pipeline,
             StringComparison.Ordinal);
         Assert.Contains(
-            "npm install --ignore-scripts --no-audit --no-fund --no-save --package-lock=false",
-            pipeline,
+            "$authenticatedNpmrc = \"$(Agent.TempDirectory)\\aspire-cli-internal-mirror.npmrc\"",
+            seedScript,
             StringComparison.Ordinal);
         Assert.Contains(
-            "$env:NPM_CONFIG_USERCONFIG = $anonymousNpmrc",
-            pipeline,
+            "$anonymousNpmrc = Join-Path $workRoot 'anonymous.npmrc'",
+            seedScript,
             StringComparison.Ordinal);
         Assert.Contains(
-            "$env:npm_config_cache = $anonymousCache",
-            pipeline,
+            "$authenticatedCache = Join-Path $workRoot 'authenticated-cache'",
+            seedScript,
             StringComparison.Ordinal);
         Assert.Contains(
-            "npm view \"$packageName@latest\" version",
-            pipeline,
+            "$anonymousCache = Join-Path $workRoot 'anonymous-cache'",
+            seedScript,
             StringComparison.Ordinal);
+
+        var protectedTryIndex = FindRequiredText(seedScript, "try {");
+        var workRootDeleteIndex = FindRequiredText(seedScript, "if (Test-Path -LiteralPath $workRoot)");
+        var seedDirectoryCreateIndex = FindRequiredText(
+            seedScript,
+            "New-Item -ItemType Directory -Path $seedDirectory -Force | Out-Null");
+        var authenticatedCacheCreateIndex = FindRequiredText(
+            seedScript,
+            "New-Item -ItemType Directory -Path $authenticatedCache -Force | Out-Null");
+        var anonymousCacheCreateIndex = FindRequiredText(
+            seedScript,
+            "New-Item -ItemType Directory -Path $anonymousCache -Force | Out-Null");
+        var anonymousNpmrcWriteIndex = FindRequiredText(
+            seedScript,
+            "Set-Content -LiteralPath $anonymousNpmrc -Encoding utf8NoBOM");
+
+        Assert.True(protectedTryIndex < workRootDeleteIndex);
+        Assert.True(protectedTryIndex < seedDirectoryCreateIndex);
+        Assert.True(protectedTryIndex < authenticatedCacheCreateIndex);
+        Assert.True(protectedTryIndex < anonymousCacheCreateIndex);
+        Assert.True(protectedTryIndex < anonymousNpmrcWriteIndex);
+
+        var authenticatedUserConfigIndex = FindRequiredText(
+            seedScript,
+            "$env:NPM_CONFIG_USERCONFIG = $authenticatedNpmrc");
+        var authenticatedCacheIndex = FindRequiredText(
+            seedScript,
+            "$env:npm_config_cache = $authenticatedCache");
+        var installIndex = FindRequiredText(
+            seedScript,
+            "$seedOutput = npm install --ignore-scripts --no-audit --no-fund --no-save --package-lock=false --loglevel=warn --registry=$internalRegistry $packageSpec 2>&1");
+        var anonymousUserConfigIndex = FindRequiredText(
+            seedScript,
+            "$env:NPM_CONFIG_USERCONFIG = $anonymousNpmrc");
+        var anonymousCacheIndex = FindRequiredText(
+            seedScript,
+            "$env:npm_config_cache = $anonymousCache");
+        var anonymousViewScriptIndex = FindRequiredText(seedScript, anonymousViewCommand);
+
+        Assert.True(authenticatedUserConfigIndex < installIndex);
+        Assert.True(authenticatedCacheIndex < installIndex);
+        Assert.True(installIndex < anonymousUserConfigIndex);
+        Assert.True(installIndex < anonymousCacheIndex);
+        Assert.True(anonymousUserConfigIndex < anonymousViewScriptIndex);
+        Assert.True(anonymousCacheIndex < anonymousViewScriptIndex);
+        Assert.Equal(
+            anonymousViewScriptIndex,
+            seedScript.LastIndexOf(anonymousViewCommand, StringComparison.Ordinal));
+
         Assert.Contains(
             "[version]$mirroredVersion -ge [version]$packageVersion",
-            pipeline,
+            seedScript,
             StringComparison.Ordinal);
-        Assert.Contains("$maxAttempts = 10", pipeline, StringComparison.Ordinal);
-        Assert.Contains("Start-Sleep -Seconds 30", pipeline, StringComparison.Ordinal);
+        Assert.Contains("$maxAttempts = 10", seedScript, StringComparison.Ordinal);
+        Assert.Contains("Start-Sleep -Seconds 30", seedScript, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -737,6 +804,43 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.True(index >= 0, $"Expected to find '{text}'.");
 
         return index;
+    }
+
+    private static int FindYamlIndentedBlockEnd(string contents, string marker)
+    {
+        var markerIndex = FindRequiredText(contents, marker);
+        var markerLineStart = contents.LastIndexOf('\n', markerIndex) + 1;
+        var markerLineEnd = contents.IndexOf('\n', markerIndex);
+        if (markerLineEnd < 0)
+        {
+            return contents.Length;
+        }
+
+        var markerIndent = CountLeadingWhitespace(contents[markerLineStart..markerLineEnd]);
+        var lineStart = markerLineEnd + 1;
+
+        while (lineStart < contents.Length)
+        {
+            var lineEnd = contents.IndexOf('\n', lineStart);
+            if (lineEnd < 0)
+            {
+                lineEnd = contents.Length;
+            }
+
+            var line = contents[lineStart..lineEnd].TrimEnd('\r');
+            if (line.Trim().Length > 0)
+            {
+                var indent = CountLeadingWhitespace(line);
+                if (indent <= markerIndent)
+                {
+                    return lineStart + indent;
+                }
+            }
+
+            lineStart = lineEnd + 1;
+        }
+
+        return contents.Length;
     }
 
     private static void AssertOwnerDefaultIsSingleRequiredAlias(string requiredAliasesValue, string actualAliasesValue, string parameterName)

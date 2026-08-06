@@ -2029,17 +2029,17 @@ extends:
                     $anonymousNpmrc = Join-Path $workRoot 'anonymous.npmrc'
                     $packageSpec = "$packageName@$packageVersion"
 
-                    if (Test-Path -LiteralPath $workRoot) {
-                      Remove-Item -LiteralPath $workRoot -Recurse -Force
-                    }
-
-                    New-Item -ItemType Directory -Path $seedDirectory -Force | Out-Null
-                    New-Item -ItemType Directory -Path $authenticatedCache -Force | Out-Null
-                    New-Item -ItemType Directory -Path $anonymousCache -Force | Out-Null
-                    "registry=$internalRegistry" |
-                      Set-Content -LiteralPath $anonymousNpmrc -Encoding utf8NoBOM
-
                     try {
+                      if (Test-Path -LiteralPath $workRoot) {
+                        Remove-Item -LiteralPath $workRoot -Recurse -Force
+                      }
+
+                      New-Item -ItemType Directory -Path $seedDirectory -Force | Out-Null
+                      New-Item -ItemType Directory -Path $authenticatedCache -Force | Out-Null
+                      New-Item -ItemType Directory -Path $anonymousCache -Force | Out-Null
+                      "registry=$internalRegistry" |
+                        Set-Content -LiteralPath $anonymousNpmrc -Encoding utf8NoBOM
+
                       Write-Host "Seeding $packageSpec into $internalRegistry through its configured upstream."
                       $env:NPM_CONFIG_USERCONFIG = $authenticatedNpmrc
                       $env:npm_config_cache = $authenticatedCache
