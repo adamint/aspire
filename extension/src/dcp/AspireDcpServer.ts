@@ -42,6 +42,7 @@ export default class AspireDcpServer {
     private wsBySession: Map<string, WebSocket> = new Map();
     private pendingNotificationQueueByDcpId: Map<string, RunSessionNotification[]> = new Map();
     private readonly _dashboardTelemetry: DashboardTelemetryPassthrough;
+    private readonly _terminatedRunIds = new Set<string>();
     // Per-runId metadata for telemetry correlation between PUT /run_session and
     // the subsequent sessionTerminated WebSocket notification. We need to look
     // up the original event timing/labels when the session terminates, since
@@ -130,6 +131,7 @@ export default class AspireDcpServer {
         const wsBySession = new Map<string, WebSocket>();
         const pendingNotificationQueueByDcpId = new Map<string, RunSessionNotification[]>();
         const dashboardTelemetry = new DashboardTelemetryPassthrough();
+        let dcpServer: AspireDcpServer;
 
         return new Promise(async (resolve, reject) => {
             const token = generateToken();
@@ -467,9 +469,13 @@ export default class AspireDcpServer {
                     }
 
                     runsBySession.delete(runId);
-                    // Map cleanup happens when the corresponding sessionTerminated
-                    // notification is sent; don't pre-delete here or we'd miss the
-                    // end event.
+                    const notification: SessionTerminatedNotification = {
+                        notification_type: 'sessionTerminated',
+                        session_id: runId,
+                        dcp_id: req.header('microsoft-developer-dcp-instance-id') as string,
+                        exit_code: 0
+                    };
+                    dcpServer.sendNotification(notification);
                     res.status(200).end();
                 } else {
                     res.status(204).end();
@@ -552,7 +558,8 @@ export default class AspireDcpServer {
                         token: token,
                         certificate: certBase64
                     };
-                    resolve(new AspireDcpServer(info, app, server, wss, wsBySession, pendingNotificationQueueByDcpId, dashboardTelemetry, runTelemetryById, debugSessionStats));
+                    dcpServer = new AspireDcpServer(info, app, server, wss, wsBySession, pendingNotificationQueueByDcpId, dashboardTelemetry, runTelemetryById, debugSessionStats);
+                    resolve(dcpServer);
                 } else {
                     reject(new Error('Failed to get server address'));
                 }
@@ -570,6 +577,13 @@ export default class AspireDcpServer {
         // in PUT /run_session goes through sendNotificationCore directly, and
         // already emits its own end event from the catch block.
         if (notification.notification_type === 'sessionTerminated') {
+            // DELETE and debug adapter exit can report the same termination. Keep the first
+            // report for the DCP server lifetime because some adapters can exit much later.
+            if (this._terminatedRunIds.has(notification.session_id)) {
+                return;
+            }
+            this._terminatedRunIds.add(notification.session_id);
+
             const sessionTerminated = notification as SessionTerminatedNotification;
             const entry = this._runTelemetryById.get(notification.session_id);
             if (entry) {
