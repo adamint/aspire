@@ -46,7 +46,7 @@ public sealed class TypeScriptLanguageSupportTests(ITestOutputHelper outputHelpe
         Assert.Equal("npm run aspire:build", scripts["build"]?.GetValue<string>());
         Assert.Equal("npm run aspire:dev", scripts["watch"]?.GetValue<string>());
         Assert.Equal("^4.21.0", devDependencies["tsx"]?.GetValue<string>());
-        Assert.Equal("^5.9.3", devDependencies["typescript"]?.GetValue<string>());
+        Assert.Equal("^6.0.3", devDependencies["typescript"]?.GetValue<string>());
         Assert.Equal("^10.0.3", devDependencies["eslint"]?.GetValue<string>());
         Assert.Equal("^8.57.1", devDependencies["typescript-eslint"]?.GetValue<string>());
 
@@ -121,7 +121,7 @@ public sealed class TypeScriptLanguageSupportTests(ITestOutputHelper outputHelpe
         Assert.Equal("^4.21.0", devDependencies["tsx"]?.GetValue<string>());
         Assert.Equal("^22.0.0", devDependencies["@types/node"]?.GetValue<string>());
         Assert.Equal("^3.1.14", devDependencies["nodemon"]?.GetValue<string>());
-        Assert.Equal("^5.9.3", devDependencies["typescript"]?.GetValue<string>());
+        Assert.Equal("^6.0.3", devDependencies["typescript"]?.GetValue<string>());
         Assert.False(devDependencies.ContainsKey("vite"));
 
         // engines.node is always set
@@ -185,7 +185,7 @@ public sealed class TypeScriptLanguageSupportTests(ITestOutputHelper outputHelpe
         Assert.Equal("^22.0.0", devDependencies["@types/node"]?.GetValue<string>());
         Assert.Equal("^3.1.14", devDependencies["nodemon"]?.GetValue<string>());
         Assert.Equal("^4.21.0", devDependencies["tsx"]?.GetValue<string>());
-        Assert.Equal("^5.9.3", devDependencies["typescript"]?.GetValue<string>());
+        Assert.Equal("^6.0.3", devDependencies["typescript"]?.GetValue<string>());
     }
 
     [Fact]
@@ -298,6 +298,34 @@ public sealed class TypeScriptLanguageSupportTests(ITestOutputHelper outputHelpe
         // The scaffold emits the embedded tsconfig.apphost.json verbatim. See
         // Scaffold_EmitsScaffoldedEslintConfigVerbatim for the rationale.
         Assert.Equal(EmbeddedResources.Read("tsconfig.apphost.json"), files["tsconfig.apphost.json"]);
+    }
+
+    [Fact]
+    public void Scaffold_PinsTypeScriptToTheLastJavaScriptApiRelease()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var files = _languageSupport.Scaffold(new ScaffoldRequest
+        {
+            TargetPath = workspace.Path,
+            ProjectName = "BridgeApp"
+        });
+
+        var devDependencies = ParseJson(files["package.json"])["devDependencies"]!.AsObject();
+        var typeScriptRange = devDependencies["typescript"]?.GetValue<string>();
+
+        // TypeScript 7 is a native (Go) compiler with no JavaScript compiler API, and the scaffolded
+        // `aspire:lint` script runs typescript-eslint, whose `typescript` peer range is capped below
+        // 6.1.0. TypeScript 6.0 is therefore the newest release a scaffolded AppHost can take, and it
+        // is the exact compiler that the `@typescript/typescript6` TS7 compatibility package
+        // re-exports. See "Running Side-by-Side with TypeScript 6.0" in
+        // https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/.
+        Assert.Equal("^6.0.3", typeScriptRange);
+        Assert.True(
+            NpmVersionHelper.TryParseNpmVersion(typeScriptRange!, out var typeScriptVersion),
+            $"Expected '{typeScriptRange}' to be a parseable npm version range.");
+        Assert.Equal(6, typeScriptVersion.Major);
+        Assert.Equal(0, typeScriptVersion.Minor);
     }
 
     private static JsonObject ParseJson(string content) => JsonNode.Parse(content)!.AsObject();

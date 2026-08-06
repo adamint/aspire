@@ -163,7 +163,14 @@ internal sealed class TypeScriptLanguageSupport : ILanguageSupport
         EnsureDependency(packageJson, "devDependencies", "eslint", "^10.0.3");
         EnsureDependency(packageJson, "devDependencies", "nodemon", "^3.1.14");
         EnsureDependency(packageJson, "devDependencies", "tsx", "^4.21.0");
-        EnsureDependency(packageJson, "devDependencies", "typescript", "^5.9.3");
+
+        // TypeScript 6.0 is the newest release a scaffolded AppHost can take. TypeScript 7 is a native
+        // (Go) compiler that ships no JavaScript compiler API, and `aspire:lint` runs typescript-eslint,
+        // whose `typescript` peer range is capped below 6.1.0. 6.0 is also the compiler that the
+        // `@typescript/typescript6` TS7 compatibility package re-exports, so this is the supported
+        // bridge rather than a version left behind. See "Running Side-by-Side with TypeScript 6.0" in
+        // https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/.
+        EnsureDependency(packageJson, "devDependencies", "typescript", "^6.0.3");
         EnsureDependency(packageJson, "devDependencies", "typescript-eslint", "^8.57.1");
 
         return packageJson.ToJsonString(s_jsonSerializerOptions);

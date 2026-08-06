@@ -2,7 +2,7 @@
 # Polyglot SDK Validation - TypeScript validation AppHosts
 # Iterates all TypeScript validation AppHosts under tests/PolyglotAppHosts/*/TypeScript,
 # runs 'aspire restore --apphost' to regenerate the per-integration .aspire/modules/ SDK, and
-# type-checks each AppHost with tsgo against the generated API surface.
+# type-checks each AppHost with the TypeScript 7 native compiler against the generated API surface.
 set -euo pipefail
 
 echo "=== TypeScript Validation AppHost Codegen Validation ==="
@@ -23,17 +23,22 @@ if ! command -v npm &> /dev/null; then
 fi
 
 if ! command -v npx &> /dev/null; then
-    echo "❌ npx not found in PATH (Node.js required to run @typescript/native-preview when tsgo is not installed)"
+    echo "❌ npx not found in PATH (Node.js required to run typescript@7 when tsc is not installed)"
     exit 1
 fi
 
-if command -v tsgo &> /dev/null; then
-    TSGO_COMMAND=(tsgo)
-elif command -v npx &> /dev/null; then
-    TSGO_COMMAND=(npx --yes @typescript/native-preview)
+# TypeScript 7 is the native (Go) port of the compiler. Since 7.0 GA it ships as the plain
+# `typescript` package with a `tsc` binary; the pre-GA `@typescript/native-preview` package and its
+# `tsgo` binary are being retired, and nightly builds have moved to `typescript@next`. See
+# https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/.
+#
+# A `tsc` already on PATH can be any TypeScript version (6.x and older are JavaScript builds), so it
+# is only used when it reports 7.x. `tsc --version` prints e.g. "Version 7.0.2".
+TYPESCRIPT_VERSION="${TYPESCRIPT_VERSION:-7}"
+if command -v tsc &> /dev/null && [[ "$(tsc --version 2>/dev/null)" == "Version 7."* ]]; then
+    TYPESCRIPT_COMMAND=(tsc)
 else
-    echo "❌ tsgo not found in PATH and npx is unavailable to run @typescript/native-preview"
-    exit 1
+    TYPESCRIPT_COMMAND=(npx --yes --package "typescript@${TYPESCRIPT_VERSION}" -- tsc)
 fi
 
 detect_parallelism() {
@@ -53,7 +58,7 @@ detect_parallelism() {
 echo "Aspire CLI version:"
 aspire --version
 echo "TypeScript checker:"
-"${TSGO_COMMAND[@]}" --version
+"${TYPESCRIPT_COMMAND[@]}" --version
 
 export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
@@ -158,7 +163,7 @@ install_command_text() {
 }
 
 typecheck_command_text() {
-    echo "tsgo --noEmit --project tsconfig.json"
+    echo "tsc --noEmit --project tsconfig.json"
 }
 
 run_install() {
@@ -171,7 +176,7 @@ run_install() {
 }
 
 run_typecheck() {
-    "${TSGO_COMMAND[@]}" --noEmit --project tsconfig.json
+    "${TYPESCRIPT_COMMAND[@]}" --noEmit --project tsconfig.json
 }
 
 ensure_package_manager_available() {
@@ -272,8 +277,8 @@ validate_apphost() {
     typecheck_command=$(typecheck_command_text "$SELECTED_PACKAGE_MANAGER")
     echo "  → $typecheck_command..."
     if ! run_typecheck "$SELECTED_PACKAGE_MANAGER" 2>&1; then
-        echo "  ❌ tsgo compilation failed for $integration_name"
-        printf 'FAIL|%s|tsgo\n' "$integration_name" > "$result_file"
+        echo "  ❌ TypeScript compilation failed for $integration_name"
+        printf 'FAIL|%s|tsc\n' "$integration_name" > "$result_file"
         return 1
     fi
 
