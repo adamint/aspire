@@ -130,8 +130,9 @@ fluent-toolbar::part(end) {
             properties inherit through the shadow boundary, so the ::after bar - which sizes
             itself from that token - collapses to nothing in both the :focus-within and :active
             states without changing the global focus-stroke width used elsewhere.
-        2. A 1px accent outline (--dash-focus-ring-color) is drawn on each exposed root/control
-            part on :focus-within; the checkbox shares this outline treatment but has no underline
+        2. An accent outline (--dash-focus-ring-color) using the global focus stroke width is drawn
+            on each exposed root/control part on :focus-within; the checkbox shares this outline
+            treatment but has no underline
             to suppress. Fluent delegates focus into shadow DOM, so the host does not reliably
             match :focus-visible when its inner control has keyboard focus. :focus-within follows
             delegated keyboard and pointer focus. On dark, the mid-violet ring avoids the near-white
@@ -152,7 +153,7 @@ fluent-checkbox:focus-within::part(control),
 fluent-select:focus-within::part(control),
 fluent-combobox:focus-within::part(control),
 fluent-text-area:focus-within::part(control) {
-    outline: 1px solid var(--dash-focus-ring-color);
+    outline: calc(var(--aspire-focus-stroke-width) * 1px) solid var(--dash-focus-ring-color);
 }
 
 /*
