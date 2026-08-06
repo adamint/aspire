@@ -102,11 +102,11 @@ fluent-toolbar::part(end) {
 }
 
 /*
-    Text input focus treatment
-    ==========================
-    Fluent/FAST text inputs draw their focus affordance as an animated accent
-    bar on the host's ::after pseudo-element (not on a ::part, so it cannot be
-    targeted directly from here), e.g.:
+    Fluent control focus treatment
+    ==============================
+    Fluent/FAST text inputs and dropdowns draw their focus affordance as an
+    animated accent bar on the host's ::after pseudo-element (not on a ::part,
+    so it cannot be targeted directly from here), e.g.:
 
         :host(:not([disabled]):focus-within)::after {
             content: "";
@@ -118,18 +118,17 @@ fluent-toolbar::part(end) {
     outline: none), so hiding it outright would regress keyboard accessibility.
     Instead we swap it for a modern, box-consistent focus ring:
 
-      1. --focus-stroke-width is set to 0 on the input hosts. Custom properties
-         inherit through the shadow boundary, so the ::after bar - which sizes
-         itself from that token - collapses to nothing in both the :focus-within
-         and :active states, removing the underline without changing the global
-         focus-stroke width used elsewhere.
-      2. A 2px accent outline (--dash-focus-ring-color) is drawn on the exposed root part
-         (the control part for fluent-text-area) on :focus-within. Fluent delegates focus into
-         its shadow DOM, so the host itself does not match :focus-visible when the inner control
-         has keyboard focus. :focus-within follows that delegated focus reliably. On dark the
-         ring is a tamed mid-violet rather than the near-white --accent-fill-rest, so it stays
-         a calm accent edge while keeping >=3:1 non-text contrast (WCAG 2.4.11). The outline
-         follows the control's corner radius and stays visible in forced-colors mode.
+        1. --focus-stroke-width is set to 0 on the text-input and dropdown hosts. Custom
+            properties inherit through the shadow boundary, so the ::after bar - which sizes
+            itself from that token - collapses to nothing in both the :focus-within and :active
+            states without changing the global focus-stroke width used elsewhere.
+        2. A 1px accent outline (--dash-focus-ring-color) is drawn on each exposed root/control
+            part on :focus-within; the checkbox shares this outline treatment but has no underline
+            to suppress. Fluent delegates focus into shadow DOM, so the host does not reliably
+            match :focus-visible when its inner control has keyboard focus. :focus-within follows
+            delegated keyboard and pointer focus. On dark, the mid-violet ring avoids the near-white
+            --accent-fill-rest while retaining >=3:1 non-text contrast (WCAG 1.4.11). The outline
+            follows the control's corner radius and remains visible in forced-colors mode.
 */
 fluent-text-field,
 fluent-search,
@@ -146,6 +145,14 @@ fluent-select:focus-within::part(control),
 fluent-combobox:focus-within::part(control),
 fluent-text-area:focus-within::part(control) {
     outline: 1px solid var(--dash-focus-ring-color);
+}
+
+/* Fluent delegates focus to the shadow-DOM button, where its internal :focus-visible rule draws the
+   outline from these inherited tokens. Override the tokens on the host so the internal rule keeps its
+   keyboard-only behavior while using the dashboard focus treatment. */
+fluent-button {
+    --focus-stroke-width: 1;
+    --focus-stroke-outer: var(--dash-focus-ring-color);
 }
 
 /*
@@ -178,12 +185,10 @@ fluent-text-area::part(control) {
     resting "underline": their ::part(control) background is the same two-layer image trick
     (linear-gradient(fill, fill), linear-gradient(... bright --neutral-stroke bottom 1px ...)), which
     reads as a heavy bottom-only border and gives the closed dropdown almost no definition against the
-    surface. Give them the same flat fill + uniform 1px border as text fields, and swap the underline
-    focus bar (sized from --focus-stroke-width) for a box-consistent accent outline drawn on
-    :focus-visible only. Using :focus-visible (not :focus-within) means a mouse click on the closed
-    dropdown no longer paints a heavy near-white perimeter ring; the ring is reserved for keyboard
-    navigation, where a visible focus indicator is required. Scoped to ::part(control) so the open
-    listbox popup is untouched. */
+    surface. Give them the same flat fill + uniform 1px border as text fields. Setting
+    --focus-stroke-width to 0 below suppresses their underline focus bar; the shared :focus-within
+    rule above draws the replacement 1px outline on ::part(control), leaving the popup listbox
+    untouched. */
 fluent-select::part(control),
 fluent-combobox::part(control) {
     background: var(--neutral-layer-1) !important;
@@ -193,12 +198,6 @@ fluent-combobox::part(control) {
 fluent-select,
 fluent-combobox {
     --focus-stroke-width: 0;
-}
-
-fluent-select:focus-visible::part(control),
-fluent-combobox:focus-visible::part(control) {
-    outline: 2px solid var(--dash-focus-ring-color);
-    outline-offset: 1px;
 }
 
 :root {
@@ -231,10 +230,10 @@ fluent-combobox:focus-visible::part(control) {
     --kbd-background-color: var(--neutral-layer-4);
     --dialog-background-color: #ffffff;
     --dialog-border-color: #e5e5e5;
-    /* Keyboard focus ring color. Single knob for the 2px :focus-visible outline shared by text inputs,
-       selects/comboboxes and scroll buttons. Defaults to the accent fill (a dark violet on light theme,
-       which reads fine on white); dark theme overrides it to a tamed violet because the dark accent fill
-       (--accent-fill-rest #e5bfff) is a near-white lavender that paints a loud halo on the violet panels. */
+     /* Focus ring color shared by inputs, checkboxes, dropdowns, buttons, and scroll buttons. Ring width
+         and focus state are control-specific. Defaults to the accent fill (a dark violet on light theme,
+         which reads fine on white); dark theme overrides it to a tamed violet because the dark accent fill
+         (--accent-fill-rest #e5bfff) is a near-white lavender that paints a loud halo on the violet panels. */
     --dash-focus-ring-color: var(--accent-fill-rest);
     /* Message bar surfaces derive from the shared --aspire-status-* seeds (tokens.css)
        so each intent hue is defined once and every theme mixes its own surface from it.
@@ -358,9 +357,9 @@ fluent-combobox:focus-visible::part(control) {
     --kbd-background-color: var(--neutral-fill-secondary-rest);
     /* Keep the blue-violet undertone from the generated ramp while setting dialogs one step darker.
        Their nested neutral-layer-1 surfaces then regain the hierarchy visible in light mode. */
-    --dialog-background-color: color-mix(in srgb, var(--neutral-layer-1) 82%, #000000);
+    --dialog-background-color: color-mix(in srgb, var(--neutral-layer-1) 75%, #000000);
     --dialog-border-color: var(--neutral-stroke-rest);
-    /* A mid periwinkle-violet keeps the focus ring above the WCAG 2.4.11 3:1 non-text contrast
+    /* A mid periwinkle-violet keeps the focus ring above the WCAG 1.4.11 3:1 non-text contrast
        minimum on the generated dark surfaces without becoming a near-white halo. */
     --dash-focus-ring-color: #a98eff;
     /* Message bar surfaces derive from the shared --aspire-status-* seeds (tokens.css).
@@ -795,10 +794,6 @@ h1 {
    color declarations regardless of nesting, and `::part(content)` reaches the anchor's shadow text. */
 .fluent-messagebar .fluent-messagebar-message,
 .fluent-messagebar .title {
-    color: var(--messagebar-foreground-color) !important;
-}
-
-.fluent-messagebar .hypertext::part(content) {
     color: var(--messagebar-foreground-color) !important;
 }
 
