@@ -4,6 +4,7 @@ import { extensionLogOutputChannel } from "../utils/logging";
 import AspireDcpServer from '../dcp/AspireDcpServer';
 import { removeTrailingNewline } from '../utils/strings';
 import { dcpServerNotInitialized } from '../loc/strings';
+import { logResolvedHotReloadState } from './hotReload';
 
 /**
  * Callback invoked when a restart is requested on an app host debug session.
@@ -33,6 +34,10 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
 
             return {
                 onWillReceiveMessage: message => {
+                    if (message.command === 'launch') {
+                        logResolvedHotReloadState(session, message.arguments);
+                    }
+
                     // Detect restart requests on app host debug sessions.
                     // When the user clicks "restart" on the app host child session,
                     // suppress VS Code's automatic child restart so the Aspire debug

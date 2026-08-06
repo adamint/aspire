@@ -208,6 +208,8 @@ extension/.test-workspace/
 extension/.test-workspaces/
 extension/node_modules/
 extension/.corepack-cache/
+extension/.proof-extensions/
+extension/.proof-user-data/
 **/.vscode-test/
 extension/.version
 extension/.vscode-test-short.mjs

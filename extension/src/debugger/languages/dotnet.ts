@@ -24,6 +24,7 @@ import {
 } from '../launchProfiles';
 import { AspireDebugSession } from '../AspireDebugSession';
 import { createAspireCliPathProcessEnvironment } from '../../utils/cliPathEnvironment';
+import { applyDevKitHotReloadSupport, logHotReloadDiagnostics } from '../hotReload';
 
 interface IDotNetService {
     getAndActivateDevKit(): Promise<boolean>
@@ -610,6 +611,12 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
             if (launchOptions.isApphost && profileName) {
                 debugConfiguration.env['DOTNET_LAUNCH_PROFILE'] = profileName;
             }
+
+            // Opt into C# Dev Kit's Hot Reload when it is available. This is a no-op (and the
+            // configuration is left untouched) when only the C# extension is installed, so .NET
+            // debugging never gains a dependency on Dev Kit.
+            const hotReloadDiagnostics = await applyDevKitHotReloadSupport(debugConfiguration);
+            logHotReloadDiagnostics(path.basename(projectPath), hotReloadDiagnostics);
         }
     };
 }

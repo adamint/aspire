@@ -318,6 +318,72 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(dotNetService.buildDotNetProjectStub.notCalled, true);
     });
 
+    test('project debug configuration receives the brokered service pipe name when C# Dev Kit is ready', async () => {
+        stubCsDevKitExtension({
+            hasServerProcessLoaded: () => true,
+            getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
+        });
+
+        const debugConfig = await createProjectDebugConfiguration();
+
+        assert.strictEqual(debugConfig.brokeredServicePipeName, 'devkit-broker-pipe');
+    });
+
+    test('project debug configuration omits the brokered service pipe name without C# Dev Kit', async () => {
+        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+
+        const debugConfig = await createProjectDebugConfiguration();
+
+        assert.strictEqual(debugConfig.brokeredServicePipeName, undefined);
+    });
+
+    test('project debug configuration omits the brokered service pipe name for a no-debug session', async () => {
+        stubCsDevKitExtension({
+            hasServerProcessLoaded: () => true,
+            getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
+        });
+
+        const debugConfig = await createProjectDebugConfiguration({ debug: false });
+
+        assert.strictEqual(debugConfig.brokeredServicePipeName, undefined);
+    });
+
+    function stubCsDevKitExtension(exports: unknown): void {
+        sinon.stub(vscode.extensions, 'getExtension').callsFake((extensionId: string) =>
+            extensionId === 'ms-dotnettools.csdevkit'
+                ? { id: extensionId, isActive: true, exports } as unknown as vscode.Extension<unknown>
+                : undefined);
+    }
+
+    async function createProjectDebugConfiguration(options: { debug?: boolean } = {}): Promise<AspireResourceExtendedDebugConfiguration> {
+        const outputPath = 'C:\\temp\\bin\\Debug\\net7.0\\TestProject.dll';
+        const { extension } = createDebuggerExtension(outputPath, null, true, true);
+
+        const launchConfig: ProjectLaunchConfiguration = {
+            type: 'project',
+            project_path: 'C:\\temp\\TestProject.csproj'
+        };
+
+        const debug = options.debug ?? true;
+        const debugConfig: AspireResourceExtendedDebugConfiguration = {
+            runId: '1',
+            debugSessionId: '1',
+            type: 'coreclr',
+            name: 'Test Debug Config',
+            request: 'launch',
+            noDebug: !debug
+        };
+
+        await extension.createDebugSessionConfigurationCallback!(
+            launchConfig,
+            [],
+            [],
+            { debug, runId: '1', debugSessionId: '1', isApphost: false, debugSession: sinon.createStubInstance(AspireDebugSession) },
+            debugConfig);
+
+        return debugConfig;
+    }
+
     test('advertises the coreclr project debugger and extracts project_path for .csproj and file-based .cs', () => {
         // A DotnetProjectResource (AddDotnetProject) advertises the same "project" launch capability as
         // AddProject and emits a ProjectLaunchConfiguration carrying project_path (a .csproj or a file-based
