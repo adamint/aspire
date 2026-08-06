@@ -115,7 +115,9 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.Contains("displayName: '[Advanced] Skip npm RID Package Publishing", pipeline);
         Assert.Contains("displayName: '[Advanced] Skip npm Pointer Package Publishing", pipeline);
         Assert.Contains("or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false))", pipeline);
-        Assert.Contains("and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true))", pipeline);
+        Assert.Contains(
+            "and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true), not(and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false))))",
+            pipeline);
     }
 
     [Fact]
@@ -318,7 +320,7 @@ public sealed class ReleasePublishNugetPipelineTests
         var stableRealGate =
             "- ${{ if and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false)) }}:";
         const string anonymousViewCommand =
-            "$viewOutput = npm view \"$packageName@latest\" version --registry=$internalRegistry --loglevel=warn 2>&1";
+            "$viewOutput = npm view \"$packageName@latest\" version --prefer-online --registry=$internalRegistry --loglevel=warn 2>&1";
         var stableRealGateIndex = FindRequiredText(pipeline, stableRealGate);
         var stableRealGateEndIndex = FindYamlIndentedBlockEnd(pipeline, stableRealGate);
         var publicValidationIndex = FindRequiredText(
@@ -469,6 +471,146 @@ public sealed class ReleasePublishNugetPipelineTests
         var obsoleteGate =
             "and(eq(parameters.DryRun, false), or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false)), eq(parameters.IsPrerelease, false))";
         Assert.Equal(-1, pipeline.IndexOf(obsoleteGate, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task StableNpmMirrorRerunStagesPointerArtifactAndValidationSummaries()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+        var prepareStage = ExtractSection(
+            pipeline,
+            "displayName: 'Download and Re-publish Artifacts'",
+            "displayName: 'Validate, Publish, and Promote'");
+        var stableNpmGate =
+            "- ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false))) }}:";
+
+        var downloadGateIndex = FindRequiredText(prepareStage, stableNpmGate);
+        var downloadIndex = FindRequiredText(
+            prepareStage,
+            "displayName: 'Download npm packages from Source Build'");
+        var prepareGateIndex = prepareStage.IndexOf(
+            stableNpmGate,
+            downloadGateIndex + stableNpmGate.Length,
+            StringComparison.Ordinal);
+        var prepareIndex = FindRequiredText(
+            prepareStage,
+            "displayName: 'Prepare npm Artifacts for Publishing'");
+
+        Assert.True(downloadGateIndex < downloadIndex);
+        Assert.True(prepareGateIndex > downloadIndex);
+        Assert.True(prepareGateIndex < prepareIndex);
+        Assert.Contains(
+            "- ${{ if and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true), not(and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false)))) }}:",
+            prepareStage,
+            StringComparison.Ordinal);
+
+        var stagedValidationIndex = FindRequiredText(
+            pipeline,
+            "displayName: 'Verify Staged npm Package Versions'");
+        var stableStagedValidationGateIndex = pipeline.LastIndexOf(
+            stableNpmGate,
+            stagedValidationIndex,
+            StringComparison.Ordinal);
+        var publicationOnlyGateIndex = pipeline.LastIndexOf(
+            "- ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false)) }}:",
+            stagedValidationIndex,
+            StringComparison.Ordinal);
+
+        Assert.True(stableStagedValidationGateIndex > publicationOnlyGateIndex);
+    }
+
+    [Fact]
+    public async Task NpmMirrorAnonymousValidationUsesOnlyFreshCredentialFreeConfiguration()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+        var seedScript = ExtractSection(
+            pipeline,
+            "$packageName = '@microsoft/aspire-cli'",
+            "displayName: 'Seed and Validate npm Internal Mirror'");
+
+        Assert.Contains(
+            "$anonymousGlobalNpmrc = Join-Path $workRoot 'anonymous-global.npmrc'",
+            seedScript,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$anonymousDirectory = Join-Path $workRoot 'anonymous'",
+            seedScript,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$env:NPM_CONFIG_GLOBALCONFIG = $anonymousGlobalNpmrc",
+            seedScript,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "npm view \"$packageName@latest\" version --prefer-online --registry=$internalRegistry",
+            seedScript,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Remove-Item Env:NPM_CONFIG_GLOBALCONFIG -ErrorAction SilentlyContinue",
+            seedScript,
+            StringComparison.Ordinal);
+
+        var anonymousDirectoryCreateIndex = FindRequiredText(
+            seedScript,
+            "New-Item -ItemType Directory -Path $anonymousDirectory -Force | Out-Null");
+        var anonymousGlobalConfigCreateIndex = FindRequiredText(
+            seedScript,
+            "New-Item -ItemType File -Path $anonymousGlobalNpmrc -Force | Out-Null");
+        var anonymousLocationIndex = FindRequiredText(
+            seedScript,
+            "Push-Location $anonymousDirectory");
+        var anonymousViewIndex = FindRequiredText(
+            seedScript,
+            "npm view \"$packageName@latest\" version --prefer-online --registry=$internalRegistry");
+
+        Assert.True(anonymousDirectoryCreateIndex < anonymousLocationIndex);
+        Assert.True(anonymousGlobalConfigCreateIndex < anonymousLocationIndex);
+        Assert.True(anonymousLocationIndex < anonymousViewIndex);
+    }
+
+    [Fact]
+    public async Task NpmMirrorCleanupDoesNotMaskSuccessfulValidation()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+        var seedScript = ExtractSection(
+            pipeline,
+            "$packageName = '@microsoft/aspire-cli'",
+            "displayName: 'Seed and Validate npm Internal Mirror'");
+
+        Assert.Contains(
+            "Best-effort cleanup of '$workRoot' failed:",
+            seedScript,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction Stop",
+            seedScript,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NpmMirrorOnlyRerunDocumentationSkipsEveryUnrelatedReleaseAction()
+    {
+        var releaseProcess = await ReadRepoFileAsync("docs/release-process.md");
+        var mirrorRecovery = ExtractSection(
+            releaseProcess,
+            "### npm internal mirror seeding or anonymous validation fails",
+            "### Tag already exists but points to different commit");
+
+        foreach (var parameterName in new[]
+        {
+            "SkipNuGetPublish",
+            "SkipNpmRidPublish",
+            "SkipNpmPointerPublish",
+            "SkipChannelPromotion",
+            "SkipWinGetPublish",
+            "SkipGitHubTasks",
+            "SkipReleaseAssets",
+            "SkipHomebrewValidation",
+            "SkipNixPackageUpdate",
+            "SkipVSCodeExtensionPublish"
+        })
+        {
+            Assert.Contains($"{parameterName}=true", mirrorRecovery, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

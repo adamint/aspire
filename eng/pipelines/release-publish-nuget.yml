@@ -370,7 +370,7 @@ extends:
                   artifact: PackageArtifacts
                   patterns: '**/*.nupkg'
 
-              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false)) }}:
+              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false))) }}:
                 - download: aspire-build
                   displayName: 'Download npm packages from Source Build'
                   artifact: BlobArtifacts
@@ -466,7 +466,7 @@ extends:
                     Write-Host "Installer-only run detected; created empty PackageArtifacts placeholder."
                   displayName: 'Prepare Empty PackageArtifacts Placeholder'
 
-              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false)) }}:
+              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false))) }}:
                 - powershell: |
                     $sourcePath = "$(Pipeline.Workspace)/aspire-build/BlobArtifacts"
                     $ridTargetPath = "$(Pipeline.Workspace)/npm/rid-packages"
@@ -638,7 +638,7 @@ extends:
                     Write-Host "Prepared $($ridPackages.Count) RID npm package(s), pointer package version $($versions[0]), and $($signatureSidecars.Count) detached signature sidecar(s)."
                   displayName: 'Prepare npm Artifacts for Publishing'
 
-              - ${{ if and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true)) }}:
+              - ${{ if and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true), not(and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false)))) }}:
                 - powershell: |
                     New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/rid-packages" -Force | Out-Null
                     New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/pointer-package" -Force | Out-Null
@@ -1125,7 +1125,7 @@ extends:
                   inputs:
                     versionSpec: '22.x'
 
-              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false)) }}:
+              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false))) }}:
                 - powershell: |
                     $ErrorActionPreference = 'Stop'
                     $validationRoot = "$(Pipeline.Workspace)/npm/validation-summary"
@@ -2026,7 +2026,9 @@ extends:
                     $seedDirectory = Join-Path $workRoot 'seed'
                     $authenticatedCache = Join-Path $workRoot 'authenticated-cache'
                     $anonymousCache = Join-Path $workRoot 'anonymous-cache'
+                    $anonymousDirectory = Join-Path $workRoot 'anonymous'
                     $anonymousNpmrc = Join-Path $workRoot 'anonymous.npmrc'
+                    $anonymousGlobalNpmrc = Join-Path $workRoot 'anonymous-global.npmrc'
                     $packageSpec = "$packageName@$packageVersion"
 
                     try {
@@ -2037,8 +2039,10 @@ extends:
                       New-Item -ItemType Directory -Path $seedDirectory -Force | Out-Null
                       New-Item -ItemType Directory -Path $authenticatedCache -Force | Out-Null
                       New-Item -ItemType Directory -Path $anonymousCache -Force | Out-Null
+                      New-Item -ItemType Directory -Path $anonymousDirectory -Force | Out-Null
                       "registry=$internalRegistry" |
                         Set-Content -LiteralPath $anonymousNpmrc -Encoding utf8NoBOM
+                      New-Item -ItemType File -Path $anonymousGlobalNpmrc -Force | Out-Null
 
                       Write-Host "Seeding $packageSpec into $internalRegistry through its configured upstream."
                       $env:NPM_CONFIG_USERCONFIG = $authenticatedNpmrc
@@ -2061,40 +2065,52 @@ extends:
                       # Use a credential-free npmrc and a separate empty cache so this
                       # proves anonymous visibility instead of cached authenticated data.
                       $env:NPM_CONFIG_USERCONFIG = $anonymousNpmrc
+                      $env:NPM_CONFIG_GLOBALCONFIG = $anonymousGlobalNpmrc
                       $env:npm_config_cache = $anonymousCache
 
-                      $maxAttempts = 10
-                      for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-                        Write-Host "Anonymous mirror verification attempt $attempt of $maxAttempts."
-                        $viewOutput = npm view "$packageName@latest" version --registry=$internalRegistry --loglevel=warn 2>&1
-                        $viewExitCode = $LASTEXITCODE
-                        $viewOutput | ForEach-Object { Write-Host $_ }
+                      Push-Location $anonymousDirectory
+                      try {
+                        $maxAttempts = 10
+                        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+                          Write-Host "Anonymous mirror verification attempt $attempt of $maxAttempts."
+                          $viewOutput = npm view "$packageName@latest" version --prefer-online --registry=$internalRegistry --loglevel=warn 2>&1
+                          $viewExitCode = $LASTEXITCODE
+                          $viewOutput | ForEach-Object { Write-Host $_ }
 
-                        $mirroredVersion = $viewOutput |
-                          ForEach-Object { "$_".Trim() } |
-                          Where-Object { $_ -match '^\d+\.\d+\.\d+$' } |
-                          Select-Object -First 1
+                          $mirroredVersion = $viewOutput |
+                            ForEach-Object { "$_".Trim() } |
+                            Where-Object { $_ -match '^\d+\.\d+\.\d+$' } |
+                            Select-Object -First 1
 
-                        if ($viewExitCode -eq 0 -and
-                            $mirroredVersion -and
-                            [version]$mirroredVersion -ge [version]$packageVersion) {
-                          Write-Host "Anonymous internal npm latest is $mirroredVersion, satisfying released version $packageVersion."
-                          break
+                          if ($viewExitCode -eq 0 -and
+                              $mirroredVersion -and
+                              [version]$mirroredVersion -ge [version]$packageVersion) {
+                            Write-Host "Anonymous internal npm latest is $mirroredVersion, satisfying released version $packageVersion."
+                            break
+                          }
+
+                          if ($attempt -eq $maxAttempts) {
+                            throw "Internal npm mirror did not anonymously expose $packageName@latest at or above $packageVersion after $maxAttempts attempts."
+                          }
+
+                          Start-Sleep -Seconds 30
                         }
-
-                        if ($attempt -eq $maxAttempts) {
-                          throw "Internal npm mirror did not anonymously expose $packageName@latest at or above $packageVersion after $maxAttempts attempts."
-                        }
-
-                        Start-Sleep -Seconds 30
+                      }
+                      finally {
+                        Pop-Location
                       }
                     }
                     finally {
                       Remove-Item Env:NPM_CONFIG_USERCONFIG -ErrorAction SilentlyContinue
+                      Remove-Item Env:NPM_CONFIG_GLOBALCONFIG -ErrorAction SilentlyContinue
                       Remove-Item Env:npm_config_cache -ErrorAction SilentlyContinue
 
                       if (Test-Path -LiteralPath $workRoot) {
-                        Remove-Item -LiteralPath $workRoot -Recurse -Force
+                        try {
+                          Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction Stop
+                        } catch {
+                          Write-Warning "Best-effort cleanup of '$workRoot' failed: $($_.Exception.Message)"
+                        }
                       }
                     }
                   displayName: 'Seed and Validate npm Internal Mirror'

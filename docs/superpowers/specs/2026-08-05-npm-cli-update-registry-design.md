@@ -100,17 +100,19 @@ The gate will:
    This is a local temporary install, not a global install. It avoids lifecycle
    scripts and persistent project files while causing Azure Artifacts to save
    the package from its npm upstream.
-4. Switch to a clean npm user configuration with no credentials and retry:
+4. Switch to a fresh working directory, empty user and global npm
+   configurations, and a separate empty cache, then retry with online metadata
+   preferred:
 
    ```text
-   npm view @microsoft/aspire-cli@latest version
+   npm view @microsoft/aspire-cli@latest version --prefer-online
    ```
 
    against `dotnet-public-npm`.
 5. Parse a stable SemVer result and require the anonymous internal `latest`
    version to be at-or-above the selected pointer-package version.
-6. Clean up the temporary npm configuration, cache, prefix, and install
-   directory.
+6. Best-effort clean up the temporary npm configuration, cache, prefix, and
+   install directory without masking a successful mirror validation.
 
 The at-or-above rule handles safe reruns after a newer stable release has
 already advanced `latest`. A normal release should resolve the exact version
@@ -120,6 +122,10 @@ The seeding gate runs on real stable release paths, including reruns where
 `SkipNpmPointerPublish=true` because the public pointer package already exists.
 It does not run during dry runs or prerelease runs because it mutates the
 internal upstream cache.
+
+Stable publish-skipped reruns still stage the selected source build's pointer
+package and validation summaries. Public smoke and mirror validation need the
+same verified package identity even when no package is submitted again.
 
 Failure to authenticate, ingest the package, parse the mirrored version, or
 prove anonymous resolution fails the release job before channel promotion.
@@ -154,7 +160,7 @@ For an npm launch, call:
 await npmRunner.ResolvePackageAsync(
     NpmInstallDetection.ExpectedPackageName,
     "latest",
-    cancellationToken);
+    lifetimeCancellationToken);
 ```
 
 Do not query NuGet for that invocation. The npm dist-tag has already selected
@@ -169,9 +175,16 @@ including stable/prerelease handling.
 Share one in-flight npm resolution between concurrent notifier consumers.
 Retain a successful result for the CLI process lifetime.
 
-If resolution fails or is cancelled, clear the in-flight entry. This allows an
-explicit later call, such as `aspire doctor`, to retry instead of permanently
-caching a transient failure.
+Caller cancellation only stops that caller from waiting; it does not cancel
+the shared lookup for another consumer. The shared operation uses a
+notifier-owned lifetime token. Notifier disposal cancels that token and waits
+for the shared lookup to finish. `NpmRunner` terminates its npm child process
+tree when the token is cancelled so CLI shutdown cannot leave the metadata
+lookup behind.
+
+If resolution fails or the shared operation is cancelled, clear the in-flight
+entry. This allows an explicit later call, such as `aspire doctor`, to retry
+instead of permanently caching a transient failure.
 
 The cached npm result and the existing NuGet package cache remain separate so
 the selected source is explicit and one install type cannot accidentally reuse
@@ -244,8 +257,10 @@ Extend `ReleasePublishNugetPipelineTests` to require:
 - temporary internal-feed `.npmrc` creation
 - `npmAuthenticate@0`
 - authenticated upstream ingestion
-- a clean anonymous verification configuration
+- a fresh anonymous working directory, user configuration, global
+  configuration, and cache
 - bounded retries and the at-or-above version gate
+- source npm artifact staging on publish-skipped stable reruns
 - ordering after public npm validation and before channel promotion
 - execution on pointer-publish reruns
 - no mirror mutation during dry runs or prerelease runs

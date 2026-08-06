@@ -289,7 +289,16 @@ internal sealed class NpmRunner(IEnvironment environment, ILogger<NpmRunner> log
             var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
             var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
 
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                await TerminateNpmProcessAsync(process).ConfigureAwait(false);
+                throw;
+            }
+
             activity.SetProcessExitCode(process.ExitCode);
 
             if (process.ExitCode != 0)
@@ -309,4 +318,25 @@ internal sealed class NpmRunner(IEnvironment environment, ILogger<NpmRunner> log
         }
     }
 
+    private async Task TerminateNpmProcessAsync(Process process)
+    {
+        try
+        {
+            if (process.HasExited)
+            {
+                return;
+            }
+
+            logger.LogDebug("Terminating npm process {ProcessId} because the operation was cancelled.", process.Id);
+            process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (IsExpectedProcessTerminationException(ex))
+        {
+            logger.LogDebug(ex, "Unable to terminate npm process after cancellation.");
+        }
+    }
+
+    internal static bool IsExpectedProcessTerminationException(Exception exception)
+        => exception is InvalidOperationException or System.ComponentModel.Win32Exception or AggregateException;
 }

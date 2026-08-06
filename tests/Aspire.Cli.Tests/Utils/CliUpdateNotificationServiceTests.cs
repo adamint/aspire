@@ -677,6 +677,91 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task NpmResolutionIsCanceledWhenNotifierIsDisposed()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
+        var resolutionStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancellationObserved = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var allowCancellationToComplete = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var resolutionToken = CancellationToken.None;
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
+        {
+            configure.NpmRunnerFactory = _ => new FakeNpmRunner
+            {
+                ResolvePackageAsyncCallback = async (_, _, cancellationToken) =>
+                {
+                    resolutionToken = cancellationToken;
+                    resolutionStarted.TrySetResult();
+                    try
+                    {
+                        await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                        return null;
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        cancellationObserved.TrySetResult();
+                        await allowCancellationToComplete.Task;
+                        throw;
+                    }
+                }
+            };
+            configure.CliUpdateNotifierFactory = sp => CreateCliUpdateNotifier(sp, "9.4.0");
+        });
+
+        var provider = services.BuildServiceProvider();
+        Task<CliVersionStatus>? statusTask = null;
+        Task? disposeTask = null;
+
+        try
+        {
+            var notifier = provider.GetRequiredService<ICliUpdateNotifier>();
+            statusTask = notifier.GetVersionStatusAsync(
+                workspace.WorkspaceRoot,
+                CancellationToken.None);
+            await resolutionStarted.Task.DefaultTimeout();
+
+            Assert.True(resolutionToken.CanBeCanceled);
+
+            disposeTask = Task.Run(provider.Dispose);
+            await cancellationObserved.Task.DefaultTimeout();
+
+            Assert.True(resolutionToken.IsCancellationRequested);
+            Assert.False(disposeTask.IsCompleted);
+
+            allowCancellationToComplete.TrySetResult();
+            await disposeTask.DefaultTimeout();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => statusTask!).DefaultTimeout();
+        }
+        finally
+        {
+            allowCancellationToComplete.TrySetResult();
+            provider.Dispose();
+
+            if (disposeTask is not null)
+            {
+                await disposeTask.DefaultTimeout();
+            }
+
+            if (statusTask is not null)
+            {
+                try
+                {
+                    await statusTask.DefaultTimeout();
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+        }
+    }
+
+    [Fact]
     public async Task StableWillNotRecommendUpdatingToPreview()
     {
         var currentVersion = VersionHelper.GetDefaultTemplateVersion();

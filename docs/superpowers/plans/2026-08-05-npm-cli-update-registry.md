@@ -4,7 +4,7 @@
 
 **Goal:** Discover npm-installed Aspire CLI updates through `dotnet-public-npm` and make every stable release seed and anonymously verify the mirrored `@microsoft/aspire-cli` package before channel promotion.
 
-**Architecture:** `CliUpdateNotifier` will branch before NuGet lookup: npm launches resolve `@microsoft/aspire-cli@latest` through the existing `INpmRunner`, while non-npm launches retain the current NuGet path. The notifier will share one in-flight npm resolution, retain successful metadata for the process lifetime, and clear failures so an explicit `aspire doctor` check can retry. The release pipeline will continue publishing only to public npm, then authenticate to `dotnet-public-npm`, install the exact released pointer package to trigger upstream ingestion, switch to a credential-free npm configuration and cache, and require anonymous `@latest` resolution at or above the released version before promotion.
+**Architecture:** `CliUpdateNotifier` will branch before NuGet lookup: npm launches resolve `@microsoft/aspire-cli@latest` through the existing `INpmRunner`, while non-npm launches retain the current NuGet path. The notifier will share one in-flight npm resolution, retain successful metadata for the process lifetime, clear failures so an explicit `aspire doctor` check can retry, and cancel and drain the npm child process when the notifier is disposed. The release pipeline will continue publishing only to public npm, stage the selected source build's npm artifacts even on stable publish-skipped reruns, authenticate to `dotnet-public-npm`, install the exact released pointer package to trigger upstream ingestion, switch to a fresh credential-free working directory, user/global configuration, and cache, and require anonymous `@latest` resolution at or above the released version before promotion.
 
 **Tech Stack:** .NET 10, C# 13, `Semver`, xUnit v3 with Microsoft.Testing.Platform, Azure Pipelines YAML, PowerShell 7, npm, Azure Artifacts `npmAuthenticate@0`
 
@@ -340,11 +340,12 @@ internal class CliUpdateNotifier(
     INpmRunner npmRunner,
     IInteractionService interactionService,
     IProcessPathProvider processPathProvider,
-    CliExecutionContext executionContext) : ICliUpdateNotifier
+    CliExecutionContext executionContext) : ICliUpdateNotifier, IDisposable
 {
     private const string LatestNpmVersionRange = "latest";
 
     private readonly object _npmResolutionLock = new();
+    private readonly CancellationTokenSource _npmResolutionCancellationSource = new();
     private IEnumerable<Shared.NuGetPackageCli>? _availablePackages;
     private NpmPackageInfo? _availableNpmPackage;
     private Task<NpmPackageInfo>? _npmResolutionTask;
@@ -379,14 +380,14 @@ private async Task<NpmPackageInfo> GetLatestNpmPackageAsync(
 
     lock (_npmResolutionLock)
     {
-        resolutionTask = _npmResolutionTask ??= ResolveLatestNpmPackageAsync(cancellationToken);
+        resolutionTask = _npmResolutionTask ??= ResolveLatestNpmPackageAsync();
     }
 
     try
     {
-        return await resolutionTask;
+        return await resolutionTask.WaitAsync(cancellationToken);
     }
-    catch
+    catch when (resolutionTask.IsFaulted || resolutionTask.IsCanceled)
     {
         // Background notification checks may fail before an explicit doctor check.
         // Clear only this failed or cancelled task so doctor can make a fresh attempt.
@@ -402,17 +403,21 @@ private async Task<NpmPackageInfo> GetLatestNpmPackageAsync(
     }
 }
 
-private async Task<NpmPackageInfo> ResolveLatestNpmPackageAsync(
-    CancellationToken cancellationToken)
+private async Task<NpmPackageInfo> ResolveLatestNpmPackageAsync()
 {
     return await npmRunner.ResolvePackageAsync(
         NpmInstallDetection.ExpectedPackageName,
         LatestNpmVersionRange,
-        cancellationToken)
+        _npmResolutionCancellationSource.Token)
         ?? throw new InvalidOperationException(
             $"Unable to resolve {NpmPackageInfo.FormatPackageSpecifier(NpmInstallDetection.ExpectedPackageName, LatestNpmVersionRange)} from the internal npm registry.");
 }
 ```
+
+Implement `Dispose()` by cancelling `_npmResolutionCancellationSource`,
+waiting for the shared resolution task to finish, and then disposing the
+source. Update `NpmRunner` so cancellation kills the npm process tree and waits
+for it to exit before cleaning its temporary directory.
 
 - [ ] **Step 10: Compare npm's concrete version and preserve existing status behavior**
 
@@ -791,21 +796,32 @@ dotnet test --project tests/Infrastructure.Tests/Infrastructure.Tests.csproj --n
 
 Expected: FAIL because the rerun gate excludes both-skipped npm publication and no mirror steps exist.
 
-- [ ] **Step 4: Install Node.js for stable real reruns**
+- [ ] **Step 4: Stage npm artifacts and install Node.js for stable real reruns**
 
-Replace the compile-time condition immediately above `Install Node.js for npm Validation`:
+Replace the compile-time condition around each of these prepare/release blocks:
 
-```yaml
-              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false)) }}:
-```
+- `Download npm packages from Source Build`
+- `Prepare npm Artifacts for Publishing`
+- `Verify Staged npm Package Versions`
+- `Install Node.js for npm Validation`
 
-with:
+Use:
 
 ```yaml
               - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false))) }}:
 ```
 
-Leave the following prepare-summary/package-inventory block under its existing publication-flags condition. A both-skipped rerun does not need to re-authorize publication; it gets the exact package version from the public smoke test.
+Change `Prepare Empty npm Artifact Placeholders` to the inverse condition:
+
+```yaml
+              - ${{ if and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true), not(and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false)))) }}:
+```
+
+A stable mirror-only rerun does not submit npm packages, but it still needs
+the selected source build's pointer tarball and validation summaries. The
+public smoke derives the exact version from that staged pointer package, and
+the staged-version check keeps the rerun on the same validated artifact path
+as a normal release.
 
 - [ ] **Step 5: Move the both-skipped message and broaden only the stable real block**
 
@@ -902,20 +918,24 @@ Add immediately after authentication:
                     $seedDirectory = Join-Path $workRoot 'seed'
                     $authenticatedCache = Join-Path $workRoot 'authenticated-cache'
                     $anonymousCache = Join-Path $workRoot 'anonymous-cache'
+                    $anonymousDirectory = Join-Path $workRoot 'anonymous'
                     $anonymousNpmrc = Join-Path $workRoot 'anonymous.npmrc'
+                    $anonymousGlobalNpmrc = Join-Path $workRoot 'anonymous-global.npmrc'
                     $packageSpec = "$packageName@$packageVersion"
 
-                    if (Test-Path -LiteralPath $workRoot) {
-                      Remove-Item -LiteralPath $workRoot -Recurse -Force
-                    }
-
-                    New-Item -ItemType Directory -Path $seedDirectory -Force | Out-Null
-                    New-Item -ItemType Directory -Path $authenticatedCache -Force | Out-Null
-                    New-Item -ItemType Directory -Path $anonymousCache -Force | Out-Null
-                    "registry=$internalRegistry" |
-                      Set-Content -LiteralPath $anonymousNpmrc -Encoding utf8NoBOM
-
                     try {
+                      if (Test-Path -LiteralPath $workRoot) {
+                        Remove-Item -LiteralPath $workRoot -Recurse -Force
+                      }
+
+                      New-Item -ItemType Directory -Path $seedDirectory -Force | Out-Null
+                      New-Item -ItemType Directory -Path $authenticatedCache -Force | Out-Null
+                      New-Item -ItemType Directory -Path $anonymousCache -Force | Out-Null
+                      New-Item -ItemType Directory -Path $anonymousDirectory -Force | Out-Null
+                      "registry=$internalRegistry" |
+                        Set-Content -LiteralPath $anonymousNpmrc -Encoding utf8NoBOM
+                      New-Item -ItemType File -Path $anonymousGlobalNpmrc -Force | Out-Null
+
                       Write-Host "Seeding $packageSpec into $internalRegistry through its configured upstream."
                       $env:NPM_CONFIG_USERCONFIG = $authenticatedNpmrc
                       $env:npm_config_cache = $authenticatedCache
@@ -937,46 +957,58 @@ Add immediately after authentication:
                       # Use a credential-free npmrc and a separate empty cache so this
                       # proves anonymous visibility instead of cached authenticated data.
                       $env:NPM_CONFIG_USERCONFIG = $anonymousNpmrc
+                      $env:NPM_CONFIG_GLOBALCONFIG = $anonymousGlobalNpmrc
                       $env:npm_config_cache = $anonymousCache
 
-                      $maxAttempts = 10
-                      for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-                        Write-Host "Anonymous mirror verification attempt $attempt of $maxAttempts."
-                        $viewOutput = npm view "$packageName@latest" version --registry=$internalRegistry --loglevel=warn 2>&1
-                        $viewExitCode = $LASTEXITCODE
-                        $viewOutput | ForEach-Object { Write-Host $_ }
+                      Push-Location $anonymousDirectory
+                      try {
+                        $maxAttempts = 10
+                        for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+                          Write-Host "Anonymous mirror verification attempt $attempt of $maxAttempts."
+                          $viewOutput = npm view "$packageName@latest" version --prefer-online --registry=$internalRegistry --loglevel=warn 2>&1
+                          $viewExitCode = $LASTEXITCODE
+                          $viewOutput | ForEach-Object { Write-Host $_ }
 
-                        $mirroredVersion = $viewOutput |
-                          ForEach-Object { "$_".Trim() } |
-                          Where-Object { $_ -match '^\d+\.\d+\.\d+$' } |
-                          Select-Object -First 1
+                          $mirroredVersion = $viewOutput |
+                            ForEach-Object { "$_".Trim() } |
+                            Where-Object { $_ -match '^\d+\.\d+\.\d+$' } |
+                            Select-Object -First 1
 
-                        if ($viewExitCode -eq 0 -and
-                            $mirroredVersion -and
-                            [version]$mirroredVersion -ge [version]$packageVersion) {
-                          Write-Host "Anonymous internal npm latest is $mirroredVersion, satisfying released version $packageVersion."
-                          break
+                          if ($viewExitCode -eq 0 -and
+                              $mirroredVersion -and
+                              [version]$mirroredVersion -ge [version]$packageVersion) {
+                            Write-Host "Anonymous internal npm latest is $mirroredVersion, satisfying released version $packageVersion."
+                            break
+                          }
+
+                          if ($attempt -eq $maxAttempts) {
+                            throw "Internal npm mirror did not anonymously expose $packageName@latest at or above $packageVersion after $maxAttempts attempts."
+                          }
+
+                          Start-Sleep -Seconds 30
                         }
-
-                        if ($attempt -eq $maxAttempts) {
-                          throw "Internal npm mirror did not anonymously expose $packageName@latest at or above $packageVersion after $maxAttempts attempts."
-                        }
-
-                        Start-Sleep -Seconds 30
+                      }
+                      finally {
+                        Pop-Location
                       }
                     }
                     finally {
                       Remove-Item Env:NPM_CONFIG_USERCONFIG -ErrorAction SilentlyContinue
+                      Remove-Item Env:NPM_CONFIG_GLOBALCONFIG -ErrorAction SilentlyContinue
                       Remove-Item Env:npm_config_cache -ErrorAction SilentlyContinue
 
                       if (Test-Path -LiteralPath $workRoot) {
-                        Remove-Item -LiteralPath $workRoot -Recurse -Force
+                        try {
+                          Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction Stop
+                        } catch {
+                          Write-Warning "Best-effort cleanup of '$workRoot' failed: $($_.Exception.Message)"
+                        }
                       }
                     }
                   displayName: 'Seed and Validate npm Internal Mirror'
 ```
 
-The authenticated install triggers upstream ingestion without adding another publication destination. The anonymous phase uses a credential-free config and separate empty cache. The at-or-above comparison permits a later stable release already mirrored on a safe rerun.
+The authenticated install triggers upstream ingestion without adding another publication destination. The anonymous phase uses a fresh working directory, credential-free user and global configs, a separate empty cache, and online metadata preference. The at-or-above comparison permits a later stable release already mirrored on a safe rerun, and cleanup cannot mask a successful validation.
 
 - [ ] **Step 9: Run the release pipeline tests**
 
@@ -1137,10 +1169,15 @@ Expected: no whitespace errors and no uncommitted implementation changes.
 
 Invoke the `azdo-internal` skill before interacting with `dnceng/internal`.
 
-Trigger the Aspire internal release pipeline (`microsoft-aspire`, definition `1602`) from this branch or its internal mirror commit. Select a source build whose stable `@microsoft/aspire-cli` pointer package already exists on public npm. Use:
+Trigger the Aspire internal release pipeline
+(`microsoft-aspire-Release-To-NuGet`, definition `1600`) from this branch or
+its internal mirror commit. Pin its `aspire-build` resource to a source run
+from `microsoft-aspire` (definition `1602`) whose stable
+`@microsoft/aspire-cli` pointer package already exists on public npm. Use:
 
 ```text
 DryRun=false
+IsPrerelease=false
 SkipNuGetPublish=true
 SkipNpmRidPublish=true
 SkipNpmPointerPublish=true
@@ -1157,20 +1194,29 @@ Expected: no public publication or channel promotion occurs. `Validate Published
 
 - [ ] **Step 5: Independently verify anonymous resolution**
 
-Run with a fresh temporary user config containing no credentials:
+Run from a fresh directory with empty user/global configs and cache:
 
 ```bash
-anonymous_npmrc="$(mktemp)"
+anonymous_root="$(mktemp -d)"
+trap 'rm -rf "$anonymous_root"' EXIT
+cd "$anonymous_root"
+
+anonymous_npmrc="$PWD/user.npmrc"
+anonymous_global_npmrc="$PWD/global.npmrc"
+anonymous_cache="$PWD/cache"
+
 printf '%s\n' \
   'registry=https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/' \
   > "$anonymous_npmrc"
+touch "$anonymous_global_npmrc"
+mkdir "$anonymous_cache"
 
 NPM_CONFIG_USERCONFIG="$anonymous_npmrc" \
+NPM_CONFIG_GLOBALCONFIG="$anonymous_global_npmrc" \
+NPM_CONFIG_CACHE="$anonymous_cache" \
   npm view @microsoft/aspire-cli@latest version \
   --prefer-online \
   --registry https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/
-
-rm -f "$anonymous_npmrc"
 ```
 
 Expected: npm prints a stable version at or above the public smoke test's `NpmPublishedPointerVersion` without authentication or `E401`.

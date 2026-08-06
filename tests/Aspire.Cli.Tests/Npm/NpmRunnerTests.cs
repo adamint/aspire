@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using Aspire.Cli.Npm;
 using Aspire.Cli.Telemetry;
@@ -8,6 +10,7 @@ using Aspire.Cli.Tests.Acquisition;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Cli.Utils;
+using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -235,6 +238,60 @@ public class NpmRunnerTests
     }
 
     [Fact]
+    public async Task ResolvePackageAsync_CancellationTerminatesNpmProcess()
+    {
+        var tempDirectory = Directory.CreateTempSubdirectory("aspire-npm-runner-test-");
+        int? processId = null;
+
+        try
+        {
+            WriteBlockingFakeNpm(tempDirectory);
+            var processIdPath = Path.Combine(tempDirectory.FullName, "process-id.txt");
+            var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            using var pathOverride = new EnvVarOverride(
+                "PATH",
+                $"{tempDirectory.FullName}{Path.PathSeparator}{existingPath}");
+            using var pathExtensionsOverride = OperatingSystem.IsWindows()
+                ? new EnvVarOverride("PATHEXT", ".CMD")
+                : null;
+            using var processIdPathOverride = new EnvVarOverride("NPM_PID_FILE", processIdPath);
+            using var profilingTelemetry = new ProfilingTelemetry(new ConfigurationBuilder().Build());
+            using var cancellationTokenSource = new CancellationTokenSource();
+            var runner = new NpmRunner(
+                new TestEnvironment(),
+                NullLogger<NpmRunner>.Instance,
+                profilingTelemetry);
+
+            var resolutionTask = runner.ResolvePackageAsync(
+                NpmInstallDetection.ExpectedPackageName,
+                "latest",
+                cancellationTokenSource.Token);
+            processId = await WaitForProcessIdAsync(processIdPath).DefaultTimeout();
+
+            await cancellationTokenSource.CancelAsync();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => resolutionTask).DefaultTimeout();
+            await WaitForProcessExitAsync(processId.Value).DefaultTimeout();
+        }
+        finally
+        {
+            if (processId is { } runningProcessId)
+            {
+                TryKillProcess(runningProcessId);
+            }
+
+            tempDirectory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void IsExpectedProcessTerminationException_AggregateException_ReturnsTrue()
+    {
+        Assert.True(NpmRunner.IsExpectedProcessTerminationException(new AggregateException()));
+    }
+
+    [Fact]
     public void TryExtractLastVersion_SingleVersion_ReturnsTrimmedVersion()
     {
         var result = NpmRunner.TryExtractLastVersion("0.1.1\n", out var version);
@@ -330,5 +387,95 @@ public class NpmRunnerTests
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
             UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
             UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+    }
+
+    private static void WriteBlockingFakeNpm(DirectoryInfo directory)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            File.WriteAllText(
+                Path.Combine(directory.FullName, "npm.cmd"),
+                """
+                @echo off
+                powershell.exe -NoLogo -NoProfile -NonInteractive -Command "$PID | Set-Content -LiteralPath $env:NPM_PID_FILE; while ($true) { Start-Sleep -Milliseconds 100 }"
+                """);
+            return;
+        }
+
+        var npmPath = Path.Combine(directory.FullName, "npm");
+        File.WriteAllText(
+            npmPath,
+            """
+            #!/bin/sh
+            printf '%s\n' "$$" > "$NPM_PID_FILE"
+            while true; do
+              sleep 1
+            done
+            """);
+        File.SetUnixFileMode(
+            npmPath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+            UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+            UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+    }
+
+    private static async Task<int> WaitForProcessIdAsync(string processIdPath)
+    {
+        while (true)
+        {
+            try
+            {
+                var value = await File.ReadAllTextAsync(
+                    processIdPath,
+                    TestContext.Current.CancellationToken);
+                if (int.TryParse(
+                    value,
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var processId))
+                {
+                    return processId;
+                }
+            }
+            catch (IOException)
+            {
+            }
+
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+    }
+
+    private static async Task WaitForProcessExitAsync(int processId)
+    {
+        while (true)
+        {
+            try
+            {
+                using var process = Process.GetProcessById(processId);
+                if (process.HasExited)
+                {
+                    return;
+                }
+            }
+            catch (ArgumentException)
+            {
+                return;
+            }
+
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+    }
+
+    private static void TryKillProcess(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+        }
     }
 }

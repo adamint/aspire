@@ -47,14 +47,16 @@ internal class CliUpdateNotifier(
     INpmRunner npmRunner,
     IInteractionService interactionService,
     IProcessPathProvider processPathProvider,
-    CliExecutionContext executionContext) : ICliUpdateNotifier
+    CliExecutionContext executionContext) : ICliUpdateNotifier, IDisposable
 {
     private const string LatestNpmVersionRange = "latest";
 
     private readonly object _npmResolutionLock = new();
+    private readonly CancellationTokenSource _npmResolutionCancellationSource = new();
     private IEnumerable<Shared.NuGetPackageCli>? _availablePackages;
     private NpmPackageInfo? _availableNpmPackage;
     private Task<NpmPackageInfo>? _npmResolutionTask;
+    private bool _disposed;
 
     public async Task CheckForCliUpdatesAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
     {
@@ -165,7 +167,7 @@ internal class CliUpdateNotifier(
         return await npmRunner.ResolvePackageAsync(
             NpmInstallDetection.ExpectedPackageName,
             LatestNpmVersionRange,
-            CancellationToken.None)
+            _npmResolutionCancellationSource.Token)
             ?? throw new InvalidOperationException(
                 $"Unable to resolve {NpmPackageInfo.FormatPackageSpecifier(NpmInstallDetection.ExpectedPackageName, LatestNpmVersionRange)} from the internal npm registry.");
     }
@@ -244,5 +246,40 @@ internal class CliUpdateNotifier(
             prerelease: true,
             nugetConfigFile: null,
             cancellationToken: cancellationToken);
+    }
+
+    public void Dispose()
+    {
+        Task<NpmPackageInfo>? resolutionTask;
+
+        lock (_npmResolutionLock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _npmResolutionCancellationSource.Cancel();
+            resolutionTask = _npmResolutionTask;
+        }
+
+        try
+        {
+            // The host disposes services synchronously after stopping hosted services. Drain the
+            // shared lookup here so cancellation has time to terminate its npm process tree.
+            resolutionTask?.GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException) when (_npmResolutionCancellationSource.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Failed while waiting for npm update resolution to stop.");
+        }
+        finally
+        {
+            _npmResolutionCancellationSource.Dispose();
+        }
     }
 }
