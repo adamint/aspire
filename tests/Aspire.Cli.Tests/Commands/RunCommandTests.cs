@@ -550,6 +550,36 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(CliExitCodes.FailedToFindProject, exitCode);
     }
 
+    [Theory]
+    [InlineData("run", true)]
+    [InlineData("run --apphost ./AppHost.csproj", false)]
+    public async Task RunCommand_PersistsAppHostSelectionOnlyWhenImplicit(string commandLine, bool expectedCreateSettingsFile)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        bool? createSettingsFile = null;
+        var projectLocator = new TestProjectLocator
+        {
+            UseOrFindAppHostProjectFileWithBehaviorAsyncCallback = (_, _, create, _) =>
+            {
+                createSettingsFile = create;
+                return Task.FromResult(new AppHostProjectSearchResult(null, []));
+            }
+        };
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
+        {
+            options.ProjectLocatorFactory = _ => projectLocator;
+        });
+        using var provider = services.BuildServiceProvider();
+
+        var command = provider.GetRequiredService<RootCommand>();
+        var result = command.Parse(commandLine);
+
+        var exitCode = await result.InvokeAsync().DefaultTimeout();
+
+        Assert.Equal(CliExitCodes.FailedToFindProject, exitCode);
+        Assert.Equal(expectedCreateSettingsFile, createSettingsFile);
+    }
+
     [Fact]
     public async Task RunCommand_WhenMultipleProjectFilesFound_NonInteractive_ReturnsFailedToFindProject()
     {

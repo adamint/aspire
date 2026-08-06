@@ -243,7 +243,7 @@ internal sealed class RunCommand : BaseCommand
                 searchResult = await _projectLocator.UseOrFindAppHostProjectFileAsync(
                     passedAppHostProjectFile,
                     multipleAppHostBehavior,
-                    createSettingsFile: true,
+                    createSettingsFile: passedAppHostProjectFile is null,
                     cancellationToken);
             }
             var effectiveAppHostFile = searchResult.SelectedProjectFile;

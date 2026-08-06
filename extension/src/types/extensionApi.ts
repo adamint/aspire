@@ -182,6 +182,7 @@ export type AspireExtensionE2EControlCommand =
     | { name: 'setSourceBreakpoint'; filePath: string; line: number; clearExisting?: boolean }
     | { name: 'clearBreakpoints' }
     | { name: 'getBreakpoints' }
+    | { name: 'startDebugConfiguration'; configurationName: string }
     | { name: 'stopDebugging' }
     | { name: 'closeAllEditors' }
     | { name: 'getRegisteredAspireCommands' }

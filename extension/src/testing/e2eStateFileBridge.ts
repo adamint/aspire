@@ -487,6 +487,20 @@ async function executeE2eControlCommand(
       markStarted();
       return getE2eBreakpoints();
     }
+    case 'startDebugConfiguration': {
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+      if (!workspaceFolder) {
+        throw new Error('Aspire extension E2E debug configuration launch requires an open workspace folder.');
+      }
+
+      const startPromise = vscode.debug.startDebugging(workspaceFolder, command.configurationName);
+      markStarted();
+      if (!await startPromise) {
+        throw new Error(`Failed to start debug configuration '${command.configurationName}'.`);
+      }
+
+      return undefined;
+    }
     case 'stopDebugging': {
       markStarted();
       await stopDebuggingForE2E(aspireContext, dataRepository, appHostLaunchService, appHostTreeProvider);

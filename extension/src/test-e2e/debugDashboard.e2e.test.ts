@@ -2,8 +2,8 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { getCommandInvocationCount, getDebugLaunchCount, getStoppingPathEventCount, getTreeAppHostLabel, isSamePath, waitForAppHostLaunching, waitForCommandOutcome, waitForDebugConsoleOutput, waitForDebugDashboardUrl, waitForDebugLaunch, waitForDebugSessionStartup, waitForExtensionState, waitForHttpText, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForRunningAppHost, waitForStoppingPathEvent, waitForWorkspaceAppHost } from './helpers/assertions';
-import { executeE2eControlCommand, resetDashboardDefaultChangedNotificationForE2E, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setShowStatusDelayForE2E, stopPrimaryAppHostIfRunning, writeFileWithRetry, writeWorkspaceSetting } from './helpers/fixtures';
-import { getPrimaryAppHostProjectPath } from './helpers/paths';
+import { createAdditionalAppHostCandidate, executeE2eControlCommand, removeAdditionalAppHostCandidate, resetDashboardDefaultChangedNotificationForE2E, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setShowStatusDelayForE2E, stopAppHostIfRunning, stopPrimaryAppHostIfRunning, writeFileWithRetry, writeWorkspaceSetting } from './helpers/fixtures';
+import { getPrimaryAppHostProjectPath, getWorkspaceRoot } from './helpers/paths';
 import { openAspireView, waitForEditorTitle, waitForNotificationMessage, waitForTreeItem, waitForWorkbenchTextAfterIntegratedBrowserNavigation } from './helpers/vscode';
 
 suite('Aspire debug dashboard E2E', function () {
@@ -187,6 +187,68 @@ suite('Aspire debug dashboard E2E', function () {
         await executeE2eControlCommand({ name: 'stopDebugging' });
         await waitForNoDebugSessions();
         await waitForNoRunningAppHost(120000, appHostPath);
+    });
+
+    test('switching named launch configurations does not change the workspace AppHost default', async function () {
+        if (process.env.ASPIRE_EXTENSION_E2E_SKIP_CURRENT_CLI_REGRESSIONS === 'true') {
+            return;
+        }
+
+        await openAspireView();
+        await waitForRepositoryIdle();
+        await waitForWorkspaceAppHost();
+
+        const workspaceRoot = getWorkspaceRoot();
+        const primaryAppHostPath = getPrimaryAppHostProjectPath();
+        const secondaryAppHostPath = createAdditionalAppHostCandidate();
+        const configPath = path.join(workspaceRoot, 'aspire.config.json');
+        const launchJsonPath = path.join(workspaceRoot, '.vscode', 'launch.json');
+        const originalConfig = fs.readFileSync(configPath);
+        const originalLaunchJson = fs.existsSync(launchJsonPath) ? fs.readFileSync(launchJsonPath) : undefined;
+        const configurations = [
+            { name: 'Primary AppHost', program: primaryAppHostPath },
+            { name: 'Secondary AppHost', program: secondaryAppHostPath },
+        ];
+
+        try {
+            writeFileWithRetry(launchJsonPath, JSON.stringify({
+                version: '0.2.0',
+                configurations: configurations.map(configuration => ({
+                    type: 'aspire',
+                    request: 'launch',
+                    ...configuration,
+                })),
+            }, undefined, 2));
+
+            for (const configuration of configurations) {
+                await executeE2eControlCommand(
+                    { name: 'startDebugConfiguration', configurationName: configuration.name },
+                    { waitFor: 'started' });
+                await waitForDebugSessionStartup(configuration.program);
+
+                assert.deepStrictEqual(
+                    fs.readFileSync(configPath),
+                    originalConfig,
+                    `Expected ${configuration.name} to leave aspire.config.json byte-for-byte unchanged.`);
+
+                await executeE2eControlCommand({ name: 'stopDebugging' });
+                await waitForNoDebugSessions();
+                await waitForNoRunningAppHost(120000, configuration.program);
+            }
+        }
+        finally {
+            await runE2eTeardown([
+                () => executeE2eControlCommand({ name: 'stopDebugging' }),
+                () => waitForNoDebugSessions().catch(() => undefined),
+                () => stopAppHostIfRunning(primaryAppHostPath),
+                () => stopAppHostIfRunning(secondaryAppHostPath),
+                () => fs.writeFileSync(configPath, originalConfig),
+                () => originalLaunchJson === undefined
+                    ? fs.rmSync(launchJsonPath, { force: true })
+                    : fs.writeFileSync(launchJsonPath, originalLaunchJson),
+                () => removeAdditionalAppHostCandidate(),
+            ], 'Named launch configuration persistence E2E cleanup failed.');
+        }
     });
 
     test('surfaces AppHost build failure logs in the debug console when the CLI exits after a build failure', async function () {
