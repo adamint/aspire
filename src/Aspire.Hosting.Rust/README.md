@@ -24,8 +24,7 @@ aspire add Aspire.Hosting.Rust
 
 ## Usage example
 
-Then, in the AppHost, add a Rust application resource and reference it from another resource with
-either C# or TypeScript:
+In the AppHost, add a Rust application resource with either C# or TypeScript:
 
 **C#**
 
