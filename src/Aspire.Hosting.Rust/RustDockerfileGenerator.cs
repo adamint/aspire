@@ -161,10 +161,15 @@ internal static class RustDockerfileGenerator
         //
         // BusyBox and shadow-utils disagree on both the command names and their flags, and the runtime image
         // may ship either, so try one and fall back to the other rather than guessing from the image name.
-        // The ids are pinned so a mounted volume sees the same owner whichever branch of the fallback ran.
+        //
+        // The ids are left to the tool to allocate. Pinning one looks appealing, since it would give a
+        // mounted volume the same owner whichever branch ran, but there is no id that is free on every image:
+        // alpine:3.22 already uses gid 999 for `ping`, and asking for it fails outright rather than falling
+        // through to the next command. An image that needs a particular id can create the user itself and
+        // supply its own Dockerfile.
         runtimeStage.Run(
-            "(addgroup -g 999 -S app || groupadd --system --gid 999 app) && " +
-            "(adduser -u 999 -S -G app app || useradd --system --uid 999 --gid 999 --no-create-home app)");
+            "(addgroup -S app || groupadd --system app) && " +
+            "(adduser -S -G app app || useradd --system --gid app --no-create-home app)");
 
         runtimeStage
             .WorkDir("/app")

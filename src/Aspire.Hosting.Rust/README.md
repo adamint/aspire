@@ -89,7 +89,7 @@ VS Code.
 `aspire publish` and `aspire deploy` build the app into a container. An app that runs should publish
 with no extra configuration: if the app directory contains a `Dockerfile` it is used as-is, otherwise
 one is generated that compiles the crate inside the container. The container runs as a non-root `app`
-user with uid and gid `999`.
+user.
 
 #### Base images
 
