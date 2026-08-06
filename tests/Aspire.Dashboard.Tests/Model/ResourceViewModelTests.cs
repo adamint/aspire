@@ -205,6 +205,7 @@ public sealed class ResourceViewModelTests
     [InlineData(KnownResourceTypes.Project, KnownProperties.Project.Path, nameof(DashboardResources.ResourcesDetailsProjectPathProperty), 0)]
     [InlineData(KnownResourceTypes.Project, KnownProperties.Project.LaunchProfile, nameof(DashboardResources.ResourcesDetailsProjectLaunchProfileProperty), 1)]
     [InlineData(KnownResourceTypes.Project, KnownProperties.Executable.Pid, nameof(DashboardResources.ResourcesDetailsExecutableProcessIdProperty), 2)]
+    [InlineData(KnownResourceTypes.Project, KnownProperties.Project.AssemblyName, nameof(DashboardResources.ResourcesDetailsProjectAssemblyNameProperty), 3)]
     [InlineData(KnownResourceTypes.Parameter, KnownProperties.Parameter.Value, nameof(DashboardResources.ResourcesDetailsParameterValueProperty), 0)]
     public void ToViewModel_LegacyBuiltInResourceSpecificPropertyMetadata_AppliesFallback(string resourceType, string propertyName, string expectedDisplayNameResourceName, int expectedProducerSortOrder)
     {

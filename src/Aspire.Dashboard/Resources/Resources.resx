@@ -199,6 +199,9 @@
   <data name="ResourcesDetailsProjectPathProperty" xml:space="preserve">
     <value>Project path</value>
   </data>
+  <data name="ResourcesDetailsProjectAssemblyNameProperty" xml:space="preserve">
+    <value>Assembly name</value>
+  </data>
   <data name="ResourcesDetailsProjectLaunchProfileProperty" xml:space="preserve">
     <value>Launch profile</value>
   </data>

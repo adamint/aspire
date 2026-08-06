@@ -85,6 +85,72 @@ public class ResourceSnapshotBuilderTests
     }
 
     [Fact]
+    public void ProjectSnapshotAddsAssemblyNameWhenProjectMetadataSuppliesIt()
+    {
+        var project = new ProjectResource("project");
+        project.Annotations.Add(new TestProjectMetadata { AssemblyName = "My Attach Service" });
+        project.Annotations.Add(new LaunchProfileAnnotation("https"));
+
+        var executable = Executable.Create("project", "dotnet");
+        executable.Annotate(DcpCustomResource.ResourceNameAnnotation, project.Name);
+        executable.Status = new ExecutableStatus
+        {
+            EffectiveArgs = ["run"],
+            ProcessId = 1234
+        };
+
+        var snapshot = CreateSnapshotBuilder(new Dictionary<string, IResource>
+        {
+            [project.Name] = project
+        }).ToSnapshot(executable, CreatePreviousSnapshot());
+
+        AssertHighlightedProperty(snapshot, KnownProperties.Project.AssemblyName, "Assembly name", isSensitive: false, sortOrder: 3);
+        Assert.Equal("My Attach Service", GetProperty(snapshot, KnownProperties.Project.AssemblyName).Value);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ProjectSnapshotOmitsAssemblyNameWhenProjectMetadataDoesNotSupplyIt(string? assemblyName)
+    {
+        var project = new ProjectResource("project");
+        project.Annotations.Add(new TestProjectMetadata { AssemblyName = assemblyName });
+        project.Annotations.Add(new LaunchProfileAnnotation("https"));
+
+        var executable = Executable.Create("project", "dotnet");
+        executable.Annotate(DcpCustomResource.ResourceNameAnnotation, project.Name);
+        executable.Status = new ExecutableStatus
+        {
+            EffectiveArgs = ["run"],
+            ProcessId = 1234
+        };
+
+        var snapshot = CreateSnapshotBuilder(new Dictionary<string, IResource>
+        {
+            [project.Name] = project
+        }).ToSnapshot(executable, CreatePreviousSnapshot());
+
+        Assert.Empty(snapshot.Properties.Where(p => p.Name == KnownProperties.Project.AssemblyName));
+    }
+
+    [Fact]
+    public void ExecutableSnapshotWithoutProjectMetadataOmitsAssemblyName()
+    {
+        var executable = Executable.Create("exe", "dotnet");
+        executable.Spec.WorkingDirectory = "/app";
+        executable.Status = new ExecutableStatus
+        {
+            EffectiveArgs = ["run"],
+            ProcessId = 1234
+        };
+
+        var snapshot = CreateSnapshotBuilder().ToSnapshot(executable, CreatePreviousSnapshot());
+
+        Assert.Empty(snapshot.Properties.Where(p => p.Name == KnownProperties.Project.AssemblyName));
+    }
+
+    [Fact]
     public void ProjectSnapshotRejectsMultipleProjectMetadataAnnotations()
     {
         var project = new ProjectResource("project");
@@ -293,6 +359,8 @@ public class ResourceSnapshotBuilderTests
     private sealed class TestProjectMetadata : IProjectMetadata
     {
         public string ProjectPath => "/app/project.csproj";
+
+        public string? AssemblyName { get; init; }
 
         public LaunchSettings LaunchSettings { get; } = new()
         {
