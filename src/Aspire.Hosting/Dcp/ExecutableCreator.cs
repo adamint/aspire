@@ -91,6 +91,19 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             spec.Args.AddRange(projectArgs);
         }
 
+        SupportsDebuggingAnnotation? supportsDebuggingAnnotation = null;
+        if (!HasProjectLaunchArgsOverride(er.ModelResource)
+            && !er.ModelResource.HasAnnotationOfType<ForceProcessExecutionAnnotation>()
+            && er.ModelResource.SupportsDebugging(_configuration, out var activeDebuggingAnnotation))
+        {
+            supportsDebuggingAnnotation = activeDebuggingAnnotation;
+
+            // Executable objects are reused for restarts, and a prior producer failure may have changed
+            // the execution type to Process. Reset it before building arguments because launch-profile
+            // arguments are executable in Process mode but display-only in IDE mode.
+            spec.ExecutionType = ExecutionType.IDE;
+        }
+
         var (configuration, pemCertificates) = await BuildExecutableConfiguration(er, resourceLogger, cancellationToken).ConfigureAwait(false);
 
         spec.PemCertificates = pemCertificates;
@@ -162,14 +175,8 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         // Invoke the active launch configuration producer only after the resource execution configuration
         // has been resolved. This gives every launch type, including "project", the exact arguments and
         // environment used for this executable creation.
-        if (!HasProjectLaunchArgsOverride(er.ModelResource)
-            && !er.ModelResource.HasAnnotationOfType<ForceProcessExecutionAnnotation>()
-            && er.ModelResource.SupportsDebugging(_configuration, out var supportsDebuggingAnnotation))
+        if (supportsDebuggingAnnotation is not null)
         {
-            // A transient producer failure may have changed the reused executable to Process on a prior
-            // creation. Recompute the intended execution type from the immutable resource model each time.
-            exe.Spec.ExecutionType = ExecutionType.IDE;
-
             var isProjectLaunchConfiguration =
                 supportsDebuggingAnnotation.LaunchConfigurationType is KnownLaunchConfigurationTypes.Project;
 
