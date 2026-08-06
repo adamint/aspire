@@ -327,8 +327,7 @@ If public npm publication already succeeded, rerun the release with both `SkipNp
 If the authenticated install fails, verify that the release build identity still has contributor access to `dotnet-public-npm` and that the feed's npm.org upstream is enabled. If anonymous verification exhausts its retries, check the package version directly with a credential-free npm configuration:
 
 ```bash
-release_validation_dir=".release-proof.$$"
-mkdir -p "$release_validation_dir"
+release_validation_dir="$(mktemp -d)"
 trap 'rm -rf "$release_validation_dir"' EXIT
 cd "$release_validation_dir"
 
