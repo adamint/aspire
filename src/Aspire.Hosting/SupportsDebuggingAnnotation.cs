@@ -39,7 +39,7 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
     /// </summary>
     /// <remarks>
     /// The IDE advertises the launch configuration types it can handle; a resource whose type is not
-    /// advertised is started as a plain process instead. 
+    /// advertised is started as a plain process instead.
     /// <para>
     /// Exception: when the active debug session does not
     /// advertise any launch configuration types at all (for example Visual Studio, which does not send a
