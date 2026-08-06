@@ -327,8 +327,24 @@ If public npm publication already succeeded, rerun the release with both `SkipNp
 If the authenticated install fails, verify that the release build identity still has contributor access to `dotnet-public-npm` and that the feed's npm.org upstream is enabled. If anonymous verification exhausts its retries, check the package version directly with a credential-free npm configuration:
 
 ```bash
-NPM_CONFIG_USERCONFIG=/dev/null npm view @microsoft/aspire-cli@latest version \
-  --registry https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/
+release_validation_dir=".release-proof.$$"
+mkdir -p "$release_validation_dir"
+trap 'rm -rf "$release_validation_dir"' EXIT
+cd "$release_validation_dir"
+
+fresh_npmrc="$PWD/clean.npmrc"
+fresh_cache_dir="$PWD/npm-cache"
+
+cat >"$fresh_npmrc" <<'EOF'
+registry=https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/
+EOF
+
+mkdir -p "$fresh_cache_dir"
+
+NPM_CONFIG_USERCONFIG="$fresh_npmrc" \
+NPM_CONFIG_GLOBALCONFIG=/dev/null \
+NPM_CONFIG_CACHE="$fresh_cache_dir" \
+npm view @microsoft/aspire-cli@latest version --prefer-online --registry https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/
 ```
 
 ### Tag already exists but points to different commit
