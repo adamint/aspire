@@ -1177,7 +1177,10 @@ public class InteractionServiceTests
     {
         var interactionService = CreateInteractionService();
 
-        var tcs = new TaskCompletionSource();
+        // Run continuations asynchronously so the rest of the test never resumes inline on the work callback's
+        // thread. Inlining would run the cancellation below before the callback returns, so the prompt task could
+        // never complete and the test would deadlock until the timeout.
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var resultTask = interactionService.PromptProgressAsync("Please wait", "Working...", new ProgressInteractionOptions
         {
             PrimaryButtonText = "Cancel",
@@ -1198,6 +1201,39 @@ public class InteractionServiceTests
 
         var interaction = Assert.Single(interactionService.GetCurrentInteractions());
         await CompleteInteractionAsync(interactionService, interaction.InteractionId, new InteractionCompletionState { Complete = true, State = false });
+
+        var result = await resultTask.DefaultTimeout();
+        Assert.True(result.Canceled);
+        Assert.Empty(interactionService.GetCurrentInteractions());
+    }
+
+    [Fact]
+    public async Task PromptProgressAsync_WithWorkThatHandlesCancellation_ExternallyCancelled_ReturnsCanceled()
+    {
+        var interactionService = CreateInteractionService();
+
+        using var cts = new CancellationTokenSource();
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resultTask = interactionService.PromptProgressAsync("Please wait", "Working...", new ProgressInteractionOptions
+        {
+            Work = async ctx =>
+            {
+                tcs.SetResult();
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, ctx.CancellationToken);
+                }
+                catch (OperationCanceledException) when (ctx.CancellationToken.IsCancellationRequested)
+                {
+                }
+            }
+        }, cancellationToken: cts.Token);
+
+        await tcs.Task.DefaultTimeout();
+
+        // External cancellation completes the interaction with a null state, unlike the cancel button which
+        // sends false. Both must still surface as canceled even though the work returned normally.
+        cts.Cancel();
 
         var result = await resultTask.DefaultTimeout();
         Assert.True(result.Canceled);
