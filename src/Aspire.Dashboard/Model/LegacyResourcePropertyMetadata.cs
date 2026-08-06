@@ -30,6 +30,7 @@ internal static class LegacyResourcePropertyMetadata
             (KnownResourceTypes.Project, KnownProperties.Project.Path) => Create(KnownProperties.Project.Path, nameof(ResourcesDetailsProjectPathProperty), 0),
             (KnownResourceTypes.Project, KnownProperties.Project.LaunchProfile) => Create(KnownProperties.Project.LaunchProfile, nameof(ResourcesDetailsProjectLaunchProfileProperty), 1),
             (KnownResourceTypes.Project, KnownProperties.Executable.Pid) => Create(KnownProperties.Executable.Pid, nameof(ResourcesDetailsExecutableProcessIdProperty), 2),
+            (KnownResourceTypes.Project, KnownProperties.Project.AssemblyName) => Create(KnownProperties.Project.AssemblyName, nameof(ResourcesDetailsProjectAssemblyNameProperty), 3),
             (KnownResourceTypes.Parameter, KnownProperties.Parameter.Value) => Create(KnownProperties.Parameter.Value, nameof(ResourcesDetailsParameterValueProperty), 0),
             _ => ((int SortOrder, KnownProperty KnownProperty)?)null
         };

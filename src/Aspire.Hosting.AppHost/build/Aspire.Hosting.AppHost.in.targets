@@ -51,7 +51,135 @@
 		</ItemGroup>
   </Target>
 
-  <Target Name="_CSharpWriteProjectMetadataSources" DependsOnTargets="CreateAspireProjectMetadataSources" Condition="'$(Language)' == 'C#'">
+  <!--
+    Resolves the MSBuild-evaluated assembly name for every Aspire project resource so it can be baked into the
+    generated IProjectMetadata at AppHost build time. Nothing here runs at application run time.
+
+    Two phases are required:
+      1. GetTargetFrameworks reports whether a reference cross-targets and, when it does, which target frameworks
+         it declares. GetTargetPath is only defined by the inner build (Microsoft.Common.CurrentVersion.targets);
+         Microsoft.Common.CrossTargeting.targets does not define it, so a cross-targeting reference has to be asked
+         for one specific TargetFramework.
+      2. GetTargetPath returns @(TargetPathWithTargetPlatformMoniker) whose item spec is $(TargetPath). Its file name
+         is $(TargetName), which defaults to $(AssemblyName), so %(Filename) is the evaluated assembly name including
+         anything contributed by an imported Directory.Build.props or conditioned on Configuration/TargetFramework.
+
+    Single-targeted references are deliberately asked without an explicit TargetFramework: that matches the global
+    properties ResolveProjectReferences already uses, so MSBuild serves the result from its project cache instead of
+    evaluating the reference a second time. For those references TargetFramework is also undefined so a multi-targeted
+    AppHost's inner build cannot force its own TFM onto a reference that does not build for it.
+  -->
+  <Target Name="_GetAspireProjectResourceAssemblyNames"
+          DependsOnTargets="_CreateAspireProjectResources"
+          Condition="'$(SkipAspireProjectResourceAssemblyName)' != 'true'">
+
+    <MSBuild Projects="@(_AspireProjectResource)"
+             Targets="GetTargetFrameworks"
+             BuildInParallel="$(BuildInParallel)"
+             Properties="%(_AspireProjectResource.SetConfiguration); %(_AspireProjectResource.SetPlatform)"
+             ContinueOnError="true"
+             RemoveProperties="%(_AspireProjectResource.GlobalPropertiesToRemove);TargetFramework;RuntimeIdentifier;SelfContained;$(_GlobalPropertiesToRemoveFromProjectReferences)"
+             SkipNonexistentProjects="true"
+             SkipNonexistentTargets="true">
+      <Output TaskParameter="TargetOutputs" ItemName="_AspireProjectResourceTargetFrameworkInfo" />
+    </MSBuild>
+
+    <!--
+      The item list is updated from itself on purpose. Updating one list from another (Update="@(OtherList)") does not
+      batch per item - the last batch's values are applied to every item - so the self-update is what keeps each
+      reference's TargetFrameworks metadata paired with its own project.
+
+      %(TargetFrameworks) is a single semicolon-joined value such as "net8.0;net9.0"; the first entry is used because
+      it is the one a cross-targeting reference reports first and there is no better signal about which inner build
+      the AppHost will end up launching.
+    -->
+    <ItemGroup>
+      <_AspireProjectResourceTargetFrameworkInfo Update="@(_AspireProjectResourceTargetFrameworkInfo)">
+        <SetTargetFramework Condition="'%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' != 'true' and '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' != ''">TargetFramework=$([System.Text.RegularExpressions.Regex]::Match('%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)', '^[^;]*'))</SetTargetFramework>
+        <!--
+          RemoveProperties wins over Properties in the MSBuild task, so TargetFramework can only be undefined for the
+          references that are not being asked for a specific one. Undefining it matters for a multi-targeted AppHost,
+          whose inner build would otherwise push its own TFM onto a single-targeted reference.
+        -->
+        <RemoveGlobalProperties Condition="'%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' != 'true' and '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' != ''">RuntimeIdentifier;SelfContained</RemoveGlobalProperties>
+        <RemoveGlobalProperties Condition="'%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' == 'true' or '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' == ''">TargetFramework;RuntimeIdentifier;SelfContained</RemoveGlobalProperties>
+      </_AspireProjectResourceTargetFrameworkInfo>
+    </ItemGroup>
+
+    <MSBuild Projects="@(_AspireProjectResourceTargetFrameworkInfo)"
+             Targets="GetTargetPath"
+             BuildInParallel="$(BuildInParallel)"
+             Properties="%(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)"
+             ContinueOnError="true"
+             RemoveProperties="%(_AspireProjectResourceTargetFrameworkInfo.RemoveGlobalProperties);$(_GlobalPropertiesToRemoveFromProjectReferences)"
+             SkipNonexistentProjects="true"
+             SkipNonexistentTargets="true">
+      <Output TaskParameter="TargetOutputs" ItemName="_AspireProjectResourceTargetPath" />
+    </MSBuild>
+
+  </Target>
+
+  <!--
+    Copies each resolved assembly name onto the matching AspireProjectMetadataSource item.
+
+    This target is batched on the source project rather than using an ItemGroup, because MSBuild cannot join two item
+    lists inside a single ItemGroup: the resolved target paths and the metadata sources are separate lists that have
+    to be correlated by project path.
+  -->
+  <Target Name="_SetAspireProjectMetadataAssemblyNames"
+          DependsOnTargets="CreateAspireProjectMetadataSources;_GetAspireProjectResourceAssemblyNames"
+          Outputs="%(_AspireProjectResourceTargetPath.MSBuildSourceProjectFile)">
+
+    <PropertyGroup>
+      <_AspireResolvedProjectFile>%(_AspireProjectResourceTargetPath.MSBuildSourceProjectFile)</_AspireResolvedProjectFile>
+      <_AspireResolvedProjectFile Condition="'$(_AspireResolvedProjectFile)' != ''">$([System.IO.Path]::GetFullPath('$(_AspireResolvedProjectFile)'))</_AspireResolvedProjectFile>
+      <_AspireResolvedAssemblyName>%(_AspireProjectResourceTargetPath.Filename)</_AspireResolvedAssemblyName>
+      <!--
+        The escaping is done against a property rather than inline against %(Filename) because an assembly name may
+        contain an apostrophe, which would terminate the property function's quoted argument list.
+      -->
+      <_AspireResolvedAssemblyNameLiteral>$(_AspireResolvedAssemblyName.Replace('"', '""'))</_AspireResolvedAssemblyNameLiteral>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <AspireProjectMetadataSource Update="@(AspireProjectMetadataSource)"
+                                   Condition="'$(_AspireResolvedAssemblyName)' != '' and '%(AspireProjectMetadataSource.ProjectPath)' == '$(_AspireResolvedProjectFile)'">
+        <ProjectAssemblyName>$(_AspireResolvedAssemblyName)</ProjectAssemblyName>
+        <ProjectAssemblyNameLiteral>$(_AspireResolvedAssemblyNameLiteral)</ProjectAssemblyNameLiteral>
+      </AspireProjectMetadataSource>
+    </ItemGroup>
+
+  </Target>
+
+  <Target Name="_CSharpWriteProjectMetadataSources" DependsOnTargets="CreateAspireProjectMetadataSources;_SetAspireProjectMetadataAssemblyNames" Condition="'$(Language)' == 'C#'">
+    <ItemGroup>
+      <AspireProjectMetadataSource Update="@(AspireProjectMetadataSource)">
+        <!--
+          The member is emitted only when the assembly name resolved, so implementations that could not be evaluated
+          fall back to the IProjectMetadata.AssemblyName default interface member, which returns null.
+
+          A verbatim string literal is used instead of the raw string literal used for ProjectPath because a raw string
+          literal cannot end with a quote character and an assembly name is allowed to contain quotes.
+
+          The nullable directives are required because an AppHost may compile with nullable annotations disabled, and
+          CS8669 rejects a nullable annotation in auto-generated code without an explicit annotations context.
+        -->
+        <AssemblyNameMember Condition="'%(AspireProjectMetadataSource.ProjectAssemblyName)' != ''"><![CDATA[
+    /// <summary>
+    /// The assembly name that the ]]>%(ClassName)<![CDATA[ project builds to.
+    /// </summary>
+    /// <remarks>
+    /// Evaluated by MSBuild when this AppHost was built, so it reflects any AssemblyName set by the project or
+    /// imported into it rather than the project file name.
+    /// </remarks>
+#nullable enable
+    public string? AssemblyName => @"]]>%(AspireProjectMetadataSource.ProjectAssemblyNameLiteral)<![CDATA["%3B
+#nullable restore
+]]></AssemblyNameMember>
+      </AspireProjectMetadataSource>
+    </ItemGroup>
+
+    <!-- The source is composed in a second pass so it observes the AssemblyNameMember written above. -->
     <ItemGroup>
       <AspireProjectMetadataSource Update="@(AspireProjectMetadataSource)">
         <Source>
@@ -73,7 +201,7 @@ namespace Projects%3B
     /// The path to the ]]>%(ClassName)<![CDATA[ project.
     /// </summary>
     public string ProjectPath => """]]>%(ProjectPath)<![CDATA["""%3B
-
+]]>%(AspireProjectMetadataSource.AssemblyNameMember)<![CDATA[
     /// <summary>
     /// Gets a value indicating whether building the project before running it should be suppressed.
     /// </summary>

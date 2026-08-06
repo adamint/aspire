@@ -197,6 +197,11 @@
         <target state="new">Value</target>
         <note />
       </trans-unit>
+      <trans-unit id="ResourcesDetailsProjectAssemblyNameProperty">
+        <source>Assembly name</source>
+        <target state="new">Assembly name</target>
+        <note />
+      </trans-unit>
       <trans-unit id="ResourcesDetailsProjectLaunchProfileProperty">
         <source>Launch profile</source>
         <target state="new">Launch profile</target>

@@ -420,6 +420,15 @@ namespace Aspire.Dashboard.Resources {
         }
 
         /// <summary>
+        ///   Looks up a localized string similar to Assembly name.
+        /// </summary>
+        public static string ResourcesDetailsProjectAssemblyNameProperty {
+            get {
+                return ResourceManager.GetString("ResourcesDetailsProjectAssemblyNameProperty", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to Launch profile.
         /// </summary>
         public static string ResourcesDetailsProjectLaunchProfileProperty {
