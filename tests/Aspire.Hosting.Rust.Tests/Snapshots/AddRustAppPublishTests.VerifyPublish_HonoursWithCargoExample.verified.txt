@@ -1,7 +1,7 @@
 ﻿FROM rust:alpine AS build
 WORKDIR /app
 COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,target=/build/target \
     cargo build --example demo --release --target-dir /build/target && \
     bin="$(ls -1d /build/target/release/examples/demo /build/target/*/release/examples/demo 2>/dev/null | head -n1)" && \
     [ -n "$bin" ] || { echo "cargo build produced no binary under /build/target" >&2; exit 1; } && \

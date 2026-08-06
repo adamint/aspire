@@ -109,20 +109,23 @@ internal static class RustDockerfileGenerator
             .From(baseImageAnnotation?.BuildImage ?? DefaultBuildImage, "build")
             .WorkDir("/app");
 
-        if (target.Target is { } triple)
-        {
-            // A cross target's standard library is not present in the base image.
-            buildStage.Run($"rustup target add {ShellQuote(triple)}");
-        }
+        // A cross target's standard library is not present in the base image. This has to run after the source
+        // is copied: rustup installs the target into the toolchain selected for the directory, so before the
+        // copy it would land in the image default and a rust-toolchain.toml pin would build without it.
+        var installTarget = target.Target is { } triple
+            ? $"rustup target add {ShellQuote(triple)}{CommandContinuation}"
+            : "";
 
         buildStage
             .Copy(".", ".")
-            // Neither the target directory nor RUSTUP_HOME can be cache mounted. Cache mounts are not part of
-            // the resulting layer, so COPY --from could not see the binary, and they start empty and shadow
-            // what they cover, so one over /usr/local/rustup hides the toolchains the image ships.
+            // RUSTUP_HOME cannot be cache mounted: mounts start empty and shadow what they cover, so one over
+            // /usr/local/rustup hides the toolchains the image ships. The target directory is safe because the
+            // selected binary is copied to ContainerArtifactDirectory while the mount is still live, and that
+            // is what COPY --from reads.
             .RunWithMounts(
-                $"{BuildCargoCommand(cargoArgs)}{CommandContinuation}{BuildCollectArtifactCommand(target)}",
-                "type=cache,target=/usr/local/cargo/registry");
+                $"{installTarget}{BuildCargoCommand(cargoArgs)}{CommandContinuation}{BuildCollectArtifactCommand(target)}",
+                "type=cache,target=/usr/local/cargo/registry",
+                $"type=cache,target={ContainerTargetDirectory}");
 
         // Add intermediate FROM stages for any container files sources (e.g. FROM frontend AS frontend_stage).
         context.Builder.AddContainerFilesStages(context.Resource, logger);
@@ -158,13 +161,11 @@ internal static class RustDockerfileGenerator
             await annotation.Callback(new RustCargoArgsCallbackContext(args, cancellationToken)).ConfigureAwait(false);
         }
 
-        var cargoArgs = args.Where(static arg => arg.Length > 0).ToList();
-
         // Appended last because cargo takes the last occurrence of a flag.
-        cargoArgs.Add("--target-dir");
-        cargoArgs.Add(ContainerTargetDirectory);
+        args.Add("--target-dir");
+        args.Add(ContainerTargetDirectory);
 
-        return cargoArgs;
+        return args;
     }
 
     // Matches the two-token form WithCargoManifestPath emits. A --manifest-path passed as a raw string
