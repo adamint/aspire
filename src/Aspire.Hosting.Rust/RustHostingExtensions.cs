@@ -680,6 +680,9 @@ public static class RustHostingExtensions
         // under an extra triple directory. Cargo metadata does not report the value, so it is read from the
         // resource environment here. WithCargoTarget still wins because a command-line --target beats both
         // the environment and .cargo/config.toml.
+        // A `[build] target` in .cargo/config.toml is not resolved: cargo metadata does not report it either
+        // and reading it needs the unstable `cargo config get`, so that layout is left to
+        // https://github.com/microsoft/aspire/issues/18956.
         // See https://doc.rust-lang.org/cargo/reference/config.html#buildtarget
         if (target.Target is null && environment.TryGetValue("CARGO_BUILD_TARGET", out var buildTarget) && buildTarget.Length > 0)
         {

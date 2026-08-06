@@ -44,6 +44,15 @@ export function terminateProcessTree(child: ChildProcess, force: boolean = false
             extensionLogOutputChannel.warn(`Failed to stop process tree for PID ${child.pid}: ${error}`);
             child.kill();
         });
+        // taskkill can start and still fail, most often with access denied, which would otherwise leave the
+        // tree running. Signalling the direct child is the best that can be done from here, and is harmless
+        // when the nonzero code was the benign 128 for a process that had already exited.
+        taskkill.on('close', code => {
+            if (code !== 0) {
+                extensionLogOutputChannel.warn(`taskkill exited with code ${code} for PID ${child.pid}; falling back to killing the direct child.`);
+                child.kill();
+            }
+        });
         taskkill.unref();
 
         return true;
