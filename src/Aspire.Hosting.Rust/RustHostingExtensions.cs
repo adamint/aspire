@@ -116,14 +116,14 @@ public static class RustHostingExtensions
             {
                 // A hand-written Dockerfile always wins: the generated one is a convenience for crates that
                 // do not have one, not something that should silently shadow the user's own container build.
-                if (File.Exists(Path.Combine(appDirectory, "Dockerfile")))
+                if (File.Exists(Path.Combine(resource.WorkingDirectory, "Dockerfile")))
                 {
                     return;
                 }
 
                 containerBuilder.WithDockerfileBuilder(
-                    appDirectory,
-                    context => RustDockerfileGenerator.WriteAsync(resource, appDirectory, context));
+                    resource.WorkingDirectory,
+                    context => RustDockerfileGenerator.WriteAsync(resource, context));
             });
     }
 

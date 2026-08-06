@@ -244,6 +244,27 @@ public class AddRustAppPublishTests(ITestOutputHelper outputHelper)
         Assert.False(File.Exists(Path.Combine(outputDir.FullName, "api.Dockerfile.dockerignore")));
     }
 
+    [Fact]
+    public void PublishingFollowsWithWorkingDirectory()
+    {
+        // The crate is read from the resource's working directory rather than the value AddRustApp was given,
+        // so a WithWorkingDirectory applied afterwards decides both what cargo is asked about and what is
+        // copied into the image.
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var sourceDir = workspace.CreateDirectory("source");
+        var relocatedDir = workspace.CreateDirectory("relocated");
+        var outputDir = workspace.CreateDirectory("output");
+
+        var reader = new FakeCargoMetadataReader(CargoMetadataFactory.SinglePackage("my-service"));
+
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Publish, outputDir.FullName, step: "publish-manifest");
+        builder.Services.AddSingleton<ICargoMetadataReader>(reader);
+        builder.AddRustApp("api", sourceDir.FullName).WithWorkingDirectory(relocatedDir.FullName);
+        builder.Build().Run();
+
+        Assert.Equal(relocatedDir.FullName, reader.LastWorkingDirectory);
+    }
+
     private async Task<string> PublishDockerfileAsync(
         Action<string>? configureSource = null,
         string? metadata = null,

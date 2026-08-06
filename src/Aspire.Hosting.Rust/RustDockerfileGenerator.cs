@@ -51,14 +51,17 @@ internal static class RustDockerfileGenerator
 
         """;
 
-    public static async Task WriteAsync(RustAppResource resource, string appDirectory, DockerfileBuilderCallbackContext context)
+    public static async Task WriteAsync(RustAppResource resource, DockerfileBuilderCallbackContext context)
     {
         var logger = context.Services.GetService<ILogger<RustAppResource>>();
+
+        // Read from the resource so a WithWorkingDirectory applied after AddRustApp is honoured.
+        var workingDirectory = Path.GetFullPath(resource.WorkingDirectory);
 
         // A <dockerfile>.dockerignore replaces the context root's .dockerignore rather than merging with it,
         // so an authored one wins outright.
         if (context.Resource.TryGetLastAnnotation<DockerfileBuildAnnotation>(out var dockerfileBuildAnnotation)
-            && !File.Exists(Path.Combine(appDirectory, ".dockerignore")))
+            && !File.Exists(Path.Combine(workingDirectory, ".dockerignore")))
         {
             dockerfileBuildAnnotation.BuildContextIgnoreContent ??= DefaultRustBuildContextIgnoreContent;
         }
@@ -70,14 +73,14 @@ internal static class RustDockerfileGenerator
         var metadata = await context.Services.GetRequiredService<ICargoMetadataReader>()
             // Empty environment: the resource's environment applies to the process the container runs, not to
             // this host-side manifest query.
-            .ReadAsync(appDirectory, options.ManifestPath, resource.Name, ReadOnlyDictionary<string, string>.Empty, context.CancellationToken)
+            .ReadAsync(workingDirectory, options.ManifestPath, resource.Name, ReadOnlyDictionary<string, string>.Empty, context.CancellationToken)
             .ConfigureAwait(false);
 
-        if (metadata.WorkspaceRoot is { Length: > 0 } workspaceRoot && !IsInsideAppDirectory(workspaceRoot, appDirectory))
+        if (metadata.WorkspaceRoot is { Length: > 0 } workspaceRoot && !IsInsideWorkingDirectory(workspaceRoot, workingDirectory))
         {
             throw new DistributedApplicationException(
                 $"The Rust app '{resource.Name}' is a member of the cargo workspace rooted at '{workspaceRoot}', which is outside its " +
-                $"app directory '{appDirectory}'. Publishing copies only the app directory into the container image, so point the app " +
+                $"app directory '{workingDirectory}'. Publishing copies only the app directory into the container image, so point the app " +
                 $"directory at the workspace root and select the member with WithCargoPackage(\"<name>\"), or add a Dockerfile next to " +
                 $"Cargo.toml to take over the container build.");
         }
@@ -94,7 +97,7 @@ internal static class RustDockerfileGenerator
 
         if (options.ManifestPath is { } manifestPath)
         {
-            RewriteManifestPath(cargoArgs, manifestPath, ToContainerPath(manifestPath, appDirectory, resource.Name));
+            RewriteManifestPath(cargoArgs, manifestPath, ToContainerPath(manifestPath, workingDirectory, resource.Name));
         }
 
         // Images are used exactly as given and nothing is installed into either: a name is free-form, so an
@@ -177,29 +180,29 @@ internal static class RustDockerfileGenerator
         }
     }
 
-    // The app directory is the build context and is copied to /app, so only a path inside it has a container
-    // equivalent.
-    private static string ToContainerPath(string hostPath, string appDirectory, string resourceName)
+    // The working directory is the build context and is copied to /app, so only a path inside it has a
+    // container equivalent.
+    private static string ToContainerPath(string hostPath, string workingDirectory, string resourceName)
     {
-        if (!IsInsideAppDirectory(hostPath, appDirectory))
+        if (!IsInsideWorkingDirectory(hostPath, workingDirectory))
         {
             throw new DistributedApplicationException(
-                $"The Rust app '{resourceName}' builds from '{hostPath}', which is outside its app directory '{appDirectory}'. " +
+                $"The Rust app '{resourceName}' builds from '{hostPath}', which is outside its app directory '{workingDirectory}'. " +
                 $"Publishing copies only the app directory into the container image, so point the app directory at a location that " +
                 $"contains the whole crate, or add a Dockerfile next to Cargo.toml to take over the container build.");
         }
 
-        var relative = Path.GetRelativePath(appDirectory, Path.GetFullPath(hostPath, appDirectory));
+        var relative = Path.GetRelativePath(workingDirectory, Path.GetFullPath(hostPath, workingDirectory));
 
         return relative is "." ? "/app" : $"/app/{relative.Replace('\\', '/')}";
     }
 
-    private static bool IsInsideAppDirectory(string hostPath, string appDirectory)
+    private static bool IsInsideWorkingDirectory(string hostPath, string workingDirectory)
     {
-        var relative = Path.GetRelativePath(appDirectory, Path.GetFullPath(hostPath, appDirectory));
+        var relative = Path.GetRelativePath(workingDirectory, Path.GetFullPath(hostPath, workingDirectory));
 
         // GetRelativePath returns a rooted path when the two share no common root (different drives on
-        // Windows), and a ..-prefixed path when the target is above the app directory.
+        // Windows), and a ..-prefixed path when the target is above the working directory.
         return !Path.IsPathRooted(relative)
             && relative != ".."
             && !relative.StartsWith("../", StringComparison.Ordinal)

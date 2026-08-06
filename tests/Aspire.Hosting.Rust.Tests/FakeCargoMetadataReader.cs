@@ -23,6 +23,11 @@ internal sealed class FakeCargoMetadataReader(string metadataJson, string worksp
     public IReadOnlyDictionary<string, string> LastEnvironment { get; private set; } = new Dictionary<string, string>();
 
     /// <summary>
+    /// The directory the reader was last asked to query in.
+    /// </summary>
+    public string? LastWorkingDirectory { get; private set; }
+
+    /// <summary>
     /// How many times the reader has been asked for metadata.
     /// </summary>
     /// <remarks>
@@ -38,17 +43,18 @@ internal sealed class FakeCargoMetadataReader(string metadataJson, string worksp
 
     private int _readCount;
 
-    public async Task<CargoMetadata> ReadAsync(string appDirectory, string? manifestPath, string resourceName, IReadOnlyDictionary<string, string> environment, CancellationToken cancellationToken)
+    public async Task<CargoMetadata> ReadAsync(string workingDirectory, string? manifestPath, string resourceName, IReadOnlyDictionary<string, string> environment, CancellationToken cancellationToken)
     {
         Interlocked.Increment(ref _readCount);
         LastEnvironment = environment;
+        LastWorkingDirectory = workingDirectory;
 
         if (OnRead is { } onRead)
         {
             await onRead(cancellationToken).ConfigureAwait(false);
         }
 
-        var workspaceRoot = Path.GetFullPath(workspaceRootRelativePath, appDirectory);
+        var workspaceRoot = Path.GetFullPath(workspaceRootRelativePath, workingDirectory);
         var rebased = metadataJson.Replace(
             "\"workspace_root\": \"/app\"",
             $"\"workspace_root\": {JsonSerializer.Serialize(workspaceRoot)}",
@@ -60,7 +66,7 @@ internal sealed class FakeCargoMetadataReader(string metadataJson, string worksp
         {
             rebased = rebased.Replace(
                 "\"target_directory\": \"/app/target\"",
-                $"\"target_directory\": {JsonSerializer.Serialize(Path.GetFullPath(targetDirectory, appDirectory))}",
+                $"\"target_directory\": {JsonSerializer.Serialize(Path.GetFullPath(targetDirectory, workingDirectory))}",
                 StringComparison.Ordinal);
         }
 
