@@ -2,8 +2,8 @@ import * as vscode from 'vscode';
 import { isCsDevKitInstalled } from '../capabilities';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { AspireResourceExtendedDebugConfiguration } from '../dcp/types';
-import { dontShowAgainLabel, enableHotReloadLabel, hotReloadAvailablePrompt, hotReloadEnableFailed, hotReloadEnabled } from '../loc/strings';
-import { hotReloadPromptSuppressedKey } from '../utils/hotReloadNotificationState';
+import { dontShowAgainLabel, enableHotReloadLabel, hotReloadActiveNotice, hotReloadAvailablePrompt, hotReloadEnableFailed, hotReloadEnabled, showHotReloadOutputLabel } from '../loc/strings';
+import { hotReloadPromptSuppressedKey, hotReloadSessionNoticeShownKey } from '../utils/hotReloadNotificationState';
 
 const csDevKitExtensionId = 'ms-dotnettools.csdevkit';
 
@@ -241,6 +241,14 @@ export function logHotReloadDiagnostics(resourceName: string, diagnostics: HotRe
             "Hot Reload is disabled because 'csharp.experimental.debug.hotReload' is not enabled. " +
             'This setting is machine-scoped, so it must be set in user settings; workspace settings are ignored.');
     }
+    else {
+        // Logged for every resource, not once, so the answer to "was this project covered?" is in
+        // the channel even for a user who dismissed the one-time notice or joined mid-session.
+        extensionLogOutputChannel.info(
+            `Hot Reload covers ${resourceName}. Saving a file applies the change to the running resource ` +
+            "('csharp.debug.hotReloadOnSave', on by default); the toolbar button applies pending changes to all " +
+            ".NET resources at once. Results appear in the '.NET Hot Reload' output channel.");
+    }
 }
 
 /**
@@ -297,7 +305,14 @@ let hotReloadPromptShownThisWindow = false;
 export function initializeHotReloadPromptState(memento: vscode.Memento | undefined): void {
     hotReloadPromptState = memento;
     hotReloadPromptShownThisWindow = false;
+    hotReloadNoticeShownThisWindow = false;
 }
+
+/**
+ * True once the "Hot Reload is active" notice has been raised in this window.
+ */
+let hotReloadNoticeShownThisWindow = false;
+
 
 /**
  * Records that the prompt should not be shown again in future windows.
@@ -392,4 +407,82 @@ export async function promptToEnableHotReloadIfNeeded(diagnostics: HotReloadDiag
     vscode.window.showInformationMessage(hotReloadEnabled);
 
     return true;
+}
+
+/**
+ * Command contributed by C# Dev Kit that reveals the '.NET Hot Reload' output channel, which is
+ * where Dev Kit reports what it did with each edit.
+ */
+const showHotReloadPanelCommand = 'csdevkit.debug.showHotReloadPanel';
+
+/**
+ * Tells the user, once, that Hot Reload is live for this Aspire app and what it covers.
+ *
+ * This exists because Hot Reload working is not the same as the user knowing it worked. Everything
+ * about the interaction is owned by Dev Kit and none of it is expressed in Aspire's terms: the
+ * toolbar button is gated on the global `hotReloadEnabled` context key with no session-type check,
+ * so it also appears while the Aspire parent session is selected, and pressing it calls
+ * `applyChanges()` on a single global client service — it applies across every registered .NET
+ * resource rather than the selected one. Nothing states that, so the reasonable reading of the
+ * button is that it targets whatever is selected.
+ *
+ * The notice also says that saving applies changes, which is the part users are most likely to miss.
+ * `csharp.debug.hotReloadOnSave` defaults to `true`, so the button is a manual fallback rather than
+ * the primary gesture, and an edit is usually already applied by the time someone goes looking for a
+ * button to press.
+ *
+ * Deliberately NOT a per-reload notification. Two independent reasons:
+ * 1. Dev Kit exports only `{ serviceBroker, ensureInitialized, getBrokeredServiceServerPipeName,
+ *    hasServerProcessLoaded, serverProcessLoaded }`. Its `reportHotReloadResult` and
+ *    `onHotReloadAvailabilityChanged` are internal, so this extension cannot observe the outcome of
+ *    a reload and any result we reported would be invented.
+ * 2. With reload-on-save enabled the operation runs on every save, and a notification per save is
+ *    unusable. Dev Kit already reports results in a way suited to that frequency: a status bar item
+ *    and the '.NET Hot Reload' output channel, with detail controlled by
+ *    `csharp.debug.hotReloadVerbosity`.
+ */
+export function announceHotReloadForSessionIfNeeded(diagnostics: HotReloadDiagnostics, isDebugSession: boolean): void {
+    if (!isDebugSession || !diagnostics.settingEnabled) {
+        return;
+    }
+
+    if (!diagnostics.devKitInstalled || !diagnostics.devKitActive || diagnostics.devKitLimitedActivation) {
+        return;
+    }
+
+    if (hotReloadNoticeShownThisWindow || hotReloadPromptState?.get<boolean>(hotReloadSessionNoticeShownKey, false) === true) {
+        return;
+    }
+
+    // Set before the first await so that concurrently launching resources cannot each raise a
+    // notice, exactly as the enable prompt does.
+    hotReloadNoticeShownThisWindow = true;
+
+    // Deliberately carries no resource count or list. Resources launch as independent requests
+    // spread over seconds, so anything counted at notice time reports whichever subset had arrived
+    // and is wrong for the rest — an earlier version of this said "1 .NET resource" for a
+    // three-resource app. The claim made here is true regardless of launch timing, and the
+    // per-resource lines written by `logHotReloadDiagnostics` name each project as it starts.
+    void (async () => {
+        try {
+            await hotReloadPromptState?.update(hotReloadSessionNoticeShownKey, true);
+        }
+        catch (err) {
+            extensionLogOutputChannel.warn(`Failed to persist the Hot Reload notice state: ${err instanceof Error ? err.message : String(err)}`);
+        }
+
+        const selection = await vscode.window.showInformationMessage(hotReloadActiveNotice, showHotReloadOutputLabel);
+        if (selection !== showHotReloadOutputLabel) {
+            return;
+        }
+
+        try {
+            await vscode.commands.executeCommand(showHotReloadPanelCommand);
+        }
+        catch (err) {
+            // The command is contributed by Dev Kit and is not part of any contract with this
+            // extension, so treat it as advisory rather than surfacing a failure to the user.
+            extensionLogOutputChannel.warn(`Could not run '${showHotReloadPanelCommand}': ${err instanceof Error ? err.message : String(err)}`);
+        }
+    })();
 }

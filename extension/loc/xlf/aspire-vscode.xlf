@@ -10,8 +10,11 @@
     <trans-unit id="aspire-vscode.strings.hotReloadAvailablePrompt">
       <source xml:lang="en">.NET Hot Reload can apply code edits to running Aspire resources without restarting them. It is turned off in C# Dev Kit.</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.hotReloadActiveNotice">
+      <source xml:lang="en">.NET Hot Reload is active for the .NET resources in this Aspire app. Saving a file applies the change to the running resource without restarting it, and the Hot Reload button applies pending changes to all of them at once.</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.hotReloadEnabled">
-      <source xml:lang="en">.NET Hot Reload is enabled. Start debugging again to use it — the Hot Reload button appears in the debug toolbar.</source>
+      <source xml:lang="en">.NET Hot Reload is enabled. Start debugging again to use it — after that, saving a file applies the change to the running resource.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.debugSessionAlreadyExists">
       <source xml:lang="en">A debug session is already active for id {0}.</source>
@@ -651,6 +654,9 @@
     </trans-unit>
     <trans-unit id="configuration.aspire.enableCodeLens">
       <source xml:lang="en">Show CodeLens actions (state, restart, stop, logs) inline above resource declarations in AppHost files.</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.showHotReloadOutputLabel">
+      <source xml:lang="en">Show Hot Reload Output</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.dashboardLaunchNotificationLabel">
       <source xml:lang="en">Show a notification</source>

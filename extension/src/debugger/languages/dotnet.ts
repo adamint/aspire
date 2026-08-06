@@ -24,7 +24,7 @@ import {
 } from '../launchProfiles';
 import { AspireDebugSession } from '../AspireDebugSession';
 import { createAspireCliPathProcessEnvironment } from '../../utils/cliPathEnvironment';
-import { applyDevKitHotReloadSupport, logHotReloadDiagnostics, promptToEnableHotReloadIfNeeded } from '../hotReload';
+import { announceHotReloadForSessionIfNeeded, applyDevKitHotReloadSupport, logHotReloadDiagnostics, promptToEnableHotReloadIfNeeded } from '../hotReload';
 
 interface IDotNetService {
     getAndActivateDevKit(): Promise<boolean>
@@ -637,6 +637,14 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 // told the user its debugger was disabled.
                 void promptToEnableHotReloadIfNeeded(hotReloadDiagnostics, debugConfiguration.noDebug !== true)
                     .catch(err => extensionLogOutputChannel.warn(`Hot Reload prompt failed: ${err instanceof Error ? err.message : String(err)}`));
+
+                // Complements the prompt above rather than duplicating it. The prompt only fires when
+                // Hot Reload is off; this fires when it is already on, which is the case where the
+                // user gets no signal at all that the feature exists or what it covers.
+                //
+                // Synchronous and non-blocking by construction: it only records the resource and
+                // schedules a timer, so it cannot delay the debug configuration being returned.
+                announceHotReloadForSessionIfNeeded(hotReloadDiagnostics, debugConfiguration.noDebug !== true);
             }
             catch (err) {
                 extensionLogOutputChannel.warn(`Could not determine C# Dev Kit Hot Reload availability; continuing without it: ${err instanceof Error ? err.message : String(err)}`);

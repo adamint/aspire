@@ -94,6 +94,15 @@ suite('Aspire Hot Reload end-to-end proof', function () {
         assert.notStrictEqual(devKit.exports?.isLimitedActivation, true, 'Dev Kit must not be in limited activation');
 
         const coreclrSessions: vscode.DebugSession[] = [];
+        // Capture notifications so the proof can show what the user is actually told about Hot
+        // Reload, not just that the reload happened.
+        const notifications: string[] = [];
+        const originalShowInformationMessage = vscode.window.showInformationMessage;
+        (vscode.window as { showInformationMessage: unknown }).showInformationMessage = (message: string, ...rest: unknown[]) => {
+            notifications.push(message);
+            return (originalShowInformationMessage as (...args: unknown[]) => Thenable<unknown>)(message, ...rest);
+        };
+
         const disposables: vscode.Disposable[] = [];
         const stamp = () => new Date().toISOString().slice(11, 23);
 
@@ -219,8 +228,15 @@ suite('Aspire Hot Reload end-to-end proof', function () {
                 console.log(`[proof] edited ${resource.resourceName}`);
             }
 
-            console.log('[proof] all edits saved, requesting hot reload');
-            await vscode.commands.executeCommand('csdevkit.debug.hotReload');
+            if (process.env.ASPIRE_HOT_RELOAD_PROOF_SAVE_ONLY === 'true') {
+                console.log('[proof] SAVE-ONLY mode: NOT invoking csdevkit.debug.hotReload');
+            } else {
+                console.log('[proof] all edits saved, requesting hot reload');
+                await vscode.commands.executeCommand('csdevkit.debug.hotReload');
+            }
+
+            console.log(`[proof] notifications seen: ${JSON.stringify(notifications)}`);
+            (vscode.window as { showInformationMessage: unknown }).showInformationMessage = originalShowInformationMessage;
 
             for (const resource of resources) {
                 const baseline = before.get(resource.resourceName)!;

@@ -1,10 +1,10 @@
 import * as assert from 'assert';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { applyDevKitHotReloadSupport, initializeHotReloadPromptState, isHotReloadSettingEnabled, logHotReloadDiagnostics, logResolvedHotReloadState, promptToEnableHotReloadIfNeeded, tryGetDevKitBrokeredServicePipeName } from '../debugger/hotReload';
-import { hotReloadPromptSuppressedKey } from '../utils/hotReloadNotificationState';
+import { announceHotReloadForSessionIfNeeded, applyDevKitHotReloadSupport, initializeHotReloadPromptState, isHotReloadSettingEnabled, logHotReloadDiagnostics, logResolvedHotReloadState, promptToEnableHotReloadIfNeeded, tryGetDevKitBrokeredServicePipeName } from '../debugger/hotReload';
+import { hotReloadPromptSuppressedKey, hotReloadSessionNoticeShownKey } from '../utils/hotReloadNotificationState';
 import { createTestMemento } from './common';
-import { hotReloadAvailablePrompt, hotReloadEnabled } from '../loc/strings';
+import { hotReloadActiveNotice, hotReloadAvailablePrompt, hotReloadEnabled } from '../loc/strings';
 import { AspireResourceExtendedDebugConfiguration } from '../dcp/types';
 import { extensionLogOutputChannel } from '../utils/logging';
 
@@ -390,6 +390,135 @@ suite('Hot Reload Tests', () => {
                 const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
                 assert.ok(logged.includes('absent'), `expected '${JSON.stringify(launchArguments)}' to be reported as absent, got: ${logged}`);
             }
+        });
+    });
+
+    suite('active session notice', () => {
+        const activeDiagnostics = {
+            devKitInstalled: true,
+            devKitActive: true,
+            devKitLimitedActivation: false,
+            devKitServerLoaded: true,
+            settingEnabled: true,
+            pipeNameInjected: true
+        };
+
+        // The notice body is fire-and-forget so it cannot block the launch path, so let the
+        // microtask queue drain before asserting.
+        const flush = async () => { await new Promise(resolve => setTimeout(resolve, 5)); };
+
+        test('tells the user Hot Reload is active and how it is triggered', async () => {
+            initializeHotReloadPromptState(createTestMemento());
+            const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+
+            announceHotReloadForSessionIfNeeded(activeDiagnostics, true);
+            await flush();
+
+            assert.strictEqual(notification.callCount, 1);
+            assert.strictEqual(notification.firstCall.args[0], hotReloadActiveNotice);
+        });
+
+        test('makes no claim that depends on how many resources have launched', () => {
+            // Regression guard. An earlier version counted the resources seen so far and announced
+            // "1 .NET resource(s)" for a three-resource app, because Aspire launches resources as
+            // independent requests spread over seconds rather than all at once. Any count or list
+            // in this string is wrong for whichever resources had not started yet.
+            assert.strictEqual(/\d/.test(hotReloadActiveNotice), false, hotReloadActiveNotice);
+        });
+
+        test('is raised once per launch burst, not once per resource', async () => {
+            initializeHotReloadPromptState(createTestMemento());
+            const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+
+            // Concurrent launches: the guard has to be set before the first await, or a five-project
+            // app produces five identical notices.
+            announceHotReloadForSessionIfNeeded(activeDiagnostics, true);
+            announceHotReloadForSessionIfNeeded(activeDiagnostics, true);
+            announceHotReloadForSessionIfNeeded(activeDiagnostics, true);
+            await flush();
+
+            assert.strictEqual(notification.callCount, 1);
+        });
+
+        test('is shown once ever, not once per window', async () => {
+            const memento = createTestMemento();
+            await memento.update(hotReloadSessionNoticeShownKey, true);
+            initializeHotReloadPromptState(memento);
+            const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+
+            announceHotReloadForSessionIfNeeded(activeDiagnostics, true);
+            await flush();
+
+            assert.strictEqual(notification.called, false);
+        });
+
+        test('records that it was shown so a later window stays quiet', async () => {
+            const memento = createTestMemento();
+            initializeHotReloadPromptState(memento);
+            sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+
+            announceHotReloadForSessionIfNeeded(activeDiagnostics, true);
+            await flush();
+
+            assert.strictEqual(memento.get<boolean>(hotReloadSessionNoticeShownKey, false), true);
+        });
+
+        test('opens the Dev Kit Hot Reload output when the user asks for it', async () => {
+            initializeHotReloadPromptState(createTestMemento());
+            sinon.stub(vscode.window, 'showInformationMessage').resolves('Show Hot Reload Output' as unknown as vscode.MessageItem);
+            const executeCommand = sinon.stub(vscode.commands, 'executeCommand').resolves();
+
+            announceHotReloadForSessionIfNeeded(activeDiagnostics, true);
+            await flush();
+
+            assert.strictEqual(executeCommand.calledWith('csdevkit.debug.showHotReloadPanel'), true);
+        });
+
+        test('survives Dev Kit not having the Hot Reload panel command', async () => {
+            initializeHotReloadPromptState(createTestMemento());
+            sinon.stub(vscode.window, 'showInformationMessage').resolves('Show Hot Reload Output' as unknown as vscode.MessageItem);
+            sinon.stub(vscode.commands, 'executeCommand').rejects(new Error('command not found'));
+
+            announceHotReloadForSessionIfNeeded(activeDiagnostics, true);
+            await flush();
+        });
+
+        test('stays silent when Hot Reload is off, since the enable prompt covers that case', async () => {
+            initializeHotReloadPromptState(createTestMemento());
+            const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+
+            announceHotReloadForSessionIfNeeded({ ...activeDiagnostics, settingEnabled: false }, true);
+            await flush();
+
+            assert.strictEqual(notification.called, false);
+        });
+
+        test('stays silent for a non-debug session and without a usable Dev Kit', async () => {
+            initializeHotReloadPromptState(createTestMemento());
+            const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+
+            announceHotReloadForSessionIfNeeded(activeDiagnostics, false);
+            announceHotReloadForSessionIfNeeded({ ...activeDiagnostics, devKitInstalled: false }, true);
+            announceHotReloadForSessionIfNeeded({ ...activeDiagnostics, devKitActive: false }, true);
+            announceHotReloadForSessionIfNeeded({ ...activeDiagnostics, devKitLimitedActivation: true }, true);
+            await flush();
+
+            assert.strictEqual(notification.called, false);
+        });
+
+        test('does not notify per reload, because Dev Kit exposes no reload result', async () => {
+            initializeHotReloadPromptState(createTestMemento());
+            const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+
+            // Stands in for a developer saving repeatedly during a session. Hot Reload runs on every
+            // save ('csharp.debug.hotReloadOnSave' defaults to true), so anything that notified per
+            // reload would be unusable.
+            for (let i = 0; i < 25; i++) {
+                announceHotReloadForSessionIfNeeded(activeDiagnostics, true);
+                await flush();
+            }
+
+            assert.strictEqual(notification.callCount, 1);
         });
     });
 
