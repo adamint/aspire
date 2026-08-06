@@ -9,6 +9,8 @@ import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration
 import * as io from '../utils/io';
 import { ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
 import { AppHostParentOutputFilter, AspireDebugSession } from '../debugger/AspireDebugSession';
+import { initializeHotReloadPromptState } from '../debugger/hotReload';
+import { createTestMemento } from './common';
 
 class TestDotNetService {
     private _getDotNetTargetPathStub: sinon.SinonStub;
@@ -354,6 +356,78 @@ suite('Dotnet Debugger Extension Tests', () => {
                 ? { id: extensionId, isActive: true, exports } as unknown as vscode.Extension<unknown>
                 : undefined);
     }
+
+    test('project launch is not blocked while the Hot Reload prompt is waiting for an answer', async () => {
+        // A VS Code notification carrying buttons stays up until the user interacts with it, so
+        // awaiting one on the launch path would stall the resource - potentially forever - behind a
+        // purely advisory message. The prompt must never gate the debug session.
+        initializeHotReloadPromptState(createTestMemento());
+        stubCsDevKitExtension({
+            hasServerProcessLoaded: () => true,
+            getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
+        });
+        sinon.stub(vscode.workspace, 'getConfiguration').returns({
+            get: () => false,
+            update: async () => undefined
+        } as unknown as vscode.WorkspaceConfiguration);
+
+        let resolveNotification: ((value: string | undefined) => void) | undefined;
+        const notification = sinon.stub(vscode.window, 'showInformationMessage')
+            .returns(new Promise<string | undefined>(resolve => { resolveNotification = resolve; }) as unknown as Thenable<vscode.MessageItem | undefined>);
+
+        const debugConfig = await createProjectDebugConfiguration();
+
+        assert.strictEqual(notification.called, true, 'the prompt should have been raised');
+        assert.strictEqual(debugConfig.brokeredServicePipeName, 'devkit-broker-pipe', 'launch must still complete');
+
+        resolveNotification?.(undefined);
+    });
+
+    test('project launch succeeds when C# Dev Kit throws while its Hot Reload state is read', async () => {
+        // Dev Kit is a third-party optional dependency. Nothing it does may turn a working .NET
+        // debug session into a failed one, so a throw from its exports has to degrade to "no Hot
+        // Reload" rather than propagating out of the launch path.
+        initializeHotReloadPromptState(createTestMemento());
+        stubCsDevKitExtension({
+            hasServerProcessLoaded: () => { throw new Error('dev kit exploded'); },
+            getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
+        });
+
+        const debugConfig = await createProjectDebugConfiguration();
+
+        assert.strictEqual(debugConfig.brokeredServicePipeName, undefined);
+        assert.strictEqual(debugConfig.program, 'C:\\temp\\bin\\Debug\\net7.0\\TestProject.dll');
+    });
+
+    test('project debug configuration is untouched by Hot Reload when C# Dev Kit is absent', async () => {
+        // The guarantee for users running only the base C# extension: the configuration handed to
+        // the coreclr debugger carries nothing this feature added. Compare the whole key set rather
+        // than one property so a stray field cannot slip in unnoticed, and assert the Hot Reload
+        // property is absent entirely rather than merely undefined.
+        initializeHotReloadPromptState(createTestMemento());
+        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+        const notification = sinon.stub(vscode.window, 'showInformationMessage');
+
+        const debugConfig = await createProjectDebugConfiguration();
+
+        assert.deepStrictEqual(Object.keys(debugConfig).sort(), [
+            'args',
+            'checkForDevCert',
+            'cwd',
+            'debugSessionId',
+            'env',
+            'executablePath',
+            'name',
+            'noDebug',
+            'program',
+            'request',
+            'runId',
+            'serverReadyAction',
+            'type'
+        ]);
+        assert.strictEqual('brokeredServicePipeName' in debugConfig, false);
+        assert.strictEqual(notification.called, false, 'a user without Dev Kit must never be prompted');
+    });
 
     async function createProjectDebugConfiguration(options: { debug?: boolean } = {}): Promise<AspireResourceExtendedDebugConfiguration> {
         const outputPath = 'C:\\temp\\bin\\Debug\\net7.0\\TestProject.dll';

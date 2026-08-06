@@ -16,6 +16,13 @@ const hotReloadConfigurationSection = 'csharp.experimental.debug';
 const hotReloadConfigurationName = 'hotReload';
 
 /**
+ * How long to wait for C# Dev Kit to report its brokered service pipe name.
+ *
+ * This work sits on the resource launch path, so it is bounded rather than open ended.
+ */
+const devKitPipeNameTimeoutMs = 5000;
+
+/**
  * The subset of C# Dev Kit's exported API surface that this extension consumes.
  *
  * Declared locally instead of importing from Dev Kit because Dev Kit is an OPTIONAL dependency:
@@ -90,17 +97,56 @@ function tryGetDevKitExports(): CSharpDevKitExports | undefined {
  */
 export async function tryGetDevKitBrokeredServicePipeName(): Promise<string | undefined> {
     const exports = tryGetDevKitExports();
-    if (exports === undefined || !exports.hasServerProcessLoaded()) {
+    if (exports === undefined || !hasServerProcessLoadedSafely(exports)) {
         return undefined;
     }
 
     try {
-        const pipeName = await exports.getBrokeredServiceServerPipeName();
-        return pipeName === '' ? undefined : pipeName;
+        // Bounded because this runs on the resource launch path, before the debug session is
+        // created. Dev Kit reports the pipe name from an already-loaded server process, so this
+        // resolves immediately in practice; a hang means something is wrong on its side and the
+        // right answer is to launch without Hot Reload rather than stall the resource. The C#
+        // extension resolves the same value again during its own configuration resolution, so
+        // giving up here costs nothing in the common case.
+        const pipeName = await withTimeout(exports.getBrokeredServiceServerPipeName(), devKitPipeNameTimeoutMs);
+        return pipeName === undefined || pipeName === '' ? undefined : pipeName;
     }
     catch (err) {
         extensionLogOutputChannel.warn(`Failed to read the C# Dev Kit brokered service pipe name; Hot Reload will be unavailable for this session: ${err instanceof Error ? err.message : String(err)}`);
         return undefined;
+    }
+}
+
+/** Resolves to `undefined` when `promise` has not settled within `timeoutMs`. */
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
+    let timer: NodeJS.Timeout | undefined;
+
+    try {
+        return await Promise.race([
+            promise,
+            new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), timeoutMs); })
+        ]);
+    }
+    finally {
+        if (timer !== undefined) {
+            clearTimeout(timer);
+        }
+    }
+}
+
+/**
+ * Calls Dev Kit's `hasServerProcessLoaded` without letting a failure escape.
+ *
+ * This is foreign code on the resource launch path, and the only consequence of not knowing the
+ * answer is that Hot Reload is treated as unavailable.
+ */
+function hasServerProcessLoadedSafely(exports: CSharpDevKitExports): boolean {
+    try {
+        return exports.hasServerProcessLoaded();
+    }
+    catch (err) {
+        extensionLogOutputChannel.warn(`C# Dev Kit failed to report its server process state; treating Hot Reload as unavailable: ${err instanceof Error ? err.message : String(err)}`);
+        return false;
     }
 }
 
@@ -140,7 +186,7 @@ export async function applyDevKitHotReloadSupport(debugConfiguration: AspireReso
         return diagnostics;
     }
 
-    diagnostics.devKitServerLoaded = exports.hasServerProcessLoaded();
+    diagnostics.devKitServerLoaded = hasServerProcessLoadedSafely(exports);
 
     // Hot Reload is applied by the debugger, so a no-debug ("run") session can never hot reload.
     // Skip the work entirely rather than attaching a pipe that nothing will use.

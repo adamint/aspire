@@ -615,13 +615,27 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
             // Opt into C# Dev Kit's Hot Reload when it is available. This is a no-op (and the
             // configuration is left untouched) when only the C# extension is installed, so .NET
             // debugging never gains a dependency on Dev Kit.
-            const hotReloadDiagnostics = await applyDevKitHotReloadSupport(debugConfiguration);
-            logHotReloadDiagnostics(path.basename(projectPath), hotReloadDiagnostics);
+            //
+            // The whole block is guarded because it is the only part of this callback that calls
+            // into a third-party optional extension. Hot Reload is an enhancement; nothing it does
+            // may turn a working .NET debug session into a failed one.
+            try {
+                const hotReloadDiagnostics = await applyDevKitHotReloadSupport(debugConfiguration);
+                logHotReloadDiagnostics(path.basename(projectPath), hotReloadDiagnostics);
 
-            // Dev Kit ships Hot Reload behind an opt-in that older builds default to off, so a user
-            // with Dev Kit installed can debug an Aspire app forever without the feature ever being
-            // offered. Surface it once instead of leaving it undiscoverable.
-            await promptToEnableHotReloadIfNeeded(hotReloadDiagnostics, launchOptions.debug === true);
+                // Dev Kit ships Hot Reload behind an opt-in that older builds default to off, so a
+                // user with Dev Kit installed can debug an Aspire app forever without the feature
+                // ever being offered. Surface it once instead of leaving it undiscoverable.
+                //
+                // Deliberately NOT awaited. A VS Code notification carrying buttons stays up until
+                // the user interacts with it, and this callback runs before the debug session is
+                // created, so awaiting it would stall the resource behind an advisory message.
+                void promptToEnableHotReloadIfNeeded(hotReloadDiagnostics, launchOptions.debug === true)
+                    .catch(err => extensionLogOutputChannel.warn(`Hot Reload prompt failed: ${err instanceof Error ? err.message : String(err)}`));
+            }
+            catch (err) {
+                extensionLogOutputChannel.warn(`Could not determine C# Dev Kit Hot Reload availability; continuing without it: ${err instanceof Error ? err.message : String(err)}`);
+            }
         }
     };
 }

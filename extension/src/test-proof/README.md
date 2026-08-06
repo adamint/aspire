@@ -12,6 +12,7 @@ support stays reproducible.
 |------|----------------|
 | `devkitHotReload.proof.ts` | Dev Kit exports a brokered service pipe name, and the value the extension injects is byte-identical to Dev Kit's own. |
 | `aspireHotReloadE2E.proof.ts` | Edits to **three concurrently running** project resources are applied to the running processes: every HTTP response changes while every process id stays the same. |
+| `aspireNoDevKit.proof.ts` | The same Aspire app is **unaffected** when Dev Kit is absent — with only the C# extension, and with neither extension installed. |
 
 ## Running them
 
@@ -19,6 +20,10 @@ support stays reproducible.
 yarn run compile-tests
 yarn vscode-test --config .vscode-test-devkit.mjs     # pipe-name proof
 yarn vscode-test --config .vscode-test-e2eproof.mjs   # end-to-end proof
+
+# no-degradation proofs
+ASPIRE_HOT_RELOAD_PROOF_MODE=csharp-only   yarn vscode-test --config .vscode-test-nodevkit.mjs
+ASPIRE_HOT_RELOAD_PROOF_MODE=no-extensions yarn vscode-test --config .vscode-test-nodevkit.mjs
 ```
 
 Both harnesses use `--extensions-dir extension/.proof-extensions` so the proof runs against a pinned
@@ -27,6 +32,33 @@ extension set instead of whatever the developer happens to have installed. Popul
 `ms-dotnettools.csdevkit`, `ms-dotnettools.vscode-dotnet-runtime`, and their platform-specific
 companions out of `~/.vscode-insiders/extensions`. Delete `.proof-extensions/extensions.json`
 afterwards; it is a scan cache and a stale copy silently hides newly added extensions.
+
+## Proving the experience is not degraded without Dev Kit
+
+Dev Kit is optional. `aspireNoDevKit.proof.ts` runs the same three-resource fixture against two
+reduced extension sets, selected by `ASPIRE_HOT_RELOAD_PROOF_MODE`:
+
+| Mode | Extensions directory | What must still happen |
+|------|----------------------|------------------------|
+| `csharp-only` | `.proof-extensions-csharp` | All three resources run and serve, all three attach a `coreclr` debug session, no debug configuration carries `brokeredServicePipeName`, and no Hot Reload notification appears. |
+| `no-extensions` | `.proof-extensions-none` | All three resources still run and serve, and no project debug session is created at all. |
+
+Build the two directories from the full pinned set:
+
+```bash
+cp -R .proof-extensions .proof-extensions-csharp
+rm -rf .proof-extensions-csharp/ms-dotnettools.csdevkit-* .proof-extensions-csharp/extensions.json
+mkdir -p .proof-extensions-none
+```
+
+Each mode gets its own `.proof-user-data-<mode>` directory. Copy `.proof-user-data/User/settings.json`
+into both but **drop** `csharp.experimental.debug.hotReload`, `csharp.debug.hotReloadVerbosity`, and
+`csharp.debug.hotReloadOnSave`; keep `aspire.aspireCliExecutablePath` or the CLI will not be found.
+
+These proofs are only meaningful against a baseline. Run the identical compiled proof from a worktree
+at the commit before this change (`ASPIRE_HOT_RELOAD_PROOF_ASSETS_DIR` lets both checkouts share the
+one copied extension set) and compare the output. Both must produce the same resource count, the same
+session list, and the same notification list.
 
 ## The end-to-end fixture
 
