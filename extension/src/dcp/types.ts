@@ -155,7 +155,7 @@ export interface ProcessRestartedNotification extends RunSessionNotification {
 
 export interface SessionTerminatedNotification extends RunSessionNotification {
     notification_type: 'sessionTerminated';
-    exit_code: number;
+    exit_code?: number;
 }
 
 export interface ServiceLogsNotification extends RunSessionNotification {
