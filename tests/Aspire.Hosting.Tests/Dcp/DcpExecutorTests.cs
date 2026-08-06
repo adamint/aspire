@@ -444,6 +444,71 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ProjectReplicas_CreateFreshLaunchConfigurationContexts()
+    {
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
+        {
+            AssemblyName = typeof(DistributedApplicationTests).Assembly.FullName
+        });
+
+        var launchContexts = new ConcurrentQueue<LaunchConfigurationCallbackContext>();
+        var project = builder.AddProject<Projects.ServiceA>("ServiceA")
+            .WithReplicas(2)
+            .WithEnvironment("REPLICA_VALUE", "resolved")
+            .WithDebugSupport(
+                context =>
+                {
+                    launchContexts.Enqueue(context);
+                    return Task.FromResult(
+                        ProjectLaunchConfigurationFactory.Create(context.Resource, context.Mode));
+                },
+                KnownLaunchConfigurationTypes.Project);
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [DcpExecutor.DebugSessionPortVar] = "12345",
+                [KnownConfigNames.DebugSessionInfo] = JsonSerializer.Serialize(new RunSessionInfo
+                {
+                    ProtocolsSupported = ["test"],
+                    SupportedLaunchConfigurations = [KnownLaunchConfigurationTypes.Project]
+                }),
+                [KnownConfigNames.DebugSessionRunMode] = ExecutableLaunchMode.Debug
+            })
+            .Build();
+        var kubernetesService = new TestKubernetesService();
+
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(
+            distributedAppModel,
+            kubernetesService: kubernetesService,
+            configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        var executables = GetCreatedExecutablesForResource(kubernetesService, project.Resource.Name);
+        Assert.Equal(2, executables.Count);
+        Assert.All(executables, executable =>
+        {
+            Assert.Equal(ExecutionType.IDE, executable.Spec.ExecutionType);
+            Assert.True(executable.TryGetProjectLaunchConfiguration(out var launchConfiguration));
+            Assert.NotNull(launchConfiguration);
+        });
+
+        var contexts = launchContexts.ToArray();
+        Assert.Equal(2, contexts.Length);
+        Assert.NotSame(contexts[0], contexts[1]);
+        Assert.NotSame(contexts[0].ExecutionConfiguration, contexts[1].ExecutionConfiguration);
+        Assert.All(contexts, context => Assert.Same(project.Resource, context.Resource));
+        Assert.All(
+            contexts,
+            context => Assert.Contains(
+                context.ExecutionConfiguration.EnvironmentVariables,
+                pair => pair is { Key: "REPLICA_VALUE", Value: "resolved" }));
+    }
+
+    [Fact]
     public async Task ResourceRestarted_RebuildsExecutionConfigurationAndLaunchContext()
     {
         var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions
