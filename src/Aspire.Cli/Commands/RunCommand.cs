@@ -1084,13 +1084,19 @@ internal sealed class RunCommand : BaseCommand
             // The extension capability is negotiated once because it is a property of the
             // connected extension host and the log stream can be high volume. The AppHost side
             // needs no probe: every entry carries its own proof (see below).
-            var extensionSupportsStructuredLogs = false;
-            if (ExtensionHelper.IsExtensionHost(interactionService, out var extensionInteractionService, out var extensionBackchannel))
-            {
-                extensionSupportsStructuredLogs = await SupportsStructuredAppHostLogsAsync(extensionBackchannel, cancellationToken).ConfigureAwait(false);
-            }
+            //
+            // The probe is started but deliberately not awaited here. Awaiting it would leave the
+            // AppHost log stream unsubscribed for the duration of a round trip to the extension,
+            // and BackchannelLoggerProvider replays at most MaxReplayEntries and evicts the oldest
+            // beyond that. A slow extension would therefore cost the CLI log file the earliest
+            // startup records permanently, which is the opposite of what that file is for. The
+            // answer is only needed once an entry is actually forwarded, so it is awaited there.
+            var structuredLogSupportProbe = ExtensionHelper.IsExtensionHost(interactionService, out var extensionInteractionService, out var extensionBackchannel)
+                ? SupportsStructuredAppHostLogsAsync(extensionBackchannel, cancellationToken)
+                : Task.FromResult(false);
 
             var logEntries = backchannel.GetAppHostLogEntriesAsync(cancellationToken);
+            bool? extensionSupportsStructuredLogs = null;
 
             await foreach (var entry in logEntries.WithCancellation(cancellationToken))
             {
@@ -1116,6 +1122,11 @@ internal sealed class RunCommand : BaseCommand
                     continue;
                 }
 
+                // Resolved on the first entry that is actually forwarded, and once only. The stream
+                // is already subscribed by this point, so waiting here can delay extension delivery
+                // but can no longer drop records from the CLI log file.
+                extensionSupportsStructuredLogs ??= await structuredLogSupportProbe.ConfigureAwait(false);
+
                 // BackchannelLoggerProvider.WriteEntry stamps a sequence number starting at 1
                 // under its lock and is the only producer of BackchannelLogEntry, so a non-zero
                 // value proves the AppHost understands the identity-bearing shape. An AppHost
@@ -1125,7 +1136,7 @@ internal sealed class RunCommand : BaseCommand
                 // the same record. Testing the sentinel per entry also covers the auxiliary
                 // backchannel, which re-exports this stream under a different capability
                 // vocabulary that a negotiated token would not reach.
-                if (extensionSupportsStructuredLogs && entry.SequenceNumber > 0)
+                if (extensionSupportsStructuredLogs is true && entry.SequenceNumber > 0)
                 {
                     extensionInteractionService.WriteAppHostLogEntry(new ExtensionAppHostLogEntry
                     {
@@ -1175,12 +1186,13 @@ internal sealed class RunCommand : BaseCommand
         {
             return await extensionBackchannel.HasCapabilityAsync(KnownCapabilities.AppHostLogOutput, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        catch (Exception)
         {
-            // The probe makes a round trip before the log stream is subscribed. A faulted RPC
-            // must not stop the AppHost logs from reaching the CLI log file, which is the
-            // artifact used to diagnose that very failure, so fall back to the legacy path
-            // instead of propagating.
+            // Every failure, including cancellation, degrades to the legacy path rather than
+            // propagating. The caller starts this probe without awaiting it and only awaits it if
+            // an entry is forwarded, so an exception escaping here could end up on a task nobody
+            // observes. Reporting "not supported" is also the right answer for the caller: an
+            // extension that cannot answer the probe cannot be sent the structured shape either.
             return false;
         }
     }

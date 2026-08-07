@@ -3752,9 +3752,102 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task CaptureAppHostLogsAsync_FallsBackToLegacyMessagesWhenCapabilityProbeFails()
+    public async Task CaptureAppHostLogsAsync_DoesNotLetTheCapabilityProbeGateLogFileWrites()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var errorWriter = new TestStartupErrorWriter();
+        using var fileLoggerProvider = new FileLoggerProvider(logFilePath, errorWriter);
+        var forwardedEntries = new List<ExtensionAppHostLogEntry>();
+
+        // Released as soon as the AppHost stream is enumerated, before its first entry is yielded.
+        // A probe awaited ahead of the subscription therefore never resolves and the capture hangs,
+        // which is what makes this a regression test rather than a timing assertion: it fails by
+        // deadlock, not by being slow, if the probe moves back ahead of the subscription.
+        var streamEnumerationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var probeAnswered = false;
+
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = async (capability, _) =>
+            {
+                await streamEnumerationStarted.Task;
+                probeAnswered = true;
+                return capability == KnownCapabilities.AppHostLogOutput;
+            },
+            WriteAppHostLogEntryAsyncCallback = entry =>
+            {
+                forwardedEntries.Add(entry);
+                return Task.CompletedTask;
+            }
+        };
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+        var consoleInteractionService = new ConsoleInteractionService(
+            provider.GetRequiredService<ConsoleEnvironment>(),
+            workspace.CreateExecutionContext(logFilePath: logFilePath),
+            TestHelpers.CreateInteractiveHostEnvironment(),
+            new EnvironmentProcessPathProvider(),
+            NullLoggerFactory.Instance,
+            new ConsoleLogBufferContext());
+        using var extensionInteractionService = new ExtensionInteractionService(
+            consoleInteractionService,
+            extensionBackchannel,
+            extensionPromptEnabled: false,
+            logger: NullLogger<ExtensionInteractionService>.Instance);
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetAppHostLogEntriesAsyncCallback = YieldEntries
+        };
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, extensionInteractionService, timeout.Token).WaitAsync(timeout.Token);
+        await extensionInteractionService.FlushAsync();
+
+        Assert.True(probeAnswered);
+
+        // Both entries reached the log file even though the probe had not answered when the stream
+        // was subscribed, and the structured forwarding still happened once the answer arrived.
+        fileLoggerProvider.Dispose();
+        var logFileContents = await File.ReadAllTextAsync(logFilePath);
+        Assert.Contains("Produced before the probe answered", logFileContents);
+        Assert.Contains("Also produced before the probe answered", logFileContents);
+        Assert.Equal(
+            ["Produced before the probe answered", "Also produced before the probe answered"],
+            forwardedEntries.Select(entry => entry.Message));
+
+        async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            streamEnumerationStarted.SetResult();
+
+            yield return new BackchannelLogEntry
+            {
+                SequenceNumber = 1,
+                Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 0, TimeSpan.Zero),
+                LogLevel = LogLevel.Information,
+                Message = "Produced before the probe answered",
+                EventId = new EventId(),
+                CategoryName = "Example.Category",
+            };
+
+            yield return new BackchannelLogEntry
+            {
+                SequenceNumber = 2,
+                Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 1, TimeSpan.Zero),
+                LogLevel = LogLevel.Information,
+                Message = "Also produced before the probe answered",
+                EventId = new EventId(),
+                CategoryName = "Example.Category",
+            };
+
+            await Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task CaptureAppHostLogsAsync_FallsBackToLegacyMessagesWhenCapabilityProbeFails()
+    {        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
         var errorWriter = new TestStartupErrorWriter();
         using var fileLoggerProvider = new FileLoggerProvider(logFilePath, errorWriter);
