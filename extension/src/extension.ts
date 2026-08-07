@@ -351,7 +351,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(cliUpdateCommandRegistration, cliUpdateSelfCommandRegistration, settingsCommandRegistration, openLocalSettingsCommandRegistration, openGlobalSettingsCommandRegistration, runAppHostCommandRegistration, debugAppHostCommandRegistration);
   context.subscriptions.push(installCliRegistration, verifyCliInstalledRegistration);
 
-  const debugConfigProvider = new AspireDebugConfigurationProvider(appHostDiscoveryService);
+  const debugConfigProvider = new AspireDebugConfigurationProvider(appHostDiscoveryService, appHostLaunchService);
   context.subscriptions.push(
     vscode.debug.registerDebugConfigurationProvider('aspire', debugConfigProvider, vscode.DebugConfigurationProviderTriggerKind.Dynamic)
   );

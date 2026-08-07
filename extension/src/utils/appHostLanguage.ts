@@ -279,12 +279,20 @@ function isRunnableJsTsAppHost(filePath: string, contents: string): boolean {
         /* setParentNodes */ false,
         isJavaScriptAppHostPath(filePath) ? ts.ScriptKind.JS : ts.ScriptKind.TS);
 
+    // `require` is an ordinary identifier, so a file is free to declare its own. A local
+    // one is not Node's module loader and loads nothing, which means `require('aspire')`
+    // would then be a call into the file's own code. Resolving the binding per call site
+    // needs a full scope analysis, so any declaration of the name anywhere in the file
+    // disqualifies every `require` call in it. That is conservative in the safe
+    // direction: a real AppHost has no reason to shadow `require`.
+    const requireIsShadowed = declaresBinding(sourceFile, 'require');
+
     let referencesAspireModule = false;
     let createsBuilder = false;
     let runsBuiltApplication = false;
 
     const visit = (node: ts.Node): void => {
-        if (!referencesAspireModule && isAspireModuleReference(node)) {
+        if (!referencesAspireModule && isAspireModuleReference(node, requireIsShadowed)) {
             referencesAspireModule = true;
         }
 
@@ -308,23 +316,64 @@ function isRunnableJsTsAppHost(filePath: string, contents: string): boolean {
     return referencesAspireModule && createsBuilder && runsBuiltApplication;
 }
 
+/** True when the file declares `name` anywhere, in any scope. */
+function declaresBinding(sourceFile: ts.SourceFile, name: string): boolean {
+    let declared = false;
+    const visit = (node: ts.Node): void => {
+        if (declared) {
+            return;
+        }
+
+        if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node) || ts.isFunctionExpression(node))
+            && node.name?.text === name) {
+            declared = true;
+            return;
+        }
+
+        if ((ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isBindingElement(node))
+            && ts.isIdentifier(node.name) && node.name.text === name) {
+            declared = true;
+            return;
+        }
+
+        if (ts.isImportClause(node) && node.name?.text === name) {
+            declared = true;
+            return;
+        }
+
+        if ((ts.isImportSpecifier(node) || ts.isNamespaceImport(node) || ts.isImportEqualsDeclaration(node))
+            && node.name.text === name) {
+            declared = true;
+            return;
+        }
+
+        ts.forEachChild(node, visit);
+    };
+
+    visit(sourceFile);
+
+    return declared;
+}
+
 /**
  * True for a node that names an Aspire module in genuine module-specifier position:
  * `import ... from 'aspire'`, a bare `import 'aspire'`, `export ... from 'aspire'`,
  * `import x = require('aspire')`, `import('aspire')`, and `require('aspire')`.
  *
- * A specifier that only appears as data — `const doc = "require('aspire')"` — is not a
+ * A specifier that only appears as data - `const doc = "require('aspire')"` - is not a
  * module reference and does not reach any of these node shapes.
  */
-function isAspireModuleReference(node: ts.Node): boolean {
+function isAspireModuleReference(node: ts.Node, requireIsShadowed: boolean): boolean {
     if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-        return node.moduleSpecifier !== undefined
+        return !isTypeOnlyModuleBinding(node)
+            && node.moduleSpecifier !== undefined
             && ts.isStringLiteralLike(node.moduleSpecifier)
             && isAspireModuleSpecifier(node.moduleSpecifier.text);
     }
 
     if (ts.isImportEqualsDeclaration(node)) {
-        return ts.isExternalModuleReference(node.moduleReference)
+        return !node.isTypeOnly
+            && ts.isExternalModuleReference(node.moduleReference)
             && ts.isStringLiteralLike(node.moduleReference.expression)
             && isAspireModuleSpecifier(node.moduleReference.expression.text);
     }
@@ -335,12 +384,54 @@ function isAspireModuleReference(node: ts.Node): boolean {
 
     // `import('aspire')` parses as a call whose expression is the `import` keyword.
     const isModuleLoadingCall = node.expression.kind === ts.SyntaxKind.ImportKeyword
-        || (ts.isIdentifier(node.expression) && node.expression.text === 'require');
+        || (!requireIsShadowed && ts.isIdentifier(node.expression) && node.expression.text === 'require');
 
     return isModuleLoadingCall
         && node.arguments.length > 0
         && ts.isStringLiteralLike(node.arguments[0])
         && isAspireModuleSpecifier(node.arguments[0].text);
+}
+
+/**
+ * True when an import or export only carries types.
+ *
+ * `import type { X } from 'aspire'`, and equally `import { type X } from 'aspire'` where
+ * every named binding is type-only, are erased by the compiler. Nothing is loaded at
+ * runtime, so such a file never actually runs Aspire and must not pass a gate whose
+ * result authorizes executing it.
+ *
+ * See https://www.typescriptlang.org/docs/handbook/modules/reference.html#type-only-imports-and-exports.
+ */
+function isTypeOnlyModuleBinding(node: ts.ImportDeclaration | ts.ExportDeclaration): boolean {
+    if (ts.isImportDeclaration(node)) {
+        const importClause = node.importClause;
+        if (importClause === undefined) {
+            // A bare `import 'aspire'` has no clause at all and is evaluated for its side
+            // effects, which is exactly the runtime load this gate is looking for.
+            return false;
+        }
+
+        if (importClause.isTypeOnly) {
+            return true;
+        }
+
+        const namedBindings = importClause.namedBindings;
+        return importClause.name === undefined
+            && namedBindings !== undefined
+            && ts.isNamedImports(namedBindings)
+            && namedBindings.elements.length > 0
+            && namedBindings.elements.every(element => element.isTypeOnly);
+    }
+
+    if (node.isTypeOnly) {
+        return true;
+    }
+
+    const exportClause = node.exportClause;
+    return exportClause !== undefined
+        && ts.isNamedExports(exportClause)
+        && exportClause.elements.length > 0
+        && exportClause.elements.every(element => element.isTypeOnly);
 }
 
 /**

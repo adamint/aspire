@@ -421,6 +421,70 @@ suite('appHostLanguage.isRunnableAppHostFileContents', () => {
         assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', contents), true);
     });
 
+    test('rejects a type-only import of an Aspire module', () => {
+        // `import type` and an all-`type` named import are erased by the compiler, so the
+        // file never loads Aspire at runtime. Accepting them would authorize executing
+        // arbitrary TypeScript whose builder is entirely local.
+        const localBuilder = [
+            'function createBuilder() { return { build: () => ({ run: () => {} }) }; }',
+            'const builder = createBuilder();',
+            'builder.build().run();',
+            '',
+        ].join('\n');
+        const contents = [
+            "import type { DistributedApplicationBuilder } from '@aspire/hosting';",
+            "import { type CreateBuilderOptions } from 'aspire';",
+            "export type { DistributedApplicationBuilder } from '@aspire/hosting';",
+            localBuilder,
+        ].join('\n');
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', contents), false);
+    });
+
+    test('accepts an import that loads an Aspire module alongside type-only bindings', () => {
+        // The counterpart of the refusal above: a value import still loads the module even
+        // when some of its named bindings are type-only.
+        const contents = [
+            "import { createBuilder, type CreateBuilderOptions } from '@aspire/hosting';",
+            'const builder = createBuilder();',
+            'builder.build().run();',
+            '',
+        ].join('\n');
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', contents), true);
+    });
+
+    test('rejects a require call when the file declares its own require', () => {
+        // A locally declared `require` is not Node's module loader, so `require('aspire')`
+        // loads nothing and the AppHost shape below is entirely local code.
+        const contents = [
+            "function require(name: string) { return { createBuilder: () => ({ build: () => ({ run: () => {} }) }) }; }",
+            "const aspire = require('aspire');",
+            'const builder = aspire.createBuilder();',
+            'builder.build().run();',
+            '',
+        ].join('\n');
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', contents), false);
+    });
+
+    test('rejects a require call shadowed by a parameter or a local binding', () => {
+        const shadowingForms = [
+            "((require: (name: string) => { createBuilder: () => { build: () => { run: () => void } } }) => {\n  const aspire = require('aspire');\n  const builder = aspire.createBuilder();\n  builder.build().run();\n})(makeFake());",
+            "const require = (name: string) => ({ createBuilder: () => ({ build: () => ({ run: () => {} }) }) });\nconst aspire = require('aspire');\nconst builder = aspire.createBuilder();\nbuilder.build().run();",
+        ];
+        assert.deepStrictEqual(
+            shadowingForms.map(contents => isRunnableAppHostFileContents('/w/apphost.ts', contents)),
+            [false, false]);
+    });
+
+    test('accepts a genuine require of an Aspire module', () => {
+        const contents = [
+            "const aspire = require('aspire');",
+            'const builder = aspire.createBuilder();',
+            'builder.build().run();',
+            '',
+        ].join('\n');
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.js', contents), true);
+    });
+
     test('rejects a C# file whose SDK directive appears only inside a raw string literal', () => {
         // A raw string preserves the leading newline, so the directive lands at the start
         // of a line and satisfies a line-anchored match against text that only had its

@@ -41,6 +41,8 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
     markLaunchingOnLaunch = true;
     lifecycleLockError: Error | undefined;
     onLifecycleLockHeld: (() => void) | undefined;
+    reserveLaunchAttempts = 0;
+    onRunningAppHostsRequested: (() => void) | undefined;
     private readonly lifecycleLocks = new Map<string, Promise<unknown>>();
 
     get pendingLifecycleLockCount(): number {
@@ -49,6 +51,20 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
 
     isLaunching(appHostPath: string): boolean {
         return this.launchingPaths.has(path.resolve(appHostPath));
+    }
+
+    tryReserveLaunch(appHostPath: string): boolean {
+        this.reserveLaunchAttempts++;
+        if (this.isLaunching(appHostPath)) {
+            return false;
+        }
+
+        this.launchingPaths.add(path.resolve(appHostPath));
+        return true;
+    }
+
+    clearLaunching(appHostPath: string): void {
+        this.launchingPaths.delete(path.resolve(appHostPath));
     }
 
     getEditorOwnedRunSessions(appHostPath: string): AppHostLifecycleOwnedSessions {
@@ -74,6 +90,7 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
 
     async getRunningAppHosts(token: vscode.CancellationToken): Promise<readonly AppHostLifecycleRunningAppHost[]> {
         this.runningAppHostRequests++;
+        this.onRunningAppHostsRequested?.();
         if (token.isCancellationRequested) {
             throw new vscode.CancellationError();
         }
@@ -89,7 +106,7 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
         return compareAppHostIdentity(left, right);
     }
 
-    async runWithAppHostLifecycleLock<T>(appHostPath: string, token: vscode.CancellationToken, action: () => Promise<T>): Promise<T> {
+    async runWithAppHostLifecycleLock<T>(appHostPath: string, token: vscode.CancellationToken, action: (token: vscode.CancellationToken) => Promise<T>): Promise<T> {
         if (this.lifecycleLockError) {
             throw this.lifecycleLockError;
         }
@@ -102,7 +119,7 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
             }
 
             this.onLifecycleLockHeld?.();
-            return await action();
+            return await action(token);
         });
         const tracked = current.then(() => undefined, () => undefined);
         this.lifecycleLocks.set(key, tracked);
@@ -128,6 +145,13 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
 
         if (this.markLaunchingOnLaunch) {
             this.launchingPaths.add(path.resolve(appHostPath));
+        }
+        else {
+            // Production clears its own reservation on every pre-start failure path, and the
+            // tool clears it when the launch throws before that. Mirror the successful
+            // no-tracking case so a test that opts out of launching state does not leave the
+            // reservation the tool took behind.
+            this.launchingPaths.delete(path.resolve(appHostPath));
         }
     }
 }
@@ -869,6 +893,45 @@ suite('AppHost lifecycle language model tools', () => {
 
             assert.strictEqual(result.outcome, 'ambiguousSession');
             assert.strictEqual(launchService.launchCalls.length, 0);
+        });
+
+        test('claims the launching slot before launching so a concurrent editor launch cannot duplicate it', async () => {
+            // A `launch.json`/F5 launch never takes the lifecycle lock; it reserves through
+            // the debug configuration provider instead. Land one *after* every check inside
+            // the lock has already passed, by reserving while the tool awaits its final
+            // ownership probe. Only a synchronous claim taken immediately before the launch
+            // can still catch it, which is why the checks above it are not sufficient.
+            // The first probe runs before the lock is taken; reserving there would be caught
+            // by the in-lock `isLaunching` check instead. Reserve during the second probe,
+            // the authoritative one that runs inside the lock immediately before the launch,
+            // so only the synchronous claim is left to notice.
+            launchService.onRunningAppHostsRequested = () => {
+                if (launchService.runningAppHostRequests === 2) {
+                    launchService.launchingPaths.add(path.resolve(appHostProjectPath));
+                }
+            };
+
+            const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'alreadyStarting');
+            assert.strictEqual(result.ownership, 'editor');
+            assert.strictEqual(launchService.launchCalls.length, 0);
+        });
+
+        test('releases the launching claim when the launch itself fails', async () => {
+            // The claim is taken by the tool, so a failure before the launch path adopts it
+            // would otherwise leave this AppHost reported as launching for the lifetime of
+            // the window and every later start would answer `alreadyStarting`.
+            launchService.launchError = new Error('startDebugging declined');
+            launchService.markLaunchingOnLaunch = false;
+
+            const failed = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+            assert.strictEqual(failed.outcome, 'failed');
+            assert.strictEqual(launchService.isLaunching(appHostProjectPath), false);
+
+            launchService.launchError = undefined;
+            const retried = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+            assert.strictEqual(retried.outcome, 'started');
         });
 
         test('skips the external ownership probe when the editor already owns the AppHost', async () => {

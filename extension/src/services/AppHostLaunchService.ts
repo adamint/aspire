@@ -14,7 +14,11 @@ function isAspireCommandType(value: unknown): value is AspireCommandType {
     return value === 'run' || value === 'deploy' || value === 'publish' || value === 'do';
 }
 
-function getTerminationCommand(configuration: vscode.DebugConfiguration): AspireCommandType | undefined {
+/**
+ * The Aspire command an `aspire` debug configuration will run, or `undefined` when the
+ * configuration names something this extension does not recognize.
+ */
+export function getAspireDebugConfigurationCommand(configuration: vscode.DebugConfiguration): AspireCommandType | undefined {
     // Run is the default Aspire command when omitted from launch configuration.
     if (configuration.command === undefined || configuration.command === null) {
         return 'run';
@@ -78,12 +82,20 @@ export interface AppHostOwnedSessions {
 export const appHostLifecycleLockWaitTimeoutMs = 10_000;
 
 /**
- * Upper bound on how long one lifecycle operation may hold the per-AppHost lock.
+ * How long one lifecycle operation may run before the lock cancels it.
  *
  * Generous on purpose: a real AppHost shutdown tears down containers and other
  * resources, so this is a stuck-operation backstop rather than an operation timeout.
  */
 export const appHostLifecycleLockMaxHoldMs = 120_000;
+
+/**
+ * How long a `launch.json`/F5 launch stays reserved before the reservation expires.
+ *
+ * It only has to cover the gap between VS Code resolving the debug configuration and the
+ * debug session becoming observable; after that the session itself is the evidence.
+ */
+export const externalLaunchReservationTimeoutMs = 60_000;
 
 export class AppHostLifecycleLockTimeoutError extends Error {
     constructor() {
@@ -133,7 +145,7 @@ export class AppHostLaunchService implements vscode.Disposable {
                 if (this._launchingPaths.delete(key)) {
                     this._onDidChangeLaunchingState.fire();
                 }
-                const command = getTerminationCommand(session.configuration);
+                const command = getAspireDebugConfigurationCommand(session.configuration);
                 this._onDidTerminateAppHostDebugSession.fire({
                     appHostPath,
                     command,
@@ -216,7 +228,16 @@ export class AppHostLaunchService implements vscode.Disposable {
         return compareAppHostIdentity(left, right);
     }
 
-    async runWithAppHostLifecycleLock<T>(appHostPath: string, token: vscode.CancellationToken, action: () => Promise<T>): Promise<T> {
+    /**
+     * Runs `action` as the only lifecycle operation for this AppHost.
+     *
+     * `action` receives a token that is cancelled when the caller cancels *or* when the
+     * operation outruns {@link appHostLifecycleLockMaxHoldMs}. The lock is held until
+     * `action` settles either way: releasing it while the operation is still in flight
+     * would admit a second start/stop alongside the first, which is the exact duplicate
+     * this lock exists to prevent.
+     */
+    async runWithAppHostLifecycleLock<T>(appHostPath: string, token: vscode.CancellationToken, action: (token: vscode.CancellationToken) => Promise<T>): Promise<T> {
         throwIfCancelled(token);
         const key = this.getLifecycleLockKey(appHostPath);
         const previous = this._lifecycleLocks.get(key) ?? Promise.resolve();
@@ -235,28 +256,32 @@ export class AppHostLaunchService implements vscode.Disposable {
 
         let acquired = false;
         let holdTimeout: NodeJS.Timeout | undefined;
+        const holdCancellation = new vscode.CancellationTokenSource();
+        const callerCancellation = token.onCancellationRequested(() => holdCancellation.cancel());
         try {
             await waitForPromise(previous, token, appHostLifecycleLockWaitTimeoutMs);
             acquired = true;
-            // A held lock is only ever released when its action settles, so an operation
-            // that never settles would leave this key occupied for the lifetime of the
-            // window and every later Run/Debug for this AppHost would fail with `busy`.
-            // Force the gate open after a generous bound so the lock self-heals. This can
-            // let a later operation overlap a stuck one, which is still far better than
-            // disabling the AppHost's lifecycle until the window is reloaded.
+            // An operation that outruns the bound is cancelled rather than abandoned. The
+            // lock stays with it until it settles: forcing the gate open would let the next
+            // start/stop run alongside an operation that is still tearing down containers
+            // or still driving `startDebugging`, producing the duplicate lifecycle this
+            // lock exists to prevent. Waiters give up on their own budget with `busy`,
+            // which is a truthful answer while the AppHost really is mid-operation.
             holdTimeout = setTimeout(() => {
-                extensionLogOutputChannel.warn(`AppHost lifecycle operation for ${appHostPath} exceeded ${appHostLifecycleLockMaxHoldMs}ms; releasing the lifecycle lock so later operations are not blocked.`);
-                release();
+                extensionLogOutputChannel.warn(`AppHost lifecycle operation for ${appHostPath} exceeded ${appHostLifecycleLockMaxHoldMs}ms; cancelling it. The lifecycle lock is held until it settles.`);
+                holdCancellation.cancel();
             }, appHostLifecycleLockMaxHoldMs);
             // The backstop must never be a reason for the host process to stay alive.
             holdTimeout.unref?.();
             throwIfCancelled(token);
-            return await action();
+            return await action(holdCancellation.token);
         }
         finally {
             if (holdTimeout) {
                 clearTimeout(holdTimeout);
             }
+            callerCancellation.dispose();
+            holdCancellation.dispose();
             if (acquired) {
                 release();
             }
@@ -293,6 +318,65 @@ export class AppHostLaunchService implements vscode.Disposable {
         // launching" would let a second process start against the same AppHost.
         return Array.from(this._launchingPaths).some(launchingPath =>
             compareAppHostIdentity(launchingPath, appHostPath) !== 'different');
+    }
+
+    /**
+     * Claims the launching slot for an AppHost, or reports that another launch already
+     * holds it.
+     *
+     * Synchronous on purpose. {@link runWithAppHostLifecycleLock} only serializes the
+     * launches that go through it, and a `launch.json`/F5 launch reaches
+     * `vscode.debug.startDebugging` through the debug configuration provider without ever
+     * taking that lock. Any check followed by an `await` therefore leaves a window in
+     * which both paths see "nothing is launching" for the same AppHost. Claiming the slot
+     * in a single synchronous step closes that window, because the JavaScript event loop
+     * cannot interleave the two callers inside it.
+     */
+    tryReserveLaunch(appHostPath: string): boolean {
+        if (this.isLaunching(appHostPath)) {
+            return false;
+        }
+
+        this.reserveLaunch(appHostPath);
+        return true;
+    }
+
+    /**
+     * Records that a launch is in flight without refusing it.
+     */
+    reserveLaunch(appHostPath: string): void {
+        const key = getAppHostPathComparisonKey(appHostPath);
+        if (this._launchingPaths.has(key)) {
+            return;
+        }
+
+        this._launchingPaths.add(key);
+        this._onDidChangeLaunchingState.fire();
+    }
+
+    /**
+     * Records a launch this service did not initiate - `launch.json`/F5 goes straight to
+     * `vscode.debug.startDebugging` and never reaches {@link launch}.
+     *
+     * The user pressing F5 is never refused; the point is that the launch becomes visible
+     * to {@link tryReserveLaunch} so an agent-driven start cannot slip in beside it during
+     * the window between resolving the configuration and the debug session appearing.
+     *
+     * Self-expiring, because this path has no completion signal of its own: when VS Code
+     * declines a configuration after resolving it, no session is created and no terminate
+     * event ever fires. Once the session does appear it is visible as an owned session, so
+     * the reservation has nothing left to cover.
+     */
+    reserveExternalLaunch(appHostPath: string): void {
+        const key = getAppHostPathComparisonKey(appHostPath);
+        this.reserveLaunch(appHostPath);
+        const expiry = setTimeout(() => {
+            if (this._launchingPaths.delete(key)) {
+                this._onDidChangeLaunchingState.fire();
+            }
+        }, externalLaunchReservationTimeoutMs);
+        // A reservation must never be a reason for the host process to stay alive.
+        expiry.unref?.();
     }
 
     /**
@@ -335,12 +419,12 @@ export class AppHostLaunchService implements vscode.Disposable {
      * @param doStep Optional step name for the 'do' command.
      */
     async launch(appHostPath: string, command: AspireCommandType, noDebug: boolean, doStep?: string): Promise<void> {
-        return await this.runWithAppHostLifecycleLock(appHostPath, this._lifecycleCancellationSource.token, async () => {
+        return await this.runWithAppHostLifecycleLock(appHostPath, this._lifecycleCancellationSource.token, async lockToken => {
             if (this._disposed) {
                 throw new vscode.CancellationError();
             }
 
-            await this.launchCore(appHostPath, command, noDebug, doStep, this._lifecycleCancellationSource.token);
+            await this.launchCore(appHostPath, command, noDebug, doStep, lockToken);
         });
     }
 
@@ -359,11 +443,40 @@ export class AppHostLaunchService implements vscode.Disposable {
         doStep: string | undefined,
         token: vscode.CancellationToken,
     ): Promise<void> {
-        throwIfCancelled(token);
+        // Reserve before the first await. The awaits below (telemetry, the CLI gate) run
+        // before `startDebugging`, so reserving later would leave a window in which a
+        // concurrent F5 or tool-driven start sees no launch in flight for this AppHost.
+        // The tree also shows "Starting..." from here, and every pre-start failure path
+        // clears it because VS Code emits no terminate event for a launch that never
+        // started. See https://code.visualstudio.com/api/references/vscode-api#debug.startDebugging
+        this.reserveLaunch(appHostPath);
+        // Everything between the reservation and the main try/catch below has to release
+        // the reservation itself, otherwise a cancelled or failed launch would leave this
+        // AppHost permanently reported as launching.
+        const abortIfCancelled = (): void => {
+            if (!token.isCancellationRequested) {
+                return;
+            }
+
+            this.clearLaunching(appHostPath);
+            throw new vscode.CancellationError();
+        };
+        const releaseReservationOnFailure = async <T>(work: () => Promise<T>): Promise<T> => {
+            abortIfCancelled();
+            try {
+                return await work();
+            }
+            catch (error) {
+                this.clearLaunching(appHostPath);
+                throw error;
+            }
+        };
+
         const startTime = Date.now();
         const executionSuppressed = isE2eDebugLaunchSuppressed();
-        const telemetryProperties = await getLaunchTelemetryProperties(appHostPath, command, noDebug, executionSuppressed);
-        throwIfCancelled(token);
+        const telemetryProperties = await releaseReservationOnFailure(
+            () => getLaunchTelemetryProperties(appHostPath, command, noDebug, executionSuppressed));
+        abortIfCancelled();
 
         const config: AspireExtendedDebugConfiguration = {
             type: 'aspire',
@@ -378,6 +491,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             config.step = doStep;
         }
 
+        abortIfCancelled();
         this._onDidRequestLaunch.fire({
             appHostPath,
             command,
@@ -385,7 +499,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             doStep,
             executionSuppressed,
         });
-        throwIfCancelled(token);
+        abortIfCancelled();
         if (executionSuppressed) {
             this.clearLaunching(appHostPath);
             sendTelemetryEvent('aspire/vscode/apphost/launch/result', {
@@ -398,13 +512,6 @@ export class AppHostLaunchService implements vscode.Disposable {
         }
 
         try {
-            // Track launching state before awaiting the CLI/debug checks so the tree shows
-            // "Starting..." immediately after the user invokes the command. Every pre-start
-            // failure path below clears it because VS Code will not emit a terminate event.
-            // See https://code.visualstudio.com/api/references/vscode-api#debug.startDebugging
-            this._launchingPaths.add(getAppHostPathComparisonKey(appHostPath));
-            this._onDidChangeLaunchingState.fire();
-
             const cliAvailability = await checkCliAvailableOrRedirect('debug_gate');
             if (!cliAvailability.available) {
                 throw new vscode.CancellationError();

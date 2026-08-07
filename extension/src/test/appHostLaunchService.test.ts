@@ -383,13 +383,18 @@ suite('AppHostLaunchService', () => {
         void active;
     });
 
-    test('releases a lifecycle lock that an operation never settles so later work is not blocked forever', async () => {
+    test('cancels a lifecycle operation that outruns its budget instead of releasing the lock beside it', async () => {
         const clock = sinon.useFakeTimers();
         try {
+            let observedCancellation = false;
+            let settleWedged!: () => void;
             const wedged = service.runWithAppHostLifecycleLock(
                 '/repo/AppHost/AppHost.csproj',
                 new vscode.CancellationTokenSource().token,
-                () => new Promise<void>(() => { }));
+                lockToken => new Promise<void>(resolve => {
+                    settleWedged = resolve;
+                    lockToken.onCancellationRequested(() => { observedCancellation = true; });
+                }));
             await Promise.resolve();
 
             // A caller already waiting still gives up on its own 10s budget.
@@ -401,20 +406,56 @@ suite('AppHostLaunchService', () => {
             await clock.tickAsync(appHostLifecycleLockWaitTimeoutMs);
             await queuedRejection;
 
-            // Once the hold backstop fires, the AppHost is usable again instead of being
-            // wedged for the lifetime of the window.
+            // The backstop cancels the operation. It must not hand the lock to someone
+            // else while the first operation is still in flight: that is the duplicate
+            // start/stop the lock exists to prevent.
             await clock.tickAsync(appHostLifecycleLockMaxHoldMs);
+            assert.strictEqual(observedCancellation, true, 'the backstop should cancel the operation');
+
+            const blocked = service.runWithAppHostLifecycleLock(
+                '/repo/AppHost/AppHost.csproj',
+                new vscode.CancellationTokenSource().token,
+                async () => 'blocked');
+            const blockedRejection = assert.rejects(blocked, AppHostLifecycleLockTimeoutError);
+            await clock.tickAsync(appHostLifecycleLockWaitTimeoutMs);
+            await blockedRejection;
+
+            // Once the cancelled operation actually settles, the AppHost is usable again.
+            settleWedged();
+            await wedged;
             const recovered = service.runWithAppHostLifecycleLock(
                 '/repo/AppHost/AppHost.csproj',
                 new vscode.CancellationTokenSource().token,
                 async () => 'recovered');
             await clock.tickAsync(appHostLifecycleLockWaitTimeoutMs);
             assert.strictEqual(await recovered, 'recovered');
-            void wedged;
         }
         finally {
             clock.restore();
         }
+    });
+
+    test('cancels the lifecycle operation when the caller cancels', async () => {
+        const source = new vscode.CancellationTokenSource();
+        let observedCancellation = false;
+        let signalStarted!: () => void;
+        const started = new Promise<void>(resolve => { signalStarted = resolve; });
+        const running = service.runWithAppHostLifecycleLock(
+            '/repo/AppHost/AppHost.csproj',
+            source.token,
+            lockToken => new Promise<string>(resolve => {
+                lockToken.onCancellationRequested(() => {
+                    observedCancellation = true;
+                    resolve('cancelled');
+                });
+                signalStarted();
+            }));
+        await started;
+        source.cancel();
+
+        assert.strictEqual(await running, 'cancelled');
+        assert.strictEqual(observedCancellation, true);
+        source.dispose();
     });
 
     test('matches an editor session whose program is the workspace folder through its resolved AppHost', () => {

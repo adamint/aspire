@@ -6,9 +6,20 @@ import type { CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { appHostTelemetryTargetPathConfigKey } from './AspireDebugConfigurationMetadata';
+import { getAspireDebugConfigurationCommand } from '../services/AppHostLaunchService';
+
+/**
+ * The part of `AppHostLaunchService` this provider needs to make a `launch.json`/F5
+ * launch visible to the shared launching reservation.
+ */
+export interface ExternalLaunchReservation {
+    reserveExternalLaunch(appHostPath: string): void;
+}
 
 export class AspireDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
-    constructor(private readonly _appHostDiscoveryService: AppHostDiscoveryService) {
+    constructor(
+        private readonly _appHostDiscoveryService: AppHostDiscoveryService,
+        private readonly _launchReservation: ExternalLaunchReservation) {
     }
 
     async provideDebugConfigurations(folder: vscode.WorkspaceFolder | undefined, token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration[]> {
@@ -74,6 +85,15 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
         if (typeof config.program === 'string') {
             const program = config.program;
             config.program = await this.resolveDebugTarget(program, folder);
+
+            // This is the last hook before VS Code creates the session, and it is the only
+            // point a `launch.json`/F5 launch shares with the tool-driven path, which goes
+            // through `AppHostLaunchService`. Reserving here is what stops an agent from
+            // starting a second AppHost in the window before the session exists. Only
+            // `run` reserves: publish/deploy/do sessions are not AppHost lifetimes.
+            if (typeof config.program === 'string' && getAspireDebugConfigurationCommand(aspireConfig) === 'run') {
+                this._launchReservation.reserveExternalLaunch(config.program);
+            }
 
             const telemetryTarget = await this.tryFindWorkspaceDefaultCandidate(program, folder);
             if (telemetryTarget) {

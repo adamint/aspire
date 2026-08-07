@@ -125,10 +125,16 @@ export interface AppHostLifecycleToolResult {
  */
 export interface AppHostLifecycleLaunchService {
     isLaunching(appHostPath: string): boolean;
+    /**
+     * Synchronously claims the launching slot, or reports that another launch already
+     * holds it. See `AppHostLaunchService.tryReserveLaunch`.
+     */
+    tryReserveLaunch(appHostPath: string): boolean;
+    clearLaunching(appHostPath: string): void;
     getEditorOwnedRunSessions(appHostPath: string): AppHostLifecycleOwnedSessions;
     getRunningAppHosts(token: vscode.CancellationToken): Promise<readonly AppHostLifecycleRunningAppHost[]>;
     compareAppHostIdentity(left: string | undefined, right: string | undefined): AppHostIdentityRelation;
-    runWithAppHostLifecycleLock<T>(appHostPath: string, token: vscode.CancellationToken, action: () => Promise<T>): Promise<T>;
+    runWithAppHostLifecycleLock<T>(appHostPath: string, token: vscode.CancellationToken, action: (token: vscode.CancellationToken) => Promise<T>): Promise<T>;
     launchFromLifecycleOwner(appHostPath: string, command: 'run', noDebug: boolean, token: vscode.CancellationToken): Promise<void>;
 }
 
@@ -273,11 +279,11 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 return createResult(aspireAppHostStartToolName, 'alreadyRunning', preflight.target.relativePath, 'external', requestedMode, undefined);
             }
 
-            return await this._dependencies.launchService.runWithAppHostLifecycleLock(preflight.target.absolutePath, token, async () => {
+            return await this._dependencies.launchService.runWithAppHostLifecycleLock(preflight.target.absolutePath, token, async lockToken => {
                 // Re-resolve after the confirmation and after waiting on the shared lock:
                 // the file can be deleted or replaced, and an editor command may already
                 // have launched this AppHost while this call was queued.
-                const recheck = this.preflight(aspireAppHostStartToolName, input.appHostPath, token, requestedMode);
+                const recheck = this.preflight(aspireAppHostStartToolName, input.appHostPath, lockToken, requestedMode);
                 if (recheck.rejected) {
                     return recheck.result;
                 }
@@ -312,8 +318,16 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
 
                 // Authoritative ownership check immediately before launching. This is the
                 // one that matters: everything before it could be stale by now.
-                if (await this.isRunningOutsideEditor(current.absolutePath, token)) {
+                if (await this.isRunningOutsideEditor(current.absolutePath, lockToken)) {
                     return createResult(aspireAppHostStartToolName, 'alreadyRunning', current.relativePath, 'external', requestedMode, undefined);
+                }
+
+                // Claim the launching slot in one synchronous step. The lifecycle lock only
+                // serializes callers that take it, and `launch.json`/F5 reaches
+                // `startDebugging` without it, so this claim - not the checks above - is
+                // what makes "no second AppHost" hold against a concurrent editor launch.
+                if (!this._dependencies.launchService.tryReserveLaunch(current.absolutePath)) {
+                    return createResult(aspireAppHostStartToolName, 'alreadyStarting', current.relativePath, 'editor', requestedMode, undefined);
                 }
 
                 try {
@@ -323,9 +337,13 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                         current.absolutePath,
                         'run',
                         requestedMode === 'run',
-                        token);
+                        lockToken);
                 }
                 catch (error) {
+                    // The launch path clears its own reservation once it owns it, but a
+                    // failure before that point (a disposed service, for example) would
+                    // otherwise leave this AppHost reported as launching forever.
+                    this._dependencies.launchService.clearLaunching(current.absolutePath);
                     return this.createErrorResult(aspireAppHostStartToolName, error, current.relativePath, 'editor', requestedMode, undefined);
                 }
 
@@ -356,8 +374,8 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 ? undefined
                 : await this.probeExternalOwnershipForStop(preflight.target.absolutePath, token);
 
-            return await this._dependencies.launchService.runWithAppHostLifecycleLock(preflight.target.absolutePath, token, async () => {
-                const recheck = this.preflight(aspireAppHostStopToolName, input.appHostPath, token, undefined);
+            return await this._dependencies.launchService.runWithAppHostLifecycleLock(preflight.target.absolutePath, token, async lockToken => {
+                const recheck = this.preflight(aspireAppHostStopToolName, input.appHostPath, lockToken, undefined);
                 if (recheck.rejected) {
                     return recheck.result;
                 }
@@ -380,7 +398,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
 
                 if (owned.sessions.length === 0) {
                     const externalOwnership = externalOwnershipBeforeLock
-                        ?? await this.probeExternalOwnershipForStop(current.absolutePath, token);
+                        ?? await this.probeExternalOwnershipForStop(current.absolutePath, lockToken);
                     if (externalOwnership === 'unknown') {
                         // The probe failed, so "nothing is running" would be an assertion the
                         // extension cannot make. Report the failure and let the agent retry
@@ -399,7 +417,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
 
                 const session = owned.sessions[0];
                 const effectiveMode = getSessionMode(session);
-                if (token.isCancellationRequested) {
+                if (lockToken.isCancellationRequested) {
                     return createResult(aspireAppHostStopToolName, 'cancelled', current.relativePath, 'editor', undefined, effectiveMode);
                 }
                 try {
