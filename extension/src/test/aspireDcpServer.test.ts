@@ -7,7 +7,7 @@ import * as sinon from 'sinon';
 import WebSocket from 'ws';
 import type { AspireDebugSession } from '../debugger/AspireDebugSession';
 import AspireDcpServer from '../dcp/AspireDcpServer';
-import type { AspireResourceDebugSession, NodeLaunchConfiguration, ProcessRestartedNotification, RunSessionNotification, RunSessionPayload, ServiceLogsNotification, SessionTerminatedNotification } from '../dcp/types';
+import type { AspireResourceDebugSession, NodeLaunchConfiguration, ProcessRestartedNotification, RunSessionNotification, RunSessionPayload, ServiceLogsNotification, SessionMessageNotification, SessionTerminatedNotification } from '../dcp/types';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { __setReporterForTests } from '../utils/telemetry';
 
@@ -347,7 +347,7 @@ suite('Aspire DCP server', () => {
         assert.deepStrictEqual(client.notifications, [notification]);
     });
 
-    test('requested stop forwards shutdown output until adapter completion', async () => {
+    test('requested stop is terminal on the notification stream and records later adapter completion once', async () => {
         const client = await openNotificationClient(harness);
         const createResponse = await createRunSession(harness);
         const runLocation = createResponse.headers.location;
@@ -358,6 +358,11 @@ suite('Aspire DCP server', () => {
         const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
         const requestedStopNotification = await client.waitForNotification();
         assert.strictEqual(deleteResponse.statusCode, 200);
+        assert.deepStrictEqual(requestedStopNotification, {
+            notification_type: 'sessionTerminated',
+            session_id: runId,
+        });
+        await closeNotificationClient(harness, client);
 
         const shutdownLog: ServiceLogsNotification = {
             notification_type: 'serviceLogs',
@@ -372,9 +377,17 @@ suite('Aspire DCP server', () => {
             dcp_id: harness.dcpId,
             pid: 42,
         };
+        const sessionMessage: SessionMessageNotification = {
+            notification_type: 'sessionMessage',
+            session_id: runId,
+            dcp_id: harness.dcpId,
+            level: 'info',
+            message: 'shutdown message',
+            details: [],
+        };
         adapterNotificationHandler(shutdownLog);
         adapterNotificationHandler(restarted);
-        await drainNotifications(client);
+        adapterNotificationHandler(sessionMessage);
 
         const completed: SessionTerminatedNotification = {
             notification_type: 'sessionTerminated',
@@ -383,27 +396,25 @@ suite('Aspire DCP server', () => {
             exit_code: 0,
         };
         adapterNotificationHandler(completed);
-        const afterCompletionLog: ServiceLogsNotification = {
-            ...shutdownLog,
-            log_message: 'output after completion',
+        const duplicateCompletion: SessionTerminatedNotification = {
+            ...completed,
+            exit_code: 5,
         };
-        adapterNotificationHandler(afterCompletionLog);
-        await drainNotifications(client);
+        adapterNotificationHandler(duplicateCompletion);
 
-        assert.deepStrictEqual(client.notifications, [
-            requestedStopNotification,
-            {
-                notification_type: 'serviceLogs',
-                session_id: runId,
-                is_std_err: false,
-                log_message: 'shutdown output',
-            },
-            {
-                notification_type: 'processRestarted',
-                session_id: runId,
-                pid: 42,
-            },
-        ]);
+        assert.strictEqual(getInternals(harness.dcpServer).pendingNotificationQueueByDcpId.has(harness.dcpId), false);
+        const reconnectedClient = await openNotificationClient(harness);
+        await drainNotifications(reconnectedClient);
+        assert.deepStrictEqual(reconnectedClient.notifications, []);
+
+        const runSessionEndEvents = telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end');
+        assert.strictEqual(runSessionEndEvents.length, 1);
+        assert.deepStrictEqual(runSessionEndEvents[0].properties, {
+            resource_type: 'node',
+            mode: 'Debug',
+            exit_code_bucket: 'success',
+        });
+        assert.strictEqual(runSessionEndEvents[0].measurements?.exit_code, 0);
     });
 
     test('DELETE preserves existing, completed, and unknown status semantics', async () => {
@@ -472,7 +483,7 @@ suite('Aspire DCP server', () => {
         assert.match(warn.firstCall.args[0], /stop threw synchronously/);
     });
 
-    test('DELETE accepts a replacement DCP execution from the owning debug session', async () => {
+    test('DELETE rejects a connected same-prefix replacement while the exact owner is live', async () => {
         const replacementDcpId = `${harness.dcpSessionId}-replacement`;
         const ownerClient = await openNotificationClient(harness);
         const replacementClient = await openNotificationClient(harness, replacementDcpId);
@@ -482,16 +493,59 @@ suite('Aspire DCP server', () => {
         const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
 
         const replacementResponse = await request(harness, 'DELETE', `/run_session/${runId}`, undefined, replacementDcpId);
-        assert.strictEqual(replacementResponse.statusCode, 200);
-        const notification = await replacementClient.waitForNotification();
+        assert.strictEqual(replacementResponse.statusCode, 403);
+        assert.strictEqual(harness.stopDebugging.called, false);
+        await Promise.all([drainNotifications(ownerClient), drainNotifications(replacementClient)]);
+        assert.deepStrictEqual(ownerClient.notifications, []);
+        assert.deepStrictEqual(replacementClient.notifications, []);
 
+        const ownerResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        const notification = await ownerClient.waitForNotification();
+        assert.strictEqual(ownerResponse.statusCode, 200);
         assert.strictEqual(harness.stopDebugging.calledOnce, true);
         assert.deepStrictEqual(notification, {
             notification_type: 'sessionTerminated',
             session_id: runId,
         });
-        await drainNotifications(ownerClient);
-        assert.deepStrictEqual(ownerClient.notifications, []);
+        await drainNotifications(replacementClient);
+        assert.deepStrictEqual(replacementClient.notifications, []);
+    });
+
+    test('DELETE accepts a connected same-prefix replacement after the owner disconnects', async () => {
+        const replacementDcpId = `${harness.dcpSessionId}-replacement`;
+        const ownerClient = await openNotificationClient(harness);
+        const createResponse = await createRunSession(harness);
+        const runLocation = createResponse.headers.location;
+        assert.ok(runLocation);
+        const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
+        await closeNotificationClient(harness, ownerClient);
+        const replacementClient = await openNotificationClient(harness, replacementDcpId);
+
+        const replacementResponse = await request(harness, 'DELETE', `/run_session/${runId}`, undefined, replacementDcpId);
+        const notification = await replacementClient.waitForNotification();
+
+        assert.strictEqual(replacementResponse.statusCode, 200);
+        assert.strictEqual(harness.stopDebugging.calledOnce, true);
+        assert.deepStrictEqual(notification, {
+            notification_type: 'sessionTerminated',
+            session_id: runId,
+        });
+    });
+
+    test('DELETE rejects a same-prefix replacement without a registered WebSocket', async () => {
+        const replacementDcpId = `${harness.dcpSessionId}-replacement`;
+        const ownerClient = await openNotificationClient(harness);
+        const createResponse = await createRunSession(harness);
+        const runLocation = createResponse.headers.location;
+        assert.ok(runLocation);
+        const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
+        await closeNotificationClient(harness, ownerClient);
+
+        const replacementResponse = await request(harness, 'DELETE', `/run_session/${runId}`, undefined, replacementDcpId);
+
+        assert.strictEqual(replacementResponse.statusCode, 403);
+        assert.strictEqual(harness.stopDebugging.called, false);
+        assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.get(runId)?.lifecycle, 'running');
     });
 
     test('DELETE rejects a DCP instance that does not own the run', async () => {
@@ -791,12 +845,12 @@ suite('Aspire DCP server', () => {
         const firstDeleteResponse = await request(harness, 'DELETE', `/run_session/${firstRunId}`);
         await client.waitForNotification(notification => notification.session_id === firstRunId);
 
-        const lateFirstLog: ServiceLogsNotification = {
+        const postTerminalFirstLog: ServiceLogsNotification = {
             notification_type: 'serviceLogs',
             session_id: firstRunId,
             dcp_id: harness.dcpId,
             is_std_err: false,
-            log_message: 'late first log',
+            log_message: 'post-terminal first log',
         };
         const secondLog: ServiceLogsNotification = {
             notification_type: 'serviceLogs',
@@ -815,7 +869,7 @@ suite('Aspire DCP server', () => {
             ...secondTerminated,
             session_id: firstRunId,
         };
-        firstHandler(lateFirstLog);
+        firstHandler(postTerminalFirstLog);
         firstHandler(firstTerminated);
         secondHandler(secondLog);
         secondHandler(secondTerminated);
@@ -828,12 +882,6 @@ suite('Aspire DCP server', () => {
             {
                 notification_type: 'sessionTerminated',
                 session_id: firstRunId,
-            },
-            {
-                notification_type: 'serviceLogs',
-                session_id: firstRunId,
-                is_std_err: false,
-                log_message: 'late first log',
             },
             {
                 notification_type: 'serviceLogs',

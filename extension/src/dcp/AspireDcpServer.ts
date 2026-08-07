@@ -538,11 +538,22 @@ export default class AspireDcpServer {
                 const run = runsBySession.get(runId);
                 const dcpId = req.header('microsoft-developer-dcp-instance-id') as string;
                 const ownerPrefix = run ? getDcpIdPrefix(run.ownerDcpId) : null;
-                if (run && ownerPrefix !== null && ownerPrefix === getDcpIdPrefix(dcpId)) {
-                    // DCP can restart its per-execution instance while the owning Aspire
-                    // debug session remains alive. Route all subsequent notifications to
-                    // the replacement execution that successfully claimed the run.
-                    run.ownerDcpId = dcpId;
+                const isExactOwner = run?.ownerDcpId === dcpId;
+                const ownerWebSocket = run ? wsBySession.get(run.ownerDcpId) : undefined;
+                const replacementWebSocket = wsBySession.get(dcpId);
+                const canReplaceDisconnectedOwner = run
+                    && !isExactOwner
+                    && ownerPrefix !== null
+                    && ownerPrefix === getDcpIdPrefix(dcpId)
+                    && replacementWebSocket?.readyState === WebSocket.OPEN
+                    && (!ownerWebSocket || ownerWebSocket.readyState === WebSocket.CLOSED);
+                if (run && (isExactOwner || canReplaceDisconnectedOwner)) {
+                    if (canReplaceDisconnectedOwner) {
+                        // The full DCP instance ID distinguishes concurrent executions. Transfer
+                        // ownership only after the old execution's notification socket is gone and
+                        // the same-session replacement has established its own socket.
+                        run.ownerDcpId = dcpId;
+                    }
                     if (run.lifecycle === 'stopRequested' || run.lifecycle === 'completed') {
                         res.status(200).end();
                         return;
@@ -780,7 +791,9 @@ export default class AspireDcpServer {
         } as RunSessionNotification;
 
         if (ownedNotification.notification_type !== 'sessionTerminated') {
-            if (run.lifecycle !== 'completed') {
+            // sessionTerminated is terminal on the DCP notification stream, even when
+            // debugger teardown continues asynchronously for telemetry and cleanup.
+            if (!run.terminalNotificationSent) {
                 this._sendNotification(ownedNotification);
             }
             return;
