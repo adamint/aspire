@@ -285,10 +285,18 @@ internal sealed class SdkDumpCommand : BaseCommand
 
         capabilities.Diagnostics.RemoveAll(d => d.Severity == "Info");
 
+        // This records what the caller asked to scan, not what NuGet resolved. `sdk dump` restores
+        // with a minimum-version reference (see IntegrationReference.GetRestoreVersionRange) and, in
+        // a repository checkout, may build a first-party integration from src/ instead, so a scan of
+        // 13.4.0 can legitimately report on 13.4.1. That is intentional: dump is an inspection tool,
+        // and `--format ci` — the format the checked-in *.ats.txt baselines use — carries no package
+        // versions at all, so nothing version-keyed is published from this block. `sdk export` is the
+        // command that has to make the label true, and it pins the restore and rejects checkout skew.
         var packageVersions = integrations
             .Where(i => i.IsPackageReference)
             .Select(i => new PackageInfo { Name = i.Name, Version = i.Version! })
             .ToList();
+
         if (packageVersions.Count > 0)
         {
             capabilities.Packages = packageVersions;
@@ -634,6 +642,10 @@ internal sealed class CapabilitiesInfo
 internal sealed class PackageInfo
 {
     public string Name { get; set; } = "";
+
+    // The version that was requested on the command line, not the one NuGet resolved. Restore uses a
+    // minimum-version reference, so the scanned assembly can be newer; see the comment in
+    // SdkDumpCommand.PrepareCapabilitiesForOutput for why dump keeps requested-version semantics.
     public string Version { get; set; } = "";
 }
 

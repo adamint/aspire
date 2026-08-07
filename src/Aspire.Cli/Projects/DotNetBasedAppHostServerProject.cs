@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -42,6 +43,10 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
     private readonly IEnvironment _environment;
     private readonly ILogger _logger;
     private readonly string? _logFilePath;
+
+    // Boxed so "not read yet" and "read, and there is no answer" stay distinguishable without
+    // re-parsing eng/Versions.props on every lookup.
+    private StrongBox<string?>? _repositoryVersionPrefix;
 
     public DotNetBasedAppHostServerProject(
         string appPath,
@@ -183,12 +188,25 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
             }
             else if (integration.Name.StartsWith("Aspire.Hosting", StringComparison.OrdinalIgnoreCase))
             {
-                var projectPath = GetLocalProjectSubstitution(integration.Name);
-                if (projectPath is not null && addedProjects.Add(integration.Name))
+                if (GetLocalProjectSubstitution(integration.Name) is { } substitution)
                 {
-                    projectRefGroup.Add(new XElement("ProjectReference",
-                        new XAttribute("Include", projectPath),
-                        new XElement("IsAspireProjectResource", "false")));
+                    if (addedProjects.Add(integration.Name))
+                    {
+                        projectRefGroup.Add(new XElement("ProjectReference",
+                            new XAttribute("Include", substitution.ProjectPath),
+                            new XElement("IsAspireProjectResource", "false")));
+                    }
+                }
+                else
+                {
+                    // A first-party name does not mean this checkout can supply it. Dropping the
+                    // reference here used to make a nonexistent package scan clean and export an
+                    // empty module, so fall back to restoring it like any other package.
+                    if (integration.Version is null)
+                    {
+                        throw new InvalidOperationException($"Integration '{integration.Name}' is neither a project reference nor a package reference (both Version and ProjectPath are null).");
+                    }
+                    otherPackages.Add(integration);
                 }
             }
             else
@@ -480,7 +498,7 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
     /// project actually does. Only first-party <c>Aspire.Hosting.*</c> packages live under
     /// <c>src/</c>, so a third-party integration is always restored from a feed even here.
     /// </remarks>
-    public string? GetLocalProjectSubstitution(string packageName)
+    public LocalProjectSubstitution? GetLocalProjectSubstitution(string packageName)
     {
         if (!packageName.StartsWith("Aspire.Hosting", StringComparison.OrdinalIgnoreCase))
         {
@@ -488,7 +506,70 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
         }
 
         var projectPath = Path.Combine(_repoRoot, "src", packageName, $"{packageName}.csproj");
-        return File.Exists(projectPath) ? projectPath : null;
+        return File.Exists(projectPath)
+            ? new LocalProjectSubstitution(projectPath, GetRepositoryVersionPrefix())
+            : null;
+    }
+
+    /// <summary>
+    /// Reads the <c>Major.Minor.Patch</c> this checkout builds from <c>eng/Versions.props</c>, or
+    /// <see langword="null"/> when it cannot be established.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The repository states its version line as three properties that <c>VersionPrefix</c> is
+    /// composed from:
+    /// <code>
+    /// &lt;MajorVersion&gt;13&lt;/MajorVersion&gt;
+    /// &lt;MinorVersion&gt;5&lt;/MinorVersion&gt;
+    /// &lt;PatchVersion&gt;0&lt;/PatchVersion&gt;
+    /// &lt;VersionPrefix&gt;$(MajorVersion).$(MinorVersion).$(PatchVersion)&lt;/VersionPrefix&gt;
+    /// </code>
+    /// <c>VersionPrefix</c> itself is read as the unexpanded MSBuild expression, so the three parts
+    /// are read directly. The prerelease suffix (<c>-preview.1.25366.3</c>) is assigned by Arcade at
+    /// build time and is not in the checkout, which is why only the prefix can be established here.
+    /// </para>
+    /// <para>
+    /// Any failure returns <see langword="null"/> rather than throwing: this only informs callers
+    /// that need provenance, and no other caller should lose a scanner over an unreadable file.
+    /// </para>
+    /// </remarks>
+    private string? GetRepositoryVersionPrefix()
+    {
+        if (_repositoryVersionPrefix is { } cached)
+        {
+            return cached.Value;
+        }
+
+        _repositoryVersionPrefix = ReadRepositoryVersionPrefix(_repoRoot);
+        return _repositoryVersionPrefix.Value;
+    }
+
+    private static StrongBox<string?> ReadRepositoryVersionPrefix(string repoRoot)
+    {
+        try
+        {
+            var versionsPropsPath = Path.Combine(repoRoot, "eng", "Versions.props");
+            if (!File.Exists(versionsPropsPath))
+            {
+                return new StrongBox<string?>(null);
+            }
+
+            var doc = XDocument.Load(versionsPropsPath);
+
+            var major = doc.Descendants("MajorVersion").FirstOrDefault()?.Value;
+            var minor = doc.Descendants("MinorVersion").FirstOrDefault()?.Value;
+            var patch = doc.Descendants("PatchVersion").FirstOrDefault()?.Value;
+
+            return new StrongBox<string?>(
+                string.IsNullOrWhiteSpace(major) || string.IsNullOrWhiteSpace(minor) || string.IsNullOrWhiteSpace(patch)
+                    ? null
+                    : $"{major.Trim()}.{minor.Trim()}.{patch.Trim()}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+        {
+            return new StrongBox<string?>(null);
+        }
     }
 
     /// <inheritdoc />

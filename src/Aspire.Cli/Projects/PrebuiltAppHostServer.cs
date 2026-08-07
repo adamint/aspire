@@ -280,7 +280,10 @@ internal sealed class PrebuiltAppHostServer : IAppHostServerProject, IDisposable
 
         if (packageRefs.Count > 0)
         {
-            var preview = packageRefs.Take(5).Select(static r => $"{r.Name} {r.Version}");
+            // Show the range restore was actually given, not the raw version: `--source` and
+            // exact references both pin to `[x.y.z]`, and a reader chasing a resolution failure
+            // needs to see that the request was an equality rather than a minimum.
+            var preview = packageRefs.Take(5).Select(r => $"{r.Name} {GetRestoreVersion(r, hasOverride)}");
             output.AppendError($"  packages: {string.Join(", ", preview)}{(packageRefs.Count > 5 ? $", … (+{packageRefs.Count - 5} more)" : string.Empty)}");
         }
     }

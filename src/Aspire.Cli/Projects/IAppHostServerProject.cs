@@ -148,5 +148,5 @@ internal interface IAppHostServerProject
     /// than the surface of the version that was asked for.
     /// </remarks>
     /// <param name="packageName">The package name the caller asked to restore.</param>
-    string? GetLocalProjectSubstitution(string packageName) => null;
+    LocalProjectSubstitution? GetLocalProjectSubstitution(string packageName) => null;
 }

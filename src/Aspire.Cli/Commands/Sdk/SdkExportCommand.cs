@@ -7,6 +7,7 @@ using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Projects;
 using Microsoft.Extensions.Logging;
+using Semver;
 using StreamJsonRpc;
 
 namespace Aspire.Cli.Commands.Sdk;
@@ -206,14 +207,23 @@ internal sealed class SdkExportCommand : BaseCommand
     /// requested package version.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// In repository development mode the scanner AppHost replaces every first-party
-    /// <c>Aspire.Hosting.*</c> package reference with the matching project under <c>src/</c> and
+    /// <c>Aspire.Hosting.*</c> package reference that exists under <c>src/</c> with that project and
     /// discards the requested version, so the checkout's API surface would be published under
     /// someone else's version number. That is the same stale-signature problem the core-package
     /// guard prevents, so this refuses for the same reason. Asking for the version this CLI was
     /// built from is still allowed: that is exactly what the checkout contains. The core package is
     /// already handled before any project is created, and third-party packages are never
     /// substituted, so both fall straight through.
+    /// </para>
+    /// <para>
+    /// The check cannot rest on <see cref="CliExecutionContext.IdentitySdkVersion"/> alone, because
+    /// that value is overrideable by design (<c>ASPIRE_CLI_VERSION</c>, the install sidecar) and
+    /// would let a caller name local source whatever they like. The checkout's own version line is
+    /// the independent half; the identity is still compared so a checkout on the right line cannot
+    /// publish a neighbouring build's number.
+    /// </para>
     /// </remarks>
     /// <param name="serverProject">The scanner AppHost that will restore the export.</param>
     /// <param name="packageName">The package being exported.</param>
@@ -226,21 +236,46 @@ internal sealed class SdkExportCommand : BaseCommand
             return null;
         }
 
-        if (serverProject.GetLocalProjectSubstitution(packageName) is not string localProjectPath)
+        if (serverProject.GetLocalProjectSubstitution(packageName) is not { } substitution)
         {
             return null;
+        }
+
+        var preamble = $"This CLI runs from an Aspire repository checkout, so {packageName} is built from {substitution.ProjectPath} " +
+                       $"instead of being restored from a package feed.";
+
+        if (ExecutionContext.IdentityOverridden)
+        {
+            // An ASPIRE_CLI_* override makes this run an emulation of a build the checkout is not,
+            // which is exactly the combination that cannot be checked: both the source and the label
+            // are caller-controlled. The overrides stay available for every non-substituted path.
+            return $"{preamble} This run also has an ASPIRE_CLI_* identity override in effect, so nothing can confirm the " +
+                   $"checkout really is {packageVersion}. Re-run without the override, or export {packageName} from an installed CLI.";
+        }
+
+        if (substitution.CheckoutVersionPrefix is not string checkoutPrefix)
+        {
+            return $"{preamble} This checkout does not say which version it builds (eng/Versions.props is missing or unreadable), " +
+                   $"so an export labelled {packageVersion} cannot be verified. Export {packageName} from an installed CLI instead.";
+        }
+
+        if (!SemVersion.TryParse(packageVersion, SemVersionStyles.Any, out var requestedVersion)
+            || $"{requestedVersion.Major}.{requestedVersion.Minor}.{requestedVersion.Patch}" != checkoutPrefix)
+        {
+            return $"{preamble} That checkout builds {checkoutPrefix}, but {packageVersion} was requested, and exporting it " +
+                   $"would describe the checkout's API surface under the requested version. " +
+                   $"Run the export with the {StripBuildMetadata(packageVersion)} CLI instead.";
         }
 
         var requested = StripBuildMetadata(packageVersion);
-        if (string.Equals(requested, ExecutionContext.IdentitySdkVersion, StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(requested, ExecutionContext.IdentitySdkVersion, StringComparison.OrdinalIgnoreCase))
         {
-            return null;
+            return $"{preamble} That checkout is {ExecutionContext.IdentitySdkVersion}, but {packageVersion} was requested, " +
+                   $"and exporting it would describe the checkout's API surface under the requested version. " +
+                   $"Run the export with the {requested} CLI, or request {packageName}@{ExecutionContext.IdentitySdkVersion}.";
         }
 
-        return $"This CLI runs from an Aspire repository checkout, so {packageName} is built from {localProjectPath} " +
-               $"instead of being restored from a package feed. That checkout is {ExecutionContext.IdentitySdkVersion}, " +
-               $"but {packageVersion} was requested, and exporting it would describe the checkout's API surface under the " +
-               $"requested version. Run the export with the {requested} CLI, or request {packageName}@{ExecutionContext.IdentitySdkVersion}.";
+        return null;
     }
 
     private async Task<int> ExportApiAsync(

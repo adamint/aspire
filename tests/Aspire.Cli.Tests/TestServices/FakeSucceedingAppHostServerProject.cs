@@ -17,17 +17,26 @@ internal sealed class FakeSucceedingAppHostServerProject(string appDirectoryPath
     public string AppDirectoryPath { get; } = appDirectoryPath;
 
     /// <summary>
-    /// Package names this fake reports as satisfied by a repository project, keyed to the project
-    /// path. Mirrors <see cref="DotNetBasedAppHostServerProject"/> in repository dev mode, where an
+    /// Package names this fake reports as satisfied by a repository project. Mirrors
+    /// <see cref="DotNetBasedAppHostServerProject"/> in repository dev mode, where an
     /// <c>Aspire.Hosting.*</c> package reference is replaced by the matching project under
     /// <c>src/</c> and the requested package version is discarded.
     /// </summary>
-    public Dictionary<string, string> LocalProjectSubstitutions { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, LocalProjectSubstitution> LocalProjectSubstitutions { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Registers a substitution whose checkout builds <paramref name="checkoutVersionPrefix"/>, or
+    /// whose version cannot be established when that is <see langword="null"/>.
+    /// </summary>
+    public void AddLocalProjectSubstitution(string packageName, string? checkoutVersionPrefix)
+        => LocalProjectSubstitutions[packageName] = new LocalProjectSubstitution(
+            Path.Combine("src", packageName, $"{packageName}.csproj"),
+            checkoutVersionPrefix);
 
     public string GetInstanceIdentifier() => AppDirectoryPath;
 
-    public string? GetLocalProjectSubstitution(string packageName)
-        => LocalProjectSubstitutions.TryGetValue(packageName, out var projectPath) ? projectPath : null;
+    public LocalProjectSubstitution? GetLocalProjectSubstitution(string packageName)
+        => LocalProjectSubstitutions.TryGetValue(packageName, out var substitution) ? substitution : null;
 
     public Task<AppHostServerPrepareResult> PrepareAsync(
         string sdkVersion,

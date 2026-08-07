@@ -11,6 +11,7 @@ using Aspire.Cli.Tests.Utils;
 using Aspire.Cli.Commands.Sdk;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.DependencyInjection;
+using Semver;
 using StreamJsonRpc;
 
 namespace Aspire.Cli.Tests.Commands.Sdk;
@@ -205,10 +206,9 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         var interactionService = new TestInteractionService();
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
-        appHostServerProject.LocalProjectSubstitutions["Aspire.Hosting.Redis"] =
-            Path.Combine("src", "Aspire.Hosting.Redis", "Aspire.Hosting.Redis.csproj");
         var rpcClient = new StubExportRpcClient();
         using var provider = CreateProvider(interactionService, workspace, rpcClient, appHostServerProject);
+        appHostServerProject.AddLocalProjectSubstitution("Aspire.Hosting.Redis", CheckoutVersionPrefix(provider));
 
         // A CLI running from a repository checkout builds first-party integrations from src/ and
         // throws the requested package version away, so honouring this would publish the checkout's
@@ -226,10 +226,9 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         var interactionService = new TestInteractionService();
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
-        appHostServerProject.LocalProjectSubstitutions["Aspire.Hosting.Redis"] =
-            Path.Combine("src", "Aspire.Hosting.Redis", "Aspire.Hosting.Redis.csproj");
         var rpcClient = new StubExportRpcClient();
         using var provider = CreateProvider(interactionService, workspace, rpcClient, appHostServerProject);
+        appHostServerProject.AddLocalProjectSubstitution("Aspire.Hosting.Redis", CheckoutVersionPrefix(provider));
 
         // Exporting the version the checkout actually contains is the local development case and
         // stays supported: the project reference and the label describe the same surface.
@@ -241,16 +240,93 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(("typescript", "Aspire.Hosting.Redis", checkoutVersion), rpcClient.LastExportRequest);
     }
 
+    /// <summary>
+    /// The version this CLI reports is overrideable (<c>ASPIRE_CLI_VERSION</c>, the install sidecar),
+    /// so comparing the request against it alone lets a caller name the checkout whatever they like.
+    /// The version the checkout actually builds comes from the checkout itself and settles it.
+    /// </summary>
+    [Fact]
+    public async Task SdkExportRejectsASubstitutedPackageWhenTheCheckoutBuildsADifferentVersion()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(
+            interactionService,
+            workspace,
+            rpcClient,
+            appHostServerProject,
+            identityVersion: "99.0.0");
+        appHostServerProject.AddLocalProjectSubstitution("Aspire.Hosting.Redis", "13.5.0");
+
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@99.0.0");
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.Null(rpcClient.LastExportRequest);
+        Assert.Empty(interactionService.DisplayedRawText);
+    }
+
+    /// <summary>
+    /// An <c>ASPIRE_CLI_*</c> override makes the run an emulation of a build this checkout is not.
+    /// The overrides stay useful everywhere else; they just cannot also decide the label on a
+    /// document generated from local source.
+    /// </summary>
+    [Fact]
+    public async Task SdkExportRejectsASubstitutedPackageWhenTheCliIdentityIsOverridden()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(
+            interactionService,
+            workspace,
+            rpcClient,
+            appHostServerProject,
+            identityVersion: "13.5.0",
+            identityOverridden: true);
+        appHostServerProject.AddLocalProjectSubstitution("Aspire.Hosting.Redis", "13.5.0");
+
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0");
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.Null(rpcClient.LastExportRequest);
+        Assert.Empty(interactionService.DisplayedRawText);
+    }
+
+    /// <summary>
+    /// When the checkout cannot say what it builds there is nothing left to check the label against,
+    /// and an unverifiable label is the failure mode this command exists to prevent.
+    /// </summary>
+    [Fact]
+    public async Task SdkExportRejectsASubstitutedPackageWhenTheCheckoutVersionIsUnknown()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(interactionService, workspace, rpcClient, appHostServerProject);
+        appHostServerProject.AddLocalProjectSubstitution("Aspire.Hosting.Redis", checkoutVersionPrefix: null);
+
+        var checkoutVersion = provider.GetRequiredService<Aspire.Cli.CliExecutionContext>().IdentitySdkVersion;
+
+        var exitCode = await InvokeAsync(provider, $"sdk export --language typescript --package Aspire.Hosting.Redis@{checkoutVersion}");
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.Null(rpcClient.LastExportRequest);
+        Assert.Empty(interactionService.DisplayedRawText);
+    }
+
     [Fact]
     public async Task SdkExportForAThirdPartyPackageIsUnaffectedByCheckoutSubstitution()
     {
         var interactionService = new TestInteractionService();
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
-        appHostServerProject.LocalProjectSubstitutions["Aspire.Hosting.Redis"] =
-            Path.Combine("src", "Aspire.Hosting.Redis", "Aspire.Hosting.Redis.csproj");
         var rpcClient = new StubExportRpcClient();
         using var provider = CreateProvider(interactionService, workspace, rpcClient, appHostServerProject);
+        appHostServerProject.AddLocalProjectSubstitution("Aspire.Hosting.Redis", CheckoutVersionPrefix(provider));
 
         // A Community Toolkit integration is never replaced by a repository project, so it restores
         // at the requested version even from a checkout and must keep exporting.
@@ -373,11 +449,20 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         TestInteractionService interactionService,
         TemporaryWorkspace workspace,
         IAppHostRpcClient rpcClient,
-        IAppHostServerProject appHostServerProject)
+        IAppHostServerProject appHostServerProject,
+        string? identityVersion = null,
+        bool identityOverridden = false)
     {
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
         {
             options.InteractionServiceFactory = _ => interactionService;
+            if (identityVersion is not null || identityOverridden)
+            {
+                options.CliExecutionContextFactory = _ => TestExecutionContextHelper.CreateExecutionContext(
+                    workspace.WorkspaceRoot,
+                    identityVersion: identityVersion,
+                    identityOverridden: identityOverridden);
+            }
         });
 
         services.AddSingleton<IAppHostServerProjectFactory>(new TestAppHostServerProjectFactory
@@ -390,6 +475,19 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         });
 
         return services.BuildServiceProvider();
+    }
+
+    /// <summary>
+    /// The <c>Major.Minor.Patch</c> a checkout matching this CLI's identity would build. Tests that
+    /// exercise the honest local-development path need the substitution to agree with the identity.
+    /// </summary>
+    private static string CheckoutVersionPrefix(ServiceProvider provider)
+    {
+        var identity = SemVersion.Parse(
+            provider.GetRequiredService<Aspire.Cli.CliExecutionContext>().IdentitySdkVersion,
+            SemVersionStyles.Any);
+
+        return $"{identity.Major}.{identity.Minor}.{identity.Patch}";
     }
 
     private sealed class StubExportRpcClient : FakeAppHostRpcClient

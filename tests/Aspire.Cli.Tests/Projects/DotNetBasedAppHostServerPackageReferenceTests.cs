@@ -1,8 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using System.Diagnostics;
-using System.IO.Compression;
 using System.Xml.Linq;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Projects;
@@ -69,9 +67,9 @@ public class DotNetBasedAppHostServerPackageReferenceTests(ITestOutputHelper out
 
         // The template always references these two without a version, so they have to resolve
         // through the central list the way they do in the real repo.
-        CreateStubPackage(feedPath, "StreamJsonRpc", "1.0.0");
-        CreateStubPackage(feedPath, "Google.Protobuf", "1.0.0");
-        CreateStubPackage(feedPath, IntegrationPackage, "13.4.0");
+        OfflineNuGetFeed.CreateStubPackage(feedPath, "StreamJsonRpc", "1.0.0");
+        OfflineNuGetFeed.CreateStubPackage(feedPath, "Google.Protobuf", "1.0.0");
+        OfflineNuGetFeed.CreateStubPackage(feedPath, IntegrationPackage, "13.4.0");
 
         // Mirrors the real repo: a central list that pins first-party dependencies but knows nothing
         // about a Community Toolkit integration.
@@ -89,7 +87,7 @@ public class DotNetBasedAppHostServerPackageReferenceTests(ITestOutputHelper out
         await project.CreateProjectFilesAsync(
             [IntegrationReference.FromPackage(IntegrationPackage, "13.4.0")]);
 
-        var (exitCode, output) = await RestoreAsync(
+        var (exitCode, output) = await OfflineNuGetFeed.RestoreAsync(
             Path.Combine(projectModelPath, "AppHostServer.csproj"),
             feedPath);
 
@@ -148,13 +146,79 @@ public class DotNetBasedAppHostServerPackageReferenceTests(ITestOutputHelper out
 
         var project = CreateProject(appPath, Path.Combine(appPath, ".aspire_server"));
 
-        Assert.Equal(redisProjectPath, project.GetLocalProjectSubstitution("Aspire.Hosting.Redis"));
+        Assert.Equal(redisProjectPath, project.GetLocalProjectSubstitution("Aspire.Hosting.Redis")?.ProjectPath);
 
         // No src/Aspire.Hosting.Qdrant in this checkout, so the package really is restored.
         Assert.Null(project.GetLocalProjectSubstitution("Aspire.Hosting.Qdrant"));
 
         // Third-party integrations are never substituted, even when a same-named folder exists.
         Assert.Null(project.GetLocalProjectSubstitution("CommunityToolkit.Aspire.Hosting.ActiveMQ"));
+    }
+
+    /// <summary>
+    /// The version a checkout builds has to come from the checkout, because the version this CLI
+    /// reports is overrideable. <c>eng/Versions.props</c> is where the repository states it.
+    /// </summary>
+    [Fact]
+    public void GetLocalProjectSubstitution_ReportsTheVersionTheCheckoutBuilds()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appPath = workspace.WorkspaceRoot.FullName;
+
+        var redisProjectPath = Path.Combine(appPath, "src", "Aspire.Hosting.Redis", "Aspire.Hosting.Redis.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(redisProjectPath)!);
+        File.WriteAllText(redisProjectPath, "<Project />");
+
+        var project = CreateProject(appPath, Path.Combine(appPath, ".aspire_server"));
+
+        // No eng/Versions.props yet, so the checkout cannot say what it builds and callers that
+        // publish version-keyed artifacts have to treat the substitution as unverifiable.
+        Assert.Null(project.GetLocalProjectSubstitution("Aspire.Hosting.Redis")?.CheckoutVersionPrefix);
+
+        Directory.CreateDirectory(Path.Combine(appPath, "eng"));
+        File.WriteAllText(Path.Combine(appPath, "eng", "Versions.props"), """
+            <Project>
+              <PropertyGroup>
+                <MajorVersion>13</MajorVersion>
+                <MinorVersion>5</MinorVersion>
+                <PatchVersion>0</PatchVersion>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        var withVersions = CreateProject(appPath, Path.Combine(appPath, ".aspire_server_versioned"));
+
+        Assert.Equal("13.5.0", withVersions.GetLocalProjectSubstitution("Aspire.Hosting.Redis")?.CheckoutVersionPrefix);
+    }
+
+    /// <summary>
+    /// A first-party package name does not mean the checkout can supply it. Without a matching
+    /// project under <c>src/</c> the reference used to be dropped from the generated project
+    /// entirely, so a nonexistent package scanned clean and exported an empty module.
+    /// </summary>
+    [Fact]
+    public async Task CreateProjectFiles_FallsBackToAPackageReferenceWhenTheLocalProjectIsMissing()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appPath = workspace.WorkspaceRoot.FullName;
+        var projectModelPath = Path.Combine(appPath, ".aspire_server");
+
+        var project = CreateProject(appPath, projectModelPath);
+
+        await project.CreateProjectFilesAsync(
+        [
+            IntegrationReference.FromExactPackage("Aspire.Hosting.NotInThisCheckout", "13.4.0"),
+            IntegrationReference.FromPackage("Aspire.Hosting.AlsoMissing", "13.4.0")
+        ]);
+
+        var document = XDocument.Load(Path.Combine(projectModelPath, "AppHostServer.csproj"));
+        var references = document
+            .Descendants("PackageReference")
+            .ToDictionary(element => element.Attribute("Include")!.Value, element => element.Attribute("VersionOverride")?.Value);
+
+        Assert.Equal("[13.4.0]", references["Aspire.Hosting.NotInThisCheckout"]);
+        Assert.Equal("13.4.0", references["Aspire.Hosting.AlsoMissing"]);
+        Assert.Empty(document.Descendants("ProjectReference"));
     }
 
     /// <summary>
@@ -172,9 +236,9 @@ public class DotNetBasedAppHostServerPackageReferenceTests(ITestOutputHelper out
 
         const string IntegrationPackage = "Contoso.Aspire.Hosting.ExactVersionProbe";
 
-        CreateStubPackage(feedPath, "StreamJsonRpc", "1.0.0");
-        CreateStubPackage(feedPath, "Google.Protobuf", "1.0.0");
-        CreateStubPackage(feedPath, IntegrationPackage, "13.4.1");
+        OfflineNuGetFeed.CreateStubPackage(feedPath, "StreamJsonRpc", "1.0.0");
+        OfflineNuGetFeed.CreateStubPackage(feedPath, "Google.Protobuf", "1.0.0");
+        OfflineNuGetFeed.CreateStubPackage(feedPath, IntegrationPackage, "13.4.1");
 
         await File.WriteAllTextAsync(Path.Combine(appPath, "Directory.Packages.props"), """
             <Project>
@@ -189,7 +253,7 @@ public class DotNetBasedAppHostServerPackageReferenceTests(ITestOutputHelper out
         await CreateProject(appPath, floatingModelPath)
             .CreateProjectFilesAsync([IntegrationReference.FromPackage(IntegrationPackage, "13.4.0")]);
 
-        var (floatingExitCode, floatingOutput) = await RestoreAsync(
+        var (floatingExitCode, floatingOutput) = await OfflineNuGetFeed.RestoreAsync(
             Path.Combine(floatingModelPath, "AppHostServer.csproj"),
             feedPath);
         outputHelper.WriteLine(floatingOutput);
@@ -208,7 +272,7 @@ public class DotNetBasedAppHostServerPackageReferenceTests(ITestOutputHelper out
         await CreateProject(appPath, exactModelPath)
             .CreateProjectFilesAsync([IntegrationReference.FromExactPackage(IntegrationPackage, "13.4.0")]);
 
-        var (exactExitCode, exactOutput) = await RestoreAsync(
+        var (exactExitCode, exactOutput) = await OfflineNuGetFeed.RestoreAsync(
             Path.Combine(exactModelPath, "AppHostServer.csproj"),
             feedPath);
         outputHelper.WriteLine(exactOutput);
@@ -230,59 +294,4 @@ public class DotNetBasedAppHostServerPackageReferenceTests(ITestOutputHelper out
             new TestEnvironment(),
             NullLogger<DotNetBasedAppHostServerProject>.Instance,
             projectModelPath);
-
-    private static void CreateStubPackage(string feedPath, string id, string version)
-    {
-        var stagingPath = Path.Combine(feedPath, $".staging-{id}");
-        Directory.CreateDirectory(Path.Combine(stagingPath, "lib", "net10.0"));
-
-        File.WriteAllText(Path.Combine(stagingPath, $"{id}.nuspec"), $"""
-            <?xml version="1.0" encoding="utf-8"?>
-            <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
-              <metadata>
-                <id>{id}</id>
-                <version>{version}</version>
-                <description>Stub package for restore tests.</description>
-                <authors>Aspire</authors>
-              </metadata>
-            </package>
-            """);
-
-        File.WriteAllText(Path.Combine(stagingPath, "[Content_Types].xml"), """
-            <?xml version="1.0" encoding="utf-8"?>
-            <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-              <Default Extension="nuspec" ContentType="text/xml" />
-              <Default Extension="dll" ContentType="application/octet-stream" />
-              <Default Extension="xml" ContentType="text/xml" />
-            </Types>
-            """);
-
-        File.WriteAllBytes(Path.Combine(stagingPath, "lib", "net10.0", $"{id}.dll"), []);
-
-        ZipFile.CreateFromDirectory(stagingPath, Path.Combine(feedPath, $"{id}.{version}.nupkg"));
-        Directory.Delete(stagingPath, recursive: true);
-    }
-
-    private static async Task<(int ExitCode, string Output)> RestoreAsync(string projectPath, string feedPath)
-    {
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            WorkingDirectory = Path.GetDirectoryName(projectPath)!
-        };
-
-        startInfo.ArgumentList.Add("restore");
-        startInfo.ArgumentList.Add(projectPath);
-        // Replaces every configured source so the restore cannot reach the network.
-        startInfo.ArgumentList.Add("--source");
-        startInfo.ArgumentList.Add(feedPath);
-
-        using var process = Process.Start(startInfo)!;
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderrTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-
-        return (process.ExitCode, await stdoutTask + await stderrTask);
-    }
 }
