@@ -58,4 +58,23 @@ suite('E2E shard matrix', () => {
             specFiles,
             'The spec values in extension-e2e-tests.yml must be exactly the compiled paths of the .e2e.test.ts files under src/test-e2e.');
     });
+
+    test('covers the resource debugger shard on Linux and Windows', () => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+        // Rows pair a platform with the shard name, so the platform coverage of one shard can only
+        // be read from the two together:
+        //       - name: Linux
+        //         shardName: resource-debugger
+        //         spec: out/test-e2e/test-e2e/resourceDebugger.e2e.test.js
+        const resourceDebuggerPlatforms = [...workflow.matchAll(/-\s*name:\s*(\S+)\s*\n\s*shardName:\s*(\S+)/g)]
+            .filter(match => match[2] === 'resource-debugger')
+            .map(match => match[1]);
+
+        // Resource debugging attaches a second debug adapter underneath the AppHost session, and
+        // tearing that process tree down is the part that differs between the platforms: POSIX
+        // signals a process group, Windows has no equivalent and the extension walks the tree.
+        // A single-platform row would leave exactly the half this shard exists to prove unexercised,
+        // and the set-equality test above cannot catch it because the spec would still be listed.
+        assert.deepStrictEqual(resourceDebuggerPlatforms, ['Linux', 'Windows']);
+    });
 });

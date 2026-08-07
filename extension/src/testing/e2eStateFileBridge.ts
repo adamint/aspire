@@ -580,9 +580,9 @@ async function executeE2eControlCommand(
         cleanupRun(runId);
       }
     }
-    case 'proveMauiResourceDebugging': {
+    case 'proveResourceDebugging': {
       markStarted();
-      return await proveMauiResourceDebugging(command, aspireContext, appHostTreeProvider, terminalProvider);
+      return await proveResourceDebugging(command, aspireContext, appHostTreeProvider, terminalProvider);
     }
     case 'getExtensionPackageJson': {
       markStarted();
@@ -743,7 +743,58 @@ function getE2eEnvVars(value: unknown): EnvVar[] {
   return value.map(item => ({ name: item.name, value: item.value }));
 }
 
-type MauiResourceDebugProofCommand = Extract<AspireExtensionE2EControlCommand, { name: 'proveMauiResourceDebugging' }>;
+type ResourceDebugProofCommand = Extract<AspireExtensionE2EControlCommand, { name: 'proveResourceDebugging' }>;
+
+/**
+ * The validated, language-neutral shape of a resource debug proof request.
+ *
+ * The path fields are still raw here: workspace containment is enforced by the handler because it
+ * needs `vscode.workspace`, while everything below is pure so the contract stays unit testable.
+ */
+export interface ResourceDebugProofRequest {
+  proof: string;
+  appHostPath: string;
+  resourceName: string;
+  sourcePath: string;
+  breakpointLine: number;
+  timeoutMs: number;
+  pauseOnBreakpointMs: number;
+  expectedResourceDebugSessionType?: string;
+  stopDebuggingOnCompletion: boolean;
+  appHostStartupTimeoutMs: number;
+  resourceStartTimeoutMs: number;
+  breakpointTimeoutMs: number;
+}
+
+export function getResourceDebugProofRequest(command: ResourceDebugProofCommand): ResourceDebugProofRequest {
+  if (command.name !== 'proveResourceDebugging') {
+    throw new Error(`Unsupported Aspire resource debug proof command: ${getUnknownCommandName(command)}`);
+  }
+
+  const timeoutMs = getE2ePositiveInteger(command.timeoutMs, 300000, 'timeoutMs');
+
+  return {
+    proof: 'aspire-resource-debug-breakpoint-hit',
+    appHostPath: getE2eRequiredString(command.appHostPath, 'Aspire extension E2E resource debug proof requires appHostPath.'),
+    resourceName: getE2eRequiredString(command.resourceName, 'Aspire extension E2E resource debug proof requires resourceName.'),
+    sourcePath: getE2eRequiredString(command.sourcePath, 'Aspire extension E2E resource debug proof requires sourcePath.'),
+    breakpointLine: getE2eBreakpointLine(command.breakpointLine),
+    timeoutMs,
+    pauseOnBreakpointMs: getE2ePositiveInteger(command.pauseOnBreakpointMs, 0, 'pauseOnBreakpointMs'),
+    expectedResourceDebugSessionType: command.expectedResourceDebugSessionType !== undefined
+      ? getE2eRequiredString(command.expectedResourceDebugSessionType, 'Aspire extension E2E resource debug proof expectedResourceDebugSessionType must be a non-empty string when provided.')
+      : undefined,
+    // Leaving the session running is opt-in so callers that only want to prove the breakpoint hit
+    // do not have to remember to tear it down. A teardown test flips this to false because it needs
+    // the debuggee alive when the proof returns so it can observe the stop itself.
+    stopDebuggingOnCompletion: command.stopDebuggingOnCompletion !== false,
+    // Each phase gets its own budget rather than sharing one deadline, so a slow AppHost start
+    // cannot silently starve the breakpoint wait.
+    appHostStartupTimeoutMs: Math.min(timeoutMs, 180000),
+    resourceStartTimeoutMs: Math.min(timeoutMs, 180000),
+    breakpointTimeoutMs: Math.min(timeoutMs, 240000),
+  };
+}
 
 interface DebugSessionSnapshot {
   id: string;
@@ -775,25 +826,56 @@ interface DebugAdapterOutputEvent {
   output: string;
 }
 
-interface DebugAdapterMessageSummary {
+export interface DebugAdapterMessageSummary {
   sessionId: string;
   sessionType: string;
   sessionName: string;
   command?: string;
+  /**
+   * `seq` on a request and `requestSeq` (the protocol's `request_seq`) on a response, so a response
+   * can be tied back to the exact request that produced it. Several debug sessions are alive at once
+   * during a proof - the synthetic Aspire parent, the AppHost session, and one session per debugged
+   * resource - and they all issue the same commands, so a response is only meaningful together with
+   * its session and sequence number.
+   * See https://microsoft.github.io/debug-adapter-protocol/specification#Base_Protocol_Response
+   */
+  seq?: number;
+  requestSeq?: number;
   success?: boolean;
   body?: unknown;
 }
 
-async function proveMauiResourceDebugging(command: MauiResourceDebugProofCommand, aspireContext: AspireExtensionContext, appHostTreeProvider: AspireAppHostTreeProvider, terminalProvider: AspireTerminalProvider): Promise<unknown> {
-  const appHostPath = getE2eWorkspacePath(command.appHostPath);
-  const sourcePath = getE2eWorkspacePath(command.sourcePath);
-  const resourceName = getE2eRequiredString(command.resourceName, 'Aspire extension E2E MAUI proof requires resourceName.');
-  const breakpointLine = getE2eBreakpointLine(command.breakpointLine);
-  const timeoutMs = getE2ePositiveInteger(command.timeoutMs, 300000, 'timeoutMs');
-  const pauseOnBreakpointMs = getE2ePositiveInteger(command.pauseOnBreakpointMs, 0, 'pauseOnBreakpointMs');
-  const appHostStartupTimeoutMs = Math.min(timeoutMs, 180000);
-  const resourceStartTimeoutMs = Math.min(timeoutMs, 180000);
-  const breakpointTimeoutMs = Math.min(timeoutMs, 240000);
+/**
+ * The debug adapter `process` event, which reports the operating-system process the adapter is
+ * debugging:
+ *   { "type": "event", "event": "process",
+ *     "body": { "name": "node app.js", "systemProcessId": 4711, "isLocalProcess": true, "startMethod": "launch" } }
+ * Every body field except `name` is optional, so an adapter may report a name and nothing else.
+ * See https://microsoft.github.io/debug-adapter-protocol/specification#Events_Process
+ *
+ * js-debug (`pwa-node`, `pwa-chrome`, `pwa-msedge`) is not such an adapter: it only sends `process`
+ * from its standalone DAP server entry points (`src/vsDebugServer.ts`, `src/flatSessionLauncher.ts`),
+ * where it repurposes the event to rename the session, and it never populates `systemProcessId`.
+ * Running inside VS Code, which is how the extension launches every JavaScript resource, js-debug
+ * sends no `process` event at all. That is why the Node proof reads the debuggee's pid from the
+ * resource's own stdout instead (see resourceDebugger.e2e.test.ts). The event is still captured here
+ * because adapters used by other languages do send it - for example `coreclr` and `debugpy` - so a
+ * future language proof can use it and, in the meantime, it is useful failure diagnostics.
+ */
+interface DebugAdapterProcessEvent {
+  sessionId: string;
+  sessionType: string;
+  sessionName: string;
+  name?: string;
+  systemProcessId?: number;
+  startMethod?: string;
+}
+
+async function proveResourceDebugging(command: ResourceDebugProofCommand, aspireContext: AspireExtensionContext, appHostTreeProvider: AspireAppHostTreeProvider, terminalProvider: AspireTerminalProvider): Promise<unknown> {
+  const request = getResourceDebugProofRequest(command);
+  const appHostPath = getE2eWorkspacePath(request.appHostPath);
+  const sourcePath = getE2eWorkspacePath(request.sourcePath);
+  const { resourceName, breakpointLine, pauseOnBreakpointMs, appHostStartupTimeoutMs, resourceStartTimeoutMs, breakpointTimeoutMs } = request;
   const sourceText = fs.readFileSync(sourcePath, 'utf8');
   const breakpointText = sourceText.split(/\r?\n/)[breakpointLine]?.trim();
 
@@ -803,8 +885,11 @@ async function proveMauiResourceDebugging(command: MauiResourceDebugProofCommand
   const debugAdapterResponses: DebugAdapterMessageSummary[] = [];
   const stoppedEvents: DebugAdapterStoppedEvent[] = [];
   const outputEvents: DebugAdapterOutputEvent[] = [];
+  const outputHeadEvents: DebugAdapterOutputEvent[] = [];
+  const processEvents: DebugAdapterProcessEvent[] = [];
   const breakpointRequests: DebugAdapterMessageSummary[] = [];
   const breakpointResponses: DebugAdapterMessageSummary[] = [];
+  let observedOutputEventCount = 0;
   let resourceCommandResult: Awaited<ReturnType<typeof runAspireCliForE2E>> | undefined;
 
   const sessionSubscription = vscode.debug.onDidStartDebugSession(session => {
@@ -829,6 +914,7 @@ async function proveMauiResourceDebugging(command: MauiResourceDebugProofCommand
               sessionType: session.type,
               sessionName: session.name,
               command: message.command,
+              seq: message.seq,
               body: redactDebugAdapterArguments(message.arguments),
             });
           }
@@ -840,6 +926,7 @@ async function proveMauiResourceDebugging(command: MauiResourceDebugProofCommand
               sessionType: session.type,
               sessionName: session.name,
               command: message.command,
+              requestSeq: message.request_seq,
               success: message.success,
               body: redactDebugAdapterArguments(message),
             });
@@ -850,6 +937,7 @@ async function proveMauiResourceDebugging(command: MauiResourceDebugProofCommand
               sessionType: session.type,
               sessionName: session.name,
               command: message.command,
+              requestSeq: message.request_seq,
               success: message.success,
               body: redactDebugAdapterArguments(message.body),
             });
@@ -864,14 +952,36 @@ async function proveMauiResourceDebugging(command: MauiResourceDebugProofCommand
             });
           }
           if (message?.type === 'event' && message.event === 'output') {
-            outputEvents.push({
+            const outputEvent = {
               sessionId: session.id,
               sessionType: session.type,
               output: String(message.body?.output ?? ''),
-            });
+            };
+            // The debuggee's own first lines identify it - the Node fixture prints its pid and its
+            // child's pid there - and js-debug is the reason that matters: with `outputCapture: 'std'`
+            // it pipes the debuggee's stdio over DAP instead of sending a `process` event, so the head
+            // is kept separately from the ring buffer that holds only the most recent lines.
+            if (outputHeadEvents.length < 20) {
+              outputHeadEvents.push(outputEvent);
+            }
+
+            // Counted separately because outputEvents is a bounded ring buffer: once it is full its
+            // length stops growing, so its length cannot be used to detect newly arrived output.
+            observedOutputEventCount++;
+            outputEvents.push(outputEvent);
             if (outputEvents.length > 200) {
               outputEvents.shift();
             }
+          }
+          if (message?.type === 'event' && message.event === 'process') {
+            processEvents.push({
+              sessionId: session.id,
+              sessionType: session.type,
+              sessionName: session.name,
+              name: message.body?.name,
+              systemProcessId: message.body?.systemProcessId,
+              startMethod: message.body?.startMethod,
+            });
           }
         }
       };
@@ -905,7 +1015,7 @@ async function proveMauiResourceDebugging(command: MauiResourceDebugProofCommand
     let stoppedEvent: { stoppedEvent: DebugAdapterStoppedEvent; stackTrace: { stackFrames?: Array<{ source?: { path?: string }; line?: number }> }; matchingFrame: { source?: { path?: string }; line?: number } };
     try {
       stoppedEvent = await waitForE2eValue(
-        `MAUI breakpoint in ${sourcePath}:${breakpointLine + 1}`,
+        `resource breakpoint in ${sourcePath}:${breakpointLine + 1}`,
         breakpointTimeoutMs,
         async () => {
           for (const stoppedEvent of stoppedEvents) {
@@ -950,20 +1060,44 @@ ${JSON.stringify({
         breakpointRequests,
         breakpointResponses,
         stoppedEvents,
+        processEvents,
+        outputHead: outputHeadEvents,
         outputSample: outputEvents.slice(-40),
       }, undefined, 2)}`);
     }
 
     if (stoppedEvent.matchingFrame.line !== breakpointLine + 1) {
-      throw new Error(`Expected MAUI breakpoint line ${breakpointLine + 1}, got ${stoppedEvent.matchingFrame.line}.`);
+      throw new Error(`Expected resource breakpoint line ${breakpointLine + 1}, got ${stoppedEvent.matchingFrame.line}.`);
+    }
+
+    const resourceDebugSession = debugSessions.find(session => session.id === stoppedEvent.stoppedEvent.sessionId);
+    if (request.expectedResourceDebugSessionType !== undefined && resourceDebugSession?.type !== request.expectedResourceDebugSessionType) {
+      throw new Error(`Expected the stopped resource debug session to use debug type '${request.expectedResourceDebugSessionType}', got '${resourceDebugSession?.type ?? '<unknown>'}'.`);
     }
 
     if (pauseOnBreakpointMs > 0) {
       await delay(pauseOnBreakpointMs);
     }
 
+    if (!request.stopDebuggingOnCompletion) {
+      // A caller that keeps the session alive goes on to stop debugging itself, and the Aspire stop
+      // path cannot complete while the debuggee is suspended: the resource process never observes
+      // the shutdown request, so the child session — and with it the Aspire parent — stays alive.
+      // Resuming first matches what a user does (hit the breakpoint, continue, then stop) and keeps
+      // the proof from handing back a session that can only be torn down by force.
+      await resumeDebuggeeAfterBreakpoint(
+        sessionById.get(stoppedEvent.stoppedEvent.sessionId),
+        stoppedEvent.stoppedEvent.threadId!,
+        breakpoint,
+        breakpointRequests,
+        breakpointResponses,
+        stoppedEvents,
+        () => observedOutputEventCount,
+        Math.min(request.timeoutMs, 60000));
+    }
+
     return {
-      proof: 'aspire-maui-resource-debug-breakpoint-hit',
+      proof: request.proof,
       appHostPath,
       resourceName,
       timeouts: {
@@ -978,21 +1112,151 @@ ${JSON.stringify({
       },
       resourceCommandResult,
       debugSessions,
+      // The AppHost session is the 'aspire' debug session the extension starts for this AppHost. The
+      // resource session is whichever session actually stopped on the breakpoint. Both are reported
+      // so a caller can assert the resource debugger is a separate session rather than the AppHost's.
+      appHostDebugSession: debugSessions.find(session =>
+        session.type === 'aspire' &&
+        typeof session.configuration.program === 'string' &&
+        isSamePath(session.configuration.program, appHostPath)),
+      resourceDebugSession,
       launchRequests,
       debugAdapterResponses,
       breakpointRequests,
       breakpointResponses,
       stoppedEvents,
+      processEvents,
       matchingStackFrame: stoppedEvent.matchingFrame,
       topStackFrame: stoppedEvent.stackTrace?.stackFrames?.[0],
+      outputHead: outputHeadEvents,
       outputSample: outputEvents.slice(-40),
     };
   } finally {
     vscode.debug.removeBreakpoints([breakpoint]);
     sessionSubscription.dispose();
     trackerRegistration.dispose();
-    await vscode.debug.stopDebugging();
+    if (request.stopDebuggingOnCompletion) {
+      await vscode.debug.stopDebugging();
+    }
   }
+}
+
+/**
+ * Clears the proof breakpoint and lets the debuggee run again.
+ *
+ * The breakpoint is removed before continuing, because continuing while it is still installed would
+ * immediately re-suspend the debuggee the next time the marked line runs. Removal is confirmed by
+ * waiting for the adapter's own successful `setBreakpoints` response, correlated by debug session and
+ * request sequence number: several sessions are alive at once during a proof (the synthetic Aspire
+ * parent, the AppHost session, and the resource session), all of them are tracked, and all of them
+ * exchange `setBreakpoints` traffic, so accepting the next response from any of them would let this
+ * continue before the resource's own adapter has dropped the breakpoint.
+ *
+ * The debuggee is then only considered running once new adapter output arrives, so a caller cannot
+ * proceed to stop debugging while the process is still suspended. The output is deliberately not
+ * filtered by session: js-debug launches the process in the parent session and pipes its stdio from
+ * there under `outputCapture: 'std'`, while the stop is reported by the child session that attaches
+ * to the target, so the debuggee's output does not carry the stopped session's id.
+ */
+async function resumeDebuggeeAfterBreakpoint(
+  session: vscode.DebugSession | undefined,
+  threadId: number,
+  breakpoint: vscode.SourceBreakpoint,
+  breakpointRequests: readonly DebugAdapterMessageSummary[],
+  breakpointResponses: readonly DebugAdapterMessageSummary[],
+  stoppedEvents: readonly DebugAdapterStoppedEvent[],
+  getObservedOutputEventCount: () => number,
+  timeoutMs: number): Promise<void> {
+  if (!session) {
+    throw new Error('Aspire extension E2E resource debug proof could not resolve the stopped debug session to resume it.');
+  }
+
+  const breakpointSourcePath = breakpoint.location.uri.fsPath;
+  const breakpointRequestsBefore = breakpointRequests.length;
+  vscode.debug.removeBreakpoints([breakpoint]);
+
+  // VS Code re-sends the whole breakpoint list for a source whenever it changes, so the removal
+  // reaches the adapter as a `setBreakpoints` request naming that source. Only requests observed
+  // after removeBreakpoints returned are considered, and the request has to carry a sequence number
+  // because the acknowledgement below is matched against it.
+  const removalRequest = await waitForE2eValue(
+    `the ${session.type} adapter to receive the sequenced breakpoint removal for ${breakpointSourcePath}`,
+    timeoutMs,
+    () => findBreakpointRemovalRequest(breakpointRequests.slice(breakpointRequestsBefore), session.id, breakpointSourcePath));
+
+  await waitForE2eValue(
+    `the ${session.type} adapter to acknowledge breakpoint removal (request seq ${removalRequest.seq})`,
+    timeoutMs,
+    () => isBreakpointRemovalAcknowledged(breakpointResponses, session.id, removalRequest.seq!) ? true : undefined);
+
+  const stoppedEventsBefore = stoppedEvents.length;
+  const outputEventsBefore = getObservedOutputEventCount();
+  await session.customRequest('continue', { threadId });
+  const resumed = await waitForE2eValue<{ reSuspend?: DebugAdapterStoppedEvent }>(
+    'the resumed resource process to produce output',
+    timeoutMs,
+    () => {
+      // A re-suspend means the breakpoint outlived its removal, which is exactly what the correlation
+      // above is there to prevent. It is reported instead of waited out so the failure names its cause
+      // rather than surfacing as an output timeout.
+      const reSuspend = stoppedEvents.slice(stoppedEventsBefore).find(event => event.sessionId === session.id);
+      if (reSuspend) {
+        return { reSuspend };
+      }
+
+      return getObservedOutputEventCount() > outputEventsBefore ? {} : undefined;
+    });
+  if (resumed.reSuspend) {
+    throw new Error(`The ${session.type} resource debug session suspended again (reason '${resumed.reSuspend.reason ?? '<unknown>'}') after the proof breakpoint was removed and the debuggee was continued.`);
+  }
+}
+
+/**
+ * Finds the `setBreakpoints` request that carries the proof breakpoint's removal.
+ *
+ * `requestsSinceRemoval` must already be limited to requests observed after `removeBreakpoints` was
+ * called; this narrows those to the debug session being resumed and to the source the breakpoint was
+ * set in, and requires a sequence number so the response can be matched to this exact request.
+ */
+export function findBreakpointRemovalRequest(
+  requestsSinceRemoval: readonly DebugAdapterMessageSummary[],
+  sessionId: string,
+  breakpointSourcePath: string): DebugAdapterMessageSummary | undefined {
+  return requestsSinceRemoval.find(request =>
+    request.sessionId === sessionId &&
+    request.command === 'setBreakpoints' &&
+    typeof request.seq === 'number' &&
+    isSetBreakpointsRequestForSource(request.body, breakpointSourcePath));
+}
+
+/** Whether the adapter answered the given `setBreakpoints` request on the given session successfully. */
+export function isBreakpointRemovalAcknowledged(
+  responses: readonly DebugAdapterMessageSummary[],
+  sessionId: string,
+  requestSeq: number): boolean {
+  return responses.some(response =>
+    response.sessionId === sessionId &&
+    response.command === 'setBreakpoints' &&
+    response.requestSeq === requestSeq &&
+    response.success === true);
+}
+
+/**
+ * Whether a captured `setBreakpoints` request targets the given source file. The captured body is the
+ * request's arguments:
+ *   { "source": { "path": "/workspace/AspireE2E.NodeApp/app.js", "name": "app.js" },
+ *     "lines": [14], "breakpoints": [{ "line": 14 }], "sourceModified": false }
+ * Only the source is matched, not the remaining breakpoint lines, because the protocol's line
+ * numbering depends on the client's `linesStartAt1` handshake with each adapter.
+ * See https://microsoft.github.io/debug-adapter-protocol/specification#Requests_SetBreakpoints
+ */
+function isSetBreakpointsRequestForSource(requestBody: unknown, breakpointSourcePath: string): boolean {
+  if (!requestBody || typeof requestBody !== 'object') {
+    return false;
+  }
+
+  const source = (requestBody as { source?: { path?: unknown } }).source;
+  return typeof source?.path === 'string' && isSamePath(source.path, breakpointSourcePath);
 }
 
 function toDebugSessionSnapshot(session: vscode.DebugSession): DebugSessionSnapshot {
@@ -1156,7 +1420,7 @@ function getE2ePositiveInteger(value: unknown, defaultValue: number, propertyNam
   }
 
   if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
-    throw new Error(`Aspire extension E2E MAUI proof ${propertyName} must be a non-negative integer when provided.`);
+    throw new Error(`Aspire extension E2E resource debug proof ${propertyName} must be a non-negative integer when provided.`);
   }
 
   return value;
