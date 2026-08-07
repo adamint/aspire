@@ -24,19 +24,28 @@ public class RepoRootTests : IDisposable
 
     public void Dispose()
     {
-        // The nested worktree must be unregistered before the outer repo is deleted, otherwise git
-        // leaves administrative files behind under .git/worktrees.
-        var outer = Path.Combine(_scratch.FullName, "outer");
-        if (Directory.Exists(Path.Combine(outer, "nested")))
+        // Cleanup must never throw: `CreateRepositoryWithNestedWorktree` can fail partway through, and a
+        // failure in here would replace the real assertion failure with a confusing teardown error.
+        try
         {
-            RunGit(outer, "worktree", "remove", "--force", "nested");
+            // The nested worktree must be unregistered before the outer repo is deleted, otherwise git
+            // leaves administrative files behind under .git/worktrees.
+            var outer = Path.Combine(_scratch.FullName, "outer");
+            if (Directory.Exists(Path.Combine(outer, "nested")))
+            {
+                RunGit(outer, "worktree", "remove", "--force", "nested");
+            }
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or Xunit.Sdk.XunitException)
+        {
+            // Best effort - fall through to deleting the directory tree outright.
         }
 
         try
         {
             _scratch.Delete(recursive: true);
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Best-effort cleanup; a leftover temp directory must not fail the test run.
         }
@@ -144,12 +153,127 @@ public class RepoRootTests : IDisposable
     }
 
     /// <summary>
+    /// The <c>.git</c>-as-a-file branch is where the bug lived, but the git probe answers first and hides
+    /// it. This drives the fallback walk directly, with no git process involved.
+    /// </summary>
+    [Fact]
+    public void FindRepoRootByMarker_StopsAtWorktreeGitFile_NotOuterGitDirectory()
+    {
+        var outer = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "outer")).FullName;
+        Directory.CreateDirectory(Path.Combine(outer, ".git"));
+
+        var worktree = Directory.CreateDirectory(Path.Combine(outer, ".worktrees", "linked")).FullName;
+        File.WriteAllText(Path.Combine(worktree, ".git"), $"gitdir: {Path.Combine(outer, ".git", "worktrees", "linked")}\n");
+
+        var nested = Directory.CreateDirectory(Path.Combine(worktree, "tools")).FullName;
+
+        Assert.Equal(worktree, Program.FindRepoRootByMarker(nested));
+    }
+
+    [Fact]
+    public void FindRepoRootByMarker_StopsAtGitDirectory_WhenNoWorktreeInvolved()
+    {
+        var outer = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "outer")).FullName;
+        Directory.CreateDirectory(Path.Combine(outer, ".git"));
+        var nested = Directory.CreateDirectory(Path.Combine(outer, "tools", "deep")).FullName;
+
+        Assert.Equal(outer, Program.FindRepoRootByMarker(nested));
+    }
+
+    [Fact]
+    public void FindRepoRootByMarker_ReturnsNull_WhenNoMarkerExists()
+    {
+        var loose = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "loose", "deep")).FullName;
+
+        Assert.Null(Program.FindRepoRootByMarker(loose));
+    }
+
+    [Fact]
+    public void WrongTreeError_IsNull_WhenRootIsAnAncestor()
+    {
+        var root = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "repo")).FullName;
+        var inside = Directory.CreateDirectory(Path.Combine(root, "tools")).FullName;
+
+        Assert.Null(Program.TryGetWrongTreeError(root, inside));
+    }
+
+    /// <summary>
+    /// The guard exists because a wrong-tree run is otherwise indistinguishable from a correct one, so
+    /// the message has to name both paths. Pin that so a later reword cannot quietly drop one.
+    /// </summary>
+    [Fact]
+    public void WrongTreeError_NamesBothResolvedRootAndCurrentDirectory()
+    {
+        var root = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "repoA")).FullName;
+        var elsewhere = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "repoB", "tools")).FullName;
+
+        var error = Program.TryGetWrongTreeError(root, elsewhere);
+
+        Assert.NotNull(error);
+        Assert.Contains(root, error);
+        Assert.Contains(elsewhere, error);
+    }
+
+    /// <summary>
+    /// A junction or `subst` drive on Windows lets the caller's directory and git's answer name the same
+    /// tree with different spellings. Refusing that would block a legitimate run, so the guard resolves
+    /// links before it gives up. Symlink creation needs elevation on Windows, so this is POSIX-only.
+    /// </summary>
+    [Fact]
+    public void WrongTreeError_IsNull_WhenPathsDifferOnlyBySymlink()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "creating symlinks requires elevation on Windows");
+
+        // The link target is relative AND routed through a second link, so resolving one hop hands back
+        // another unresolved spelling. Anything that substitutes a target without re-resolving it fails.
+        var realBase = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "realbase")).FullName;
+        var realRepo = Directory.CreateDirectory(Path.Combine(realBase, "repo")).FullName;
+        var inside = Directory.CreateDirectory(Path.Combine(realRepo, "tools")).FullName;
+
+        Directory.CreateSymbolicLink(Path.Combine(_scratch.FullName, "linkbase"), "realbase");
+        Directory.CreateSymbolicLink(Path.Combine(_scratch.FullName, "repolink"), Path.Combine("linkbase", "repo"));
+
+        var viaLink = Path.Combine(_scratch.FullName, "repolink", "tools");
+
+        Assert.False(Program.IsSameOrAncestorDirectory(realRepo, viaLink), "the two spellings should differ textually, otherwise this test proves nothing");
+        Assert.Null(Program.TryGetWrongTreeError(realRepo, viaLink));
+        Assert.Null(Program.TryGetWrongTreeError(realRepo, inside));
+    }
+
+    private static bool IsGitAvailable()
+    {
+        try
+        {
+            using var process = Process.Start(new ProcessStartInfo("git")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            });
+
+            if (process is null)
+            {
+                return false;
+            }
+
+            process.WaitForExit();
+            return true;
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Creates a main checkout with a linked worktree nested inside it. The nesting is the point: the
     /// worktree's <c>.git</c> is a file, so a probe that only looks for a <c>.git</c> directory walks
     /// past it and lands on the outer checkout.
     /// </summary>
     private (string Outer, string Nested) CreateOuterRepoWithNestedWorktree()
     {
+        Assert.SkipUnless(IsGitAvailable(), "git is not available on PATH");
+
         var outer = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "outer")).FullName;
         Directory.CreateDirectory(Path.Combine(outer, "tests", "Sample"));
         File.WriteAllText(Path.Combine(outer, "tests", "Sample", "SampleTests.cs"), "namespace N; public class C { public void M() { } }");

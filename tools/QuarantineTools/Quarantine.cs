@@ -48,6 +48,17 @@ public class Program
     /// </summary>
     private static readonly TimeSpan s_gitProbeTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// Exit code for refusing to edit a tree the caller is not standing in. Distinct from the other
+    /// failure codes (2 = tests folder not found, 3 = no matching test) so a caller can tell them apart.
+    /// </summary>
+    private const int ExitCodeWrongTree = 4;
+
+    /// <summary>
+    /// Matches the conventional MAXSYMLINKS limit; bounds link resolution so a symlink cycle terminates.
+    /// </summary>
+    private const int MaxLinkDepth = 40;
+
     public static Task<int> Main(string[] args)
     {
         var rootCommand = new RootCommand("Quarantine or unquarantine xUnit tests by adding/removing a QuarantinedTest or ActiveIssue attribute.");
@@ -144,12 +155,10 @@ public class Program
 
         // This tool rewrites source files in bulk, so a wrong root is destructive rather than merely
         // wrong. Refuse instead of editing a tree the caller is not standing in.
-        if (!IsSameOrAncestorDirectory(repoRoot, currentDirectory))
+        if (TryGetWrongTreeError(repoRoot, currentDirectory) is { } wrongTreeError)
         {
-            Console.Error.WriteLine("Refusing to run: the resolved repository root is not the working directory or one of its ancestors.");
-            Console.Error.WriteLine($"  Resolved repository root: {repoRoot}");
-            Console.Error.WriteLine($"  Current directory:        {currentDirectory}");
-            return 2;
+            Console.Error.WriteLine(wrongTreeError);
+            return ExitCodeWrongTree;
         }
 
         var testsRoot = string.IsNullOrWhiteSpace(scanRootOverride)
@@ -503,7 +512,15 @@ public class Program
         }
 
         // Fallback for when git is unavailable or `startDir` is not inside a repository.
-        //
+        return FindRepoRootByMarker(startDir);
+    }
+
+    /// <summary>
+    /// Walks up from <paramref name="startDir"/> looking for a <c>.git</c> marker. Used when git cannot
+    /// answer. Returns null if no marker is found.
+    /// </summary>
+    internal static string? FindRepoRootByMarker(string startDir)
+    {
         // IMPORTANT: `.git` must be matched as a file *or* a directory. In a linked worktree `.git` is a
         // regular file holding a `gitdir: <path>` pointer, so a directory-only probe walks straight past
         // the worktree root. When a worktree is nested inside another checkout of the same repository,
@@ -601,6 +618,93 @@ public class Program
         catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception)
         {
             // The process already exited or cannot be killed; nothing useful to do either way.
+        }
+    }
+
+    /// <summary>
+    /// Returns the error text to print when <paramref name="repoRoot"/> is not a tree the caller is
+    /// standing in, or null when the root is safe to use.
+    /// </summary>
+    internal static string? TryGetWrongTreeError(string repoRoot, string currentDirectory)
+    {
+        if (IsSameOrAncestorDirectory(repoRoot, currentDirectory))
+        {
+            return null;
+        }
+
+        // Only now, on the failure path, pay for symlink resolution. The two paths can legitimately be
+        // spelled differently - a Windows junction or `subst` drive lets the caller's directory read as
+        // `D:\src\aspire` while git reports `C:/src/aspire` - and refusing a valid run would be its own
+        // bug. Confining canonicalization to this path means a gap in it can only rescue a run that was
+        // already being refused, never block one that was about to succeed.
+        if (IsSameOrAncestorDirectory(Canonicalize(repoRoot), Canonicalize(currentDirectory)))
+        {
+            return null;
+        }
+
+        // Name both paths: the whole point of this guard is that a wrong-tree run is otherwise
+        // indistinguishable from a correct one, so the message has to say which tree was rejected.
+        return $"""
+            Refusing to run: the resolved repository root is not the working directory or one of its ancestors.
+              Resolved repository root: {repoRoot}
+              Current directory:        {currentDirectory}
+            """;
+    }
+
+    /// <summary>
+    /// Resolves every symlinked component of <paramref name="path"/>. Returns the input unchanged if it
+    /// cannot be resolved; this is a best-effort comparison aid, never a correctness requirement.
+    /// </summary>
+    private static string Canonicalize(string path)
+    {
+        try
+        {
+            return CanonicalizeCore(Path.GetFullPath(path), MaxLinkDepth);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return path;
+        }
+    }
+
+    private static string CanonicalizeCore(string path, int remainingDepth)
+    {
+        if (remainingDepth <= 0)
+        {
+            // A cycle, or a chain long enough to be indistinguishable from one.
+            return path;
+        }
+
+        var info = new DirectoryInfo(path);
+
+        // A link's stored target is whatever string was written at creation time, so substituting it can
+        // reintroduce an unresolved spelling (and may itself be relative to the link's own directory).
+        // Re-canonicalize the substituted path rather than trusting it, one hop at a time.
+        if (ResolveLink(info) is { } target)
+        {
+            var linkDirectory = info.Parent?.FullName ?? path;
+            return CanonicalizeCore(Path.GetFullPath(target, linkDirectory), remainingDepth - 1);
+        }
+
+        return info.Parent is { } parent
+            ? Path.Combine(CanonicalizeCore(parent.FullName, remainingDepth - 1), info.Name)
+            : Path.TrimEndingDirectorySeparator(info.FullName);
+    }
+
+    /// <summary>
+    /// Returns the link target of <paramref name="info"/>, or null when it is not a link.
+    /// </summary>
+    private static string? ResolveLink(DirectoryInfo info)
+    {
+        try
+        {
+            return info.ResolveLinkTarget(returnFinalTarget: false)?.FullName;
+        }
+        catch (IOException)
+        {
+            // On Windows the entry can be a kind this overload rejects; treat it as "not a link" and let
+            // the caller keep the path as spelled.
+            return null;
         }
     }
 
