@@ -187,11 +187,20 @@ internal class ResourceSnapshotBuilder
             ];
 
             // The assembly name is only known when the AppHost build baked it into the generated project metadata.
-            // Its absence is the capability signal for consumers, so nothing is written when it could not be resolved
-            // rather than writing a null or empty placeholder they would have to special-case.
+            // Its absence - not a null or empty value - is the capability signal consumers use to decide whether the
+            // evaluated assembly name can be relied on, so nothing is written when it could not be resolved.
+            var previousProperties = previous.Properties;
             if (!string.IsNullOrWhiteSpace(projectAssemblyName))
             {
                 projectProperties.Add(ResourcePropertySnapshotMetadata.Create(KnownResourceTypes.Project, KnownProperties.Project.AssemblyName, projectAssemblyName));
+            }
+            else
+            {
+                // Snapshots are merged into the previously published one and SetResourcePropertyRange only adds or
+                // replaces, so simply omitting the property would leave an earlier value in place. That stale value
+                // would read as "the assembly name is available" and defeat the absence-is-the-signal contract, so
+                // the property has to be removed explicitly.
+                previousProperties = previousProperties.RemoveResourceProperty(KnownProperties.Project.AssemblyName);
             }
 
             return previous with
@@ -199,7 +208,7 @@ internal class ResourceSnapshotBuilder
                 ResourceType = previous.ResourceType ?? KnownResourceTypes.Project,
                 State = state,
                 ExitCode = executable.Status?.ExitCode,
-                Properties = previous.Properties.SetResourcePropertyRange([.. projectProperties]),
+                Properties = previousProperties.SetResourcePropertyRange([.. projectProperties]),
                 EnvironmentVariables = environment,
                 CreationTimeStamp = executable.Metadata.CreationTimestamp?.ToUniversalTime(),
                 StartTimeStamp = executable.Status?.StartupTimestamp?.ToUniversalTime(),
