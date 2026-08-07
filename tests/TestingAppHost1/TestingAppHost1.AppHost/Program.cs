@@ -28,6 +28,14 @@ if (args.Contains("--override-dashboard-testing-defaults"))
     builder.Configuration["ASPIRE_INTERACTIVITY_ENABLED"] = "true";
 }
 
+if (args.Contains("--clear-apphost-browser-token"))
+{
+    // Clearing the frozen token is the one dashboard setting an AppHost can still change after the testing
+    // builder has hardened things, because DashboardOptions does not read this key until the application starts.
+    // It is kept separate from --override-dashboard-testing-defaults so that flag keeps asserting on a token.
+    builder.Configuration["AppHost:BrowserToken"] = "";
+}
+
 builder.Configuration["ConnectionStrings:cs"] = "testconnection";
 
 builder.AddConnectionString("cs");
