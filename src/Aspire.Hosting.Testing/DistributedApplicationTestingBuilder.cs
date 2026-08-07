@@ -51,8 +51,11 @@ public static class DistributedApplicationTestingBuilder
     /// <returns>
     /// A new instance of <see cref="IDistributedApplicationTestingBuilder"/>.
     /// </returns>
-    /// <exception cref="ArgumentNullException">Thrown when <paramref name="options"/> or <paramref name="args"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException">Thrown when <paramref name="args"/> contains a <see langword="null"/> or empty value.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="options"/> or <paramref name="args"/> is <see langword="null"/>, or when
+    /// <paramref name="args"/> contains a <see langword="null"/> value.
+    /// </exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="args"/> contains an empty value.</exception>
     /// <exception cref="InvalidOperationException">
     /// Thrown when <see cref="DistributedApplicationTestingBuilderOptions.EnableDashboard"/> is enabled in publish mode.
     /// </exception>
@@ -95,9 +98,10 @@ public static class DistributedApplicationTestingBuilder
     /// A new instance of <see cref="IDistributedApplicationTestingBuilder"/>.
     /// </returns>
     /// <exception cref="ArgumentNullException">
-    /// Thrown when <paramref name="entryPoint"/>, <paramref name="options"/>, or <paramref name="args"/> is <see langword="null"/>.
+    /// Thrown when <paramref name="entryPoint"/>, <paramref name="options"/>, or <paramref name="args"/> is
+    /// <see langword="null"/>, or when <paramref name="args"/> contains a <see langword="null"/> value.
     /// </exception>
-    /// <exception cref="ArgumentException">Thrown when <paramref name="args"/> contains a <see langword="null"/> or empty value.</exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="args"/> contains an empty value.</exception>
     /// <exception cref="InvalidOperationException">
     /// Thrown when <see cref="DistributedApplicationTestingBuilderOptions.EnableDashboard"/> is enabled in publish mode.
     /// </exception>
@@ -188,7 +192,15 @@ public static class DistributedApplicationTestingBuilder
         ArgumentNullException.ThrowIfNull(configureBuilder, nameof(configureBuilder));
 
         var factory = new SuspendingDistributedApplicationFactory(entryPoint, args, enableDashboard, configureBuilder);
-        return await factory.CreateBuilderAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await factory.CreateBuilderAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            await factory.DisposeAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     /// <summary>
@@ -209,11 +221,18 @@ public static class DistributedApplicationTestingBuilder
     /// <returns>
     /// A new instance of <see cref="IDistributedApplicationTestingBuilder"/>.
     /// </returns>
-    /// <exception cref="ArgumentNullException">Thrown when <paramref name="options"/> or <paramref name="args"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException">Thrown when <paramref name="args"/> contains a <see langword="null"/> or empty value.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="options"/> or <paramref name="args"/> is <see langword="null"/>, or when
+    /// <paramref name="args"/> contains a <see langword="null"/> value.
+    /// </exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="args"/> contains an empty value.</exception>
     /// <exception cref="InvalidOperationException">
     /// Thrown when <see cref="DistributedApplicationTestingBuilderOptions.EnableDashboard"/> is enabled in publish mode.
     /// </exception>
+    /// <remarks>
+    /// The <paramref name="args"/> parameter is required so calls such as <c>Create(default)</c> continue to bind to
+    /// the existing command-line-arguments overload.
+    /// </remarks>
     public static IDistributedApplicationTestingBuilder Create(
         DistributedApplicationTestingBuilderOptions options,
         string[] args)
@@ -272,7 +291,16 @@ public static class DistributedApplicationTestingBuilder
         }
 
         applicationOptions.DisableDashboard = false;
-        applicationOptions.DashboardUnsecuredAllowAnonymous = false;
+
+        // Command-line configuration has higher precedence than the configuration sources supplied through
+        // HostApplicationBuilderSettings. Append this after the AppHost callback so creation-time arguments and
+        // configuration cannot select anonymous dashboard authentication before testing defaults are reapplied.
+        hostBuilderOptions.Args =
+        [
+            .. (hostBuilderOptions.Args ?? applicationOptions.Args ?? []),
+            $"{KnownConfigNames.DashboardUnsecuredAllowAnonymous}=false"
+        ];
+        applicationOptions.Args = hostBuilderOptions.Args;
 
         hostBuilderOptions.Configuration ??= new();
         AddDashboardTestingConfiguration(hostBuilderOptions.Configuration);
@@ -343,24 +371,20 @@ public static class DistributedApplicationTestingBuilder
         : DistributedApplicationFactory(entryPoint, args)
     {
         private readonly SemaphoreSlim _continueBuilding = new(0);
+        private int _buildingContinuationState;
 
         public async Task<IDistributedApplicationTestingBuilder> CreateBuilderAsync(CancellationToken cancellationToken)
         {
             var innerBuilder = await ResolveBuilderAsync(cancellationToken).ConfigureAwait(false);
+            ConfigureDashboardTesting(innerBuilder, enableDashboard);
             return new Builder(this, innerBuilder);
         }
 
         protected override void OnBuilderCreating(DistributedApplicationOptions applicationOptions, HostApplicationBuilderSettings hostOptions)
         {
             base.OnBuilderCreating(applicationOptions, hostOptions);
-            ConfigureDashboardTesting(applicationOptions, hostOptions, enableDashboard);
             configureBuilder(applicationOptions, hostOptions);
-        }
-
-        protected override void OnBuilderCreated(DistributedApplicationBuilder applicationBuilder)
-        {
-            base.OnBuilderCreated(applicationBuilder);
-            ConfigureDashboardTesting(applicationBuilder, enableDashboard);
+            ConfigureDashboardTesting(applicationOptions, hostOptions, enableDashboard);
         }
 
         protected override void OnBuilding(DistributedApplicationBuilder applicationBuilder)
@@ -369,24 +393,74 @@ public static class DistributedApplicationTestingBuilder
 
             // Wait until the owner signals that building can continue by calling BuildAsync().
             _continueBuilding.Wait();
+            if (Volatile.Read(ref _buildingContinuationState) == 2)
+            {
+                throw new ObjectDisposedException(
+                    nameof(IDistributedApplicationTestingBuilder),
+                    "The testing builder was disposed before the application was built.");
+            }
         }
 
         public async Task<DistributedApplication> BuildAsync(CancellationToken cancellationToken)
         {
-            _continueBuilding.Release();
-            return await ResolveApplicationAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var previousState = Interlocked.CompareExchange(ref _buildingContinuationState, 1, 0);
+            ObjectDisposedException.ThrowIf(previousState == 2, this);
+            if (previousState == 0)
+            {
+                _continueBuilding.Release();
+            }
+
+            try
+            {
+                return await ResolveApplicationAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Once the AppHost has been released, it can still finish building after the caller stops waiting.
+                // Wait for that application and dispose the factory before propagating cancellation so it cannot
+                // continue running without an owner.
+                try
+                {
+                    _ = await ResolveApplicationAsync(CancellationToken.None).ConfigureAwait(false);
+                }
+                finally
+                {
+                    await DisposeAsync().ConfigureAwait(false);
+                }
+
+                throw;
+            }
+            catch (OperationCanceledException) when (Volatile.Read(ref _buildingContinuationState) == 2)
+            {
+                throw new ObjectDisposedException(
+                    nameof(IDistributedApplicationTestingBuilder),
+                    "The testing builder was disposed before the application was built.");
+            }
         }
 
         public override async ValueTask DisposeAsync()
         {
-            _continueBuilding.Release();
+            PrepareForDisposal();
             await base.DisposeAsync().ConfigureAwait(false);
         }
 
         public override void Dispose()
         {
-            _continueBuilding.Release();
+            PrepareForDisposal();
             base.Dispose();
+        }
+
+        private void PrepareForDisposal()
+        {
+            var previousState = Interlocked.Exchange(ref _buildingContinuationState, 2);
+            if (previousState == 0)
+            {
+                // Abort on the AppHost entry-point thread instead of allowing a rejected or canceled
+                // builder to continue into Build() after the factory has already been disposed.
+                _continueBuilding.Release();
+            }
         }
 
         private sealed class Builder(SuspendingDistributedApplicationFactory factory, DistributedApplicationBuilder innerBuilder) : IDistributedApplicationTestingBuilder
@@ -514,8 +588,8 @@ public static class DistributedApplicationTestingBuilder
 
                 DistributedApplicationFactory.ConfigureBuilder(args, applicationOptions, hostBuilderOptions, appAssembly, (options, settings) =>
                 {
-                    ConfigureDashboardTesting(options, settings, enableDashboard);
                     configureBuilder(options, settings);
+                    ConfigureDashboardTesting(options, settings, enableDashboard);
                 });
             });
 

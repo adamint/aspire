@@ -10,9 +10,10 @@ namespace Aspire.Hosting.Testing;
 /// Dashboard support is configured while the underlying distributed application builder is constructed because
 /// the dashboard services cannot be added after construction. When enabled, the testing builder uses authenticated
 /// HTTP endpoints on randomized loopback ports, disables interactivity, and retains the testing builder's fail-fast
-/// dependency behavior. Configuration applied to the returned builder can override runtime settings such as port
-/// allocation, interactivity, and dependency waiting before the application is built. Dashboard authentication is
-/// selected while the underlying builder is constructed.
+/// dependency behavior. These testing defaults are reapplied after the AppHost has configured its builder.
+/// Configuration applied directly to the returned builder can override runtime settings such as port allocation,
+/// interactivity, and dependency waiting before the application is built. Dashboard authentication is selected while
+/// the underlying builder is constructed.
 /// </remarks>
 /// <example>
 /// The following example creates a testing builder with dashboard support:

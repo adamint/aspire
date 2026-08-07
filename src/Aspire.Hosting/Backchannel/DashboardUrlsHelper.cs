@@ -38,24 +38,22 @@ internal static class DashboardUrlsHelper
     }
 
     /// <summary>
-    /// Gets the authenticated dashboard URL and preserves terminal dashboard failures.
+    /// Gets all dashboard connection information while preserving terminal dashboard failures.
     /// </summary>
     /// <param name="serviceProvider">The service provider.</param>
     /// <param name="logger">The logger for diagnostic output.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The authenticated dashboard URL, or <see langword="null"/> when no URL is available.</returns>
-    internal static async Task<string?> GetDashboardUrlOrThrowAsync(
+    /// <returns>Complete dashboard connection information.</returns>
+    internal static async Task<DashboardConnectionInfo> GetDashboardConnectionInfoOrThrowAsync(
         IServiceProvider serviceProvider,
         ILogger logger,
         CancellationToken cancellationToken)
     {
-        var info = await GetDashboardConnectionInfoCoreAsync(
+        return await GetDashboardConnectionInfoCoreAsync(
             serviceProvider,
             logger,
             throwOnDashboardFailure: true,
             cancellationToken).ConfigureAwait(false);
-
-        return info.BaseUrlWithLoginToken;
     }
 
     private static async Task<DashboardConnectionInfo> GetDashboardConnectionInfoCoreAsync(
@@ -165,7 +163,7 @@ internal static class DashboardUrlsHelper
             if (!string.IsNullOrEmpty(apiBaseUrl))
             {
                 baseUrlWithLoginToken = !string.IsNullOrEmpty(dashboardOptions.DashboardToken)
-                    ? $"{apiBaseUrl.TrimEnd('/')}/login?t={dashboardOptions.DashboardToken}"
+                    ? $"{apiBaseUrl.TrimEnd('/')}/login?t={Uri.EscapeDataString(dashboardOptions.DashboardToken)}"
                     : apiBaseUrl;
 
                 var rewrittenUrl = codespacesUrlRewriter?.RewriteUrl(baseUrlWithLoginToken);
@@ -183,6 +181,7 @@ internal static class DashboardUrlsHelper
                 IsHealthy = true,
                 ApiBaseUrl = apiBaseUrl,
                 ApiToken = dashboardOptions.ApiKey,
+                HasBrowserToken = !string.IsNullOrEmpty(dashboardOptions.DashboardToken),
                 BaseUrlWithLoginToken = baseUrlWithLoginToken,
                 CodespacesUrlWithLoginToken = codespacesUrlWithLoginToken
             };
@@ -227,6 +226,7 @@ internal sealed class DashboardConnectionInfo
     public bool IsHealthy { get; init; }
     public string? ApiBaseUrl { get; init; }
     public string? ApiToken { get; init; }
+    public bool HasBrowserToken { get; init; }
     /// <summary>
     /// Gets the resolved dashboard URL.
     /// When browser token authentication is enabled, this value includes the login token.

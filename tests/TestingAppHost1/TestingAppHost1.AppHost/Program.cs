@@ -9,6 +9,25 @@ using Microsoft.Extensions.Hosting;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
+var buildProbeArgument = args.FirstOrDefault(
+    argument => argument.StartsWith("--block-apphost-build=", StringComparison.Ordinal));
+if (buildProbeArgument is not null)
+{
+    var buildProbeId = buildProbeArgument["--block-apphost-build=".Length..];
+    TestingAppHostBuildProbe.Configure(builder, buildProbeId);
+}
+
+if (args.Contains("--override-dashboard-testing-defaults"))
+{
+    builder.Configuration["DcpPublisher:RandomizePorts"] = "false";
+    builder.Configuration["ASPNETCORE_URLS"] = "http://127.0.0.1:12345";
+    builder.Configuration["ASPIRE_DASHBOARD_OTLP_ENDPOINT_URL"] = "http://127.0.0.1:12346";
+    builder.Configuration["ASPIRE_DASHBOARD_OTLP_HTTP_ENDPOINT_URL"] = "http://127.0.0.1:12347";
+    builder.Configuration["ASPIRE_RESOURCE_SERVICE_ENDPOINT_URL"] = "http://127.0.0.1:12348";
+    builder.Configuration["ASPIRE_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS"] = "true";
+    builder.Configuration["ASPIRE_INTERACTIVITY_ENABLED"] = "true";
+}
+
 builder.Configuration["ConnectionStrings:cs"] = "testconnection";
 
 builder.AddConnectionString("cs");

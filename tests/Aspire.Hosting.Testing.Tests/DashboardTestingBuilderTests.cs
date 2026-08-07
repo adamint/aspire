@@ -5,6 +5,7 @@
 
 using Aspire.Hosting.Dashboard;
 using Aspire.Hosting.Dcp;
+using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
@@ -80,6 +81,24 @@ public class DashboardTestingBuilderTests
         Assert.Equal(nameof(ResourceServiceAuthMode.ApiKey), builder.Configuration["AppHost:ResourceService:AuthMode"]);
     }
 
+    [Theory]
+    [InlineData(CreationSurface.Generic)]
+    [InlineData(CreationSurface.Type)]
+    public async Task DashboardTestingDefaultsOverrideAppHostConfiguration(CreationSurface creationSurface)
+    {
+        await using var builder = await CreateDashboardBuilderAsync(
+            creationSurface,
+            ["--override-dashboard-testing-defaults"]);
+
+        Assert.Equal("true", builder.Configuration["DcpPublisher:RandomizePorts"]);
+        Assert.Equal("http://127.0.0.1:0", builder.Configuration[AspNetCoreUrls]);
+        Assert.Equal("http://127.0.0.1:0", builder.Configuration[DashboardOtlpGrpcEndpointUrl]);
+        Assert.Equal("http://127.0.0.1:0", builder.Configuration[DashboardOtlpHttpEndpointUrl]);
+        Assert.Equal("http://127.0.0.1:0", builder.Configuration[ResourceServiceEndpointUrl]);
+        Assert.Equal("false", builder.Configuration[DashboardUnsecuredAllowAnonymous]);
+        Assert.Equal("false", builder.Configuration[InteractivityEnabled]);
+    }
+
     [Fact]
     public async Task DashboardTestingDefaultsAreNonInteractiveAndFailFast()
     {
@@ -134,16 +153,100 @@ public class DashboardTestingBuilderTests
             await DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(default);
         await using var typeBuilder =
             await DistributedApplicationTestingBuilder.CreateAsync(typeof(Projects.TestingAppHost1_AppHost), default);
+
+        Func<Task<IDistributedApplicationTestingBuilder>> genericOptionsCall = () =>
+            DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
+                CreateDashboardOptions(),
+                [],
+                default);
+        Func<Task<IDistributedApplicationTestingBuilder>> typeOptionsCall = () =>
+            DistributedApplicationTestingBuilder.CreateAsync(
+                typeof(Projects.TestingAppHost1_AppHost),
+                CreateDashboardOptions(),
+                [],
+                default);
+
+        Assert.NotNull(genericOptionsCall);
+        Assert.NotNull(typeOptionsCall);
+    }
+
+    [Fact]
+    public async Task BuildAsyncWithPreCanceledTokenDoesNotReleaseAppHost()
+    {
+        var probe = TestingAppHostBuildProbe.Create();
+        var builder =
+            await DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
+                [$"--block-apphost-build={probe.Id}"]);
+        try
+        {
+            using var cancellationTokenSource = new CancellationTokenSource();
+            cancellationTokenSource.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => builder.BuildAsync(cancellationTokenSource.Token));
+            await Assert.ThrowsAsync<TimeoutException>(
+                () => probe.BuildEntered.WaitAsync(TimeSpan.FromMilliseconds(500)));
+        }
+        finally
+        {
+            probe.ContinueBuilding();
+            await builder.DisposeAsync();
+            probe.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task BuildAsyncCancellationAfterReleaseDisposesBuiltApplication()
+    {
+        var probe = TestingAppHostBuildProbe.Create();
+        var builder =
+            await DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
+                [$"--block-apphost-build={probe.Id}"]);
+        try
+        {
+            using var cancellationTokenSource = new CancellationTokenSource();
+            var buildTask = builder.BuildAsync(cancellationTokenSource.Token);
+            await probe.BuildEntered.DefaultTimeout();
+            Assert.False(buildTask.IsCompleted);
+
+            cancellationTokenSource.Cancel();
+            await Task.Delay(50);
+            probe.ContinueBuilding();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => buildTask);
+            await probe.ApplicationDisposed.DefaultTimeout();
+        }
+        finally
+        {
+            probe.ContinueBuilding();
+            await builder.DisposeAsync();
+            probe.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task BuildAsyncAfterBuilderDisposedThrowsObjectDisposedException()
+    {
+        var builder = await DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>();
+        await builder.DisposeAsync();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => builder.BuildAsync());
     }
 
     [Theory]
-    [InlineData(CreationSurface.Generic)]
-    [InlineData(CreationSurface.Type)]
-    [InlineData(CreationSurface.AdHoc)]
-    public async Task DashboardTestingIsRejectedInPublishMode(CreationSurface creationSurface)
+    [InlineData(CreationSurface.Generic, "--operation", "publish")]
+    [InlineData(CreationSurface.Generic, "--publisher", "manifest")]
+    [InlineData(CreationSurface.Type, "--operation", "publish")]
+    [InlineData(CreationSurface.Type, "--publisher", "manifest")]
+    [InlineData(CreationSurface.AdHoc, "--operation", "publish")]
+    [InlineData(CreationSurface.AdHoc, "--publisher", "manifest")]
+    public async Task DashboardTestingIsRejectedInPublishMode(
+        CreationSurface creationSurface,
+        string argumentName,
+        string argumentValue)
     {
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => CreatePublishBuilderAsync(creationSurface));
+            () => CreatePublishBuilderAsync(creationSurface, [argumentName, argumentValue]));
 
         Assert.Equal("Dashboard testing is not supported in publish mode.", exception.Message);
     }
@@ -171,10 +274,9 @@ public class DashboardTestingBuilderTests
         };
     }
 
-    private static async Task CreatePublishBuilderAsync(CreationSurface creationSurface)
+    private static async Task CreatePublishBuilderAsync(CreationSurface creationSurface, string[] args)
     {
         var options = CreateDashboardOptions();
-        string[] args = ["--publisher", "manifest"];
 
         var builder = creationSurface switch
         {

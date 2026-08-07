@@ -15,18 +15,18 @@ namespace Aspire.Hosting.Testing;
 public static class DistributedApplicationHostingTestingExtensions
 {
     private const string DashboardDisabledExceptionMessage = "The dashboard is not enabled for this application.";
-    private const string DashboardUrlApplicationNotStartedExceptionMessage = "The application must be started before retrieving the dashboard URL.";
-    private const string DashboardUrlPublishModeExceptionMessage = "The dashboard URL is not available in publish mode.";
-    private const string DashboardUrlUnavailableExceptionMessage = "The dashboard URL is not available.";
+    private const string DashboardLoginUrlAnonymousExceptionMessage = "The dashboard login URL is not available because anonymous dashboard access is enabled.";
+    private const string DashboardLoginUrlApplicationNotStartedExceptionMessage = "The application must be started before retrieving the dashboard login URL.";
+    private const string DashboardLoginUrlPublishModeExceptionMessage = "The dashboard login URL is not available in publish mode.";
+    private const string DashboardLoginUrlUnavailableExceptionMessage = "The dashboard login URL is not available.";
 
     /// <summary>
-    /// Gets the URL for the running Aspire dashboard.
+    /// Gets the authenticated login URL for the running Aspire dashboard.
     /// </summary>
     /// <param name="app">The distributed application.</param>
     /// <param name="cancellationToken">A token used to cancel the operation.</param>
     /// <returns>
-    /// An absolute <see cref="Uri"/> for the dashboard. When browser token authentication is enabled, the URI includes
-    /// the login credential.
+    /// An absolute <see cref="Uri"/> that authenticates the browser with the running dashboard.
     /// </returns>
     /// <remarks>
     /// <para>
@@ -35,16 +35,17 @@ public static class DistributedApplicationHostingTestingExtensions
     /// </para>
     /// <para>
     /// This method does not start the distributed application. Call <see cref="DistributedApplication.StartAsync(CancellationToken)"/>
-    /// before requesting the dashboard URL.
+    /// before requesting the dashboard login URL.
     /// </para>
     /// <para>
-    /// The returned URI may contain an authentication credential. Treat it as a secret and do not log or share it.
+    /// This method waits for the dashboard resource to become healthy. Pass a cancellation token when the wait must
+    /// be bounded. The returned URI contains an authentication credential and should be treated as sensitive.
     /// </para>
     /// </remarks>
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="app"/> is <see langword="null"/>.</exception>
     /// <exception cref="InvalidOperationException">
     /// Thrown when the application is in publish mode, the dashboard is disabled, the application has not started,
-    /// or a dashboard URL is unavailable.
+    /// anonymous dashboard access is enabled, or a dashboard login URL is unavailable.
     /// </exception>
     /// <exception cref="DistributedApplicationException">Thrown when the dashboard reaches a terminal failure state.</exception>
     /// <exception cref="OperationCanceledException">Thrown when <paramref name="cancellationToken"/> is canceled.</exception>
@@ -60,11 +61,11 @@ public static class DistributedApplicationHostingTestingExtensions
     /// await using var app = await builder.BuildAsync();
     /// await app.StartAsync();
     ///
-    /// var dashboardUrl = await app.GetDashboardUrlAsync();
+    /// var dashboardLoginUrl = await app.GetDashboardLoginUrlAsync();
     /// </code>
     /// </example>
     [AspireExportIgnore(Reason = "Dashboard URLs are only available to .NET test code and may contain authentication credentials.")]
-    public static async Task<Uri> GetDashboardUrlAsync(
+    public static async Task<Uri> GetDashboardLoginUrlAsync(
         this DistributedApplication app,
         CancellationToken cancellationToken = default)
     {
@@ -73,7 +74,7 @@ public static class DistributedApplicationHostingTestingExtensions
         var executionContext = app.Services.GetRequiredService<DistributedApplicationExecutionContext>();
         if (executionContext.IsPublishMode)
         {
-            throw new InvalidOperationException(DashboardUrlPublishModeExceptionMessage);
+            throw new InvalidOperationException(DashboardLoginUrlPublishModeExceptionMessage);
         }
 
         var applicationOptions = app.Services.GetRequiredService<DistributedApplicationOptions>();
@@ -82,19 +83,25 @@ public static class DistributedApplicationHostingTestingExtensions
             throw new InvalidOperationException(DashboardDisabledExceptionMessage);
         }
 
-        ThrowIfNotStarted(app, DashboardUrlApplicationNotStartedExceptionMessage);
+        ThrowIfNotStarted(app, DashboardLoginUrlApplicationNotStartedExceptionMessage);
         cancellationToken.ThrowIfCancellationRequested();
 
         var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(
             "Aspire.Hosting.Testing.DistributedApplicationDashboard");
-        var dashboardUrl = await DashboardUrlsHelper.GetDashboardUrlOrThrowAsync(
+        var dashboardInfo = await DashboardUrlsHelper.GetDashboardConnectionInfoOrThrowAsync(
             app.Services,
             logger,
             cancellationToken).ConfigureAwait(false);
 
-        if (!Uri.TryCreate(dashboardUrl, UriKind.Absolute, out var dashboardUri))
+        var dashboardUrl = dashboardInfo.CodespacesUrlWithLoginToken ?? dashboardInfo.BaseUrlWithLoginToken;
+        if (!dashboardInfo.IsHealthy || !Uri.TryCreate(dashboardUrl, UriKind.Absolute, out var dashboardUri))
         {
-            throw new InvalidOperationException(DashboardUrlUnavailableExceptionMessage);
+            throw new InvalidOperationException(DashboardLoginUrlUnavailableExceptionMessage);
+        }
+
+        if (!dashboardInfo.HasBrowserToken)
+        {
+            throw new InvalidOperationException(DashboardLoginUrlAnonymousExceptionMessage);
         }
 
         return dashboardUri;
