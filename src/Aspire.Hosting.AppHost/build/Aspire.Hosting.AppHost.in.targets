@@ -41,12 +41,29 @@
 
   <!-- Generate the data structures for doing the codegen for project resources -->
   <Target Name="CreateAspireProjectMetadataSources"
-          DependsOnTargets="_CreateAspireProjectResources">
+          DependsOnTargets="_CreateAspireProjectResources"
+          Outputs="%(_AspireProjectResource.Identity)">
+    <!--
+      Batched on the project resource so each value can be routed through a property before it reaches a property
+      function. MSBuild substitutes %(...) into the *unexpanded* argument text of a property function, so a value
+      containing an apostrophe - a project at /repo/O'Brien/Worker.csproj, or an AspireProjectMetadataTypeName
+      containing one - terminates the argument list, and MSBuild abandons the parse and emits the whole expression
+      back as a literal string. That produced a ProjectPath of "$([System.IO.Path]::GetFullPath(../O'Brien/Worker.csproj))"
+      and a source file named after the unparsed ClassName expression, so the AppHost failed to compile.
+      $(...) is expanded only after the arguments have been parsed, which is why the indirection fixes it. The same
+      hazard is called out on the assembly name in _SetAspireProjectMetadataAssemblyNames below.
+    -->
+    <PropertyGroup>
+      <_AspireProjectResourceIdentity>%(_AspireProjectResource.Identity)</_AspireProjectResourceIdentity>
+      <_AspireProjectResourceTypeName>%(_AspireProjectResource.AspireProjectMetadataTypeName)</_AspireProjectResourceTypeName>
+      <_AspireProjectResourceClassNameSource Condition="'$(_AspireProjectResourceTypeName)' == ''">%(_AspireProjectResource.Filename)</_AspireProjectResourceClassNameSource>
+      <_AspireProjectResourceClassNameSource Condition="'$(_AspireProjectResourceTypeName)' != ''">$(_AspireProjectResourceTypeName)</_AspireProjectResourceClassNameSource>
+    </PropertyGroup>
+
     <ItemGroup>
       <AspireProjectMetadataSource Include="@(_AspireProjectResource)" Condition="'@(_AspireProjectResource)' != ''">
-        <ClassName Condition="%(_AspireProjectResource.AspireProjectMetadataTypeName) == ''">$([System.Text.RegularExpressions.Regex]::Replace($([System.IO.Path]::GetFileNameWithoutExtension(%(_AspireProjectResource.Identity))), $(_GeneratedClassNameFixupRegex), '_'))</ClassName>
-        <ClassName Condition="%(_AspireProjectResource.AspireProjectMetadataTypeName) != ''">$([System.Text.RegularExpressions.Regex]::Replace(%(_AspireProjectResource.AspireProjectMetadataTypeName), $(_GeneratedClassNameFixupRegex), '_'))</ClassName>
-        <ProjectPath>$([System.IO.Path]::GetFullPath(%(_AspireProjectResource.Identity)))</ProjectPath>
+        <ClassName>$([System.Text.RegularExpressions.Regex]::Replace('$(_AspireProjectResourceClassNameSource)', $(_GeneratedClassNameFixupRegex), '_'))</ClassName>
+        <ProjectPath>$([System.IO.Path]::GetFullPath('$(_AspireProjectResourceIdentity)'))</ProjectPath>
       </AspireProjectMetadataSource>
 		</ItemGroup>
   </Target>

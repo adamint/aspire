@@ -309,6 +309,30 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ProjectMetadataResolvesAssemblyNameWhenProjectDirectoryContainsAnApostrophe()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        // An apostrophe in the project path reaches two different MSBuild property functions: the
+        // GetFullPath over %(Identity) that normalizes ProjectPath, and the GetFullPath over the
+        // $(_AspireResolvedProjectFile) property that normalizes the resolved project file before the
+        // two lists are correlated. Both have to survive it, because a failure here does not degrade
+        // the assembly name - it fails metadata generation and takes the whole AppHost build with it.
+        var generatedSource = await GenerateProjectMetadataSourceAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                    <AssemblyName>Apostrophe Service</AssemblyName>
+                  </PropertyGroup>
+                """,
+            referencedProjectDirectoryName: "O'Brien");
+
+        Assert.Equal("""    public string? AssemblyName => @"Apostrophe Service";""", GetGeneratedAssemblyNameMember(generatedSource));
+    }
+
+    [Fact]
     public async Task ProjectMetadataOmitsAssemblyNameWhenResolutionIsDisabled()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
@@ -1013,7 +1037,8 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         string targetFramework = "net8.0",
         string configuration = "Debug",
         string? projectReferenceMetadataXml = null,
-        string? solutionProjectConfiguration = null)
+        string? solutionProjectConfiguration = null,
+        string referencedProjectDirectoryName = "Worker")
     {
         var repoRoot = GetRepoRoot();
 
@@ -1027,7 +1052,7 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
             Path.Combine(workspace.Path, "Directory.Packages.props"),
             "<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>");
 
-        var workerDirectory = Directory.CreateDirectory(Path.Combine(workspace.Path, "Worker")).FullName;
+        var workerDirectory = Directory.CreateDirectory(Path.Combine(workspace.Path, referencedProjectDirectoryName)).FullName;
         var workerProjectFile = Path.Combine(workerDirectory, "Worker.csproj");
         await File.WriteAllTextAsync(workerProjectFile,
             $"""
@@ -1086,7 +1111,7 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
               </PropertyGroup>
 
               <ItemGroup>
-                <ProjectReference Include="../Worker/Worker.csproj"
+                <ProjectReference Include="../{{referencedProjectDirectoryName}}/Worker.csproj"
                                   IsAspireProjectResource="true"
                                   ReferenceOutputAssembly="false"
                                   SkipGetTargetFrameworkProperties="true"
