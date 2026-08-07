@@ -2609,14 +2609,17 @@ public partial class AtsTypeScriptCodeGeneratorTests
     /// be decided by collision detection over whatever the context happened to hold, so the narrowed
     /// view and the full scan reached different answers for the same package.
     /// <para>
-    /// Both directions are checked because only one of them fails under the old scheme, and it is
-    /// not the obvious one. Event Hubs is scanned first, so it kept the unsuffixed base name in both
-    /// views and agreed by luck; Service Bus lost the draw during full generation and was suffixed
-    /// there while its own single-package export was not. Comparing interface bodies rather than
-    /// just names is what makes that failure visible: the old scheme had Service Bus export
-    /// <c>RunAsEmulatorOptions</c> as <c>configureContainer?: boolean</c> while the SDK gave that
-    /// same name to Event Hubs as <c>configureContainer?: string</c>, so a consumer concatenating
-    /// the export silently got the wrong shape rather than a redeclaration error.
+    /// Both directions fail under the old scheme, but at different assertions, and that asymmetry
+    /// is why the body comparison is here. Event Hubs was scanned first and kept the unsuffixed
+    /// base name, so it fails only on the name: it produced <c>RunAsEmulatorOptions</c> rather than
+    /// <c>AzureEventHubsRunAsEmulatorOptions</c>. Service Bus lost that draw during full generation
+    /// and was suffixed there while its own single-package export was not, so it disagreed about
+    /// the interface itself. Checking only that the exported name appears among the generated names
+    /// would have missed it, because the name did appear -- it just belonged to Event Hubs. The old
+    /// scheme had Service Bus export <c>RunAsEmulatorOptions</c> as <c>configureContainer?: boolean</c>
+    /// while the SDK gave that same name to Event Hubs as <c>configureContainer?: string</c>, so a
+    /// consumer concatenating the export silently got the wrong callback type rather than a
+    /// redeclaration error.
     /// </para>
     /// </remarks>
     [Theory]
