@@ -187,8 +187,7 @@ suite('Browser Debugger Tests', () => {
         assert.deepStrictEqual(dcpServer.sendNotification.firstCall.args[0], {
             notification_type: 'sessionTerminated',
             session_id: 'run-1',
-            dcp_id: 'dcp-1',
-            exit_code: 0
+            dcp_id: 'dcp-1'
         });
         assert.strictEqual(rmStub.calledOnceWithExactly(path.join(os.tmpdir(), 'aspire-vscode-browser-debug', 'run-1'), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }), true);
 
@@ -249,6 +248,82 @@ suite('Browser Debugger Tests', () => {
         aspireDebugSession.dispose();
     });
 
+    test('stopSession is awaitable and single-shot for a DCP-requested browser stop', async () => {
+        // This is the shape a DCP `DELETE /run_session` drives (microsoft/aspire#19125 schedules the
+        // debugger teardown after acknowledging the delete). Three things must hold together:
+        //   1. stopSession() resolves only after VS Code finished stopping the browser session, so the
+        //      caller can sequence teardown rather than fire-and-forget.
+        //   2. exactly one `sessionTerminated` reaches DCP, with no `exit_code` (a requested stop is
+        //      not a program exit).
+        //   3. repeated stops are memoized, so DCP-requested stop plus extension disposal cannot
+        //      terminate the run twice.
+        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
+        let startDebugSession: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(listener => {
+            startDebugSession = listener;
+            return { dispose: () => { } };
+        });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(() => {
+            return { dispose: () => { } };
+        });
+        sinon.stub(vscode.debug, 'startDebugging').callsFake(async (_folder, configuration) => {
+            assert.ok(startDebugSession);
+            startDebugSession(createDebugSession('browser-session-id', configuration as vscode.DebugConfiguration));
+            return true;
+        });
+        let finishStopDebugging: (() => void) | undefined;
+        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').callsFake(() => new Promise<void>(resolve => {
+            finishStopDebugging = resolve;
+        }));
+
+        const dcpServer = {
+            sendNotification: sinon.stub(),
+            takeDebugSessionAggregateStats: sinon.stub(),
+        };
+        const parentDebugSession = createDebugSession('aspire-session-id', {
+            type: 'aspire',
+            request: 'launch',
+            name: 'Aspire',
+            program: '/workspace/apphost.cs',
+        });
+        const terminalProvider = {
+            isDebugConfigEnvironmentLoggingEnabled: () => false,
+        };
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, dcpServer as any, terminalProvider as any, () => { });
+        const debugConfig = createDebugConfig();
+        await configure({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
+
+        const resourceDebugSession = await aspireDebugSession.startAndGetDebugSession(debugConfig);
+
+        assert.ok(resourceDebugSession);
+        let stopResolved = false;
+        const firstStop = Promise.resolve(resourceDebugSession.stopSession()).then(() => { stopResolved = true; });
+        const secondStop = resourceDebugSession.stopSession();
+        await Promise.resolve();
+
+        assert.strictEqual(stopDebuggingStub.callCount, 1, 'Expected the browser session to be stopped once');
+        assert.strictEqual(stopResolved, false, 'Expected stopSession to stay pending until VS Code finished stopping');
+        assert.strictEqual(dcpServer.sendNotification.called, false, 'Expected no termination before the stop completed');
+
+        assert.ok(finishStopDebugging);
+        finishStopDebugging();
+        await firstStop;
+        await secondStop;
+
+        assert.strictEqual(stopResolved, true);
+        assert.strictEqual(stopDebuggingStub.callCount, 1, 'Expected the second stop to reuse the in-flight stop');
+        assert.strictEqual(dcpServer.sendNotification.callCount, 1, 'Expected exactly one sessionTerminated');
+        assert.deepStrictEqual(dcpServer.sendNotification.firstCall.args[0], {
+            notification_type: 'sessionTerminated',
+            session_id: 'run-1',
+            dcp_id: 'dcp-1'
+        });
+        assert.strictEqual(rmStub.calledOnceWithExactly(path.join(os.tmpdir(), 'aspire-vscode-browser-debug', 'run-1'), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }), true);
+
+        aspireDebugSession.dispose();
+        assert.strictEqual(dcpServer.sendNotification.callCount, 1, 'Expected disposal after a requested stop to stay single-shot');
+    });
+
     test('sends sessionTerminated when browser debug session starts after Aspire session disposal', async () => {
         const rmStub = sinon.stub(fs.promises, 'rm').resolves();
         let startDebugSession: ((session: vscode.DebugSession) => void) | undefined;
@@ -294,8 +369,7 @@ suite('Browser Debugger Tests', () => {
         assert.deepStrictEqual(dcpServer.sendNotification.firstCall.args[0], {
             notification_type: 'sessionTerminated',
             session_id: 'run-1',
-            dcp_id: 'dcp-1',
-            exit_code: 0
+            dcp_id: 'dcp-1'
         });
         assert.strictEqual(rmStub.calledOnceWithExactly(path.join(os.tmpdir(), 'aspire-vscode-browser-debug', 'run-1'), { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }), true);
     });
