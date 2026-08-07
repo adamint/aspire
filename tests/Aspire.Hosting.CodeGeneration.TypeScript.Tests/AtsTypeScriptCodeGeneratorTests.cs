@@ -2598,6 +2598,56 @@ public partial class AtsTypeScriptCodeGeneratorTests
         Assert.Equal(CollisionPackageB, serviceBusDeclaration.OwningAssemblyName);
     }
 
+    /// <summary>
+    /// A per-package export names a colliding options interface the way full generation names it,
+    /// on the context the export path actually produces rather than on a raw scan.
+    /// </summary>
+    /// <remarks>
+    /// The determinism test above compares projectors built directly over hand-made contexts, but
+    /// <c>sdk export</c> never hands the projector a raw scan: <see cref="AtsContextFilter.FilterForApiExport"/>
+    /// narrows it to the requested package first. That difference is the whole bug — naming used to
+    /// be decided by collision detection over whatever the context happened to hold, so the narrowed
+    /// view and the full scan reached different answers for the same package.
+    /// <para>
+    /// Both directions are checked because only one of them fails under the old scheme, and it is
+    /// not the obvious one. Event Hubs is scanned first, so it kept the unsuffixed base name in both
+    /// views and agreed by luck; Service Bus lost the draw during full generation and was suffixed
+    /// there while its own single-package export was not. Comparing interface bodies rather than
+    /// just names is what makes that failure visible: the old scheme had Service Bus export
+    /// <c>RunAsEmulatorOptions</c> as <c>configureContainer?: boolean</c> while the SDK gave that
+    /// same name to Event Hubs as <c>configureContainer?: string</c>, so a consumer concatenating
+    /// the export silently got the wrong shape rather than a redeclaration error.
+    /// </para>
+    /// </remarks>
+    [Theory]
+    [InlineData(CollisionPackageA, "AzureEventHubsRunAsEmulatorOptions")]
+    [InlineData(CollisionPackageB, "AzureServiceBusRunAsEmulatorOptions")]
+    public void ApiExportNamesACollidingOptionsInterfaceTheWayGenerationDoes(string packageName, string expectedInterfaceName)
+    {
+        var fullContext = CreateEmulatorCollisionContext();
+        var exportContext = AtsContextFilter.FilterForApiExport(fullContext, [packageName]);
+
+        var model = new TypeScriptApiProjector(exportContext).BuildApiModel(
+            new TypeScriptApiPackageIdentity(packageName, TestPackageVersion),
+            [packageName]);
+
+        var exportedOptions = Assert.Single(
+            model.Modules.SelectMany(module => module.Items),
+            item => item.Kind == TypeScriptApiItemKind.Options);
+
+        Assert.Equal(expectedInterfaceName, exportedOptions.Name);
+        Assert.Equal(packageName, exportedOptions.OwningAssemblyName);
+
+        var generatedSource = new AtsTypeScriptCodeGenerator()
+            .GenerateDistributedApplication(fullContext)["aspire.mts"];
+
+        var generatedInterfaces = ParsePublicInterfaceMembers(generatedSource);
+        Assert.Contains(exportedOptions.Name, generatedInterfaces.Keys);
+        Assert.Equal(
+            exportedOptions.Members.Select(member => member.Declaration).OrderBy(d => d, StringComparer.Ordinal),
+            generatedInterfaces[exportedOptions.Name].OrderBy(d => d, StringComparer.Ordinal));
+    }
+
     private const string CollisionPackageA = "Aspire.Hosting.Azure.EventHubs";
     private const string CollisionPackageB = "Aspire.Hosting.Azure.ServiceBus";
 
