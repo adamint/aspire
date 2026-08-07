@@ -33,16 +33,27 @@ internal static class KnownCapabilities
     public const string Project = "project";
     public const string Node = "node";
 
-    // AppHost build ownership. Whichever side advertises this capability promises the AppHost is
-    // built exactly once before launch, so the other side skips its own build.
+    // AppHost build ownership. The handshake is deliberately asymmetric: advertising this
+    // capability means something different depending on which side of the backchannel does it.
     //
-    // The unversioned predecessor ("build-dotnet-using-cli", CLI 13.2.0-13.2.4) could not be
-    // trusted: on those CLI versions a no-debug launch from the extension forced watch mode, which
-    // skipped the CLI pre-build entirely even though the CLI still advertised the token. An
-    // extension that believed the token skipped its own build too, so nobody built and the user
-    // silently launched stale output (https://github.com/microsoft/aspire/issues/15850).
-    // The version suffix makes the promise verifiable, so build ownership only transfers when both
-    // sides understand the newer contract. Never accept the unversioned token here.
+    //   - The CLI advertising it is a promise -- "I pre-build the AppHost before every launch,
+    //     debug and no-debug alike". The extension reads that in InteractionService and passes
+    //     forceBuild: false, skipping its own build.
+    //   - An extension advertising it is a request -- "you own the pre-build, I will not do it".
+    //     BuildAppHostIfNeededAsync reads that and builds. Without it the CLI stays out of the way,
+    //     because an older extension host still builds for itself and a second build would
+    //     duplicate work and race the extension's diagnostics/launch pipeline.
+    //
+    // Either way the AppHost is built exactly once, and neither side has to know the other's
+    // version -- only whether it speaks this contract.
+    //
+    // The unversioned predecessor ("build-dotnet-using-cli", CLI 13.2.0-13.2.4) could not carry the
+    // CLI-side promise: those versions advertised the token unconditionally but derived watch mode
+    // from `isExtensionHost && !StartDebugSession`, so a no-debug launch skipped the CLI pre-build
+    // entirely. An extension that believed the token skipped its build too, nobody built, and the
+    // user silently launched stale output (https://github.com/microsoft/aspire/issues/15850). The
+    // version suffix is what makes the promise verifiable, so matching stays exact: never accept
+    // the unversioned token, and force a future revision to opt in deliberately.
     public const string BuildDotnetUsingCliV2 = "build-dotnet-using-cli.v2";
     public const string Baseline = "baseline.v1";
     public const string SecretPrompts = "secret-prompts.v1";

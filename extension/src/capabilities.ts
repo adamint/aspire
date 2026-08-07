@@ -6,7 +6,7 @@ export type Capability =
     | 'baseline.v1'
     | 'secret-prompts.v1'
     | 'file-pickers.v1'
-    | 'build-dotnet-using-cli.v2' // Support transferring AppHost build ownership to the CLI
+    | 'build-dotnet-using-cli.v2' // AppHost build ownership; see buildDotnetUsingCliCapability below for what advertising it means on each side
     | 'devkit' // Support for .NET DevKit extension (old, used for determining whether to build .NET projects in extension)
     | 'ms-dotnettools.csdevkit' // Older AppHost versions used this extension identifier instead of devkit
     | 'project' // Support for running C# projects
@@ -26,14 +26,25 @@ export type Capability =
 export type Capabilities = Capability[];
 
 /**
- * AppHost build ownership capability. Whichever side advertises this promises the AppHost is built
- * exactly once before launch, so the other side skips its own build.
+ * AppHost build ownership. The handshake is deliberately asymmetric: advertising this capability
+ * means something different depending on which side of the backchannel does it.
  *
- * The unversioned predecessor ('build-dotnet-using-cli', CLI 13.2.0-13.2.4) could not be trusted:
- * on those CLI versions a no-debug launch forced watch mode, which skipped the CLI pre-build while
- * the CLI still advertised the token. Trusting it meant nobody built and the user silently ran
- * stale output (https://github.com/microsoft/aspire/issues/15850). Never treat the unversioned
- * token as proof that the CLI built.
+ * - The extension advertising it is a request - "the CLI owns the pre-build, I will not do it".
+ *   `BuildAppHostIfNeededAsync` in the CLI reads that and builds. Without it the CLI stays out of
+ *   the way, because an older extension still builds for itself.
+ * - The CLI advertising it is a promise - "I pre-build the AppHost before every launch, debug and
+ *   no-debug alike". `InteractionService` reads that and passes `forceBuild: false`, skipping the
+ *   extension's own build.
+ *
+ * Either way the AppHost is built exactly once, and neither side has to know the other's version -
+ * only whether it speaks this contract.
+ *
+ * The unversioned predecessor ('build-dotnet-using-cli', CLI 13.2.0-13.2.4) could not carry the
+ * CLI-side promise: those versions advertised the token unconditionally but turned watch mode on
+ * for a no-debug launch, which skipped the CLI pre-build entirely. An extension that believed the
+ * token skipped its build too, nobody built, and the user silently ran stale output
+ * (https://github.com/microsoft/aspire/issues/15850). The version suffix is what makes the promise
+ * verifiable, so matching stays exact: never treat the unversioned token as proof the CLI built.
  */
 export const buildDotnetUsingCliCapability = 'build-dotnet-using-cli.v2' satisfies Capability;
 
