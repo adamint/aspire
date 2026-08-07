@@ -6,6 +6,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using System.CommandLine;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -22,7 +23,7 @@ using System.Text.RegularExpressions;
 //    - quarantine: provide one or more fully-qualified test names immediately after -q, and pass the
 //      issue URL using -i/--url. Example: `quarantine -q N.C.M -i https://...`
 //    - unquarantine: provide one or more fully-qualified test names after -u. Example: `quarantine -u N.C.M`
-// 2. Locate the repo root (looks for a .git folder) and then the tests directory under it.
+// 2. Locate the repo root (asks `git rev-parse --show-toplevel`) and then the tests directory under it.
 // 3. Enumerate all .cs files under tests, ignoring bin/ and obj/.
 // 4. For each file, parse a syntax tree and find method declarations. For each method, compute its
 //    containing namespace and type chain and compare against requested targets (namespace + nested type
@@ -41,6 +42,11 @@ public class Program
 {
     private const string DefaultQuarantinedTestAttributeFullName = "Aspire.TestUtilities.QuarantinedTest";
     private const string DefaultActiveIssueAttributeFullName = "Xunit.ActiveIssueAttribute";
+
+    /// <summary>
+    /// Upper bound for the `git rev-parse` probe.
+    /// </summary>
+    private static readonly TimeSpan s_gitProbeTimeout = TimeSpan.FromSeconds(10);
 
     public static Task<int> Main(string[] args)
     {
@@ -133,7 +139,19 @@ public class Program
     private static async Task<int> ExecuteAsync(bool quarantine, bool unquarantine, List<string> fullMethodNames, string? issueUrl, string? scanRootOverride, string attributeFullName, CancellationToken cancellationToken)
     {
         // Resolve repository root and tests folder
-        var repoRoot = FindRepoRoot(Directory.GetCurrentDirectory()) ?? Directory.GetCurrentDirectory();
+        var currentDirectory = Directory.GetCurrentDirectory();
+        var repoRoot = await FindRepoRootAsync(currentDirectory, cancellationToken).ConfigureAwait(false) ?? currentDirectory;
+
+        // This tool rewrites source files in bulk, so a wrong root is destructive rather than merely
+        // wrong. Refuse instead of editing a tree the caller is not standing in.
+        if (!IsSameOrAncestorDirectory(repoRoot, currentDirectory))
+        {
+            Console.Error.WriteLine("Refusing to run: the resolved repository root is not the working directory or one of its ancestors.");
+            Console.Error.WriteLine($"  Resolved repository root: {repoRoot}");
+            Console.Error.WriteLine($"  Current directory:        {currentDirectory}");
+            return 2;
+        }
+
         var testsRoot = string.IsNullOrWhiteSpace(scanRootOverride)
                             ? Path.Combine(repoRoot, "tests")
                             : (Path.IsPathRooted(scanRootOverride!)
@@ -472,21 +490,142 @@ public class Program
     }
 
     /// <summary>
-    /// Walks up the directory tree from <paramref name="startDir"/> to locate the repository root
-    /// (identified by the presence of a .git folder). Returns null if not found.
+    /// Resolves the root of the git working tree that contains <paramref name="startDir"/>.
+    /// Returns null if no repository root can be determined.
     /// </summary>
-    private static string? FindRepoRoot(string startDir)
+    internal static async Task<string?> FindRepoRootAsync(string startDir, CancellationToken cancellationToken)
     {
+        // Ask git first. Git owns the definition of "working tree root" and gets linked worktrees,
+        // submodules, and symlinked paths right, none of which a directory probe can do reliably.
+        if (await TryGetGitTopLevelAsync(startDir, cancellationToken).ConfigureAwait(false) is { } topLevel)
+        {
+            return topLevel;
+        }
+
+        // Fallback for when git is unavailable or `startDir` is not inside a repository.
+        //
+        // IMPORTANT: `.git` must be matched as a file *or* a directory. In a linked worktree `.git` is a
+        // regular file holding a `gitdir: <path>` pointer, so a directory-only probe walks straight past
+        // the worktree root. When a worktree is nested inside another checkout of the same repository,
+        // that walk terminates on the outer checkout's real `.git` directory and this tool then rewrites
+        // source files in the wrong tree - silently, because the edit itself succeeds.
+        // See https://git-scm.com/docs/gitrepository-layout#Documentation/gitrepository-layout.txt-gitfile
         var dir = new DirectoryInfo(startDir);
         while (dir != null)
         {
-            if (Directory.Exists(Path.Combine(dir.FullName, ".git")))
+            var gitPath = Path.Combine(dir.FullName, ".git");
+            if (Directory.Exists(gitPath) || File.Exists(gitPath))
             {
                 return dir.FullName;
             }
             dir = dir.Parent;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Runs <c>git rev-parse --show-toplevel</c> in <paramref name="startDir"/>. Returns null when git is
+    /// not on PATH, the directory is not inside a working tree, or the command otherwise fails.
+    /// </summary>
+    private static async Task<string?> TryGetGitTopLevelAsync(string startDir, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var startInfo = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = startDir,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            startInfo.ArgumentList.Add("rev-parse");
+            startInfo.ArgumentList.Add("--show-toplevel");
+
+            using var process = Process.Start(startInfo);
+            if (process is null)
+            {
+                return null;
+            }
+
+            // Resolving the repo root must never be the reason the tool appears to hang, so bound the
+            // probe and fall back to the directory walk if git does not answer.
+            using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeoutSource.CancelAfter(s_gitProbeTimeout);
+
+            // Read both streams concurrently to avoid deadlock when a pipe buffer fills.
+            var standardOutputTask = process.StandardOutput.ReadToEndAsync(timeoutSource.Token);
+            var standardErrorTask = process.StandardError.ReadToEndAsync(timeoutSource.Token);
+
+            try
+            {
+                await process.WaitForExitAsync(timeoutSource.Token).ConfigureAwait(false);
+                await Task.WhenAll(standardOutputTask, standardErrorTask).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                TryKill(process);
+                return null;
+            }
+
+            if (process.ExitCode != 0)
+            {
+                return null;
+            }
+
+            // git prints a single absolute path using forward slashes on every platform, including
+            // Windows (for example `C:/src/aspire`). GetFullPath normalizes the separators.
+            var trimmed = standardOutputTask.Result.Trim();
+            return trimmed.Length == 0 ? null : Path.GetFullPath(trimmed);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            // git missing from PATH or not executable - fall back to the directory walk.
+            return null;
+        }
+    }
+
+    private static void TryKill(Process process)
+    {
+        try
+        {
+            process.Kill(entireProcessTree: true);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception)
+        {
+            // The process already exited or cannot be killed; nothing useful to do either way.
+        }
+    }
+
+    /// <summary>
+    /// Returns true when <paramref name="candidateAncestor"/> is <paramref name="directory"/> itself or
+    /// one of its ancestors.
+    /// </summary>
+    internal static bool IsSameOrAncestorDirectory(string candidateAncestor, string directory)
+    {
+        var ancestor = new DirectoryInfo(Path.GetFullPath(candidateAncestor));
+        var current = new DirectoryInfo(Path.GetFullPath(directory));
+
+        // Directory names are compared with the platform's file-name casing rules: Windows and the
+        // default macOS volume format are case-insensitive, Linux is not.
+        var comparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+
+        while (current != null)
+        {
+            if (string.Equals(TrimTrailingSeparator(current.FullName), TrimTrailingSeparator(ancestor.FullName), comparison))
+            {
+                return true;
+            }
+            current = current.Parent;
+        }
+        return false;
+    }
+
+    private static string TrimTrailingSeparator(string path)
+    {
+        // A root such as "/" or "C:\" must keep its separator, so never trim the path down to empty.
+        var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return trimmed.Length == 0 ? path : trimmed;
     }
 
     /// <summary>
