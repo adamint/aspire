@@ -20,7 +20,7 @@ suite('utils/workspace tests', () => {
         sandbox.restore();
     });
 
-    test('getRelativePathToWorkspace falls back to the workspace name for absolute paths from any host platform', () => {
+    test('getRelativePathToWorkspace falls back to the workspace name when asRelativePath cannot relativize', () => {
         const workspaceFolder = {
             uri: vscode.Uri.file('/workspace'),
             name: 'workspace',
@@ -30,22 +30,47 @@ suite('utils/workspace tests', () => {
         sandbox.stub(vscode.workspace, 'workspaceFolders').value([workspaceFolder]);
         const asRelativePathStub = sandbox.stub(vscode.workspace, 'asRelativePath');
 
-        // `asRelativePath` returns the input unchanged when it cannot be made relative. The Win32
-        // forms are only rejected by `path.win32` and the POSIX form only by `path.posix`, so this
-        // asserts the same privacy-safe fallback on a Windows host and on a POSIX host (remote
-        // SSH, WSL, Codespaces), where the default `path` module understands only one of them.
-        const absolutePaths = [
+        // `asRelativePath` returns the input unchanged when it cannot be made relative, and it
+        // resolves against the workspace rather than the extension host. Both platforms' absolute
+        // forms must be rejected here, because the Win32 forms are only recognized by `path.win32`
+        // and the POSIX form only by `path.posix`.
+        const hostAbsolutePath = path.join(path.sep, 'workspace', 'src', 'AppHost.csproj');
+        const unrelativizedResults = [
+            hostAbsolutePath,
             'C:\\Users\\me\\src\\AppHost.csproj',
             '\\\\server\\share\\src\\AppHost.csproj',
             '/home/me/src/AppHost.csproj',
-        ];
-
-        const identities = absolutePaths.map(absolutePath => {
-            asRelativePathStub.returns(absolutePath);
-            return getRelativePathToWorkspace(absolutePath);
+        ].map(unrelativized => {
+            asRelativePathStub.returns(unrelativized);
+            return getRelativePathToWorkspace(hostAbsolutePath);
         });
 
-        assert.deepStrictEqual(identities, ['workspace', 'workspace', 'workspace']);
+        assert.deepStrictEqual(unrelativizedResults, ['workspace', 'workspace', 'workspace', 'workspace']);
+    });
+
+    test('getRelativePathToWorkspace reduces absolute paths from either platform to a bare file name', () => {
+        // A path that is absolute only under the *other* platform's rules is inside no workspace
+        // folder on this host, so `getWorkspaceFolder` returns undefined and the absolute-path
+        // rejection in the `asRelativePath` branch is never reached. That left `path.basename`,
+        // which on POSIX does not treat `\` as a separator, so the whole
+        // `C:\Users\me\secret\AppHost.csproj` was returned as the debug configuration name.
+        sandbox.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+
+        const absolutePaths = [
+            'C:\\Users\\me\\secret\\AppHost.csproj',
+            'C:/Users/me/secret/AppHost.csproj',
+            '\\\\server\\share\\secret\\AppHost.csproj',
+            '/home/me/secret/AppHost.csproj',
+        ];
+
+        const names = absolutePaths.map(absolutePath => getRelativePathToWorkspace(absolutePath));
+
+        assert.deepStrictEqual(names, ['AppHost.csproj', 'AppHost.csproj', 'AppHost.csproj', 'AppHost.csproj']);
+        for (const name of names) {
+            // The privacy property, asserted independently of host platform: whatever is returned
+            // is a single path segment, so no directory component can leak.
+            assert.ok(!/[\\/]/.test(name), `'${name}' must be a single path segment on either host platform`);
+        }
     });
 
     test('getRelativePathToWorkspace keeps genuinely relative paths in either separator style', () => {
