@@ -267,6 +267,30 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ProjectMetadataSkipsAssemblyNameForReferenceDisabledInSolutionConfiguration()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        // A reference the solution excludes from the build carries BuildReference=false, and ResolveProjectReferences
+        // skips it. The probe has to skip it too: nothing caches GetTargetPath for it, so probing costs a fresh
+        // evaluation of a project the build was told not to touch.
+        var generatedSource = await GenerateProjectMetadataSourceAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                    <AssemblyName>Disabled Service</AssemblyName>
+                  </PropertyGroup>
+                """,
+            solutionProjectConfiguration: "Debug|AnyCPU",
+            buildProjectInSolution: false);
+
+        // Absence is the capability signal, so an unprobed reference must omit the member rather than guess a name.
+        Assert.Null(GetGeneratedAssemblyNameMember(generatedSource));
+    }
+
+    [Fact]
     public async Task ProjectMetadataRemovesProjectReferenceGlobalProperties()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
@@ -1105,7 +1129,8 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         string? projectReferenceMetadataXml = null,
         string? solutionProjectConfiguration = null,
         string referencedProjectDirectoryName = "Worker",
-        string? ancestorDirectoryBuildPropsXml = null)
+        string? ancestorDirectoryBuildPropsXml = null,
+        bool buildProjectInSolution = true)
     {
         var repoRoot = GetRepoRoot();
 
@@ -1168,7 +1193,7 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
             ? null
             : $$"""
               <PropertyGroup>
-                <CurrentSolutionConfigurationContents>&lt;SolutionConfiguration&gt;&lt;ProjectConfiguration Project=&quot;{C42D47BF-C684-40EB-B438-FC98C4DC6F5D}&quot; AbsolutePath=&quot;{{SecurityElement.Escape(workerProjectFile)}}&quot; BuildProjectInSolution=&quot;True&quot;&gt;{{solutionProjectConfiguration}}&lt;/ProjectConfiguration&gt;&lt;/SolutionConfiguration&gt;</CurrentSolutionConfigurationContents>
+                <CurrentSolutionConfigurationContents>&lt;SolutionConfiguration&gt;&lt;ProjectConfiguration Project=&quot;{C42D47BF-C684-40EB-B438-FC98C4DC6F5D}&quot; AbsolutePath=&quot;{{SecurityElement.Escape(workerProjectFile)}}&quot; BuildProjectInSolution=&quot;{{(buildProjectInSolution ? "True" : "False")}}&quot;&gt;{{solutionProjectConfiguration}}&lt;/ProjectConfiguration&gt;&lt;/SolutionConfiguration&gt;</CurrentSolutionConfigurationContents>
               </PropertyGroup>
             """;
 

@@ -105,7 +105,16 @@
           Condition="'$(SkipAspireProjectResourceAssemblyName)' != 'true'">
 
     <ItemGroup>
-      <_AspirePreparedProjectResource Include="@(_MSBuildProjectReferenceExistent->WithMetadataValue('IsAspireProjectResource', 'true'))" />
+      <!--
+        BuildReference is false when the active solution configuration excludes the project from the build, and
+        ResolveProjectReferences skips those references entirely (see the BuildReference conditions on its MSBuild
+        task invocations in Microsoft.Common.CurrentVersion.targets). The probe has to skip them for the same reason:
+        nothing has cached a GetTargetPath result for a reference the build never touches, so probing it is both a
+        fresh evaluation of a project the solution disabled and a chance to fail the AppHost build on a project that
+        was never meant to participate in it. AssignProjectConfiguration, which PrepareProjectReferences runs,
+        defaults the metadata to true, so it is always populated by the time this target executes.
+      -->
+      <_AspirePreparedProjectResource Include="@(_MSBuildProjectReferenceExistent->WithMetadataValue('IsAspireProjectResource', 'true')->WithMetadataValue('BuildReference', 'true'))" />
     </ItemGroup>
 
     <MSBuild Projects="@(_AspirePreparedProjectResource)"
