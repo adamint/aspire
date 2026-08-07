@@ -3343,6 +3343,169 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task CaptureAppHostLogsAsync_ForwardsStructuredEntriesToCapableExtension()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var errorWriter = new TestStartupErrorWriter();
+        using var fileLoggerProvider = new FileLoggerProvider(logFilePath, errorWriter);
+        var forwardedEntries = new List<ExtensionAppHostLogEntry>();
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (capability, _) => Task.FromResult(capability == KnownCapabilities.AppHostLogOutput),
+            WriteAppHostLogEntryAsyncCallback = entry =>
+            {
+                forwardedEntries.Add(entry);
+                return Task.CompletedTask;
+            }
+        };
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+        var consoleInteractionService = new ConsoleInteractionService(
+            provider.GetRequiredService<ConsoleEnvironment>(),
+            workspace.CreateExecutionContext(logFilePath: logFilePath),
+            TestHelpers.CreateInteractiveHostEnvironment(),
+            new EnvironmentProcessPathProvider(),
+            NullLoggerFactory.Instance,
+            new ConsoleLogBufferContext());
+        using var extensionInteractionService = new ExtensionInteractionService(
+            consoleInteractionService,
+            extensionBackchannel,
+            extensionPromptEnabled: false,
+            logger: NullLogger<ExtensionInteractionService>.Instance);
+        var entries = new[]
+        {
+            CreateEntry(1, LogLevel.Trace, "Trace message"),
+            CreateEntry(2, LogLevel.Debug, "Debug message"),
+            CreateEntry(3, LogLevel.Information, "Repeated message"),
+            CreateEntry(4, LogLevel.Information, "Repeated message"),
+            CreateEntry(5, LogLevel.Warning, "Warning message\nwith details"),
+            CreateEntry(6, LogLevel.Error, "Error message", "System.InvalidOperationException: boom"),
+            CreateEntry(7, LogLevel.Critical, "Critical native failure")
+        };
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetAppHostLogEntriesAsyncCallback = YieldEntries
+        };
+
+        await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, extensionInteractionService, CancellationToken.None);
+        await extensionInteractionService.FlushAsync();
+
+        Assert.Collection(forwardedEntries,
+            entry => Assert.Equal((1L, "Trace", "Trace message", (string?)null), (entry.SequenceNumber, entry.LogLevel, entry.Message, entry.Exception)),
+            entry => Assert.Equal((2L, "Debug", "Debug message", (string?)null), (entry.SequenceNumber, entry.LogLevel, entry.Message, entry.Exception)),
+            entry => Assert.Equal((3L, "Information", "Repeated message", (string?)null), (entry.SequenceNumber, entry.LogLevel, entry.Message, entry.Exception)),
+            entry => Assert.Equal((4L, "Information", "Repeated message", (string?)null), (entry.SequenceNumber, entry.LogLevel, entry.Message, entry.Exception)),
+            entry => Assert.Equal((5L, "Warning", "Warning message\nwith details", (string?)null), (entry.SequenceNumber, entry.LogLevel, entry.Message, entry.Exception)),
+            entry => Assert.Equal((6L, "Error", "Error message", "System.InvalidOperationException: boom"), (entry.SequenceNumber, entry.LogLevel, entry.Message, entry.Exception)),
+            entry => Assert.Equal((7L, "Critical", "Critical native failure", (string?)null), (entry.SequenceNumber, entry.LogLevel, entry.Message, entry.Exception)));
+        Assert.All(forwardedEntries, entry =>
+        {
+            Assert.Equal("Example.Category", entry.CategoryName);
+            Assert.Equal(42, entry.EventId);
+            Assert.Equal("ExampleEvent", entry.EventName);
+        });
+
+        async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            foreach (var entry in entries)
+            {
+                yield return entry;
+            }
+
+            await Task.CompletedTask;
+        }
+
+        static BackchannelLogEntry CreateEntry(long sequenceNumber, LogLevel level, string message, string? exception = null)
+        {
+            return new BackchannelLogEntry
+            {
+                SequenceNumber = sequenceNumber,
+                Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 0, TimeSpan.Zero),
+                LogLevel = level,
+                Message = message,
+                Exception = exception,
+                EventId = new EventId(42, "ExampleEvent"),
+                CategoryName = "Example.Category",
+            };
+        }
+    }
+
+    [Fact]
+    public async Task CaptureAppHostLogsAsync_UsesLegacyDebugMessagesForOlderExtension()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var errorWriter = new TestStartupErrorWriter();
+        using var fileLoggerProvider = new FileLoggerProvider(logFilePath, errorWriter);
+        var forwardedMessages = new List<(string Message, bool Stdout, string? TextStyle)>();
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (_, _) => Task.FromResult(false),
+            WriteDebugSessionMessageAsyncCallback = (message, stdout, textStyle) =>
+            {
+                forwardedMessages.Add((message, stdout, textStyle));
+                return Task.CompletedTask;
+            }
+        };
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+        var consoleInteractionService = new ConsoleInteractionService(
+            provider.GetRequiredService<ConsoleEnvironment>(),
+            workspace.CreateExecutionContext(logFilePath: logFilePath),
+            TestHelpers.CreateInteractiveHostEnvironment(),
+            new EnvironmentProcessPathProvider(),
+            NullLoggerFactory.Instance,
+            new ConsoleLogBufferContext());
+        using var extensionInteractionService = new ExtensionInteractionService(
+            consoleInteractionService,
+            extensionBackchannel,
+            extensionPromptEnabled: false,
+            logger: NullLogger<ExtensionInteractionService>.Instance);
+        var entries = new[]
+        {
+            CreateEntry(LogLevel.Debug, "Debug message"),
+            CreateEntry(LogLevel.Information, "Information message"),
+            CreateEntry(LogLevel.Warning, "Warning message"),
+            CreateEntry(LogLevel.Error, "Error message"),
+        };
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetAppHostLogEntriesAsyncCallback = YieldEntries
+        };
+
+        await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, extensionInteractionService, CancellationToken.None);
+        await extensionInteractionService.FlushAsync();
+
+        Assert.Collection(forwardedMessages,
+            message => Assert.Equal(("Information message", true, "\x1b[2m"), message),
+            message => Assert.Equal(("Warning message", true, "\x1b[2m"), message),
+            message => Assert.Equal(("Error message", false, "\x1b[2m"), message));
+
+        async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            foreach (var entry in entries)
+            {
+                yield return entry;
+            }
+
+            await Task.CompletedTask;
+        }
+
+        static BackchannelLogEntry CreateEntry(LogLevel level, string message)
+        {
+            return new BackchannelLogEntry
+            {
+                Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 0, TimeSpan.Zero),
+                LogLevel = level,
+                Message = message,
+                EventId = new EventId(),
+                CategoryName = "Example.Category",
+            };
+        }
+    }
+
+    [Fact]
     public async Task CaptureAppHostLogsAsync_ConnectionLostException_TreatedAsNormalCompletion()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

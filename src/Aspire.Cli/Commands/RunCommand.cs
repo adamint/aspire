@@ -1081,15 +1081,37 @@ internal sealed class RunCommand : BaseCommand
         {
             await Task.Yield();
 
+            // The capability is negotiated once instead of per record: it is a property of the
+            // connected extension host, and the log stream can be high volume.
+            var supportsStructuredAppHostLogs = false;
+            if (ExtensionHelper.IsExtensionHost(interactionService, out var extensionInteractionService, out var extensionBackchannel))
+            {
+                supportsStructuredAppHostLogs = await extensionBackchannel.HasCapabilityAsync(KnownCapabilities.AppHostLogOutput, cancellationToken).ConfigureAwait(false);
+            }
+
             var logEntries = backchannel.GetAppHostLogEntriesAsync(cancellationToken);
 
             await foreach (var entry in logEntries.WithCancellation(cancellationToken))
             {
-                if (ExtensionHelper.IsExtensionHost(interactionService, out var extensionInteractionService, out _))
+                if (extensionInteractionService is not null)
                 {
-                    if (entry.LogLevel is not LogLevel.Trace and not LogLevel.Debug)
+                    if (supportsStructuredAppHostLogs)
                     {
-                        // Send only information+ level logs to the extension host.
+                        extensionInteractionService.WriteAppHostLogEntry(new ExtensionAppHostLogEntry
+                        {
+                            SequenceNumber = entry.SequenceNumber,
+                            Timestamp = entry.Timestamp,
+                            LogLevel = entry.LogLevel.ToString(),
+                            Message = entry.Message,
+                            CategoryName = entry.CategoryName,
+                            EventId = entry.EventId.Id,
+                            EventName = entry.EventId.Name,
+                            Exception = entry.Exception,
+                        });
+                    }
+                    else if (entry.LogLevel is not LogLevel.Trace and not LogLevel.Debug)
+                    {
+                        // Older extensions only accept plain debug-session messages.
                         extensionInteractionService.WriteDebugSessionMessage(entry.Message, entry.LogLevel is not LogLevel.Error and not LogLevel.Critical, "\x1b[2m");
                     }
                 }
