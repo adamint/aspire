@@ -1,4 +1,4 @@
-import { applyTextStyle } from '../utils/strings';
+import { AnsiColors, applyTextStyle } from '../utils/strings';
 
 export type AppHostLogLevel = 'Trace' | 'Debug' | 'Information' | 'Warning' | 'Error' | 'Critical';
 
@@ -525,19 +525,15 @@ function getRecordBody(record: AppHostLoggerRecord): string {
     return record.exception ? `${record.message}\n${record.exception}` : record.message;
 }
 
-// Mirrors AnsiColors in utils/AspireTerminalProvider, which cannot be imported here:
-// that module pulls in `vscode`, and this one is deliberately host-free so the
-// correlation logic can be exercised directly under Node.
-const ansiYellow = '\x1b[33m';
-const ansiDim = '\x1b[2m';
-
+// Standard SGR codes, resolved through the workbench ANSI palette so the rendered
+// record follows the active color theme.
 function formatLoggerRecord(record: AppHostLoggerRecord): AppHostParentOutput {
     const body = `${record.categoryName}: ${record.logLevel}: ${record.message}${record.exception ? `\n${record.exception}` : ''}`;
     const category = record.logLevel === 'Error' || record.logLevel === 'Critical' ? 'stderr' : 'stdout';
     const style = record.logLevel === 'Trace' || record.logLevel === 'Debug'
-        ? ansiDim
+        ? AnsiColors.Dim
         : record.logLevel === 'Warning'
-            ? ansiYellow
+            ? AnsiColors.Yellow
             : undefined;
 
     return {

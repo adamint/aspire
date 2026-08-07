@@ -5,10 +5,9 @@ import { getRelativePathToWorkspace, isFolderOpenInWorkspace } from '../utils/wo
 import { yesLabel, noLabel, directLink, codespacesLink, openAspireDashboard, settingsLabel, failedToShowPromptEmpty, incompatibleAppHostError, aspireHostingSdkVersion, aspireCliVersion, requiredCapability, fieldRequired, aspireDebugSessionNotInitialized, errorMessage, failedToStartDebugSession, dashboard, codespaces, selectDirectoryTitle, selectFileTitle, unableToAddFolderToWorkspace, dashboardLaunchBehaviorChanged, changelogLabel } from '../loc/strings';
 import { ICliRpcClient } from './rpcClient';
 import { ProgressNotifier } from './progressNotifier';
-import { applyTextStyle, formatText } from '../utils/strings';
+import { AnsiColors, applyTextStyle, formatText } from '../utils/strings';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { AspireExtendedDebugConfiguration, EnvVar } from '../dcp/types';
-import { AnsiColors } from '../utils/AspireTerminalProvider';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import type { DashboardLaunchBehavior } from '../debugger/AspireDebugSession';
 import { isDirectory } from '../utils/io';
