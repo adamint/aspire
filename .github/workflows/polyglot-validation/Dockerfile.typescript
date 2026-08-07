@@ -52,10 +52,11 @@ ENV ASPIRE_CLI_TELEMETRY_OPTOUT=1
 
 WORKDIR /workspace
 
-COPY setup-local-cli.sh /scripts/setup-local-cli.sh
-COPY test-typescript.sh /scripts/test-typescript.sh
-COPY test-typescript-playground.sh /scripts/test-typescript-playground.sh
-RUN chmod +x /scripts/setup-local-cli.sh /scripts/test-typescript.sh /scripts/test-typescript-playground.sh
+# Copy the whole script directory rather than naming files individually. Enumerating them meant a
+# script could reference a sibling that was never added to the image — a helper extracted out of one
+# of these scripts is invisible until the job runs and the `source` fails.
+COPY *.sh /scripts/
+RUN chmod +x /scripts/*.sh
 
 # Entrypoint: Set up Aspire CLI and run validation
 # Bundle extraction happens lazily on first command that needs the layout

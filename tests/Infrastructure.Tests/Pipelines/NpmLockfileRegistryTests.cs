@@ -225,6 +225,114 @@ public class NpmLockfileRegistryTests
     }
 
     /// <summary>
+    /// A sourced helper only enforces anything if it is actually present where the script runs. The
+    /// TypeScript image previously copied its scripts by name, so extracting a helper out of one of
+    /// them left the image without it and the `source` failed at job time.
+    /// </summary>
+    /// <remarks>
+    /// Every polyglot image is checked, not just the TypeScript one, because the images that still
+    /// enumerate their scripts would hit the same failure the first time one of their scripts grows
+    /// a sibling helper.
+    /// </remarks>
+    [Theory]
+    [MemberData(nameof(PolyglotDockerfiles))]
+    public void PolyglotValidationImage_ShipsEveryFileItsScriptsSource(string dockerfileName)
+    {
+        var copied = FilesCopiedIntoImage(ReadRepoFile($"{PolyglotValidationDirectory}/{dockerfileName}"));
+
+        // Only the scripts the image actually ships can run in it, so they define what has to resolve.
+        var missing = copied
+            .Where(name => name.EndsWith(".sh", StringComparison.Ordinal))
+            .SelectMany(name => SourcedFileNames(ReadRepoFile($"{PolyglotValidationDirectory}/{name}")))
+            .Distinct()
+            .Where(name => !copied.Contains(name))
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(Array.Empty<string>(), missing);
+    }
+
+    /// <summary>
+    /// Asserted separately from the theory above so that a regex that silently stops matching cannot
+    /// make every image trivially pass.
+    /// </summary>
+    [Fact]
+    public void TypeScriptValidationImage_ShipsTheRegistryEnvHelper()
+    {
+        var copied = FilesCopiedIntoImage(ReadRepoFile($"{PolyglotValidationDirectory}/Dockerfile.typescript"));
+
+        var sourced = s_packageAcquiringScriptNames
+            .SelectMany(name => SourcedFileNames(ReadRepoFile($"{PolyglotValidationDirectory}/{name}")))
+            .Distinct()
+            .ToArray();
+
+        Assert.Equal(new[] { RegistryEnvScriptName }, sourced);
+        Assert.Contains(RegistryEnvScriptName, copied);
+    }
+
+    public static TheoryData<string> PolyglotDockerfiles => ToTheoryData(
+        Directory.EnumerateFiles(Path.Combine(RepoRoot.Path, PolyglotValidationDirectory), "Dockerfile.*")
+            .Select(Path.GetFileName)
+            .Where(name => name is not null)
+            .Select(name => name!)
+            .OrderBy(name => name, StringComparer.Ordinal));
+
+    /// <summary>
+    /// Resolves the file names a Dockerfile puts in the image, expanding `COPY *.sh` against the
+    /// build context so a glob counts as covering every matching file rather than none.
+    /// </summary>
+    private static HashSet<string> FilesCopiedIntoImage(string dockerfile)
+    {
+        // COPY lines here are the simple `COPY <src> <dest>` form, e.g.
+        //   COPY *.sh /scripts/
+        //   COPY setup-local-cli.sh /scripts/setup-local-cli.sh
+        var copied = new HashSet<string>(StringComparer.Ordinal);
+        var contextFiles = Directory.EnumerateFiles(Path.Combine(RepoRoot.Path, PolyglotValidationDirectory))
+            .Select(Path.GetFileName)
+            .ToArray();
+
+        foreach (Match match in Regex.Matches(dockerfile, @"^COPY\s+(?<source>\S+)\s+\S+\s*$", RegexOptions.Multiline))
+        {
+            var source = match.Groups["source"].Value;
+
+            if (source.Contains('*'))
+            {
+                var pattern = "^" + Regex.Escape(source).Replace("\\*", ".*") + "$";
+                foreach (var file in contextFiles.Where(file => file is not null && Regex.IsMatch(file, pattern)))
+                {
+                    copied.Add(file!);
+                }
+
+                continue;
+            }
+
+            copied.Add(source);
+        }
+
+        return copied;
+    }
+
+    private static IEnumerable<string> SourcedFileNames(string script)
+    {
+        // Sibling helpers are referenced through the `$(dirname "${BASH_SOURCE[0]}")/name.sh` idiom,
+        // either sourced inline or assigned to a variable first so the script can check the file
+        // exists before sourcing it:
+        //
+        //   NPM_REGISTRY_ENV="$(dirname "${BASH_SOURCE[0]}")/npm-registry-env.sh"
+        //   source "$NPM_REGISTRY_ENV"
+        //
+        // Matching the idiom rather than the `source` keyword therefore catches both shapes; keying
+        // off `source` alone would miss the indirect one and silently pass.
+        var siblingReferences = Regex.Matches(script, @"\$\(dirname [^)]*\)/(?<name>[A-Za-z0-9._-]+\.sh)")
+            .Select(match => match.Groups["name"].Value);
+
+        var directSources = Regex.Matches(script, @"^(?:source|\.)\s+""?[^""\s]*/(?<name>[A-Za-z0-9._-]+\.sh)""?\s*$", RegexOptions.Multiline)
+            .Select(match => match.Groups["name"].Value);
+
+        return siblingReferences.Concat(directSources);
+    }
+
+    /// <summary>
     /// Commands that acquire packages from the npm ecosystem, either directly or through the
     /// TypeScript guest runtime. `aspire init --language typescript` installs the scaffolded AppHost's
     /// dependencies with the guest runtime's package manager and passes no --registry, so it acquires

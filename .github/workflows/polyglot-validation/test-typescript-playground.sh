@@ -39,7 +39,17 @@ fi
 TYPESCRIPT_VERSION="${TYPESCRIPT_VERSION:-7}"
 # Point every package manager at the approved dotnet-public-npm feed before anything is installed.
 # This also sets NPM_REGISTRY, used in the install hint below.
-source "$(dirname "${BASH_SOURCE[0]}")/npm-registry-env.sh"
+#
+# Fail closed when the helper is absent: an image that did not ship it must not fall through to
+# installing from an unapproved feed.
+NPM_REGISTRY_ENV="$(dirname "${BASH_SOURCE[0]}")/npm-registry-env.sh"
+if [ ! -f "$NPM_REGISTRY_ENV" ]; then
+    echo "❌ $NPM_REGISTRY_ENV is missing, so the approved-feed configuration cannot be applied."
+    echo "   Refusing to install packages that would come from an unapproved registry."
+    exit 1
+fi
+# shellcheck source=npm-registry-env.sh
+source "$NPM_REGISTRY_ENV"
 
 if ! command -v tsc &> /dev/null || [[ "$(tsc --version 2>/dev/null)" != "Version 7."* ]]; then
     echo "❌ A TypeScript 7 'tsc' is required on PATH to type-check the generated API surface."
