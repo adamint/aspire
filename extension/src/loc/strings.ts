@@ -169,6 +169,8 @@ export const bunDebuggerName = vscode.l10n.t('Bun');
 export const debuggerInstallAction = vscode.l10n.t('Install');
 export const debuggerInstallDontShowAgain = vscode.l10n.t("Don't show again");
 export const debuggerInstallNotification = (debuggerName: string) => vscode.l10n.t('Install the {0} debugger extension to debug this Aspire resource.', debuggerName);
+export const debuggerInstalledRestartAppHost = (debuggerName: string) => vscode.l10n.t('The {0} debugger extension is installed. Restart the AppHost to debug {0} resources.', debuggerName);
+export const debuggerInstallFailed = (debuggerName: string, error: string) => vscode.l10n.t('The {0} debugger extension could not be installed: {1}', debuggerName, error);
 export const dontShowAgainLabel = vscode.l10n.t("Don't Show Again");
 export const doYouWantToSetDefaultApphost = (appHost: string) => vscode.l10n.t('Do you want to set {0} as the default AppHost for this workspace?', appHost);
 export const doYouWantToSelectDefaultApphost = vscode.l10n.t('Do you want to select the default AppHost for this workspace?');

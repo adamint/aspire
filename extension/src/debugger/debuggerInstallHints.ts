@@ -3,10 +3,16 @@ import {
     bunDebuggerName,
     debuggerInstallAction,
     debuggerInstallDontShowAgain,
+    debuggerInstallFailed,
     debuggerInstallNotification,
+    debuggerInstalledRestartAppHost,
     goDebuggerName,
     pythonDebuggerName,
 } from '../loc/strings';
+import { bunDebuggerExtension } from './languages/bun';
+import { goDebuggerExtension } from './languages/go';
+import { pythonDebuggerExtension } from './languages/python';
+import { ResourceDebuggerExtension } from './debuggerExtensions';
 
 export interface DebuggerInstallHint {
     debuggerName: string;
@@ -17,44 +23,76 @@ export interface DebuggerInstallHintServiceDependencies {
     getExtension(extensionId: string): vscode.Extension<unknown> | undefined;
     onDidChangeExtensions: vscode.Event<void>;
     showInformationMessage(message: string, ...items: string[]): Thenable<string | undefined>;
+    showErrorMessage(message: string): Thenable<string | undefined>;
     installExtension(extensionId: string): Thenable<void>;
 }
 
-const pythonDebuggerInstallHint: DebuggerInstallHint = {
-    debuggerName: pythonDebuggerName,
-    extensionId: 'ms-python.debugpy',
-};
+/**
+ * Add* methods whose resources opt into debugging by default, grouped by the debug adapter
+ * extension that has to be installed for the debugger to attach.
+ *
+ * Only methods that call `.WithDebugging()` (or the polyglot equivalent) for the user belong
+ * here. `AddPythonExecutable` is deliberately absent: it produces a `PythonAppResource` but
+ * leaves debugging opt-in, so suggesting debugpy for it would be misleading.
+ *
+ * Node/Vite/Next.js resources are also absent because they are debugged by VS Code's built-in
+ * js-debug adapter, which needs no extension (see `languages/node.ts`, `extensionId: null`).
+ */
+const debuggerInstallHintDefinitions: readonly {
+    debuggerName: string;
+    debuggerExtension: ResourceDebuggerExtension;
+    methodNames: readonly string[];
+}[] = [
+    {
+        debuggerName: pythonDebuggerName,
+        debuggerExtension: pythonDebuggerExtension,
+        methodNames: ['AddPythonApp', 'AddPythonModule', 'AddUvicornApp'],
+    },
+    {
+        debuggerName: goDebuggerName,
+        debuggerExtension: goDebuggerExtension,
+        methodNames: ['AddGoApp'],
+    },
+    {
+        debuggerName: bunDebuggerName,
+        debuggerExtension: bunDebuggerExtension,
+        methodNames: ['AddBunApp'],
+    },
+];
 
-const goDebuggerInstallHint: DebuggerInstallHint = {
-    debuggerName: goDebuggerName,
-    extensionId: 'golang.go',
-};
+const debuggerInstallHintsByMethodName = new Map<string, DebuggerInstallHint>();
+const debuggerInstallHintsByExtensionId = new Map<string, DebuggerInstallHint>();
 
-const bunDebuggerInstallHint: DebuggerInstallHint = {
-    debuggerName: bunDebuggerName,
-    extensionId: 'oven.bun-vscode',
-};
+for (const definition of debuggerInstallHintDefinitions) {
+    const extensionId = definition.debuggerExtension.extensionId;
+    if (!extensionId) {
+        // A null extensionId means the debug adapter ships with VS Code, so there is nothing to install.
+        continue;
+    }
 
-const debuggerInstallHintsByMethod = new Map<string, DebuggerInstallHint>([
-    ['AddPythonApp', pythonDebuggerInstallHint],
-    ['AddPythonModule', pythonDebuggerInstallHint],
-    ['AddUvicornApp', pythonDebuggerInstallHint],
-    ['addPythonApp', pythonDebuggerInstallHint],
-    ['addPythonModule', pythonDebuggerInstallHint],
-    ['addUvicornApp', pythonDebuggerInstallHint],
-    ['AddGoApp', goDebuggerInstallHint],
-    ['addGoApp', goDebuggerInstallHint],
-    ['AddBunApp', bunDebuggerInstallHint],
-    ['addBunApp', bunDebuggerInstallHint],
-]);
+    const hint: DebuggerInstallHint = { debuggerName: definition.debuggerName, extensionId };
+    debuggerInstallHintsByExtensionId.set(extensionId, hint);
+    for (const methodName of definition.methodNames) {
+        // C# AppHosts use `AddPythonApp(...)` while polyglot AppHosts use `addPythonApp(...)`, and
+        // the JS/TS parser matches `/^add\w+$/i`, so any casing can reach this lookup. Key the map
+        // case-insensitively instead of enumerating every spelling.
+        debuggerInstallHintsByMethodName.set(methodName.toLowerCase(), hint);
+    }
+}
 
 const notificationSuppressedKeyPrefix = 'aspire.debuggerInstallHint.suppressed.';
 
 export function getDebuggerInstallHint(methodName: string): DebuggerInstallHint | undefined {
-    return debuggerInstallHintsByMethod.get(methodName);
+    return debuggerInstallHintsByMethodName.get(methodName.toLowerCase());
+}
+
+export function getDebuggerInstallHintForExtension(extensionId: string): DebuggerInstallHint | undefined {
+    return debuggerInstallHintsByExtensionId.get(extensionId);
 }
 
 export async function installDebuggerExtension(extensionId: string): Promise<void> {
+    // https://code.visualstudio.com/api/references/commands - `workbench.extensions.installExtension`
+    // accepts an extension id and resolves once the gallery install completes.
     await vscode.commands.executeCommand('workbench.extensions.installExtension', extensionId);
 }
 
@@ -63,6 +101,7 @@ export class DebuggerInstallHintService implements vscode.Disposable {
     readonly onDidChange = this._onDidChange.event;
 
     private readonly _notificationsShownThisSession = new Set<string>();
+    private readonly _installsAwaitingActivation = new Set<string>();
     private readonly _extensionChangeSubscription: vscode.Disposable;
     private _disposed = false;
 
@@ -78,12 +117,23 @@ export class DebuggerInstallHintService implements vscode.Disposable {
         return hint && !this._dependencies.getExtension(hint.extensionId) ? hint : undefined;
     }
 
+    /**
+     * Whether any debugger hint could still produce a notification. The watcher uses this to skip
+     * opening and parsing AppHost source documents on every resource poll once every hint has
+     * already been shown, suppressed, or satisfied by an installed extension.
+     */
+    hasPendingNotifications(): boolean {
+        for (const hint of debuggerInstallHintsByExtensionId.values()) {
+            if (this._canShowNotification(hint)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     async showNotificationIfNeeded(hint: DebuggerInstallHint): Promise<void> {
-        const notificationSuppressedKey = `${notificationSuppressedKeyPrefix}${hint.extensionId}`;
-        if (this._disposed
-            || this._dependencies.getExtension(hint.extensionId)
-            || this._notificationsShownThisSession.has(hint.extensionId)
-            || this._globalState.get<boolean>(notificationSuppressedKey, false)) {
+        if (!this._canShowNotification(hint)) {
             return;
         }
 
@@ -109,7 +159,7 @@ export class DebuggerInstallHintService implements vscode.Disposable {
         }
 
         if (selected === debuggerInstallDontShowAgain) {
-            await this._globalState.update(notificationSuppressedKey, true);
+            await this._globalState.update(`${notificationSuppressedKeyPrefix}${hint.extensionId}`, true);
         } else if (selected === debuggerInstallAction) {
             await this.installExtension(hint.extensionId);
         }
@@ -120,14 +170,39 @@ export class DebuggerInstallHintService implements vscode.Disposable {
             return;
         }
 
-        await this._dependencies.installExtension(extensionId);
+        try {
+            await this._dependencies.installExtension(extensionId);
+        } catch (error) {
+            // Installing goes through the marketplace, so it fails when the user is offline, behind a
+            // proxy, or running a build without gallery access. Surface that instead of leaving the
+            // hint in place with no explanation.
+            if (!this._disposed) {
+                const debuggerName = getDebuggerInstallHintForExtension(extensionId)?.debuggerName ?? extensionId;
+                void this._dependencies.showErrorMessage(debuggerInstallFailed(debuggerName, getErrorMessage(error)));
+            }
+
+            return;
+        }
+
+        if (this._disposed) {
+            return;
+        }
+
+        // `workbench.extensions.installExtension` resolves when the install completes, but the
+        // extension host publishes the new extension afterwards, so `getExtension` can still return
+        // undefined here. Defer the follow-up guidance until the extension is actually visible;
+        // `refresh` re-checks on every `extensions.onDidChange` event.
+        this._installsAwaitingActivation.add(extensionId);
         this.refresh();
     }
 
     refresh(): void {
-        if (!this._disposed) {
-            this._onDidChange.fire();
+        if (this._disposed) {
+            return;
         }
+
+        this._notifyCompletedInstalls();
+        this._onDidChange.fire();
     }
 
     dispose(): void {
@@ -136,8 +211,33 @@ export class DebuggerInstallHintService implements vscode.Disposable {
         }
 
         this._disposed = true;
+        this._installsAwaitingActivation.clear();
         this._extensionChangeSubscription.dispose();
         this._onDidChange.dispose();
+    }
+
+    private _canShowNotification(hint: DebuggerInstallHint): boolean {
+        return !this._disposed
+            && !this._dependencies.getExtension(hint.extensionId)
+            && !this._notificationsShownThisSession.has(hint.extensionId)
+            && !this._globalState.get<boolean>(`${notificationSuppressedKeyPrefix}${hint.extensionId}`, false);
+    }
+
+    private _notifyCompletedInstalls(): void {
+        for (const extensionId of [...this._installsAwaitingActivation]) {
+            if (!this._dependencies.getExtension(extensionId)) {
+                continue;
+            }
+
+            this._installsAwaitingActivation.delete(extensionId);
+
+            // Debug capabilities are snapshotted into DEBUG_SESSION_INFO / ASPIRE_EXTENSION_CAPABILITIES
+            // when the AppHost process starts (see utils/AspireTerminalProvider), so a debugger installed
+            // while an AppHost is running only takes effect on the next run. Say so rather than implying
+            // the already-running resource became debuggable.
+            const debuggerName = getDebuggerInstallHintForExtension(extensionId)?.debuggerName ?? extensionId;
+            void this._dependencies.showInformationMessage(debuggerInstalledRestartAppHost(debuggerName));
+        }
     }
 }
 
@@ -146,6 +246,11 @@ export function createDebuggerInstallHintService(globalState: vscode.Memento): D
         getExtension: extensionId => vscode.extensions.getExtension(extensionId),
         onDidChangeExtensions: vscode.extensions.onDidChange,
         showInformationMessage: (message, ...items) => vscode.window.showInformationMessage(message, ...items),
+        showErrorMessage: message => vscode.window.showErrorMessage(message),
         installExtension: installDebuggerExtension,
     });
+}
+
+function getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
 }

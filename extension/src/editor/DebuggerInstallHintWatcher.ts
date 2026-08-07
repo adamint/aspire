@@ -11,6 +11,8 @@ export interface DebuggerInstallHintWatcherDependencies {
     reportError(error: unknown): void;
 }
 
+const maxParseAttempts = 5;
+
 export class DebuggerInstallHintWatcher implements vscode.Disposable {
     private readonly _disposables: vscode.Disposable[];
     private _refreshRequested = false;
@@ -59,6 +61,13 @@ export class DebuggerInstallHintWatcher implements vscode.Disposable {
     }
 
     private async _scanRunningResources(): Promise<void> {
+        // Opening and parsing AppHost sources is the expensive part of this watcher and it runs on
+        // every resource poll. Once every debugger hint has been shown, suppressed, or satisfied by
+        // an installed extension there is nothing left to notify about, so skip the work entirely.
+        if (!this._debuggerInstallHintService.hasPendingNotifications()) {
+            return;
+        }
+
         for (const appHost of this._repository.appHosts) {
             if (this._disposed) {
                 return;
@@ -150,7 +159,10 @@ export function createDebuggerInstallHintWatcher(
             const sourceUri = vscode.Uri.file(sourcePath);
             let document = await vscode.workspace.openTextDocument(sourceUri);
 
-            while (true) {
+            // A document that is edited or closed while the parser runs invalidates the parse, so we
+            // retry. Bound the retries so a document being edited continuously can never spin this
+            // loop forever; the next repository poll re-runs the scan anyway.
+            for (let attempt = 0; attempt < maxParseAttempts; attempt++) {
                 const cached = parsedResourceCache.get(document);
                 if (cached?.documentVersion === document.version) {
                     return cached.resources;
@@ -181,6 +193,8 @@ export function createDebuggerInstallHintWatcher(
                 });
                 return resources;
             }
+
+            return [];
         },
         reportError(error) {
             extensionLogOutputChannel.warn(`Failed to evaluate missing debugger install hints: ${String(error)}`);

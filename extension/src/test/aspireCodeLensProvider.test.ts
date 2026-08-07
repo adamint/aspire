@@ -142,6 +142,7 @@ function createHarness(opts: {
         getExtension: extensionId => installedExtensions.has(extensionId) ? { id: extensionId } as vscode.Extension<unknown> : undefined,
         onDidChangeExtensions: extensionChanges.event,
         showInformationMessage: () => Promise.resolve(undefined),
+        showErrorMessage: () => Promise.resolve(undefined),
         installExtension: () => Promise.resolve(),
     });
 

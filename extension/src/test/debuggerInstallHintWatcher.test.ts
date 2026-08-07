@@ -79,6 +79,7 @@ function createHintService(showInformationMessage: sinon.SinonStub, installedExt
             getExtension: extensionId => installed.has(extensionId) ? { id: extensionId } as vscode.Extension<unknown> : undefined,
             onDidChangeExtensions: extensionChanges.event,
             showInformationMessage,
+            showErrorMessage: () => Promise.resolve(undefined),
             installExtension: () => Promise.resolve(),
         }),
         extensionChanges,
@@ -254,6 +255,70 @@ suite('DebuggerInstallHintWatcher', () => {
         await refresh;
 
         assert.strictEqual(showInformationMessage.callCount, 0);
+        service.dispose();
+        extensionChanges.dispose();
+        repositoryChanges.dispose();
+    });
+
+    test('stops parsing AppHost sources once every hint has been shown', async () => {
+        const repositoryChanges = new vscode.EventEmitter<void>();
+        const repository = createRepository(repositoryChanges, [{
+            appHostPath: '/repo/AppHost/AppHost.csproj',
+            appHostPid: 123,
+            cliPid: null,
+            dashboardUrl: null,
+            resources: [makeResource('python'), makeResource('go'), makeResource('bun')],
+        }]);
+        const showInformationMessage = sinon.stub().resolves(undefined);
+        const { service, extensionChanges } = createHintService(showInformationMessage);
+        const parseAppHostResources = sinon.stub().resolves([
+            makeParsedResource('python', 'AddPythonApp'),
+            makeParsedResource('go', 'AddGoApp'),
+            makeParsedResource('bun', 'AddBunApp'),
+        ]);
+        const watcher = new DebuggerInstallHintWatcher(repository, service, {
+            parseAppHostResources,
+            reportError: error => assert.fail(String(error)),
+        });
+
+        await watcher.refresh();
+        assert.strictEqual(parseAppHostResources.callCount, 1);
+        assert.strictEqual(showInformationMessage.callCount, 3);
+
+        await watcher.refresh();
+
+        assert.strictEqual(parseAppHostResources.callCount, 1);
+        assert.strictEqual(showInformationMessage.callCount, 3);
+        watcher.dispose();
+        service.dispose();
+        extensionChanges.dispose();
+        repositoryChanges.dispose();
+    });
+
+    test('does not parse AppHost sources when every debugger extension is installed', async () => {
+        const repositoryChanges = new vscode.EventEmitter<void>();
+        const repository = createRepository(repositoryChanges, [{
+            appHostPath: '/repo/AppHost/AppHost.csproj',
+            appHostPid: 123,
+            cliPid: null,
+            dashboardUrl: null,
+            resources: [makeResource('python')],
+        }]);
+        const showInformationMessage = sinon.stub().resolves(undefined);
+        const { service, extensionChanges } = createHintService(
+            showInformationMessage,
+            ['ms-python.debugpy', 'golang.go', 'oven.bun-vscode']);
+        const parseAppHostResources = sinon.stub().resolves([makeParsedResource('python', 'AddPythonApp')]);
+        const watcher = new DebuggerInstallHintWatcher(repository, service, {
+            parseAppHostResources,
+            reportError: error => assert.fail(String(error)),
+        });
+
+        await watcher.refresh();
+
+        assert.strictEqual(parseAppHostResources.callCount, 0);
+        assert.strictEqual(showInformationMessage.callCount, 0);
+        watcher.dispose();
         service.dispose();
         extensionChanges.dispose();
         repositoryChanges.dispose();

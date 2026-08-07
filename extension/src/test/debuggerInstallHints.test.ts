@@ -8,9 +8,18 @@ import {
     DebuggerInstallHintService,
     DebuggerInstallHintServiceDependencies,
     getDebuggerInstallHint,
+    getDebuggerInstallHintForExtension,
     installDebuggerExtension,
 } from '../debugger/debuggerInstallHints';
-import { debuggerInstallAction, debuggerInstallDontShowAgain } from '../loc/strings';
+import { bunDebuggerExtension } from '../debugger/languages/bun';
+import { goDebuggerExtension } from '../debugger/languages/go';
+import { pythonDebuggerExtension } from '../debugger/languages/python';
+import {
+    debuggerInstallAction,
+    debuggerInstallDontShowAgain,
+    debuggerInstalledRestartAppHost,
+    debuggerInstallFailed,
+} from '../loc/strings';
 
 function createTestMemento(): vscode.Memento {
     const values = new Map<string, unknown>();
@@ -39,6 +48,7 @@ function createDependencies(overrides: Partial<DebuggerInstallHintServiceDepende
             getExtension: () => undefined,
             onDidChangeExtensions: extensionChanges.event,
             showInformationMessage: () => Promise.resolve(undefined),
+            showErrorMessage: () => Promise.resolve(undefined),
             installExtension: () => Promise.resolve(),
             ...overrides,
         },
@@ -73,6 +83,33 @@ suite('debugger install hints', () => {
         assert.strictEqual(getDebuggerInstallHint('AddPythonExecutable'), undefined);
         assert.strictEqual(getDebuggerInstallHint('addPythonExecutable'), undefined);
         assert.strictEqual(getDebuggerInstallHint('addPythonScript'), undefined);
+    });
+
+    test('reuses the extension ids registered by the resource debugger extensions', () => {
+        assert.deepStrictEqual(
+            [
+                getDebuggerInstallHint('AddPythonApp')?.extensionId,
+                getDebuggerInstallHint('AddGoApp')?.extensionId,
+                getDebuggerInstallHint('AddBunApp')?.extensionId,
+            ],
+            [
+                pythonDebuggerExtension.extensionId,
+                goDebuggerExtension.extensionId,
+                bunDebuggerExtension.extensionId,
+            ]);
+        assert.deepStrictEqual(
+            [
+                getDebuggerInstallHintForExtension('ms-python.debugpy'),
+                getDebuggerInstallHintForExtension('golang.go'),
+                getDebuggerInstallHintForExtension('oven.bun-vscode'),
+                getDebuggerInstallHintForExtension('ms-dotnettools.csharp'),
+            ],
+            [
+                { debuggerName: 'Python', extensionId: 'ms-python.debugpy' },
+                { debuggerName: 'Go', extensionId: 'golang.go' },
+                { debuggerName: 'Bun', extensionId: 'oven.bun-vscode' },
+                undefined,
+            ]);
     });
 
     test('only returns hints while the debugger extension is missing', () => {
@@ -251,6 +288,112 @@ suite('debugger install hints', () => {
         await installDebuggerExtension('ms-python.debugpy');
 
         assert.ok(executeCommand.calledOnceWithExactly('workbench.extensions.installExtension', 'ms-python.debugpy'));
+    });
+
+    test('guides the user to restart the AppHost once the installed extension becomes available', async () => {
+        const installed = new Set<string>();
+        const showInformationMessage = sinon.stub().resolves(undefined);
+        const { dependencies, extensionChanges } = createDependencies({
+            getExtension: extensionId => installed.has(extensionId) ? { id: extensionId } as vscode.Extension<unknown> : undefined,
+            showInformationMessage,
+            // The install command resolves before the extension host publishes the extension, so
+            // `getExtension` still reports it as missing when `installExtension` returns.
+            installExtension: () => Promise.resolve(),
+        });
+        const service = new DebuggerInstallHintService(createTestMemento(), dependencies);
+
+        await service.installExtension('golang.go');
+        assert.strictEqual(showInformationMessage.callCount, 0);
+
+        installed.add('golang.go');
+        extensionChanges.fire();
+
+        assert.deepStrictEqual(
+            showInformationMessage.args,
+            [[debuggerInstalledRestartAppHost('Go')]]);
+
+        extensionChanges.fire();
+        assert.strictEqual(showInformationMessage.callCount, 1);
+
+        service.dispose();
+        extensionChanges.dispose();
+    });
+
+    test('reports install failures and keeps the hint available', async () => {
+        const showErrorMessage = sinon.stub().resolves(undefined);
+        const showInformationMessage = sinon.stub().resolves(undefined);
+        const { dependencies, extensionChanges } = createDependencies({
+            showErrorMessage,
+            showInformationMessage,
+            installExtension: () => Promise.reject(new Error('offline')),
+        });
+        const service = new DebuggerInstallHintService(createTestMemento(), dependencies);
+
+        await service.installExtension('oven.bun-vscode');
+
+        assert.deepStrictEqual(
+            showErrorMessage.args,
+            [[debuggerInstallFailed('Bun', 'offline')]]);
+        assert.strictEqual(showInformationMessage.callCount, 0);
+        assert.strictEqual(service.getMissingDebugger('AddBunApp')?.extensionId, 'oven.bun-vscode');
+
+        service.dispose();
+        extensionChanges.dispose();
+    });
+
+    test('install failure from the notification action does not reject', async () => {
+        const showErrorMessage = sinon.stub().resolves(undefined);
+        const { dependencies, extensionChanges } = createDependencies({
+            showErrorMessage,
+            showInformationMessage: () => Promise.resolve(debuggerInstallAction),
+            installExtension: () => Promise.reject(new Error('no marketplace')),
+        });
+        const service = new DebuggerInstallHintService(createTestMemento(), dependencies);
+
+        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddPythonApp')!);
+
+        assert.deepStrictEqual(
+            showErrorMessage.args,
+            [[debuggerInstallFailed('Python', 'no marketplace')]]);
+
+        service.dispose();
+        extensionChanges.dispose();
+    });
+
+    test('reports pending notifications only while a hint can still be shown', async () => {
+        const installed = new Set<string>(['golang.go']);
+        const globalState = createTestMemento();
+        const showInformationMessage = sinon.stub();
+        showInformationMessage.onFirstCall().resolves(debuggerInstallDontShowAgain);
+        showInformationMessage.onSecondCall().resolves(undefined);
+        const { dependencies, extensionChanges } = createDependencies({
+            getExtension: extensionId => installed.has(extensionId) ? { id: extensionId } as vscode.Extension<unknown> : undefined,
+            showInformationMessage,
+        });
+        const service = new DebuggerInstallHintService(globalState, dependencies);
+
+        assert.strictEqual(service.hasPendingNotifications(), true);
+
+        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddPythonApp')!);
+        assert.strictEqual(service.hasPendingNotifications(), true);
+
+        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddBunApp')!);
+        assert.strictEqual(service.hasPendingNotifications(), false);
+
+        service.dispose();
+        extensionChanges.dispose();
+    });
+
+    test('reports no pending notifications once every debugger extension is installed', () => {
+        const { dependencies, extensionChanges } = createDependencies({
+            getExtension: extensionId => ({ id: extensionId }) as vscode.Extension<unknown>,
+        });
+        const service = new DebuggerInstallHintService(createTestMemento(), dependencies);
+
+        assert.strictEqual(service.hasPendingNotifications(), false);
+
+        service.dispose();
+        extensionChanges.dispose();
     });
 
     test('extension changes refresh missing hints and supported capabilities', () => {

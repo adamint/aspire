@@ -271,6 +271,8 @@
   "aspire-vscode.strings.debuggerInstallAction": "Install",
   "aspire-vscode.strings.debuggerInstallDontShowAgain": "Don't show again",
   "aspire-vscode.strings.debuggerInstallNotification": "Install the {0} debugger extension to debug this Aspire resource.",
+  "aspire-vscode.strings.debuggerInstalledRestartAppHost": "The {0} debugger extension is installed. Restart the AppHost to debug {0} resources.",
+  "aspire-vscode.strings.debuggerInstallFailed": "The {0} debugger extension could not be installed: {1}",
   "aspire-vscode.strings.codeLensInstallDebugger": "$(warning)\u200A Install {0} debugger",
   "aspire-vscode.strings.workspaceAppHostLabel": "Workspace AppHost",
   "aspire-vscode.strings.dashboardUrlNotFound": "No Aspire Dashboard URL is available. Start an AppHost and try again.",
