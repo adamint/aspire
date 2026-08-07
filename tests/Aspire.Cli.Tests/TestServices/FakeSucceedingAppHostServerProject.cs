@@ -22,7 +22,14 @@ internal sealed class FakeSucceedingAppHostServerProject(string appDirectoryPath
     /// <c>Aspire.Hosting.*</c> package reference is replaced by the matching project under
     /// <c>src/</c> and the requested package version is discarded.
     /// </summary>
-    public Dictionary<string, LocalProjectSubstitution> LocalProjectSubstitutions { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <remarks>
+    /// The comparer is ordinal on purpose. The real implementation resolves a substitution through
+    /// <c>File.Exists</c>, so it is case-sensitive on Linux and case-insensitive on macOS and
+    /// Windows. Modelling the strictest platform here means a caller that looks a substitution up
+    /// under an arbitrary spelling fails everywhere rather than only on the platform CI happens not
+    /// to be running.
+    /// </remarks>
+    public Dictionary<string, LocalProjectSubstitution> LocalProjectSubstitutions { get; } = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Registers a substitution whose checkout builds <paramref name="checkoutVersionPrefix"/>, or

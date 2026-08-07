@@ -387,6 +387,36 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
     }
 
     /// <summary>
+    /// The core package is matched case-insensitively but resolved through the filesystem, and the
+    /// generated scanner project-references <c>src/Aspire.Hosting</c> under that exact spelling
+    /// regardless of how the caller spelled it. A lookup under the caller's spelling would miss on
+    /// a case-sensitive filesystem and skip the check while the scanner still built the checkout.
+    /// </summary>
+    [Fact]
+    public async Task SdkExportOfTheCorePackageRejectsACheckoutOnAnotherVersionLineWhateverTheCasing()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(
+            interactionService,
+            workspace,
+            rpcClient,
+            appHostServerProject,
+            identityVersion: "13.4.0");
+        appHostServerProject.AddLocalProjectSubstitution("Aspire.Hosting", "13.5.0");
+
+        // The version has to match the identity or the earlier core guard rejects it for a different
+        // reason, which would hide whether the substitution lookup found anything.
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package aspire.hosting@13.4.0");
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.Null(rpcClient.LastExportRequest);
+        Assert.Empty(interactionService.DisplayedRawText);
+    }
+
+    /// <summary>
     /// The same checkout on the same version line is exactly what the label claims, so it exports.
     /// </summary>
     [Fact]

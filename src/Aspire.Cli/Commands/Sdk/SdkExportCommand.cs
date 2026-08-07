@@ -246,8 +246,9 @@ internal sealed class SdkExportCommand : BaseCommand
     /// <returns>The rejection reason, or <see langword="null"/> when the request is exportable.</returns>
     private string? ValidateRequestedPackageIsRestorable(IAppHostServerProject serverProject, string packageName, string packageVersion)
     {
-        if (string.Equals(packageName, CorePackageName, StringComparison.OrdinalIgnoreCase)
-            && ExecutionContext.IdentityOverridden)
+        var isCorePackage = string.Equals(packageName, CorePackageName, StringComparison.OrdinalIgnoreCase);
+
+        if (isCorePackage && ExecutionContext.IdentityOverridden)
         {
             // The prebuilt scanner has no second signal: the core assemblies come from the bundle
             // this CLI shipped with, so an override leaves nothing to check the label against.
@@ -257,12 +258,19 @@ internal sealed class SdkExportCommand : BaseCommand
                    $"Re-run without the override, or export {CorePackageName} from an installed CLI.";
         }
 
-        if (serverProject.GetLocalProjectSubstitution(packageName) is not { } substitution)
+        // The core package is matched case-insensitively but resolved through the filesystem, and
+        // the generated scanner project-references src/Aspire.Hosting under that exact spelling no
+        // matter how the caller spelled it. Looking the substitution up under the caller's spelling
+        // would miss on a case-sensitive filesystem — `--package aspire.hosting` on Linux — and skip
+        // the whole check while the scanner still built the checkout's core surface.
+        var lookupName = isCorePackage ? CorePackageName : packageName;
+
+        if (serverProject.GetLocalProjectSubstitution(lookupName) is not { } substitution)
         {
             return null;
         }
 
-        var preamble = $"This CLI runs from an Aspire repository checkout, so {packageName} is built from {substitution.ProjectPath} " +
+        var preamble = $"This CLI runs from an Aspire repository checkout, so {lookupName} is built from {substitution.ProjectPath} " +
                        $"instead of being restored from a package feed.";
 
         if (ExecutionContext.IdentityOverridden)
@@ -283,9 +291,16 @@ internal sealed class SdkExportCommand : BaseCommand
         if (!SemVersion.TryParse(packageVersion, SemVersionStyles.Any, out var requestedVersion)
             || $"{requestedVersion.Major}.{requestedVersion.Minor}.{requestedVersion.Patch}" != checkoutPrefix)
         {
-            return $"{preamble} That checkout builds {checkoutPrefix}, but {packageVersion} was requested, and exporting it " +
-                   $"would describe the checkout's API surface under the requested version. " +
-                   $"Run the export with the {StripBuildMetadata(packageVersion)} CLI instead.";
+            // A core export takes its version from this CLI's identity rather than from --package,
+            // so telling the caller to re-run with the requested version's CLI would name the CLI
+            // they are already running. There the checkout is the half that has to move.
+            return isCorePackage
+                ? $"{preamble} That checkout builds {checkoutPrefix}, but this CLI is {packageVersion}, and exporting it " +
+                  $"would describe the checkout's API surface under this CLI's version. " +
+                  $"Export {lookupName} from a {checkoutPrefix} CLI, or point this one at a {StripBuildMetadata(packageVersion)} checkout."
+                : $"{preamble} That checkout builds {checkoutPrefix}, but {packageVersion} was requested, and exporting it " +
+                  $"would describe the checkout's API surface under the requested version. " +
+                  $"Run the export with the {StripBuildMetadata(packageVersion)} CLI instead.";
         }
 
         var requested = StripBuildMetadata(packageVersion);
