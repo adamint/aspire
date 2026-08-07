@@ -574,7 +574,17 @@ export default class AspireDcpServer {
                 this._runTelemetryById.delete(notification.session_id);
                 const durationMs = Date.now() - entry.startTimeMs;
                 const exitCode = sessionTerminated.exit_code;
-                const exitBucket = exitCode === 0 ? 'success' : exitCode === -1 ? 'canceled' : 'nonzero';
+                // `exit_code` is optional on the wire: DCP allows it to be omitted when a debug session
+                // ended for a reason other than program exit (a stopped browser/WASM session, for
+                // example). Bucket that as `unknown` rather than folding it into `success`, and leave
+                // the measurement off entirely so no fabricated exit code reaches telemetry.
+                const exitBucket = exitCode === undefined
+                    ? 'unknown'
+                    : exitCode === 0
+                        ? 'success'
+                        : exitCode === -1
+                            ? 'canceled'
+                            : 'nonzero';
                 // Route non-zero exits through the error-event channel so they are surfaced
                 // as errors in the telemetry pipeline, consistent with the synchronous
                 // launch-failure path above and the dashboard fault path.
@@ -585,13 +595,13 @@ export default class AspireDcpServer {
                     exit_code_bucket: exitBucket,
                 }, {
                     duration_ms: durationMs,
-                    exit_code: exitCode,
+                    ...(exitCode === undefined ? {} : { exit_code: exitCode }),
                 });
 
                 // Surface a non-zero exit on the parent AppHost debug-session aggregate so
                 // the eventual `debug/apphost/end` summary reflects whether any child
                 // resource session ended unsuccessfully.
-                if (exitBucket === 'nonzero') {
+                if (exitBucket === 'nonzero' && exitCode !== undefined) {
                     this.recordAppHostProcessExit(entry.debugSessionId, exitCode);
                 }
             }
