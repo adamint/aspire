@@ -538,18 +538,30 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
         // depending on the filesystem. Enumerate and compare rather than passing the caller's name
         // as a search pattern, so a package id that happens to contain a wildcard cannot match a
         // directory it does not name.
-        foreach (var directory in Directory.EnumerateDirectories(srcPath))
+        //
+        // Enumerating can throw where the old File.Exists probe could not, and this runs on the
+        // `aspire run` path via CreateProjectFile, so an unreadable or concurrently removed src/
+        // reports "no substitution" the same way GetRepositoryVersionPrefix does rather than
+        // costing the caller its scanner.
+        try
         {
-            var canonicalName = Path.GetFileName(directory);
-            if (!string.Equals(canonicalName, packageName, StringComparison.OrdinalIgnoreCase))
+            foreach (var directory in Directory.EnumerateDirectories(srcPath))
             {
-                continue;
-            }
+                var canonicalName = Path.GetFileName(directory);
+                if (!string.Equals(canonicalName, packageName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
 
-            var projectPath = Path.Combine(directory, $"{canonicalName}.csproj");
-            return File.Exists(projectPath)
-                ? new LocalProjectSubstitution(projectPath, GetRepositoryVersionPrefix())
-                : null;
+                var projectPath = Path.Combine(directory, $"{canonicalName}.csproj");
+                return File.Exists(projectPath)
+                    ? new LocalProjectSubstitution(projectPath, GetRepositoryVersionPrefix())
+                    : null;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
         }
 
         return null;
