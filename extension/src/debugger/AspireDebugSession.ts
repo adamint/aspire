@@ -163,14 +163,17 @@ export class AspireDebugSession implements vscode.DebugAdapter {
    * signalled directly whenever the cooperative path did not finish the job. No-ops when the CLI
    * already exited, which is the normal case.
    */
-  terminateCliProcessTree(): void {
+  terminateCliProcessTree(options?: { force?: boolean }): void {
     this.cancelScheduledCliProcessTermination();
     const cliProcess = this._cliProcess;
-    if (!cliProcess || cliProcess.exitCode !== null || cliProcess.signalCode !== null) {
+    if (!cliProcess) {
       return;
     }
 
-    terminateCliProcess(cliProcess, `Aspire CLI for debug session ${this.debugSessionId}`);
+    // Deliberately not skipped once the leader has exited. `terminateCliProcess` reaps the surviving
+    // members of a managed process group in that case, and that is the only path that collects
+    // AppHost and resource processes which outlived the CLI that owned them.
+    terminateCliProcess(cliProcess, `Aspire CLI for debug session ${this.debugSessionId}`, options);
   }
 
   private scheduleCliProcessTermination(): void {
@@ -482,8 +485,12 @@ export class AspireDebugSession implements vscode.DebugAdapter {
           vscode.window.showErrorMessage(processExceptionOccurred(error.message, commandLabel));
         },
         exitCallback: (code) => {
-          // The CLI came down on its own, so the escalation timer has nothing left to signal.
-          this.cancelScheduledCliProcessTermination();
+          // The leader came down on its own, so the escalation timer has nothing left to signal —
+          // but a detached leader's descendants (the AppHost and every resource process beneath it)
+          // can outlive it, and this is the last moment they can be collected safely: once the
+          // leader's PID is released the operating system may recycle it as another group's id, and
+          // a later negative-PID signal would land on something unrelated.
+          this.terminateCliProcessTree();
           this._dcpServer.recordAppHostProcessExit(this.debugSessionId, code);
           // Flush any partial line left in either buffer so trailing output isn't lost.
           if (stdoutBuffer.length > 0) {

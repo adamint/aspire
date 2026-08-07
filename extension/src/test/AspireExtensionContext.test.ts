@@ -258,6 +258,23 @@ suite('AspireExtensionContext', () => {
         }
     });
 
+    test('deactivation force-terminates rather than relying on the unref-d escalation timer', async () => {
+        const order: string[] = [];
+        const context = createContext(order);
+        const terminateOptions: Array<{ force?: boolean } | undefined> = [];
+        addSession(context, 'session', () => {
+            order.push('stop session');
+            return Promise.resolve();
+        }, () => order.push('dispose session'), options => terminateOptions.push(options));
+
+        await deactivateContext(context);
+
+        // `terminateCliProcess` escalates to a hard kill on an `unref`'d timer, and deactivation
+        // resolves as soon as this sweep returns, so the extension host can exit before that timer
+        // fires and leave a CLI that ignored SIGTERM alive.
+        assert.deepStrictEqual(terminateOptions, [{ force: true }]);
+    });
+
     test('a debug session registered after teardown is refused and disposed rather than tracked forever', async () => {
         const order: string[] = [];
         const context = createContext(order);
@@ -302,7 +319,7 @@ function createContext(order: string[]): AspireExtensionContext {
     return context;
 }
 
-function addSession(context: AspireExtensionContext, debugSessionId: string, stopCli: () => Promise<void>, dispose: () => void, terminateCliProcessTree: () => void = () => { }): void {
+function addSession(context: AspireExtensionContext, debugSessionId: string, stopCli: () => Promise<void>, dispose: () => void, terminateCliProcessTree: (options?: { force?: boolean }) => void = () => { }): void {
     context.addAspireDebugSession({
         debugSessionId,
         onDidChangeState: () => ({ dispose: () => { } }),

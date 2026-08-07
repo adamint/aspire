@@ -109,7 +109,7 @@ export function spawnCliProcess(terminalProvider: AspireTerminalProvider, comman
     return child;
 }
 
-export function terminateCliProcess(childProcess: ChildProcessWithoutNullStreams, description: string, options?: { suppressTimeoutWarning?: boolean }): void {
+export function terminateCliProcess(childProcess: ChildProcessWithoutNullStreams, description: string, options?: { suppressTimeoutWarning?: boolean; force?: boolean }): void {
     const processGroupPid = process.platform !== 'win32' && managedPosixProcessGroups.has(childProcess)
         ? childProcess.pid
         : undefined;
@@ -162,6 +162,16 @@ export function terminateCliProcess(childProcess: ChildProcessWithoutNullStreams
             }
             managedPosixProcessGroups.delete(childProcess);
         }
+        return;
+    }
+
+    if (options?.force) {
+        // Skip the graceful signal and its escalation timer entirely. The timer below is `unref`'d,
+        // so a caller that is itself shutting down — extension deactivation, which resolves as soon
+        // as this returns — can have its host exit before the timer ever fires, leaving a process
+        // that ignored SIGTERM alive along with its whole tree. Such callers have already spent
+        // their own cooperative window, so the only signal left that means anything is the hard one.
+        forceTermination();
         return;
     }
 

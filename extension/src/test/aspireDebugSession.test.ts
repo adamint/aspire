@@ -109,7 +109,7 @@ suite('AspireDebugSession tests', () => {
         }
     });
 
-    test('terminateCliProcessTree signals a running CLI process and does nothing once it exited', () => {
+    test('terminateCliProcessTree signals a running CLI process and still collects an exited one', () => {
         // `terminateCliProcess` is stubbed rather than executed: on Windows it shells out to
         // `taskkill /pid <pid> /t` instead of calling `child.kill`, so running it for real would
         // both fail this assertion on the Windows CI agents and signal whatever process happens to
@@ -131,7 +131,31 @@ suite('AspireDebugSession tests', () => {
 
         aspireDebugSession.terminateCliProcessTree();
 
+        // An exited leader is still forwarded: `terminateCliProcess` reaps the surviving members of
+        // its managed process group, which is the only path that collects an AppHost and resource
+        // processes that outlived the CLI.
+        sinon.assert.calledTwice(terminateStub);
+        assert.strictEqual(terminateStub.secondCall.args[0], exited);
+    });
+
+    test('a CLI process that exits on its own still has its process group collected', async () => {
+        // Already exited: the leader is gone by the time the exit callback runs, which is exactly
+        // the state the old early return skipped on.
+        const cliProcess = createFakeCliProcess(4324, 0);
+        const spawnStub = sinon.stub(cliModule, 'spawnCliProcess').returns(cliProcess);
+        const terminateStub = sinon.stub(cliModule, 'terminateCliProcess');
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = createSessionForSpawn();
+
+        await aspireDebugSession.spawnAspireCommand(['run'], '/workspace', false, 'aspire run');
+
+        spawnStub.firstCall.args[3]?.exitCallback?.(0);
+
+        // The CLI is gone but the AppHost and resource processes in its detached group need not be,
+        // and once the leader's PID is released the group id can be recycled — so the collection has
+        // to happen here rather than on a later timer.
         sinon.assert.calledOnce(terminateStub);
+        assert.strictEqual(terminateStub.firstCall.args[0], cliProcess);
     });
 
     test('a launch that resolves the CLI path after disposal does not spawn an orphan CLI', async () => {

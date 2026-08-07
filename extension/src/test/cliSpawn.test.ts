@@ -474,6 +474,32 @@ suite('spawnCliProcess tests', () => {
             platformStub.restore();
         }
     });
+    test('force terminates a POSIX process group immediately without waiting for the grace period', async () => {
+        const platformStub = sinon.stub(process, 'platform').value('linux');
+        const processKillStub = sinon.stub(process, 'kill').returns(true);
+        const clock = sinon.useFakeTimers();
+        const childProcess = createTestChildProcess(4646);
+        const spawnStub = sinon.stub(nodeChildProcess, 'spawn').returns(childProcess);
+        const terminalProvider = { createEnvironment: () => ({}) } as AspireTerminalProvider;
+
+        try {
+            const child = spawnCliProcess(terminalProvider, '/usr/local/bin/aspire', ['run'], { createProcessGroup: true });
+            terminateCliProcess(child, 'test Aspire CLI', { force: true });
+
+            // No SIGTERM and no escalation timer: a caller that is itself shutting down cannot rely
+            // on an `unref`'d timer still being there five seconds later.
+            assert.deepStrictEqual(processKillStub.args, [[-4646, 'SIGKILL']]);
+
+            await clock.tickAsync(5000);
+            assert.strictEqual(processKillStub.callCount, 1);
+        }
+        finally {
+            spawnStub.restore();
+            clock.restore();
+            processKillStub.restore();
+            platformStub.restore();
+        }
+    });
 });
 
 function createTestChildProcess(pid: number, exitCode: number | null = null): nodeChildProcess.ChildProcessWithoutNullStreams & { kill: sinon.SinonStub } {

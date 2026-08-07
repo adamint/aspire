@@ -168,7 +168,11 @@ export class AspireExtensionContext implements vscode.Disposable {
         // cannot leave an AppHost and its resource processes orphaned.
         for (const session of this._aspireDebugSessions) {
             try {
-                session.terminateCliProcessTree();
+                // Force rather than signal-and-schedule: `terminateCliProcess` escalates to a hard
+                // kill on an `unref`'d timer, and `_deactivateCore` resolves immediately after this
+                // sweep, so the extension host can exit before that timer fires. The cooperative
+                // deadline above was this CLI's grace period; there is no second one.
+                session.terminateCliProcessTree({ force: true });
             }
             catch (error) {
                 extensionLogOutputChannel.warn(`Failed to terminate the Aspire CLI process during extension deactivation: ${error}`);
