@@ -5,6 +5,7 @@ import * as vscode from 'vscode';
 import { createSelfSignedCertAsync, generateToken } from '../utils/security';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { AspireResourceDebugSession, DcpServerConnectionInfo, ErrorDetails, ErrorResponse, ProcessRestartedNotification, RunSessionNotification, RunSessionPayload, ServiceLogsNotification, SessionMessageNotification, SessionTerminatedNotification } from './types';
+import { RunSessionRecord, RunSessionRegistry, TerminationTrigger } from './RunSessionRegistry';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import { getResourceDebuggerExtensions, prepareDebugSession } from '../debugger/debuggerExtensions';
 import { cleanupRun } from '../debugger/runCleanupRegistry';
@@ -29,9 +30,12 @@ export interface DcpTelemetryHooks {
     onRunSessionAccepted?: (info: { resourceType: string; mode: string }) => void;
 }
 
-interface DcpServerOptions {
-    requestedStopTelemetryTimeoutMs?: number;
-    terminalStateRetentionMs?: number;
+export interface DcpServerOptions {
+    /**
+     * How long a terminated run stays registered so a late debug-adapter exit can still
+     * supply the true exit code for telemetry. See {@link RunSessionRegistry}.
+     */
+    runRetentionMs?: number;
 }
 
 type DebugSessionAggregateStats = {
@@ -40,69 +44,58 @@ type DebugSessionAggregateStats = {
     anyNonZeroExit: boolean;
 };
 
-type RunSessionState = {
-    adapterCompletionProcessed: boolean;
-    debugSessions: AspireResourceDebugSession[];
-    lifecycle: 'starting' | 'running' | 'stopRequested' | 'completed';
-    ownerDcpId: string;
-    runId: string;
-    teardownStarted: boolean;
-    telemetryFallbackTimer?: NodeJS.Timeout;
-    terminalStateTimer?: NodeJS.Timeout;
-    terminalNotificationSent: boolean;
-};
+interface AspireDcpServerParts {
+    app: express.Express;
+    dashboardTelemetry: DashboardTelemetryPassthrough;
+    debugSessionStats: Map<string, DebugSessionAggregateStats>;
+    info: DcpServerConnectionInfo;
+    pendingNotificationsByRoutingKey: Map<string, RunSessionNotification[]>;
+    runSessions: RunSessionRegistry;
+    runTelemetryById: Map<string, RunTelemetryEntry>;
+    server: https.Server;
+    wsByRoutingKey: Map<string, WebSocket>;
+    wss: WebSocketServer;
+}
+
+type RunTelemetryEntry = { startTimeMs: number; resourceType: string; mode: string; debugSessionId: string };
 
 export default class AspireDcpServer {
     private readonly app: express.Express;
     private server: https.Server;
     private wss: WebSocketServer;
-    private wsBySession: Map<string, WebSocket> = new Map();
-    private pendingNotificationQueueByDcpId: Map<string, RunSessionNotification[]> = new Map();
+    // Notification transport is keyed by the stable debug-session prefix, never by the full
+    // DCP instance ID. A DCP instance that reconnects (or is replaced within the same debug
+    // session) lands in the same bucket, so queued notifications are never stranded under an
+    // identity that will not come back. See getSessionRoutingKey.
+    private wsByRoutingKey: Map<string, WebSocket> = new Map();
+    private pendingNotificationsByRoutingKey: Map<string, RunSessionNotification[]> = new Map();
     private readonly _dashboardTelemetry: DashboardTelemetryPassthrough;
-    private readonly _runsBySession: Map<string, RunSessionState>;
+    private readonly _runSessions: RunSessionRegistry;
     private _disposed = false;
     // Per-runId metadata for telemetry correlation between PUT /run_session and
     // the subsequent sessionTerminated WebSocket notification. We need to look
     // up the original event timing/labels when the session terminates, since
     // the WebSocket notification arrives without that context.
-    private readonly _runTelemetryById: Map<string, { startTimeMs: number; resourceType: string; mode: string; debugSessionId: string }>;
+    private readonly _runTelemetryById: Map<string, RunTelemetryEntry>;
     // Per AppHost debug-session aggregate stats accumulated across the lifetime of the
     // session. Used to emit the `debug/apphost/end` summary when an AppHost debug session
     // terminates. Entries are added on first run_session for a debugSessionId and removed
     // (and returned) by takeDebugSessionAggregateStats().
     private readonly _debugSessionStats: Map<string, DebugSessionAggregateStats>;
-    private readonly _requestedStopTelemetryTimeoutMs: number;
-    private readonly _telemetryFallbackTimers = new Set<NodeJS.Timeout>();
-    private readonly _terminalStateRetentionMs: number;
-    private readonly _terminalStateTimers = new Set<NodeJS.Timeout>();
 
     public readonly connectionInfo: DcpServerConnectionInfo;
 
-    private constructor(
-        info: DcpServerConnectionInfo,
-        app: express.Express,
-        server: https.Server,
-        wss: WebSocketServer,
-        wsBySession: Map<string, WebSocket>,
-        pendingNotificationQueueByDcpId: Map<string, RunSessionNotification[]>,
-        dashboardTelemetry: DashboardTelemetryPassthrough,
-        runsBySession: Map<string, RunSessionState>,
-        runTelemetryById: Map<string, { startTimeMs: number; resourceType: string; mode: string; debugSessionId: string }>,
-        debugSessionStats: Map<string, DebugSessionAggregateStats>,
-        requestedStopTelemetryTimeoutMs: number,
-        terminalStateRetentionMs: number) {
-        this.connectionInfo = info;
-        this.app = app;
-        this.server = server;
-        this.wss = wss;
-        this.wsBySession = wsBySession;
-        this.pendingNotificationQueueByDcpId = pendingNotificationQueueByDcpId;
-        this._dashboardTelemetry = dashboardTelemetry;
-        this._runsBySession = runsBySession;
-        this._runTelemetryById = runTelemetryById;
-        this._debugSessionStats = debugSessionStats;
-        this._requestedStopTelemetryTimeoutMs = requestedStopTelemetryTimeoutMs;
-        this._terminalStateRetentionMs = terminalStateRetentionMs;
+    private constructor(parts: AspireDcpServerParts) {
+        this.connectionInfo = parts.info;
+        this.app = parts.app;
+        this.server = parts.server;
+        this.wss = parts.wss;
+        this.wsByRoutingKey = parts.wsByRoutingKey;
+        this.pendingNotificationsByRoutingKey = parts.pendingNotificationsByRoutingKey;
+        this._dashboardTelemetry = parts.dashboardTelemetry;
+        this._runSessions = parts.runSessions;
+        this._runTelemetryById = parts.runTelemetryById;
+        this._debugSessionStats = parts.debugSessionStats;
     }
 
     /**
@@ -147,10 +140,8 @@ export default class AspireDcpServer {
         getDebugSession: (debugSessionId: string) => AspireDebugSession | null,
         hooks: DcpTelemetryHooks = {},
         options: DcpServerOptions = {}): Promise<AspireDcpServer> {
-        const requestedStopTelemetryTimeoutMs = options.requestedStopTelemetryTimeoutMs ?? 5_000;
-        const terminalStateRetentionMs = options.terminalStateRetentionMs ?? 5_000;
-        const runsBySession = new Map<string, RunSessionState>();
-        const runTelemetryById = new Map<string, { startTimeMs: number; resourceType: string; mode: string; debugSessionId: string }>();
+        const runRetentionMs = options.runRetentionMs ?? 5_000;
+        const runTelemetryById = new Map<string, RunTelemetryEntry>();
         const debugSessionStats = new Map<string, DebugSessionAggregateStats>();
         const getOrCreateDebugSessionStats = (debugSessionId: string): DebugSessionAggregateStats => {
             let aggregate = debugSessionStats.get(debugSessionId);
@@ -161,10 +152,17 @@ export default class AspireDcpServer {
 
             return aggregate;
         };
-        const wsBySession = new Map<string, WebSocket>();
-        const pendingNotificationQueueByDcpId = new Map<string, RunSessionNotification[]>();
+        const wsByRoutingKey = new Map<string, WebSocket>();
+        const pendingNotificationsByRoutingKey = new Map<string, RunSessionNotification[]>();
         const dashboardTelemetry = new DashboardTelemetryPassthrough();
         let dcpServer: AspireDcpServer;
+        // `dcpServer` is assigned once the HTTP server is listening, which always precedes any
+        // request or adapter callback that can reach the registry.
+        const runSessions = new RunSessionRegistry({
+            recordCompletion: (runId, exitCode) => dcpServer._recordRunSessionCompletion(runId, exitCode),
+            retentionMs: runRetentionMs,
+            send: (sessionPrefix, notification) => dcpServer._deliver(sessionPrefix, notification),
+        });
 
         return new Promise(async (resolve, reject) => {
             const token = generateToken();
@@ -409,19 +407,17 @@ export default class AspireDcpServer {
                 }
 
                 // Reserve the run before starting VS Code's debug session. The debug adapter
-                // tracker is created during startup and binds to this object. The map keeps
-                // the same state for bounded late registration, and a registered tracker can
-                // continue deduplicating callbacks after the tombstone expires.
-                const run: RunSessionState = {
-                    adapterCompletionProcessed: false,
+                // tracker is created during startup and resolves this run by `runId`, so the
+                // registration must exist before startup can produce callbacks.
+                //
+                // `PUT /run_session` resources always launch through a debug adapter, so the
+                // adapter's exit is the authoritative exit code for this run.
+                const run = runSessions.register({
                     debugSessions: processes,
-                    lifecycle: 'starting',
-                    ownerDcpId: dcpId,
                     runId,
-                    teardownStarted: false,
-                    terminalNotificationSent: false,
-                };
-                runsBySession.set(runId, run);
+                    sessionPrefix: debugSessionId,
+                    terminationTrigger: { kind: 'adapterExit' } satisfies TerminationTrigger,
+                });
                 runTelemetryById.set(runId, { startTimeMs: runSessionStartTimeMs, resourceType: supportedResourceType, mode, debugSessionId });
 
                 try {
@@ -463,7 +459,7 @@ export default class AspireDcpServer {
                     }
 
                     if (!resourceDebugSession) {
-                        runsBySession.delete(runId);
+                        runSessions.remove(runId);
                         emitRunSessionFailureEnd('debugger_did_not_start');
 
                         // Clean up any processes associated with this run (registered by resource-type extensions)
@@ -517,10 +513,8 @@ export default class AspireDcpServer {
 
                     // The HTTP failure and terminal notification are both required, but the
                     // adapter may still report its own exit after startup partially succeeded.
-                    // Route the notification through the run state so that late callbacks see
-                    // the completed protocol result and cannot publish it a second time.
-                    dcpServer._sendTerminalNotification(run);
-                    dcpServer._completeRun(run);
+                    // Terminating through the registry makes that later callback a no-op.
+                    runSessions.terminate(runId, undefined);
 
                     const error: ErrorDetails = {
                         code: 'DebugSessionFailed',
@@ -535,60 +529,42 @@ export default class AspireDcpServer {
 
             app.delete('/run_session/:id', requireHeaders, (req: Request, res: Response) => {
                 const runId = req.params.id as string;
-                const run = runsBySession.get(runId);
+                const run = runSessions.get(runId);
+                if (!run) {
+                    // Per docs/specs/IDE-execution.md, an unknown session is 204 No Content, and
+                    // DCP treats that as a successful stop. A terminated-and-evicted run is
+                    // therefore indistinguishable from one that never existed, which is why no
+                    // tombstone is needed to answer a retried DELETE correctly.
+                    res.status(204).end();
+                    return;
+                }
+
+                // Authorization is the debug-session prefix, matching the identity already used
+                // by requireTelemetryHeaders and PUT /run_session. It deliberately does not
+                // compare full DCP instance IDs: DCP may restart an instance within the same
+                // debug session, and treating each instance as a distinct owner would require
+                // handing run state between them.
                 const dcpId = req.header('microsoft-developer-dcp-instance-id') as string;
-                const ownerPrefix = run ? getDcpIdPrefix(run.ownerDcpId) : null;
-                const isExactOwner = run?.ownerDcpId === dcpId;
-                const ownerWebSocket = run ? wsBySession.get(run.ownerDcpId) : undefined;
-                const replacementWebSocket = wsBySession.get(dcpId);
-                const canReplaceUnavailableOwner = run
-                    && !isExactOwner
-                    && ownerPrefix !== null
-                    && ownerPrefix === getDcpIdPrefix(dcpId)
-                    && replacementWebSocket?.readyState === WebSocket.OPEN
-                    && ownerWebSocket?.readyState !== WebSocket.OPEN;
-                if (run && (isExactOwner || canReplaceUnavailableOwner)) {
-                    if (canReplaceUnavailableOwner) {
-                        // The full DCP instance ID distinguishes concurrent executions. Transfer
-                        // ownership only after the old execution can no longer receive notifications
-                        // and the same-session replacement has established its own socket.
-                        const previousOwnerDcpId = run.ownerDcpId;
-                        run.ownerDcpId = dcpId;
-                        // Anything already queued for the previous owner would otherwise be
-                        // stranded: that execution is gone and will never reconnect under its
-                        // instance ID, so the queue is never drained. This matters most for a
-                        // `sessionTerminated` queued by an earlier DELETE from the exact owner
-                        // whose socket had already dropped — the terminal-state early return
-                        // below answers 200 without emitting anything new (the run is already
-                        // `stopRequested` and `terminalNotificationSent` is set), so the
-                        // replacement would never learn the session ended. Hand the queue over
-                        // before that early return.
-                        dcpServer._transferQueuedNotificationsToOwner(run, previousOwnerDcpId);
-                    }
-                    if (run.lifecycle === 'stopRequested' || run.lifecycle === 'completed') {
-                        res.status(200).end();
-                        return;
-                    }
-
-                    run.lifecycle = 'stopRequested';
-                    dcpServer.sendRequestedStopNotification(run);
-                    dcpServer._scheduleTerminalStateCleanup(run);
-
-                    // DCP's DELETE contract is the protocol acknowledgement that the run has
-                    // terminated. Complete that contract before entering VS Code debugger
-                    // teardown, whose implementation may wait on another extension.
-                    res.status(200).end();
-                    dcpServer._scheduleDebuggerTeardown(run);
-                } else if (run) {
+                if (getSessionRoutingKey(dcpId) !== run.sessionPrefix) {
                     const error: ErrorDetails = {
                         code: 'RunSessionOwnerMismatch',
                         message: `Run session ${runId} is owned by a different Aspire debug session.`,
                         details: []
                     };
                     res.status(403).json({ error }).end();
-                } else {
-                    res.status(204).end();
+                    return;
                 }
+
+                if (!runSessions.requestStop(runId)) {
+                    res.status(200).end();
+                    return;
+                }
+
+                // DCP's DELETE contract is the protocol acknowledgement that the run has
+                // terminated. Complete that contract before entering VS Code debugger
+                // teardown, whose implementation may wait on another extension.
+                res.status(200).end();
+                dcpServer._scheduleDebuggerTeardown(run);
             });
 
 
@@ -610,9 +586,9 @@ export default class AspireDcpServer {
                     //     processes) and `sessionTerminated` notifications
                     //     by guessing or predicting a `dcpId`.
                     //   - Hijack notification delivery for an active debug
-                    //     session — `wsBySession.set(dcpId, ws)` below
-                    //     replaces any existing entry, so a second connection
-                    //     for the same `dcpId` silently steals all future
+                    //     session — `wsByRoutingKey.set(...)` below replaces
+                    //     any existing entry, so a second connection for the
+                    //     same debug session silently steals all future
                     //     notifications from the legitimate DCP client.
                     const authHeader = request.headers['authorization'] as string | undefined;
                     const dcpId = request.headers['microsoft-developer-dcp-instance-id'] as string | undefined;
@@ -628,28 +604,27 @@ export default class AspireDcpServer {
                         return;
                     }
                     wss.handleUpgrade(request, socket, head, (ws) => {
-                        extensionLogOutputChannel.info(`WebSocket connection established for DCP ID: ${dcpId}`);
-                        const previousWs = wsBySession.get(dcpId);
-                        wsBySession.set(dcpId, ws);
-                        if (previousWs && previousWs !== ws && previousWs.readyState === WebSocket.OPEN) {
-                            // Install the replacement before closing the old socket so notifications
-                            // emitted by close handlers are routed to the new connection.
-                            previousWs.close(1000, 'Replaced by a newer DCP connection.');
-                        }
+                        // Route on the debug-session prefix so a reconnecting or replaced DCP
+                        // instance inherits the same queue. The latest socket for a debug session
+                        // wins; the superseded socket is left to close on its own, which is what
+                        // DCP does when it rotates instances.
+                        const routingKey = getSessionRoutingKey(dcpId);
+                        extensionLogOutputChannel.info(`WebSocket connection established for DCP ID: ${dcpId} (routing key: ${routingKey})`);
+                        wsByRoutingKey.set(routingKey, ws);
 
-                        const pendingNotifications = pendingNotificationQueueByDcpId.get(dcpId);
+                        const pendingNotifications = pendingNotificationsByRoutingKey.get(routingKey);
                         if (pendingNotifications) {
                             for (const notification of pendingNotifications) {
                                 AspireDcpServer.sendNotificationCore(notification, ws);
                             }
 
-                            pendingNotificationQueueByDcpId.delete(dcpId);
+                            pendingNotificationsByRoutingKey.delete(routingKey);
                         }
 
                         ws.onclose = () => {
                             extensionLogOutputChannel.info(`WebSocket connection closed for DCP ID: ${dcpId}`);
-                            if (wsBySession.get(dcpId) === ws) {
-                                wsBySession.delete(dcpId);
+                            if (wsByRoutingKey.get(routingKey) === ws) {
+                                wsByRoutingKey.delete(routingKey);
                             }
                         };
                     });
@@ -675,7 +650,18 @@ export default class AspireDcpServer {
                         token: token,
                         certificate: certBase64
                     };
-                    dcpServer = new AspireDcpServer(info, app, server, wss, wsBySession, pendingNotificationQueueByDcpId, dashboardTelemetry, runsBySession, runTelemetryById, debugSessionStats, requestedStopTelemetryTimeoutMs, terminalStateRetentionMs);
+                    dcpServer = new AspireDcpServer({
+                        app,
+                        dashboardTelemetry,
+                        debugSessionStats,
+                        info,
+                        pendingNotificationsByRoutingKey,
+                        runSessions,
+                        runTelemetryById,
+                        server,
+                        wsByRoutingKey,
+                        wss,
+                    });
                     resolve(dcpServer);
                 } else {
                     reject(new Error('Failed to get server address'));
@@ -687,55 +673,33 @@ export default class AspireDcpServer {
     }
 
     public createRunSessionNotificationHandler(runId: string): (notification: RunSessionNotification) => void {
-        const run = this._runsBySession.get(runId);
-        if (!run) {
-            // Resource adapters can start after a completed run's bounded tombstone expires.
-            // Their callbacks must remain scoped to that run and must never fall through to
-            // generic AppHost notification delivery, which would bypass terminal deduplication.
-            return () => { };
-        }
-
-        // The lookup map retains this state for bounded late tracker registration. Once
-        // registered, the tracker keeps the same run-scoped dedupe state until the adapter
-        // exits, even after the map tombstone expires.
-        return notification => this._handleRunSessionNotification(run, notification);
+        // Resolve by runId on every callback rather than capturing the record. A tracker can
+        // outlive its run, and an evicted run must drop its notifications instead of falling
+        // through to generic AppHost delivery, which would bypass terminal deduplication.
+        return notification => this._runSessions.notify(runId, notification);
     }
 
     public sendNotification(notification: RunSessionNotification): void {
-        const run = this._runsBySession.get(notification.session_id);
-        if (run) {
-            this._handleRunSessionNotification(run, notification);
+        if (this._runSessions.get(notification.session_id)) {
+            this._runSessions.notify(notification.session_id, notification);
             return;
         }
 
-        this._sendNotification(notification);
+        // AppHost-scoped notifications carry no run session (`session_id` is empty), so they
+        // are delivered straight to the debug session's socket.
+        this._deliver(getSessionRoutingKey(notification.dcp_id), notification);
     }
 
-    private sendRequestedStopNotification(run: RunSessionState): void {
-        this._sendTerminalNotification(run);
-        this._scheduleTelemetryFallback(run);
+    /**
+     * Terminates a run session that ends without a debug-adapter exit, such as a resource whose
+     * lifetime is bound to a VS Code debug session. Safe to call for an unknown or already
+     * terminated run.
+     */
+    public terminateRunSession(runId: string, exitCode?: number): void {
+        this._runSessions.terminate(runId, exitCode);
     }
 
-    private _scheduleTelemetryFallback(run: RunSessionState): void {
-        if (run.telemetryFallbackTimer || !this._runTelemetryById.has(run.runId)) {
-            return;
-        }
-
-        // The DELETE response is a protocol result, not proof that the debug adapter has
-        // exited. Keep a bounded window for the adapter's real exit code, then close the
-        // telemetry pair as canceled without discarding the separately retained run state.
-        const timer = setTimeout(() => {
-            this._telemetryFallbackTimers.delete(timer);
-            if (run.telemetryFallbackTimer === timer) {
-                run.telemetryFallbackTimer = undefined;
-            }
-            this._recordRunSessionCompletion(run, -1);
-        }, this._requestedStopTelemetryTimeoutMs);
-        run.telemetryFallbackTimer = timer;
-        this._telemetryFallbackTimers.add(timer);
-    }
-
-    private _scheduleDebuggerTeardown(run: RunSessionState): void {
+    private _scheduleDebuggerTeardown(run: RunSessionRecord): void {
         if (run.teardownStarted) {
             return;
         }
@@ -762,78 +726,17 @@ export default class AspireDcpServer {
         extensionLogOutputChannel.warn(`Failed to stop debug session for run ID ${runId} after DELETE completed: ${error instanceof Error ? error.message : String(error)}`);
     }
 
-    private _scheduleTerminalStateCleanup(run: RunSessionState): void {
-        if (run.terminalStateTimer) {
-            return;
-        }
-
-        const timer = setTimeout(() => {
-            this._terminalStateTimers.delete(timer);
-            if (run.terminalStateTimer === timer) {
-                run.terminalStateTimer = undefined;
-            }
-            // Retention is the final lifecycle bound. If no adapter exit or
-            // telemetry fallback completed the run first, close telemetry here
-            // before removing the only run-scoped state owner.
-            this._recordRunSessionCompletion(run, -1);
-            run.lifecycle = 'completed';
-            if (this._runsBySession.get(run.runId) === run) {
-                this._runsBySession.delete(run.runId);
-            }
-        }, this._terminalStateRetentionMs);
-        run.terminalStateTimer = timer;
-        this._terminalStateTimers.add(timer);
-    }
-
-    private _completeRun(run: RunSessionState): void {
-        run.lifecycle = 'completed';
-        this._scheduleTerminalStateCleanup(run);
-    }
-
-    private _handleRunSessionNotification(run: RunSessionState, notification: RunSessionNotification): void {
-        if (this._disposed || notification.session_id !== run.runId) {
-            return;
-        }
-
-        const ownedNotification = {
-            ...notification,
-            dcp_id: run.ownerDcpId,
-            session_id: run.runId,
-        } as RunSessionNotification;
-
-        if (ownedNotification.notification_type !== 'sessionTerminated') {
-            // sessionTerminated is terminal on the DCP notification stream, even when
-            // debugger teardown continues asynchronously for telemetry and cleanup.
-            if (!run.terminalNotificationSent) {
-                this._sendNotification(ownedNotification);
-            }
-            return;
-        }
-
-        if (run.adapterCompletionProcessed) {
-            return;
-        }
-        run.adapterCompletionProcessed = true;
-
-        const sessionTerminated = ownedNotification as SessionTerminatedNotification;
-        this._recordRunSessionCompletion(run, sessionTerminated.exit_code);
-        this._sendTerminalNotification(run, sessionTerminated.exit_code);
-        this._completeRun(run);
-    }
-
-    private _recordRunSessionCompletion(run: RunSessionState, exitCode: number | undefined): void {
-        if (run.telemetryFallbackTimer) {
-            clearTimeout(run.telemetryFallbackTimer);
-            this._telemetryFallbackTimers.delete(run.telemetryFallbackTimer);
-            run.telemetryFallbackTimer = undefined;
-        }
-
-        const entry = this._runTelemetryById.get(run.runId);
+    /**
+     * Closes the telemetry pair for a run. Idempotent by design: a requested stop and a later
+     * adapter exit both report completion, and only the first one to arrive is recorded.
+     */
+    private _recordRunSessionCompletion(runId: string, exitCode: number | undefined): void {
+        const entry = this._runTelemetryById.get(runId);
         if (!entry) {
             return;
         }
 
-        this._runTelemetryById.delete(run.runId);
+        this._runTelemetryById.delete(runId);
         const durationMs = Date.now() - entry.startTimeMs;
         const exitBucket = exitCode === undefined
             ? 'unknown'
@@ -863,74 +766,23 @@ export default class AspireDcpServer {
         }
     }
 
-    private _sendTerminalNotification(run: RunSessionState, exitCode?: number): void {
-        if (this._disposed || run.terminalNotificationSent) {
-            return;
-        }
-        run.terminalNotificationSent = true;
-
-        const notification: SessionTerminatedNotification = {
-            notification_type: 'sessionTerminated',
-            session_id: run.runId,
-            dcp_id: run.ownerDcpId,
-            ...(exitCode === undefined ? {} : { exit_code: exitCode }),
-        };
-        this._sendNotification(notification);
-    }
-
     /**
-     * Moves notifications already queued for `previousDcpId` onto the run's current
-     * owner during a DELETE-driven ownership transfer.
+     * Delivers a notification to a debug session's current socket, queueing it under the
+     * routing key when no socket is connected.
      *
-     * The pending queue is only drained when a WebSocket upgrade arrives for that exact
-     * DCP instance ID. A replaced execution never reconnects under its old ID, so
-     * anything left behind is dropped permanently — including the `sessionTerminated`
-     * that DCP needs to observe (https://github.com/microsoft/aspire/issues/15426).
-     *
-     * Only this run's notifications move. Other runs still owned by `previousDcpId`
-     * keep their place in the original queue and transfer with their own DELETE.
+     * Because the key is the stable debug-session prefix rather than a DCP instance ID, a
+     * queue is always drained by the next connection from that debug session. Nothing can be
+     * stranded under an identity that never returns.
      */
-    private _transferQueuedNotificationsToOwner(run: RunSessionState, previousDcpId: string): void {
-        if (this._disposed || previousDcpId === run.ownerDcpId) {
-            return;
-        }
-
-        const queued = this.pendingNotificationQueueByDcpId.get(previousDcpId);
-        if (!queued) {
-            return;
-        }
-
-        const transferred = queued.filter(notification => notification.session_id === run.runId);
-        if (transferred.length === 0) {
-            return;
-        }
-
-        const retained = queued.filter(notification => notification.session_id !== run.runId);
-        if (retained.length === 0) {
-            this.pendingNotificationQueueByDcpId.delete(previousDcpId);
-        } else {
-            this.pendingNotificationQueueByDcpId.set(previousDcpId, retained);
-        }
-
-        // Re-route in the original order so the new owner observes the same sequence the
-        // previous owner would have. `_sendNotification` delivers immediately when the new
-        // owner's socket is open and re-queues under the new ID otherwise.
-        for (const notification of transferred) {
-            this._sendNotification({ ...notification, dcp_id: run.ownerDcpId });
-        }
-    }
-
-    private _sendNotification(notification: RunSessionNotification): void {
+    private _deliver(routingKey: string, notification: RunSessionNotification): void {
         if (this._disposed) {
             return;
         }
 
-        // If no WebSocket is available for the session, retain notifications in order
-        // until that DCP instance reconnects.
-        const ws = this.wsBySession.get(notification.dcp_id);
+        const ws = this.wsByRoutingKey.get(routingKey);
         if (!ws || ws.readyState !== WebSocket.OPEN) {
-            extensionLogOutputChannel.trace(`No WebSocket found for DCP ID: ${notification.dcp_id} or WebSocket is not open (state: ${ws?.readyState})`);
-            this.pendingNotificationQueueByDcpId.set(notification.dcp_id, [...(this.pendingNotificationQueueByDcpId.get(notification.dcp_id) || []), notification]);
+            extensionLogOutputChannel.trace(`No open WebSocket for routing key ${routingKey} (state: ${ws?.readyState}); queueing notification.`);
+            this.pendingNotificationsByRoutingKey.set(routingKey, [...(this.pendingNotificationsByRoutingKey.get(routingKey) || []), notification]);
             return;
         }
 
@@ -977,11 +829,9 @@ export default class AspireDcpServer {
             return;
         }
 
-        // Every run-session start must have one matching end event. Disposal can
-        // happen before either an adapter exit or the requested-stop fallback.
-        for (const run of this._runsBySession.values()) {
-            this._recordRunSessionCompletion(run, -1);
-        }
+        // The registry emits a matching end event for every still-registered run, since
+        // disposal can happen before either an adapter exit or the retention deadline.
+        this._runSessions.dispose();
 
         this._disposed = true;
 
@@ -999,29 +849,21 @@ export default class AspireDcpServer {
             this.server.close();
         }
 
-        for (const timer of this._telemetryFallbackTimers) {
-            clearTimeout(timer);
-        }
-        this._telemetryFallbackTimers.clear();
-        for (const timer of this._terminalStateTimers) {
-            clearTimeout(timer);
-        }
-        this._terminalStateTimers.clear();
-        this._runsBySession.clear();
         this._runTelemetryById.clear();
-        this.pendingNotificationQueueByDcpId.clear();
-        this.wsBySession.clear();
+        this.pendingNotificationsByRoutingKey.clear();
+        this.wsByRoutingKey.clear();
         this._dashboardTelemetry.dispose();
     }
 }
 
-// Cryptographically-secure identifier generators. The DCP instance id is
-// used as the keying material for routing notifications back to a specific
-// debug session (`wsBySession.set(dcpId, ws)`) — a predictable id combined
-// with the WebSocket upgrade endpoint would let a colocated process hijack
-// the notification stream. `Math.random()` is NOT cryptographically secure
-// (V8's xorshift128+ is predictable from a small number of outputs), so use
-// `randomBytes` instead. 16 hex chars = 64 bits of true entropy.
+// Cryptographically-secure identifier generators. The debug-session prefix is
+// the keying material for routing notifications back to a specific debug
+// session (`wsByRoutingKey.set(getSessionRoutingKey(dcpId), ws)`) — a
+// predictable id combined with the WebSocket upgrade endpoint would let a
+// colocated process hijack the notification stream. `Math.random()` is NOT
+// cryptographically secure (V8's xorshift128+ is predictable from a small
+// number of outputs), so use `randomBytes` instead. 16 hex chars = 64 bits of
+// true entropy.
 //
 // Returns only `[0-9a-f]` so the `getDcpIdPrefix` regex below
 // (`aspire-extension-run-[a-z0-9]+`) keeps matching without changes.
@@ -1040,6 +882,20 @@ function getDcpIdPrefix(dcpId: string): string | null {
     }
 
     return null;
+}
+
+/**
+ * Reduces any DCP identity to the stable debug-session key used for notification routing
+ * and DELETE authorization.
+ *
+ * DCP instance IDs are `<debug session prefix>-<instance suffix>`; the suffix changes when
+ * DCP restarts an instance within the same debug session. Callers pass whichever form they
+ * hold — the AppHost adapter carries the bare prefix, resource adapters and DCP requests
+ * carry the full instance ID — and both resolve to the same key. A bare prefix has no
+ * suffix to strip, so `getDcpIdPrefix` returns null and the value is already the key.
+ */
+export function getSessionRoutingKey(dcpId: string): string {
+    return getDcpIdPrefix(dcpId) ?? dcpId;
 }
 
 function respondWithError(res: Response, statusCode: number, message: ErrorResponse): void {
