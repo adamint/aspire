@@ -85,12 +85,16 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
         Func<LaunchConfigurationCallbackContext, Task<T>> launchConfigurationProducer,
         bool rewritesArgumentsForDebugging = false)
     {
+        // The annotator stays generic over T so the DCP annotation is serialized against the concrete
+        // launch configuration type rather than a boxed object, which would change the emitted JSON.
         return new SupportsDebuggingAnnotation(
             launchConfigurationType,
             async (exe, context) =>
                 exe.AnnotateAsObjectList(
                     Executable.LaunchConfigurationsAnnotation,
                     await ProduceAsync(context).ConfigureAwait(false)),
+            // The suppression is safe because ProduceAsync throws rather than returning null; the
+            // compiler cannot see that because T is unconstrained and so may be a nullable type.
             async context => (await ProduceAsync(context).ConfigureAwait(false))!,
             rewritesArgumentsForDebugging);
 
