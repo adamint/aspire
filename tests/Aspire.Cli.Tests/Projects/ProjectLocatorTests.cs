@@ -442,6 +442,77 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         Assert.Single(settingsFileMessages);
     }
 
+    [Theory]
+    [InlineData("modern-config-at-workspace-root")]
+    [InlineData("legacy-settings-at-workspace-root")]
+    [InlineData("config-beside-apphost")]
+    public async Task RecordedAppHostPathResolvesFromTheConfigFileItWasWrittenTo(string layout)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        DirectoryInfo appHostParentDirectory;
+        DirectoryInfo expectedConfigDirectory;
+
+        switch (layout)
+        {
+            case "modern-config-at-workspace-root":
+                await File.WriteAllTextAsync(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName), "{}");
+                appHostParentDirectory = workspace.WorkspaceRoot;
+                expectedConfigDirectory = workspace.WorkspaceRoot;
+                break;
+
+            case "legacy-settings-at-workspace-root":
+                // CreateForCli already planted <root>/.aspire/settings.json, which is the layout
+                // under test. The config is found in <root>/.aspire but must be rebased onto
+                // <root>/aspire.config.json, so the directory it was found in is not the directory
+                // the path is stored relative to.
+                appHostParentDirectory = workspace.WorkspaceRoot;
+                expectedConfigDirectory = workspace.WorkspaceRoot;
+                break;
+
+            case "config-beside-apphost":
+                // The AppHost's own tree wins over the working directory, so the target sits below
+                // the directory the CLI was invoked from.
+                appHostParentDirectory = workspace.WorkspaceRoot.CreateSubdirectory("nested");
+                await File.WriteAllTextAsync(Path.Combine(appHostParentDirectory.FullName, AspireConfigFile.FileName), "{}");
+                expectedConfigDirectory = appHostParentDirectory;
+                break;
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(layout), layout, "Unknown workspace config layout.");
+        }
+
+        var appHostDirectory = appHostParentDirectory.CreateSubdirectory("AppHost");
+        var appHostProjectFile = new FileInfo(Path.Combine(appHostDirectory.FullName, "AppHost.csproj"));
+        await File.WriteAllTextAsync(appHostProjectFile.FullName, "Not a real apphost");
+
+        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var projectLocator = CreateProjectLocator(executionContext);
+
+        var result = await projectLocator.UseOrFindAppHostProjectFileAsync(
+            appHostProjectFile,
+            MultipleAppHostProjectsFoundBehavior.Prompt,
+            createSettingsFile: true,
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal(appHostProjectFile.FullName, result.SelectedProjectFile?.FullName);
+
+        var expectedConfigPath = Path.Combine(expectedConfigDirectory.FullName, AspireConfigFile.FileName);
+        Assert.True(File.Exists(expectedConfigPath), $"Expected the AppHost to be recorded in '{expectedConfigPath}'.");
+
+        var recordedPath = ReadConfiguredAppHostPath(expectedConfigPath);
+        Assert.Equal("AppHost/AppHost.csproj", recordedPath);
+
+        // Each layout above resolves to a different config file, and two of them pick a directory
+        // that is neither the working directory nor the directory the existing config was found in.
+        // The stored path is relative, so it is only correct if the branch that chose the file and
+        // the base directory the path was made relative to stayed in agreement: resolving the
+        // recorded value against the file it actually landed in has to lead back to the AppHost.
+        Assert.Equal(
+            appHostProjectFile.FullName,
+            Path.GetFullPath(Path.Combine(expectedConfigDirectory.FullName, recordedPath!)));
+    }
+
     [Fact]
     public void WorkspaceConfigLockFileNameIgnoresConfigRootCasing()
     {
