@@ -17,12 +17,15 @@ suite('E2E shard matrix', () => {
     const specDirectory = path.join(extensionRoot, 'src', 'test-e2e');
 
     /**
-     * Compiled spec paths the matrix is allowed to reference, derived from the spec files on disk.
-     * This is the canonical set: a matrix value is correct only if it is in here, and a spec is run
-     * only if the matrix references it.
+     * Compiled spec paths the matrix is allowed to reference, derived from spec file names.
+     *
+     * This is the canonical set, and membership in it is the only thing that makes a matrix value
+     * correct. Deliberately not a filesystem existence check: `out/test-e2e/test-e2e/helpers/fixtures.js`
+     * maps to a TypeScript helper that really is on disk, so an existence check accepts it even though
+     * the runner's glob would then match no tests.
      */
-    function canonicalSpecPaths(): string[] {
-        return fs.readdirSync(specDirectory)
+    function canonicalSpecPaths(specFileNames: readonly string[]): string[] {
+        return specFileNames
             .filter(file => file.endsWith('.e2e.test.ts'))
             .map(file => `out/test-e2e/test-e2e/${file.replace(/\.ts$/, '.js')}`)
             .sort();
@@ -36,15 +39,29 @@ suite('E2E shard matrix', () => {
      * A spec legitimately appears on more than one row (one per platform), so the values are
      * deduplicated before being compared with the canonical set.
      */
-    function matrixSpecPaths(): string[] {
-        const workflow = fs.readFileSync(workflowPath, 'utf8');
-
+    function matrixSpecPaths(workflow: string): string[] {
         return [...new Set([...workflow.matchAll(/^\s*spec:\s*(\S+)\s*$/gm)].map(match => match[1]))].sort();
     }
 
+    function workflowWithSpecs(...specs: readonly string[]): string {
+        return [
+            'jobs:',
+            '  e2e:',
+            '    strategy:',
+            '      matrix:',
+            '        include:',
+            ...specs.map(spec => [
+                '          - name: Linux',
+                '            shardName: shard',
+                `            spec: ${spec}`,
+            ].join('\n')),
+            '',
+        ].join('\n');
+    }
+
     test('runs exactly the set of E2E specs in the CI matrix', () => {
-        const specFiles = canonicalSpecPaths();
-        const matrixSpecs = matrixSpecPaths();
+        const specFiles = canonicalSpecPaths(fs.readdirSync(specDirectory));
+        const matrixSpecs = matrixSpecPaths(fs.readFileSync(workflowPath, 'utf8'));
 
         assert.ok(specFiles.length > 0, `Expected E2E spec files under ${specDirectory}.`);
         assert.ok(matrixSpecs.length > 0, 'Expected spec entries in the E2E workflow matrix.');
@@ -59,10 +76,47 @@ suite('E2E shard matrix', () => {
             'The spec values in extension-e2e-tests.yml must be exactly the compiled paths of the .e2e.test.ts files under src/test-e2e.');
     });
 
+    test('rejects a matrix row pointing at a real file that is not an E2E spec', () => {
+        // The premise of this case: the row references a file that genuinely exists, so a reverse
+        // check written as "the path this maps to exists on disk" accepts it. Assert the premise
+        // directly, otherwise renaming the helper would silently turn this into a vacuous test.
+        assert.ok(
+            fs.existsSync(path.join(specDirectory, 'helpers', 'fixtures.ts')),
+            'This case depends on src/test-e2e/helpers/fixtures.ts existing so it models a real non-spec file.');
+
+        const workflow = workflowWithSpecs(
+            'out/test-e2e/test-e2e/edgeCases.e2e.test.js',
+            'out/test-e2e/test-e2e/helpers/fixtures.js');
+
+        assert.notDeepStrictEqual(
+            matrixSpecPaths(workflow),
+            canonicalSpecPaths(['edgeCases.e2e.test.ts']),
+            'A matrix row pointing at a helper module must be rejected: it produces a shard that runs zero tests.');
+    });
+
+    test('rejects a spec that has no matrix row', () => {
+        const workflow = workflowWithSpecs('out/test-e2e/test-e2e/edgeCases.e2e.test.js');
+
+        assert.notDeepStrictEqual(
+            matrixSpecPaths(workflow),
+            canonicalSpecPaths(['edgeCases.e2e.test.ts', 'appHostTree.e2e.test.ts']),
+            'A spec with no matrix row must be rejected: it never runs and the workflow still reports success.');
+    });
+
+    test('accepts one spec listed on several platform rows', () => {
+        const workflow = workflowWithSpecs(
+            'out/test-e2e/test-e2e/edgeCases.e2e.test.js',
+            'out/test-e2e/test-e2e/edgeCases.e2e.test.js');
+
+        // Guards the deduplication: without it every cross-platform shard would look like a
+        // duplicate entry and the set equality check would fail on a correct workflow.
+        assert.deepStrictEqual(matrixSpecPaths(workflow), canonicalSpecPaths(['edgeCases.e2e.test.ts']));
+    });
+
     test('covers the resource debugger shard on Linux and Windows', () => {
         const workflow = fs.readFileSync(workflowPath, 'utf8');
-        // Rows pair a platform with the shard name, so the platform coverage of one shard can only
-        // be read from the two together:
+        // Rows pair a platform with the shard name, so the platform coverage of a single shard can
+        // only be read from the two together:
         //       - name: Linux
         //         shardName: resource-debugger
         //         spec: out/test-e2e/test-e2e/resourceDebugger.e2e.test.js
@@ -73,8 +127,9 @@ suite('E2E shard matrix', () => {
         // Resource debugging attaches a second debug adapter underneath the AppHost session, and
         // tearing that process tree down is the part that differs between the platforms: POSIX
         // signals a process group, Windows has no equivalent and the extension walks the tree.
-        // A single-platform row would leave exactly the half this shard exists to prove unexercised,
-        // and the set-equality test above cannot catch it because the spec would still be listed.
+        // A single-platform row would leave exactly the half this shard exists to prove
+        // unexercised, and the set equality test above cannot catch it because the spec would
+        // still be listed - it just would not run everywhere it needs to.
         assert.deepStrictEqual(resourceDebuggerPlatforms, ['Linux', 'Windows']);
     });
 });
