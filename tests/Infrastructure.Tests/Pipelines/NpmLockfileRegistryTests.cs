@@ -88,6 +88,45 @@ public class NpmLockfileRegistryTests
 
     public static TheoryData<string> YarnLockfilePaths => ToTheoryData(EnumeratePolyglotLockfiles("yarn.lock"));
 
+    /// <summary>
+    /// Records which shipped lockfiles still resolve through an unapproved registry, so the gap is
+    /// visible and bounded rather than implicit.
+    /// </summary>
+    /// <remarks>
+    /// The theory above guards a named set, which cannot notice a lockfile that was never added to
+    /// it. Every `package-lock.json` under src/ ships to users, so this discovers them from disk and
+    /// pins the exact set that is not yet on the approved feed. Normalizing one makes this fail until
+    /// it is removed from the list; adding a new unnormalized one makes it fail immediately.
+    ///
+    /// These four are pre-existing and predate the lockfile guard — the `frontend/` lockfiles resolve
+    /// every package from registry.npmjs.org, and aspire-ts-cs-starter carries the
+    /// ms-feed-*.pkgs.visualstudio.com redirect drift. Normalizing them means regenerating against the
+    /// approved feed, which changes what `aspire new` ships and is deliberately not bundled into this
+    /// change.
+    /// </remarks>
+    [Fact]
+    public void ShippedLockfiles_NotYetOnTheApprovedFeed_AreExactlyTheKnownSet()
+    {
+        var sourceRoot = Path.Combine(RepoRoot.Path, "src");
+
+        var unnormalized = Directory.EnumerateFiles(sourceRoot, "package-lock.json", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}node_modules{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(path => ScanNpmLockfile(File.ReadAllText(path)).Offenders.Count > 0)
+            .Select(path => Path.GetRelativePath(RepoRoot.Path, path).Replace(Path.DirectorySeparatorChar, '/'))
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            new[]
+            {
+                "src/Aspire.Cli/Templating/Templates/java-starter/frontend/package-lock.json",
+                "src/Aspire.Cli/Templating/Templates/py-starter/frontend/package-lock.json",
+                "src/Aspire.Cli/Templating/Templates/ts-starter/frontend/package-lock.json",
+                "src/Aspire.ProjectTemplates/templates/aspire-ts-cs-starter/frontend/package-lock.json",
+            },
+            unnormalized);
+    }
+
     [Theory]
     [MemberData(nameof(NpmLockfilePaths))]
     public void NpmLockfile_ResolvesEveryPackageThroughTheApprovedFeed(string relativePath)
