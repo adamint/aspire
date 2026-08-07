@@ -172,6 +172,91 @@ suite('AspireExtensionContext', () => {
             warnStub.restore();
         }
     });
+
+    test('deactivation stops a debug session registered while an earlier stop is in flight', async () => {
+        const order: string[] = [];
+        const context = createContext(order);
+        const firstStop = createDeferred<void>();
+        addSession(context, 'first', () => {
+            order.push('stop first');
+            return firstStop.promise;
+        }, () => order.push('dispose first'));
+
+        const shutdown = deactivateContext(context);
+        await Promise.resolve();
+        assert.deepStrictEqual(order, ['stop first']);
+
+        // `_isShuttingDown` does not gate `addAspireDebugSession`, so a debug-adapter descriptor
+        // or an RPC-triggered `startDebugSession` can still register a session at exactly this
+        // point. Snapshotting the session array once would leave this one running.
+        addSession(context, 'late', () => {
+            order.push('stop late');
+            return Promise.resolve();
+        }, () => order.push('dispose late'));
+
+        firstStop.resolve();
+        await shutdown;
+
+        assert.ok(order.includes('stop late'), `A session registered during shutdown must still be asked to stop: ${JSON.stringify(order)}`);
+        assert.ok(order.indexOf('stop late') < order.indexOf('rpc server'), `The late stop must happen before the transport is disposed: ${JSON.stringify(order)}`);
+    });
+
+    test('deactivation terminates the CLI process group after the cooperative stop resolves', async () => {
+        const order: string[] = [];
+        const context = createContext(order);
+        addSession(context, 'session', () => {
+            order.push('stop session');
+            return Promise.resolve();
+        }, () => order.push('dispose session'), () => order.push('terminate session'));
+
+        await deactivateContext(context);
+
+        // A resolved `stopCli` proves the request was accepted, not that the process exited, so
+        // the process group is signalled regardless before teardown continues.
+        assert.deepStrictEqual(order, [
+            'stop session',
+            'terminate session',
+            'dispose session',
+            'rpc server',
+            'dcp server',
+            'terminal provider',
+            'editor command provider',
+        ]);
+    });
+
+    test('deactivation terminates the CLI process group when the cooperative stop never settles', async () => {
+        const order: string[] = [];
+        const context = createContext(order);
+        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
+        const clock = sinon.useFakeTimers();
+        // A CLI that stopped servicing its connection leaves the request pending forever. The
+        // timeout only ends the wait, so without an explicit signal the process would survive.
+        addSession(context, 'hung', () => {
+            order.push('stop hung');
+            return new Promise<void>(() => { });
+        }, () => order.push('dispose hung'), () => order.push('terminate hung'));
+
+        try {
+            const shutdown = deactivateContext(context);
+            await clock.tickAsync(5_000);
+            await shutdown;
+
+            assert.deepStrictEqual(order, [
+                'stop hung',
+                'terminate hung',
+                'dispose hung',
+                'rpc server',
+                'dcp server',
+                'terminal provider',
+                'editor command provider',
+            ]);
+            sinon.assert.calledWithMatch(warnStub, 'Timed out after 5000ms waiting for Aspire CLI stop requests');
+        }
+        finally {
+            clock.restore();
+            warnStub.restore();
+        }
+    });
 });
 
 function createContext(order: string[]): AspireExtensionContext {
@@ -186,12 +271,13 @@ function createContext(order: string[]): AspireExtensionContext {
     return context;
 }
 
-function addSession(context: AspireExtensionContext, debugSessionId: string, stopCli: () => Promise<void>, dispose: () => void): void {
+function addSession(context: AspireExtensionContext, debugSessionId: string, stopCli: () => Promise<void>, dispose: () => void, terminateCliProcessTree: () => void = () => { }): void {
     context.addAspireDebugSession({
         debugSessionId,
         onDidChangeState: () => ({ dispose: () => { } }),
         onDidSendDebugConsoleOutput: () => ({ dispose: () => { } }),
         requestCliStopForExtensionShutdown: stopCli,
+        terminateCliProcessTree,
         dispose,
     } as unknown as AspireDebugSession);
 }

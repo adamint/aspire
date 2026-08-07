@@ -137,15 +137,58 @@ export class AspireExtensionContext implements vscode.Disposable {
     }
 
     private async _waitForCliStopRequests(): Promise<void> {
-        const stopRequests = this._aspireDebugSessions.map(session => {
+        const requested = new Map<string, Promise<void>>();
+        const deadline = Date.now() + AspireExtensionContext._cliStopTimeoutMs;
+
+        // Re-snapshot after every await. `_isShuttingDown` does not stop `addAspireDebugSession`
+        // from registering a session, so a debug-adapter descriptor or an RPC-triggered
+        // `startDebugSession` that lands mid-await would never be asked to stop if the array were
+        // captured only once. Requesting a stop is idempotent per session, so re-scanning is safe.
+        while (this._collectStopRequests(requested) && Date.now() < deadline) {
+            const timedOut = await this._settleStopRequests([...requested.values()], deadline);
+            if (timedOut) {
+                extensionLogOutputChannel.warn(`Timed out after ${AspireExtensionContext._cliStopTimeoutMs}ms waiting for Aspire CLI stop requests; continuing extension teardown.`);
+                break;
+            }
+        }
+
+        // A cooperative stop that resolved, rejected or timed out proves only what happened to the
+        // RPC request; the CLI process can still be running. Signal any that are, so deactivation
+        // cannot leave an AppHost and its resource processes orphaned.
+        for (const session of this._aspireDebugSessions) {
             try {
-                return session.requestCliStopForExtensionShutdown();
+                session.terminateCliProcessTree();
             }
             catch (error) {
-                return Promise.reject(error);
+                extensionLogOutputChannel.warn(`Failed to terminate the Aspire CLI process during extension deactivation: ${error}`);
             }
-        });
+        }
+    }
 
+    /**
+     * Requests a CLI stop for every registered session that has not been asked yet, returning
+     * whether any new session was found.
+     */
+    private _collectStopRequests(requested: Map<string, Promise<void>>): boolean {
+        let addedRequest = false;
+        for (const session of this._aspireDebugSessions) {
+            if (requested.has(session.debugSessionId)) {
+                continue;
+            }
+
+            addedRequest = true;
+            try {
+                requested.set(session.debugSessionId, session.requestCliStopForExtensionShutdown());
+            }
+            catch (error) {
+                requested.set(session.debugSessionId, Promise.reject(error));
+            }
+        }
+
+        return addedRequest;
+    }
+
+    private async _settleStopRequests(stopRequests: Promise<void>[], deadline: number): Promise<boolean> {
         const allStops = Promise.allSettled(stopRequests);
         let timeout: ReturnType<typeof setTimeout> | undefined;
         const outcome = await Promise.race([
@@ -154,7 +197,7 @@ export class AspireExtensionContext implements vscode.Disposable {
                 timeout = setTimeout(() => {
                     timeout = undefined;
                     resolve({ timedOut: true });
-                }, AspireExtensionContext._cliStopTimeoutMs);
+                }, Math.max(0, deadline - Date.now()));
             }),
         ]);
 
@@ -163,8 +206,7 @@ export class AspireExtensionContext implements vscode.Disposable {
         }
 
         if (outcome.timedOut) {
-            extensionLogOutputChannel.warn(`Timed out after ${AspireExtensionContext._cliStopTimeoutMs}ms waiting for Aspire CLI stop requests; continuing extension teardown.`);
-            return;
+            return true;
         }
 
         const failures = outcome.results
@@ -180,6 +222,8 @@ export class AspireExtensionContext implements vscode.Disposable {
                 extensionLogOutputChannel.warn(`Failed to stop Aspire CLI during extension deactivation: ${failure}`);
             }
         }
+
+        return false;
     }
 
     private _disposeCore(): void {

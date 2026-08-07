@@ -5,7 +5,7 @@ import { createDebugAdapterTracker, AppHostOutputHandler, AppHostRestartHandler 
 import { AspireResourceExtendedDebugConfiguration, AspireResourceDebugSession, EnvVar, AspireExtendedDebugConfiguration, NodeLaunchConfiguration, ProcessRestartedNotification, ProjectLaunchConfiguration, SessionTerminatedNotification, StartAppHostOptions } from "../dcp/types";
 import { extensionLogOutputChannel } from "../utils/logging";
 import AspireDcpServer, { generateDcpIdPrefix } from "../dcp/AspireDcpServer";
-import { spawnCliProcess } from "./languages/cli";
+import { spawnCliProcess, terminateCliProcess } from "./languages/cli";
 import { disconnectingFromSession, launchingWithAppHost, launchingWithDirectory, processExceptionOccurred, processExitedWithCode, aspireDashboard, appHostSessionTerminated } from "../loc/strings";
 import { projectDebuggerExtension } from "./languages/dotnet";
 import { AnsiColors } from "../utils/AspireTerminalProvider";
@@ -20,6 +20,7 @@ import { ICliRpcClient } from "../server/rpcClient";
 import path from "path";
 import os from "os";
 import { EnvironmentVariables } from "../utils/environment";
+import type { ChildProcessWithoutNullStreams } from "child_process";
 import { sendTelemetryEvent } from "../utils/telemetry";
 import { classifyAppHostPath, classifyAppHostDirectory } from "../utils/appHostLanguage";
 import { bucketAspireCommand } from "../utils/telemetryBuckets";
@@ -53,6 +54,12 @@ export function getLoggableDebugConfiguration(debugConfig: AspireResourceExtende
 export class AspireDebugSession implements vscode.DebugAdapter {
   private static readonly _mauiDebugStartMaxAttempts = 3;
   private static readonly _mauiDebugStartRetryDelayMs = 5000;
+  /**
+   * How long the cooperative `stopCli` RPC has to bring the CLI down before its process group is
+   * signalled. Long enough for the CLI to stop containers and other resources cleanly, short
+   * enough that a wedged CLI does not keep the AppHost alive indefinitely.
+   */
+  private static readonly _cliCooperativeStopGraceMs = 10_000;
   private readonly _onDidSendMessage = new EventEmitter<any>();
   private readonly _onDidSendDebugConsoleOutput = new EventEmitter<AspireDebugConsoleOutputEvent>();
   private _messageSeq = 1;
@@ -75,6 +82,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private _disposed = false;
   private _parentStopPromise: Thenable<void> | undefined;
   private _cliStopPromise: Promise<void> | undefined;
+  private _cliProcess: ChildProcessWithoutNullStreams | undefined;
+  private _cliTerminationTimer: ReturnType<typeof setTimeout> | undefined;
   // Timestamp for the `debug/apphost/end` duration measurement. Captured the first
   // time we observe a `launch` request so it covers the actual user-visible session
   // lifetime, not the moment the AspireDebugSession object was constructed.
@@ -143,6 +152,46 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
     this._cliStopPromise ??= this._rpcClient.stopCli();
     return this._cliStopPromise;
+  }
+
+  /**
+   * Signals the `aspire` CLI process group when the process is still alive.
+   *
+   * The cooperative `stopCli` RPC resolving proves only that the request was accepted, and on a
+   * closed transport it resolves having done nothing at all. Neither outcome terminates the CLI,
+   * so the process it owns — the AppHost and every resource process beneath it — has to be
+   * signalled directly whenever the cooperative path did not finish the job. No-ops when the CLI
+   * already exited, which is the normal case.
+   */
+  terminateCliProcessTree(): void {
+    this.cancelScheduledCliProcessTermination();
+    const cliProcess = this._cliProcess;
+    if (!cliProcess || cliProcess.exitCode !== null || cliProcess.signalCode !== null) {
+      return;
+    }
+
+    terminateCliProcess(cliProcess, `Aspire CLI for debug session ${this.debugSessionId}`);
+  }
+
+  private scheduleCliProcessTermination(): void {
+    if (!this._cliProcess || this._cliTerminationTimer) {
+      return;
+    }
+
+    // Give the cooperative stop the first chance so the CLI can shut its resources down cleanly;
+    // only a CLI that is still alive afterwards gets signalled.
+    this._cliTerminationTimer = setTimeout(() => {
+      this._cliTerminationTimer = undefined;
+      this.terminateCliProcessTree();
+    }, AspireDebugSession._cliCooperativeStopGraceMs);
+    this._cliTerminationTimer.unref?.();
+  }
+
+  private cancelScheduledCliProcessTermination(): void {
+    if (this._cliTerminationTimer) {
+      clearTimeout(this._cliTerminationTimer);
+      this._cliTerminationTimer = undefined;
+    }
   }
 
   private stopParentDebugSessionOnce(): Thenable<void> {
@@ -406,7 +455,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       return partial;
     };
 
-    spawnCliProcess(
+    this._cliProcess = spawnCliProcess(
       this._terminalProvider,
       await this._terminalProvider.getAspireCliExecutablePath(),
       args,
@@ -422,6 +471,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
           vscode.window.showErrorMessage(processExceptionOccurred(error.message, commandLabel));
         },
         exitCallback: (code) => {
+          // The CLI came down on its own, so the escalation timer has nothing left to signal.
+          this.cancelScheduledCliProcessTermination();
           this._dcpServer.recordAppHostProcessExit(this.debugSessionId, code);
           // Flush any partial line left in either buffer so trailing output isn't lost.
           if (stdoutBuffer.length > 0) {
@@ -439,7 +490,12 @@ export class AspireDebugSession implements vscode.DebugAdapter {
         workingDirectory: workingDirectory,
         debugSessionId: this.debugSessionId,
         noDebug: noDebug,
-        env: env
+        env: env,
+        // `aspire run` owns the AppHost and every resource process beneath it. Spawning it as a
+        // process-group leader is what lets `terminateCliProcess` signal the whole tree by negative
+        // PID when the cooperative `stopCli` RPC does not finish the job. Every other CLI spawn
+        // site in the extension already does this; this one is the longest-lived of them.
+        createProcessGroup: true,
       },
     );
 
@@ -449,6 +505,12 @@ export class AspireDebugSession implements vscode.DebugAdapter {
           extensionLogOutputChannel.info(`stopCli failed (connection may already be closed): ${err}`);
         });
         extensionLogOutputChannel.info(`Requested Aspire CLI exit with args: ${args.join(' ')}`);
+        // `stopCli` is cooperative and cannot be the only stop mechanism: it resolves without
+        // effect when the transport is already closed, and never settles when the CLI has stopped
+        // servicing the connection. Escalate to signalling the process group once the CLI has had
+        // a chance to exit on its own, so a CLI that ignores the request cannot outlive the
+        // session and keep the AppHost and its resource processes alive.
+        this.scheduleCliProcessTermination();
       }
     });
 

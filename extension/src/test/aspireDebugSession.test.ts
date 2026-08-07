@@ -1,9 +1,13 @@
 import * as assert from 'assert';
 import type { TelemetryReporter } from '@vscode/extension-telemetry';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { join } from 'node:path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
+import * as cliModule from '../debugger/languages/cli';
 import { AspireDebugSession, buildAspireCommandArgs, getLoggableDebugConfiguration } from '../debugger/AspireDebugSession';
 import { appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { AspireResourceExtendedDebugConfiguration } from '../dcp/types';
@@ -62,8 +66,7 @@ suite('AspireDebugSession tests', () => {
         tempDirs.length = 0;
     });
 
-    test('extension shutdown reuses an in-flight CLI stop request', async () => {
-        let completeStop!: () => void;
+    test('extension shutdown reuses an in-flight CLI stop request', async () => {        let completeStop!: () => void;
         const stopRequest = new Promise<void>(resolve => {
             completeStop = resolve;
         });
@@ -83,6 +86,44 @@ suite('AspireDebugSession tests', () => {
 
         completeStop();
         await firstRequest;
+    });
+
+    test('spawns the Aspire CLI as a process-group leader and retains the child process', async () => {
+        const cliProcess = createFakeCliProcess(4321);
+        const spawnStub = sinon.stub(cliModule, 'spawnCliProcess').returns(cliProcess);
+        try {
+            const aspireDebugSession = createSessionForSpawn();
+
+            await aspireDebugSession.spawnAspireCommand(['run'], '/workspace', false, 'aspire run');
+
+            const options = spawnStub.firstCall.args[3];
+            // Without a process group there is no way to signal the AppHost and resource processes
+            // the CLI owns, and without retaining the child there is nothing to signal at all.
+            assert.strictEqual(options?.createProcessGroup, true);
+            assert.strictEqual((aspireDebugSession as any)._cliProcess, cliProcess);
+        }
+        finally {
+            spawnStub.restore();
+        }
+    });
+
+    test('terminateCliProcessTree signals a running CLI process and does nothing once it exited', () => {
+        const running = createFakeCliProcess(4322);
+        const aspireDebugSession = createSessionForSpawn();
+        (aspireDebugSession as any)._cliProcess = running;
+
+        aspireDebugSession.terminateCliProcessTree();
+
+        // The cooperative `stopCli` RPC cannot terminate the process, so the signal is what
+        // actually ends the CLI and the resource tree beneath it.
+        sinon.assert.called(running.kill);
+
+        const exited = createFakeCliProcess(4323, 0);
+        (aspireDebugSession as any)._cliProcess = exited;
+
+        aspireDebugSession.terminateCliProcessTree();
+
+        sinon.assert.notCalled(exited.kill);
     });
 
     test('suppresses the Aspire CLI first-run banner for extension-managed launches', async () => {
@@ -1504,5 +1545,36 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
             await clock.tickAsync(10);
         }
+    }
+
+    function createSessionForSpawn(): AspireDebugSession {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+
+        return new AspireDebugSession(
+            parentDebugSession,
+            { onNewConnection: () => ({ dispose: () => { } }) } as any,
+            { recordAppHostProcessExit: () => { } } as any,
+            {
+                getAspireCliExecutablePath: async () => '/usr/local/bin/aspire',
+                createEnvironment: () => ({}),
+            } as any,
+            () => { });
+    }
+
+    function createFakeCliProcess(pid: number, exitCode: number | null = null): ChildProcessWithoutNullStreams & { kill: sinon.SinonStub } {
+        const kill = sinon.stub().returns(true);
+        return Object.assign(new EventEmitter(), {
+            stdin: new PassThrough(),
+            stdout: new PassThrough(),
+            stderr: new PassThrough(),
+            killed: false,
+            exitCode,
+            signalCode: null,
+            pid,
+            kill,
+        }) as unknown as ChildProcessWithoutNullStreams & { kill: sinon.SinonStub };
     }
 });
