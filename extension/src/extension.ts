@@ -49,6 +49,8 @@ import { createE2eStateFileBridge, isE2eBridgeEnabled } from './testing/e2eState
 import type { AspireAppHostState, AspireExtensionApi, AspireExtensionStateSnapshot, WaitForStateOptions } from './types/extensionApi';
 import { AppHostsViewTelemetry } from './views/AppHostsViewTelemetry';
 import { initializeCliPathEnvironmentSync } from './utils/cliPathEnvironment';
+import { createDebuggerInstallHintService } from './debugger/debuggerInstallHints';
+import { createDebuggerInstallHintWatcher } from './editor/DebuggerInstallHintWatcher';
 
 let aspireExtensionContext = new AspireExtensionContext();
 
@@ -273,9 +275,15 @@ export async function activate(context: vscode.ExtensionContext) {
     { dispose: () => { appHostTreeProvider.dispose(); dataRepository.dispose(); } });
 
   // CodeLens provider — shows Debug on pipeline steps, resource state on resources
-  const codeLensProvider = new AspireCodeLensProvider(appHostTreeProvider, dataRepository);
+  const debuggerInstallHintService = createDebuggerInstallHintService(context.globalState);
+  const debuggerInstallHintWatcher = createDebuggerInstallHintWatcher(dataRepository, debuggerInstallHintService);
+  void debuggerInstallHintWatcher.refresh().catch(error =>
+    extensionLogOutputChannel.warn(`Failed to evaluate missing debugger install hints: ${String(error)}`));
+  const codeLensProvider = new AspireCodeLensProvider(appHostTreeProvider, dataRepository, debuggerInstallHintService);
   const languageFilters = getSupportedLanguageIds().map(lang => ({ language: lang, scheme: 'file' }));
   const codeLensRegistration = vscode.languages.registerCodeLensProvider(languageFilters, codeLensProvider);
+  const installDebuggerExtensionRegistration = registerInstrumentedCommand('aspire-vscode.installDebuggerExtension', 'codelens', (extensionId: string) =>
+    debuggerInstallHintService.installExtension(extensionId));
   const codeLensDebugPipelineStepRegistration = registerInstrumentedCommand('aspire-vscode.codeLensDebugPipelineStep', 'codelens', (stepName: string) => editorCommandProvider.tryExecuteDoAppHost(false, stepName));
   const codeLensResourceActionRegistration = registerInstrumentedCommand('aspire-vscode.codeLensResourceAction', 'codelens', async (resourceName: string, action: string, appHostPath: string, resourceCommand?: ResourceCommandJson) => {
     const effectiveResourceCommand = getCurrentResourceCommand(dataRepository, resourceName, action, appHostPath) ?? resourceCommand;
@@ -335,7 +343,7 @@ export async function activate(context: vscode.ExtensionContext) {
     additionalArgs.push('--follow');
     terminalProvider.sendAspireCommandToAspireTerminal('logs', true, additionalArgs);
   });
-  context.subscriptions.push(codeLensRegistration, codeLensDebugPipelineStepRegistration, codeLensResourceActionRegistration, codeLensViewLogsRegistration, codeLensRevealResourceRegistration, codeLensOpenDashboardRegistration, codeLensViewAppHostLogsRegistration, codeLensProvider);
+  context.subscriptions.push(codeLensRegistration, installDebuggerExtensionRegistration, codeLensDebugPipelineStepRegistration, codeLensResourceActionRegistration, codeLensViewLogsRegistration, codeLensRevealResourceRegistration, codeLensOpenDashboardRegistration, codeLensViewAppHostLogsRegistration, codeLensProvider, debuggerInstallHintWatcher, debuggerInstallHintService);
 
   // Gutter decorations — colored dots next to resources showing runtime state
   const gutterDecorationProvider = new AspireGutterDecorationProvider(appHostTreeProvider);

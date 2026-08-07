@@ -32,21 +32,27 @@ import {
     codeLensOpenDashboard,
     codeLensViewAppHostLogs,
     codeLensResourceValueMissing,
+    codeLensInstallDebugger,
+    debuggerInstallNotification,
 } from '../loc/strings';
+import { DebuggerInstallHint, DebuggerInstallHintService } from '../debugger/debuggerInstallHints';
 
 export class AspireCodeLensProvider implements vscode.CodeLensProvider {
     private readonly _onDidChangeCodeLenses = new vscode.EventEmitter<void>();
     readonly onDidChangeCodeLenses = this._onDidChangeCodeLenses.event;
 
     private _disposables: vscode.Disposable[] = [];
+    private _disposed = false;
 
     constructor(
         private readonly _treeProvider: AspireAppHostTreeProvider,
         private readonly _dataRepository: AppHostDataRepository,
+        private readonly _debuggerInstallHintService: DebuggerInstallHintService,
     ) {
         // Re-compute lenses whenever the polling data changes
         this._disposables.push(
-            _treeProvider.onDidChangeTreeData(() => this._onDidChangeCodeLenses.fire())
+            _treeProvider.onDidChangeTreeData(() => this._onDidChangeCodeLenses.fire()),
+            _debuggerInstallHintService.onDidChange(() => this._onDidChangeCodeLenses.fire()),
         );
     }
 
@@ -131,6 +137,10 @@ export class AspireCodeLensProvider implements vscode.CodeLensProvider {
                         ?? findWorkspace(resource.name);
                     if (match) {
                         this._addStateLenses(lenses, lineRange, match.resource, match.appHost);
+                        const debuggerInstallHint = this._debuggerInstallHintService.getMissingDebugger(resource.methodName);
+                        if (match.resource.state === ResourceState.Running && debuggerInstallHint) {
+                            this._addDebuggerInstallHintLens(lenses, lineRange, debuggerInstallHint);
+                        }
                     }
                 }
             }
@@ -145,6 +155,19 @@ export class AspireCodeLensProvider implements vscode.CodeLensProvider {
             command: 'aspire-vscode.codeLensDebugPipelineStep',
             tooltip: codeLensDebugPipelineStep,
             arguments: [stepName],
+        }));
+    }
+
+    private _addDebuggerInstallHintLens(
+        lenses: vscode.CodeLens[],
+        range: vscode.Range,
+        hint: DebuggerInstallHint,
+    ): void {
+        lenses.push(new vscode.CodeLens(range, {
+            title: codeLensInstallDebugger(hint.debuggerName),
+            command: 'aspire-vscode.installDebuggerExtension',
+            tooltip: debuggerInstallNotification(hint.debuggerName),
+            arguments: [hint.extensionId],
         }));
     }
 
@@ -345,7 +368,13 @@ export class AspireCodeLensProvider implements vscode.CodeLensProvider {
     }
 
     dispose(): void {
+        if (this._disposed) {
+            return;
+        }
+
+        this._disposed = true;
         this._disposables.forEach(d => d.dispose());
+        this._disposables = [];
         this._onDidChangeCodeLenses.dispose();
     }
 }
