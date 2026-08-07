@@ -562,7 +562,7 @@ async function executeE2eControlCommand(
         throw new Error(`Language model tool '${command.toolName}' is not registered.`);
       }
 
-      const prepared = tool.prepareInvocation({ input: command.input }, new vscode.CancellationTokenSource().token);
+      const prepared = await tool.prepareInvocation({ input: command.input }, new vscode.CancellationTokenSource().token);
       return {
         invocationMessage: prepared.invocationMessage,
         confirmationTitle: prepared.confirmationMessages?.title,

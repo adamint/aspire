@@ -13,7 +13,7 @@ interface LifecycleToolResult {
     appHostPath: string;
     requestedMode?: string;
     effectiveMode?: string;
-    ownership: string;
+    controller: string;
 }
 
 interface PreparedInvocation {
@@ -95,7 +95,7 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
         assert.strictEqual(dedupedResults.length, 1, `Expected the second concurrent start to be deduplicated. Results: ${JSON.stringify(concurrentStarts)}`);
         assert.strictEqual(startedResults[0].appHostPath, relativeAppHostPath);
         assert.strictEqual(startedResults[0].requestedMode, 'debug');
-        assert.strictEqual(startedResults[0].ownership, 'editor');
+        assert.strictEqual(startedResults[0].controller, 'editor');
 
         await waitForDebugSessionStartup(appHostPath, 600000);
         const appHostPids = await waitForAppHostProcessCount(appHostPath, 1, 180000);
@@ -113,7 +113,7 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
         assert.strictEqual(repeatedStartInvocation.dialogs[0].details, `Start the Aspire AppHost ${relativeAppHostPath} in run mode?`);
         assert.strictEqual(repeatedStart.length, 1);
         assert.strictEqual(repeatedStart[0].outcome, 'alreadyRunning');
-        assert.strictEqual(repeatedStart[0].ownership, 'editor');
+        assert.strictEqual(repeatedStart[0].controller, 'editor');
         assert.strictEqual(repeatedStart[0].requestedMode, 'run');
         // The running session keeps its own mode: a start call cannot silently switch a
         // debug session to a run session.
@@ -134,7 +134,7 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
         assert.strictEqual(stopInvocation.dialogs[0].details, `Stop the Aspire AppHost ${relativeAppHostPath}?`);
         assert.strictEqual(stopResults.length, 1);
         assert.strictEqual(stopResults[0].outcome, 'stopped');
-        assert.strictEqual(stopResults[0].ownership, 'editor');
+        assert.strictEqual(stopResults[0].controller, 'editor');
         assert.strictEqual(stopResults[0].appHostPath, relativeAppHostPath);
 
         await waitForNoDebugSessions(180000);
@@ -148,7 +148,7 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
             input: { appHostPath: relativeAppHostPath },
         }, 120000, 1)).results;
         assert.strictEqual(stopAgainResults[0].outcome, 'notRunning');
-        assert.strictEqual(stopAgainResults[0].ownership, 'none');
+        assert.strictEqual(stopAgainResults[0].controller, 'none');
 
         writeLifecycleToolArtifact({
             relativeAppHostPath,

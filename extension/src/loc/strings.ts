@@ -251,3 +251,4 @@ export const appHostLifecycleUnresolvedPath = vscode.l10n.t('an unresolved path'
 // for the same AppHost is still in flight, so it has to be localized like any other
 // message the user can see in a notification.
 export const appHostLifecycleBusy = vscode.l10n.t('Another start or stop operation for this Aspire AppHost is still in progress. Wait for it to finish and try again.');
+export const appHostLifecycleLaunchAlreadyClaimed = vscode.l10n.t('This Aspire AppHost is already being started. The new debug session was cancelled so only one AppHost runs.');

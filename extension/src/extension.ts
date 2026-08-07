@@ -385,6 +385,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // process the editor cannot observe or shut down cleanly.
   const appHostLifecycleToolService = new AppHostLifecycleToolService({
     launchService: appHostLaunchService,
+    discoveryService: appHostDiscoveryService,
   });
   context.subscriptions.push(appHostLifecycleToolService);
   const appHostLifecycleToolRegistration = registerAppHostLifecycleTools(appHostLifecycleToolService);

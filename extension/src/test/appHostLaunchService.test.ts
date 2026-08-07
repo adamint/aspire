@@ -205,6 +205,57 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(service.isLaunching(path.join(directory, 'Program.cs')), true);
     });
 
+    test('refuses an external launch claim once a lifecycle launch holds the AppHost', async () => {
+        // A lifecycle caller that already passed `tryReserveLaunch` is on its way to
+        // `startDebugging` and cannot be called back, so an F5 arriving second has to lose
+        // or two AppHosts start for one project.
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const projectPath = path.join(directory, 'AppHost.csproj');
+
+        assert.strictEqual(service.tryReserveLaunch(projectPath), true);
+
+        assert.strictEqual(service.tryReserveExternalLaunch(projectPath), false);
+    });
+
+    test('refuses an external launch claim addressed through the sibling AppHost source file', async () => {
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+
+        assert.strictEqual(service.tryReserveLaunch(path.join(directory, 'AppHost.csproj')), true);
+
+        assert.strictEqual(service.tryReserveExternalLaunch(path.join(directory, 'Program.cs')), false);
+    });
+
+    test('allows an external launch claim for an unrelated AppHost', async () => {
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const otherDirectory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+
+        assert.strictEqual(service.tryReserveLaunch(path.join(directory, 'AppHost.csproj')), true);
+
+        assert.strictEqual(service.tryReserveExternalLaunch(path.join(otherDirectory, 'AppHost.csproj')), true);
+    });
+
+    test('allows an external launch claim after the lifecycle claim is cleared', async () => {
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const projectPath = path.join(directory, 'AppHost.csproj');
+
+        assert.strictEqual(service.tryReserveLaunch(projectPath), true);
+        service.clearLaunching(projectPath);
+
+        assert.strictEqual(service.tryReserveExternalLaunch(projectPath), true);
+    });
+
+    test('an external launch claim does not itself block a later external launch claim', async () => {
+        // Only a lifecycle claim refuses. `reserveLaunch` on its own just makes the launch
+        // visible, and refusing the user's F5 because an earlier F5 was recorded would break
+        // the ordinary restart flow.
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const projectPath = path.join(directory, 'AppHost.csproj');
+
+        assert.strictEqual(service.tryReserveExternalLaunch(projectPath), true);
+
+        assert.strictEqual(service.tryReserveExternalLaunch(projectPath), true);
+    });
+
     test('multiple paths can be tracked independently', async () => {
         await service.launch('/repo/AppHost1.csproj', 'run', true);
         await service.launch('/repo/AppHost2.csproj', 'run', true);
@@ -474,9 +525,9 @@ suite('AppHostLaunchService', () => {
         };
         service.setEditorSessionProvider(() => [folderSession]);
 
-        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'AppHost.csproj')), { sessions: [folderSession], ambiguous: false });
-        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'Program.cs')), { sessions: [folderSession], ambiguous: false });
-        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(otherDirectory, 'AppHost.csproj')), { sessions: [], ambiguous: false });
+        assert.deepStrictEqual(service.getEditorRunSessions(path.join(directory, 'AppHost.csproj')), { sessions: [folderSession], ambiguous: false });
+        assert.deepStrictEqual(service.getEditorRunSessions(path.join(directory, 'Program.cs')), { sessions: [folderSession], ambiguous: false });
+        assert.deepStrictEqual(service.getEditorRunSessions(path.join(otherDirectory, 'AppHost.csproj')), { sessions: [], ambiguous: false });
     });
 
     test('does not match a folder session that has no resolved AppHost', () => {
@@ -493,7 +544,7 @@ suite('AppHostLaunchService', () => {
         };
         service.setEditorSessionProvider(() => [folderSession]);
 
-        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'AppHost.csproj')), { sessions: [], ambiguous: false });
+        assert.deepStrictEqual(service.getEditorRunSessions(path.join(directory, 'AppHost.csproj')), { sessions: [], ambiguous: false });
     });
 
     test('reports an unprovable session association as ambiguous rather than owned', () => {
@@ -511,9 +562,9 @@ suite('AppHostLaunchService', () => {
         };
         service.setEditorSessionProvider(() => [session]);
 
-        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'Program.cs')), { sessions: [], ambiguous: true });
-        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'Second.csproj')), { sessions: [], ambiguous: false });
-        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'First.csproj')), { sessions: [session], ambiguous: false });
+        assert.deepStrictEqual(service.getEditorRunSessions(path.join(directory, 'Program.cs')), { sessions: [], ambiguous: true });
+        assert.deepStrictEqual(service.getEditorRunSessions(path.join(directory, 'Second.csproj')), { sessions: [], ambiguous: false });
+        assert.deepStrictEqual(service.getEditorRunSessions(path.join(directory, 'First.csproj')), { sessions: [session], ambiguous: false });
     });
 
     test('prefers the resolved AppHost over the session program when both are present', () => {
@@ -531,8 +582,8 @@ suite('AppHostLaunchService', () => {
         };
         service.setEditorSessionProvider(() => [session]);
 
-        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'Second.csproj')), { sessions: [session], ambiguous: false });
-        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'First.csproj')), { sessions: [], ambiguous: false });
+        assert.deepStrictEqual(service.getEditorRunSessions(path.join(directory, 'Second.csproj')), { sessions: [session], ambiguous: false });
+        assert.deepStrictEqual(service.getEditorRunSessions(path.join(directory, 'First.csproj')), { sessions: [], ambiguous: false });
     });
 
     test('matches project and AppHost source identities without matching sibling projects', () => {
@@ -607,7 +658,7 @@ suite('AppHostLaunchService', () => {
         };
         service.setEditorSessionProvider(() => [runSession, publishSession, testSession]);
 
-        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'AppHost.csproj')), { sessions: [runSession], ambiguous: false });
+        assert.deepStrictEqual(service.getEditorRunSessions(path.join(directory, 'AppHost.csproj')), { sessions: [runSession], ambiguous: false });
     });
 
 

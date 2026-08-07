@@ -70,11 +70,11 @@ export interface RunningAppHost {
  * proven either way.
  *
  * `ambiguous` exists because a project file and a sibling `Program.cs` only describe one
- * AppHost when the directory forces that pairing. When it does not, an ownership answer
- * of "no sessions" would be a guess that lets a caller start a duplicate AppHost, and an
- * answer of "this session" would let a caller stop the wrong one.
+ * AppHost when the directory forces that pairing. When it does not, answering "no
+ * sessions" would be a guess that lets a caller start a duplicate AppHost, and answering
+ * "this session" would let a caller stop the wrong one.
  */
-export interface AppHostOwnedSessions {
+export interface AppHostEditorSessions {
     readonly sessions: readonly AppHostLaunchSession[];
     readonly ambiguous: boolean;
 }
@@ -118,6 +118,15 @@ export class AppHostLifecycleLockTimeoutError extends Error {
  */
 export class AppHostLaunchService implements vscode.Disposable {
     private readonly _launchingPaths = new Set<string>();
+    /**
+     * The subset of {@link _launchingPaths} claimed by a lifecycle-owned launch, meaning a
+     * caller that went through {@link tryReserveLaunch}.
+     *
+     * Recorded separately because a claim has to be able to refuse a later arrival. An
+     * ordinary launching flag only reports that something is in flight; it cannot tell a
+     * `launch.json`/F5 launch that the AppHost is already spoken for.
+     */
+    private readonly _lifecycleLaunchClaims = new Set<string>();
     private readonly _lifecycleLocks = new Map<string, Promise<unknown>>();
     private readonly _lifecycleCancellationSource = new vscode.CancellationTokenSource();
     private _getEditorSessions: () => readonly AppHostLaunchSession[] = () => [];
@@ -142,6 +151,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             const appHostPath = session.configuration?.program;
             if (appHostPath && session.configuration?.type === 'aspire') {
                 const key = getAppHostPathComparisonKey(appHostPath);
+                this._lifecycleLaunchClaims.delete(key);
                 if (this._launchingPaths.delete(key)) {
                     this._onDidChangeLaunchingState.fire();
                 }
@@ -186,16 +196,16 @@ export class AppHostLaunchService implements vscode.Disposable {
     }
 
     /**
-     * Returns the editor-owned `run` sessions for an AppHost, and whether any session's
+     * Returns the editor-created `run` sessions for an AppHost, and whether any session's
      * relationship to it could not be proven.
      *
      * A session's own {@link AppHostLaunchSession.resolvedAppHostPath} is authoritative
      * when present: the debug configuration provider only sets it after resolving a
      * folder to a single unambiguous candidate, whereas `appHostPath` is then just the
      * folder. Falling back to `appHostPath` for those sessions would compare a directory
-     * against a file and quietly report "not owned".
+     * against a file and quietly report "no session".
      */
-    getEditorOwnedRunSessions(appHostPath: string): AppHostOwnedSessions {
+    getEditorRunSessions(appHostPath: string): AppHostEditorSessions {
         const sessions: AppHostLaunchSession[] = [];
         let ambiguous = false;
         for (const session of this._getEditorSessions()) {
@@ -337,8 +347,25 @@ export class AppHostLaunchService implements vscode.Disposable {
             return false;
         }
 
+        this._lifecycleLaunchClaims.add(getAppHostPathComparisonKey(appHostPath));
         this.reserveLaunch(appHostPath);
         return true;
+    }
+
+    /**
+     * Whether a lifecycle-owned launch currently holds the claim for this AppHost.
+     *
+     * Uses the same identity relation as {@link isLaunching}: an association that cannot be
+     * proven counts as claimed, because letting a second launch proceed on an unproven
+     * "different" would be the exact duplicate this claim exists to prevent.
+     */
+    hasLifecycleLaunchClaim(appHostPath: string): boolean {
+        if (this._lifecycleLaunchClaims.has(getAppHostPathComparisonKey(appHostPath))) {
+            return true;
+        }
+
+        return Array.from(this._lifecycleLaunchClaims).some(claimedPath =>
+            compareAppHostIdentity(claimedPath, appHostPath) !== 'different');
     }
 
     /**
@@ -355,19 +382,26 @@ export class AppHostLaunchService implements vscode.Disposable {
     }
 
     /**
-     * Records a launch this service did not initiate - `launch.json`/F5 goes straight to
-     * `vscode.debug.startDebugging` and never reaches {@link launch}.
+     * Claims the launching slot for a launch this service did not initiate -
+     * `launch.json`/F5 goes straight to `vscode.debug.startDebugging` and never reaches
+     * {@link launch}.
      *
-     * The user pressing F5 is never refused; the point is that the launch becomes visible
-     * to {@link tryReserveLaunch} so an agent-driven start cannot slip in beside it during
-     * the window between resolving the configuration and the debug session appearing.
+     * Returns `false` when a lifecycle-owned launch already holds the claim. Recording the
+     * launch without refusing it would leave both callers running: the lifecycle caller has
+     * already passed its own check and is on its way to `startDebugging`, so nothing later
+     * can stop it, and two AppHosts would start against the same project. Whoever claimed
+     * first wins, which is the only rule that produces one process from a race.
      *
-     * Self-expiring, because this path has no completion signal of its own: when VS Code
-     * declines a configuration after resolving it, no session is created and no terminate
-     * event ever fires. Once the session does appear it is visible as an owned session, so
-     * the reservation has nothing left to cover.
+     * The reservation is self-expiring, because this path has no completion signal of its
+     * own: when VS Code declines a configuration after resolving it, no session is created
+     * and no terminate event ever fires. Once the session does appear it is visible as an
+     * editor session, so the reservation has nothing left to cover.
      */
-    reserveExternalLaunch(appHostPath: string): void {
+    tryReserveExternalLaunch(appHostPath: string): boolean {
+        if (this.hasLifecycleLaunchClaim(appHostPath)) {
+            return false;
+        }
+
         const key = getAppHostPathComparisonKey(appHostPath);
         this.reserveLaunch(appHostPath);
         const expiry = setTimeout(() => {
@@ -377,6 +411,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         }, externalLaunchReservationTimeoutMs);
         // A reservation must never be a reason for the host process to stay alive.
         expiry.unref?.();
+        return true;
     }
 
     /**
@@ -385,6 +420,7 @@ export class AppHostLaunchService implements vscode.Disposable {
      */
     clearLaunching(appHostPath: string): void {
         const key = getAppHostPathComparisonKey(appHostPath);
+        this._lifecycleLaunchClaims.delete(key);
         if (this._launchingPaths.delete(key)) {
             this._onDidChangeLaunchingState.fire();
         }
@@ -392,6 +428,7 @@ export class AppHostLaunchService implements vscode.Disposable {
 
     clearMatchingLaunching(appHostPath: string): void {
         const exactKey = getAppHostPathComparisonKey(appHostPath);
+        this._lifecycleLaunchClaims.delete(exactKey);
         if (this._launchingPaths.delete(exactKey)) {
             this._onDidChangeLaunchingState.fire();
             return;
@@ -406,6 +443,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         }
 
         this._launchingPaths.delete(matchingPaths[0]);
+        this._lifecycleLaunchClaims.delete(matchingPaths[0]);
         this._onDidChangeLaunchingState.fire();
     }
 

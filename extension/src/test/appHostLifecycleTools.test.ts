@@ -14,13 +14,15 @@ import {
     aspireAppHostStartToolName,
     aspireAppHostStopToolName,
     registerAppHostLifecycleTools,
+    type AppHostLifecycleDiscoveryService,
     type AppHostLifecycleEditorSession,
+    type AppHostLifecycleEditorSessions,
     type AppHostLifecycleLaunchService,
-    type AppHostLifecycleOwnedSessions,
     type AppHostLifecycleRunningAppHost,
     type AppHostLifecycleToolResult,
 } from '../lm/appHostLifecycleTools';
 import { AppHostLifecycleLockTimeoutError } from '../services/AppHostLaunchService';
+import { type CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import { compareAppHostIdentity, type AppHostIdentityRelation } from '../utils/appHostIdentity';
 
 interface LaunchCall {
@@ -67,7 +69,7 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
         this.launchingPaths.delete(path.resolve(appHostPath));
     }
 
-    getEditorOwnedRunSessions(appHostPath: string): AppHostLifecycleOwnedSessions {
+    getEditorRunSessions(appHostPath: string): AppHostLifecycleEditorSessions {
         const sessions: AppHostLifecycleEditorSession[] = [];
         let ambiguous = false;
         for (const session of this.editorSessions) {
@@ -156,6 +158,36 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
     }
 }
 
+/**
+ * Stands in for `AppHostDiscoveryService`. Tests register absolute paths and the fake
+ * hands each workspace folder the ones inside it, which is the shape `aspire ls
+ * --format json` produces after the real service adapts it.
+ */
+class FakeDiscoveryService implements AppHostLifecycleDiscoveryService {
+    readonly registeredPaths: string[] = [];
+    discoverCalls = 0;
+    discoverError: Error | undefined;
+
+    async discover(workspaceFolder: vscode.WorkspaceFolder, _forceRefresh?: boolean, cancellationToken?: vscode.CancellationToken): Promise<readonly CandidateAppHostDisplayInfo[]> {
+        this.discoverCalls++;
+        if (cancellationToken?.isCancellationRequested) {
+            throw new vscode.CancellationError();
+        }
+
+        if (this.discoverError) {
+            throw this.discoverError;
+        }
+
+        const folderPath = workspaceFolder.uri.fsPath;
+        return this.registeredPaths
+            .filter(candidatePath => {
+                const relative = path.relative(folderPath, candidatePath);
+                return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
+            })
+            .map(candidatePath => ({ path: candidatePath, language: 'csharp', status: 'buildable' }));
+    }
+}
+
 class FakeEditorSession implements AppHostLifecycleEditorSession {
     stopCount = 0;
     stopError: Error | undefined;
@@ -215,6 +247,7 @@ suite('AppHost lifecycle language model tools', () => {
     let workspaceFoldersStub: sinon.SinonStub;
     let isTrustedStub: sinon.SinonStub;
     let launchService: FakeLaunchService;
+    let discoveryService: FakeDiscoveryService;
     let editorSessions: FakeEditorSession[];
     let service: AppHostLifecycleToolService;
 
@@ -235,9 +268,12 @@ suite('AppHost lifecycle language model tools', () => {
         isTrustedStub = sinon.stub(vscode.workspace, 'isTrusted').value(true);
 
         launchService = new FakeLaunchService();
+        discoveryService = new FakeDiscoveryService();
+        discoveryService.registeredPaths.push(appHostProjectPath);
         editorSessions = [];
         service = new AppHostLifecycleToolService({
             launchService,
+            discoveryService,
         });
         launchService.editorSessions = editorSessions;
     });
@@ -376,7 +412,7 @@ suite('AppHost lifecycle language model tools', () => {
         });
     });
 
-    suite('path canonicalization', () => {
+    suite('selector resolution', () => {
         test('rejects a missing appHostPath without launching', async () => {
             const result = await service.start({ mode: 'run' } as never, new vscode.CancellationTokenSource().token);
 
@@ -384,49 +420,108 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
-        test('rejects an unknown mode without launching', async () => {
-            const statStub = sinon.stub(mutableFs, 'statSync');
-            try {
-                const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'watch' } as never, new vscode.CancellationTokenSource().token);
+        test('rejects an unknown mode before consulting the AppHost registry', async () => {
+            const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'watch' } as never, new vscode.CancellationTokenSource().token);
 
-                assert.strictEqual(result.outcome, 'invalidInput');
-                assert.strictEqual(launchService.launchCalls.length, 0);
-                assert.strictEqual(statStub.called, false);
-            }
-            finally {
-                statStub.restore();
-            }
+            assert.strictEqual(result.outcome, 'invalidInput');
+            assert.strictEqual(launchService.launchCalls.length, 0);
+            assert.strictEqual(discoveryService.discoverCalls, 0);
         });
 
-        test('rejects unexpected input properties before filesystem access', async () => {
-            const statStub = sinon.stub(mutableFs, 'statSync');
-            try {
-                const result = await service.start({
-                    appHostPath: 'AppHost/AppHost.csproj',
-                    mode: 'run',
-                    command: 'publish',
-                } as never, new vscode.CancellationTokenSource().token);
+        test('rejects unexpected input properties before consulting the AppHost registry', async () => {
+            const result = await service.start({
+                appHostPath: 'AppHost/AppHost.csproj',
+                mode: 'run',
+                command: 'publish',
+            } as never, new vscode.CancellationTokenSource().token);
 
-                assert.strictEqual(result.outcome, 'invalidInput');
-                assert.strictEqual(statStub.called, false);
-            }
-            finally {
-                statStub.restore();
-            }
+            assert.strictEqual(result.outcome, 'invalidInput');
+            assert.strictEqual(discoveryService.discoverCalls, 0);
         });
 
-        test('rejects a path that does not exist on disk', async () => {
+        test('rejects a selector the AppHost registry does not list', async () => {
             const result = await service.start({ appHostPath: 'AppHost/Missing.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
-            assert.strictEqual(result.outcome, 'pathNotFound');
+            assert.strictEqual(result.outcome, 'unknownAppHost');
+            assert.deepStrictEqual(result.knownAppHosts, ['AppHost/AppHost.csproj']);
             assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
-        test('rejects a relative path that matches more than one workspace folder', async () => {
+        test('rejects a real project file the registry never enumerated', async () => {
+            // The file exists, parses as an Aspire AppHost, and sits inside the workspace.
+            // None of that matters: only Aspire's own candidate list can name a target, so
+            // the tool cannot be pointed at something the editor does not already offer.
+            const unlisted = path.join(workspaceRoot, 'AppHost', 'Unlisted.csproj');
+            fs.writeFileSync(unlisted, appHostProjectContents);
+
+            const result = await service.start({ appHostPath: 'AppHost/Unlisted.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'unknownAppHost');
+            assert.strictEqual(launchService.launchCalls.length, 0);
+        });
+
+        test('resolves a registry entry without reading the file it names', async () => {
+            // The registry is the authority, not the filesystem. Proving the tool never
+            // re-derives the target from disk is what makes the identity in the
+            // confirmation and the identity handed to the launcher the same object.
+            const registryOnly = path.join(workspaceRoot, 'Ghost', 'AppHost.csproj');
+            discoveryService.registeredPaths.push(registryOnly);
+
+            const result = await service.start({ appHostPath: 'Ghost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'started');
+            assert.deepStrictEqual(launchService.launchCalls, [{ appHostPath: registryOnly, command: 'run', noDebug: true }]);
+        });
+
+        test('rejects a selector carrying invisible characters that the registry cannot match', async () => {
+            // A zero-width joiner distinguishes two strings while rendering identically.
+            // Because the selector is only ever compared against enumerated candidates, a
+            // crafted one simply matches nothing; there is no path to launch and no
+            // alternate identity to display.
+            const spoofed = `AppHost/App\u200dHost.csproj`;
+
+            const result = await service.start({ appHostPath: spoofed, mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'unknownAppHost');
+            assert.strictEqual(launchService.launchCalls.length, 0);
+        });
+
+        test('drops a registry entry whose identity cannot be rendered faithfully', async () => {
+            // Aspire enumerated it, but the name carries a zero-width space, so no prompt
+            // can show it one-to-one. Refusing to offer it at all is the only answer that
+            // keeps the confirmed identity equal to the executed one.
+            const invisible = path.join(workspaceRoot, 'AppHost', 'App\u200bHost.csproj');
+            discoveryService.registeredPaths.push(invisible);
+
+            const result = await service.start({ appHostPath: 'AppHost/App\u200bHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'unknownAppHost');
+            assert.deepStrictEqual(result.knownAppHosts, ['AppHost/AppHost.csproj']);
+            assert.strictEqual(launchService.launchCalls.length, 0);
+        });
+
+        test('reports discoveryFailed rather than unknownAppHost when the registry cannot be read', async () => {
+            discoveryService.discoverError = new Error('aspire ls failed');
+
+            const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'discoveryFailed');
+            assert.strictEqual(result.knownAppHosts, undefined);
+            assert.strictEqual(launchService.launchCalls.length, 0);
+        });
+
+        test('accepts a selector written with a leading ./ and backslashes', async () => {
+            const result = await service.start({ appHostPath: '.\\AppHost\\AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'started');
+            assert.strictEqual(result.appHostPath, 'AppHost/AppHost.csproj');
+        });
+
+        test('rejects a relative selector that matches AppHosts under more than one workspace folder', async () => {
             const secondRoot = createFixtureDirectory('second-workspace');
             try {
-                fs.mkdirSync(path.join(secondRoot, 'AppHost'), { recursive: true });
-                fs.writeFileSync(path.join(secondRoot, 'AppHost', 'AppHost.csproj'), appHostProjectContents);
+                const secondAppHost = path.join(secondRoot, 'AppHost', 'AppHost.csproj');
+                discoveryService.registeredPaths.push(secondAppHost);
                 workspaceFoldersStub.value([
                     { uri: vscode.Uri.file(workspaceRoot), name: 'workspace', index: 0 },
                     { uri: vscode.Uri.file(secondRoot), name: 'second', index: 1 },
@@ -434,7 +529,8 @@ suite('AppHost lifecycle language model tools', () => {
 
                 const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
-                assert.strictEqual(result.outcome, 'pathAmbiguous');
+                assert.strictEqual(result.outcome, 'ambiguousAppHost');
+                assert.deepStrictEqual(result.knownAppHosts, ['workspace/AppHost/AppHost.csproj', 'second/AppHost/AppHost.csproj']);
                 assert.strictEqual(launchService.launchCalls.length, 0);
             }
             finally {
@@ -442,49 +538,40 @@ suite('AppHost lifecycle language model tools', () => {
             }
         });
 
-        test('rejects an absolute path outside every workspace folder', async () => {
-            const outsideAppHost = path.join(outsideRoot, 'AppHost.csproj');
-            fs.writeFileSync(outsideAppHost, appHostProjectContents);
-            const statStub = sinon.stub(mutableFs, 'statSync');
-            const realpathStub = sinon.stub(mutableFs.realpathSync, 'native');
-
+        test('resolves the workspace-folder-qualified selector in a multi-root workspace', async () => {
+            const secondRoot = createFixtureDirectory('second-workspace');
             try {
-                const result = await service.start({ appHostPath: outsideAppHost, mode: 'run' }, new vscode.CancellationTokenSource().token);
+                const secondAppHost = path.join(secondRoot, 'AppHost', 'AppHost.csproj');
+                discoveryService.registeredPaths.push(secondAppHost);
+                workspaceFoldersStub.value([
+                    { uri: vscode.Uri.file(workspaceRoot), name: 'workspace', index: 0 },
+                    { uri: vscode.Uri.file(secondRoot), name: 'second', index: 1 },
+                ]);
 
-                assert.strictEqual(result.outcome, 'invalidInput');
-                assert.strictEqual(launchService.launchCalls.length, 0);
-                assert.strictEqual(statStub.called, false);
-                assert.strictEqual(realpathStub.called, false);
+                const result = await service.start({ appHostPath: 'second/AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+                assert.strictEqual(result.outcome, 'started');
+                assert.strictEqual(result.appHostPath, 'AppHost/AppHost.csproj');
+                assert.deepStrictEqual(launchService.launchCalls, [{ appHostPath: secondAppHost, command: 'run', noDebug: true }]);
             }
             finally {
-                statStub.restore();
-                realpathStub.restore();
+                fs.rmSync(secondRoot, { recursive: true, force: true });
             }
         });
 
-        test('rejects an absolute path even when it names an AppHost inside the workspace', async () => {
+        test('rejects an absolute selector even when it names a registered AppHost', async () => {
             // The manifest, the README, and the confirmation contract all describe a
-            // workspace-relative input. Accepting an absolute path that happens to land
-            // inside a workspace folder would silently widen that contract, and the
-            // relative form of the same file is always available to the caller.
-            const statStub = sinon.stub(mutableFs, 'statSync');
-            const realpathStub = sinon.stub(mutableFs.realpathSync, 'native');
+            // workspace-relative input. Accepting an absolute path that happens to name a
+            // registry entry would silently widen that contract, and the relative form of
+            // the same entry is always available to the caller.
+            const result = await service.start({ appHostPath: appHostProjectPath, mode: 'run' }, new vscode.CancellationTokenSource().token);
 
-            try {
-                const result = await service.start({ appHostPath: appHostProjectPath, mode: 'run' }, new vscode.CancellationTokenSource().token);
-
-                assert.strictEqual(result.outcome, 'invalidInput');
-                assert.strictEqual(launchService.launchCalls.length, 0);
-                assert.strictEqual(statStub.called, false);
-                assert.strictEqual(realpathStub.called, false);
-            }
-            finally {
-                statStub.restore();
-                realpathStub.restore();
-            }
+            assert.strictEqual(result.outcome, 'invalidInput');
+            assert.strictEqual(launchService.launchCalls.length, 0);
+            assert.strictEqual(discoveryService.discoverCalls, 0);
         });
 
-        test('rejects an absolute path in stop as well as start', async () => {
+        test('rejects an absolute selector in stop as well as start', async () => {
             const session = new FakeEditorSession(appHostProjectPath, { noDebug: false });
             editorSessions.push(session);
 
@@ -494,92 +581,31 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(session.stopCount, 0);
         });
 
-        test('rejects a traversal path that escapes the workspace folder', async () => {
+        test('rejects a traversal selector because no registry entry can equal one', async () => {
             const outsideAppHost = path.join(outsideRoot, 'AppHost.csproj');
             fs.writeFileSync(outsideAppHost, appHostProjectContents);
+            discoveryService.registeredPaths.push(outsideAppHost);
             const traversal = path.join('..', path.basename(outsideRoot), 'AppHost.csproj');
-            const statStub = sinon.stub(mutableFs, 'statSync');
-            const realpathStub = sinon.stub(mutableFs.realpathSync, 'native');
 
-            try {
-                const result = await service.start({ appHostPath: traversal, mode: 'run' }, new vscode.CancellationTokenSource().token);
+            const result = await service.start({ appHostPath: traversal, mode: 'run' }, new vscode.CancellationTokenSource().token);
 
-                assert.strictEqual(result.outcome, 'pathOutsideWorkspace');
-                assert.strictEqual(launchService.launchCalls.length, 0);
-                assert.strictEqual(statStub.called, false);
-                assert.strictEqual(realpathStub.called, false);
-            }
-            finally {
-                statStub.restore();
-                realpathStub.restore();
-            }
-        });
-
-        test('rejects a symlink inside the workspace whose target escapes the workspace', async function () {
-            const outsideAppHost = path.join(outsideRoot, 'AppHost.csproj');
-            fs.writeFileSync(outsideAppHost, appHostProjectContents);
-            const linkPath = path.join(workspaceRoot, 'AppHost', 'Linked.csproj');
-            try {
-                fs.symlinkSync(outsideAppHost, linkPath);
-            }
-            catch {
-                // Creating symlinks requires elevation or developer mode on Windows.
-                this.skip();
-            }
-
-            const result = await service.start({ appHostPath: 'AppHost/Linked.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
-
-            assert.strictEqual(result.outcome, 'pathEscapesWorkspace');
-            assert.strictEqual(launchService.launchCalls.length, 0);
-        });
-
-        test('rejects a workspace file that is not an AppHost', async () => {
-            const notAnAppHost = path.join(workspaceRoot, 'AppHost', 'Library.csproj');
-            fs.writeFileSync(notAnAppHost, '<Project Sdk="Microsoft.NET.Sdk"></Project>');
-
-            const result = await service.start({ appHostPath: 'AppHost/Library.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
-
-            assert.strictEqual(result.outcome, 'notAnAppHost');
-            assert.strictEqual(launchService.launchCalls.length, 0);
-        });
-
-        test('rejects source files that mention createBuilder without a runnable Aspire program', async () => {
-            const misleadingSource = path.join(workspaceRoot, 'AppHost', 'apphost.ts');
-            fs.writeFileSync(misleadingSource, 'const builder = createBuilder();');
-
-            const result = await service.start({ appHostPath: 'AppHost/apphost.ts', mode: 'run' }, new vscode.CancellationTokenSource().token);
-
-            assert.strictEqual(result.outcome, 'notAnAppHost');
-            assert.strictEqual(launchService.launchCalls.length, 0);
-        });
-
-        test('rejects AppHost markers that only appear in source comments', async () => {
-            // Its own directory with no sibling project, so the only thing that can fail
-            // this call is the commented-out markers.
-            const commentedDirectory = path.join(workspaceRoot, 'Commented');
-            fs.mkdirSync(commentedDirectory, { recursive: true });
-            fs.writeFileSync(path.join(commentedDirectory, 'apphost.cs'), [
-                '// var builder = DistributedApplication.CreateBuilder(args);',
-                '// builder.Build().Run();',
-            ].join('\n'));
-
-            const result = await service.start({ appHostPath: 'Commented/apphost.cs', mode: 'run' }, new vscode.CancellationTokenSource().token);
-
-            assert.strictEqual(result.outcome, 'notAnAppHost');
+            assert.strictEqual(result.outcome, 'unknownAppHost');
             assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
         test('rejects a directory so the tool never infers which AppHost to launch', async () => {
             const result = await service.start({ appHostPath: 'AppHost', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
-            assert.strictEqual(result.outcome, 'notAnAppHost');
+            assert.strictEqual(result.outcome, 'unknownAppHost');
             assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
         test('accepts a single-file AppHost and reports the workspace-relative path with forward slashes', async () => {
             const singleFileDirectory = path.join(workspaceRoot, 'SingleFile');
             fs.mkdirSync(singleFileDirectory, { recursive: true });
-            fs.writeFileSync(path.join(singleFileDirectory, 'apphost.cs'), singleFileAppHostContents);
+            const singleFileAppHost = path.join(singleFileDirectory, 'apphost.cs');
+            fs.writeFileSync(singleFileAppHost, singleFileAppHostContents);
+            discoveryService.registeredPaths.push(singleFileAppHost);
 
             const result = await service.start({ appHostPath: 'SingleFile/apphost.cs', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
@@ -587,50 +613,14 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(result.appHostPath, 'SingleFile/apphost.cs');
         });
 
-
-        test('rejects a single-file AppHost that sits next to a project file', async () => {
-            // The launcher only treats `apphost.cs` as a single-file AppHost when no
-            // sibling `.csproj` exists (`IsValidSingleFileAppHost` in
-            // `src/Aspire.Cli/Projects/DotNetAppHostProject.cs`). With one present it
-            // rejects the source file and searches for a project instead, so confirming
-            // the source path would name a target that is not the one about to run.
-            const directory = path.join(workspaceRoot, 'SiblingProject');
-            fs.mkdirSync(directory, { recursive: true });
-            fs.writeFileSync(path.join(directory, 'AppHost.csproj'), appHostProjectContents);
-            fs.writeFileSync(path.join(directory, 'apphost.cs'), singleFileAppHostContents);
-            const tool = new AppHostStartLanguageModelTool(service);
-
-            const prepared = await tool.prepareInvocation(
-                { input: { appHostPath: 'SiblingProject/apphost.cs', mode: 'run' } },
-                new vscode.CancellationTokenSource().token);
-            const result = await service.start({ appHostPath: 'SiblingProject/apphost.cs', mode: 'run' }, new vscode.CancellationTokenSource().token);
-
-            assert.strictEqual(prepared?.confirmationMessages?.message, 'Start the Aspire AppHost an unresolved path in run mode?');
-            assert.strictEqual(result.outcome, 'notAnAppHost');
-            assert.strictEqual(launchService.launchCalls.length, 0);
-        });
-
-        test('rejects a C# source file the launcher does not accept as a single-file AppHost', async () => {
-            // `apphost.cs` is the only name the launcher recognizes, so a differently
-            // named `.cs` file carrying the SDK directive is not runnable however its
-            // contents read.
-            const directory = path.join(workspaceRoot, 'MisnamedSingleFile');
-            fs.mkdirSync(directory, { recursive: true });
-            fs.writeFileSync(path.join(directory, 'Host.cs'), singleFileAppHostContents);
-
-            const result = await service.start({ appHostPath: 'MisnamedSingleFile/Host.cs', mode: 'run' }, new vscode.CancellationTokenSource().token);
-
-            assert.strictEqual(result.outcome, 'notAnAppHost');
-            assert.strictEqual(launchService.launchCalls.length, 0);
-        });
-
         test('treats a symlinked AppHost as the AppHost it points at', async function () {
             const directory = path.join(workspaceRoot, 'Symlinked');
             fs.mkdirSync(directory, { recursive: true });
             const realProject = path.join(directory, 'AppHost.csproj');
+            const linkedProject = path.join(directory, 'Linked.csproj');
             fs.writeFileSync(realProject, appHostProjectContents);
             try {
-                fs.symlinkSync(realProject, path.join(directory, 'Linked.csproj'));
+                fs.symlinkSync(realProject, linkedProject);
             }
             catch {
                 // Creating a symlink needs elevation or developer mode on Windows.
@@ -638,6 +628,7 @@ suite('AppHost lifecycle language model tools', () => {
                 return;
             }
 
+            discoveryService.registeredPaths.push(linkedProject);
             // The editor is already running the AppHost under its real name. Addressing it
             // through the link must find that session rather than start a second process.
             editorSessions.push(new FakeEditorSession(realProject, { noDebug: false }));
@@ -655,6 +646,7 @@ suite('AppHost lifecycle language model tools', () => {
 
             assert.deepStrictEqual([startResult.outcome, stopResult.outcome], ['workspaceNotTrusted', 'workspaceNotTrusted']);
             assert.strictEqual(launchService.launchCalls.length, 0);
+            assert.strictEqual(discoveryService.discoverCalls, 0);
         });
     });
 
@@ -664,8 +656,8 @@ suite('AppHost lifecycle language model tools', () => {
 
             assert.deepStrictEqual(launchService.launchCalls, [{ appHostPath: appHostProjectPath, command: 'run', noDebug: true }]);
             assert.deepStrictEqual(
-                { outcome: result.outcome, requestedMode: result.requestedMode, effectiveMode: result.effectiveMode, ownership: result.ownership },
-                { outcome: 'started', requestedMode: 'run', effectiveMode: 'run', ownership: 'editor' });
+                { outcome: result.outcome, requestedMode: result.requestedMode, effectiveMode: result.effectiveMode, controller: result.controller },
+                { outcome: 'started', requestedMode: 'run', effectiveMode: 'run', controller: 'editor' });
         });
 
         test('maps debug mode to a debugger-attached aspire run launch', async () => {
@@ -705,8 +697,8 @@ suite('AppHost lifecycle language model tools', () => {
             const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
             assert.deepStrictEqual(
-                { outcome: result.outcome, requestedMode: result.requestedMode, effectiveMode: result.effectiveMode, ownership: result.ownership },
-                { outcome: 'alreadyRunning', requestedMode: 'run', effectiveMode: 'debug', ownership: 'editor' });
+                { outcome: result.outcome, requestedMode: result.requestedMode, effectiveMode: result.effectiveMode, controller: result.controller },
+                { outcome: 'alreadyRunning', requestedMode: 'run', effectiveMode: 'debug', controller: 'editor' });
             assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
@@ -716,8 +708,8 @@ suite('AppHost lifecycle language model tools', () => {
             const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'debug' }, new vscode.CancellationTokenSource().token);
 
             assert.deepStrictEqual(
-                { outcome: result.outcome, requestedMode: result.requestedMode, effectiveMode: result.effectiveMode, ownership: result.ownership },
-                { outcome: 'alreadyRunning', requestedMode: 'debug', effectiveMode: 'run', ownership: 'editor' });
+                { outcome: result.outcome, requestedMode: result.requestedMode, effectiveMode: result.effectiveMode, controller: result.controller },
+                { outcome: 'alreadyRunning', requestedMode: 'debug', effectiveMode: 'run', controller: 'editor' });
             assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
@@ -727,8 +719,8 @@ suite('AppHost lifecycle language model tools', () => {
             const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
             assert.deepStrictEqual(
-                { outcome: result.outcome, ownership: result.ownership },
-                { outcome: 'alreadyRunning', ownership: 'external' });
+                { outcome: result.outcome, controller: result.controller },
+                { outcome: 'alreadyRunning', controller: 'external' });
             assert.strictEqual(launchService.launchCalls.length, 0);
             assert.strictEqual(launchService.runningAppHostRequests, 1);
         });
@@ -766,7 +758,7 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
-        test('honors cancellation while waiting for shared lifecycle ownership', async () => {
+        test('honors cancellation while waiting for the shared lifecycle lock', async () => {
             let releaseActive: (() => void) | undefined;
             const activeOperation = launchService.runWithAppHostLifecycleLock(
                 appHostProjectPath,
@@ -786,16 +778,16 @@ suite('AppHost lifecycle language model tools', () => {
             await activeOperation;
         });
 
-        test('rejects a stale path that disappears after the confirmation was prepared', async () => {
+        test('rejects a target the registry drops between the confirmation and the invocation', async () => {
             const tool = new AppHostStartLanguageModelTool(service);
             const input = { appHostPath: 'AppHost/AppHost.csproj', mode: 'run' } as const;
             const prepared = await tool.prepareInvocation({ input }, new vscode.CancellationTokenSource().token);
             assert.ok(prepared?.confirmationMessages);
 
-            fs.rmSync(appHostProjectPath);
+            discoveryService.registeredPaths.length = 0;
             const result = readToolResultPayload(await tool.invoke({ input, toolInvocationToken: undefined }, new vscode.CancellationTokenSource().token));
 
-            assert.strictEqual(result.outcome, 'pathNotFound');
+            assert.strictEqual(result.outcome, 'unknownAppHost');
             assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
@@ -818,7 +810,7 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(result.outcome, 'cancelled');
         });
 
-        test('reports a bounded busy outcome when shared lifecycle ownership cannot be acquired', async () => {
+        test('reports a bounded busy outcome when the shared lifecycle lock cannot be acquired', async () => {
             launchService.lifecycleLockError = new AppHostLifecycleLockTimeoutError();
 
             const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
@@ -827,8 +819,8 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
-        test('refuses to launch when external ownership cannot be determined', async () => {
-            // `aspire ps` backs the external-ownership probe. When it cannot answer, the
+        test('refuses to launch when the external controller cannot be determined', async () => {
+            // `aspire ps` backs the external-controller probe. When it cannot answer, the
             // tool must not launch: starting anyway could put a second AppHost on the same
             // ports as one the user already has running from a terminal. The agent gets a
             // failure it can fall back to the CLI from, which is the documented contract.
@@ -837,8 +829,8 @@ suite('AppHost lifecycle language model tools', () => {
             const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
             assert.deepStrictEqual(
-                { outcome: result.outcome, ownership: result.ownership, appHostPath: result.appHostPath, requestedMode: result.requestedMode },
-                { outcome: 'failed', ownership: 'editor', appHostPath: 'AppHost/AppHost.csproj', requestedMode: 'run' });
+                { outcome: result.outcome, controller: result.controller, appHostPath: result.appHostPath, requestedMode: result.requestedMode },
+                { outcome: 'failed', controller: 'editor', appHostPath: 'AppHost/AppHost.csproj', requestedMode: 'run' });
             assert.strictEqual(launchService.launchCalls.length, 0);
             assert.strictEqual(JSON.stringify(result).includes('/Users/private'), false);
         });
@@ -856,12 +848,12 @@ suite('AppHost lifecycle language model tools', () => {
             const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
             assert.strictEqual(result.outcome, 'alreadyRunning');
-            assert.strictEqual(result.ownership, 'external');
-            assert.strictEqual(lockTaken, false, 'Expected the external ownership fast path to answer before the lifecycle lock was taken.');
+            assert.strictEqual(result.controller, 'external');
+            assert.strictEqual(lockTaken, false, 'Expected the external-controller fast path to answer before the lifecycle lock was taken.');
             assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
-        test('revalidates external ownership after waiting for the lifecycle lock', async () => {
+        test('revalidates the external controller after waiting for the lifecycle lock', async () => {
             // The pre-lock probe is a fast path, not the authority. Waiting for the lock
             // can take up to 10s, and an AppHost started from a terminal during that wait
             // leaves no editor session and no launching flag, so a cached negative result
@@ -873,7 +865,7 @@ suite('AppHost lifecycle language model tools', () => {
             const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
             assert.strictEqual(result.outcome, 'alreadyRunning');
-            assert.strictEqual(result.ownership, 'external');
+            assert.strictEqual(result.controller, 'external');
             assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
@@ -887,6 +879,7 @@ suite('AppHost lifecycle language model tools', () => {
             fs.writeFileSync(path.join(directory, 'First.csproj'), appHostProjectContents);
             fs.writeFileSync(path.join(directory, 'Second.csproj'), appHostProjectContents);
             fs.writeFileSync(path.join(directory, 'Program.cs'), singleFileAppHostContents);
+            discoveryService.registeredPaths.push(path.join(directory, 'First.csproj'), path.join(directory, 'Second.csproj'));
             editorSessions.push(new FakeEditorSession(path.join(directory, 'Program.cs'), { noDebug: false }));
 
             const result = await service.start({ appHostPath: 'Ambiguous/First.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
@@ -899,7 +892,7 @@ suite('AppHost lifecycle language model tools', () => {
             // A `launch.json`/F5 launch never takes the lifecycle lock; it reserves through
             // the debug configuration provider instead. Land one *after* every check inside
             // the lock has already passed, by reserving while the tool awaits its final
-            // ownership probe. Only a synchronous claim taken immediately before the launch
+            // controller probe. Only a synchronous claim taken immediately before the launch
             // can still catch it, which is why the checks above it are not sufficient.
             // The first probe runs before the lock is taken; reserving there would be caught
             // by the in-lock `isLaunching` check instead. Reserve during the second probe,
@@ -914,7 +907,7 @@ suite('AppHost lifecycle language model tools', () => {
             const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
             assert.strictEqual(result.outcome, 'alreadyStarting');
-            assert.strictEqual(result.ownership, 'editor');
+            assert.strictEqual(result.controller, 'editor');
             assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
@@ -934,7 +927,7 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(retried.outcome, 'started');
         });
 
-        test('skips the external ownership probe when the editor already owns the AppHost', async () => {
+        test('skips the external-controller probe when the editor already has a session', async () => {
             editorSessions.push(new FakeEditorSession(appHostProjectPath, { noDebug: false }));
 
             const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
@@ -955,8 +948,8 @@ suite('AppHost lifecycle language model tools', () => {
             const result = await service.stop({ appHostPath: 'AppHost/AppHost.csproj' }, new vscode.CancellationTokenSource().token);
 
             assert.deepStrictEqual(
-                { outcome: result.outcome, effectiveMode: result.effectiveMode, ownership: result.ownership, appHostPath: result.appHostPath },
-                { outcome: 'stopped', effectiveMode: 'debug', ownership: 'editor', appHostPath: 'AppHost/AppHost.csproj' });
+                { outcome: result.outcome, effectiveMode: result.effectiveMode, controller: result.controller, appHostPath: result.appHostPath },
+                { outcome: 'stopped', effectiveMode: 'debug', controller: 'editor', appHostPath: 'AppHost/AppHost.csproj' });
             assert.deepStrictEqual([matching.stopCount, other.stopCount], [1, 0]);
         });
 
@@ -966,8 +959,8 @@ suite('AppHost lifecycle language model tools', () => {
             const result = await service.stop({ appHostPath: 'AppHost/AppHost.csproj' }, new vscode.CancellationTokenSource().token);
 
             assert.deepStrictEqual(
-                { outcome: result.outcome, ownership: result.ownership },
-                { outcome: 'notEditorOwned', ownership: 'external' });
+                { outcome: result.outcome, controller: result.controller },
+                { outcome: 'notEditorOwned', controller: 'external' });
         });
 
         test('does not stop a deploy or publish session for the same path', async () => {
@@ -994,26 +987,26 @@ suite('AppHost lifecycle language model tools', () => {
             const result = await service.stop({ appHostPath: 'AppHost/AppHost.csproj' }, new vscode.CancellationTokenSource().token);
 
             assert.deepStrictEqual(
-                { outcome: result.outcome, ownership: result.ownership },
-                { outcome: 'notRunning', ownership: 'none' });
+                { outcome: result.outcome, controller: result.controller },
+                { outcome: 'notRunning', controller: 'none' });
         });
 
-        test('reports failed rather than notRunning when external ownership cannot be determined', async () => {
+        test('reports failed rather than notRunning when the external controller cannot be determined', async () => {
             // A failed probe means the extension does not know whether the AppHost is
             // running outside the editor. Collapsing that into `notRunning`/`none` would
-            // hand the agent an authoritative negative that contradicts the ownership
+            // hand the agent an authoritative negative that contradicts the controller
             // contract, so the unknown state is reported as a failure instead.
             launchService.runningAppHostError = new Error('aspire ps failed: /Users/private/AppHost.csproj is unreadable');
 
             const result = await service.stop({ appHostPath: 'AppHost/AppHost.csproj' }, new vscode.CancellationTokenSource().token);
 
             assert.deepStrictEqual(
-                { outcome: result.outcome, ownership: result.ownership },
-                { outcome: 'failed', ownership: 'unknown' });
+                { outcome: result.outcome, controller: result.controller },
+                { outcome: 'failed', controller: 'unknown' });
             assert.strictEqual(JSON.stringify(result).includes('/Users/private'), false);
         });
 
-        test('does not probe for external ownership when the editor owns the session', async () => {
+        test('does not probe for an external controller when the editor already has the session', async () => {
             const session = new FakeEditorSession(appHostProjectPath, { noDebug: false });
             editorSessions.push(session);
             session.onStopped = () => { editorSessions.length = 0; };
@@ -1045,6 +1038,7 @@ suite('AppHost lifecycle language model tools', () => {
             fs.writeFileSync(path.join(directory, 'First.csproj'), appHostProjectContents);
             fs.writeFileSync(path.join(directory, 'Second.csproj'), appHostProjectContents);
             fs.writeFileSync(path.join(directory, 'Program.cs'), singleFileAppHostContents);
+            discoveryService.registeredPaths.push(path.join(directory, 'First.csproj'), path.join(directory, 'Second.csproj'));
             const session = new FakeEditorSession(path.join(directory, 'Program.cs'), { noDebug: false });
             editorSessions.push(session);
 
@@ -1062,6 +1056,7 @@ suite('AppHost lifecycle language model tools', () => {
             fs.mkdirSync(directory, { recursive: true });
             fs.writeFileSync(path.join(directory, 'First.csproj'), appHostProjectContents);
             fs.writeFileSync(path.join(directory, 'Program.cs'), singleFileAppHostContents);
+            discoveryService.registeredPaths.push(path.join(directory, 'First.csproj'));
             const session = new FakeEditorSession(path.join(directory, 'Program.cs'), { noDebug: false });
             editorSessions.push(session);
 
@@ -1163,17 +1158,15 @@ suite('AppHost lifecycle language model tools', () => {
 
         test('rejects bidi and zero-width characters instead of confirming a path it will not execute', async () => {
             // A bidi isolate around an override renders the enclosed run right-to-left, so
-            // this path would display as a different AppHost while the rest of the prompt
-            // looks untouched. Deleting the characters is not a fix: the prompt would then
-            // show `gropspc.tsohppA/AppHost.csproj` while `invoke` still launched the file
-            // whose name contains them, and the same trick lets a zero-width character
-            // distinguish two real files that confirm identically.
+            // this entry would display as a different AppHost while the rest of the prompt
+            // looks untouched. Deleting the characters is not a fix either: the prompt
+            // would then show `gropspc.tsohppA/AppHost.csproj` while `invoke` launched the
+            // file whose name contains them. Such an entry is therefore dropped from the
+            // registry outright, so it can be neither displayed nor selected.
             // See https://unicode.org/reports/tr36/#Bidirectional_Text_Spoofing
-            const disguisedDirectory = path.join(workspaceRoot, '\u2066\u202Egro\u2069pspc.tsohppA');
-            fs.mkdirSync(disguisedDirectory, { recursive: true });
-            fs.writeFileSync(path.join(disguisedDirectory, 'App\u200BHost.csproj'), appHostProjectContents);
-            const tool = new AppHostStartLanguageModelTool(service);
             const disguisedPath = '\u2066\u202Egro\u2069pspc.tsohppA/App\u200BHost.csproj';
+            discoveryService.registeredPaths.push(path.join(workspaceRoot, '\u2066\u202Egro\u2069pspc.tsohppA', 'App\u200BHost.csproj'));
+            const tool = new AppHostStartLanguageModelTool(service);
 
             const prepared = await tool.prepareInvocation(
                 { input: { appHostPath: disguisedPath, mode: 'debug' } },
@@ -1183,7 +1176,7 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(
                 prepared?.confirmationMessages?.message,
                 'Start the Aspire AppHost an unresolved path in debug mode?');
-            assert.strictEqual(result.outcome, 'invalidInput');
+            assert.strictEqual(result.outcome, 'unknownAppHost');
             assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
@@ -1196,9 +1189,7 @@ suite('AppHost lifecycle language model tools', () => {
             const escapesAsterisk = process.platform !== 'win32';
             const directoryName = escapesAsterisk ? 'foo_bar*[x](y)' : 'foo_bar[x](y)';
             const expectedDisplay = escapesAsterisk ? 'foo\\_bar\\*\\[x\\]\\(y\\)' : 'foo\\_bar\\[x\\]\\(y\\)';
-            const directory = path.join(workspaceRoot, directoryName);
-            fs.mkdirSync(directory, { recursive: true });
-            fs.writeFileSync(path.join(directory, 'AppHost.csproj'), appHostProjectContents);
+            discoveryService.registeredPaths.push(path.join(workspaceRoot, directoryName, 'AppHost.csproj'));
             const tool = new AppHostStartLanguageModelTool(service);
 
             const prepared = await tool.prepareInvocation(
@@ -1211,13 +1202,13 @@ suite('AppHost lifecycle language model tools', () => {
         });
 
         test('confirms the workspace-folder-qualified target that invocation will launch', async () => {
-            // In a multi-root workspace a relative path names a file in whichever folder
-            // contains it. Showing "an unresolved path" while `invoke` went on to launch
-            // the sole match would confirm an identity the user was never shown.
+            // In a multi-root workspace a bare relative path does not say which root was
+            // selected. Preparation runs the same registry resolution `invoke` runs, so
+            // the prompt names the root and the launch uses that same entry.
             const secondRoot = createFixtureDirectory('second-workspace');
             try {
-                fs.mkdirSync(path.join(secondRoot, 'Other'), { recursive: true });
-                fs.writeFileSync(path.join(secondRoot, 'Other', 'AppHost.csproj'), appHostProjectContents);
+                const secondAppHost = path.join(secondRoot, 'Other', 'AppHost.csproj');
+                discoveryService.registeredPaths.push(secondAppHost);
                 workspaceFoldersStub.value([
                     { uri: vscode.Uri.file(workspaceRoot), name: 'workspace', index: 0 },
                     { uri: vscode.Uri.file(secondRoot), name: 'second', index: 1 },
@@ -1233,18 +1224,20 @@ suite('AppHost lifecycle language model tools', () => {
                     prepared?.confirmationMessages?.message,
                     'Start the Aspire AppHost second/Other/AppHost.csproj in debug mode?');
                 assert.strictEqual(result.outcome, 'started');
-                assert.strictEqual(launchService.launchCalls.length, 1);
+                assert.deepStrictEqual(launchService.launchCalls, [{ appHostPath: secondAppHost, command: 'run', noDebug: false }]);
             }
             finally {
                 fs.rmSync(secondRoot, { recursive: true, force: true });
             }
         });
 
-        test('describeTarget causes no lifecycle side effects for confirmation display', () => {
-            // Resolving the target is the only way to know which workspace folder a
-            // relative path names, so the display path is allowed to read the filesystem.
-            // What it must never do is start, stop, or lock anything.
-            assert.strictEqual(service.describeTarget('AppHost/AppHost.csproj'), 'AppHost/AppHost.csproj');
+        test('describeTarget causes no lifecycle side effects for confirmation display', async () => {
+            // Resolving the target is the only way to know which registry entry a selector
+            // names, so the display path is allowed to run discovery. What it must never do
+            // is start, stop, or lock anything.
+            const displayPath = await service.describeTarget('AppHost/AppHost.csproj', new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(displayPath, 'AppHost/AppHost.csproj');
             assert.strictEqual(launchService.launchCalls.length, 0);
             assert.strictEqual(launchService.pendingLifecycleLockCount, 0);
             assert.strictEqual(launchService.runningAppHostRequests, 0);
@@ -1272,7 +1265,7 @@ suite('AppHost lifecycle language model tools', () => {
                 new vscode.CancellationTokenSource().token);
             const payload = readToolResultPayload(result);
 
-            assert.deepStrictEqual(Object.keys(payload).sort(), ['appHostPath', 'effectiveMode', 'outcome', 'ownership', 'requestedMode', 'tool']);
+            assert.deepStrictEqual(Object.keys(payload).sort(), ['appHostPath', 'controller', 'effectiveMode', 'outcome', 'requestedMode', 'tool']);
             assert.strictEqual(payload.tool, aspireAppHostStartToolName);
             assert.strictEqual(payload.appHostPath, 'AppHost/AppHost.csproj');
             assert.strictEqual(JSON.stringify(payload).includes(workspaceRoot), false);
@@ -1288,7 +1281,7 @@ suite('AppHost lifecycle language model tools', () => {
                 new vscode.CancellationTokenSource().token);
             const payload = readToolResultPayload(result);
 
-            assert.deepStrictEqual(Object.keys(payload).sort(), ['appHostPath', 'effectiveMode', 'outcome', 'ownership', 'tool']);
+            assert.deepStrictEqual(Object.keys(payload).sort(), ['appHostPath', 'controller', 'effectiveMode', 'outcome', 'tool']);
             assert.strictEqual(payload.tool, aspireAppHostStopToolName);
             assert.strictEqual(payload.outcome, 'stopped');
         });

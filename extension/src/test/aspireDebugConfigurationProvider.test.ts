@@ -11,12 +11,15 @@ import type { AspireExtendedDebugConfiguration } from '../dcp/types';
 import * as cliPathModule from '../utils/cliPath';
 import { AppHostDiscoveryService } from '../utils/appHostDiscovery';
 
-/** Captures the AppHost paths the provider reserves for `launch.json`/F5 launches. */
+/** Captures the AppHost paths the provider claims for `launch.json`/F5 launches. */
 class RecordingLaunchReservation implements ExternalLaunchReservation {
     readonly reserved: string[] = [];
+    /** When set, the claim is refused as if a lifecycle-owned launch already held it. */
+    claimedByLifecycle = false;
 
-    reserveExternalLaunch(appHostPath: string): void {
+    tryReserveExternalLaunch(appHostPath: string): boolean {
         this.reserved.push(appHostPath);
+        return !this.claimedByLifecycle;
     }
 }
 
@@ -128,6 +131,51 @@ suite('AspireDebugConfigurationProvider', () => {
         });
 
         assert.deepStrictEqual(launchReservation.reserved, []);
+    });
+
+    test('claims the concrete AppHost when the workspace-folder launch config leaves program as the directory', async () => {
+        // The default `${workspaceFolder}` configuration deliberately resolves to the folder,
+        // so claiming `config.program` would claim a directory. A directory is not the same
+        // identity as the AppHost inside it, which would let the lifecycle tool start a
+        // duplicate during the F5 startup window.
+        const workspaceRoot = path.join(tempDir, 'workspace');
+        const appHostDirectory = path.join(workspaceRoot, 'AppHost');
+        fs.mkdirSync(appHostDirectory, { recursive: true });
+        const projectPath = path.join(appHostDirectory, 'AppHost.csproj');
+        fs.writeFileSync(projectPath, '<Project Sdk="Aspire.AppHost.Sdk" />');
+
+        const folder: vscode.WorkspaceFolder = { uri: vscode.Uri.file(workspaceRoot), name: 'workspace', index: 0 };
+        const provider = new AspireDebugConfigurationProvider(createAppHostDiscoveryService(projectPath), launchReservation);
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: workspaceRoot
+        });
+
+        assert.strictEqual(config?.program, workspaceRoot);
+        assert.deepStrictEqual(launchReservation.reserved, [projectPath]);
+    });
+
+    test('cancels a launch.json run when a lifecycle-owned launch already claimed the AppHost', async () => {
+        // The lifecycle caller has already passed its own check by this point and cannot be
+        // called back, so letting this session proceed would start a second AppHost for the
+        // same project.
+        const appHostPath = path.join(tempDir, 'AppHost.csproj');
+        fs.writeFileSync(appHostPath, '<Project Sdk="Aspire.AppHost.Sdk" />');
+        launchReservation.claimedByLifecycle = true;
+        const message = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+
+        const provider = new AspireDebugConfigurationProvider(createAppHostDiscoveryService(appHostPath), launchReservation);
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: appHostPath
+        });
+
+        assert.strictEqual(config, undefined);
+        assert.strictEqual(message.calledOnce, true);
     });
 
     test('leaves launch config non-AppHost C# source file unchanged', async () => {

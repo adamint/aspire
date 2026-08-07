@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { defaultConfigurationName } from '../loc/strings';
+import { appHostLifecycleLaunchAlreadyClaimed, defaultConfigurationName } from '../loc/strings';
 import type { AspireExtendedDebugConfiguration } from '../dcp/types';
 import { AppHostDiscoveryService, getDebugTargetForCandidate } from '../utils/appHostDiscovery';
 import type { CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
@@ -13,7 +13,8 @@ import { getAspireDebugConfigurationCommand } from '../services/AppHostLaunchSer
  * launch visible to the shared launching reservation.
  */
 export interface ExternalLaunchReservation {
-    reserveExternalLaunch(appHostPath: string): void;
+    /** Returns `false` when a lifecycle-owned launch already claimed this AppHost. */
+    tryReserveExternalLaunch(appHostPath: string): boolean;
 }
 
 export class AspireDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
@@ -86,21 +87,33 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
             const program = config.program;
             config.program = await this.resolveDebugTarget(program, folder);
 
-            // This is the last hook before VS Code creates the session, and it is the only
-            // point a `launch.json`/F5 launch shares with the tool-driven path, which goes
-            // through `AppHostLaunchService`. Reserving here is what stops an agent from
-            // starting a second AppHost in the window before the session exists. Only
-            // `run` reserves: publish/deploy/do sessions are not AppHost lifetimes.
-            if (typeof config.program === 'string' && getAspireDebugConfigurationCommand(aspireConfig) === 'run') {
-                this._launchReservation.reserveExternalLaunch(config.program);
-            }
-
             const telemetryTarget = await this.tryFindWorkspaceDefaultCandidate(program, folder);
             if (telemetryTarget) {
                 config[appHostTelemetryTargetPathConfigKey] = telemetryTarget.path;
             }
             else {
                 delete config[appHostTelemetryTargetPathConfigKey];
+            }
+
+            // This is the last hook before VS Code creates the session, and it is the only
+            // point a `launch.json`/F5 launch shares with the tool-driven path, which goes
+            // through `AppHostLaunchService`. Claiming here is what stops an agent from
+            // starting a second AppHost in the window before the session exists. Only
+            // `run` claims: publish/deploy/do sessions are not AppHost lifetimes.
+            //
+            // The concrete candidate is claimed in preference to `config.program`: the
+            // default `${workspaceFolder}` configuration deliberately leaves `program` as
+            // the directory, and a directory is not the same identity as the AppHost inside
+            // it, so claiming the directory would leave the tool free to start a duplicate.
+            if (getAspireDebugConfigurationCommand(aspireConfig) === 'run') {
+                const claimedPath = telemetryTarget?.path ?? (typeof config.program === 'string' ? config.program : undefined);
+                if (claimedPath && !this._launchReservation.tryReserveExternalLaunch(claimedPath)) {
+                    // A lifecycle-owned launch already claimed this AppHost and cannot be
+                    // called back, so proceeding would produce two AppHosts for one project.
+                    // Abort this session and tell the user why rather than starting a second.
+                    void vscode.window.showInformationMessage(appHostLifecycleLaunchAlreadyClaimed);
+                    return undefined;
+                }
             }
         }
 
