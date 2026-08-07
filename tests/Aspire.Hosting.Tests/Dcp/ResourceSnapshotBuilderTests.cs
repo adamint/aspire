@@ -105,7 +105,7 @@ public class ResourceSnapshotBuilderTests
             [project.Name] = project
         }).ToSnapshot(executable, CreatePreviousSnapshot());
 
-        AssertHighlightedProperty(snapshot, KnownProperties.Project.AssemblyName, "Assembly name", isSensitive: false, sortOrder: 3);
+        AssertLabeledProperty(snapshot, KnownProperties.Project.AssemblyName, "Assembly name", isSensitive: false, sortOrder: 3);
         Assert.Equal("My Attach Service", GetProperty(snapshot, KnownProperties.Project.AssemblyName).Value);
     }
 
@@ -429,6 +429,15 @@ public class ResourceSnapshotBuilderTests
         var property = GetProperty(snapshot, name);
         Assert.Equal(displayName, property.DisplayName);
         Assert.True(property.IsHighlighted);
+        Assert.Equal(isSensitive, property.IsSensitive);
+        Assert.Equal(sortOrder, property.SortOrder);
+    }
+
+    private static void AssertLabeledProperty(CustomResourceSnapshot snapshot, string name, string displayName, bool isSensitive, int sortOrder)
+    {
+        var property = GetProperty(snapshot, name);
+        Assert.Equal(displayName, property.DisplayName);
+        Assert.False(property.IsHighlighted);
         Assert.Equal(isSensitive, property.IsSensitive);
         Assert.Equal(sortOrder, property.SortOrder);
     }

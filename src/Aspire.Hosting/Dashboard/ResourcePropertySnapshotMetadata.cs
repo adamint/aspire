@@ -50,7 +50,12 @@ internal static class ResourcePropertySnapshotMetadata
             (KnownResourceTypes.Project, KnownProperties.Project.Path) => (ResourcePropertyProjectPathDisplayName, true, 0),
             (KnownResourceTypes.Project, KnownProperties.Project.LaunchProfile) => (ResourcePropertyProjectLaunchProfileDisplayName, true, 1),
             (KnownResourceTypes.Project, KnownProperties.Executable.Pid) => (ResourcePropertyExecutableProcessIdDisplayName, true, 2),
-            (KnownResourceTypes.Project, KnownProperties.Project.AssemblyName) => (ResourcePropertyProjectAssemblyNameDisplayName, true, 3),
+            // Deliberately not highlighted, unlike the project properties above. This exists to give
+            // debuggers an attach target, so promoting it into the default details view would add a
+            // row every user sees to serve a tooling concern. It still carries a display name because
+            // the property is in the snapshot either way, and the dashboard falls back to the raw
+            // "project.assemblyName" key when no name is supplied.
+            (KnownResourceTypes.Project, KnownProperties.Project.AssemblyName) => (ResourcePropertyProjectAssemblyNameDisplayName, false, 3),
             _ => (null, false, null)
         };
     }
