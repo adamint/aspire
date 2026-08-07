@@ -12,6 +12,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Testing;
 using Xunit;
+using TestingResources = Aspire.Hosting.Testing.Properties.Resources;
 
 namespace Aspire.Hosting.Testing.Tests;
 
@@ -133,7 +134,7 @@ public class DashboardLoginUrlTests
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => app.GetDashboardLoginUrlAsync(default));
 
-        Assert.Equal("The dashboard is not enabled for this application.", exception.Message);
+        Assert.Equal(TestingResources.DashboardDisabledExceptionMessage, exception.Message);
     }
 
     [Fact]
@@ -148,9 +149,7 @@ public class DashboardLoginUrlTests
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => app.GetDashboardLoginUrlAsync(default));
 
-        Assert.Equal(
-            "The dashboard login URL is not available because anonymous dashboard access is enabled.",
-            exception.Message);
+        Assert.Equal(TestingResources.DashboardLoginUrlAnonymousExceptionMessage, exception.Message);
     }
 
     [Fact]
@@ -162,7 +161,7 @@ public class DashboardLoginUrlTests
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => app.GetDashboardLoginUrlAsync(default));
 
-        Assert.Equal("The application must be started before retrieving the dashboard login URL.", exception.Message);
+        Assert.Equal(TestingResources.DashboardLoginUrlApplicationNotStartedExceptionMessage, exception.Message);
     }
 
     [Fact]
@@ -210,15 +209,13 @@ public class DashboardLoginUrlTests
     [Fact]
     public async Task GetDashboardLoginUrlAsyncThrowsInPublishMode()
     {
-        var builder = DistributedApplicationTestingBuilder.Create(
-            ["--publisher", "manifest"],
-            (options, _) => options.DisableDashboard = false);
+        var builder = DistributedApplicationTestingBuilder.Create(["--publisher", "manifest"]);
         await using var app = await builder.BuildAsync();
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => app.GetDashboardLoginUrlAsync(default));
 
-        Assert.Equal("The dashboard login URL is not available in publish mode.", exception.Message);
+        Assert.Equal(TestingResources.DashboardLoginUrlPublishModeExceptionMessage, exception.Message);
     }
 
     [Fact]

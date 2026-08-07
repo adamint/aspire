@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
+using TestingResources = Aspire.Hosting.Testing.Properties.Resources;
 
 namespace Aspire.Hosting.Testing.Tests;
 
@@ -20,6 +21,8 @@ public class DashboardTestingBuilderTests
     private const string DashboardUnsecuredAllowAnonymous = "ASPIRE_DASHBOARD_UNSECURED_ALLOW_ANONYMOUS";
     private const string InteractivityEnabled = "ASPIRE_INTERACTIVITY_ENABLED";
     private const string ResourceServiceEndpointUrl = "ASPIRE_RESOURCE_SERVICE_ENDPOINT_URL";
+    private const string DashboardFrontendBrowserToken = "ASPIRE_DASHBOARD_FRONTEND_BROWSERTOKEN";
+    private const string AppHostBrowserToken = "AppHost:BrowserToken";
 
     [Fact]
     public void DashboardIsDisabledByDefault()
@@ -41,13 +44,7 @@ public class DashboardTestingBuilderTests
         var builder = await CreateDashboardBuilderAsync(creationSurface, []);
 
         Assert.Single(builder.Services, descriptor => descriptor.ServiceType == typeof(DashboardServiceHost));
-        Assert.Equal("true", builder.Configuration["DcpPublisher:RandomizePorts"]);
-        Assert.Equal("http://127.0.0.1:0", builder.Configuration[AspNetCoreUrls]);
-        Assert.Equal("http://127.0.0.1:0", builder.Configuration[DashboardOtlpGrpcEndpointUrl]);
-        Assert.Equal("http://127.0.0.1:0", builder.Configuration[DashboardOtlpHttpEndpointUrl]);
-        Assert.Equal("http://127.0.0.1:0", builder.Configuration[ResourceServiceEndpointUrl]);
-        Assert.Equal("false", builder.Configuration[DashboardUnsecuredAllowAnonymous]);
-        Assert.Equal("false", builder.Configuration[InteractivityEnabled]);
+        AssertDashboardTestingDefaults(builder);
 
         await using var app = await builder.BuildAsync();
     }
@@ -71,13 +68,7 @@ public class DashboardTestingBuilderTests
 
         await using var builder = await CreateDashboardBuilderAsync(creationSurface, args);
 
-        Assert.Equal("true", builder.Configuration["DcpPublisher:RandomizePorts"]);
-        Assert.Equal("http://127.0.0.1:0", builder.Configuration[AspNetCoreUrls]);
-        Assert.Equal("http://127.0.0.1:0", builder.Configuration[DashboardOtlpGrpcEndpointUrl]);
-        Assert.Equal("http://127.0.0.1:0", builder.Configuration[DashboardOtlpHttpEndpointUrl]);
-        Assert.Equal("http://127.0.0.1:0", builder.Configuration[ResourceServiceEndpointUrl]);
-        Assert.Equal("false", builder.Configuration[DashboardUnsecuredAllowAnonymous]);
-        Assert.Equal("false", builder.Configuration[InteractivityEnabled]);
+        AssertDashboardTestingDefaults(builder);
         Assert.Equal(nameof(ResourceServiceAuthMode.ApiKey), builder.Configuration["AppHost:ResourceService:AuthMode"]);
     }
 
@@ -90,13 +81,31 @@ public class DashboardTestingBuilderTests
             creationSurface,
             ["--override-dashboard-testing-defaults"]);
 
-        Assert.Equal("true", builder.Configuration["DcpPublisher:RandomizePorts"]);
-        Assert.Equal("http://127.0.0.1:0", builder.Configuration[AspNetCoreUrls]);
-        Assert.Equal("http://127.0.0.1:0", builder.Configuration[DashboardOtlpGrpcEndpointUrl]);
-        Assert.Equal("http://127.0.0.1:0", builder.Configuration[DashboardOtlpHttpEndpointUrl]);
-        Assert.Equal("http://127.0.0.1:0", builder.Configuration[ResourceServiceEndpointUrl]);
-        Assert.Equal("false", builder.Configuration[DashboardUnsecuredAllowAnonymous]);
-        Assert.Equal("false", builder.Configuration[InteractivityEnabled]);
+        AssertDashboardTestingDefaults(builder);
+    }
+
+    [Theory]
+    [InlineData(CreationSurface.Generic)]
+    [InlineData(CreationSurface.Type)]
+    [InlineData(CreationSurface.AdHoc)]
+    public async Task DashboardTestingGeneratesAFreshBrowserTokenPerApplication(CreationSurface creationSurface)
+    {
+        // A token shared by every application under test is barely better than anonymous access, and this is
+        // exactly the shape an ambient ASPIRE_DASHBOARD_FRONTEND_BROWSERTOKEN on a CI agent would take.
+        const string SharedToken = "shared-browser-token";
+        string[] args = [$"--{DashboardFrontendBrowserToken}={SharedToken}"];
+
+        await using var first = await CreateDashboardBuilderAsync(creationSurface, args);
+        await using var second = await CreateDashboardBuilderAsync(creationSurface, args);
+
+        var firstToken = first.Configuration[AppHostBrowserToken];
+        var secondToken = second.Configuration[AppHostBrowserToken];
+
+        Assert.NotEmpty(firstToken!);
+        Assert.NotEmpty(secondToken!);
+        Assert.NotEqual(SharedToken, firstToken);
+        Assert.NotEqual(SharedToken, secondToken);
+        Assert.NotEqual(firstToken, secondToken);
     }
 
     [Fact]
@@ -109,6 +118,23 @@ public class DashboardTestingBuilderTests
         Assert.False(app.Services.GetRequiredService<IInteractionService>().IsAvailable);
         Assert.Equal(
             WaitBehavior.StopOnResourceUnavailable,
+            app.Services.GetRequiredService<IOptions<ResourceNotificationServiceOptions>>().Value.DefaultWaitBehavior);
+    }
+
+    [Fact]
+    public async Task DashboardTestingDefaultWaitBehaviorCanBeOverriddenThroughOptions()
+    {
+        // Fail-fast is right for an unattended run, but when the dashboard is up to be looked at, waiting keeps the
+        // stuck resource alive long enough to inspect instead of tearing the application down.
+        var options = CreateDashboardOptions();
+        options.DefaultWaitBehavior = WaitBehavior.WaitOnResourceUnavailable;
+
+        var builder = DistributedApplicationTestingBuilder.Create(options, []);
+
+        await using var app = await builder.BuildAsync();
+
+        Assert.Equal(
+            WaitBehavior.WaitOnResourceUnavailable,
             app.Services.GetRequiredService<IOptions<ResourceNotificationServiceOptions>>().Value.DefaultWaitBehavior);
     }
 
@@ -147,6 +173,9 @@ public class DashboardTestingBuilderTests
     [Fact]
     public async Task ExistingDefaultCallsRemainUnambiguous()
     {
+        // `default` has to keep binding to the pre-existing params string[] and CancellationToken overloads
+        // rather than to the new options overloads, otherwise adding those overloads is a source-breaking change.
+        // The compiler proves the binding; these assertions prove the bound overloads still behave as before.
         Assert.Throws<ArgumentNullException>(() => DistributedApplicationTestingBuilder.Create(default!));
 
         await using var genericBuilder =
@@ -154,20 +183,23 @@ public class DashboardTestingBuilderTests
         await using var typeBuilder =
             await DistributedApplicationTestingBuilder.CreateAsync(typeof(Projects.TestingAppHost1_AppHost), default);
 
-        Func<Task<IDistributedApplicationTestingBuilder>> genericOptionsCall = () =>
-            DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
+        Assert.Null(genericBuilder.Services.FirstOrDefault(descriptor => descriptor.ServiceType == typeof(DashboardServiceHost)));
+        Assert.Null(typeBuilder.Services.FirstOrDefault(descriptor => descriptor.ServiceType == typeof(DashboardServiceHost)));
+
+        await using var genericOptionsBuilder =
+            await DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
                 CreateDashboardOptions(),
                 [],
                 default);
-        Func<Task<IDistributedApplicationTestingBuilder>> typeOptionsCall = () =>
-            DistributedApplicationTestingBuilder.CreateAsync(
+        await using var typeOptionsBuilder =
+            await DistributedApplicationTestingBuilder.CreateAsync(
                 typeof(Projects.TestingAppHost1_AppHost),
                 CreateDashboardOptions(),
                 [],
                 default);
 
-        Assert.NotNull(genericOptionsCall);
-        Assert.NotNull(typeOptionsCall);
+        Assert.Single(genericOptionsBuilder.Services, descriptor => descriptor.ServiceType == typeof(DashboardServiceHost));
+        Assert.Single(typeOptionsBuilder.Services, descriptor => descriptor.ServiceType == typeof(DashboardServiceHost));
     }
 
     [Fact]
@@ -196,7 +228,7 @@ public class DashboardTestingBuilderTests
     }
 
     [Fact]
-    public async Task BuildAsyncCancellationAfterReleaseDisposesBuiltApplication()
+    public async Task BuildAsyncCancellationAfterReleaseReturnsPromptlyAndDisposesBuiltApplication()
     {
         var probe = TestingAppHostBuildProbe.Create();
         var builder =
@@ -210,11 +242,78 @@ public class DashboardTestingBuilderTests
             Assert.False(buildTask.IsCompleted);
 
             cancellationTokenSource.Cancel();
-            await Task.Delay(50);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => buildTask.DefaultTimeout());
+
+            // The AppHost is still blocked inside Build(), so observing cancellation here proves BuildAsync
+            // returned without waiting for the application it already released.
+            Assert.False(probe.ApplicationDisposed.IsCompleted);
+
             probe.ContinueBuilding();
 
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => buildTask);
+            // Promptness is already proven by the assertion above. Reclaiming the late application goes through
+            // DistributedApplicationFactory.DisposeAsync, which first waits for the released AppHost entry point to
+            // exit under the host's shutdown timeout, so this leg needs a budget larger than DefaultTimeout's 5s.
+            await probe.ApplicationDisposed.WaitAsync(TimeSpan.FromSeconds(60));
+        }
+        finally
+        {
+            probe.ContinueBuilding();
+            await builder.DisposeAsync();
+            probe.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task BuildAsyncCancellationFollowedByDisposeStillDisposesLateApplication()
+    {
+        var probe = TestingAppHostBuildProbe.Create();
+        var builder =
+            await DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
+                [$"--block-apphost-build={probe.Id}"]);
+        try
+        {
+            using var cancellationTokenSource = new CancellationTokenSource();
+            var buildTask = builder.BuildAsync(cancellationTokenSource.Token);
+            await probe.BuildEntered.DefaultTimeout();
+
+            cancellationTokenSource.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => buildTask.DefaultTimeout());
+
+            // Disposing before the AppHost finishes building is the ordinary `await using` sequence. The
+            // application arrives after disposal has already claimed the factory, so nothing the caller holds
+            // can tear it down; the factory has to reclaim it.
+            await builder.DisposeAsync().DefaultTimeout();
+
+            probe.ContinueBuilding();
+
             await probe.ApplicationDisposed.DefaultTimeout();
+        }
+        finally
+        {
+            probe.ContinueBuilding();
+            await builder.DisposeAsync();
+            probe.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task BuildAsyncCancellationPreservesOperationCanceledExceptionWhenAppHostLaterFails()
+    {
+        var probe = TestingAppHostBuildProbe.Create();
+        var builder =
+            await DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
+                [$"--block-apphost-build={probe.Id}", "--crash-after-build"]);
+        try
+        {
+            using var cancellationTokenSource = new CancellationTokenSource();
+            var buildTask = builder.BuildAsync(cancellationTokenSource.Token);
+            await probe.BuildEntered.DefaultTimeout();
+
+            cancellationTokenSource.Cancel();
+            probe.ContinueBuilding();
+            await probe.EntryPointFailure.DefaultTimeout();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => buildTask);
         }
         finally
         {
@@ -230,7 +329,9 @@ public class DashboardTestingBuilderTests
         var builder = await DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>();
         await builder.DisposeAsync();
 
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => builder.BuildAsync());
+        var exception = await Assert.ThrowsAsync<ObjectDisposedException>(() => builder.BuildAsync());
+
+        Assert.Equal(nameof(IDistributedApplicationTestingBuilder), exception.ObjectName);
     }
 
     [Theory]
@@ -248,7 +349,24 @@ public class DashboardTestingBuilderTests
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(
             () => CreatePublishBuilderAsync(creationSurface, [argumentName, argumentValue]));
 
-        Assert.Equal("Dashboard testing is not supported in publish mode.", exception.Message);
+        Assert.Equal(TestingResources.DashboardTestingPublishModeExceptionMessage, exception.Message);
+    }
+
+    [Fact]
+    public async Task DashboardTestingIsRejectedInPublishModeWhenEnabledThroughConfigureBuilder()
+    {
+        // DistributedApplicationOptions.DisableDashboard = false is the older spelling of "run the dashboard", and
+        // it has to reach the same rejection as the EnableDashboard option rather than silently skipping it.
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            var builder = DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
+                ["--publisher", "manifest"],
+                (options, _) => options.DisableDashboard = false);
+
+            await using var created = await builder;
+        });
+
+        Assert.Equal(TestingResources.DashboardTestingPublishModeExceptionMessage, exception.Message);
     }
 
     private static DistributedApplicationTestingBuilderOptions CreateDashboardOptions()
@@ -257,6 +375,27 @@ public class DashboardTestingBuilderTests
         {
             EnableDashboard = true
         };
+    }
+
+    private static void AssertDashboardTestingDefaults(IDistributedApplicationTestingBuilder builder)
+    {
+        Assert.Equal("true", builder.Configuration["DcpPublisher:RandomizePorts"]);
+
+        // Blank is how the product spells "assign me a free port", so these must stay empty rather than
+        // carrying an explicit :0, which would be a literal fixed port.
+        Assert.Equal(string.Empty, builder.Configuration[AspNetCoreUrls]);
+        Assert.Equal(string.Empty, builder.Configuration[DashboardOtlpGrpcEndpointUrl]);
+        Assert.Equal(string.Empty, builder.Configuration[DashboardOtlpHttpEndpointUrl]);
+
+        Assert.Equal("http://127.0.0.1:0", builder.Configuration[ResourceServiceEndpointUrl]);
+        Assert.Equal("false", builder.Configuration[DashboardUnsecuredAllowAnonymous]);
+        Assert.Equal("false", builder.Configuration[InteractivityEnabled]);
+
+        // The token has to survive all the way into AppHost:BrowserToken, which is the key the dashboard
+        // actually validates against and the one GetDashboardLoginUrlAsync hands back.
+        var browserToken = builder.Configuration[DashboardFrontendBrowserToken];
+        Assert.NotEmpty(browserToken!);
+        Assert.Equal(browserToken, builder.Configuration[AppHostBrowserToken]);
     }
 
     private static async Task<IDistributedApplicationTestingBuilder> CreateDashboardBuilderAsync(

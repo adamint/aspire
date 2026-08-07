@@ -22,7 +22,6 @@ namespace Aspire.Hosting.Testing;
 /// </summary>
 public static class DistributedApplicationTestingBuilder
 {
-    private const string DashboardTestingPublishModeExceptionMessage = "Dashboard testing is not supported in publish mode.";
 
     /// <summary>
     /// Creates a new instance of <see cref="IDistributedApplicationTestingBuilder"/>.
@@ -118,7 +117,7 @@ public static class DistributedApplicationTestingBuilder
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        return CreateAsyncCore(entryPoint, args, options.EnableDashboard, (_, __) => { }, cancellationToken);
+        return CreateAsyncCore(entryPoint, args, options, (_, __) => { }, cancellationToken);
     }
 
     /// <summary>
@@ -178,12 +177,12 @@ public static class DistributedApplicationTestingBuilder
     /// </returns>
     [SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "Generic and non-generic")]
     public static async Task<IDistributedApplicationTestingBuilder> CreateAsync(Type entryPoint, string[] args, Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder, CancellationToken cancellationToken = default)
-        => await CreateAsyncCore(entryPoint, args, enableDashboard: false, configureBuilder, cancellationToken).ConfigureAwait(false);
+        => await CreateAsyncCore(entryPoint, args, testingOptions: null, configureBuilder, cancellationToken).ConfigureAwait(false);
 
     private static async Task<IDistributedApplicationTestingBuilder> CreateAsyncCore(
         Type entryPoint,
         string[] args,
-        bool enableDashboard,
+        DistributedApplicationTestingBuilderOptions? testingOptions,
         Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder,
         CancellationToken cancellationToken)
     {
@@ -191,7 +190,7 @@ public static class DistributedApplicationTestingBuilder
         ThrowIfNullOrContainsIsNullOrEmpty(args);
         ArgumentNullException.ThrowIfNull(configureBuilder, nameof(configureBuilder));
 
-        var factory = new SuspendingDistributedApplicationFactory(entryPoint, args, enableDashboard, configureBuilder);
+        var factory = new SuspendingDistributedApplicationFactory(entryPoint, args, testingOptions, configureBuilder);
         try
         {
             return await factory.CreateBuilderAsync(cancellationToken).ConfigureAwait(false);
@@ -239,7 +238,7 @@ public static class DistributedApplicationTestingBuilder
     {
         ArgumentNullException.ThrowIfNull(options);
 
-        return CreateCore(args, options.EnableDashboard, (_, __) => { });
+        return CreateCore(args, options, (_, __) => { });
     }
 
     /// <summary>
@@ -251,18 +250,18 @@ public static class DistributedApplicationTestingBuilder
     /// A new instance of <see cref="IDistributedApplicationTestingBuilder"/>.
     /// </returns>
     public static IDistributedApplicationTestingBuilder Create(string[] args, Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder)
-        => CreateCore(args, enableDashboard: false, configureBuilder);
+        => CreateCore(args, testingOptions: null, configureBuilder);
 
     private static IDistributedApplicationTestingBuilder CreateCore(
         string[] args,
-        bool enableDashboard,
+        DistributedApplicationTestingBuilderOptions? testingOptions,
         Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder,
         Assembly? appHostAssembly = null)
     {
         ThrowIfNullOrContainsIsNullOrEmpty(args);
         ArgumentNullException.ThrowIfNull(configureBuilder);
 
-        return new TestingBuilder(args, enableDashboard, configureBuilder, appHostAssembly);
+        return new TestingBuilder(args, testingOptions, configureBuilder, appHostAssembly);
     }
 
     /// <summary>
@@ -278,27 +277,51 @@ public static class DistributedApplicationTestingBuilder
         string[] args,
         Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder,
         Assembly appHostAssembly)
-        => CreateCore(args, enableDashboard: false, configureBuilder, appHostAssembly);
+        => CreateCore(args, testingOptions: null, configureBuilder, appHostAssembly);
+
+    private static bool IsDashboardTestingEnabled(
+        DistributedApplicationOptions applicationOptions,
+        DistributedApplicationTestingBuilderOptions? testingOptions)
+    {
+        // Setting DistributedApplicationOptions.DisableDashboard = false through the configureBuilder callback was
+        // already the supported way to run a dashboard from a test, so treat it as equivalent to the option. Both
+        // spellings must converge here or only one of them gets the hardened testing defaults below.
+        return testingOptions?.EnableDashboard == true || !applicationOptions.DisableDashboard;
+    }
 
     private static void ConfigureDashboardTesting(
         DistributedApplicationOptions applicationOptions,
         HostApplicationBuilderSettings hostBuilderOptions,
-        bool enableDashboard)
+        DistributedApplicationTestingBuilderOptions? testingOptions,
+        out DashboardTestingState dashboardTestingState)
     {
-        if (!enableDashboard)
+        if (!IsDashboardTestingEnabled(applicationOptions, testingOptions))
         {
+            dashboardTestingState = default;
             return;
         }
+
+        dashboardTestingState = new DashboardTestingState(
+            Enabled: true,
+            DefaultWaitBehavior: testingOptions?.DefaultWaitBehavior ?? WaitBehavior.StopOnResourceUnavailable);
 
         applicationOptions.DisableDashboard = false;
 
         // Command-line configuration has higher precedence than the configuration sources supplied through
         // HostApplicationBuilderSettings. Append this after the AppHost callback so creation-time arguments and
         // configuration cannot select anonymous dashboard authentication before testing defaults are reapplied.
+        //
+        // The browser token rides along on the same mechanism, and deliberately not on the in-memory collection
+        // below, for two reasons. DistributedApplicationBuilder resolves the token during construction and freezes
+        // it into AppHost:BrowserToken, so it has to be visible before the builder is created and there has to be
+        // exactly one value. And turning off anonymous access only closes the door if a credential actually exists:
+        // without this, an ambient ASPIRE_DASHBOARD_FRONTEND_BROWSERTOKEN on a CI agent would share a single known
+        // token across every test application running there.
         hostBuilderOptions.Args =
         [
             .. (hostBuilderOptions.Args ?? applicationOptions.Args ?? []),
-            $"{KnownConfigNames.DashboardUnsecuredAllowAnonymous}=false"
+            $"{KnownConfigNames.DashboardUnsecuredAllowAnonymous}=false",
+            $"{KnownConfigNames.DashboardFrontendBrowserToken}={TokenGenerator.GenerateToken()}"
         ];
         applicationOptions.Args = hostBuilderOptions.Args;
 
@@ -306,16 +329,16 @@ public static class DistributedApplicationTestingBuilder
         AddDashboardTestingConfiguration(hostBuilderOptions.Configuration);
     }
 
-    private static void ConfigureDashboardTesting(IDistributedApplicationBuilder builder, bool enableDashboard)
+    private static void ConfigureDashboardTesting(IDistributedApplicationBuilder builder, DashboardTestingState dashboardTestingState)
     {
-        if (!enableDashboard)
+        if (!dashboardTestingState.Enabled)
         {
             return;
         }
 
         if (builder.ExecutionContext.IsPublishMode)
         {
-            throw new InvalidOperationException(DashboardTestingPublishModeExceptionMessage);
+            throw new InvalidOperationException(Properties.Resources.DashboardTestingPublishModeExceptionMessage);
         }
 
         // Apply these after the builder has loaded environment variables and command-line arguments so test
@@ -324,11 +347,13 @@ public static class DistributedApplicationTestingBuilder
         // selection, including dashboard authentication, has already completed.
         AddDashboardTestingConfiguration(builder.Configuration);
 
-        // Enabling the dashboard changes the hosting default to wait indefinitely when a dependency becomes
-        // unavailable. Tests must retain the testing builder's fail-fast behavior, while a later user
-        // registration can still override this default.
+        // Enabling the dashboard makes the hosting default wait indefinitely when a dependency becomes unavailable,
+        // which would hang a test run instead of failing it. Re-pin the testing builder's fail-fast default unless
+        // the caller asked for something else, since waiting is the useful behavior when the whole point is to open
+        // the dashboard and look at the stuck resource. A later user registration still overrides this.
+        var defaultWaitBehavior = dashboardTestingState.DefaultWaitBehavior;
         builder.Services.Configure<ResourceNotificationServiceOptions>(
-            options => options.DefaultWaitBehavior = WaitBehavior.StopOnResourceUnavailable);
+            options => options.DefaultWaitBehavior = defaultWaitBehavior);
     }
 
     private static void AddDashboardTestingConfiguration(IConfigurationBuilder configuration)
@@ -336,10 +361,20 @@ public static class DistributedApplicationTestingBuilder
         configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["DcpPublisher:RandomizePorts"] = "true",
-            [KnownAspNetCoreConfigNames.Urls] = "http://127.0.0.1:0",
-            [KnownConfigNames.DashboardOtlpGrpcEndpointUrl] = "http://127.0.0.1:0",
-            [KnownConfigNames.DashboardOtlpHttpEndpointUrl] = "http://127.0.0.1:0",
+
+            // Empty means "not configured", which is how the product asks for a dynamically assigned port:
+            // ConfigureDefaultDashboardOptions normalizes blank to null, and DashboardEventHandlers then creates
+            // the endpoint with port: null. Writing an explicit "http://127.0.0.1:0" instead would parse to the
+            // fixed port 0 and only behave dynamically while DcpPublisher:RandomizePorts stays true, which a test
+            // is free to turn off. These endpoints still bind to loopback because EndpointAnnotation.TargetHost
+            // defaults to localhost.
+            [KnownAspNetCoreConfigNames.Urls] = string.Empty,
+            [KnownConfigNames.DashboardOtlpGrpcEndpointUrl] = string.Empty,
+            [KnownConfigNames.DashboardOtlpHttpEndpointUrl] = string.Empty,
+
+            // The resource service reads its port directly and has first-class handling for port 0.
             [KnownConfigNames.ResourceServiceEndpointUrl] = "http://127.0.0.1:0",
+
             [KnownConfigNames.AllowUnsecuredTransport] = "true",
             [KnownConfigNames.DashboardUnsecuredAllowAnonymous] = "false",
             [KnownConfigNames.InteractivityEnabled] = "false"
@@ -363,20 +398,38 @@ public static class DistributedApplicationTestingBuilder
         }
     }
 
+    /// <summary>
+    /// The dashboard testing configuration resolved during builder construction. Carried as a single value so the
+    /// pre-construction and post-construction halves of the configuration cannot drift apart.
+    /// </summary>
+    private readonly record struct DashboardTestingState(bool Enabled, WaitBehavior DefaultWaitBehavior);
+
     private sealed class SuspendingDistributedApplicationFactory(
         Type entryPoint,
         string[] args,
-        bool enableDashboard,
+        DistributedApplicationTestingBuilderOptions? testingOptions,
         Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder)
         : DistributedApplicationFactory(entryPoint, args)
     {
         private readonly SemaphoreSlim _continueBuilding = new(0);
+
+        // Tracks whether the suspended AppHost entry point has been released, and why. Disposal must win over a
+        // concurrent BuildAsync so a rejected builder cannot continue into Build() after the factory is gone.
+        private const int ContinuationSuspended = 0;
+        private const int ContinuationReleased = 1;
+        private const int ContinuationDisposed = 2;
+
         private int _buildingContinuationState;
+
+        // Resolved while the builder is being constructed, from the effective DistributedApplicationOptions rather
+        // than the caller's options alone, so an AppHost that enables the dashboard through configureBuilder gets the
+        // same hardened testing defaults.
+        private DashboardTestingState _dashboardTestingState;
 
         public async Task<IDistributedApplicationTestingBuilder> CreateBuilderAsync(CancellationToken cancellationToken)
         {
             var innerBuilder = await ResolveBuilderAsync(cancellationToken).ConfigureAwait(false);
-            ConfigureDashboardTesting(innerBuilder, enableDashboard);
+            ConfigureDashboardTesting(innerBuilder, _dashboardTestingState);
             return new Builder(this, innerBuilder);
         }
 
@@ -384,7 +437,7 @@ public static class DistributedApplicationTestingBuilder
         {
             base.OnBuilderCreating(applicationOptions, hostOptions);
             configureBuilder(applicationOptions, hostOptions);
-            ConfigureDashboardTesting(applicationOptions, hostOptions, enableDashboard);
+            ConfigureDashboardTesting(applicationOptions, hostOptions, testingOptions, out _dashboardTestingState);
         }
 
         protected override void OnBuilding(DistributedApplicationBuilder applicationBuilder)
@@ -393,11 +446,9 @@ public static class DistributedApplicationTestingBuilder
 
             // Wait until the owner signals that building can continue by calling BuildAsync().
             _continueBuilding.Wait();
-            if (Volatile.Read(ref _buildingContinuationState) == 2)
+            if (Volatile.Read(ref _buildingContinuationState) == ContinuationDisposed)
             {
-                throw new ObjectDisposedException(
-                    nameof(IDistributedApplicationTestingBuilder),
-                    "The testing builder was disposed before the application was built.");
+                throw CreateDisposedException();
             }
         }
 
@@ -405,9 +456,13 @@ public static class DistributedApplicationTestingBuilder
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var previousState = Interlocked.CompareExchange(ref _buildingContinuationState, 1, 0);
-            ObjectDisposedException.ThrowIf(previousState == 2, this);
-            if (previousState == 0)
+            var previousState = Interlocked.CompareExchange(ref _buildingContinuationState, ContinuationReleased, ContinuationSuspended);
+            if (previousState == ContinuationDisposed)
+            {
+                throw CreateDisposedException();
+            }
+
+            if (previousState == ContinuationSuspended)
             {
                 _continueBuilding.Release();
             }
@@ -419,25 +474,50 @@ public static class DistributedApplicationTestingBuilder
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 // Once the AppHost has been released, it can still finish building after the caller stops waiting.
-                // Wait for that application and dispose the factory before propagating cancellation so it cannot
-                // continue running without an owner.
+                // Cancellation must return to the caller promptly, so reclaim that application on a background
+                // continuation rather than blocking here until an AppHost that may never finish completes.
+                ReclaimApplicationInBackground();
+                throw;
+            }
+            catch (OperationCanceledException) when (Volatile.Read(ref _buildingContinuationState) == ContinuationDisposed)
+            {
+                throw CreateDisposedException();
+            }
+        }
+
+        /// <summary>
+        /// Disposes the factory once a released AppHost finishes building, so an application the caller abandoned
+        /// after cancellation cannot keep running.
+        /// </summary>
+        /// <remarks>
+        /// This is best effort. If the caller disposes the builder first, this wait is aborted by that disposal and
+        /// <see cref="DistributedApplicationFactory.OnBuiltCoreAsync"/> reclaims the late-arriving application instead.
+        /// </remarks>
+        private void ReclaimApplicationInBackground()
+        {
+            _ = Task.Run(async () =>
+            {
                 try
                 {
                     _ = await ResolveApplicationAsync(CancellationToken.None).ConfigureAwait(false);
-                }
-                finally
-                {
                     await DisposeAsync().ConfigureAwait(false);
                 }
+                catch
+                {
+                    // The AppHost can fail, or this wait can be aborted by the caller's own disposal, after the
+                    // caller stopped waiting. No caller remains to observe that, and the factory reclaims any
+                    // application that arrives after disposal, so swallow it rather than raising an unobserved
+                    // task exception on the finalizer thread.
+                }
+            });
+        }
 
-                throw;
-            }
-            catch (OperationCanceledException) when (Volatile.Read(ref _buildingContinuationState) == 2)
-            {
-                throw new ObjectDisposedException(
-                    nameof(IDistributedApplicationTestingBuilder),
-                    "The testing builder was disposed before the application was built.");
-            }
+        private static ObjectDisposedException CreateDisposedException()
+        {
+            // Report the public interface rather than this internal factory type so callers see the object they own.
+            return new ObjectDisposedException(
+                nameof(IDistributedApplicationTestingBuilder),
+                "The testing builder was disposed before the application was built.");
         }
 
         public override async ValueTask DisposeAsync()
@@ -454,8 +534,8 @@ public static class DistributedApplicationTestingBuilder
 
         private void PrepareForDisposal()
         {
-            var previousState = Interlocked.Exchange(ref _buildingContinuationState, 2);
-            if (previousState == 0)
+            var previousState = Interlocked.Exchange(ref _buildingContinuationState, ContinuationDisposed);
+            if (previousState == ContinuationSuspended)
             {
                 // Abort on the AppHost entry-point thread instead of allowing a rejected or canceled
                 // builder to continue into Build() after the factory has already been disposed.
@@ -560,20 +640,21 @@ public static class DistributedApplicationTestingBuilder
 
     private sealed class TestingBuilder(
         string[] args,
-        bool enableDashboard,
+        DistributedApplicationTestingBuilderOptions? testingOptions,
         Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder,
         Assembly? appHostAssembly = null)
         : IDistributedApplicationTestingBuilder
     {
-        private readonly DistributedApplicationBuilder _innerBuilder = CreateInnerBuilder(args, enableDashboard, configureBuilder, appHostAssembly);
+        private readonly DistributedApplicationBuilder _innerBuilder = CreateInnerBuilder(args, testingOptions, configureBuilder, appHostAssembly);
         private DistributedApplication? _app;
 
         private static DistributedApplicationBuilder CreateInnerBuilder(
             string[] args,
-            bool enableDashboard,
+            DistributedApplicationTestingBuilderOptions? testingOptions,
             Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder,
             Assembly? appHostAssembly = null)
         {
+            var dashboardTestingState = default(DashboardTestingState);
             var builder = TestingBuilderFactory.CreateBuilder(args, onConstructing: (applicationOptions, hostBuilderOptions) =>
             {
                 Assembly appAssembly;
@@ -589,11 +670,11 @@ public static class DistributedApplicationTestingBuilder
                 DistributedApplicationFactory.ConfigureBuilder(args, applicationOptions, hostBuilderOptions, appAssembly, (options, settings) =>
                 {
                     configureBuilder(options, settings);
-                    ConfigureDashboardTesting(options, settings, enableDashboard);
+                    ConfigureDashboardTesting(options, settings, testingOptions, out dashboardTestingState);
                 });
             });
 
-            ConfigureDashboardTesting(builder, enableDashboard);
+            ConfigureDashboardTesting(builder, dashboardTestingState);
 
             if (!builder.Configuration.GetValue(KnownConfigNames.TestingDisableHttpClient, false))
             {

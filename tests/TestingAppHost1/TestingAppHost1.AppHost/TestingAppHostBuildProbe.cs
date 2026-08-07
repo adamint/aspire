@@ -34,6 +34,16 @@ public static class TestingAppHostBuildProbe
         state.Arm();
     }
 
+    internal static void SignalEntryPointFailure(string id)
+    {
+        if (!s_probes.TryGetValue(id, out var state))
+        {
+            throw new InvalidOperationException($"Build probe '{id}' was not registered.");
+        }
+
+        state.EntryPointFailure.TrySetResult();
+    }
+
     public sealed class Probe : IDisposable
     {
         private readonly ProbeState _state;
@@ -47,6 +57,8 @@ public static class TestingAppHostBuildProbe
         public string Id { get; }
 
         public Task BuildEntered => _state.BuildEntered.Task;
+
+        public Task EntryPointFailure => _state.EntryPointFailure.Task;
 
         public Task ApplicationDisposed => _state.ApplicationDisposed.Task;
 
@@ -70,6 +82,8 @@ public static class TestingAppHostBuildProbe
         public TaskCompletionSource BuildEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TaskCompletionSource ContinueBuilding { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource EntryPointFailure { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TaskCompletionSource ApplicationDisposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

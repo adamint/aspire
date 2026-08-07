@@ -72,6 +72,12 @@ var app = builder.Build();
 
 if (args.Contains("--crash-after-build"))
 {
+    if (buildProbeArgument is not null)
+    {
+        var buildProbeId = buildProbeArgument["--block-apphost-build=".Length..];
+        TestingAppHostBuildProbe.SignalEntryPointFailure(buildProbeId);
+    }
+
     throw new InvalidOperationException("Crashing: after-build.");
 }
 

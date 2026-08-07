@@ -14,12 +14,6 @@ namespace Aspire.Hosting.Testing;
 /// </summary>
 public static class DistributedApplicationHostingTestingExtensions
 {
-    private const string DashboardDisabledExceptionMessage = "The dashboard is not enabled for this application.";
-    private const string DashboardLoginUrlAnonymousExceptionMessage = "The dashboard login URL is not available because anonymous dashboard access is enabled.";
-    private const string DashboardLoginUrlApplicationNotStartedExceptionMessage = "The application must be started before retrieving the dashboard login URL.";
-    private const string DashboardLoginUrlPublishModeExceptionMessage = "The dashboard login URL is not available in publish mode.";
-    private const string DashboardLoginUrlUnavailableExceptionMessage = "The dashboard login URL is not available.";
-
     /// <summary>
     /// Gets the authenticated login URL for the running Aspire dashboard.
     /// </summary>
@@ -74,16 +68,16 @@ public static class DistributedApplicationHostingTestingExtensions
         var executionContext = app.Services.GetRequiredService<DistributedApplicationExecutionContext>();
         if (executionContext.IsPublishMode)
         {
-            throw new InvalidOperationException(DashboardLoginUrlPublishModeExceptionMessage);
+            throw new InvalidOperationException(Properties.Resources.DashboardLoginUrlPublishModeExceptionMessage);
         }
 
         var applicationOptions = app.Services.GetRequiredService<DistributedApplicationOptions>();
         if (applicationOptions.DisableDashboard)
         {
-            throw new InvalidOperationException(DashboardDisabledExceptionMessage);
+            throw new InvalidOperationException(Properties.Resources.DashboardDisabledExceptionMessage);
         }
 
-        ThrowIfNotStarted(app, DashboardLoginUrlApplicationNotStartedExceptionMessage);
+        ThrowIfNotStarted(app, Properties.Resources.DashboardLoginUrlApplicationNotStartedExceptionMessage);
         cancellationToken.ThrowIfCancellationRequested();
 
         var logger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger(
@@ -96,12 +90,12 @@ public static class DistributedApplicationHostingTestingExtensions
         var dashboardUrl = dashboardInfo.CodespacesUrlWithLoginToken ?? dashboardInfo.BaseUrlWithLoginToken;
         if (!dashboardInfo.IsHealthy || !Uri.TryCreate(dashboardUrl, UriKind.Absolute, out var dashboardUri))
         {
-            throw new InvalidOperationException(DashboardLoginUrlUnavailableExceptionMessage);
+            throw new InvalidOperationException(Properties.Resources.DashboardLoginUrlUnavailableExceptionMessage);
         }
 
         if (!dashboardInfo.HasBrowserToken)
         {
-            throw new InvalidOperationException(DashboardLoginUrlAnonymousExceptionMessage);
+            throw new InvalidOperationException(Properties.Resources.DashboardLoginUrlAnonymousExceptionMessage);
         }
 
         return dashboardUri;
