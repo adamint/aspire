@@ -2,7 +2,9 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Globalization;
+using System.IO.Hashing;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using Aspire.Cli.Configuration;
@@ -154,6 +156,17 @@ internal sealed class ProjectLocator(
     /// is owned by the individual debug session, so it must never become the workspace default.
     /// </summary>
     private const string ExplicitLaunchConfigurationSelectionOrigin = "explicit-launch-configuration";
+
+    /// <summary>
+    /// How long to wait for the workspace config lock before giving up on it.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately far below <see cref="FileLock"/>'s five-minute default. The critical section is
+    /// a handful of small file reads and writes, so anything past a few seconds means the holder is
+    /// wedged rather than busy, and this runs on the path of an interactive command where a long
+    /// silent stall is worse than losing the serialization guarantee.
+    /// </remarks>
+    private static readonly TimeSpan s_workspaceConfigLockTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Finds all candidate AppHost projects in the specified search directory with language metadata.
@@ -1080,6 +1093,15 @@ internal sealed class ProjectLocator(
             ExplicitLaunchConfigurationSelectionOrigin,
             StringComparison.OrdinalIgnoreCase);
 
+        // Everything below reads the workspace config, can migrate a legacy layout onto disk,
+        // decides whether the workspace already has a default to preserve, and then rewrites the
+        // file -- a check-then-act plus a whole-file write. Two CLI processes are not hypothetical
+        // here: a VS Code compound launch configuration starts every AppHost it lists at the same
+        // moment (https://code.visualstudio.com/docs/debugtest/debugging#_compound-launch-configurations),
+        // so without serialization both can observe "no default recorded" and both establish one,
+        // and one whole-file write can land on top of the other's.
+        using var configLock = await TryAcquireWorkspaceConfigLockAsync(projectFile, cancellationToken);
+
         FileInfo? settingsFile = null;
         DirectoryInfo? appHostDirForScopedConfig = null;
         AspireConfigFile? recordedConfig = null;
@@ -1149,7 +1171,10 @@ internal sealed class ProjectLocator(
         // An explicit launch configuration names a target for one session; it is not a statement
         // about which AppHost the workspace defaults to. It may still establish the default when
         // there is nothing to preserve, so a single-AppHost repo keeps getting a config file from
-        // its first launch, but it must never replace a default the user already has.
+        // its first launch, but it must never replace a default the user already has. The read that
+        // decides this happened under the config lock taken above, so a launch that starts
+        // alongside the one establishing the default observes the establishing write rather than
+        // racing it.
         if (isExplicitLaunchConfiguration)
         {
             // Reuse the config the upward search already loaded when it found one. Today a plain
@@ -1232,6 +1257,79 @@ internal sealed class ProjectLocator(
     private static string? TryGetRecordedAppHostDefault(AspireConfigFile? recordedConfig)
     {
         return recordedConfig?.AppHost?.Path is { Length: > 0 } recordedPath ? recordedPath : null;
+    }
+
+    /// <summary>
+    /// Acquires the cross-process lock that serializes reading, deciding and rewriting the workspace
+    /// config for <paramref name="projectFile"/>, or returns <see langword="null"/> when the lock
+    /// could not be taken.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="FileLock"/> is the CLI's existing cross-process primitive (see
+    /// <c>BundleService</c> and <c>PrebuiltAppHostServer</c>): a file opened with
+    /// <see cref="FileShare.None"/> and <see cref="FileOptions.DeleteOnClose"/>. Exclusion is
+    /// enforced by the OS on every platform we ship -- a share-mode check on Windows, an advisory
+    /// <c>flock(2)</c> on Linux and macOS -- and in both cases the OS drops it when the holding
+    /// process exits, however it exits. There is therefore no stale lock to recover from: a crashed
+    /// or killed CLI cannot block the next launch, and the worst it can leave behind is a zero-byte
+    /// file in the cache directory that the next holder simply reopens.
+    /// </para>
+    /// <para>
+    /// Recording the workspace default is bookkeeping around the command the user actually asked
+    /// for, so failing to lock must not fail that command. Environments where the cache directory is
+    /// unwritable, or which sit on a file system without working advisory locks, fall back to the
+    /// unsynchronized behavior that shipped before this lock existed.
+    /// </para>
+    /// </remarks>
+    private async Task<FileLock?> TryAcquireWorkspaceConfigLockAsync(FileInfo projectFile, CancellationToken cancellationToken)
+    {
+        var lockPath = GetWorkspaceConfigLockPath(projectFile);
+
+        try
+        {
+            return await FileLock.AcquireAsync(lockPath, cancellationToken, s_workspaceConfigLockTimeout);
+        }
+        catch (Exception ex) when (ex is TimeoutException or IOException or UnauthorizedAccessException)
+        {
+            logger.LogDebug(ex, "Proceeding without the workspace config lock at {LockPath}.", lockPath);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Returns the lock file path that identifies the workspace config
+    /// <paramref name="projectFile"/> would be recorded in.
+    /// </summary>
+    private string GetWorkspaceConfigLockPath(FileInfo projectFile)
+    {
+        // Key the lock on the config root the write will land in, so two AppHosts that share a
+        // config file serialize while two that do not never block each other. This mirrors the
+        // search order below: the AppHost's own tree wins, and the working directory is consulted
+        // only when that tree has no config. Both helpers only read, so computing the key cannot
+        // itself race with another process the way the search's legacy migration can.
+        var configRoot = projectFile.Directory is { } appHostDirectory && ConfigurationHelper.FindNearestConfigFilePath(appHostDirectory) is not null
+            ? ConfigurationHelper.GetConfigRootDirectory(appHostDirectory)
+            : ConfigurationHelper.GetConfigRootDirectory(executionContext.WorkingDirectory);
+
+        // Two processes only exclude each other when they derive the same file name, so fold away
+        // the spellings that name one directory: symlinks (macOS resolves /tmp to /private/tmp, and
+        // checkouts are routinely reached through links) and, on Windows, case.
+        var normalizedRoot = PathNormalizer.ResolveSymlinks(configRoot.FullName);
+        if (OperatingSystem.IsWindows())
+        {
+            normalizedRoot = normalizedRoot.ToLowerInvariant();
+        }
+
+        var lockFileName = Convert.ToHexString(XxHash3.Hash(Encoding.UTF8.GetBytes(normalizedRoot))).ToLowerInvariant();
+
+        // The lock lives in the CLI's cache directory rather than in the workspace. The workspace
+        // can be read-only, and dropping even a transient file into it would show up in git status
+        // the way an eagerly written config file once did
+        // (https://github.com/microsoft/aspire/issues/17615). CacheDirectory is derived from the
+        // user profile rather than the working directory, so every CLI process on the machine
+        // computes the same path for a given config root.
+        return Path.Combine(executionContext.CacheDirectory.FullName, "workspace-config-locks", $"{lockFileName}.lock");
     }
 
     private FileInfo GetOrCreateLocalAspireConfigFile()

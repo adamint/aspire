@@ -369,6 +369,77 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         }
     }
 
+    [Fact]
+    public async Task ConcurrentLaunchConfigurationsEstablishTheWorkspaceDefaultExactlyOnce()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        // A VS Code compound launch configuration starts every AppHost it lists at once, so several
+        // CLI processes reach the "no default recorded yet, establish one" decision together. Each
+        // one must see the same outcome the user would see if they had started serially: one
+        // workspace default, chosen once, with the rest of the config intact.
+        var appHostProjectFiles = new List<FileInfo>();
+        for (var index = 0; index < 8; index++)
+        {
+            var appHostDirectory = workspace.WorkspaceRoot.CreateSubdirectory($"AppHost{index}");
+            var appHostProjectFile = new FileInfo(Path.Combine(appHostDirectory.FullName, $"AppHost{index}.csproj"));
+            await File.WriteAllTextAsync(appHostProjectFile.FullName, "Not a real apphost");
+            appHostProjectFiles.Add(appHostProjectFile);
+        }
+
+        // Records no AppHost default, so every caller is a candidate to establish one, and carries an
+        // unrelated setting that a torn read/write of the whole file would drop.
+        var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        await File.WriteAllTextAsync(configPath, """{"sdk":{"version":"9.9.9"}}""");
+
+        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var interactionService = new TestInteractionService();
+        var configuration = CreateSelectionOriginConfiguration("explicit-launch-configuration");
+
+        // One locator per caller, the way each launched CLI process gets its own.
+        var projectLocators = appHostProjectFiles
+            .Select(_ => CreateProjectLocator(executionContext, interactionService: interactionService, configuration: configuration))
+            .ToList();
+
+        var startGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callers = appHostProjectFiles
+            .Select(async (appHostProjectFile, index) =>
+            {
+                await startGate.Task;
+                return await projectLocators[index].UseOrFindAppHostProjectFileAsync(
+                    appHostProjectFile,
+                    MultipleAppHostProjectsFoundBehavior.Prompt,
+                    createSettingsFile: true,
+                    CancellationToken.None);
+            })
+            .ToList();
+
+        startGate.SetResult();
+        var results = await Task.WhenAll(callers).DefaultTimeout();
+
+        Assert.Equal(
+            appHostProjectFiles.Select(appHostProjectFile => appHostProjectFile.FullName),
+            results.Select(result => result.SelectedProjectFile?.FullName));
+
+        var recordedDefault = ReadConfiguredAppHostPath(configPath);
+        Assert.Contains(
+            recordedDefault,
+            appHostProjectFiles.Select(appHostProjectFile => $"{appHostProjectFile.Directory!.Name}/{appHostProjectFile.Name}"));
+
+        using (var document = JsonDocument.Parse(await File.ReadAllTextAsync(configPath)))
+        {
+            Assert.Equal("9.9.9", document.RootElement.GetProperty("sdk").GetProperty("version").GetString());
+        }
+
+        // Only the caller that established the default writes, so only it reports the config file.
+        // Two reports mean two callers decided the workspace had no default and the second one's
+        // write replaced the first one's.
+        var settingsFileMessages = interactionService.DisplayedMessages
+            .Where(displayedMessage => displayedMessage.Message.Contains(AspireConfigFile.FileName, StringComparison.Ordinal))
+            .ToList();
+        Assert.Single(settingsFileMessages);
+    }
+
     private static IConfiguration CreateSelectionOriginConfiguration(string? selectionOrigin)
     {
         var builder = new ConfigurationBuilder();
