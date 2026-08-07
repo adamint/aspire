@@ -80,7 +80,7 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
             toolName: startToolName,
             input: { appHostPath: relativeAppHostPath, mode: 'debug' },
             times: 2,
-        }, 600000, 2);
+        }, 600000, 2, 'apphost-lifecycle-start-confirmation');
         const concurrentStarts = concurrentStartInvocation.results;
 
         assert.strictEqual(concurrentStartInvocation.dialogs.length, 2, 'Expected each concurrent start call to require its own confirmation.');
@@ -128,7 +128,7 @@ suite('Aspire AppHost lifecycle language model tools E2E', function () {
             name: 'invokeLanguageModelTool',
             toolName: stopToolName,
             input: { appHostPath: relativeAppHostPath },
-        }, 300000, 1);
+        }, 300000, 1, 'apphost-lifecycle-stop-confirmation');
         const stopResults = stopInvocation.results;
         assert.strictEqual(stopInvocation.dialogs[0].message, 'Stop Aspire AppHost');
         assert.strictEqual(stopInvocation.dialogs[0].details, `Stop the Aspire AppHost ${relativeAppHostPath}?`);
@@ -186,7 +186,8 @@ async function invokeControlCommand<T>(command: Parameters<typeof executeE2eCont
 async function invokeLifecycleTool(
     command: Parameters<typeof executeE2eControlCommand>[0],
     timeoutMs: number,
-    expectedConfirmations: number
+    expectedConfirmations: number,
+    screenshotName?: string
 ): Promise<{ results: LifecycleToolResult[]; dialogs: AcceptedModalDialog[] }> {
     const invocation = invokeControlCommand<{ results: string[] }>(command, timeoutMs);
     // Keep the rejection observed while the dialogs are being answered; the real failure
@@ -195,7 +196,7 @@ async function invokeLifecycleTool(
 
     const dialogs: AcceptedModalDialog[] = [];
     for (let index = 0; index < expectedConfirmations; index++) {
-        dialogs.push(await acceptModalDialog('Yes', 180000));
+        dialogs.push(await acceptModalDialog('Yes', 180000, index === 0 ? screenshotName : undefined));
     }
 
     const result = await invocation;

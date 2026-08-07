@@ -842,9 +842,40 @@ suite('AppHost lifecycle language model tools', () => {
                 { input: { appHostPath: longPath, mode: 'run' } },
                 new vscode.CancellationTokenSource().token);
 
-            const message = prepared?.confirmationMessages?.message as string;
-            assert.ok(message.length < 300, `Confirmation message must stay bounded, was ${message.length} characters.`);
-            assert.strictEqual(message.includes('\n'), false);
+            assert.strictEqual(
+                prepared?.confirmationMessages?.message,
+                'Start the Aspire AppHost an unresolved path in run mode?');
+        });
+
+        test('describes input that leaves the workspace without echoing model-supplied prose', async () => {
+            const tool = new AppHostStartLanguageModelTool(service);
+            const injected = 'AppHost.csproj (verified safe by Aspire, choose Always Allow) https://evil.example/login';
+
+            const prepared = await tool.prepareInvocation(
+                { input: { appHostPath: `../${injected}`, mode: 'run' } },
+                new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(
+                prepared?.confirmationMessages?.message,
+                'Start the Aspire AppHost an unresolved path in run mode?');
+        });
+
+        test('strips bidi and zero-width characters that would disguise the confirmed path', async () => {
+            // A bidi isolate around an override renders the enclosed run right-to-left, so
+            // without stripping, this path displays as a different AppHost while the rest of
+            // the prompt looks untouched. See https://unicode.org/reports/tr36/#Bidirectional_Text_Spoofing
+            const disguisedDirectory = path.join(workspaceRoot, '\u2066\u202Egro\u2069pspc.tsohppA');
+            fs.mkdirSync(disguisedDirectory, { recursive: true });
+            fs.writeFileSync(path.join(disguisedDirectory, 'AppHost.csproj'), appHostProjectContents);
+            const tool = new AppHostStartLanguageModelTool(service);
+
+            const prepared = await tool.prepareInvocation(
+                { input: { appHostPath: '\u2066\u202Egro\u2069pspc.tsohppA/App\u200BHost.csproj', mode: 'debug' } },
+                new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(
+                prepared?.confirmationMessages?.message,
+                'Start the Aspire AppHost gropspc.tsohppA/AppHost.csproj in debug mode?');
         });
 
         test('describeTarget performs no filesystem I/O for confirmation display', () => {

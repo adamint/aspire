@@ -865,6 +865,9 @@
     <trans-unit id="aspire-vscode.strings.aspireCommandOutputTruncated">
       <source xml:lang="en">[Aspire command output truncated to {0} characters. Showing the beginning and end of the output.]</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.appHostLifecycleUnresolvedPath">
+      <source xml:lang="en">an unresolved path</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.appHostPathMustBeNonEmptyAbsolute">
       <source xml:lang="en">appHostPath must be a non-empty absolute path</source>
     </trans-unit>

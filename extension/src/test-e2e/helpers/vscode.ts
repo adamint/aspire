@@ -260,8 +260,12 @@ export interface AcceptedModalDialog {
  * Accepts the modal confirmation VS Code shows for a language model tool invoked
  * outside chat. `invokeTool` does not resolve until the dialog is answered, so callers
  * must start the invocation first and accept the dialog while it is still pending.
+ *
+ * `screenshotName` captures the dialog before the button is pushed. This confirmation is
+ * the only thing standing between an agent and a real process launch, so a run leaves
+ * visual proof that it was actually presented rather than only asserting on its text.
  */
-export async function acceptModalDialog(buttonTitle: string, timeoutMs = 120000): Promise<AcceptedModalDialog> {
+export async function acceptModalDialog(buttonTitle: string, timeoutMs = 120000, screenshotName?: string): Promise<AcceptedModalDialog> {
     let lastError: unknown;
     const accepted = await VSBrowser.instance.driver.wait(async () => {
         try {
@@ -272,6 +276,11 @@ export async function acceptModalDialog(buttonTitle: string, timeoutMs = 120000)
             }
 
             const details = await dialog.getDetails().catch(() => '');
+            if (screenshotName) {
+                // A screenshot failure must not fail the assertion the caller came for.
+                await VSBrowser.instance.takeScreenshot(screenshotName).catch(() => undefined);
+            }
+
             await dialog.pushButton(buttonTitle);
             return { message, details };
         }

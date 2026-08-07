@@ -9,6 +9,7 @@ import {
     appHostLifecycleStopConfirmationMessage,
     appHostLifecycleStopConfirmationTitle,
     appHostLifecycleStopInvocationMessage,
+    appHostLifecycleUnresolvedPath,
     appHostLifecycleUnspecifiedMode,
 } from '../loc/strings';
 import { isRunnableAppHostFileContents, isSupportedAppHostFileExtension } from '../utils/appHostLanguage';
@@ -617,6 +618,13 @@ function sanitizeModelSuppliedText(value: unknown, maxLength: number): string {
 
     const singleLine = value
         .replace(/[\u0000-\u001F\u007F]+/g, ' ')
+        // Unicode format characters are invisible but reorder or hide what follows them:
+        // a bidi isolate/override run (U+2066-U+2069, U+202A-U+202E) can make a path render
+        // as a completely different one while the surrounding prompt text stays intact, and
+        // zero-width characters (U+200B-U+200D) can split a name the user would recognize.
+        // They are neither `\s` nor C0 controls, so they need their own pass.
+        // See https://unicode.org/reports/tr9/ and https://unicode.org/reports/tr36/#Bidirectional_Text_Spoofing
+        .replace(/\p{Cf}/gu, '')
         .replace(/[`*_[\]<>|]/g, '')
         .replace(/\s+/g, ' ')
         .trim();
@@ -624,9 +632,17 @@ function sanitizeModelSuppliedText(value: unknown, maxLength: number): string {
     return singleLine.length > maxLength ? `${singleLine.slice(0, maxLength)}…` : singleLine;
 }
 
+/**
+ * Renders the requested AppHost for the confirmation dialog as a workspace-relative path.
+ *
+ * Input that cannot be mapped into an open workspace folder is described with a fixed
+ * placeholder rather than echoed. Such a call is always rejected by {@link
+ * AppHostLifecycleToolService.resolveTarget} anyway, so echoing it would only hand the
+ * model free-form prose inside the trusted prompt that gates "Always allow".
+ */
 function describeModelSuppliedPath(value: unknown): string {
     if (typeof value !== 'string') {
-        return '';
+        return appHostLifecycleUnresolvedPath;
     }
 
     const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
@@ -641,9 +657,12 @@ function describeModelSuppliedPath(value: unknown): string {
                 : undefined
         : undefined;
     const containingFolder = candidate ? findContainingWorkspaceFolder(workspaceFolders, candidate) : undefined;
-    return containingFolder && candidate
-        ? sanitizeModelSuppliedText(toPosixRelativePath(containingFolder, candidate), maxConfirmationPathLength)
-        : sanitizeModelSuppliedText(value, maxConfirmationPathLength);
+    if (!containingFolder || !candidate) {
+        return appHostLifecycleUnresolvedPath;
+    }
+
+    const sanitized = sanitizeModelSuppliedText(toPosixRelativePath(containingFolder, candidate), maxConfirmationPathLength);
+    return sanitized.length > 0 ? sanitized : appHostLifecycleUnresolvedPath;
 }
 
 /**

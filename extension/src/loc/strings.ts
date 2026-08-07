@@ -240,6 +240,10 @@ export const appHostLifecycleStopConfirmationMessage = (appHostPath: string) => 
 export const appHostLifecycleStartInvocationMessage = (appHostPath: string) => vscode.l10n.t('Starting Aspire AppHost {0}...', appHostPath);
 export const appHostLifecycleStopInvocationMessage = (appHostPath: string) => vscode.l10n.t('Stopping Aspire AppHost {0}...', appHostPath);
 export const appHostLifecycleUnspecifiedMode = vscode.l10n.t('unspecified');
+// Stands in for a requested path that does not map into an open workspace folder. Such a
+// call is always rejected, so the confirmation names the situation instead of echoing
+// model-supplied text into the prompt the user must approve.
+export const appHostLifecycleUnresolvedPath = vscode.l10n.t('an unresolved path');
 // Surfaced through the editor's own run/debug commands when another lifecycle operation
 // for the same AppHost is still in flight, so it has to be localized like any other
 // message the user can see in a notification.
