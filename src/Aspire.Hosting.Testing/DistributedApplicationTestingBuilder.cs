@@ -22,6 +22,8 @@ namespace Aspire.Hosting.Testing;
 /// </summary>
 public static class DistributedApplicationTestingBuilder
 {
+    private const string DashboardTestingPublishModeExceptionMessage = "Dashboard testing is not supported in publish mode.";
+
     /// <summary>
     /// Creates a new instance of <see cref="IDistributedApplicationTestingBuilder"/>.
     /// </summary>
@@ -38,6 +40,39 @@ public static class DistributedApplicationTestingBuilder
         => CreateAsync(typeof(TEntryPoint), cancellationToken);
 
     /// <summary>
+    /// Creates a new instance of <see cref="IDistributedApplicationTestingBuilder"/> using the specified testing options.
+    /// </summary>
+    /// <typeparam name="TEntryPoint">
+    /// A type in the entry point assembly of the target Aspire AppHost. Typically, the Program class can be used.
+    /// </typeparam>
+    /// <param name="options">The options that configure behavior selected while the underlying builder is constructed.</param>
+    /// <param name="args">The command line arguments to pass to the entry point.</param>
+    /// <param name="cancellationToken">The <see cref="CancellationToken"/>.</param>
+    /// <returns>
+    /// A new instance of <see cref="IDistributedApplicationTestingBuilder"/>.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="options"/> or <paramref name="args"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="args"/> contains a <see langword="null"/> or empty value.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when <see cref="DistributedApplicationTestingBuilderOptions.EnableDashboard"/> is enabled in publish mode.
+    /// </exception>
+    /// <remarks>
+    /// The <paramref name="args"/> parameter is required so calls such as <c>CreateAsync&lt;TEntryPoint&gt;(default)</c>
+    /// continue to bind to the existing cancellation-token overload.
+    /// </remarks>
+    [SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "Generic and non-generic")]
+    public static Task<IDistributedApplicationTestingBuilder> CreateAsync<TEntryPoint>(
+        DistributedApplicationTestingBuilderOptions options,
+        string[] args,
+        CancellationToken cancellationToken = default)
+        where TEntryPoint : class
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        return CreateAsync(typeof(TEntryPoint), options, args, cancellationToken);
+    }
+
+    /// <summary>
     /// Creates a new instance of <see cref="IDistributedApplicationTestingBuilder"/>.
     /// </summary>
     /// <param name="entryPoint">A type in the entry point assembly of the target Aspire AppHost. Typically, the Program class can be used.</param>
@@ -48,6 +83,39 @@ public static class DistributedApplicationTestingBuilder
     [SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "Generic and non-generic")]
     public static Task<IDistributedApplicationTestingBuilder> CreateAsync(Type entryPoint, CancellationToken cancellationToken = default)
         => CreateAsync(entryPoint, [], cancellationToken);
+
+    /// <summary>
+    /// Creates a new instance of <see cref="IDistributedApplicationTestingBuilder"/> using the specified testing options.
+    /// </summary>
+    /// <param name="entryPoint">A type in the entry point assembly of the target Aspire AppHost. Typically, the Program class can be used.</param>
+    /// <param name="options">The options that configure behavior selected while the underlying builder is constructed.</param>
+    /// <param name="args">The command line arguments to pass to the entry point.</param>
+    /// <param name="cancellationToken">The <see cref="CancellationToken"/>.</param>
+    /// <returns>
+    /// A new instance of <see cref="IDistributedApplicationTestingBuilder"/>.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="entryPoint"/>, <paramref name="options"/>, or <paramref name="args"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="args"/> contains a <see langword="null"/> or empty value.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when <see cref="DistributedApplicationTestingBuilderOptions.EnableDashboard"/> is enabled in publish mode.
+    /// </exception>
+    /// <remarks>
+    /// The <paramref name="args"/> parameter is required so calls such as <c>CreateAsync(entryPoint, default)</c>
+    /// continue to bind to the existing cancellation-token overload.
+    /// </remarks>
+    [SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "Generic and non-generic")]
+    public static Task<IDistributedApplicationTestingBuilder> CreateAsync(
+        Type entryPoint,
+        DistributedApplicationTestingBuilderOptions options,
+        string[] args,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        return CreateAsyncCore(entryPoint, args, options.EnableDashboard, (_, __) => { }, cancellationToken);
+    }
 
     /// <summary>
     /// Creates a new instance of <see cref="IDistributedApplicationTestingBuilder"/>.
@@ -106,12 +174,20 @@ public static class DistributedApplicationTestingBuilder
     /// </returns>
     [SuppressMessage("ApiDesign", "RS0026:Do not add multiple public overloads with optional parameters", Justification = "Generic and non-generic")]
     public static async Task<IDistributedApplicationTestingBuilder> CreateAsync(Type entryPoint, string[] args, Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder, CancellationToken cancellationToken = default)
+        => await CreateAsyncCore(entryPoint, args, enableDashboard: false, configureBuilder, cancellationToken).ConfigureAwait(false);
+
+    private static async Task<IDistributedApplicationTestingBuilder> CreateAsyncCore(
+        Type entryPoint,
+        string[] args,
+        bool enableDashboard,
+        Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(entryPoint);
         ThrowIfNullOrContainsIsNullOrEmpty(args);
         ArgumentNullException.ThrowIfNull(configureBuilder, nameof(configureBuilder));
 
-        var factory = new SuspendingDistributedApplicationFactory(entryPoint, args, configureBuilder);
+        var factory = new SuspendingDistributedApplicationFactory(entryPoint, args, enableDashboard, configureBuilder);
         return await factory.CreateBuilderAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -126,6 +202,28 @@ public static class DistributedApplicationTestingBuilder
         => Create(args, (_, __) => { });
 
     /// <summary>
+    /// Creates a new instance of <see cref="IDistributedApplicationTestingBuilder"/> using the specified testing options.
+    /// </summary>
+    /// <param name="options">The options that configure behavior selected while the underlying builder is constructed.</param>
+    /// <param name="args">The command line arguments to use when building the distributed application.</param>
+    /// <returns>
+    /// A new instance of <see cref="IDistributedApplicationTestingBuilder"/>.
+    /// </returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="options"/> or <paramref name="args"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="args"/> contains a <see langword="null"/> or empty value.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when <see cref="DistributedApplicationTestingBuilderOptions.EnableDashboard"/> is enabled in publish mode.
+    /// </exception>
+    public static IDistributedApplicationTestingBuilder Create(
+        DistributedApplicationTestingBuilderOptions options,
+        string[] args)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        return CreateCore(args, options.EnableDashboard, (_, __) => { });
+    }
+
+    /// <summary>
     /// Creates a new instance of <see cref="IDistributedApplicationTestingBuilder"/>.
     /// </summary>
     /// <param name="args">The command line arguments to pass to the entry point.</param>
@@ -134,11 +232,18 @@ public static class DistributedApplicationTestingBuilder
     /// A new instance of <see cref="IDistributedApplicationTestingBuilder"/>.
     /// </returns>
     public static IDistributedApplicationTestingBuilder Create(string[] args, Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder)
+        => CreateCore(args, enableDashboard: false, configureBuilder);
+
+    private static IDistributedApplicationTestingBuilder CreateCore(
+        string[] args,
+        bool enableDashboard,
+        Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder,
+        Assembly? appHostAssembly = null)
     {
         ThrowIfNullOrContainsIsNullOrEmpty(args);
         ArgumentNullException.ThrowIfNull(configureBuilder);
 
-        return new TestingBuilder(args, configureBuilder);
+        return new TestingBuilder(args, enableDashboard, configureBuilder, appHostAssembly);
     }
 
     /// <summary>
@@ -154,11 +259,63 @@ public static class DistributedApplicationTestingBuilder
         string[] args,
         Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder,
         Assembly appHostAssembly)
-    {
-        ThrowIfNullOrContainsIsNullOrEmpty(args);
-        ArgumentNullException.ThrowIfNull(configureBuilder);
+        => CreateCore(args, enableDashboard: false, configureBuilder, appHostAssembly);
 
-        return new TestingBuilder(args, configureBuilder, appHostAssembly);
+    private static void ConfigureDashboardTesting(
+        DistributedApplicationOptions applicationOptions,
+        HostApplicationBuilderSettings hostBuilderOptions,
+        bool enableDashboard)
+    {
+        if (!enableDashboard)
+        {
+            return;
+        }
+
+        applicationOptions.DisableDashboard = false;
+        applicationOptions.DashboardUnsecuredAllowAnonymous = false;
+
+        hostBuilderOptions.Configuration ??= new();
+        AddDashboardTestingConfiguration(hostBuilderOptions.Configuration);
+    }
+
+    private static void ConfigureDashboardTesting(IDistributedApplicationBuilder builder, bool enableDashboard)
+    {
+        if (!enableDashboard)
+        {
+            return;
+        }
+
+        if (builder.ExecutionContext.IsPublishMode)
+        {
+            throw new InvalidOperationException(DashboardTestingPublishModeExceptionMessage);
+        }
+
+        // Apply these after the builder has loaded environment variables and command-line arguments so test
+        // automation cannot accidentally opt back into fixed ports, anonymous access, or interactivity.
+        // Callers can still override runtime settings through the returned builder; constructor-time service
+        // selection, including dashboard authentication, has already completed.
+        AddDashboardTestingConfiguration(builder.Configuration);
+
+        // Enabling the dashboard changes the hosting default to wait indefinitely when a dependency becomes
+        // unavailable. Tests must retain the testing builder's fail-fast behavior, while a later user
+        // registration can still override this default.
+        builder.Services.Configure<ResourceNotificationServiceOptions>(
+            options => options.DefaultWaitBehavior = WaitBehavior.StopOnResourceUnavailable);
+    }
+
+    private static void AddDashboardTestingConfiguration(IConfigurationBuilder configuration)
+    {
+        configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DcpPublisher:RandomizePorts"] = "true",
+            [KnownAspNetCoreConfigNames.Urls] = "http://127.0.0.1:0",
+            [KnownConfigNames.DashboardOtlpGrpcEndpointUrl] = "http://127.0.0.1:0",
+            [KnownConfigNames.DashboardOtlpHttpEndpointUrl] = "http://127.0.0.1:0",
+            [KnownConfigNames.ResourceServiceEndpointUrl] = "http://127.0.0.1:0",
+            [KnownConfigNames.AllowUnsecuredTransport] = "true",
+            [KnownConfigNames.DashboardUnsecuredAllowAnonymous] = "false",
+            [KnownConfigNames.InteractivityEnabled] = "false"
+        });
     }
 
     private static void ThrowIfNullOrContainsIsNullOrEmpty(string[] args)
@@ -178,7 +335,11 @@ public static class DistributedApplicationTestingBuilder
         }
     }
 
-    private sealed class SuspendingDistributedApplicationFactory(Type entryPoint, string[] args, Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder)
+    private sealed class SuspendingDistributedApplicationFactory(
+        Type entryPoint,
+        string[] args,
+        bool enableDashboard,
+        Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder)
         : DistributedApplicationFactory(entryPoint, args)
     {
         private readonly SemaphoreSlim _continueBuilding = new(0);
@@ -192,12 +353,14 @@ public static class DistributedApplicationTestingBuilder
         protected override void OnBuilderCreating(DistributedApplicationOptions applicationOptions, HostApplicationBuilderSettings hostOptions)
         {
             base.OnBuilderCreating(applicationOptions, hostOptions);
+            ConfigureDashboardTesting(applicationOptions, hostOptions, enableDashboard);
             configureBuilder(applicationOptions, hostOptions);
         }
 
         protected override void OnBuilderCreated(DistributedApplicationBuilder applicationBuilder)
         {
             base.OnBuilderCreated(applicationBuilder);
+            ConfigureDashboardTesting(applicationBuilder, enableDashboard);
         }
 
         protected override void OnBuilding(DistributedApplicationBuilder applicationBuilder)
@@ -323,15 +486,17 @@ public static class DistributedApplicationTestingBuilder
 
     private sealed class TestingBuilder(
         string[] args,
+        bool enableDashboard,
         Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder,
         Assembly? appHostAssembly = null)
         : IDistributedApplicationTestingBuilder
     {
-        private readonly DistributedApplicationBuilder _innerBuilder = CreateInnerBuilder(args, configureBuilder, appHostAssembly);
+        private readonly DistributedApplicationBuilder _innerBuilder = CreateInnerBuilder(args, enableDashboard, configureBuilder, appHostAssembly);
         private DistributedApplication? _app;
 
         private static DistributedApplicationBuilder CreateInnerBuilder(
             string[] args,
+            bool enableDashboard,
             Action<DistributedApplicationOptions, HostApplicationBuilderSettings> configureBuilder,
             Assembly? appHostAssembly = null)
         {
@@ -347,8 +512,14 @@ public static class DistributedApplicationTestingBuilder
                     appAssembly = FindApplicationAssembly();
                 }
 
-                DistributedApplicationFactory.ConfigureBuilder(args, applicationOptions, hostBuilderOptions, appAssembly, configureBuilder);
+                DistributedApplicationFactory.ConfigureBuilder(args, applicationOptions, hostBuilderOptions, appAssembly, (options, settings) =>
+                {
+                    ConfigureDashboardTesting(options, settings, enableDashboard);
+                    configureBuilder(options, settings);
+                });
             });
+
+            ConfigureDashboardTesting(builder, enableDashboard);
 
             if (!builder.Configuration.GetValue(KnownConfigNames.TestingDisableHttpClient, false))
             {

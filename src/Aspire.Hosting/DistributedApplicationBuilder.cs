@@ -435,7 +435,7 @@ public class DistributedApplicationBuilder : IDistributedApplicationBuilder
             // Dashboard
             if (!options.DisableDashboard)
             {
-                if (!IsDashboardUnsecured(_innerBuilder.Configuration))
+                if (!IsDashboardUnsecured(options, _innerBuilder.Configuration))
                 {
                     // Passed to apps as a standard OTEL attribute to include in OTLP requests and the dashboard to validate.
                     // Set a random API key for the OTLP exporter if one isn't already present in configuration.
@@ -752,9 +752,11 @@ public class DistributedApplicationBuilder : IDistributedApplicationBuilder
         }
     }
 
-    private static bool IsDashboardUnsecured(IConfiguration configuration)
+    private static bool IsDashboardUnsecured(DistributedApplicationOptions options, IConfiguration configuration)
     {
-        return configuration.GetBool(KnownConfigNames.DashboardUnsecuredAllowAnonymous, KnownConfigNames.Legacy.DashboardUnsecuredAllowAnonymous) ?? false;
+        return options.DashboardUnsecuredAllowAnonymous
+            ?? configuration.GetBool(KnownConfigNames.DashboardUnsecuredAllowAnonymous, KnownConfigNames.Legacy.DashboardUnsecuredAllowAnonymous)
+            ?? false;
     }
 
     private void ConfigurePipelineOptions(DistributedApplicationOptions options)

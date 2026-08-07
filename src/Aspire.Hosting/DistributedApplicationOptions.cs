@@ -62,6 +62,12 @@ public sealed class DistributedApplicationOptions
     /// </summary>
     public bool DisableDashboard { get; set; }
 
+    /// <summary>
+    /// Gets or sets whether anonymous dashboard access is enabled while the builder is constructed.
+    /// A <see langword="null"/> value uses configuration.
+    /// </summary>
+    internal bool? DashboardUnsecuredAllowAnonymous { get; set; }
+
     internal Assembly? Assembly => _assembly.Value;
 
     internal string? Configuration => _configurationLazy.Value;

@@ -17,7 +17,6 @@ namespace Aspire.Hosting.Backchannel;
 /// </summary>
 internal static class DashboardUrlsHelper
 {
-
     /// <summary>
     /// Gets all dashboard connection information in a single call.
     /// Waits for the dashboard to become healthy before returning.
@@ -30,6 +29,40 @@ internal static class DashboardUrlsHelper
         IServiceProvider serviceProvider,
         ILogger logger,
         CancellationToken cancellationToken = default)
+    {
+        return await GetDashboardConnectionInfoCoreAsync(
+            serviceProvider,
+            logger,
+            throwOnDashboardFailure: false,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Gets the authenticated dashboard URL and preserves terminal dashboard failures.
+    /// </summary>
+    /// <param name="serviceProvider">The service provider.</param>
+    /// <param name="logger">The logger for diagnostic output.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The authenticated dashboard URL, or <see langword="null"/> when no URL is available.</returns>
+    internal static async Task<string?> GetDashboardUrlOrThrowAsync(
+        IServiceProvider serviceProvider,
+        ILogger logger,
+        CancellationToken cancellationToken)
+    {
+        var info = await GetDashboardConnectionInfoCoreAsync(
+            serviceProvider,
+            logger,
+            throwOnDashboardFailure: true,
+            cancellationToken).ConfigureAwait(false);
+
+        return info.BaseUrlWithLoginToken;
+    }
+
+    private static async Task<DashboardConnectionInfo> GetDashboardConnectionInfoCoreAsync(
+        IServiceProvider serviceProvider,
+        ILogger logger,
+        bool throwOnDashboardFailure,
+        CancellationToken cancellationToken)
     {
         // Check whether the dashboard resource is registered at all. If it isn't (e.g. the user
         // called DisableDashboard()), return immediately rather than waiting forever for a resource
@@ -67,6 +100,12 @@ internal static class DashboardUrlsHelper
                 waitActivity.SetError(ex);
                 activity.SetDashboardHealthy(false);
                 logger.LogWarning(ex, "An error occurred while waiting for the Aspire Dashboard to become healthy.");
+
+                if (throwOnDashboardFailure)
+                {
+                    throw;
+                }
+
                 return DashboardConnectionInfo.Unhealthy;
             }
         }
