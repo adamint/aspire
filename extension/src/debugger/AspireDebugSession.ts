@@ -847,6 +847,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // be missed and the summary would under-report failures.
     this._disposables.forEach(disposable => disposable.dispose());
     this.flushAppHostLogOutput();
+    this._appHostLogOutput.reset();
     this._trackedDebugAdapters = [];
     void this.stopParentDebugSessionOnce();
     this._onDidSendDebugConsoleOutput.dispose();

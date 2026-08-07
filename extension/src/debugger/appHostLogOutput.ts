@@ -73,6 +73,17 @@ export class AppHostLogOutputCoordinator {
         }, 'backchannel');
     }
 
+    /**
+     * Consumes one debug adapter output event and returns whatever became renderable.
+     *
+     * A record is only known to have ended once a line that cannot continue it arrives, so
+     * the last record of a burst stays buffered until the next event or {@link flush}.
+     * That costs no visible latency: the CLI relays the same record over its own path —
+     * structured for a capable extension, a dim message for an older one — and whichever
+     * copy lands first is the one rendered. Guessing that a record had ended instead would
+     * render it truncated and leak the rest as raw text whenever a stream chunk happened
+     * to break on a line boundary inside the record.
+     */
     handleDebugAdapterOutput(output: string, category: string | undefined): AppHostParentOutput[] {
         const normalizedCategory = category ?? 'console';
         const outputs: AppHostParentOutput[] = [];
@@ -98,27 +109,18 @@ export class AppHostLogOutputCoordinator {
             this._partialLines.set(normalizedCategory, partial);
         } else {
             this._partialLines.delete(normalizedCategory);
-
-            // A record is only known to be finished once a non-continuation line arrives,
-            // but holding it until the next output event would render the console one
-            // record behind. Wait only in the two cases where more of the record is
-            // almost certainly still in flight: a buffered partial line, or a header
-            // whose body has not arrived at all (SimpleConsoleFormatter always writes at
-            // least one indented body line).
-            if (this._pendingRecord && this._pendingRecord.body.length > 0) {
-                this.flushPendingRecord(outputs);
-            }
         }
 
         return outputs;
     }
 
     /**
-     * Emits anything still being assembled and clears all state.
+     * Emits whatever is still being assembled, without discarding correlation state.
      *
-     * Records are assembled across output events, so an AppHost that exits immediately
-     * after logging would otherwise take the final record with it — exactly the
-     * `fail:`/`crit:` line the user needs to see.
+     * Records are assembled across output events, so an AppHost that exits right after
+     * logging would otherwise take the final record with it — exactly the `fail:`/`crit:`
+     * line the user needs to see. Correlation state is kept so a backchannel copy still
+     * in flight is recognized as a duplicate rather than rendered again.
      */
     flush(): AppHostParentOutput[] {
         const outputs: AppHostParentOutput[] = [];
@@ -130,7 +132,6 @@ export class AppHostLogOutputCoordinator {
         }
 
         this.flushPendingRecord(outputs);
-        this.reset();
 
         return outputs;
     }
@@ -420,7 +421,13 @@ function isConsoleLoggerHeader(output: string): boolean {
 const consoleLoggerLevelTokens = ['trce', 'dbug', 'info', 'warn', 'fail', 'crit'];
 
 function couldStartConsoleLoggerHeader(text: string): boolean {
-    return consoleLoggerLevelTokens.some(token => token.startsWith(text) || text.startsWith(`${token}: `));
+    // Compare against the full `level: ` prefix in both directions so every intermediate
+    // state matches, including the one where the level is complete but the separator is
+    // still arriving ("fail" -> "fail:" -> "fail: ").
+    return consoleLoggerLevelTokens.some(token => {
+        const prefix = `${token}: `;
+        return prefix.startsWith(text) || text.startsWith(prefix);
+    });
 }
 
 function isConsoleLoggerContinuation(output: string): boolean {

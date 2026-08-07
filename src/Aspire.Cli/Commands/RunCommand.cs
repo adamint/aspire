@@ -1081,23 +1081,12 @@ internal sealed class RunCommand : BaseCommand
         {
             await Task.Yield();
 
-            // The capability is negotiated once instead of per record: it is a property of the
-            // connected extension host, and the log stream can be high volume.
+            // The capabilities are negotiated once instead of per record: they are properties of
+            // the connected extension host and AppHost, and the log stream can be high volume.
             var supportsStructuredAppHostLogs = false;
             if (ExtensionHelper.IsExtensionHost(interactionService, out var extensionInteractionService, out var extensionBackchannel))
             {
-                try
-                {
-                    supportsStructuredAppHostLogs = await extensionBackchannel.HasCapabilityAsync(KnownCapabilities.AppHostLogOutput, cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception) when (!cancellationToken.IsCancellationRequested)
-                {
-                    // The probe connects to the extension and makes a round trip before the log
-                    // stream is subscribed. A faulted extension RPC must not stop the AppHost logs
-                    // from reaching the CLI log file, which is the artifact used to diagnose that
-                    // very failure, so fall back to the legacy path instead of propagating.
-                    supportsStructuredAppHostLogs = false;
-                }
+                supportsStructuredAppHostLogs = await SupportsStructuredAppHostLogsAsync(backchannel, extensionBackchannel, cancellationToken).ConfigureAwait(false);
             }
 
             var logEntries = backchannel.GetAppHostLogEntriesAsync(cancellationToken);
@@ -1149,6 +1138,41 @@ internal sealed class RunCommand : BaseCommand
             // token fires because logCaptureCancellationSource.Cancel() runs in the finally
             // block after the AppHost process has already exited.
             return;
+        }
+    }
+
+    /// <summary>
+    /// Determines whether the structured AppHost log path can be used, which requires both the
+    /// producing AppHost and the consuming extension to understand the identity-bearing log
+    /// entry shape.
+    /// </summary>
+    /// <remarks>
+    /// The extension capability alone is not enough. <see cref="BackchannelLogEntry.SequenceNumber" />
+    /// and <see cref="BackchannelLogEntry.Exception" /> are optional on the wire, so an AppHost
+    /// that predates them deserializes as <c>0</c> and <c>null</c>. Forwarding those to a capable
+    /// extension silently breaks the two things the shape exists for: replayed entries can no
+    /// longer be recognized after a backchannel reconnect, and an exception-bearing record no
+    /// longer matches the console copy the debug adapter delivers, so it renders twice.
+    /// </remarks>
+    private static async Task<bool> SupportsStructuredAppHostLogsAsync(IAppHostCliBackchannel backchannel, IExtensionBackchannel extensionBackchannel, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var appHostCapabilities = await backchannel.GetCapabilitiesAsync(cancellationToken).ConfigureAwait(false);
+            if (!appHostCapabilities.Contains(KnownAppHostCapabilities.LogEntries_V2))
+            {
+                return false;
+            }
+
+            return await extensionBackchannel.HasCapabilityAsync(KnownCapabilities.AppHostLogOutput, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Both probes make a round trip before the log stream is subscribed. A faulted RPC
+            // must not stop the AppHost logs from reaching the CLI log file, which is the
+            // artifact used to diagnose that very failure, so fall back to the legacy path
+            // instead of propagating.
+            return false;
         }
     }
 

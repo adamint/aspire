@@ -64,6 +64,30 @@ internal static class AuxiliaryBackchannelCapabilities
 }
 
 /// <summary>
+/// Constants for primary (CLI) backchannel capability versions advertised by
+/// <c>AppHostRpcTarget.GetCapabilitiesAsync</c>.
+/// </summary>
+internal static class KnownAppHostCapabilities
+{
+    /// <summary>
+    /// Version 2 of the <c>GetAppHostLogEntriesAsync</c> stream: every
+    /// <see cref="BackchannelLogEntry"/> carries a non-zero
+    /// <see cref="BackchannelLogEntry.SequenceNumber"/> and reports its exception through
+    /// <see cref="BackchannelLogEntry.Exception"/> instead of folding it into
+    /// <see cref="BackchannelLogEntry.Message"/>.
+    /// </summary>
+    /// <remarks>
+    /// Both members are plain (non-required) properties, so an older AppHost deserializes
+    /// as <c>SequenceNumber = 0</c> and <c>Exception = null</c> rather than failing. That
+    /// is indistinguishable from a genuine v2 entry with no exception, so consumers that
+    /// depend on record identity — replay detection after a backchannel reconnect, and
+    /// correlating a structured entry with the console copy of the same record — must gate
+    /// on this capability instead of inspecting the values.
+    /// </remarks>
+    public const string LogEntries_V2 = "log-entries.v2";
+}
+
+/// <summary>
 /// Constants for resource command visibility values in the auxiliary backchannel contract.
 /// </summary>
 internal static class KnownCommandVisibility

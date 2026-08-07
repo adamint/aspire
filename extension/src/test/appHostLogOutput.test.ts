@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { AppHostLogEntry, AppHostLogOutputCoordinator } from '../debugger/appHostLogOutput';
+import { AppHostLogEntry, AppHostLogOutputCoordinator, AppHostParentOutput } from '../debugger/appHostLogOutput';
 
 suite('AppHost log output coordinator tests', () => {
     test('correlates one backchannel record with its ConsoleLogger and DebugLogger copies', () => {
@@ -11,10 +11,10 @@ suite('AppHost log output coordinator tests', () => {
             category: 'stdout'
         });
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("warn: Example.Category[7]\n      Port is already allocated.\n", 'stdout'),
+            renderConsole(coordinator, "warn: Example.Category[7]\n      Port is already allocated.\n", 'stdout'),
             []);
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("Example.Category: Warning: Port is already allocated.\n", 'console'),
+            renderConsole(coordinator, "Example.Category: Warning: Port is already allocated.\n", 'console'),
             []);
     });
 
@@ -23,11 +23,11 @@ suite('AppHost log output coordinator tests', () => {
         const entry = createEntry({ sequenceNumber: 1, logLevel: 'Information', message: 'Application started.' });
 
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("info: Example.Category[7]\n      Application started.\n", 'stdout'),
+            renderConsole(coordinator, "info: Example.Category[7]\n      Application started.\n", 'stdout'),
             [{ output: 'Example.Category: Information: Application started.\n', category: 'stdout' }]);
         assert.strictEqual(coordinator.handleBackchannelEntry(entry), undefined);
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("Example.Category: Information: Application started.\n", 'console'),
+            renderConsole(coordinator, "Example.Category: Information: Application started.\n", 'console'),
             []);
     });
 
@@ -42,13 +42,13 @@ suite('AppHost log output coordinator tests', () => {
         assert.ok(coordinator.handleBackchannelEntry(otherCategory));
 
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("info: Example.Category[7]\n      Repeated message.\n", 'stdout'),
+            renderConsole(coordinator, "info: Example.Category[7]\n      Repeated message.\n", 'stdout'),
             []);
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("info: Example.Category[7]\n      Repeated message.\n", 'stdout'),
+            renderConsole(coordinator, "info: Example.Category[7]\n      Repeated message.\n", 'stdout'),
             []);
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("info: Other.Category[7]\n      Repeated message.\n", 'stdout'),
+            renderConsole(coordinator, "info: Other.Category[7]\n      Repeated message.\n", 'stdout'),
             []);
     });
 
@@ -87,7 +87,7 @@ suite('AppHost log output coordinator tests', () => {
             category: 'stderr'
         });
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput(
+            renderConsole(coordinator, 
                 "Example.Category: Error: Request failed.\nAdditional details.\n\nSystem.InvalidOperationException: boom\n   at Program.Main()\n",
                 'console'),
             []);
@@ -100,7 +100,7 @@ suite('AppHost log output coordinator tests', () => {
             coordinator.handleDebugAdapterOutput("warn: Example.Category[7]\n", 'stdout'),
             []);
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("      Split warning.\n      Additional details.\n", 'stdout'),
+            renderConsole(coordinator, "      Split warning.\n      Additional details.\n", 'stdout'),
             [{
                 output: '\x1b[33mExample.Category: Warning: Split warning.\nAdditional details.\x1b[0m\n',
                 category: 'stdout'
@@ -130,10 +130,10 @@ suite('AppHost log output coordinator tests', () => {
         }
 
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("info: Example.Category[7]\n      Message 0\n", 'stdout'),
+            renderConsole(coordinator, "info: Example.Category[7]\n      Message 0\n", 'stdout'),
             [{ output: 'Example.Category: Information: Message 0\n', category: 'stdout' }]);
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("info: Example.Category[7]\n      Message 1024\n", 'stdout'),
+            renderConsole(coordinator, "info: Example.Category[7]\n      Message 1024\n", 'stdout'),
             []);
     });
 
@@ -148,7 +148,7 @@ suite('AppHost log output coordinator tests', () => {
             category: 'stdout'
         });
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("warn: Adapter.Only[3]\n      Debug adapter only.\n", 'stdout'),
+            renderConsole(coordinator, "warn: Adapter.Only[3]\n      Debug adapter only.\n", 'stdout'),
             [{
                 output: '\x1b[33mAdapter.Only: Warning: Debug adapter only.\x1b[0m\n',
                 category: 'stdout'
@@ -159,8 +159,8 @@ suite('AppHost log output coordinator tests', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
         const rendered = [
-            ...coordinator.handleDebugAdapterOutput("warn: Example.Category[7]\n      First warning.\n", 'stdout'),
-            ...coordinator.handleDebugAdapterOutput("info: Example.Category[7]\n      Second info.\n", 'stdout'),
+            ...renderConsole(coordinator, "warn: Example.Category[7]\n      First warning.\n", 'stdout'),
+            ...renderConsole(coordinator, "info: Example.Category[7]\n      Second info.\n", 'stdout'),
             coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 3, message: 'Third from the CLI.' }))!
         ];
 
@@ -177,12 +177,12 @@ suite('AppHost log output coordinator tests', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         const rendered: string[] = [];
 
-        rendered.push(...coordinator.handleDebugAdapterOutput("info: Example.Category[7]\n      Adapter first.\n", 'stdout').map(output => output.output));
+        rendered.push(...renderConsole(coordinator, "info: Example.Category[7]\n      Adapter first.\n", 'stdout').map(output => output.output));
         const backchannelOnly = coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 1, message: 'Backchannel second.' }));
         rendered.push(backchannelOnly!.output);
         // The correlated copy of "Adapter first." must not re-render out of order.
         assert.strictEqual(coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 2, message: 'Adapter first.' })), undefined);
-        rendered.push(...coordinator.handleDebugAdapterOutput("info: Example.Category[7]\n      Adapter third.\n", 'stdout').map(output => output.output));
+        rendered.push(...renderConsole(coordinator, "info: Example.Category[7]\n      Adapter third.\n", 'stdout').map(output => output.output));
 
         assert.deepStrictEqual(rendered, [
             'Example.Category: Information: Adapter first.\n',
@@ -200,13 +200,13 @@ suite('AppHost log output coordinator tests', () => {
         assert.ok(coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 2, eventId: 9, message: 'Same text.' })));
 
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("info: Example.Category[9]\n      Same text.\n", 'stdout'),
+            renderConsole(coordinator, "info: Example.Category[9]\n      Same text.\n", 'stdout'),
             []);
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("info: Example.Category[3]\n      Same text.\n", 'stdout'),
+            renderConsole(coordinator, "info: Example.Category[3]\n      Same text.\n", 'stdout'),
             []);
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("info: Example.Category[4]\n      Same text.\n", 'stdout'),
+            renderConsole(coordinator, "info: Example.Category[4]\n      Same text.\n", 'stdout'),
             [{ output: 'Example.Category: Information: Same text.\n', category: 'stdout' }]);
     });
 
@@ -214,7 +214,7 @@ suite('AppHost log output coordinator tests', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput(
+            renderConsole(coordinator, 
                 "fail: Example.Category[7]\n      Request failed.\n      System.InvalidOperationException: boom\n         at Program.Main()\n",
                 'stdout'),
             [{
@@ -234,10 +234,10 @@ suite('AppHost log output coordinator tests', () => {
         const output = 'Repeated raw stdout.\n';
         const loggerShapedOutput = 'Status: Error: connection refused\n';
 
-        assert.deepStrictEqual(coordinator.handleDebugAdapterOutput(output, 'stdout'), [{ output, category: 'stdout' }]);
-        assert.deepStrictEqual(coordinator.handleDebugAdapterOutput(output, 'stdout'), [{ output, category: 'stdout' }]);
+        assert.deepStrictEqual(renderConsole(coordinator, output, 'stdout'), [{ output, category: 'stdout' }]);
+        assert.deepStrictEqual(renderConsole(coordinator, output, 'stdout'), [{ output, category: 'stdout' }]);
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput(loggerShapedOutput, 'stdout'),
+            renderConsole(coordinator, loggerShapedOutput, 'stdout'),
             [{ output: loggerShapedOutput, category: 'stdout' }]);
     });
     test('correlates a record whose exception the AppHost could not send separately', () => {
@@ -253,7 +253,7 @@ suite('AppHost log output coordinator tests', () => {
             category: 'stderr'
         });
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput(
+            renderConsole(coordinator, 
                 "fail: Example.Category[7]\n      Health check failed.\n      System.InvalidOperationException: boom\n         at Probe()\n",
                 'stderr'),
             []);
@@ -272,7 +272,7 @@ suite('AppHost log output coordinator tests', () => {
 
         assert.ok(coordinator.handleBackchannelEntry(entry));
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput(
+            renderConsole(coordinator, 
                 "fail: Example.Category[7]\n      Health check failed.\n      System.Net.Sockets.SocketException (111): Connection refused\n         at Connect()\n",
                 'stderr'),
             []);
@@ -289,7 +289,7 @@ suite('AppHost log output coordinator tests', () => {
                 'stderr'),
             []);
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("om\n         at Connect()\n", 'stderr'),
+            renderConsole(coordinator, "om\n         at Connect()\n", 'stderr'),
             [{
                 output: 'Example.Category: Error: Boom happened.\nSystem.InvalidOperationException: boom\n   at Connect()\n',
                 category: 'stderr'
@@ -300,7 +300,7 @@ suite('AppHost log output coordinator tests', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput(
+            renderConsole(coordinator, 
                 "info: Example.Category[7]\n      First message.\ninfo: Other.Category[7]\n      Second message.\n",
                 'stdout'),
             [
@@ -322,10 +322,10 @@ suite('AppHost log output coordinator tests', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("dbug: Example.Category[7]\n      Verbose line one.\n", 'stdout'),
+            renderConsole(coordinator, "dbug: Example.Category[7]\n      Verbose line one.\n", 'stdout'),
             [{ output: '\x1b[2mExample.Category: Debug: Verbose line one.\x1b[0m\n', category: 'stdout' }]);
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("      Verbose line two.\n", 'stdout'),
+            renderConsole(coordinator, "      Verbose line two.\n", 'stdout'),
             []);
     });
 
@@ -350,7 +350,7 @@ suite('AppHost log output coordinator tests', () => {
 
         assert.ok(coordinator.handleBackchannelEntry(createEntry({ message: 'Line one.\n' })));
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput("info: Example.Category[7]\n      Line one.\n      \n", 'stdout'),
+            renderConsole(coordinator, "info: Example.Category[7]\n      Line one.\n      \n", 'stdout'),
             []);
     });
 
@@ -358,10 +358,21 @@ suite('AppHost log output coordinator tests', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
         assert.deepStrictEqual(
-            coordinator.handleDebugAdapterOutput('Downloading... ', 'stdout'),
+            renderConsole(coordinator, 'Downloading... ', 'stdout'),
             [{ output: 'Downloading... ', category: 'stdout' }]);
     });
 });
+
+
+// The console copy of a record is only known to be complete when a line that cannot
+// continue it arrives, so a test that feeds console output on its own releases it
+// explicitly. In production the CLI relay renders the same record without waiting.
+function renderConsole(
+    coordinator: AppHostLogOutputCoordinator,
+    output: string,
+    category: string | undefined): AppHostParentOutput[] {
+    return [...coordinator.handleDebugAdapterOutput(output, category), ...coordinator.flush()];
+}
 
 function createEntry(overrides: Partial<AppHostLogEntry> = {}): AppHostLogEntry {
     return {
