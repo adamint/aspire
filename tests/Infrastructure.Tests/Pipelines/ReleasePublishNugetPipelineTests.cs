@@ -468,6 +468,42 @@ public sealed class ReleasePublishNugetPipelineTests
     }
 
     [Fact]
+    public async Task NpmMirrorSeedingPinsLocalPrefixBeforeEveryWorkingDirectoryChange()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        // npm resolves its project config by walking up from the working directory to the nearest
+        // package.json/node_modules and reading that directory's .npmrc. --userconfig/--globalconfig
+        // do not cover that layer, so an ancestor .npmrc on the release agent could inject a scoped
+        // registry or credentials and make the "anonymous" verification prove nothing. Both
+        // directories the seed script cds into must be pinned before the Push-Location.
+        var markerIndex = FindRequiredText(pipeline, "function Set-NpmLocalPrefixMarker {");
+        var seedPinIndex = FindRequiredText(pipeline, "Set-NpmLocalPrefixMarker -Directory $seedDirectory");
+        var anonymousPinIndex = FindRequiredText(pipeline, "Set-NpmLocalPrefixMarker -Directory $anonymousDirectory");
+        var seedPushIndex = FindRequiredText(pipeline, "Push-Location $seedDirectory");
+        var anonymousPushIndex = FindRequiredText(pipeline, "Push-Location $anonymousDirectory");
+
+        Assert.True(markerIndex < seedPinIndex);
+        Assert.True(seedPinIndex < seedPushIndex);
+        Assert.True(anonymousPinIndex < anonymousPushIndex);
+
+        // The marker must match the CLI's PinNpmLocalPrefixAsync so both isolation paths stay
+        // recognizably the same mechanism.
+        Assert.Contains(
+            """'{"name":"aspire-npm-isolated","version":"0.0.0","private":true}'""",
+            pipeline);
+
+        // Every directory the seed script enters has to be pinned; a new Push-Location without a
+        // matching marker would silently reopen the ancestor-.npmrc hole.
+        var pushLocations = System.Text.RegularExpressions.Regex.Matches(
+            pipeline[FindRequiredText(pipeline, "$packageName = '@microsoft/aspire-cli'")..],
+            @"Push-Location \$(\w+)");
+        Assert.Equal(
+            new[] { "seedDirectory", "anonymousDirectory" },
+            pushLocations.Select(match => match.Groups[1].Value).Distinct().ToArray());
+    }
+
+    [Fact]
     public async Task SeedsAndAnonymouslyValidatesNpmInternalMirrorBeforePromotion()
     {
         var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");

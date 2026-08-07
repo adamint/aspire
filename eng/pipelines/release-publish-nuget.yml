@@ -2049,6 +2049,17 @@ extends:
                 - pwsh: |
                     $ErrorActionPreference = 'Stop'
 
+                    function Set-NpmLocalPrefixMarker {
+                      param(
+                        [Parameter(Mandatory = $true)][string] $Directory
+                      )
+
+                      # Matches the marker written by PinNpmLocalPrefixAsync in the CLI. "private"
+                      # keeps npm from ever treating this scratch directory as publishable.
+                      '{"name":"aspire-npm-isolated","version":"0.0.0","private":true}' |
+                        Set-Content -LiteralPath (Join-Path $Directory 'package.json') -Encoding utf8NoBOM
+                    }
+
                     function Invoke-NpmPack {
                       param(
                         [Parameter(Mandatory = $true)][string] $PackageSpec,
@@ -2138,6 +2149,19 @@ extends:
                       New-Item -ItemType Directory -Path $authenticatedCache -Force | Out-Null
                       New-Item -ItemType Directory -Path $anonymousCache -Force | Out-Null
                       New-Item -ItemType Directory -Path $anonymousDirectory -Force | Out-Null
+
+                      # --userconfig/--globalconfig do NOT cover npm's project config layer. npm
+                      # resolves the local prefix by walking up from the working directory until it
+                      # finds package.json or node_modules, then reads that directory's .npmrc,
+                      # which can supply a scoped registry or credentials and silently invalidate
+                      # the anonymous verification below. Writing a private package.json into each
+                      # directory we cd into stops that walk here, so the only project config in
+                      # effect is the one we control. Same reason as PinNpmLocalPrefixAsync in
+                      # src/Aspire.Cli/Npm/NpmRunner.cs.
+                      # See https://docs.npmjs.com/cli/v11/configuring-npm/npmrc#files
+                      Set-NpmLocalPrefixMarker -Directory $seedDirectory
+                      Set-NpmLocalPrefixMarker -Directory $anonymousDirectory
+
                       New-Item -ItemType File -Path $authenticatedGlobalNpmrc -Force | Out-Null
                       "registry=$internalRegistry" |
                         Set-Content -LiteralPath $anonymousNpmrc -Encoding utf8NoBOM
