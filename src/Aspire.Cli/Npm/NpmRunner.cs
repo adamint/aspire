@@ -134,17 +134,21 @@ internal sealed class NpmRunner : INpmRunner
         }
 
         var tempRoot = CreateIsolatedTempDirectory();
-        var projectDirectory = Path.Combine(tempRoot, "project");
-        var cacheDirectory = Path.Combine(tempRoot, "cache");
-        var userConfigPath = Path.Combine(tempRoot, "user.npmrc");
-        var globalConfigPath = Path.Combine(tempRoot, "global.npmrc");
-        Directory.CreateDirectory(projectDirectory);
-        Directory.CreateDirectory(cacheDirectory);
-        File.WriteAllText(userConfigPath, string.Empty);
-        File.WriteAllText(globalConfigPath, string.Empty);
 
         try
         {
+            // The isolation scaffolding is created inside the try so a failure while writing the
+            // empty npmrc files still deletes the temp root instead of leaking it for the machine's
+            // temp-cleanup policy to reclaim.
+            var projectDirectory = Path.Combine(tempRoot, "project");
+            var cacheDirectory = Path.Combine(tempRoot, "cache");
+            var userConfigPath = Path.Combine(tempRoot, "user.npmrc");
+            var globalConfigPath = Path.Combine(tempRoot, "global.npmrc");
+            Directory.CreateDirectory(projectDirectory);
+            Directory.CreateDirectory(cacheDirectory);
+            await File.WriteAllTextAsync(userConfigPath, string.Empty, cancellationToken);
+            await File.WriteAllTextAsync(globalConfigPath, string.Empty, cancellationToken);
+
             var packageSpecifier = NpmPackageInfo.FormatPackageSpecifier(packageName, versionRange);
             _logger.LogDebug("Resolving npm package {PackageSpecifier} anonymously from the internal registry", packageSpecifier);
 

@@ -56,7 +56,17 @@ internal sealed class TestNpmRegistry : IAsyncDisposable
             while (!_cancellationTokenSource.IsCancellationRequested)
             {
                 using var client = await _listener.AcceptTcpClientAsync(_cancellationTokenSource.Token);
-                await HandleRequestAsync(client, _cancellationTokenSource.Token);
+
+                try
+                {
+                    await HandleRequestAsync(client, _cancellationTokenSource.Token);
+                }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException or SocketException)
+                {
+                    // npm's HTTP agent can open and drop connections (retries, agent pooling) without
+                    // completing a request. Keep serving instead of faulting the server task, because a
+                    // faulted task would surface from DisposeAsync and fail an otherwise passing test.
+                }
             }
         }
         catch (OperationCanceledException) when (_cancellationTokenSource.IsCancellationRequested)
@@ -71,8 +81,14 @@ internal sealed class TestNpmRegistry : IAsyncDisposable
     {
         await using var stream = client.GetStream();
         using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
+
+        // Request line shape: "GET /@microsoft%2faspire-cli HTTP/1.1". A connection that is opened
+        // and closed without sending anything yields null here, which is not a test failure.
         var requestLine = await reader.ReadLineAsync(cancellationToken);
-        Assert.False(string.IsNullOrWhiteSpace(requestLine));
+        if (string.IsNullOrWhiteSpace(requestLine))
+        {
+            return;
+        }
 
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         while (await reader.ReadLineAsync(cancellationToken) is { Length: > 0 } headerLine)
@@ -85,6 +101,11 @@ internal sealed class TestNpmRegistry : IAsyncDisposable
         }
 
         var requestParts = requestLine.Split(' ', 3);
+        if (requestParts.Length < 2)
+        {
+            return;
+        }
+
         _requests.Enqueue(new TestNpmRegistryRequest(requestParts[0], requestParts[1], headers));
         _requestAvailable.Release();
 
