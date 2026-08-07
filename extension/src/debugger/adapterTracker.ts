@@ -28,8 +28,9 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
                 return undefined;
             }
             const debugSessionId = configuration.debugSessionId;
-            const sendNotification = dcpServer.createRunSessionNotificationHandler(configuration.runId)
-                ?? (notification => dcpServer.sendNotification(notification));
+            const sendNotification = configuration.isApphost
+                ? (notification: ServiceLogsNotification | ProcessRestartedNotification | SessionTerminatedNotification) => dcpServer.sendNotification(notification)
+                : dcpServer.createRunSessionNotificationHandler(configuration.runId);
 
             let debuggeeExitCode: number | undefined;
 

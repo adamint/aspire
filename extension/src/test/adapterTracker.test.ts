@@ -12,6 +12,9 @@ suite('Debug Adapter Tracker Tests', () => {
 
     setup(() => {
         dcpServer = sinon.createStubInstance(AspireDcpServer);
+        dcpServer.createRunSessionNotificationHandler.callsFake(() => notification => {
+            dcpServer.sendNotification(notification);
+        });
 
         // Create a mock debug session with AspireResourceExtendedDebugConfiguration
         debugSession = {
@@ -205,6 +208,32 @@ suite('Debug Adapter Tracker Tests', () => {
             exit_code: 7,
         });
         assert.strictEqual(dcpServer.sendNotification.called, false);
+
+        disposable.dispose();
+    });
+
+    test('reserves generic notification sending for the AppHost session', async () => {
+        const disposable = createDebugAdapterTracker(dcpServer as any, 'coreclr');
+        const factory = registerFactoryStub.lastCall.args[1];
+        const tracker = factory.createDebugAdapterTracker({
+            ...debugSession,
+            configuration: {
+                ...debugSession.configuration,
+                isApphost: true,
+                runId: '',
+            },
+        });
+
+        tracker.onExit(0);
+
+        assert.strictEqual(dcpServer.createRunSessionNotificationHandler.called, false);
+        assert.strictEqual(dcpServer.sendNotification.calledOnce, true);
+        assert.deepStrictEqual(dcpServer.sendNotification.firstCall.args[0], {
+            notification_type: 'sessionTerminated',
+            session_id: '',
+            dcp_id: 'debug-456',
+            exit_code: 0,
+        });
 
         disposable.dispose();
     });

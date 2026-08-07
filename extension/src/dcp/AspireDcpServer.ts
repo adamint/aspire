@@ -537,7 +537,12 @@ export default class AspireDcpServer {
                 const runId = req.params.id as string;
                 const run = runsBySession.get(runId);
                 const dcpId = req.header('microsoft-developer-dcp-instance-id') as string;
-                if (run && run.ownerDcpId === dcpId) {
+                const ownerPrefix = run ? getDcpIdPrefix(run.ownerDcpId) : null;
+                if (run && ownerPrefix !== null && ownerPrefix === getDcpIdPrefix(dcpId)) {
+                    // DCP can restart its per-execution instance while the owning Aspire
+                    // debug session remains alive. Route all subsequent notifications to
+                    // the replacement execution that successfully claimed the run.
+                    run.ownerDcpId = dcpId;
                     if (run.lifecycle === 'stopRequested' || run.lifecycle === 'completed') {
                         res.status(200).end();
                         return;
@@ -555,7 +560,7 @@ export default class AspireDcpServer {
                 } else if (run) {
                     const error: ErrorDetails = {
                         code: 'RunSessionOwnerMismatch',
-                        message: `Run session ${runId} is owned by a different DCP instance.`,
+                        message: `Run session ${runId} is owned by a different Aspire debug session.`,
                         details: []
                     };
                     res.status(403).json({ error }).end();
@@ -602,7 +607,13 @@ export default class AspireDcpServer {
                     }
                     wss.handleUpgrade(request, socket, head, (ws) => {
                         extensionLogOutputChannel.info(`WebSocket connection established for DCP ID: ${dcpId}`);
+                        const previousWs = wsBySession.get(dcpId);
                         wsBySession.set(dcpId, ws);
+                        if (previousWs && previousWs !== ws && previousWs.readyState === WebSocket.OPEN) {
+                            // Install the replacement before closing the old socket so notifications
+                            // emitted by close handlers are routed to the new connection.
+                            previousWs.close(1000, 'Replaced by a newer DCP connection.');
+                        }
 
                         const pendingNotifications = pendingNotificationQueueByDcpId.get(dcpId);
                         if (pendingNotifications) {
@@ -653,15 +664,18 @@ export default class AspireDcpServer {
         });
     }
 
-    public createRunSessionNotificationHandler(runId: string): ((notification: RunSessionNotification) => void) | undefined {
+    public createRunSessionNotificationHandler(runId: string): (notification: RunSessionNotification) => void {
         const run = this._runsBySession.get(runId);
         if (!run) {
-            return undefined;
+            // Resource adapters can start after a completed run's bounded tombstone expires.
+            // Their callbacks must remain scoped to that run and must never fall through to
+            // generic AppHost notification delivery, which would bypass terminal deduplication.
+            return () => { };
         }
 
-        // The tracker retains this closure until the adapter exits. That keeps exactly the
-        // run-scoped dedupe state needed for a late callback without retaining a server-wide
-        // tombstone or leaving a completed run in the lookup map.
+        // The lookup map retains this state for bounded late tracker registration. Once
+        // registered, the tracker keeps the same run-scoped dedupe state until the adapter
+        // exits, even after the map tombstone expires.
         return notification => this._handleRunSessionNotification(run, notification);
     }
 
@@ -736,6 +750,11 @@ export default class AspireDcpServer {
             if (run.terminalStateTimer === timer) {
                 run.terminalStateTimer = undefined;
             }
+            // Retention is the final lifecycle bound. If no adapter exit or
+            // telemetry fallback completed the run first, close telemetry here
+            // before removing the only run-scoped state owner.
+            this._recordRunSessionCompletion(run, -1);
+            run.lifecycle = 'completed';
             if (this._runsBySession.get(run.runId) === run) {
                 this._runsBySession.delete(run.runId);
             }
@@ -745,16 +764,8 @@ export default class AspireDcpServer {
     }
 
     private _completeRun(run: RunSessionState): void {
-        if (run.terminalStateTimer) {
-            clearTimeout(run.terminalStateTimer);
-            this._terminalStateTimers.delete(run.terminalStateTimer);
-            run.terminalStateTimer = undefined;
-        }
-
         run.lifecycle = 'completed';
-        if (this._runsBySession.get(run.runId) === run) {
-            this._runsBySession.delete(run.runId);
-        }
+        this._scheduleTerminalStateCleanup(run);
     }
 
     private _handleRunSessionNotification(run: RunSessionState, notification: RunSessionNotification): void {
@@ -769,7 +780,7 @@ export default class AspireDcpServer {
         } as RunSessionNotification;
 
         if (ownedNotification.notification_type !== 'sessionTerminated') {
-            if (!run.terminalNotificationSent && run.lifecycle !== 'completed') {
+            if (run.lifecycle !== 'completed') {
                 this._sendNotification(ownedNotification);
             }
             return;
@@ -896,6 +907,16 @@ export default class AspireDcpServer {
     }
 
     public dispose(): void {
+        if (this._disposed) {
+            return;
+        }
+
+        // Every run-session start must have one matching end event. Disposal can
+        // happen before either an adapter exit or the requested-stop fallback.
+        for (const run of this._runsBySession.values()) {
+            this._recordRunSessionCompletion(run, -1);
+        }
+
         this._disposed = true;
 
         // Send WebSocket close message to all clients before shutting down
