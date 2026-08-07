@@ -197,17 +197,26 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
                             new XElement("IsAspireProjectResource", "false")));
                     }
                 }
-                else
+                else if (integration.RequireExactVersion)
                 {
                     // A first-party name does not mean this checkout can supply it. Dropping the
-                    // reference here used to make a nonexistent package scan clean and export an
-                    // empty module, so fall back to restoring it like any other package.
+                    // reference made `sdk export --package Aspire.Hosting.DoesNotExist@13.5.0-dev`
+                    // scan clean and publish an empty module under a package id that has never
+                    // existed, so a caller that demands an exact version gets a real package
+                    // reference instead and the restore fails (NU1101) as it should.
                     if (integration.Version is null)
                     {
                         throw new InvalidOperationException($"Integration '{integration.Name}' is neither a project reference nor a package reference (both Version and ProjectPath are null).");
                     }
                     otherPackages.Add(integration);
                 }
+
+                // Everything else keeps dropping the reference. Only `sdk export` asks for exactness,
+                // and only it names the package explicitly; `aspire run`, `sdk dump`, and `sdk
+                // generate` take their integrations from aspire.config.json, where a version-less
+                // entry resolves to this CLI's identity (`13.5.0-dev` in a checkout). Restoring that
+                // as a package could never succeed, so failing here would turn one unavailable
+                // integration into a build failure for the whole AppHost.
             }
             else
             {

@@ -193,11 +193,19 @@ public class DotNetBasedAppHostServerPackageReferenceTests(ITestOutputHelper out
 
     /// <summary>
     /// A first-party package name does not mean the checkout can supply it. Without a matching
-    /// project under <c>src/</c> the reference used to be dropped from the generated project
-    /// entirely, so a nonexistent package scanned clean and exported an empty module.
+    /// project under <c>src/</c> the reference is dropped from the generated project, so a
+    /// nonexistent package scanned clean and exported an empty module. A reference that demands an
+    /// exact version now restores as a real package instead, so the failure surfaces.
     /// </summary>
+    /// <remarks>
+    /// Only <c>sdk export</c> demands exactness. Everything else keeps dropping the reference,
+    /// because <c>aspire run</c> and the other scanner callers take their integrations from
+    /// aspire.config.json, where a version-less entry resolves to this CLI's identity — a version
+    /// that could never restore from a feed, so failing would break the whole AppHost rather than
+    /// one integration.
+    /// </remarks>
     [Fact]
-    public async Task CreateProjectFiles_FallsBackToAPackageReferenceWhenTheLocalProjectIsMissing()
+    public async Task CreateProjectFiles_FallsBackToAPackageReferenceOnlyForAnExactReference()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var appPath = workspace.WorkspaceRoot.FullName;
@@ -217,7 +225,7 @@ public class DotNetBasedAppHostServerPackageReferenceTests(ITestOutputHelper out
             .ToDictionary(element => element.Attribute("Include")!.Value, element => element.Attribute("VersionOverride")?.Value);
 
         Assert.Equal("[13.4.0]", references["Aspire.Hosting.NotInThisCheckout"]);
-        Assert.Equal("13.4.0", references["Aspire.Hosting.AlsoMissing"]);
+        Assert.False(references.ContainsKey("Aspire.Hosting.AlsoMissing"));
         Assert.Empty(document.Descendants("ProjectReference"));
     }
 

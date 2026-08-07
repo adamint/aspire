@@ -207,13 +207,21 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
         var rpcClient = new StubExportRpcClient();
-        using var provider = CreateProvider(interactionService, workspace, rpcClient, appHostServerProject);
-        appHostServerProject.AddLocalProjectSubstitution("Aspire.Hosting.Redis", CheckoutVersionPrefix(provider));
+        using var provider = CreateProvider(
+            interactionService,
+            workspace,
+            rpcClient,
+            appHostServerProject,
+            identityVersion: "13.5.0");
+        appHostServerProject.AddLocalProjectSubstitution("Aspire.Hosting.Redis", "13.5.0");
 
         // A CLI running from a repository checkout builds first-party integrations from src/ and
-        // throws the requested package version away, so honouring this would publish the checkout's
-        // API surface under 13.5.0 — the mislabel this command exists to prevent.
-        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0");
+        // throws the requested package version away, so honouring this would publish the 13.5.0
+        // checkout's API surface under 13.4.0 — the mislabel this command exists to prevent. Both
+        // halves are pinned rather than derived from the running assembly so the rejection turns on
+        // the checkout-versus-request mismatch and not on whether this build carries a prerelease
+        // label, which an official release build strips.
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.4.0");
 
         Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
         Assert.Null(rpcClient.LastExportRequest);
@@ -316,6 +324,91 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
         Assert.Null(rpcClient.LastExportRequest);
         Assert.Empty(interactionService.DisplayedRawText);
+    }
+
+    /// <summary>
+    /// Neither scanner honours the requested SDK version — the repository scanner builds
+    /// <c>src/Aspire.Hosting</c> and the prebuilt scanner loads the assemblies bundled with the CLI
+    /// — so a core export always describes this CLI. The version guard that enforces that compares
+    /// the request against the identity, which an override also controls, and the default request is
+    /// that same identity, so the comparison is vacuous under an override.
+    /// </summary>
+    [Fact]
+    public async Task SdkExportOfTheCorePackageRejectsAnOverriddenCliIdentity()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(
+            interactionService,
+            workspace,
+            rpcClient,
+            appHostServerProject,
+            identityVersion: "99.0.0",
+            identityOverridden: true);
+
+        // No --package at all, so this is the default invocation: Aspire.Hosting at the identity
+        // version. Without the guard this publishes the current core surface as 99.0.0.
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript");
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.Null(rpcClient.LastExportRequest);
+        Assert.Empty(interactionService.DisplayedRawText);
+    }
+
+    /// <summary>
+    /// Repository mode is entered through <c>ASPIRE_REPO_ROOT</c>, which is not an identity field,
+    /// so an installed CLI pointed at a checkout on another version line has an entirely honest
+    /// identity and no override in effect. The generated scanner always project-references
+    /// <c>src/Aspire.Hosting</c>, so what it exports is the checkout's core surface under the
+    /// installed CLI's number.
+    /// </summary>
+    [Fact]
+    public async Task SdkExportOfTheCorePackageRejectsACheckoutOnAnotherVersionLine()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(
+            interactionService,
+            workspace,
+            rpcClient,
+            appHostServerProject,
+            identityVersion: "13.4.0");
+        appHostServerProject.AddLocalProjectSubstitution("Aspire.Hosting", "13.5.0");
+
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript");
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.Null(rpcClient.LastExportRequest);
+        Assert.Empty(interactionService.DisplayedRawText);
+    }
+
+    /// <summary>
+    /// The same checkout on the same version line is exactly what the label claims, so it exports.
+    /// </summary>
+    [Fact]
+    public async Task SdkExportOfTheCorePackageFromAMatchingCheckoutSucceeds()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(
+            interactionService,
+            workspace,
+            rpcClient,
+            appHostServerProject,
+            identityVersion: "13.5.0");
+        appHostServerProject.AddLocalProjectSubstitution("Aspire.Hosting", "13.5.0");
+
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript");
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal("Aspire.Hosting", rpcClient.LastExportRequest?.PackageName);
+        Assert.Equal("13.5.0", rpcClient.LastExportRequest?.PackageVersion);
     }
 
     [Fact]

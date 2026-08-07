@@ -213,9 +213,8 @@ internal sealed class SdkExportCommand : BaseCommand
     /// discards the requested version, so the checkout's API surface would be published under
     /// someone else's version number. That is the same stale-signature problem the core-package
     /// guard prevents, so this refuses for the same reason. Asking for the version this CLI was
-    /// built from is still allowed: that is exactly what the checkout contains. The core package is
-    /// already handled before any project is created, and third-party packages are never
-    /// substituted, so both fall straight through.
+    /// built from is still allowed: that is exactly what the checkout contains. Third-party packages
+    /// are never substituted, so they fall straight through.
     /// </para>
     /// <para>
     /// The check cannot rest on <see cref="CliExecutionContext.IdentitySdkVersion"/> alone, because
@@ -224,6 +223,22 @@ internal sealed class SdkExportCommand : BaseCommand
     /// the independent half; the identity is still compared so a checkout on the right line cannot
     /// publish a neighbouring build's number.
     /// </para>
+    /// <para>
+    /// The core package needs both halves as well. Neither <see cref="IAppHostServerProject"/>
+    /// implementation honours the requested SDK version — the repository scanner builds
+    /// <c>src/Aspire.Hosting</c> and the prebuilt scanner loads the assemblies bundled with the CLI
+    /// — so a core export always describes this CLI, and the label has to be this CLI's real
+    /// version. The comparison that enforces that runs before any project is created, but it
+    /// compares the request against the identity while the default request <em>is</em> the identity,
+    /// so on its own it only catches an explicitly wrong <c>--package</c>. Two cases get past it.
+    /// An identity override makes the identity itself caller-controlled, and the prebuilt scanner
+    /// has no second signal to check it against, so an override is refused outright. Repository mode
+    /// is entered through <c>ASPIRE_REPO_ROOT</c>, which is not an identity field at all, so an
+    /// installed CLI can be pointed at a checkout on a different version line with no override in
+    /// effect; the core package therefore falls through to the same checkout comparison every other
+    /// first-party package gets, which is available because <c>src/Aspire.Hosting</c> is always
+    /// project-referenced by the generated scanner.
+    /// </para>
     /// </remarks>
     /// <param name="serverProject">The scanner AppHost that will restore the export.</param>
     /// <param name="packageName">The package being exported.</param>
@@ -231,9 +246,15 @@ internal sealed class SdkExportCommand : BaseCommand
     /// <returns>The rejection reason, or <see langword="null"/> when the request is exportable.</returns>
     private string? ValidateRequestedPackageIsRestorable(IAppHostServerProject serverProject, string packageName, string packageVersion)
     {
-        if (string.Equals(packageName, CorePackageName, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(packageName, CorePackageName, StringComparison.OrdinalIgnoreCase)
+            && ExecutionContext.IdentityOverridden)
         {
-            return null;
+            // The prebuilt scanner has no second signal: the core assemblies come from the bundle
+            // this CLI shipped with, so an override leaves nothing to check the label against.
+            // Repository mode does have one, and falls through to it below.
+            return $"The scanner loads the {CorePackageName} assemblies this CLI ships with, so an export of it describes this CLI. " +
+                   $"This run emulates a different build through an ASPIRE_CLI_* override, so the export cannot be attributed to a real build of {packageVersion}. " +
+                   $"Re-run without the override, or export {CorePackageName} from an installed CLI.";
         }
 
         if (serverProject.GetLocalProjectSubstitution(packageName) is not { } substitution)
