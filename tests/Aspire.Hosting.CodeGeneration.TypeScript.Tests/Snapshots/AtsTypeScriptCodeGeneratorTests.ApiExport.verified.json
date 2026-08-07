@@ -30,13 +30,8 @@
               "summary": "Adds an optional string parameter",
               "parameters": [
                 {
-                  "name": "value",
-                  "type": "string",
-                  "optional": true
-                },
-                {
-                  "name": "enabled",
-                  "type": "boolean",
+                  "name": "options",
+                  "type": "WithOptionalStringOptions",
                   "optional": true
                 }
               ]
@@ -131,8 +126,8 @@
               "summary": "Configures with optional callback",
               "parameters": [
                 {
-                  "name": "callback",
-                  "type": "(arg: TestCallbackContext) =\u003E Promise\u003Cvoid\u003E",
+                  "name": "options",
+                  "type": "WithOptionalCallbackOptions",
                   "optional": true
                 }
               ]
@@ -380,13 +375,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingOptions",
                   "optional": true
                 }
               ]
@@ -411,13 +401,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingPathOptions",
                   "optional": true
                 }
               ]
@@ -512,13 +497,8 @@
               "summary": "Adds an optional string parameter",
               "parameters": [
                 {
-                  "name": "value",
-                  "type": "string",
-                  "optional": true
-                },
-                {
-                  "name": "enabled",
-                  "type": "boolean",
+                  "name": "options",
+                  "type": "WithOptionalStringOptions",
                   "optional": true
                 }
               ]
@@ -597,8 +577,8 @@
               "summary": "Configures with optional callback",
               "parameters": [
                 {
-                  "name": "callback",
-                  "type": "(arg: TestCallbackContext) =\u003E Promise\u003Cvoid\u003E",
+                  "name": "options",
+                  "type": "WithOptionalCallbackOptions",
                   "optional": true
                 }
               ]
@@ -830,13 +810,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingOptions",
                   "optional": true
                 }
               ]
@@ -861,13 +836,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingPathOptions",
                   "optional": true
                 }
               ]
@@ -963,13 +933,8 @@
               "summary": "Adds an optional string parameter",
               "parameters": [
                 {
-                  "name": "value",
-                  "type": "string",
-                  "optional": true
-                },
-                {
-                  "name": "enabled",
-                  "type": "boolean",
+                  "name": "options",
+                  "type": "WithOptionalStringOptions",
                   "optional": true
                 }
               ]
@@ -1064,8 +1029,8 @@
               "summary": "Configures with optional callback",
               "parameters": [
                 {
-                  "name": "callback",
-                  "type": "(arg: TestCallbackContext) =\u003E Promise\u003Cvoid\u003E",
+                  "name": "options",
+                  "type": "WithOptionalCallbackOptions",
                   "optional": true
                 }
               ]
@@ -1313,13 +1278,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingOptions",
                   "optional": true
                 }
               ]
@@ -1344,13 +1304,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingPathOptions",
                   "optional": true
                 }
               ]
@@ -1449,8 +1404,8 @@
                   "summary": "The ATS resource name."
                 },
                 {
-                  "name": "port",
-                  "type": "number",
+                  "name": "options",
+                  "type": "AddTestRedisOptions",
                   "optional": true
                 }
               ]
@@ -1494,13 +1449,8 @@
               "summary": "Adds an optional string parameter",
               "parameters": [
                 {
-                  "name": "value",
-                  "type": "string",
-                  "optional": true
-                },
-                {
-                  "name": "enabled",
-                  "type": "boolean",
+                  "name": "options",
+                  "type": "WithOptionalStringOptions",
                   "optional": true
                 }
               ]
@@ -1595,8 +1545,8 @@
               "summary": "Configures with optional callback",
               "parameters": [
                 {
-                  "name": "callback",
-                  "type": "(arg: TestCallbackContext) =\u003E Promise\u003Cvoid\u003E",
+                  "name": "options",
+                  "type": "WithOptionalCallbackOptions",
                   "optional": true
                 }
               ]
@@ -1844,13 +1794,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingOptions",
                   "optional": true
                 }
               ]
@@ -1875,13 +1820,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingPathOptions",
                   "optional": true
                 }
               ]
@@ -1978,13 +1918,8 @@
               "summary": "Adds an optional string parameter",
               "parameters": [
                 {
-                  "name": "value",
-                  "type": "string",
-                  "optional": true
-                },
-                {
-                  "name": "enabled",
-                  "type": "boolean",
+                  "name": "options",
+                  "type": "WithOptionalStringOptions",
                   "optional": true
                 }
               ]
@@ -2079,8 +2014,8 @@
               "summary": "Configures with optional callback",
               "parameters": [
                 {
-                  "name": "callback",
-                  "type": "(arg: TestCallbackContext) =\u003E Promise\u003Cvoid\u003E",
+                  "name": "options",
+                  "type": "WithOptionalCallbackOptions",
                   "optional": true
                 }
               ]
@@ -2328,13 +2263,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingOptions",
                   "optional": true
                 }
               ]
@@ -2359,13 +2289,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingPathOptions",
                   "optional": true
                 }
               ]
@@ -2460,13 +2385,8 @@
               "summary": "Adds an optional string parameter",
               "parameters": [
                 {
-                  "name": "value",
-                  "type": "string",
-                  "optional": true
-                },
-                {
-                  "name": "enabled",
-                  "type": "boolean",
+                  "name": "options",
+                  "type": "WithOptionalStringOptions",
                   "optional": true
                 }
               ]
@@ -2545,8 +2465,8 @@
               "summary": "Configures with optional callback",
               "parameters": [
                 {
-                  "name": "callback",
-                  "type": "(arg: TestCallbackContext) =\u003E Promise\u003Cvoid\u003E",
+                  "name": "options",
+                  "type": "WithOptionalCallbackOptions",
                   "optional": true
                 }
               ]
@@ -2778,13 +2698,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingOptions",
                   "optional": true
                 }
               ]
@@ -2809,13 +2724,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingPathOptions",
                   "optional": true
                 }
               ]
@@ -2911,13 +2821,8 @@
               "summary": "Adds an optional string parameter",
               "parameters": [
                 {
-                  "name": "value",
-                  "type": "string",
-                  "optional": true
-                },
-                {
-                  "name": "enabled",
-                  "type": "boolean",
+                  "name": "options",
+                  "type": "WithOptionalStringOptions",
                   "optional": true
                 }
               ]
@@ -2996,8 +2901,8 @@
               "summary": "Configures with optional callback",
               "parameters": [
                 {
-                  "name": "callback",
-                  "type": "(arg: TestCallbackContext) =\u003E Promise\u003Cvoid\u003E",
+                  "name": "options",
+                  "type": "WithOptionalCallbackOptions",
                   "optional": true
                 }
               ]
@@ -3229,13 +3134,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingOptions",
                   "optional": true
                 }
               ]
@@ -3260,13 +3160,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingPathOptions",
                   "optional": true
                 }
               ]
@@ -3362,13 +3257,8 @@
               "summary": "Adds an optional string parameter",
               "parameters": [
                 {
-                  "name": "value",
-                  "type": "string",
-                  "optional": true
-                },
-                {
-                  "name": "enabled",
-                  "type": "boolean",
+                  "name": "options",
+                  "type": "WithOptionalStringOptions",
                   "optional": true
                 }
               ]
@@ -3463,8 +3353,8 @@
               "summary": "Configures with optional callback",
               "parameters": [
                 {
-                  "name": "callback",
-                  "type": "(arg: TestCallbackContext) =\u003E Promise\u003Cvoid\u003E",
+                  "name": "options",
+                  "type": "WithOptionalCallbackOptions",
                   "optional": true
                 }
               ]
@@ -3712,13 +3602,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingOptions",
                   "optional": true
                 }
               ]
@@ -3743,13 +3628,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingPathOptions",
                   "optional": true
                 }
               ]
@@ -3845,13 +3725,8 @@
               "summary": "Adds an optional string parameter",
               "parameters": [
                 {
-                  "name": "value",
-                  "type": "string",
-                  "optional": true
-                },
-                {
-                  "name": "enabled",
-                  "type": "boolean",
+                  "name": "options",
+                  "type": "WithOptionalStringOptions",
                   "optional": true
                 }
               ]
@@ -3930,8 +3805,8 @@
               "summary": "Configures with optional callback",
               "parameters": [
                 {
-                  "name": "callback",
-                  "type": "(arg: TestCallbackContext) =\u003E Promise\u003Cvoid\u003E",
+                  "name": "options",
+                  "type": "WithOptionalCallbackOptions",
                   "optional": true
                 }
               ]
@@ -4163,13 +4038,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingOptions",
                   "optional": true
                 }
               ]
@@ -4194,13 +4064,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingPathOptions",
                   "optional": true
                 }
               ]
@@ -4614,13 +4479,8 @@
               "summary": "Adds an optional string parameter",
               "parameters": [
                 {
-                  "name": "value",
-                  "type": "string",
-                  "optional": true
-                },
-                {
-                  "name": "enabled",
-                  "type": "boolean",
+                  "name": "options",
+                  "type": "WithOptionalStringOptions",
                   "optional": true
                 }
               ]
@@ -4715,8 +4575,8 @@
               "summary": "Configures with optional callback",
               "parameters": [
                 {
-                  "name": "callback",
-                  "type": "(arg: TestCallbackContext) =\u003E Promise\u003Cvoid\u003E",
+                  "name": "options",
+                  "type": "WithOptionalCallbackOptions",
                   "optional": true
                 }
               ]
@@ -4964,13 +4824,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingOptions",
                   "optional": true
                 }
               ]
@@ -4995,13 +4850,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingPathOptions",
                   "optional": true
                 }
               ]
@@ -5158,8 +5008,8 @@
                   "optional": false
                 },
                 {
-                  "name": "databaseName",
-                  "type": "string",
+                  "name": "options",
+                  "type": "AddTestChildDatabaseOptions",
                   "optional": true
                 }
               ]
@@ -5174,8 +5024,8 @@
               "summary": "Configures the Redis resource with persistence",
               "parameters": [
                 {
-                  "name": "mode",
-                  "type": "TestPersistenceMode",
+                  "name": "options",
+                  "type": "WithPersistenceOptions",
                   "optional": true
                 }
               ]
@@ -5190,13 +5040,8 @@
               "summary": "Adds an optional string parameter",
               "parameters": [
                 {
-                  "name": "value",
-                  "type": "string",
-                  "optional": true
-                },
-                {
-                  "name": "enabled",
-                  "type": "boolean",
+                  "name": "options",
+                  "type": "WithOptionalStringOptions",
                   "optional": true
                 }
               ]
@@ -5325,8 +5170,8 @@
               "summary": "Configures with optional callback",
               "parameters": [
                 {
-                  "name": "callback",
-                  "type": "(arg: TestCallbackContext) =\u003E Promise\u003Cvoid\u003E",
+                  "name": "options",
+                  "type": "WithOptionalCallbackOptions",
                   "optional": true
                 }
               ]
@@ -5510,8 +5355,8 @@
               "summary": "Gets the status of the resource asynchronously",
               "parameters": [
                 {
-                  "name": "cancellationToken",
-                  "type": "AbortSignal | CancellationToken",
+                  "name": "options",
+                  "type": "GetStatusAsyncOptions",
                   "optional": true
                 }
               ]
@@ -5547,8 +5392,8 @@
                   "optional": false
                 },
                 {
-                  "name": "cancellationToken",
-                  "type": "AbortSignal | CancellationToken",
+                  "name": "options",
+                  "type": "WaitForReadyAsyncOptions",
                   "optional": true
                 }
               ]
@@ -5579,13 +5424,8 @@
               "summary": "Adds a data volume with persistence",
               "parameters": [
                 {
-                  "name": "name",
-                  "type": "string",
-                  "optional": true
-                },
-                {
-                  "name": "isReadOnly",
-                  "type": "boolean",
+                  "name": "options",
+                  "type": "WithDataVolumeOptions",
                   "optional": true
                 }
               ]
@@ -5689,13 +5529,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingOptions",
                   "optional": true
                 }
               ]
@@ -5720,13 +5555,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingPathOptions",
                   "optional": true
                 }
               ]
@@ -5880,13 +5710,8 @@
               "summary": "Adds an optional string parameter",
               "parameters": [
                 {
-                  "name": "value",
-                  "type": "string",
-                  "optional": true
-                },
-                {
-                  "name": "enabled",
-                  "type": "boolean",
+                  "name": "options",
+                  "type": "WithOptionalStringOptions",
                   "optional": true
                 }
               ]
@@ -5981,8 +5806,8 @@
               "summary": "Configures with optional callback",
               "parameters": [
                 {
-                  "name": "callback",
-                  "type": "(arg: TestCallbackContext) =\u003E Promise\u003Cvoid\u003E",
+                  "name": "options",
+                  "type": "WithOptionalCallbackOptions",
                   "optional": true
                 }
               ]
@@ -6246,13 +6071,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingOptions",
                   "optional": true
                 }
               ]
@@ -6277,13 +6097,8 @@
                   "optional": false
                 },
                 {
-                  "name": "enableConsole",
-                  "type": "boolean",
-                  "optional": true
-                },
-                {
-                  "name": "maxFiles",
-                  "type": "number",
+                  "name": "options",
+                  "type": "WithMergeLoggingPathOptions",
                   "optional": true
                 }
               ]

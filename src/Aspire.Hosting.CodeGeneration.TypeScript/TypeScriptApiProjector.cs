@@ -269,11 +269,36 @@ internal sealed partial class TypeScriptApiProjector
         var optionsTypeName = hasDirectOptionsParameter
             ? MapParameterToTypeScript(directOptionsParam!)
             : ResolveOptionsInterfaceName(capability);
-        var parameterList = BuildPublicParameterList(
-            requiredParams,
-            hasOptionals,
-            optionsTypeName,
-            trailingCancellationToken: GetTrailingCancellationTokenParameter(optionalParams));
+        var optionsParameterName = GetPublicOptionsParameterName(userParams, hasOptionals, hasDirectOptionsParameter);
+        var trailingCancellationToken = GetTrailingCancellationTokenParameter(optionalParams);
+        var publicParameters = requiredParams
+            .Select(ProjectPublicParameter)
+            .ToList();
+        TypeScriptApiParameter? optionsParameter = null;
+
+        if (hasOptionals)
+        {
+            optionsParameter = new TypeScriptApiParameter
+            {
+                Name = optionsParameterName,
+                DeclaredType = optionsTypeName,
+                IsOptional = true,
+                Summary = directOptionsParam?.Documentation?.Summary
+            };
+            publicParameters.Add(optionsParameter);
+        }
+
+        TypeScriptApiParameter? publicCancellationToken = null;
+        if (trailingCancellationToken is not null)
+        {
+            publicCancellationToken = ProjectPublicParameter(trailingCancellationToken);
+            publicParameters.Add(publicCancellationToken);
+        }
+
+        var parameterList = string.Join(
+            ", ",
+            publicParameters.Select(parameter =>
+                $"{parameter.Name}{(parameter.IsOptional ? "?" : string.Empty)}: {parameter.DeclaredType}"));
 
         return new TypeScriptApiMethodSignature
         {
@@ -282,11 +307,20 @@ internal sealed partial class TypeScriptApiProjector
             ReturnType = isTypeClass
                 ? ResolveTypeClassReturnType(builder!, capability)
                 : ResolveBuilderReturnType(builder, capability),
+            Parameters = publicParameters,
             RequiredParameters = requiredParams,
-            OptionalParameters = optionalParams,
-            HasOptions = hasOptionals,
-            OptionsTypeName = optionsTypeName
+            OptionsParameter = optionsParameter,
+            TrailingCancellationToken = publicCancellationToken
         };
+
+        TypeScriptApiParameter ProjectPublicParameter(AtsParameterInfo parameter)
+            => new()
+            {
+                Name = parameter.Name,
+                DeclaredType = MapParameterToTypeScript(parameter),
+                IsOptional = parameter.IsOptional || parameter.IsNullable,
+                Summary = parameter.Documentation?.Summary
+            };
     }
 
     /// <summary>
@@ -731,18 +765,6 @@ internal sealed partial class TypeScriptApiProjector
         AtsCapabilityInfo capability)
     {
         var signature = ResolveMethodSignature(builderModel, capability);
-        var targetParamName = capability.TargetParameterName ?? "builder";
-
-        var parameters = capability.Parameters
-            .Where(p => builderModel is null || p.Name != targetParamName)
-            .Select(p => new TypeScriptApiParameter
-            {
-                Name = p.Name,
-                DeclaredType = MapParameterToTypeScript(p),
-                IsOptional = p.IsOptional || p.IsNullable,
-                Summary = p.Documentation?.Summary
-            })
-            .ToList();
 
         return new TypeScriptApiMember
         {
@@ -755,7 +777,7 @@ internal sealed partial class TypeScriptApiProjector
             DeprecationMessage = capability.IsObsolete ? capability.ObsoleteMessage ?? string.Empty : null,
             CapabilityId = capability.CapabilityId,
             OwningAssemblyName = GetCapabilityOwningAssemblyName(capability),
-            Parameters = parameters,
+            Parameters = signature.Parameters,
             ReturnType = signature.ReturnType
         };
     }

@@ -1924,6 +1924,138 @@ public partial class AtsTypeScriptCodeGeneratorTests
             .UseFileName("AtsTypeScriptCodeGeneratorTests.ApiDeclarations");
     }
 
+    [Fact]
+    public void ApiExportMethodParametersMatchResolvedPublicSignatures()
+    {
+        var atsContext = CreateOwnershipFilteredContext();
+        var template = atsContext.Capabilities.Single(c =>
+            c.CapabilityId == "Aspire.Hosting.CodeGeneration.TypeScript.Tests/waitForReadyAsync");
+        var stringParameter = atsContext.Capabilities
+            .Single(c => c.CapabilityId == "Aspire.Hosting.CodeGeneration.TypeScript.Tests/withMergeLogging")
+            .Parameters.Single(p => p.Name == "logLevel");
+        var boolParameter = atsContext.Capabilities
+            .Single(c => c.CapabilityId == "Aspire.Hosting.CodeGeneration.TypeScript.Tests/withOptionalString")
+            .Parameters.Single(p => p.Name == "enabled");
+        var dtoParameter = atsContext.Capabilities
+            .Single(c => c.CapabilityId == "Aspire.Hosting.CodeGeneration.TypeScript.Tests/withConfig")
+            .Parameters.Single(p => p.Name == "config");
+        var cancellationTokenParameter = template.Parameters.Single(p => p.Name == "cancellationToken");
+
+        AtsCapabilityInfo CreateCapability(string methodName, params AtsParameterInfo[] parameters)
+            => new()
+            {
+                CapabilityId = $"{TestPackageName}/{methodName}",
+                MethodName = methodName,
+                Parameters = parameters,
+                ReturnType = template.ReturnType,
+                TargetTypeId = template.TargetTypeId,
+                TargetType = template.TargetType,
+                TargetParameterName = template.TargetParameterName,
+                ExpandedTargetTypes = template.ExpandedTargetTypes,
+                ReturnsBuilder = template.ReturnsBuilder,
+                CapabilityKind = template.CapabilityKind
+            };
+
+        var contextWithEdgeCases = WithAdditionalCapabilities(
+            atsContext,
+            CreateCapability(
+                "withOptionsCollision",
+                new AtsParameterInfo
+                {
+                    Name = "options",
+                    Type = stringParameter.Type,
+                    Documentation = new AtsDocumentationInfo { Summary = "Required options value." }
+                },
+                new AtsParameterInfo
+                {
+                    Name = "optionsBag",
+                    Type = stringParameter.Type,
+                    Documentation = new AtsDocumentationInfo { Summary = "Required options bag value." }
+                },
+                new AtsParameterInfo
+                {
+                    Name = "enabled",
+                    Type = boolParameter.Type,
+                    IsOptional = true,
+                    Documentation = new AtsDocumentationInfo { Summary = "Whether the behavior is enabled." }
+                }),
+            CreateCapability(
+                "withDirectOptionsAndCancellation",
+                new AtsParameterInfo
+                {
+                    Name = "options",
+                    Type = dtoParameter.Type,
+                    IsOptional = true,
+                    Documentation = new AtsDocumentationInfo { Summary = "Direct options." }
+                },
+                new AtsParameterInfo
+                {
+                    Name = "cancellationToken",
+                    Type = cancellationTokenParameter.Type,
+                    IsOptional = true,
+                    Documentation = new AtsDocumentationInfo { Summary = "Cancellation token." }
+                }));
+
+        var projector = new TypeScriptApiProjector(contextWithEdgeCases);
+        var model = projector.BuildApiModel(
+            new TypeScriptApiPackageIdentity(TestPackageName, TestPackageVersion),
+            [TestPackageName]);
+        var testRedisResource = Assert.Single(
+            model.Modules.SelectMany(module => module.Items),
+            item => item.Name == nameof(TestRedisResource));
+
+        var withOptionalString = Assert.Single(
+            testRedisResource.Members,
+            member => member.Name == "withOptionalString");
+        Assert.Collection(
+            withOptionalString.Parameters,
+            parameter => AssertParameter(parameter, "options", "WithOptionalStringOptions", isOptional: true));
+
+        var withOptionsCollision = Assert.Single(
+            testRedisResource.Members,
+            member => member.Name == "withOptionsCollision");
+        Assert.Equal(
+            "withOptionsCollision(options: string, optionsBag: string, _optionsBag?: WithOptionsCollisionOptions): Promise<boolean>",
+            withOptionsCollision.Declaration);
+        Assert.Collection(
+            withOptionsCollision.Parameters,
+            parameter => AssertParameter(parameter, "options", "string", isOptional: false, "Required options value."),
+            parameter => AssertParameter(parameter, "optionsBag", "string", isOptional: false, "Required options bag value."),
+            parameter => AssertParameter(parameter, "_optionsBag", "WithOptionsCollisionOptions", isOptional: true));
+
+        var withDirectOptionsAndCancellation = Assert.Single(
+            testRedisResource.Members,
+            member => member.Name == "withDirectOptionsAndCancellation");
+        Assert.Equal(
+            "withDirectOptionsAndCancellation(options?: TestConfigDto, cancellationToken?: AbortSignal | CancellationToken): Promise<boolean>",
+            withDirectOptionsAndCancellation.Declaration);
+        Assert.Collection(
+            withDirectOptionsAndCancellation.Parameters,
+            parameter => AssertParameter(parameter, "options", "TestConfigDto", isOptional: true, "Direct options."),
+            parameter => AssertParameter(parameter, "cancellationToken", "AbortSignal | CancellationToken", isOptional: true, "Cancellation token."));
+
+        var generatedSource = new AtsTypeScriptCodeGenerator()
+            .GenerateDistributedApplication(contextWithEdgeCases)["aspire.mts"];
+        var generatedInterfaceMembers = ParsePublicInterfaceMembers(generatedSource);
+        var testRedisResourceMembers = generatedInterfaceMembers[nameof(TestRedisResource)];
+
+        Assert.Contains(withOptionsCollision.Declaration, testRedisResourceMembers);
+        Assert.Contains(withDirectOptionsAndCancellation.Declaration, testRedisResourceMembers);
+
+        static void AssertParameter(
+            TypeScriptApiParameter parameter,
+            string name,
+            string declaredType,
+            bool isOptional,
+            string? summary = null)
+        {
+            Assert.Equal(name, parameter.Name);
+            Assert.Equal(declaredType, parameter.DeclaredType);
+            Assert.Equal(isOptional, parameter.IsOptional);
+            Assert.Equal(summary, parameter.Summary);
+        }
+    }
+
     /// <summary>
     /// The export contract promises that concatenating a manifest's declaration fragments type-checks
     /// without site-authored shims, so every symbol a fragment names must be declared by some fragment.

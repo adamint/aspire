@@ -960,31 +960,25 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
             c.CapabilityKind != AtsCapabilityKind.PropertyGetter &&
             c.CapabilityKind != AtsCapabilityKind.PropertySetter))
         {
-            var targetParamName = capability.TargetParameterName ?? "builder";
-            var userParams = capability.Parameters.Where(p => p.Name != targetParamName).ToList();
-            var (requiredParams, optionalParams) = TypeScriptApiProjector.SeparateParameters(userParams);
-            var hasOptionals = optionalParams.Count > 0;
-            var hasDirectOptionsParameter = TypeScriptApiProjector.TryGetDirectOptionsParameter(optionalParams, out var directOptionsParam);
-            var optionsInterfaceName = hasDirectOptionsParameter ? _projector.MapParameterToTypeScript(directOptionsParam!) : _projector.ResolveOptionsInterfaceName(capability);
-            var publicParamsString = _projector.BuildPublicParameterList(requiredParams, hasOptionals, optionsInterfaceName, trailingCancellationToken: TypeScriptApiProjector.GetTrailingCancellationTokenParameter(optionalParams));
+            var signature = _projector.ResolveMethodSignature(builder, capability);
             var hasNonBuilderReturn = !capability.ReturnsBuilder && capability.ReturnType != null;
 
-            WriteCapabilityDocComment("    ", capability, requiredParams, hasOptionals ? "options" : null);
+            WriteCapabilityDocComment("    ", capability, signature.RequiredParameters, signature.OptionsParameter?.Name);
             if (hasNonBuilderReturn)
             {
                 if (_projector.TryGetPromiseWrapperType(capability.ReturnType, out var promiseInterfaceName, out _))
                 {
-                    WriteLine($"    {capability.MethodName}({publicParamsString}): {promiseInterfaceName};");
+                    WriteLine($"    {capability.MethodName}({signature.ParameterList}): {promiseInterfaceName};");
                 }
                 else
                 {
                     var returnType = _projector.MapTypeRefToTypeScript(capability.ReturnType);
-                    WriteLine($"    {capability.MethodName}({publicParamsString}): Promise<{returnType}>;");
+                    WriteLine($"    {capability.MethodName}({signature.ParameterList}): Promise<{returnType}>;");
                 }
             }
             else
             {
-                WriteLine($"    {capability.MethodName}({publicParamsString}): {_projector.GetBuilderPromiseInterfaceForMethod(builder, capability)};");
+                WriteLine($"    {capability.MethodName}({signature.ParameterList}): {_projector.GetBuilderPromiseInterfaceForMethod(builder, capability)};");
             }
         }
 
@@ -1020,31 +1014,25 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
 
         foreach (var capability in capabilities)
         {
-            var targetParamName = capability.TargetParameterName ?? "builder";
-            var userParams = capability.Parameters.Where(p => p.Name != targetParamName).ToList();
-            var (requiredParams, optionalParams) = TypeScriptApiProjector.SeparateParameters(userParams);
-            var hasOptionals = optionalParams.Count > 0;
-            var hasDirectOptionsParameter = TypeScriptApiProjector.TryGetDirectOptionsParameter(optionalParams, out var directOptionsParam);
-            var optionsInterfaceName = hasDirectOptionsParameter ? _projector.MapParameterToTypeScript(directOptionsParam!) : _projector.ResolveOptionsInterfaceName(capability);
-            var paramsString = _projector.BuildPublicParameterList(requiredParams, hasOptionals, optionsInterfaceName, trailingCancellationToken: TypeScriptApiProjector.GetTrailingCancellationTokenParameter(optionalParams));
+            var signature = _projector.ResolveMethodSignature(builder, capability);
             var hasNonBuilderReturn = !capability.ReturnsBuilder && capability.ReturnType != null;
 
-            WriteCapabilityDocComment("    ", capability, requiredParams, hasOptionals ? "options" : null);
+            WriteCapabilityDocComment("    ", capability, signature.RequiredParameters, signature.OptionsParameter?.Name);
             if (hasNonBuilderReturn)
             {
                 if (_projector.TryGetPromiseWrapperType(capability.ReturnType, out var returnPromiseInterfaceName, out _))
                 {
-                    WriteLine($"    {capability.MethodName}({paramsString}): {returnPromiseInterfaceName};");
+                    WriteLine($"    {capability.MethodName}({signature.ParameterList}): {returnPromiseInterfaceName};");
                 }
                 else
                 {
                     var returnType = _projector.MapTypeRefToTypeScript(capability.ReturnType);
-                    WriteLine($"    {capability.MethodName}({paramsString}): Promise<{returnType}>;");
+                    WriteLine($"    {capability.MethodName}({signature.ParameterList}): Promise<{returnType}>;");
                 }
             }
             else
             {
-                WriteLine($"    {capability.MethodName}({paramsString}): {_projector.GetBuilderPromiseInterfaceForMethod(builder, capability)};");
+                WriteLine($"    {capability.MethodName}({signature.ParameterList}): {_projector.GetBuilderPromiseInterfaceForMethod(builder, capability)};");
             }
         }
 
@@ -1052,33 +1040,24 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
         WriteLine();
     }
 
-    private void GenerateTypeClassInterfaceMethod(string className, AtsCapabilityInfo capability)
+    private void GenerateTypeClassInterfaceMethod(BuilderModel model, string className, AtsCapabilityInfo capability)
     {
-        var methodName = !string.IsNullOrEmpty(capability.OwningTypeName) && capability.MethodName.Contains('.')
-            ? capability.MethodName[(capability.MethodName.LastIndexOf('.') + 1)..]
-            : TypeScriptApiProjector.GetTypeScriptMethodName(capability.MethodName);
-        var targetParamName = capability.TargetParameterName ?? "context";
-        var userParams = capability.Parameters.Where(p => p.Name != targetParamName).ToList();
-        var (requiredParams, optionalParams) = TypeScriptApiProjector.SeparateParameters(userParams);
-        var hasOptionals = optionalParams.Count > 0;
-        var hasDirectOptionsParameter = TypeScriptApiProjector.TryGetDirectOptionsParameter(optionalParams, out var directOptionsParam);
-        var optionsInterfaceName = hasDirectOptionsParameter ? _projector.MapParameterToTypeScript(directOptionsParam!) : _projector.ResolveOptionsInterfaceName(capability);
-        var paramsString = _projector.BuildPublicParameterList(requiredParams, hasOptionals, optionsInterfaceName, trailingCancellationToken: TypeScriptApiProjector.GetTrailingCancellationTokenParameter(optionalParams));
+        var signature = _projector.ResolveMethodSignature(model, capability);
         var isVoid = capability.ReturnType == null || capability.ReturnType.TypeId == AtsConstants.Void;
 
-        WriteCapabilityDocComment("    ", capability, requiredParams, hasOptionals ? "options" : null);
+        WriteCapabilityDocComment("    ", capability, signature.RequiredParameters, signature.OptionsParameter?.Name);
         if (capability.ReturnType != null && _projector.TypesWithPromiseWrappers.Contains(capability.ReturnType.TypeId))
         {
-            WriteLine($"    {methodName}({paramsString}): {_projector.GetPublicPromiseInterfaceName(capability.ReturnType.TypeId)};");
+            WriteLine($"    {signature.MethodName}({signature.ParameterList}): {_projector.GetPublicPromiseInterfaceName(capability.ReturnType.TypeId)};");
         }
         else if (isVoid)
         {
-            WriteLine($"    {methodName}({paramsString}): {TypeScriptApiProjector.GetPromiseInterfaceName(className)};");
+            WriteLine($"    {signature.MethodName}({signature.ParameterList}): {TypeScriptApiProjector.GetPromiseInterfaceName(className)};");
         }
         else
         {
             var returnType = _projector.MapTypeRefToTypeScript(capability.ReturnType);
-            WriteLine($"    {methodName}({paramsString}): Promise<{returnType}>;");
+            WriteLine($"    {signature.MethodName}({signature.ParameterList}): Promise<{returnType}>;");
         }
     }
 
@@ -1113,7 +1092,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
 
         foreach (var method in standardMethods)
         {
-            GenerateTypeClassInterfaceMethod(className, method);
+            GenerateTypeClassInterfaceMethod(model, className, method);
         }
 
         WriteLine("}");
@@ -1132,7 +1111,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
         }
         foreach (var method in standardMethods)
         {
-            GenerateTypeClassInterfaceMethod(className, method);
+            GenerateTypeClassInterfaceMethod(model, className, method);
         }
         WriteLine("}");
         WriteLine();
@@ -1766,47 +1745,19 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
         // Filter out property getters and setters - they are not methods
         foreach (var capability in capabilities)
         {
-            var methodName = capability.MethodName;
-            var targetParamName = capability.TargetParameterName ?? "builder";
-            var userParams = capability.Parameters.Where(p => p.Name != targetParamName).ToList();
-
-            // Separate required and optional parameters
-            var (requiredParams, optionalParams) = TypeScriptApiProjector.SeparateParameters(userParams);
-            var hasOptionals = optionalParams.Count > 0;
-            var hasDirectOptionsParameter = TypeScriptApiProjector.TryGetDirectOptionsParameter(optionalParams, out var directOptionsParam);
-            var optionsTypeName = hasDirectOptionsParameter ? _projector.MapParameterToTypeScript(directOptionsParam!) : _projector.ResolveOptionsInterfaceName(capability);
-            var trailingCancellationToken = TypeScriptApiProjector.GetTrailingCancellationTokenParameter(optionalParams);
-
-            // Build parameter list using options pattern
-            var publicParamDefs = new List<string>();
-            foreach (var param in requiredParams)
-            {
-                var tsType = _projector.MapParameterToTypeScript(param);
-                publicParamDefs.Add($"{param.Name}: {tsType}");
-            }
-            if (hasOptionals)
-            {
-                publicParamDefs.Add($"options?: {optionsTypeName}");
-            }
-            if (trailingCancellationToken is not null)
-            {
-                publicParamDefs.Add($"{trailingCancellationToken.Name}?: {_projector.MapParameterToTypeScript(trailingCancellationToken)}");
-            }
-            var paramsString = string.Join(", ", publicParamDefs);
+            var signature = _projector.ResolveMethodSignature(builder, capability);
 
             // Forward args to underlying object's method (which handles options extraction)
-            var forwardArgs = new List<string>();
-            foreach (var param in requiredParams)
+            var forwardArgs = signature.RequiredParameters
+                .Select(parameter => parameter.Name)
+                .ToList();
+            if (signature.OptionsParameter is { } optionsParameter)
             {
-                forwardArgs.Add(param.Name);
+                forwardArgs.Add(optionsParameter.Name);
             }
-            if (hasOptionals)
+            if (signature.TrailingCancellationToken is { } cancellationToken)
             {
-                forwardArgs.Add("options");
-            }
-            if (trailingCancellationToken is not null)
-            {
-                forwardArgs.Add(trailingCancellationToken.Name);
+                forwardArgs.Add(cancellationToken.Name);
             }
             var argsString = string.Join(", ", forwardArgs);
 
@@ -1817,10 +1768,10 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
             {
                 if (_projector.TryGetPromiseWrapperType(capability.ReturnType, out var returnPromiseInterfaceName, out var returnPromiseImplementationClassName))
                 {
-                    Write($"    {methodName}(");
-                    Write(paramsString);
+                    Write($"    {signature.MethodName}(");
+                    Write(signature.ParameterList);
                     WriteLine($"): {returnPromiseInterfaceName} {{");
-                    Write($"        return new {returnPromiseImplementationClassName}(this._promise.then(obj => obj.{methodName}(");
+                    Write($"        return new {returnPromiseImplementationClassName}(this._promise.then(obj => obj.{signature.MethodName}(");
                     Write(argsString);
                     WriteLine(")), this._client);");
                     WriteLine("    }");
@@ -1830,10 +1781,10 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
 
                 // For non-builder returns, call the public method directly
                 var returnType = _projector.MapTypeRefToTypeScript(capability.ReturnType);
-                Write($"    {methodName}(");
-                Write(paramsString);
+                Write($"    {signature.MethodName}(");
+                Write(signature.ParameterList);
                 WriteLine($"): Promise<{returnType}> {{");
-                Write($"        return this._promise.then(obj => obj.{methodName}(");
+                Write($"        return this._promise.then(obj => obj.{signature.MethodName}(");
                 Write(argsString);
                 WriteLine("));");
                 WriteLine("    }");
@@ -1854,12 +1805,12 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
                     methodPromiseImplementationClass = TypeScriptApiProjector.GetImplementationPromiseClassName(returnClass);
                 }
 
-                Write($"    {methodName}(");
-                Write(paramsString);
+                Write($"    {signature.MethodName}(");
+                Write(signature.ParameterList);
                 Write($"): {methodPromiseClass} {{");
                 WriteLine();
                 // Forward to the public method on the underlying object, wrapping result in promise class
-                Write($"        return new {methodPromiseImplementationClass}(this._promise.then(obj => obj.{methodName}(");
+                Write($"        return new {methodPromiseImplementationClass}(this._promise.then(obj => obj.{signature.MethodName}(");
                 Write(argsString);
                 WriteLine($")), this._client);");
                 WriteLine("    }");
@@ -3308,50 +3259,19 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
         // Generate fluent methods that chain via .then()
         foreach (var capability in methods)
         {
-            var methodName = !string.IsNullOrEmpty(capability.OwningTypeName) && capability.MethodName.Contains('.')
-                ? capability.MethodName[(capability.MethodName.LastIndexOf('.') + 1)..]
-                : TypeScriptApiProjector.GetTypeScriptMethodName(capability.MethodName);
-
-            var targetParamName = capability.TargetParameterName ?? "context";
-            var userParams = capability.Parameters.Where(p => p.Name != targetParamName).ToList();
-
-            // Separate required and optional parameters
-            var (requiredParams, optionalParams) = TypeScriptApiProjector.SeparateParameters(userParams);
-            var hasOptionals = optionalParams.Count > 0;
-            var hasDirectOptionsParameter = TypeScriptApiProjector.TryGetDirectOptionsParameter(optionalParams, out var directOptionsParam);
-            var optionsInterfaceName = hasDirectOptionsParameter ? _projector.MapParameterToTypeScript(directOptionsParam!) : _projector.ResolveOptionsInterfaceName(capability);
-            var trailingCancellationToken = TypeScriptApiProjector.GetTrailingCancellationTokenParameter(optionalParams);
-
-            // Build parameter list using options pattern
-            var publicParamDefs = new List<string>();
-            foreach (var param in requiredParams)
-            {
-                var tsType = _projector.MapParameterToTypeScript(param);
-                publicParamDefs.Add($"{param.Name}: {tsType}");
-            }
-            if (hasOptionals)
-            {
-                publicParamDefs.Add($"options?: {optionsInterfaceName}");
-            }
-            if (trailingCancellationToken is not null)
-            {
-                publicParamDefs.Add($"{trailingCancellationToken.Name}?: {_projector.MapParameterToTypeScript(trailingCancellationToken)}");
-            }
-            var paramsString = string.Join(", ", publicParamDefs);
+            var signature = _projector.ResolveMethodSignature(model, capability);
 
             // Forward args to underlying object's public method
-            var forwardArgs = new List<string>();
-            foreach (var param in requiredParams)
+            var forwardArgs = signature.RequiredParameters
+                .Select(parameter => parameter.Name)
+                .ToList();
+            if (signature.OptionsParameter is { } optionsParameter)
             {
-                forwardArgs.Add(param.Name);
+                forwardArgs.Add(optionsParameter.Name);
             }
-            if (hasOptionals)
+            if (signature.TrailingCancellationToken is { } cancellationToken)
             {
-                forwardArgs.Add("options");
-            }
-            if (trailingCancellationToken is not null)
-            {
-                forwardArgs.Add(trailingCancellationToken.Name);
+                forwardArgs.Add(cancellationToken.Name);
             }
             var argsString = string.Join(", ", forwardArgs);
 
@@ -3366,10 +3286,10 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
                     _projector.WrapperClassNames.GetValueOrDefault(capability.ReturnType!.TypeId)
                         ?? TypeScriptApiProjector.DeriveClassName(capability.ReturnType.TypeId));
                 // Return type has Promise wrapper - forward to public method, wrap result
-                Write($"    {methodName}(");
-                Write(paramsString);
+                Write($"    {signature.MethodName}(");
+                Write(signature.ParameterList);
                 WriteLine($"): {returnPromiseWrapper} {{");
-                Write($"        return new {returnPromiseImplementationClass}(this._promise.then(obj => obj.{methodName}(");
+                Write($"        return new {returnPromiseImplementationClass}(this._promise.then(obj => obj.{signature.MethodName}(");
                 Write(argsString);
                 WriteLine($")), this._client);");
                 WriteLine("    }");
@@ -3377,10 +3297,10 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
             else if (isVoid)
             {
                 // Void return - forward to public method, wrap result in this class's promise
-                Write($"    {methodName}(");
-                Write(paramsString);
+                Write($"    {signature.MethodName}(");
+                Write(signature.ParameterList);
                 WriteLine($"): {promiseClass} {{");
-                Write($"        return new {promiseImplementationClass}(this._promise.then(obj => obj.{methodName}(");
+                Write($"        return new {promiseImplementationClass}(this._promise.then(obj => obj.{signature.MethodName}(");
                 Write(argsString);
                 WriteLine($")), this._client);");
                 WriteLine("    }");
@@ -3388,10 +3308,10 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
             else
             {
                 // Non-void, non-wrapper return - plain Promise
-                Write($"    {methodName}(");
-                Write(paramsString);
+                Write($"    {signature.MethodName}(");
+                Write(signature.ParameterList);
                 WriteLine($"): Promise<{returnType}> {{");
-                Write($"        return this._promise.then(obj => obj.{methodName}(");
+                Write($"        return this._promise.then(obj => obj.{signature.MethodName}(");
                 Write(argsString);
                 WriteLine("));");
                 WriteLine("    }");

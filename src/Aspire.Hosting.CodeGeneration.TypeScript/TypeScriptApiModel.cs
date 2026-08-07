@@ -234,17 +234,17 @@ internal sealed record TypeScriptApiMethodSignature
     /// <summary>Gets the final TypeScript return type text.</summary>
     public required string ReturnType { get; init; }
 
+    /// <summary>Gets the parameters exactly as they appear in the public TypeScript signature.</summary>
+    public required IReadOnlyList<TypeScriptApiParameter> Parameters { get; init; }
+
     /// <summary>Gets the required parameters, in declaration order.</summary>
     public required IReadOnlyList<AtsParameterInfo> RequiredParameters { get; init; }
 
-    /// <summary>Gets the optional parameters, in declaration order.</summary>
-    public required IReadOnlyList<AtsParameterInfo> OptionalParameters { get; init; }
+    /// <summary>Gets the resolved options bag parameter, when the method exposes one.</summary>
+    public TypeScriptApiParameter? OptionsParameter { get; init; }
 
-    /// <summary>Gets a value indicating whether the method exposes an options bag.</summary>
-    public required bool HasOptions { get; init; }
-
-    /// <summary>Gets the options type name used for the options bag parameter.</summary>
-    public required string OptionsTypeName { get; init; }
+    /// <summary>Gets the cancellation token emitted separately after a direct options DTO.</summary>
+    public TypeScriptApiParameter? TrailingCancellationToken { get; init; }
 
     /// <summary>Gets the full declaration string, for example <c>addRedis(name: string): RedisResourceBuilderPromise</c>.</summary>
     public string Declaration => $"{MethodName}({ParameterList}): {ReturnType}";
