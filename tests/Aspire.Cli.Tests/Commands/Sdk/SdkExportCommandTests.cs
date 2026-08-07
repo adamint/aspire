@@ -200,6 +200,96 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task SdkExportForAPackageTheCheckoutWouldSubstituteReturnsInvalidCommand()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        appHostServerProject.LocalProjectSubstitutions["Aspire.Hosting.Redis"] =
+            Path.Combine("src", "Aspire.Hosting.Redis", "Aspire.Hosting.Redis.csproj");
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(interactionService, workspace, rpcClient, appHostServerProject);
+
+        // A CLI running from a repository checkout builds first-party integrations from src/ and
+        // throws the requested package version away, so honouring this would publish the checkout's
+        // API surface under 13.5.0 — the mislabel this command exists to prevent.
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0");
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.Null(rpcClient.LastExportRequest);
+        Assert.Empty(interactionService.DisplayedRawText);
+    }
+
+    [Fact]
+    public async Task SdkExportForASubstitutedPackageAtTheCheckoutVersionSucceeds()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        appHostServerProject.LocalProjectSubstitutions["Aspire.Hosting.Redis"] =
+            Path.Combine("src", "Aspire.Hosting.Redis", "Aspire.Hosting.Redis.csproj");
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(interactionService, workspace, rpcClient, appHostServerProject);
+
+        // Exporting the version the checkout actually contains is the local development case and
+        // stays supported: the project reference and the label describe the same surface.
+        var checkoutVersion = provider.GetRequiredService<Aspire.Cli.CliExecutionContext>().IdentitySdkVersion;
+
+        var exitCode = await InvokeAsync(provider, $"sdk export --language typescript --package Aspire.Hosting.Redis@{checkoutVersion}");
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal(("typescript", "Aspire.Hosting.Redis", checkoutVersion), rpcClient.LastExportRequest);
+    }
+
+    [Fact]
+    public async Task SdkExportForAThirdPartyPackageIsUnaffectedByCheckoutSubstitution()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        appHostServerProject.LocalProjectSubstitutions["Aspire.Hosting.Redis"] =
+            Path.Combine("src", "Aspire.Hosting.Redis", "Aspire.Hosting.Redis.csproj");
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(interactionService, workspace, rpcClient, appHostServerProject);
+
+        // A Community Toolkit integration is never replaced by a repository project, so it restores
+        // at the requested version even from a checkout and must keep exporting.
+        var exitCode = await InvokeAsync(
+            provider,
+            "sdk export --language typescript --package CommunityToolkit.Aspire.Hosting.ActiveMQ@13.4.0");
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal(("typescript", "CommunityToolkit.Aspire.Hosting.ActiveMQ", "13.4.0"), rpcClient.LastExportRequest);
+    }
+
+    /// <summary>
+    /// A bare NuGet version is a minimum, not an equality, so a package that is missing from the feed
+    /// restores as the next one up and the export is published under a version it does not describe.
+    /// Only the requested package is pinned; the code generation package tracks this CLI and is
+    /// resolved the same way <c>sdk generate</c> resolves it.
+    /// </summary>
+    [Fact]
+    public async Task SdkExportPinsOnlyTheRequestedPackageToAnExactVersion()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new CapturingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        using var provider = CreateProvider(interactionService, workspace, new StubExportRpcClient(), appHostServerProject);
+
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0");
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+
+        var requested = Assert.Single(appHostServerProject.Integrations, integration => integration.Name == "Aspire.Hosting.Redis");
+        Assert.True(requested.RequireExactVersion);
+
+        var codeGeneration = Assert.Single(
+            appHostServerProject.Integrations,
+            integration => integration.Name.Contains("CodeGeneration", StringComparison.OrdinalIgnoreCase));
+        Assert.False(codeGeneration.RequireExactVersion);
+    }
+
+    [Fact]
     public async Task SdkExportWithUnsupportedLanguageReturnsInvalidCommand()
     {
         var interactionService = new TestInteractionService();

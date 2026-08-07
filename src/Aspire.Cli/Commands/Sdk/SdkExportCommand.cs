@@ -137,7 +137,9 @@ internal sealed class SdkExportCommand : BaseCommand
             }
             else
             {
-                integrations.Add(reference);
+                // Pin the requested version: a bare NuGet version is a minimum, so an unavailable
+                // version would restore as a later one and be published under the wrong number.
+                integrations.Add(IntegrationReference.FromExactPackage(reference.Name, reference.Version));
             }
         }
 
@@ -199,6 +201,48 @@ internal sealed class SdkExportCommand : BaseCommand
         return plusIndex < 0 ? version : version[..plusIndex];
     }
 
+    /// <summary>
+    /// Refuses an export the scanner would satisfy from a local checkout instead of restoring the
+    /// requested package version.
+    /// </summary>
+    /// <remarks>
+    /// In repository development mode the scanner AppHost replaces every first-party
+    /// <c>Aspire.Hosting.*</c> package reference with the matching project under <c>src/</c> and
+    /// discards the requested version, so the checkout's API surface would be published under
+    /// someone else's version number. That is the same stale-signature problem the core-package
+    /// guard prevents, so this refuses for the same reason. Asking for the version this CLI was
+    /// built from is still allowed: that is exactly what the checkout contains. The core package is
+    /// already handled before any project is created, and third-party packages are never
+    /// substituted, so both fall straight through.
+    /// </remarks>
+    /// <param name="serverProject">The scanner AppHost that will restore the export.</param>
+    /// <param name="packageName">The package being exported.</param>
+    /// <param name="packageVersion">The version the caller asked for.</param>
+    /// <returns>The rejection reason, or <see langword="null"/> when the request is exportable.</returns>
+    private string? ValidateRequestedPackageIsRestorable(IAppHostServerProject serverProject, string packageName, string packageVersion)
+    {
+        if (string.Equals(packageName, CorePackageName, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (serverProject.GetLocalProjectSubstitution(packageName) is not string localProjectPath)
+        {
+            return null;
+        }
+
+        var requested = StripBuildMetadata(packageVersion);
+        if (string.Equals(requested, ExecutionContext.IdentitySdkVersion, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        return $"This CLI runs from an Aspire repository checkout, so {packageName} is built from {localProjectPath} " +
+               $"instead of being restored from a package feed. That checkout is {ExecutionContext.IdentitySdkVersion}, " +
+               $"but {packageVersion} was requested, and exporting it would describe the checkout's API surface under the " +
+               $"requested version. Run the export with the {requested} CLI, or request {packageName}@{ExecutionContext.IdentitySdkVersion}.";
+    }
+
     private async Task<int> ExportApiAsync(
         string language,
         string packageName,
@@ -214,6 +258,8 @@ internal sealed class SdkExportCommand : BaseCommand
             ? packageVersion
             : ExecutionContext.IdentityVersion;
 
+        string? rejection = null;
+
         await using var session = await SdkCommandPreparation.PrepareSessionAsync(
             _appHostServerProjectFactory,
             _serverSessionFactory,
@@ -223,11 +269,16 @@ internal sealed class SdkExportCommand : BaseCommand
             sdkVersion,
             integrations,
             packageSource,
+            validateProject: serverProject => rejection = ValidateRequestedPackageIsRestorable(serverProject, packageName, packageVersion),
             cancellationToken);
 
         if (session is null)
         {
-            return CliExitCodes.FailedToBuildArtifacts;
+            // A rejection is a usage error the caller fixes by asking for a different version or
+            // running a different CLI, so it must not look like the scanner failed to build.
+            return rejection is not null
+                ? CliExitCodes.InvalidCommand
+                : CliExitCodes.FailedToBuildArtifacts;
         }
 
         JsonElement export;

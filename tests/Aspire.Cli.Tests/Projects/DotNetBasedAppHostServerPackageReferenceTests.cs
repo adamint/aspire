@@ -30,16 +30,7 @@ public class DotNetBasedAppHostServerPackageReferenceTests(ITestOutputHelper out
         var appPath = workspace.WorkspaceRoot.FullName;
         var projectModelPath = Path.Combine(appPath, ".aspire_server");
 
-        var project = new DotNetBasedAppHostServerProject(
-            appPath,
-            socketPath: "test.sock",
-            repoRoot: appPath,
-            new TestDotNetCliRunner(),
-            MockPackagingServiceFactory.Create(),
-            new TestProcessExecutionFactory(),
-            new TestEnvironment(),
-            NullLogger<DotNetBasedAppHostServerProject>.Instance,
-            projectModelPath);
+        var project = CreateProject(appPath, projectModelPath);
 
         // There is no src/CommunityToolkit.Aspire.Hosting.ActiveMQ under the fake repo root, so this
         // integration takes the package path rather than the project-reference path.
@@ -93,16 +84,7 @@ public class DotNetBasedAppHostServerPackageReferenceTests(ITestOutputHelper out
             </Project>
             """);
 
-        var project = new DotNetBasedAppHostServerProject(
-            appPath,
-            socketPath: "test.sock",
-            repoRoot: appPath,
-            new TestDotNetCliRunner(),
-            MockPackagingServiceFactory.Create(),
-            new TestProcessExecutionFactory(),
-            new TestEnvironment(),
-            NullLogger<DotNetBasedAppHostServerProject>.Instance,
-            projectModelPath);
+        var project = CreateProject(appPath, projectModelPath);
 
         await project.CreateProjectFilesAsync(
             [IntegrationReference.FromPackage(IntegrationPackage, "13.4.0")]);
@@ -119,6 +101,135 @@ public class DotNetBasedAppHostServerPackageReferenceTests(ITestOutputHelper out
         Assert.DoesNotContain("NU1010", output, StringComparison.Ordinal);
         Assert.Equal(0, exitCode);
     }
+
+    /// <summary>
+    /// <c>aspire sdk export</c> publishes documentation keyed on the requested version, so the
+    /// restore has to fail when that version is unavailable rather than resolve to a later one.
+    /// </summary>
+    [Fact]
+    public async Task CreateProjectFiles_PinsExactIntegrationsToASingleVersionRange()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appPath = workspace.WorkspaceRoot.FullName;
+        var projectModelPath = Path.Combine(appPath, ".aspire_server");
+
+        var project = CreateProject(appPath, projectModelPath);
+
+        await project.CreateProjectFilesAsync(
+        [
+            IntegrationReference.FromExactPackage("CommunityToolkit.Aspire.Hosting.ActiveMQ", "13.4.0"),
+            IntegrationReference.FromPackage("CommunityToolkit.Aspire.Hosting.Dapr", "13.4.0")
+        ]);
+
+        var references = XDocument.Load(Path.Combine(projectModelPath, "AppHostServer.csproj"))
+            .Descendants("PackageReference")
+            .ToDictionary(element => element.Attribute("Include")!.Value, element => element.Attribute("VersionOverride")?.Value);
+
+        Assert.Equal("[13.4.0]", references["CommunityToolkit.Aspire.Hosting.ActiveMQ"]);
+
+        // Everything else keeps the minimum-version form the run and dump paths have always used.
+        Assert.Equal("13.4.0", references["CommunityToolkit.Aspire.Hosting.Dapr"]);
+    }
+
+    /// <summary>
+    /// The generated scanner replaces a first-party <c>Aspire.Hosting.*</c> package reference with the
+    /// matching repository project and drops the requested version, so a caller that publishes
+    /// artifacts keyed on that version has to be able to see the substitution coming.
+    /// </summary>
+    [Fact]
+    public void GetLocalProjectSubstitution_ReportsOnlyFirstPartyProjectsThatExist()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appPath = workspace.WorkspaceRoot.FullName;
+
+        var redisProjectPath = Path.Combine(appPath, "src", "Aspire.Hosting.Redis", "Aspire.Hosting.Redis.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(redisProjectPath)!);
+        File.WriteAllText(redisProjectPath, "<Project />");
+
+        var project = CreateProject(appPath, Path.Combine(appPath, ".aspire_server"));
+
+        Assert.Equal(redisProjectPath, project.GetLocalProjectSubstitution("Aspire.Hosting.Redis"));
+
+        // No src/Aspire.Hosting.Qdrant in this checkout, so the package really is restored.
+        Assert.Null(project.GetLocalProjectSubstitution("Aspire.Hosting.Qdrant"));
+
+        // Third-party integrations are never substituted, even when a same-named folder exists.
+        Assert.Null(project.GetLocalProjectSubstitution("CommunityToolkit.Aspire.Hosting.ActiveMQ"));
+    }
+
+    /// <summary>
+    /// The generated XML cannot show what NuGet does with it. This restores twice against an offline
+    /// feed that holds 13.4.1 but not the requested 13.4.0: the plain reference silently resolves
+    /// upward (which is what mislabels an export), and the exact reference fails instead.
+    /// </summary>
+    [Fact]
+    public async Task CreateProjectFiles_ExactIntegrationDoesNotFloatToALaterPackage()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appPath = workspace.WorkspaceRoot.FullName;
+        var feedPath = Path.Combine(appPath, "feed");
+        Directory.CreateDirectory(feedPath);
+
+        const string IntegrationPackage = "Contoso.Aspire.Hosting.ExactVersionProbe";
+
+        CreateStubPackage(feedPath, "StreamJsonRpc", "1.0.0");
+        CreateStubPackage(feedPath, "Google.Protobuf", "1.0.0");
+        CreateStubPackage(feedPath, IntegrationPackage, "13.4.1");
+
+        await File.WriteAllTextAsync(Path.Combine(appPath, "Directory.Packages.props"), """
+            <Project>
+              <ItemGroup>
+                <PackageVersion Include="StreamJsonRpc" Version="1.0.0" />
+                <PackageVersion Include="Google.Protobuf" Version="1.0.0" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        var floatingModelPath = Path.Combine(appPath, ".aspire_server_floating");
+        await CreateProject(appPath, floatingModelPath)
+            .CreateProjectFilesAsync([IntegrationReference.FromPackage(IntegrationPackage, "13.4.0")]);
+
+        var (floatingExitCode, floatingOutput) = await RestoreAsync(
+            Path.Combine(floatingModelPath, "AppHostServer.csproj"),
+            feedPath);
+        outputHelper.WriteLine(floatingOutput);
+
+        // 13.4.0 is a minimum, so NuGet happily hands back 13.4.1 and warns rather than fails. The
+        // assets file records what was actually resolved, which the console output does not always
+        // spell out.
+        Assert.Equal(0, floatingExitCode);
+        Assert.Contains("NU1603", floatingOutput, StringComparison.Ordinal);
+        Assert.Contains(
+            $"{IntegrationPackage}/13.4.1",
+            await File.ReadAllTextAsync(Path.Combine(floatingModelPath, "obj", "project.assets.json")),
+            StringComparison.Ordinal);
+
+        var exactModelPath = Path.Combine(appPath, ".aspire_server_exact");
+        await CreateProject(appPath, exactModelPath)
+            .CreateProjectFilesAsync([IntegrationReference.FromExactPackage(IntegrationPackage, "13.4.0")]);
+
+        var (exactExitCode, exactOutput) = await RestoreAsync(
+            Path.Combine(exactModelPath, "AppHostServer.csproj"),
+            feedPath);
+        outputHelper.WriteLine(exactOutput);
+
+        // NU1102 is "package found but not at the requested version", which is the failure a caller
+        // needs instead of a document labelled 13.4.0 that describes 13.4.1.
+        Assert.NotEqual(0, exactExitCode);
+        Assert.Contains("NU1102", exactOutput, StringComparison.Ordinal);
+    }
+
+    private static DotNetBasedAppHostServerProject CreateProject(string appPath, string projectModelPath)
+        => new(
+            appPath,
+            socketPath: "test.sock",
+            repoRoot: appPath,
+            new TestDotNetCliRunner(),
+            MockPackagingServiceFactory.Create(),
+            new TestProcessExecutionFactory(),
+            new TestEnvironment(),
+            NullLogger<DotNetBasedAppHostServerProject>.Instance,
+            projectModelPath);
 
     private static void CreateStubPackage(string feedPath, string id, string version)
     {

@@ -167,7 +167,7 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
         // Add project references for Aspire.Hosting.* packages, NuGet for others
         var projectRefGroup = new XElement("ItemGroup");
         var addedProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var otherPackages = new List<(string Name, string Version)>();
+        var otherPackages = new List<IntegrationReference>();
 
         foreach (var integration in integrations)
         {
@@ -183,8 +183,8 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
             }
             else if (integration.Name.StartsWith("Aspire.Hosting", StringComparison.OrdinalIgnoreCase))
             {
-                var projectPath = Path.Combine(_repoRoot, "src", integration.Name, $"{integration.Name}.csproj");
-                if (File.Exists(projectPath) && addedProjects.Add(integration.Name))
+                var projectPath = GetLocalProjectSubstitution(integration.Name);
+                if (projectPath is not null && addedProjects.Add(integration.Name))
                 {
                     projectRefGroup.Add(new XElement("ProjectReference",
                         new XAttribute("Include", projectPath),
@@ -197,7 +197,7 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
                 {
                     throw new InvalidOperationException($"Integration '{integration.Name}' is neither a project reference nor a package reference (both Version and ProjectPath are null).");
                 }
-                otherPackages.Add((integration.Name, integration.Version));
+                otherPackages.Add(integration);
             }
         }
 
@@ -224,7 +224,7 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
             doc.Root!.Add(new XElement("ItemGroup",
                 otherPackages.Select(p => new XElement("PackageReference",
                     new XAttribute("Include", p.Name),
-                    new XAttribute("VersionOverride", p.Version)))));
+                    new XAttribute("VersionOverride", p.GetRestoreVersionRange(forceExact: false))))));
         }
 
         // Add imports for in-repo AppHost building
@@ -472,6 +472,24 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
 
     /// <inheritdoc />
     public string GetInstanceIdentifier() => GetProjectFilePath();
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// This is the same decision <see cref="CreateProjectFile"/> makes, kept in one place so a
+    /// caller asking "will my requested version survive?" cannot drift from what the generated
+    /// project actually does. Only first-party <c>Aspire.Hosting.*</c> packages live under
+    /// <c>src/</c>, so a third-party integration is always restored from a feed even here.
+    /// </remarks>
+    public string? GetLocalProjectSubstitution(string packageName)
+    {
+        if (!packageName.StartsWith("Aspire.Hosting", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var projectPath = Path.Combine(_repoRoot, "src", packageName, $"{packageName}.csproj");
+        return File.Exists(projectPath) ? projectPath : null;
+    }
 
     /// <inheritdoc />
     public async Task<AppHostServerRunResult> RunAsync(

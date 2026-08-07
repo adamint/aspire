@@ -278,7 +278,10 @@ internal sealed class CodeGenerationService
     /// </summary>
     /// <param name="language">The target language (e.g., "TypeScript").</param>
     /// <param name="packageName">The package to export documentation for.</param>
-    /// <param name="packageVersion">The exact resolved version of <paramref name="packageName"/>.</param>
+    /// <param name="packageVersion">
+    /// The version label to record for <paramref name="packageName"/>. The caller owns its accuracy;
+    /// see <see cref="ApiReferenceExportOptions.PackageVersion"/>.
+    /// </param>
     /// <returns>The language provider's API reference document, verbatim.</returns>
     [JsonRpcMethod(ExportApiMethodName)]
     public JsonElement ExportApi(string language, string packageName, string packageVersion)

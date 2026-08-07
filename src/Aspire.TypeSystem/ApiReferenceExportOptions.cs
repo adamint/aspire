@@ -19,11 +19,19 @@ public sealed class ApiReferenceExportOptions
     /// Initializes a new instance of the <see cref="ApiReferenceExportOptions"/> class.
     /// </summary>
     /// <param name="packageName">The name of the package being exported.</param>
-    /// <param name="packageVersion">The exact version of the package being exported.</param>
+    /// <param name="packageVersion">The version label to record for the package being exported.</param>
     /// <param name="exportingAssemblyNames">
     /// The assemblies whose symbols this package owns and documents. Symbols outside this set are
     /// present only to complete the reference closure.
     /// </param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="packageName"/>, <paramref name="packageVersion"/>, or
+    /// <paramref name="exportingAssemblyNames"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="packageName"/> or <paramref name="packageVersion"/> is empty or
+    /// consists only of white-space characters.
+    /// </exception>
     public ApiReferenceExportOptions(
         string packageName,
         string packageVersion,
@@ -44,9 +52,18 @@ public sealed class ApiReferenceExportOptions
     public string PackageName { get; }
 
     /// <summary>
-    /// Gets the exact version of the package being exported. Consumers key published documentation on
-    /// this value, so it must be a resolved version and never a floating range.
+    /// Gets the version label recorded for this export, as supplied by the caller.
     /// </summary>
+    /// <remarks>
+    /// Consumers key published documentation on this value, so callers are expected to pass the
+    /// exact version that was restored. Nothing on this type can confirm that: an exporter sees
+    /// loaded assemblies, not the package resolution that produced them, so any value — including a
+    /// floating or range expression — would be recorded verbatim. Exactness therefore belongs where
+    /// the restore is decided. <c>aspire sdk export</c> rejects a floating or range version before
+    /// the scanner is built, pins the requested version so an unavailable one fails the restore
+    /// instead of resolving upward, and refuses a package a repository checkout would build in place
+    /// of the requested one.
+    /// </remarks>
     public string PackageVersion { get; }
 
     /// <summary>

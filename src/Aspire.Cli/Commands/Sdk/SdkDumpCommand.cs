@@ -148,6 +148,7 @@ internal sealed class SdkDumpCommand : BaseCommand
             ExecutionContext.IdentityVersion,
             integrations,
             packageSourceOverride: null,
+            validateProject: null,
             cancellationToken);
 
         if (session is null)
@@ -209,6 +210,7 @@ internal sealed class SdkDumpCommand : BaseCommand
             ExecutionContext.IdentityVersion,
             integrations,
             packageSourceOverride: null,
+            validateProject: null,
             cancellationToken);
 
         if (session is null)

@@ -45,6 +45,27 @@ public class PrebuiltAppHostServerTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public void GenerateIntegrationProjectFile_PinsExactPackagesToASingleVersionRange()
+    {
+        var packageRefs = new List<IntegrationReference>
+        {
+            IntegrationReference.FromExactPackage("Aspire.Hosting.Redis", "13.2.0"),
+            IntegrationReference.FromPackage("Aspire.Hosting", "13.2.0")
+        };
+
+        var xml = PrebuiltAppHostServer.GenerateIntegrationProjectFile(packageRefs, [], "/tmp/libs");
+        var doc = XDocument.Parse(xml);
+
+        var versions = doc.Descendants("PackageReference")
+            .ToDictionary(e => e.Attribute("Include")!.Value, e => e.Attribute("Version")!.Value);
+
+        // `13.2.0` is a NuGet minimum, so only the bracketed form keeps an unavailable version from
+        // resolving upward and being documented under the requested number.
+        Assert.Equal("[13.2.0]", versions["Aspire.Hosting.Redis"]);
+        Assert.Equal("13.2.0", versions["Aspire.Hosting"]);
+    }
+
+    [Fact]
     public void GenerateIntegrationProjectFile_WithProjectRefsOnly_ProducesProjectReferences()
     {
         var packageRefs = new List<IntegrationReference>();

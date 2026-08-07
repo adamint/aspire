@@ -16,7 +16,18 @@ internal sealed class FakeSucceedingAppHostServerProject(string appDirectoryPath
 {
     public string AppDirectoryPath { get; } = appDirectoryPath;
 
+    /// <summary>
+    /// Package names this fake reports as satisfied by a repository project, keyed to the project
+    /// path. Mirrors <see cref="DotNetBasedAppHostServerProject"/> in repository dev mode, where an
+    /// <c>Aspire.Hosting.*</c> package reference is replaced by the matching project under
+    /// <c>src/</c> and the requested package version is discarded.
+    /// </summary>
+    public Dictionary<string, string> LocalProjectSubstitutions { get; } = new(StringComparer.OrdinalIgnoreCase);
+
     public string GetInstanceIdentifier() => AppDirectoryPath;
+
+    public string? GetLocalProjectSubstitution(string packageName)
+        => LocalProjectSubstitutions.TryGetValue(packageName, out var projectPath) ? projectPath : null;
 
     public Task<AppHostServerPrepareResult> PrepareAsync(
         string sdkVersion,

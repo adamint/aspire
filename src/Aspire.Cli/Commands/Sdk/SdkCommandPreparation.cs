@@ -120,6 +120,23 @@ internal static class SdkCommandPreparation
     /// <paramref name="interactionService"/> and surface as a null session rather than an exception,
     /// because a failed restore is a user-facing outcome and not a bug.
     /// </remarks>
+    /// <param name="appHostServerProjectFactory">Creates the scanner AppHost for the temporary directory.</param>
+    /// <param name="serverSessionFactory">Creates the session that runs the scanner AppHost.</param>
+    /// <param name="interactionService">Reports build failures and rejections to the user.</param>
+    /// <param name="logger">Receives diagnostic detail about the preparation.</param>
+    /// <param name="tempDirectoryPrefix">Prefix for the throwaway project directory.</param>
+    /// <param name="sdkVersion">The Aspire SDK version the scanner AppHost is restored at.</param>
+    /// <param name="integrations">The integrations to restore into the scanner AppHost.</param>
+    /// <param name="packageSourceOverride">A NuGet source to prefer, or <see langword="null"/> for the configured sources.</param>
+    /// <param name="validateProject">
+    /// A pre-flight check run against the created server project before anything is restored, or
+    /// <see langword="null"/> when the caller has nothing to check. Returning a message rejects the
+    /// request and reports it through <paramref name="interactionService"/>. This exists because the
+    /// factory only decides between the repository and prebuilt servers once the project is created,
+    /// and <c>sdk export</c> has to refuse a package the repository server would build from the
+    /// current checkout instead of restoring at the requested version.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token.</param>
     public static async Task<PreparedSdkSession?> PrepareSessionAsync(
         IAppHostServerProjectFactory appHostServerProjectFactory,
         IAppHostServerSessionFactory serverSessionFactory,
@@ -129,6 +146,7 @@ internal static class SdkCommandPreparation
         string sdkVersion,
         IReadOnlyList<IntegrationReference> integrations,
         string? packageSourceOverride,
+        Func<IAppHostServerProject, string?>? validateProject,
         CancellationToken cancellationToken)
     {
         var tempDirectory = Directory.CreateTempSubdirectory(tempDirectoryPrefix);
@@ -138,6 +156,12 @@ internal static class SdkCommandPreparation
         try
         {
             var appHostServerProject = await appHostServerProjectFactory.CreateAsync(tempDir, cancellationToken);
+
+            if (validateProject?.Invoke(appHostServerProject) is string rejection)
+            {
+                interactionService.DisplayError(rejection);
+                return null;
+            }
 
             logger.LogDebug("Building AppHost server with {Count} integrations", integrations.Count);
 
