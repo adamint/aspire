@@ -92,6 +92,12 @@ export function isBunInstalled() {
 }
 
 export function getSupportedCapabilities(): Capabilities {
+    // If you are resolving a merge conflict on this line, keep buildDotnetUsingCliCapability and do
+    // not restore the unversioned 'build-dotnet-using-cli' next to it. Advertising the unversioned
+    // token tells a CLI that only honors it that the extension has ceded the pre-build, and CLI
+    // 13.2.0-13.2.4 then skipped that build on no-debug launches - which is exactly
+    // https://github.com/microsoft/aspire/issues/15850 (silently launching stale output).
+    // Guarded by 'AppHost build ownership advertises only the v2 capability' in test/capabilities.test.ts.
     const capabilities: Capabilities = ['prompting', 'baseline.v1', 'secret-prompts.v1', 'file-pickers.v1', buildDotnetUsingCliCapability];
 
     if (isCsDevKitInstalled()) {
