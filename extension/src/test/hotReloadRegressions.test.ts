@@ -3,11 +3,13 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { announceHotReloadForSessionIfNeeded, getHotReloadDiagnostics, initializeHotReloadPromptState, logHotReloadDiagnostics, promptToEnableHotReloadIfNeeded } from '../debugger/hotReload';
 import { getResourceDebuggerExtensions } from '../debugger/debuggerExtensions';
+import { createProjectDebuggerExtension } from '../debugger/languages/dotnet';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
-import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration } from '../dcp/types';
-import { createTestMemento } from './common';
+import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, ProjectLaunchConfiguration } from '../dcp/types';
+import { createTestMemento, TestDotNetService } from './common';
 import { hotReloadAvailablePrompt } from '../loc/strings';
 import { extensionLogOutputChannel } from '../utils/logging';
+import * as io from '../utils/io';
 
 /**
  * Regression coverage for the cases where .NET Hot Reload must stay completely invisible.
@@ -112,6 +114,51 @@ suite('Hot Reload Regression Tests', () => {
     }
 
     /**
+     * Launches an Aspire AppHost through the real project debugger extension.
+     *
+     * The AppHost is always a .NET project, even in an app whose resources are all non-.NET, so it
+     * reaches the one callback that knows about Hot Reload. The dotnet service is faked because the
+     * launch path would otherwise build a project and shell out to the dotnet CLI; nothing faked
+     * here is read by the Hot Reload code under test.
+     */
+    async function runProjectDebuggerForAppHost(): Promise<AspireResourceExtendedDebugConfiguration> {
+        const outputPath = '/workspace/AppHost/bin/Debug/net10.0/AppHost.dll';
+        const extension = createProjectDebuggerExtension(() => new TestDotNetService(outputPath, null, true));
+        const doesFileExist = sinon.stub(io, 'doesFileExist').resolves(true);
+
+        const debugConfiguration: AspireResourceExtendedDebugConfiguration = {
+            type: 'coreclr',
+            request: 'launch',
+            name: 'Debug AppHost',
+            noDebug: false,
+            runId: 'regression-run',
+            debugSessionId: 'regression-session-apphost'
+        };
+
+        try {
+            await extension.createDebugSessionConfigurationCallback!(
+                { type: 'project', project_path: '/workspace/AppHost/AppHost.csproj' } as ProjectLaunchConfiguration,
+                [],
+                [],
+                {
+                    debug: true,
+                    runId: 'regression-run',
+                    debugSessionId: 'regression-session-apphost',
+                    isApphost: true,
+                    debugSession: sinon.createStubInstance(AspireDebugSession)
+                },
+                debugConfiguration);
+        }
+        finally {
+            // Restored here rather than in teardown so a test can launch resources afterwards;
+            // sinon refuses to wrap an already-wrapped method.
+            doesFileExist.restore();
+        }
+
+        return debugConfiguration;
+    }
+
+    /**
      * Launch configurations for the resource types that make up a polyglot Aspire app.
      *
      * Only the cheap, side-effect-free debugger extensions are driven here. `azure-functions` and
@@ -174,6 +221,28 @@ suite('Hot Reload Regression Tests', () => {
             }
 
             assertNoHotReloadTrace('a full polyglot session');
+        });
+
+        test('the .NET AppHost of a polyglot app shows and logs nothing about Hot Reload', async () => {
+            // A polyglot app still has a .NET AppHost, and it launches through the same project
+            // debugger a .NET resource would - so it is the one path by which an app with no .NET
+            // resources could still surface Hot Reload UI. The AppHost is orchestration
+            // infrastructure the user does not edit, so it must neither report itself as covered nor
+            // consume the once-per-window advisory that belongs to the first real .NET resource.
+            await runProjectDebuggerForAppHost();
+
+            assertNoHotReloadTrace('a polyglot app AppHost');
+        });
+
+        test('a full polyglot app, AppHost included, stays silent', async () => {
+            // Composed in launch order, because the AppHost starts first and every guard here is
+            // once-per-window state that an earlier launch could burn for a later one.
+            await runProjectDebuggerForAppHost();
+            for (const { launchConfig } of polyglotLaunchConfigurations) {
+                await runDebuggerExtension(launchConfig);
+            }
+
+            assertNoHotReloadTrace('a polyglot app including its AppHost');
         });
     });
 

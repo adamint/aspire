@@ -65,8 +65,12 @@ suite('Aspire DCP Server Tests', () => {
         const statuses = await Promise.all(rawDcpIds.map(dcpId => putRunSession(server!, dcpId, payload)));
 
         assert.deepStrictEqual(statuses, [201, 201]);
-        assert.deepStrictEqual(observedDebugSessionIds, rawDcpIds);
-        assert.deepStrictEqual(startedConfigurations.map(configuration => configuration.debugSessionId), rawDcpIds);
+        // Both PUTs are in flight at once, so Express may service them in either order. The invariant
+        // under test is that each raw DCP id survives distinctly - not the order they arrived in - so
+        // compare sorted copies rather than pinning an ordering the server never promised.
+        const expectedDcpIds = [...rawDcpIds].sort();
+        assert.deepStrictEqual([...observedDebugSessionIds].sort(), expectedDcpIds);
+        assert.deepStrictEqual(startedConfigurations.map(configuration => configuration.debugSessionId).sort(), expectedDcpIds);
     });
 
     test('routes a service notification through the raw DCP id retained by the debug configuration', async () => {

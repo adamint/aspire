@@ -12,50 +12,7 @@ import { ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
 import { AppHostParentOutputFilter, AspireDebugSession } from '../debugger/AspireDebugSession';
 import { initializeHotReloadPromptState } from '../debugger/hotReload';
 import { enableHotReloadLabel, hotReloadAvailablePrompt } from '../loc/strings';
-import { createTestMemento } from './common';
-
-class TestDotNetService {
-    private _getDotNetTargetPathStub: sinon.SinonStub;
-    private _hasDevKit: boolean;
-
-    public buildDotNetProjectStub: sinon.SinonStub;
-
-    // `dotnet run-api` output returned for file-based (.cs) apps. Tests override this with a serialized
-    // RunCommand payload; the default empty string mirrors the not-configured case.
-    public runApiOutput: string = '';
-    public runApiEnvironment: NodeJS.ProcessEnv | undefined;
-
-    constructor(outputPath: string, rejectBuild: Error | null, hasDevKit: boolean) {
-        this._getDotNetTargetPathStub = sinon.stub();
-        this._getDotNetTargetPathStub.resolves(outputPath);
-
-        this.buildDotNetProjectStub = sinon.stub();
-        if (rejectBuild) {
-            this.buildDotNetProjectStub.rejects(rejectBuild);
-        } else {
-            this.buildDotNetProjectStub.resolves();
-        }
-
-        this._hasDevKit = hasDevKit;
-    }
-
-    getDotNetTargetPath(projectFile: string): Promise<string> {
-        return this._getDotNetTargetPathStub(projectFile);
-    }
-
-    buildDotNetProject(projectFile: string): Promise<void> {
-        return this.buildDotNetProjectStub(projectFile);
-    }
-
-    getAndActivateDevKit(): Promise<boolean> {
-        return Promise.resolve(this._hasDevKit);
-    }
-
-    getDotNetRunApiOutput(projectPath: string, environment?: NodeJS.ProcessEnv): Promise<string> {
-        this.runApiEnvironment = environment;
-        return Promise.resolve(this.runApiOutput);
-    }
-}
+import { createHotReloadTestConfiguration, createTestMemento, TestDotNetService } from './common';
 
 suite('Dotnet Debugger Extension Tests', () => {
     setup(() => {
@@ -76,6 +33,11 @@ suite('Dotnet Debugger Extension Tests', () => {
     function createDebuggerExtension(outputPath: string, rejectBuild: Error | null, hasDevKit: boolean, doesOutputFileExist: boolean): { dotNetService: TestDotNetService, extension: ResourceDebuggerExtension, doesFileExistStub: sinon.SinonStub } {
         const fakeDotNetService = new TestDotNetService(outputPath, rejectBuild, hasDevKit);
         return { dotNetService: fakeDotNetService, extension: createProjectDebuggerExtension(() => fakeDotNetService), doesFileExistStub: sinon.stub(io, 'doesFileExist').resolves(doesOutputFileExist) };
+    }
+
+    function stubHotReloadSettingContribution(configuration: Partial<vscode.WorkspaceConfiguration>): void {
+        sinon.stub(vscode.workspace, 'getConfiguration')
+            .returns(createHotReloadTestConfiguration(configuration));
     }
 
     test('failed AppHost start writes error to debug console', async () => {
@@ -368,11 +330,10 @@ suite('Dotnet Debugger Extension Tests', () => {
         // awaiting one on the launch path would stall the resource - potentially forever - behind a
         // purely advisory message. The prompt must never gate the debug session.
         stubCsDevKitExtension({ isLimitedActivation: false });
-        sinon.stub(vscode.workspace, 'getConfiguration').returns({
+        stubHotReloadSettingContribution({
             get: () => false,
-            inspect: () => ({ key: 'hotReload', defaultValue: false }),
             update: async () => undefined
-        } as unknown as vscode.WorkspaceConfiguration);
+        });
 
         let resolveNotification: ((value: string | undefined) => void) | undefined;
         const notification = vscode.window.showInformationMessage as sinon.SinonStub;
@@ -480,11 +441,13 @@ suite('Dotnet Debugger Extension Tests', () => {
         stubCsDevKitExtension({});
         const notification = vscode.window.showInformationMessage as sinon.SinonStub;
         notification.resolves(undefined);
-        sinon.stub(vscode.workspace, 'getConfiguration').returns({
+        stubHotReloadSettingContribution({
             get: () => false,
-            inspect: () => ({ key: 'hotReload', defaultValue: false }),
             update: sinon.stub().resolves()
-        } as unknown as vscode.WorkspaceConfiguration);
+        });
+        // Asserted alongside the notification so moving the AppHost guard below the diagnostics
+        // cannot pass: reporting the AppHost's Hot Reload state is just as wrong as prompting for it.
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
         const parentDebugSession = sinon.createStubInstance(AspireDebugSession);
         Object.defineProperty(parentDebugSession, 'debugSessionId', { value: 'launch-1' });
 
@@ -497,6 +460,8 @@ suite('Dotnet Debugger Extension Tests', () => {
         await new Promise(resolve => setTimeout(resolve, 5));
 
         assert.strictEqual(notification.called, false, 'the AppHost must not show or consume resource Hot Reload UI');
+        const appHostLogLines = info.getCalls().map(call => String(call.args[0])).filter(line => /hot reload/i.test(line));
+        assert.deepStrictEqual(appHostLogLines, [], 'the AppHost must not be reported as a Hot Reload resource');
 
         await createProjectDebugConfiguration({
             runId: 'resource-1',
@@ -521,11 +486,10 @@ suite('Dotnet Debugger Extension Tests', () => {
         // The first resource sees the setting off and is offered it; accepting flips it on, which is
         // what the second resource then reads.
         let settingEnabled = false;
-        sinon.stub(vscode.workspace, 'getConfiguration').returns({
+        stubHotReloadSettingContribution({
             get: (name: string) => name === 'hotReload' ? settingEnabled : true,
-            inspect: () => ({ key: 'hotReload', defaultValue: false }),
             update: sinon.stub().callsFake(async () => { settingEnabled = true; })
-        } as unknown as vscode.WorkspaceConfiguration);
+        });
 
         const parentDebugSession = sinon.createStubInstance(AspireDebugSession);
         Object.defineProperty(parentDebugSession, 'debugSessionId', { value: 'launch-1' });
@@ -561,13 +525,11 @@ suite('Dotnet Debugger Extension Tests', () => {
         notification.onFirstCall().returns(new Promise<string | undefined>(resolve => {
             resolveEnablePrompt = resolve;
         }));
-
         let settingEnabled = false;
-        sinon.stub(vscode.workspace, 'getConfiguration').returns({
+        stubHotReloadSettingContribution({
             get: (name: string) => name === 'hotReload' ? settingEnabled : true,
-            inspect: () => ({ key: 'hotReload', defaultValue: false }),
             update: sinon.stub().callsFake(async () => { settingEnabled = true; })
-        } as unknown as vscode.WorkspaceConfiguration);
+        });
 
         await createProjectDebugConfiguration({ runId: 'launch-a-resource-1', debugSessionId: 'launch-a' });
         assert.strictEqual(notification.callCount, 1, 'launch A should still be waiting on its enable prompt');
@@ -1962,11 +1924,10 @@ suite('Dotnet Debugger Extension Tests', () => {
                 hasServerProcessLoaded: () => true,
                 getBrokeredServiceServerPipeName: async () => 'devkit-broker-pipe'
             });
-            sinon.stub(vscode.workspace, 'getConfiguration').returns({
+            stubHotReloadSettingContribution({
                 get: () => false,
-                inspect: () => ({ key: 'hotReload', defaultValue: false }),
                 update: async () => undefined
-            } as unknown as vscode.WorkspaceConfiguration);
+            });
 
             const showInformationMessageStub = vscode.window.showInformationMessage as sinon.SinonStub;
             const { extension } = createDebuggerExtension(outputPath, null, true, true);

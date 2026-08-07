@@ -3,7 +3,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { announceHotReloadForSessionIfNeeded, getHotReloadDiagnostics, initializeHotReloadPromptState, isHotReloadOnSaveEnabled, isHotReloadSettingEnabled, logHotReloadDiagnostics, promptToEnableHotReloadIfNeeded } from '../debugger/hotReload';
 import { hotReloadPromptSuppressedKey, hotReloadSessionNoticeShownKey } from '../utils/hotReloadNotificationState';
-import { createTestMemento } from './common';
+import { createHotReloadTestConfiguration, createTestMemento } from './common';
 import { dontShowAgainLabel, enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadAvailablePrompt, hotReloadEnabled, showHotReloadOutputLabel } from '../loc/strings';
 import { extensionLogOutputChannel } from '../utils/logging';
 
@@ -31,6 +31,14 @@ suite('Hot Reload Tests', () => {
 
     function stubNoExtensions(): void {
         sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+    }
+
+    function stubHotReloadSettingContribution(
+        configuration: Partial<vscode.WorkspaceConfiguration> = {},
+        options: { contributed?: boolean; defaultValue?: boolean } = {}
+    ): sinon.SinonStub {
+        return sinon.stub(vscode.workspace, 'getConfiguration')
+            .returns(createHotReloadTestConfiguration(configuration, options));
     }
 
     /**
@@ -147,6 +155,7 @@ suite('Hot Reload Tests', () => {
     });
 
     test('explains why Hot Reload is unavailable when the setting is off', () => {
+        stubHotReloadSettingContribution();
         const info = sinon.stub(extensionLogOutputChannel, 'info');
 
         logHotReloadDiagnostics('api', {
@@ -163,7 +172,31 @@ suite('Hot Reload Tests', () => {
         assert.ok(logged.includes('machine-scoped'), logged);
     });
 
+    test('does not tell the user to set a Hot Reload key that nothing contributes', () => {
+        // The gate is experimental, so it can be renamed out from under this code. A renamed key
+        // reads back as disabled, which must not be reported as "you have not enabled it yet":
+        // that sends the user to write a key nothing reads, and contradicts the enable prompt,
+        // which refuses to write an uncontributed setting for exactly this reason.
+        // The missing-contribution diagnostic is logged once per window, so reset that state rather
+        // than depending on no earlier test having already tripped it.
+        initializeHotReloadPromptState({ globalState: createTestMemento() });
+        stubHotReloadSettingContribution({}, { contributed: false });
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+
+        logHotReloadDiagnostics('api', {
+            devKitInstalled: true,
+            workspaceTrusted: true,
+            settingEnabled: false,
+            reloadOnSaveEnabled: true
+        }, true);
+
+        const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
+        assert.ok(!logged.includes('machine-scoped'), logged);
+        assert.ok(logged.includes('is not contributed by any installed extension'), logged);
+    });
+
     test('names the resource Hot Reload covers when the setting is on', () => {
+        stubHotReloadSettingContribution();
         const info = sinon.stub(extensionLogOutputChannel, 'info');
 
         logHotReloadDiagnostics('api', {
@@ -197,10 +230,7 @@ suite('Hot Reload Tests', () => {
 
     test('does not claim Hot Reload is active when Dev Kit no longer contributes the setting', async () => {
         initializeHotReloadPromptState({ globalState: createTestMemento() });
-        sinon.stub(vscode.workspace, 'getConfiguration').returns({
-            get: () => true,
-            inspect: () => undefined
-        } as unknown as vscode.WorkspaceConfiguration);
+        stubHotReloadSettingContribution({ get: () => true }, { contributed: false });
         const info = sinon.stub(extensionLogOutputChannel, 'info');
         const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
         const diagnostics = {
@@ -223,6 +253,7 @@ suite('Hot Reload Tests', () => {
         // Hot Reload is applied by the debugger, so `noDebug` resources are never covered however the
         // settings are configured. Claiming otherwise sends the user hunting for a reload that cannot
         // happen.
+        stubHotReloadSettingContribution();
         const info = sinon.stub(extensionLogOutputChannel, 'info');
 
         logHotReloadDiagnostics('api', {
@@ -240,6 +271,7 @@ suite('Hot Reload Tests', () => {
     test('says that saving does not apply edits when hotReloadOnSave is off', () => {
         // The gesture is read rather than assumed. Telling a user who turned the setting off that
         // saving applies their edit sends them looking for a reload that never happened.
+        stubHotReloadSettingContribution();
         const info = sinon.stub(extensionLogOutputChannel, 'info');
 
         logHotReloadDiagnostics('api', {
@@ -310,6 +342,7 @@ suite('Hot Reload Tests', () => {
         test('still opens the Hot Reload output when recording that it was shown fails', async () => {
             // The memento write is bookkeeping after the requested action succeeds. Losing that
             // record must not turn the successful button action into a rejected fire-and-forget task.
+            stubHotReloadSettingContribution();
             const failingMemento = createTestMemento();
             sinon.stub(failingMemento, 'update').rejects(new Error('storage is full'));
             initializeHotReloadPromptState({ globalState: failingMemento });
@@ -333,6 +366,7 @@ suite('Hot Reload Tests', () => {
             // setting the user already declined every time they opened another Aspire repo. This
             // pins the half that is reachable from here - nothing writes to any other store behind
             // the caller's back.
+            stubHotReloadSettingContribution();
             const supplied = createTestMemento();
             const other = createTestMemento();
 
@@ -365,14 +399,9 @@ suite('Hot Reload Tests', () => {
         // microtask queue drain before asserting.
         const flush = async () => { await new Promise(resolve => setTimeout(resolve, 5)); };
 
-        function stubContributedHotReloadSetting(): void {
-            sinon.stub(vscode.workspace, 'getConfiguration').returns({
-                inspect: () => ({ key: 'hotReload', defaultValue: false })
-            } as unknown as vscode.WorkspaceConfiguration);
-        }
-
         test('tells the user Hot Reload is active and how it is triggered', async () => {
             initializeHotReloadPromptState({ globalState: createTestMemento() });
+            stubHotReloadSettingContribution();
             const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
             announceHotReloadForSessionIfNeeded(activeDiagnostics, true, 'launch-1');
@@ -384,6 +413,7 @@ suite('Hot Reload Tests', () => {
 
         test('does not tell the user saving applies edits when hotReloadOnSave is off', async () => {
             initializeHotReloadPromptState({ globalState: createTestMemento() });
+            stubHotReloadSettingContribution();
             const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
             announceHotReloadForSessionIfNeeded({ ...activeDiagnostics, reloadOnSaveEnabled: false }, true, 'launch-1');
@@ -399,11 +429,10 @@ suite('Hot Reload Tests', () => {
             // immediately after the prompt said to start debugging again for it to take effect.
             initializeHotReloadPromptState({ globalState: createTestMemento() });
             const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(enableHotReloadLabel as unknown as vscode.MessageItem);
-            sinon.stub(vscode.workspace, 'getConfiguration').returns({
+            stubHotReloadSettingContribution({
                 get: () => false,
-                inspect: () => ({ key: 'hotReload', defaultValue: false }),
                 update: sinon.stub().resolves()
-            } as unknown as vscode.WorkspaceConfiguration);
+            });
 
             await promptToEnableHotReloadIfNeeded({ ...activeDiagnostics, settingEnabled: false }, true, 'launch-1');
             const callsAfterPrompt = notification.callCount;
@@ -421,11 +450,10 @@ suite('Hot Reload Tests', () => {
             // would mean the user does as they were told and is met with silence.
             initializeHotReloadPromptState({ globalState: createTestMemento() });
             const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(enableHotReloadLabel as unknown as vscode.MessageItem);
-            sinon.stub(vscode.workspace, 'getConfiguration').returns({
+            stubHotReloadSettingContribution({
                 get: () => false,
-                inspect: () => ({ key: 'hotReload', defaultValue: false }),
                 update: sinon.stub().resolves()
-            } as unknown as vscode.WorkspaceConfiguration);
+            });
 
             await promptToEnableHotReloadIfNeeded({ ...activeDiagnostics, settingEnabled: false }, true, 'launch-1');
             const callsAfterPrompt = notification.callCount;
@@ -441,6 +469,7 @@ suite('Hot Reload Tests', () => {
             // The memento is the one-time-ever record. Writing it before the notification resolves
             // burns it for a notice the user may never see - Do Not Disturb, or a window closed
             // while the app is still launching.
+            stubHotReloadSettingContribution();
             const memento = createTestMemento();
             initializeHotReloadPromptState({ globalState: memento });
             let resolveNotice: ((value: string | undefined) => void) | undefined;
@@ -461,6 +490,7 @@ suite('Hot Reload Tests', () => {
         test('does not leave an unhandled rejection when the notification itself fails', async () => {
             // The body is fire-and-forget, so a rejection escaping it has no owner and surfaces as an
             // extension error on a path the user never asked for.
+            stubHotReloadSettingContribution();
             initializeHotReloadPromptState({ globalState: createTestMemento() });
             sinon.stub(vscode.window, 'showInformationMessage').rejects(new Error('notifications are unavailable'));
             const warn = sinon.stub(extensionLogOutputChannel, 'warn');
@@ -490,6 +520,7 @@ suite('Hot Reload Tests', () => {
 
         test('is raised once per launch burst, not once per resource', async () => {
             initializeHotReloadPromptState({ globalState: createTestMemento() });
+            stubHotReloadSettingContribution();
             const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
             // Concurrent launches: the guard has to be set before the first await, or a five-project
@@ -517,6 +548,7 @@ suite('Hot Reload Tests', () => {
         test('records that it was shown so a later window stays quiet', async () => {
             const memento = createTestMemento();
             initializeHotReloadPromptState({ globalState: memento });
+            stubHotReloadSettingContribution();
             sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
             announceHotReloadForSessionIfNeeded(activeDiagnostics, true, 'launch-1');
@@ -527,7 +559,7 @@ suite('Hot Reload Tests', () => {
 
         test('opens the Dev Kit Hot Reload output when the user asks for it', async () => {
             initializeHotReloadPromptState({ globalState: createTestMemento() });
-            stubContributedHotReloadSetting();
+            stubHotReloadSettingContribution();
             sinon.stub(vscode.window, 'showInformationMessage').resolves(showHotReloadOutputLabel as unknown as vscode.MessageItem);
             const executeCommand = sinon.stub(vscode.commands, 'executeCommand').resolves();
 
@@ -540,7 +572,7 @@ suite('Hot Reload Tests', () => {
         test('records the active notice only after the requested output action succeeds', async () => {
             const memento = createTestMemento();
             initializeHotReloadPromptState({ globalState: memento });
-            stubContributedHotReloadSetting();
+            stubHotReloadSettingContribution();
             sinon.stub(vscode.window, 'showInformationMessage').resolves(showHotReloadOutputLabel as unknown as vscode.MessageItem);
             let resolveCommand: (() => void) | undefined;
             sinon.stub(vscode.commands, 'executeCommand')
@@ -560,7 +592,7 @@ suite('Hot Reload Tests', () => {
         test('does not burn the active notice when Dev Kit cannot open its Hot Reload panel', async () => {
             const memento = createTestMemento();
             initializeHotReloadPromptState({ globalState: memento });
-            stubContributedHotReloadSetting();
+            stubHotReloadSettingContribution();
             sinon.stub(vscode.window, 'showInformationMessage').resolves(showHotReloadOutputLabel as unknown as vscode.MessageItem);
             sinon.stub(vscode.commands, 'executeCommand').rejects(new Error('command not found'));
             const warn = sinon.stub(extensionLogOutputChannel, 'warn');
@@ -585,7 +617,7 @@ suite('Hot Reload Tests', () => {
         test('records the active notice when it is dismissed without an action', async () => {
             const memento = createTestMemento();
             initializeHotReloadPromptState({ globalState: memento });
-            stubContributedHotReloadSetting();
+            stubHotReloadSettingContribution();
             sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
             announceHotReloadForSessionIfNeeded(activeDiagnostics, true, 'launch-1');
@@ -619,6 +651,7 @@ suite('Hot Reload Tests', () => {
 
         test('does not notify per reload, because Dev Kit exposes no reload result', async () => {
             initializeHotReloadPromptState({ globalState: createTestMemento() });
+            stubHotReloadSettingContribution();
             const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
             // Stands in for a developer saving repeatedly during a session. Hot Reload runs on every
@@ -652,11 +685,10 @@ suite('Hot Reload Tests', () => {
          */
         function stubContributedSettingOff(): sinon.SinonStub {
             const update = sinon.stub().resolves();
-            sinon.stub(vscode.workspace, 'getConfiguration').returns({
+            stubHotReloadSettingContribution({
                 get: () => false,
-                inspect: () => ({ key: 'hotReload', defaultValue: false }),
                 update
-            } as unknown as vscode.WorkspaceConfiguration);
+            });
 
             return update;
         }
@@ -668,11 +700,10 @@ suite('Hot Reload Tests', () => {
             initializeHotReloadPromptState({ globalState: createTestMemento() });
             const prompt = stubPrompt(enableHotReloadLabel);
             const update = sinon.stub().resolves();
-            sinon.stub(vscode.workspace, 'getConfiguration').returns({
+            stubHotReloadSettingContribution({
                 get: () => undefined,
-                inspect: () => undefined,
                 update
-            } as unknown as vscode.WorkspaceConfiguration);
+            }, { contributed: false });
 
             const enabled = await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true, 'launch-1');
 
@@ -684,11 +715,10 @@ suite('Hot Reload Tests', () => {
         test('logs a missing Hot Reload setting contribution only once per window', async () => {
             initializeHotReloadPromptState({ globalState: createTestMemento() });
             stubPrompt(undefined);
-            sinon.stub(vscode.workspace, 'getConfiguration').returns({
+            stubHotReloadSettingContribution({
                 get: () => false,
-                inspect: () => undefined,
                 update: sinon.stub().resolves()
-            } as unknown as vscode.WorkspaceConfiguration);
+            }, { contributed: false });
             const info = sinon.stub(extensionLogOutputChannel, 'info');
 
             await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true, 'launch-1');
@@ -718,7 +748,7 @@ suite('Hot Reload Tests', () => {
             initializeHotReloadPromptState({ globalState: createTestMemento() });
             const prompt = stubPrompt(enableHotReloadLabel);
             const update = sinon.stub().resolves();
-            sinon.stub(vscode.workspace, 'getConfiguration').returns({ get: () => false, inspect: () => ({ key: 'hotReload', defaultValue: false }), update } as unknown as vscode.WorkspaceConfiguration);
+            stubHotReloadSettingContribution({ get: () => false, update });
 
             const enabled = await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true, 'launch-1');
 
@@ -776,11 +806,10 @@ suite('Hot Reload Tests', () => {
             sinon.stub(failingMemento, 'update').rejects(new Error('storage is full'));
             initializeHotReloadPromptState({ globalState: failingMemento });
             const prompt = stubPrompt(enableHotReloadLabel);
-            sinon.stub(vscode.workspace, 'getConfiguration').returns({
+            stubHotReloadSettingContribution({
                 get: () => false,
-                inspect: () => ({ key: 'hotReload', defaultValue: false }),
                 update: async () => undefined
-            } as unknown as vscode.WorkspaceConfiguration);
+            });
 
             const enabled = await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true, 'launch-1');
 
@@ -836,11 +865,10 @@ suite('Hot Reload Tests', () => {
             initializeHotReloadPromptState({ globalState: createTestMemento() });
             stubPrompt(enableHotReloadLabel);
             const error = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
-            sinon.stub(vscode.workspace, 'getConfiguration').returns({
+            stubHotReloadSettingContribution({
                 get: () => false,
-                inspect: () => ({ key: 'hotReload', defaultValue: false }),
                 update: sinon.stub().rejects(new Error('settings are read-only'))
-            } as unknown as vscode.WorkspaceConfiguration);
+            });
 
             const enabled = await promptToEnableHotReloadIfNeeded(enabledDiagnostics, true, 'launch-1');
 

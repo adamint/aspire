@@ -185,7 +185,12 @@ export function logHotReloadDiagnostics(resourceName: string, diagnostics: HotRe
             'The workspace is not trusted, so C# Dev Kit activates in limited mode and Hot Reload is unavailable.');
     }
 
-    if (diagnostics.workspaceTrusted && !diagnostics.settingEnabled) {
+    // Only advise setting the key while some installed extension still contributes it. The gate is
+    // explicitly `experimental`, so a rename leaves the key reading back as disabled, and telling the
+    // user to set it would send them to write a key nothing reads - the same outcome
+    // `promptToEnableHotReloadIfNeeded` refuses to produce. The contribution check logs its own
+    // diagnostic, which is the accurate explanation once the key is gone.
+    if (diagnostics.workspaceTrusted && !diagnostics.settingEnabled && isHotReloadSettingContributedWithDiagnostic()) {
         extensionLogOutputChannel.info(
             "Hot Reload is disabled because 'csharp.experimental.debug.hotReload' is not enabled. " +
             'This setting is machine-scoped, so it must be set in user settings; workspace settings are ignored.');
