@@ -138,6 +138,73 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ProjectMetadataUsesProjectReferenceConfiguration()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var generatedSource = await GenerateProjectMetadataSourceAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                    <AssemblyName Condition="'$(Configuration)' == 'Release'">Released Service</AssemblyName>
+                    <AssemblyName Condition="'$(Configuration)' != 'Release'">Debugged Service</AssemblyName>
+                  </PropertyGroup>
+                """,
+            projectReferenceMetadataXml: """
+                  <SetConfiguration>Configuration=Release</SetConfiguration>
+                """);
+
+        Assert.Equal("""    public string? AssemblyName => @"Released Service";""", GetGeneratedAssemblyNameMember(generatedSource));
+    }
+
+    [Fact]
+    public async Task ProjectMetadataUsesProjectReferencePlatform()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var generatedSource = await GenerateProjectMetadataSourceAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                    <AssemblyName Condition="'$(Platform)' == 'x64'">64-bit Service</AssemblyName>
+                    <AssemblyName Condition="'$(Platform)' != 'x64'">Any CPU Service</AssemblyName>
+                  </PropertyGroup>
+                """,
+            projectReferenceMetadataXml: """
+                  <SetPlatform>Platform=x64</SetPlatform>
+                """);
+
+        Assert.Equal("""    public string? AssemblyName => @"64-bit Service";""", GetGeneratedAssemblyNameMember(generatedSource));
+    }
+
+    [Fact]
+    public async Task ProjectMetadataRemovesProjectReferenceGlobalProperties()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var generatedSource = await GenerateProjectMetadataSourceAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                    <AssemblyName Condition="'$(Flavor)' == ''">Unflavored Service</AssemblyName>
+                    <AssemblyName Condition="'$(Flavor)' != ''">Flavored Service</AssemblyName>
+                  </PropertyGroup>
+                """,
+            projectReferenceMetadataXml: """
+                  <GlobalPropertiesToRemove>Flavor</GlobalPropertiesToRemove>
+                """,
+            extraArguments: ["-p:Flavor=Chocolate"]);
+
+        Assert.Equal("""    public string? AssemblyName => @"Unflavored Service";""", GetGeneratedAssemblyNameMember(generatedSource));
+    }
+
+    [Fact]
     public async Task ProjectMetadataUsesTargetFrameworkConditionedAssemblyNameForMultiTargetedReference()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
@@ -151,6 +218,49 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
                     <AssemblyName Condition="'$(TargetFramework)' == 'net8.0'">Eight Service</AssemblyName>
                     <AssemblyName Condition="'$(TargetFramework)' == 'net9.0'">Nine Service</AssemblyName>
                   </PropertyGroup>
+                """);
+
+        Assert.Equal("""    public string? AssemblyName => @"Eight Service";""", GetGeneratedAssemblyNameMember(generatedSource));
+    }
+
+    [Fact]
+    public async Task ProjectMetadataRespectsProjectReferenceTargetFramework()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var generatedSource = await GenerateProjectMetadataSourceAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
+                    <AssemblyName Condition="'$(TargetFramework)' == 'net8.0'">Eight Service</AssemblyName>
+                    <AssemblyName Condition="'$(TargetFramework)' == 'net9.0'">Nine Service</AssemblyName>
+                  </PropertyGroup>
+                """,
+            projectReferenceMetadataXml: """
+                  <SetTargetFramework>TargetFramework=net9.0</SetTargetFramework>
+                """);
+
+        Assert.Equal("""    public string? AssemblyName => @"Nine Service";""", GetGeneratedAssemblyNameMember(generatedSource));
+    }
+
+    [Fact]
+    public async Task ProjectMetadataRespectsProjectReferenceTargetFrameworkForSingleTargetedReference()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var generatedSource = await GenerateProjectMetadataSourceAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                    <AssemblyName Condition="'$(TargetFramework)' == 'net8.0'">Eight Service</AssemblyName>
+                  </PropertyGroup>
+                """,
+            projectReferenceMetadataXml: """
+                  <SetTargetFramework>TargetFramework=net8.0</SetTargetFramework>
                 """);
 
         Assert.Equal("""    public string? AssemblyName => @"Eight Service";""", GetGeneratedAssemblyNameMember(generatedSource));
@@ -854,7 +964,8 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         string? referencedDirectoryBuildPropsXml = null,
         string[]? extraArguments = null,
         string targetFramework = "net8.0",
-        string configuration = "Debug")
+        string configuration = "Debug",
+        string? projectReferenceMetadataXml = null)
     {
         var repoRoot = GetRepoRoot();
 
@@ -920,7 +1031,9 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
                                   ReferenceOutputAssembly="false"
                                   SkipGetTargetFrameworkProperties="true"
                                   ExcludeAssets="all"
-                                  Private="false" />
+                                  Private="false">
+            {{projectReferenceMetadataXml}}
+                </ProjectReference>
               </ItemGroup>
 
               <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
