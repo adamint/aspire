@@ -20,7 +20,7 @@ import {
     DebugSessionHarness
 } from './helpers/debugSessionHarness';
 
-const browserProfileRoot = path.join(os.tmpdir(), 'aspire-vscode-browser-debug');
+const browserProfilePrefix = 'aspire-vscode-browser-debug-';
 const expectedRmOptions = { recursive: true, force: true, maxRetries: 3, retryDelay: 100 };
 
 /**
@@ -28,7 +28,7 @@ const expectedRmOptions = { recursive: true, force: true, maxRetries: 3, retryDe
  * suffix because the real code creates it with `mkdtemp` rather than deriving a guessable name.
  */
 function profileDirFor(runId: string): string {
-    return path.join(browserProfileRoot, `${runId}-${stubbedMkdtempSuffix}`);
+    return path.join(os.tmpdir(), `${browserProfilePrefix}${runId}-${stubbedMkdtempSuffix}`);
 }
 
 suite('Browser Debugger Tests', () => {
@@ -117,13 +117,14 @@ suite('Browser Debugger Tests', () => {
     });
 
     // Path containment. The profile directory is deleted recursively when the run ends, so a run id
-    // that escapes the profile root would aim `fs.rm(..., { recursive: true })` at a directory Aspire
-    // does not own. `..` is the dangerous case: `.` and `-` are legal in a run id and survive
-    // character sanitizing untouched, so `path.join(tmpdir, 'aspire-vscode-browser-debug', '..')`
-    // resolves to the OS temp directory itself and the cleanup would recursively delete all of it.
+    // that escaped into the temp directory itself would aim `fs.rm(..., { recursive: true })` at a
+    // directory Aspire does not own. `..` is the dangerous case: `.` and `-` are legal in a run id
+    // and survive character sanitizing untouched. mkdtemp is what makes this safe rather than the
+    // sanitizer -- it always appends generated characters, so no run id can produce a bare `..`
+    // segment -- and these cases pin that property down.
     const escapingRunIds: { runId: string; description: string }[] = [
         { runId: '..', description: 'parent directory traversal' },
-        { runId: '.', description: 'the profile root itself' },
+        { runId: '.', description: 'the temp directory itself' },
         { runId: '', description: 'an empty run id' },
         { runId: '../..', description: 'repeated parent traversal' },
         { runId: '.././..', description: 'mixed traversal and current-directory segments' },
@@ -135,7 +136,7 @@ suite('Browser Debugger Tests', () => {
     ];
 
     for (const { runId, description } of escapingRunIds) {
-        test(`keeps the browser profile directory inside the profile root for ${description}`, async () => {
+        test(`keeps the browser profile directory directly under the temp directory for ${description}`, async () => {
             const rmStub = sinon.stub(fs.promises, 'rm').resolves();
             stubBrowserProfileFs();
             const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
@@ -150,13 +151,13 @@ suite('Browser Debugger Tests', () => {
                     'Expected the rejected profile directory to be logged');
             }
             else {
-                // Character sanitizing may already have collapsed the value into one safe segment (for
-                // example separators became '-'), so a directory is still derived. What has to hold is
-                // that it is a direct child of the profile root, never the root itself or above it.
+                // Character sanitizing collapses the value into one safe segment (for example
+                // separators become '-'), so a directory is still created. What has to hold is that
+                // it is a direct child of the temp directory, never the temp directory or above it.
                 assert.strictEqual(
                     path.dirname(userDataDir),
-                    browserProfileRoot,
-                    `Expected '${userDataDir}' to be a direct child of the profile root`);
+                    os.tmpdir(),
+                    `Expected '${userDataDir}' to be a direct child of the temp directory`);
             }
 
             cleanupRun(runId);
@@ -165,82 +166,67 @@ suite('Browser Debugger Tests', () => {
                 const deleted = call.args[0] as string;
                 assert.strictEqual(
                     path.dirname(deleted),
-                    browserProfileRoot,
-                    `Expected the recursive delete of '${deleted}' to stay inside '${browserProfileRoot}'`);
+                    os.tmpdir(),
+                    `Expected the recursive delete of '${deleted}' to stay directly under '${os.tmpdir()}'`);
+                assert.notStrictEqual(
+                    path.resolve(deleted),
+                    path.resolve(os.tmpdir()),
+                    'Expected the recursive delete never to target the temp directory itself');
             }
         });
     }
 
     // Directory creation, not path derivation, is what makes the profile directory safe. os.tmpdir()
-    // is shared and world-writable on Linux, so another local process can create
-    // `aspire-vscode-browser-debug` first. The browser follows userDataDir when it writes, so a
-    // hostile root would redirect profile data - cookies and tokens for the app being debugged -
-    // into a directory that process controls. No amount of string validation detects that.
-    test('refuses a browser profile root that is not a real directory', async () => {
-        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
-        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
-        const profileFs = stubBrowserProfileFs();
-        // A symlink planted at the profile root: lstat reports the link itself, not its target.
-        profileFs.lstat.resolves({ isDirectory: () => false, uid: process.getuid?.() ?? 0 } as never);
-        const debugConfig = createResourceDebugConfig();
-
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        assert.strictEqual(debugConfig.userDataDir, undefined, 'Expected no profile directory to be handed to the browser');
-        assert.strictEqual(profileFs.mkdtemp.called, false, 'Expected no directory to be created under an untrusted root');
-        assert.ok(warnStub.getCalls().some(call => /not a real directory/.test(call.args[0])));
-
-        cleanupRun('run-1');
-        assert.strictEqual(rmStub.called, false, 'Expected nothing to be deleted when the root was refused');
-    });
-
-    test('refuses a browser profile root owned by another user', async () => {
-        if (typeof process.getuid !== 'function') {
-            return; // POSIX-only ownership model; %TEMP% is per-user on Windows.
-        }
-
-        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
-        const profileFs = stubBrowserProfileFs();
-        profileFs.lstat.resolves({ isDirectory: () => true, uid: process.getuid() + 1 } as never);
-        const debugConfig = createResourceDebugConfig();
-
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        assert.strictEqual(debugConfig.userDataDir, undefined);
-        assert.strictEqual(profileFs.mkdtemp.called, false);
-        assert.ok(warnStub.getCalls().some(call => /owned by another user/.test(call.args[0])));
-    });
-
+    // is shared and world-writable on Linux, so any name chosen in advance can be created first by
+    // another local process. The browser follows userDataDir when it writes, so a hostile directory
+    // would redirect profile data - cookies and tokens for the app being debugged - to that process.
+    // No amount of string validation detects that.
     test('creates the browser profile directory atomically instead of using a guessable path', async () => {
-        // A deterministic child path can be pre-created as a symlink by another local process and
-        // then followed. mkdtemp fails rather than following an existing entry, so creation itself
-        // is the race protection.
+        // A deterministic path can be pre-created as a symlink by another local process and then
+        // followed. mkdtemp fails rather than following an existing entry, so creation itself is the
+        // race protection.
         const profileFs = stubBrowserProfileFs();
         const debugConfig = createResourceDebugConfig({ runId: 'run-1' });
 
         await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
 
         assert.strictEqual(profileFs.mkdtemp.calledOnce, true);
-        assert.strictEqual(profileFs.mkdtemp.firstCall.args[0], path.join(browserProfileRoot, 'run-1-'));
+        assert.strictEqual(profileFs.mkdtemp.firstCall.args[0], path.join(os.tmpdir(), `${browserProfilePrefix}run-1-`));
         // The directory handed to the browser is the one mkdtemp actually created, not the prefix.
         assert.strictEqual(debugConfig.userDataDir, profileDirFor('run-1'));
-        assert.strictEqual(profileFs.mkdir.calledOnce, true);
-        assert.deepStrictEqual(profileFs.mkdir.firstCall.args[1], { recursive: true, mode: 0o700 });
     });
 
-    test('refuses a created profile directory that resolves outside the profile root', async () => {
+    test('requires no fixed directory name that another local user could squat', async () => {
+        // A shared parent with a name Aspire requires (rather than one mkdtemp generates) is a
+        // denial of service: any local process can create it first, and refusing to use a directory
+        // owned by someone else is detectable but not recoverable. Creating directly under
+        // os.tmpdir() means there is no such name to take.
+        const profileFs = stubBrowserProfileFs();
+        const mkdirStub = sinon.stub(fs.promises, 'mkdir').resolves(undefined);
+        const debugConfig = createResourceDebugConfig({ runId: 'run-1' });
+
+        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
+
+        assert.strictEqual(mkdirStub.called, false, 'Expected no intermediate directory to be created');
+        assert.strictEqual(
+            path.dirname(profileFs.mkdtemp.firstCall.args[0] as string),
+            os.tmpdir(),
+            'Expected the profile directory to be created directly under the temp directory');
+    });
+
+    test('refuses a created profile directory that resolves outside the temp directory', async () => {
         // Defense in depth behind mkdtemp: whatever produced the final path, a recursive delete must
-        // never be aimed outside the tree Aspire owns.
+        // never be aimed outside the temp directory.
         const rmStub = sinon.stub(fs.promises, 'rm').resolves();
         const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
         const profileFs = stubBrowserProfileFs();
-        profileFs.mkdtemp.resolves(path.join(os.tmpdir(), 'somewhere-else'));
+        profileFs.mkdtemp.resolves(path.join(os.tmpdir(), 'nested', 'somewhere-else'));
         const debugConfig = createResourceDebugConfig();
 
         await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
 
         assert.strictEqual(debugConfig.userDataDir, undefined);
-        assert.ok(warnStub.getCalls().some(call => /outside/.test(call.args[0])));
+        assert.ok(warnStub.getCalls().some(call => /not directly under/.test(call.args[0])));
 
         cleanupRun('run-1');
         assert.strictEqual(rmStub.called, false);

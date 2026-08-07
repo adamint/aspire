@@ -7,8 +7,6 @@ import { AspireResourceExtendedDebugConfiguration, BrowserLaunchConfiguration, S
 
 /** Stubs installed over the filesystem calls the browser profile directory setup makes. */
 export interface BrowserProfileFsStubs {
-    mkdir: sinon.SinonStub;
-    lstat: sinon.SinonStub;
     mkdtemp: sinon.SinonStub;
 }
 
@@ -22,34 +20,26 @@ function asStub(candidate: unknown): sinon.SinonStub | undefined {
 }
 
 /**
- * Stubs the filesystem calls `createBrowserUserDataDir` makes, so tests exercise the real ownership
+ * Stubs the filesystem call `createBrowserUserDataDir` makes, so tests exercise the real creation
  * and containment logic without touching the actual filesystem.
  *
- * Defaults describe a healthy profile root: a real directory owned by this process. `mkdtemp`
- * mirrors Node's contract by appending characters to the prefix it is given, so assertions can tell
- * a generated leaf apart from a deterministic path. Individual tests override a stub to describe a
- * hostile root.
+ * `mkdtemp` mirrors Node's contract by appending characters to the prefix it is given, so
+ * assertions can tell a generated leaf apart from a deterministic path. Individual tests override
+ * it to describe a hostile or unexpected result.
  *
- * Calling this twice in one test returns the stubs already installed rather than stacking a second
- * layer. Suites install it once in `setup` so no test can accidentally create real directories under
- * the shared temp directory, and tests that need the handles call it again to get them.
+ * Calling this twice in one test returns the stub already installed rather than stacking a second
+ * layer. Suites install it once in `setup` so no test can accidentally create real directories
+ * under the shared temp directory, and tests that need the handle call it again to get it.
  */
 export function stubBrowserProfileFs(): BrowserProfileFsStubs {
-    const existingMkdir = asStub(fs.promises.mkdir);
-    const existingLstat = asStub(fs.promises.lstat);
     const existingMkdtemp = asStub(fs.promises.mkdtemp);
-    if (existingMkdir && existingLstat && existingMkdtemp) {
-        return { mkdir: existingMkdir, lstat: existingLstat, mkdtemp: existingMkdtemp };
+    if (existingMkdtemp) {
+        return { mkdtemp: existingMkdtemp };
     }
 
-    const mkdir = sinon.stub(fs.promises, 'mkdir').resolves(undefined);
-    const lstat = sinon.stub(fs.promises, 'lstat').resolves({
-        isDirectory: () => true,
-        uid: typeof process.getuid === 'function' ? process.getuid() : 0
-    } as unknown as fs.Stats);
     const mkdtemp = sinon.stub(fs.promises, 'mkdtemp').callsFake(async (prefix: fs.PathLike) => `${String(prefix)}${stubbedMkdtempSuffix}`);
 
-    return { mkdir, lstat, mkdtemp };
+    return { mkdtemp };
 }
 
 export interface Deferred<T> {
