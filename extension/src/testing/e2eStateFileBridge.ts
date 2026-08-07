@@ -786,22 +786,41 @@ interface DebugAdapterOutputEvent {
   output: string;
 }
 
-interface DebugAdapterMessageSummary {
+export interface DebugAdapterMessageSummary {
   sessionId: string;
   sessionType: string;
   sessionName: string;
   command?: string;
+  /**
+   * `seq` on a request and `requestSeq` (the protocol's `request_seq`) on a response, so a response
+   * can be tied back to the exact request that produced it. Several debug sessions are alive at once
+   * during a proof - the synthetic Aspire parent, the AppHost session, and one session per debugged
+   * resource - and they all issue the same commands, so a response is only meaningful together with
+   * its session and sequence number.
+   * See https://microsoft.github.io/debug-adapter-protocol/specification#Base_Protocol_Response
+   */
+  seq?: number;
+  requestSeq?: number;
   success?: boolean;
   body?: unknown;
 }
 
 /**
  * The debug adapter `process` event, which reports the operating-system process the adapter is
- * debugging. js-debug emits it once the debuggee is launched:
+ * debugging:
  *   { "type": "event", "event": "process",
  *     "body": { "name": "node app.js", "systemProcessId": 4711, "isLocalProcess": true, "startMethod": "launch" } }
- * `systemProcessId` is optional in the protocol, so a remote/attach adapter can omit it.
+ * Every body field except `name` is optional, so an adapter may report a name and nothing else.
  * See https://microsoft.github.io/debug-adapter-protocol/specification#Events_Process
+ *
+ * js-debug (`pwa-node`, `pwa-chrome`, `pwa-msedge`) is not such an adapter: it only sends `process`
+ * from its standalone DAP server entry points (`src/vsDebugServer.ts`, `src/flatSessionLauncher.ts`),
+ * where it repurposes the event to rename the session, and it never populates `systemProcessId`.
+ * Running inside VS Code, which is how the extension launches every JavaScript resource, js-debug
+ * sends no `process` event at all. That is why the Node proof reads the debuggee's pid from the
+ * resource's own stdout instead (see resourceDebugger.e2e.test.ts). The event is still captured here
+ * because adapters used by other languages do send it - for example `coreclr` and `debugpy` - so a
+ * future language proof can use it and, in the meantime, it is useful failure diagnostics.
  */
 interface DebugAdapterProcessEvent {
   sessionId: string;
@@ -830,6 +849,7 @@ async function proveResourceDebugging(command: ResourceDebugProofCommand, aspire
   const processEvents: DebugAdapterProcessEvent[] = [];
   const breakpointRequests: DebugAdapterMessageSummary[] = [];
   const breakpointResponses: DebugAdapterMessageSummary[] = [];
+  let observedOutputEventCount = 0;
   let resourceCommandResult: Awaited<ReturnType<typeof runAspireCliForE2E>> | undefined;
 
   const sessionSubscription = vscode.debug.onDidStartDebugSession(session => {
@@ -854,6 +874,7 @@ async function proveResourceDebugging(command: ResourceDebugProofCommand, aspire
               sessionType: session.type,
               sessionName: session.name,
               command: message.command,
+              seq: message.seq,
               body: redactDebugAdapterArguments(message.arguments),
             });
           }
@@ -865,6 +886,7 @@ async function proveResourceDebugging(command: ResourceDebugProofCommand, aspire
               sessionType: session.type,
               sessionName: session.name,
               command: message.command,
+              requestSeq: message.request_seq,
               success: message.success,
               body: redactDebugAdapterArguments(message),
             });
@@ -875,6 +897,7 @@ async function proveResourceDebugging(command: ResourceDebugProofCommand, aspire
               sessionType: session.type,
               sessionName: session.name,
               command: message.command,
+              requestSeq: message.request_seq,
               success: message.success,
               body: redactDebugAdapterArguments(message.body),
             });
@@ -894,12 +917,17 @@ async function proveResourceDebugging(command: ResourceDebugProofCommand, aspire
               sessionType: session.type,
               output: String(message.body?.output ?? ''),
             };
-            // The first lines a debuggee writes identify it (for example the pid it reports), so the
-            // head is kept separately from the ring buffer that holds the most recent lines.
+            // The debuggee's own first lines identify it - the Node fixture prints its pid and its
+            // child's pid there - and js-debug is the reason that matters: with `outputCapture: 'std'`
+            // it pipes the debuggee's stdio over DAP instead of sending a `process` event, so the head
+            // is kept separately from the ring buffer that holds only the most recent lines.
             if (outputHeadEvents.length < 20) {
               outputHeadEvents.push(outputEvent);
             }
 
+            // Counted separately because outputEvents is a bounded ring buffer: once it is full its
+            // length stops growing, so its length cannot be used to detect newly arrived output.
+            observedOutputEventCount++;
             outputEvents.push(outputEvent);
             if (outputEvents.length > 200) {
               outputEvents.shift();
@@ -1021,8 +1049,10 @@ ${JSON.stringify({
         sessionById.get(stoppedEvent.stoppedEvent.sessionId),
         stoppedEvent.stoppedEvent.threadId!,
         breakpoint,
+        breakpointRequests,
         breakpointResponses,
-        outputEvents,
+        stoppedEvents,
+        () => observedOutputEventCount,
         Math.min(request.timeoutMs, 60000));
     }
 
@@ -1074,36 +1104,119 @@ ${JSON.stringify({
 /**
  * Clears the proof breakpoint and lets the debuggee run again.
  *
- * The breakpoint is removed before continuing, and the removal is confirmed by waiting for the
- * adapter's `setBreakpoints` response, because continuing while the breakpoint is still installed
- * would immediately re-suspend the debuggee on its next iteration. The debuggee is then only
- * considered running once it produces new output, so a caller cannot proceed to stop debugging while
- * the process is still suspended.
+ * The breakpoint is removed before continuing, because continuing while it is still installed would
+ * immediately re-suspend the debuggee the next time the marked line runs. Removal is confirmed by
+ * waiting for the adapter's own successful `setBreakpoints` response, correlated by debug session and
+ * request sequence number: several sessions are alive at once during a proof (the synthetic Aspire
+ * parent, the AppHost session, and the resource session), all of them are tracked, and all of them
+ * exchange `setBreakpoints` traffic, so accepting the next response from any of them would let this
+ * continue before the resource's own adapter has dropped the breakpoint.
+ *
+ * The debuggee is then only considered running once new adapter output arrives, so a caller cannot
+ * proceed to stop debugging while the process is still suspended. The output is deliberately not
+ * filtered by session: js-debug launches the process in the parent session and pipes its stdio from
+ * there under `outputCapture: 'std'`, while the stop is reported by the child session that attaches
+ * to the target, so the debuggee's output does not carry the stopped session's id.
  */
 async function resumeDebuggeeAfterBreakpoint(
   session: vscode.DebugSession | undefined,
   threadId: number,
   breakpoint: vscode.SourceBreakpoint,
+  breakpointRequests: readonly DebugAdapterMessageSummary[],
   breakpointResponses: readonly DebugAdapterMessageSummary[],
-  outputEvents: readonly DebugAdapterOutputEvent[],
+  stoppedEvents: readonly DebugAdapterStoppedEvent[],
+  getObservedOutputEventCount: () => number,
   timeoutMs: number): Promise<void> {
   if (!session) {
     throw new Error('Aspire extension E2E resource debug proof could not resolve the stopped debug session to resume it.');
   }
 
-  const breakpointResponsesBefore = breakpointResponses.length;
+  const breakpointSourcePath = breakpoint.location.uri.fsPath;
+  const breakpointRequestsBefore = breakpointRequests.length;
   vscode.debug.removeBreakpoints([breakpoint]);
-  await waitForE2eValue(
-    'the debug adapter to acknowledge breakpoint removal',
-    timeoutMs,
-    () => breakpointResponses.length > breakpointResponsesBefore ? true : undefined);
 
-  const outputEventsBefore = outputEvents.length;
-  await session.customRequest('continue', { threadId });
+  // VS Code re-sends the whole breakpoint list for a source whenever it changes, so the removal
+  // reaches the adapter as a `setBreakpoints` request naming that source. Only requests observed
+  // after removeBreakpoints returned are considered, and the request has to carry a sequence number
+  // because the acknowledgement below is matched against it.
+  const removalRequest = await waitForE2eValue(
+    `the ${session.type} adapter to receive the sequenced breakpoint removal for ${breakpointSourcePath}`,
+    timeoutMs,
+    () => findBreakpointRemovalRequest(breakpointRequests.slice(breakpointRequestsBefore), session.id, breakpointSourcePath));
+
   await waitForE2eValue(
+    `the ${session.type} adapter to acknowledge breakpoint removal (request seq ${removalRequest.seq})`,
+    timeoutMs,
+    () => isBreakpointRemovalAcknowledged(breakpointResponses, session.id, removalRequest.seq!) ? true : undefined);
+
+  const stoppedEventsBefore = stoppedEvents.length;
+  const outputEventsBefore = getObservedOutputEventCount();
+  await session.customRequest('continue', { threadId });
+  const resumed = await waitForE2eValue<{ reSuspend?: DebugAdapterStoppedEvent }>(
     'the resumed resource process to produce output',
     timeoutMs,
-    () => outputEvents.length > outputEventsBefore ? true : undefined);
+    () => {
+      // A re-suspend means the breakpoint outlived its removal, which is exactly what the correlation
+      // above is there to prevent. It is reported instead of waited out so the failure names its cause
+      // rather than surfacing as an output timeout.
+      const reSuspend = stoppedEvents.slice(stoppedEventsBefore).find(event => event.sessionId === session.id);
+      if (reSuspend) {
+        return { reSuspend };
+      }
+
+      return getObservedOutputEventCount() > outputEventsBefore ? {} : undefined;
+    });
+  if (resumed.reSuspend) {
+    throw new Error(`The ${session.type} resource debug session suspended again (reason '${resumed.reSuspend.reason ?? '<unknown>'}') after the proof breakpoint was removed and the debuggee was continued.`);
+  }
+}
+
+/**
+ * Finds the `setBreakpoints` request that carries the proof breakpoint's removal.
+ *
+ * `requestsSinceRemoval` must already be limited to requests observed after `removeBreakpoints` was
+ * called; this narrows those to the debug session being resumed and to the source the breakpoint was
+ * set in, and requires a sequence number so the response can be matched to this exact request.
+ */
+export function findBreakpointRemovalRequest(
+  requestsSinceRemoval: readonly DebugAdapterMessageSummary[],
+  sessionId: string,
+  breakpointSourcePath: string): DebugAdapterMessageSummary | undefined {
+  return requestsSinceRemoval.find(request =>
+    request.sessionId === sessionId &&
+    request.command === 'setBreakpoints' &&
+    typeof request.seq === 'number' &&
+    isSetBreakpointsRequestForSource(request.body, breakpointSourcePath));
+}
+
+/** Whether the adapter answered the given `setBreakpoints` request on the given session successfully. */
+export function isBreakpointRemovalAcknowledged(
+  responses: readonly DebugAdapterMessageSummary[],
+  sessionId: string,
+  requestSeq: number): boolean {
+  return responses.some(response =>
+    response.sessionId === sessionId &&
+    response.command === 'setBreakpoints' &&
+    response.requestSeq === requestSeq &&
+    response.success === true);
+}
+
+/**
+ * Whether a captured `setBreakpoints` request targets the given source file. The captured body is the
+ * request's arguments:
+ *   { "source": { "path": "/workspace/AspireE2E.NodeApp/app.js", "name": "app.js" },
+ *     "lines": [14], "breakpoints": [{ "line": 14 }], "sourceModified": false }
+ * Only the source is matched, not the remaining breakpoint lines, because the protocol's line
+ * numbering depends on the client's `linesStartAt1` handshake with each adapter.
+ * See https://microsoft.github.io/debug-adapter-protocol/specification#Requests_SetBreakpoints
+ */
+function isSetBreakpointsRequestForSource(requestBody: unknown, breakpointSourcePath: string): boolean {
+  if (!requestBody || typeof requestBody !== 'object') {
+    return false;
+  }
+
+  const source = (requestBody as { source?: { path?: unknown } }).source;
+  return typeof source?.path === 'string' && isSamePath(source.path, breakpointSourcePath);
 }
 
 function toDebugSessionSnapshot(session: vscode.DebugSession): DebugSessionSnapshot {

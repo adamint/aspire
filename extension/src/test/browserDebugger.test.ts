@@ -57,6 +57,31 @@ suite('Browser Debugger Tests', () => {
             new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('firefox', 'msedge, chrome'))));
     });
 
+    // The hosting side's WithBrowserDebugger accepts an arbitrary string, so the allowlist lookup must
+    // not resolve inherited Object.prototype members. A plain object literal would hand back a
+    // function for these names and assign it to debugConfiguration.type.
+    for (const inheritedMember of ['toString', 'constructor', '__proto__', 'hasOwnProperty', 'valueOf']) {
+        test(`rejects '${inheritedMember}' instead of resolving it through Object.prototype`, async () => {
+            await assert.rejects(
+                () => createConfiguration({ type: 'browser', url: 'http://localhost:5173', browser: inheritedMember }),
+                new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget(inheritedMember, 'msedge, chrome'))));
+        });
+    }
+
+    test('leaves the debug type untouched when the browser is not on the allowlist', async () => {
+        const debugConfig = createDebugConfig();
+        const launchConfig: BrowserLaunchConfiguration = { type: 'browser', url: 'http://localhost:5173', browser: '__proto__' };
+
+        await assert.rejects(() => browserDebuggerExtension.createDebugSessionConfigurationCallback!(
+            launchConfig,
+            ['--ignored'],
+            [],
+            { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession },
+            debugConfig));
+
+        assert.strictEqual(debugConfig.type, 'browser');
+    });
+
     test('rejects a launch configuration for another resource type', async () => {
         await assert.rejects(
             () => createConfiguration({ type: 'node', script_path: '/workspace/app/server.js' } as unknown as BrowserLaunchConfiguration),

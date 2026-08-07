@@ -77,8 +77,11 @@ suite('Aspire resource debugger E2E', function () {
         const proof = await runResourceDebugProof({ stopDebuggingOnCompletion: false });
 
         // The debuggee reports its own pid and the pid of the child it spawns, so the assertion covers
-        // the process tree rather than only the process js-debug launched. js-debug does not send the
-        // optional DAP `process` event, so the pids come from the resource's own captured output.
+        // the process tree rather than only the process js-debug launched. The pids come from the
+        // resource's own captured output because js-debug does not send the optional DAP `process`
+        // event when it runs inside VS Code: it only sends `process` from its standalone DAP server
+        // entry points, and even there it carries no `systemProcessId`.
+        // See https://github.com/microsoft/vscode-js-debug/blob/main/src/vsDebugServer.ts
         const debuggeePid = readReportedPid(proof, 'ASPIRE_E2E_NODE_PID');
         const childPid = readReportedPid(proof, 'ASPIRE_E2E_NODE_CHILD_PID');
         assert.ok(isProcessAlive(debuggeePid), `Expected the Node resource process ${debuggeePid} to still be running before debugging stops.`);
@@ -148,6 +151,11 @@ async function runResourceDebugProof(options: { stopDebuggingOnCompletion: boole
  *   ASPIRE_E2E_NODE_CHILD_PID=54321
  * The value arrives as a js-debug `output` event, which can split or batch lines, so the whole
  * captured output is searched rather than a single event.
+ *
+ * The stopped resource session is preferred but not required. js-debug launches the process from the
+ * parent session and, under `outputCapture: 'std'`, pipes its stdio over DAP from there, while the
+ * breakpoint is reported by the child session attached to the target - so the debuggee's output
+ * usually carries a different session id than the one that stopped.
  *
  * The proof starts the resource explicitly, which restarts a resource the AppHost had already
  * started, so more than one process can report a pid. The last reported pid belongs to the process

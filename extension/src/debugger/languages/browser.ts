@@ -11,11 +11,16 @@ import { ResourceDebuggerExtension } from "../debuggerExtensions";
  * "Configured debug type is not supported" once the session is already starting. js-debug only
  * contributes `pwa-chrome` and `pwa-msedge` for browsers:
  * https://github.com/microsoft/vscode-js-debug/blob/main/package.json
+ *
+ * A `Map` rather than an object literal because the lookup key is attacker-influenced data from the
+ * AppHost: an object literal inherits `Object.prototype`, so `toString`, `constructor`, `__proto__`
+ * and friends would resolve to inherited members and slip past the allowlist as a non-string debug
+ * type. `Map` has no such inherited keys.
  */
-const browserDebugTypesByName: Readonly<Record<string, string>> = Object.freeze({
-    msedge: 'pwa-msedge',
-    chrome: 'pwa-chrome',
-});
+const browserDebugTypesByName: ReadonlyMap<string, string> = new Map([
+    ['msedge', 'pwa-msedge'],
+    ['chrome', 'pwa-chrome'],
+]);
 
 export const browserDebuggerExtension: ResourceDebuggerExtension = {
     resourceType: 'browser',
@@ -37,10 +42,10 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
 
         // Map browser name to VS Code js-debug adapter type (pwa- prefix required)
         const browser = launchConfig.browser || 'msedge';
-        const debugType = browserDebugTypesByName[browser];
+        const debugType = browserDebugTypesByName.get(browser);
         if (!debugType) {
             extensionLogOutputChannel.warn(`No built-in js-debug adapter is registered for browser '${browser}'.`);
-            throw new Error(unsupportedBrowserDebugTarget(browser, Object.keys(browserDebugTypesByName).join(', ')));
+            throw new Error(unsupportedBrowserDebugTarget(browser, [...browserDebugTypesByName.keys()].join(', ')));
         }
 
         debugConfiguration.type = debugType;
