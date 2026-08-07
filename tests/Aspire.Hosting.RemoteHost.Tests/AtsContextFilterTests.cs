@@ -38,9 +38,9 @@ public class AtsContextFilterTests
     {
         var context = CreateContext();
 
-        Assert.DoesNotContain(
-            context.HandleTypes,
-            type => type.AtsTypeId.StartsWith("Aspire.Hosting.Redis/", StringComparison.Ordinal) && type.ClrType is not null);
+        Assert.All(
+            context.HandleTypes.Where(type => type.AtsTypeId.StartsWith("Aspire.Hosting.Redis/", StringComparison.Ordinal)),
+            type => Assert.Null(type.ClrType));
 
         Assert.Equal("Aspire.Hosting.Redis", AtsContextFilter.ResolveCanonicalAssemblyName(context, "aspire.hosting.redis"));
         Assert.NotEmpty(AtsContextFilter.FilterByExportingAssemblies(context, ["aspire.hosting.redis"]).HandleTypes);
