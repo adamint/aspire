@@ -68,6 +68,17 @@ function isHotReloadSettingContributed(): boolean {
         .inspect<boolean>(hotReloadConfigurationName)?.defaultValue !== undefined;
 }
 
+function isHotReloadSettingContributedWithDiagnostic(): boolean {
+    const contributed = isHotReloadSettingContributed();
+    if (!contributed && !hotReloadSettingMissingLoggedThisWindow) {
+        hotReloadSettingMissingLoggedThisWindow = true;
+        extensionLogOutputChannel.info(
+            `'${hotReloadConfigurationSection}.${hotReloadConfigurationName}' is not contributed by any installed extension, so Hot Reload cannot be offered.`);
+    }
+
+    return contributed;
+}
+
 /**
  * Returns whether Dev Kit applies Hot Reload edits on save. Defaults to true in Dev Kit.
  */
@@ -99,11 +110,59 @@ export function getHotReloadDiagnostics(): HotReloadDiagnostics {
     };
 }
 
+const maxTrackedHotReloadLaunches = 64;
+
+interface HotReloadLaunchState {
+    diagnostics: HotReloadDiagnostics;
+    messageShown: boolean;
+}
+
+const hotReloadLaunchStates = new Map<string, HotReloadLaunchState>();
+
+function getOrCreateHotReloadLaunchState(launchId: string, diagnostics: HotReloadDiagnostics): HotReloadLaunchState {
+    const existing = hotReloadLaunchStates.get(launchId);
+    if (existing) {
+        return existing;
+    }
+
+    // Aspire debug-session ids are unique per launch, but the extension can stay active for many
+    // runs. Bound the snapshots so a long-lived window cannot accumulate state forever. Evicting
+    // the oldest of 64 launches still leaves ample room for concurrently running Aspire apps.
+    if (hotReloadLaunchStates.size >= maxTrackedHotReloadLaunches) {
+        const oldestLaunchId = hotReloadLaunchStates.keys().next().value;
+        if (oldestLaunchId !== undefined) {
+            hotReloadLaunchStates.delete(oldestLaunchId);
+        }
+    }
+
+    const state: HotReloadLaunchState = {
+        diagnostics: { ...diagnostics },
+        messageShown: false
+    };
+    hotReloadLaunchStates.set(launchId, state);
+
+    return state;
+}
+
+/**
+ * Captures Hot Reload state on the first resource observed for an Aspire launch.
+ *
+ * Machine settings are global and can change while two Aspire apps are starting concurrently. A
+ * launch that began with Hot Reload disabled must not switch to active halfway through its sibling
+ * resources merely because another launch's prompt changed the setting.
+ */
+export function getHotReloadDiagnosticsForLaunch(launchId: string): HotReloadDiagnostics {
+    return getOrCreateHotReloadLaunchState(launchId, getHotReloadDiagnostics()).diagnostics;
+}
+
 /**
  * Whether Hot Reload is expected to apply to .NET project resources in this window.
  */
 function isHotReloadExpected(diagnostics: HotReloadDiagnostics): boolean {
-    return diagnostics.devKitInstalled && diagnostics.workspaceTrusted && diagnostics.settingEnabled;
+    return diagnostics.devKitInstalled
+        && diagnostics.workspaceTrusted
+        && diagnostics.settingEnabled
+        && isHotReloadSettingContributedWithDiagnostic();
 }
 
 /**
@@ -126,7 +185,7 @@ export function logHotReloadDiagnostics(resourceName: string, diagnostics: HotRe
             'The workspace is not trusted, so C# Dev Kit activates in limited mode and Hot Reload is unavailable.');
     }
 
-    if (!diagnostics.settingEnabled) {
+    if (diagnostics.workspaceTrusted && !diagnostics.settingEnabled) {
         extensionLogOutputChannel.info(
             "Hot Reload is disabled because 'csharp.experimental.debug.hotReload' is not enabled. " +
             'This setting is machine-scoped, so it must be set in user settings; workspace settings are ignored.');
@@ -179,17 +238,12 @@ let hotReloadPromptShownThisWindow = false;
 let hotReloadNoticeShownThisWindow = false;
 
 /**
- * The Aspire launch that already produced a Hot Reload message, if any.
+ * True once this window has reported that Dev Kit no longer contributes the experimental gate.
  *
- * The prompt and the notice describe mutually exclusive states, so at most one of them may speak for
- * a given launch. Keyed on the Aspire debug session, which every resource of one app run shares —
- * not on `runId`, which DCP generates per `PUT /run_session` and is therefore different for each
- * sibling resource. Keying on `runId` would let the prompt speak for one project and the notice for
- * the next, telling the user in the same breath to restart debugging and that Hot Reload is already
- * on. Not window-wide either: after the user enables the setting and starts debugging again, that
- * next launch is exactly when the notice should explain what Hot Reload now covers.
+ * Every .NET resource reads this state independently. Keep the diagnostic useful without repeating
+ * it for every sibling when Dev Kit renames or removes the setting.
  */
-let hotReloadMessageShownForLaunchId: string | undefined;
+let hotReloadSettingMissingLoggedThisWindow = false;
 
 /**
  * Supplies the extension context whose storage suppresses the Hot Reload prompt once dismissed.
@@ -203,7 +257,8 @@ export function initializeHotReloadPromptState(context: { globalState: vscode.Me
     hotReloadPromptState = context?.globalState;
     hotReloadPromptShownThisWindow = false;
     hotReloadNoticeShownThisWindow = false;
-    hotReloadMessageShownForLaunchId = undefined;
+    hotReloadSettingMissingLoggedThisWindow = false;
+    hotReloadLaunchStates.clear();
 }
 
 
@@ -243,6 +298,9 @@ async function suppressHotReloadPrompt(): Promise<void> {
  *   never use it.
  */
 export async function promptToEnableHotReloadIfNeeded(diagnostics: HotReloadDiagnostics, isDebugSession: boolean, launchId: string): Promise<boolean> {
+    const launchState = getOrCreateHotReloadLaunchState(launchId, diagnostics);
+    diagnostics = launchState.diagnostics;
+
     if (!isDebugSession || diagnostics.settingEnabled) {
         return false;
     }
@@ -258,15 +316,13 @@ export async function promptToEnableHotReloadIfNeeded(diagnostics: HotReloadDiag
     // The notice already spoke for this launch. Offering to turn on a setting the user was just told
     // is on would contradict it, which can happen when the value changes mid-launch via Settings Sync
     // or a profile switch while an Aspire app is still starting its resources.
-    if (hotReloadMessageShownForLaunchId === launchId) {
+    if (launchState.messageShown) {
         return false;
     }
 
-    if (!isHotReloadSettingContributed()) {
+    if (!isHotReloadSettingContributedWithDiagnostic()) {
         // Dev Kit no longer declares the gate this offer would write, so accepting it would put a
         // dead key in the user's settings and report success.
-        extensionLogOutputChannel.info(
-            `'${hotReloadConfigurationSection}.${hotReloadConfigurationName}' is not contributed by any installed extension, so Hot Reload cannot be offered.`);
         return false;
     }
 
@@ -279,7 +335,7 @@ export async function promptToEnableHotReloadIfNeeded(diagnostics: HotReloadDiag
     // Both flags are set before the first await. Aspire launches resources as independent requests
     // spread over seconds, so a five-project app would otherwise raise five identical prompts.
     hotReloadPromptShownThisWindow = true;
-    hotReloadMessageShownForLaunchId = launchId;
+    launchState.messageShown = true;
 
     const selection = await vscode.window.showInformationMessage(hotReloadAvailablePrompt, enableHotReloadLabel, dontShowAgainLabel);
 
@@ -361,6 +417,9 @@ const showHotReloadPanelCommand = 'csdevkit.debug.showHotReloadPanel';
  *    `csharp.debug.hotReloadVerbosity`.
  */
 export function announceHotReloadForSessionIfNeeded(diagnostics: HotReloadDiagnostics, isDebugSession: boolean, launchId: string): void {
+    const launchState = getOrCreateHotReloadLaunchState(launchId, diagnostics);
+    diagnostics = launchState.diagnostics;
+
     if (!isDebugSession || !isHotReloadExpected(diagnostics)) {
         return;
     }
@@ -372,7 +431,7 @@ export function announceHotReloadForSessionIfNeeded(diagnostics: HotReloadDiagno
     //
     // Scoped to the launch, not the window: the next launch is precisely when the user, having just
     // enabled the setting and restarted debugging as they were told to, should learn what it covers.
-    if (hotReloadMessageShownForLaunchId === launchId) {
+    if (launchState.messageShown) {
         return;
     }
 
@@ -383,7 +442,7 @@ export function announceHotReloadForSessionIfNeeded(diagnostics: HotReloadDiagno
     // Set before the first await so that concurrently launching resources cannot each raise a
     // notice, exactly as the enable prompt does.
     hotReloadNoticeShownThisWindow = true;
-    hotReloadMessageShownForLaunchId = launchId;
+    launchState.messageShown = true;
 
     // Deliberately carries no resource count or list. Resources launch as independent requests
     // spread over seconds, so anything counted at notice time reports whichever subset had arrived
@@ -399,30 +458,32 @@ export function announceHotReloadForSessionIfNeeded(diagnostics: HotReloadDiagno
         try {
             const selection = await vscode.window.showInformationMessage(notice, showHotReloadOutputLabel);
 
-            // Recorded only once the notification has actually been through the user, so a notice
-            // that was never delivered — Do Not Disturb, a window closed mid-launch — does not burn
-            // the one time this is ever shown. `hotReloadNoticeShownThisWindow` above already stops
-            // concurrently launching resources from stacking notices while this is pending.
-            //
-            // Caught separately from the action below: this is bookkeeping, and a storage failure
-            // must not swallow the button the user actually pressed.
+            if (selection === showHotReloadOutputLabel) {
+                try {
+                    await vscode.commands.executeCommand(showHotReloadPanelCommand);
+                }
+                catch (err) {
+                    // The user explicitly asked for this action, so do not burn the once-ever notice
+                    // when Dev Kit could not activate or execute its contributed command.
+                    extensionLogOutputChannel.warn(`Could not open the C# Dev Kit Hot Reload output: ${err instanceof Error ? err.message : String(err)}`);
+                    return;
+                }
+            }
+
+            // A dismissal means the notice was delivered and intentionally remains once-ever. A
+            // clicked action is recorded only after it succeeds, so command activation failures can
+            // offer the action again in a later window. `hotReloadNoticeShownThisWindow` above still
+            // stops concurrently launching resources from stacking notices while this is pending.
             try {
                 await hotReloadPromptState?.update(hotReloadSessionNoticeShownKey, true);
             }
             catch (err) {
                 extensionLogOutputChannel.warn(`Hot Reload notice could not be recorded as shown: ${err instanceof Error ? err.message : String(err)}`);
             }
-
-            if (selection !== showHotReloadOutputLabel) {
-                return;
-            }
-
-            await vscode.commands.executeCommand(showHotReloadPanelCommand);
         }
         catch (err) {
-            // Everything in here is advisory: the memento write is bookkeeping, and the output-panel
-            // command is contributed by Dev Kit and is not part of any contract with this extension.
-            // None of it is worth surfacing to a user who is trying to debug their app.
+            // The notification itself is advisory and fire-and-forget. Keep its failure out of the
+            // resource launch path and avoid an unhandled rejection.
             extensionLogOutputChannel.warn(`Hot Reload notice failed: ${err instanceof Error ? err.message : String(err)}`);
         }
     })();

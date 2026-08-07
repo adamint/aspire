@@ -11,6 +11,7 @@ import * as io from '../utils/io';
 import { ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
 import { AppHostParentOutputFilter, AspireDebugSession } from '../debugger/AspireDebugSession';
 import { initializeHotReloadPromptState } from '../debugger/hotReload';
+import { enableHotReloadLabel } from '../loc/strings';
 import { createTestMemento } from './common';
 
 class TestDotNetService {
@@ -485,7 +486,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         stubCsDevKitExtension({});
         // Already stubbed in setup; sinon refuses to wrap it twice, so reprogram the existing stub.
         const notification = vscode.window.showInformationMessage as sinon.SinonStub;
-        notification.resolves('Enable Hot Reload' as unknown as vscode.MessageItem);
+        notification.resolves(enableHotReloadLabel as unknown as vscode.MessageItem);
 
         // The first resource sees the setting off and is offered it; accepting flips it on, which is
         // what the second resource then reads.
@@ -509,6 +510,45 @@ suite('Dotnet Debugger Extension Tests', () => {
             notification.callCount,
             callsAfterFirstResource,
             'a sibling resource of the same launch must not contradict the message the launch already showed');
+    });
+
+    test('does not switch a concurrent Aspire launch from disabled to active mid-run', async () => {
+        initializeHotReloadPromptState({ globalState: createTestMemento() });
+        stubCsDevKitExtension({});
+        const notification = vscode.window.showInformationMessage as sinon.SinonStub;
+        let resolveEnablePrompt: ((value: string | undefined) => void) | undefined;
+        notification.onFirstCall().returns(new Promise<string | undefined>(resolve => {
+            resolveEnablePrompt = resolve;
+        }));
+
+        let settingEnabled = false;
+        sinon.stub(vscode.workspace, 'getConfiguration').returns({
+            get: (name: string) => name === 'hotReload' ? settingEnabled : true,
+            inspect: () => ({ key: 'hotReload', defaultValue: false }),
+            update: sinon.stub().callsFake(async () => { settingEnabled = true; })
+        } as unknown as vscode.WorkspaceConfiguration);
+
+        await createProjectDebugConfiguration({ runId: 'launch-a-resource-1', debugSessionId: 'launch-a' });
+        assert.strictEqual(notification.callCount, 1, 'launch A should still be waiting on its enable prompt');
+
+        // Launch B is a distinct parent Aspire session that starts while launch A's prompt remains
+        // pending. Its first resource snapshots Hot Reload as disabled.
+        await createProjectDebugConfiguration({ runId: 'launch-b-resource-1', debugSessionId: 'launch-b' });
+        assert.strictEqual(notification.callCount, 1, 'launch B must not raise a second enable prompt');
+
+        resolveEnablePrompt?.(enableHotReloadLabel);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        const callsAfterEnable = notification.callCount;
+
+        // A later sibling from launch B now reads the globally enabled setting. It still belongs to
+        // the launch that started with Hot Reload off, so it must not announce an active session.
+        await createProjectDebugConfiguration({ runId: 'launch-b-resource-2', debugSessionId: 'launch-b' });
+        await new Promise(resolve => setTimeout(resolve, 5));
+
+        assert.strictEqual(
+            notification.callCount,
+            callsAfterEnable,
+            'launch B must keep the Hot Reload state captured by its first resource');
     });
 
     test('advertises the coreclr project debugger and extracts project_path for .csproj and file-based .cs', () => {

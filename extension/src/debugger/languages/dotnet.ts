@@ -24,7 +24,7 @@ import {
 } from '../launchProfiles';
 import { AspireDebugSession } from '../AspireDebugSession';
 import { createAspireCliPathProcessEnvironment } from '../../utils/cliPathEnvironment';
-import { announceHotReloadForSessionIfNeeded, getHotReloadDiagnostics, logHotReloadDiagnostics, promptToEnableHotReloadIfNeeded } from '../hotReload';
+import { announceHotReloadForSessionIfNeeded, getHotReloadDiagnosticsForLaunch, logHotReloadDiagnostics, promptToEnableHotReloadIfNeeded } from '../hotReload';
 
 interface IDotNetService {
     getAndActivateDevKit(): Promise<boolean>
@@ -624,7 +624,7 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 // `launchOptions.debug`: the `dotnet run` and file-based-executable fallbacks above
                 // force `noDebug = true` while `launchOptions.debug` stays true.
                 const isDebugSession = debugConfiguration.noDebug !== true;
-                const hotReloadDiagnostics = getHotReloadDiagnostics();
+                const hotReloadDiagnostics = getHotReloadDiagnosticsForLaunch(launchOptions.debugSessionId);
                 logHotReloadDiagnostics(path.basename(projectPath), hotReloadDiagnostics, isDebugSession);
 
                 // Dev Kit ships Hot Reload behind an opt-in that older builds default to off, so a
@@ -635,13 +635,13 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 // the user interacts with it, and this callback runs before the debug session is
                 // created, so awaiting it would stall the resource behind an advisory message.
                 //
-                // `launchOptions.debugSessionId` identifies the Aspire launch this resource belongs to, and every
-                // sibling resource of the same app run carries the same one. Both messages take it so
-                // that only one of them can speak for a launch, without suppressing the other for the
-                // rest of the window: after the user enables the setting here and restarts debugging
-                // as instructed, that next launch is when the notice should explain what Hot Reload
-                // now covers. Not `runId` — DCP generates that per `PUT /run_session`, so it differs
-                // between sibling resources of a single launch.
+                // `AspireDcpServer` parses the parent Aspire debug-session id from each resource's
+                // DCP instance id and passes it as `launchOptions.debugSessionId`, so sibling
+                // resources of one app run share this value. Both messages take it so only one can
+                // speak for a launch without suppressing the other for the rest of the window:
+                // after the user enables the setting and restarts debugging, that next launch is
+                // when the notice should explain what Hot Reload now covers. Not `runId` — DCP
+                // generates that per `PUT /run_session`, so it differs between sibling resources.
                 void promptToEnableHotReloadIfNeeded(hotReloadDiagnostics, isDebugSession, launchOptions.debugSessionId)
                     .catch(err => extensionLogOutputChannel.warn(`Hot Reload prompt failed: ${err instanceof Error ? err.message : String(err)}`));
 

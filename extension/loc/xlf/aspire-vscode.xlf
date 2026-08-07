@@ -8,7 +8,7 @@
       <source xml:lang="en">({0} resources)</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.hotReloadAvailablePrompt">
-      <source xml:lang="en">.NET Hot Reload can apply code edits to running Aspire resources without restarting them. It is turned off in C# Dev Kit.</source>
+      <source xml:lang="en">.NET Hot Reload can apply code edits to running Aspire resources without restarting them. It is turned off in C# Dev Kit. Enabling it changes your user setting across workspaces.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.hotReloadActiveNoticeSaveDisabled">
       <source xml:lang="en">.NET Hot Reload is enabled for .NET project resources in this Aspire app, but &apos;csharp.debug.hotReloadOnSave&apos; is turned off, so saving does not apply edits. Use the Hot Reload button to apply pending edits. Dev Kit reports results in the .NET Hot Reload output.</source>
