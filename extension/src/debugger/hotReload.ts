@@ -216,7 +216,7 @@ export function logHotReloadDiagnostics(resourceName: string, diagnostics: HotRe
 }
 
 /**
- * Memento used to remember that the user dismissed the Hot Reload prompt.
+ * Memento that remembers that the user dismissed the Hot Reload prompt.
  *
  * Held at module scope, and initialized from `activate`, because the resource launch path that
  * discovers the disabled state has no access to the extension context.
@@ -446,8 +446,7 @@ export function announceHotReloadForSessionIfNeeded(diagnostics: HotReloadDiagno
 
     // Deliberately carries no resource count or list. Resources launch as independent requests
     // spread over seconds, so anything counted at notice time reports whichever subset had arrived
-    // and is wrong for the rest — an earlier version of this said "1 .NET resource" for a
-    // three-resource app. The claim made here is true regardless of launch timing, and the
+    // rather than the final app. The claim made here is true regardless of launch timing, and the
     // per-resource lines written by `logHotReloadDiagnostics` name each project as it starts.
     const notice = diagnostics.reloadOnSaveEnabled ? hotReloadActiveNotice : hotReloadActiveNoticeSaveDisabled;
 

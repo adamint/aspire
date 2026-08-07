@@ -11,7 +11,7 @@ import * as io from '../utils/io';
 import { ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
 import { AppHostParentOutputFilter, AspireDebugSession } from '../debugger/AspireDebugSession';
 import { initializeHotReloadPromptState } from '../debugger/hotReload';
-import { enableHotReloadLabel } from '../loc/strings';
+import { enableHotReloadLabel, hotReloadAvailablePrompt } from '../loc/strings';
 import { createTestMemento } from './common';
 
 class TestDotNetService {
@@ -392,9 +392,8 @@ suite('Dotnet Debugger Extension Tests', () => {
         // session into a failed one, so a throw has to degrade to "no Hot Reload" rather than
         // propagating out of the launch path.
         //
-        // Throws from the extension lookup itself, which is the first thing the launch path reads.
-        // An earlier version of this test threw from a Dev Kit export that the code stopped reading,
-        // so it passed without ever entering the catch it was written to cover.
+        // Throw from the extension lookup because it is the first optional external read and
+        // directly exercises this catch. Dev Kit activation exports are intentionally never read.
         sinon.stub(vscode.extensions, 'getExtension').throws(new Error('extension host is unavailable'));
         const warn = sinon.stub(extensionLogOutputChannel, 'warn');
 
@@ -443,7 +442,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(notification.called, false, 'a user without Dev Kit must never be prompted');
     });
 
-    async function createProjectDebugConfiguration(options: { debug?: boolean; runId?: string; debugSessionId?: string; debugSession?: AspireDebugSession } = {}): Promise<AspireResourceExtendedDebugConfiguration> {
+    async function createProjectDebugConfiguration(options: { debug?: boolean; runId?: string; debugSessionId?: string; debugSession?: AspireDebugSession; isApphost?: boolean } = {}): Promise<AspireResourceExtendedDebugConfiguration> {
         const outputPath = 'C:\\temp\\bin\\Debug\\net7.0\\TestProject.dll';
         const { extension, doesFileExistStub } = createDebuggerExtension(outputPath, null, true, true);
 
@@ -466,7 +465,7 @@ suite('Dotnet Debugger Extension Tests', () => {
             launchConfig,
             [],
             [],
-            { debug, runId: debugConfig.runId, debugSessionId: options.debugSessionId ?? '1', isApphost: false, debugSession: options.debugSession ?? sinon.createStubInstance(AspireDebugSession) },
+            { debug, runId: debugConfig.runId, debugSessionId: options.debugSessionId ?? '1', isApphost: options.isApphost ?? false, debugSession: options.debugSession ?? sinon.createStubInstance(AspireDebugSession) },
             debugConfig);
 
         // Restored so a caller can build a second configuration in the same test; sinon refuses to
@@ -475,6 +474,40 @@ suite('Dotnet Debugger Extension Tests', () => {
 
         return debugConfig;
     }
+
+    test('AppHost launch leaves the Hot Reload advisory for the first .NET resource', async () => {
+        initializeHotReloadPromptState({ globalState: createTestMemento() });
+        stubCsDevKitExtension({});
+        const notification = vscode.window.showInformationMessage as sinon.SinonStub;
+        notification.resolves(undefined);
+        sinon.stub(vscode.workspace, 'getConfiguration').returns({
+            get: () => false,
+            inspect: () => ({ key: 'hotReload', defaultValue: false }),
+            update: sinon.stub().resolves()
+        } as unknown as vscode.WorkspaceConfiguration);
+        const parentDebugSession = sinon.createStubInstance(AspireDebugSession);
+        Object.defineProperty(parentDebugSession, 'debugSessionId', { value: 'launch-1' });
+
+        await createProjectDebugConfiguration({
+            runId: 'apphost',
+            debugSessionId: 'launch-1-apphost',
+            debugSession: parentDebugSession,
+            isApphost: true
+        });
+        await new Promise(resolve => setTimeout(resolve, 5));
+
+        assert.strictEqual(notification.called, false, 'the AppHost must not show or consume resource Hot Reload UI');
+
+        await createProjectDebugConfiguration({
+            runId: 'resource-1',
+            debugSessionId: 'launch-1-resource-a',
+            debugSession: parentDebugSession
+        });
+        await new Promise(resolve => setTimeout(resolve, 5));
+
+        assert.strictEqual(notification.callCount, 1, 'the first .NET resource must still receive the advisory');
+        assert.strictEqual(notification.firstCall.args[0], hotReloadAvailablePrompt);
+    });
 
     test('scopes the Hot Reload messages to the Aspire launch, not to each resource', async () => {
         // DCP gives every resource a distinct raw instance id for adapter notification routing. The

@@ -612,6 +612,13 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 debugConfiguration.env['DOTNET_LAUNCH_PROFILE'] = profileName;
             }
 
+            // The AppHost is orchestration infrastructure, not a .NET resource covered by this
+            // advisory. Keeping it out prevents a polyglot app from seeing Hot Reload UI and leaves
+            // the one-time prompt or notice available for the first eligible .NET resource.
+            if (launchOptions.isApphost) {
+                return;
+            }
+
             // Hot Reload for .NET resources is provided entirely by C# Dev Kit and vsdbg; Aspire
             // launches a normal `coreclr` session and inherits it. Nothing here configures the
             // feature — it only reports the state and, when the feature is switched off, offers to

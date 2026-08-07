@@ -70,10 +70,9 @@ suite('Hot Reload Tests', () => {
     });
 
     test('does not depend on C# Dev Kit having activated', () => {
-        // Regression guard. Availability used to be gated on `extension.isActive` and on Dev Kit's
-        // `isLimitedActivation` export, which are only readable once Dev Kit finishes activating.
-        // Resources can launch before that, so a cold start silently produced no prompt and no
-        // notice. Workspace trust carries the same information and is always readable.
+        // Resources can launch before Dev Kit activates, so availability cannot depend on
+        // `extension.isActive` or activation exports. Workspace trust carries the limited-mode
+        // information needed here and is always readable.
         stubDevKit({ active: false, exports: undefined });
         stubWorkspaceTrust(true);
 
@@ -181,9 +180,8 @@ suite('Hot Reload Tests', () => {
     });
 
     test('does not claim to cover the resource when Hot Reload cannot run', () => {
-        // Regression guard. The "Hot Reload covers <resource>" line used to be written whenever the
-        // setting was on, so an untrusted workspace produced a log that both reported the blocker
-        // and then contradicted it.
+        // Workspace trust is a complete blocker. A coverage line here would contradict the trust
+        // diagnostic and tell the user that an unavailable feature applies to the resource.
         const info = sinon.stub(extensionLogOutputChannel, 'info');
 
         logHotReloadDiagnostics('api', {
@@ -484,10 +482,9 @@ suite('Hot Reload Tests', () => {
         });
 
         test('makes no claim that depends on how many resources have launched', () => {
-            // Regression guard. An earlier version counted the resources seen so far and announced
-            // "1 .NET resource(s)" for a three-resource app, because Aspire launches resources as
-            // independent requests spread over seconds rather than all at once. Any count or list
-            // in this string is wrong for whichever resources had not started yet.
+            // Aspire launches resources independently over several seconds, so the notice cannot
+            // know the final resource set. Any count or list would describe only the subset that
+            // happened to start before the notice.
             assert.strictEqual(/\d/.test(hotReloadActiveNotice), false, hotReloadActiveNotice);
         });
 
