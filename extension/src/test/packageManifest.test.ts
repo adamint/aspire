@@ -49,6 +49,8 @@ type ExtensionManifest = {
     };
 };
 
+const extensionRoot = path.resolve(__dirname, '../..');
+
 function readManifest(): ExtensionManifest {
     const manifestPath = path.resolve(__dirname, '../../package.json');
     return JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as ExtensionManifest;
@@ -297,11 +299,54 @@ suite('extension/package.json TypeScript 7 bridge', () => {
 
         assert.ok(typecheck, 'Expected a "typecheck" script that runs the TypeScript 7 native compiler');
         assert.ok(
-            typecheck.includes('--noEmit'),
-            `Expected the typecheck script to pass --noEmit, got "${typecheck}"`);
+            typecheck.includes('scripts/typecheck-native.js'),
+            `Expected the typecheck script to delegate to scripts/typecheck-native.js, got "${typecheck}"`);
+
+        // The resolver exists so the compiler is not addressed by a hardcoded node_modules path.
+        // Asserting on how it locates the binary — module resolution, then the package's own `bin`
+        // declaration — pins the mechanism rather than just the absence of one bad string.
+        const resolver = fs.readFileSync(path.join(extensionRoot, 'scripts', 'typecheck-native.js'), 'utf8');
         assert.ok(
-            typecheck.includes('@typescript/native'),
-            `Expected the typecheck script to resolve the native compiler explicitly, got "${typecheck}"`);
+            resolver.includes("require.resolve(`${nativePackageName}/package.json`"),
+            'Expected typecheck-native.js to locate the compiler with require.resolve');
+        assert.ok(
+            resolver.includes('packageJson.bin'),
+            'Expected typecheck-native.js to read the executable path from the package\'s own bin field');
+
+        // Both TypeScript projects have to pass the native compiler. tsconfig.json omits src/test-e2e,
+        // which is compiled separately, so checking only tsconfig.json would leave the e2e sources
+        // unverified against TypeScript 7.
+        for (const project of ['tsconfig.json', 'tsconfig.e2e.json']) {
+            assert.ok(
+                resolver.includes(`'${project}'`),
+                `Expected typecheck-native.js to type-check ${project}`);
+            assert.ok(
+                fs.existsSync(path.join(extensionRoot, project)),
+                `Expected ${project} to exist for the native typecheck`);
+        }
+    });
+
+    // The native compiler is a Go binary delivered through per-platform optional dependencies, so a
+    // lockfile that is missing an entry fails at run time on that platform only. CI runs the
+    // extension build on Linux, Windows and macOS, and contributors work on arm64 and x64 on all
+    // three, so every one of those combinations has to be present in the resolved lockfile.
+    test('the lockfile carries the native compiler binary for every platform CI and contributors build on', () => {
+        const lockfile = fs.readFileSync(path.join(extensionRoot, 'yarn.lock'), 'utf8');
+
+        const requiredPlatformPackages = [
+            'typescript-linux-x64',
+            'typescript-linux-arm64',
+            'typescript-win32-x64',
+            'typescript-win32-arm64',
+            'typescript-darwin-x64',
+            'typescript-darwin-arm64',
+        ];
+
+        for (const platformPackage of requiredPlatformPackages) {
+            assert.ok(
+                lockfile.includes(`@typescript/${platformPackage}@`),
+                `Expected yarn.lock to resolve @typescript/${platformPackage}. Regenerate it with "corepack yarn install" so the native compiler works on that platform.`);
+        }
     });
 
     test('pretest runs the native typecheck alongside the existing compile and lint steps', () => {

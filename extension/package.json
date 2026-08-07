@@ -1025,7 +1025,7 @@
     "compile-tests": "tsc6 -p . --outDir out",
     "compile-e2e": "node -e \"require('fs').rmSync('out/test-e2e',{recursive:true,force:true})\" && tsc6 -p tsconfig.e2e.json",
     "watch-tests": "tsc6 -p . -w --outDir out",
-    "typecheck": "node ./node_modules/@typescript/native/bin/tsc --noEmit -p tsconfig.json",
+    "typecheck": "node ./scripts/typecheck-native.js",
     "pretest": "yarn run compile-tests && yarn run compile && yarn run lint && yarn run typecheck",
     "lint": "eslint src",
     "unit-test": "vscode-test",

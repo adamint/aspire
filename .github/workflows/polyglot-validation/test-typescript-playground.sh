@@ -2,7 +2,8 @@
 # Polyglot SDK Validation - TypeScript validation AppHosts
 # Iterates all TypeScript validation AppHosts under tests/PolyglotAppHosts/*/TypeScript,
 # runs 'aspire restore --apphost' to regenerate the per-integration .aspire/modules/ SDK, and
-# type-checks each AppHost with the TypeScript 7 native compiler against the generated API surface.
+# type-checks each AppHost twice: once with the TypeScript the AppHost's own package.json declares,
+# and once with the TypeScript 7 native compiler.
 set -euo pipefail
 
 echo "=== TypeScript Validation AppHost Codegen Validation ==="
@@ -22,24 +23,29 @@ if ! command -v npm &> /dev/null; then
     exit 1
 fi
 
-if ! command -v npx &> /dev/null; then
-    echo "❌ npx not found in PATH (Node.js required to run typescript@7 when tsc is not installed)"
-    exit 1
-fi
-
 # TypeScript 7 is the native (Go) port of the compiler. Since 7.0 GA it ships as the plain
 # `typescript` package with a `tsc` binary; the pre-GA `@typescript/native-preview` package and its
 # `tsgo` binary are being retired, and nightly builds have moved to `typescript@next`. See
 # https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/.
 #
-# A `tsc` already on PATH can be any TypeScript version (6.x and older are JavaScript builds), so it
-# is only used when it reports 7.x. `tsc --version` prints e.g. "Version 7.0.2".
+# Dockerfile.typescript installs this compiler globally from NPM_REGISTRY, so it is always on PATH
+# in CI. There is deliberately no `npx` fallback: `npx --yes` resolves through whatever registry the
+# invoking environment happens to have configured, which for this repository would acquire the
+# compiler from outside the approved dotnet-public-npm feed. Failing with the install command is
+# honest about the missing prerequisite instead of silently changing where the toolchain comes from.
+#
+# A `tsc` on PATH can be any TypeScript version (6.x and older are JavaScript builds), so it is only
+# accepted when it reports 7.x. `tsc --version` prints e.g. "Version 7.0.2".
 TYPESCRIPT_VERSION="${TYPESCRIPT_VERSION:-7}"
-if command -v tsc &> /dev/null && [[ "$(tsc --version 2>/dev/null)" == "Version 7."* ]]; then
-    TYPESCRIPT_COMMAND=(tsc)
-else
-    TYPESCRIPT_COMMAND=(npx --yes --package "typescript@${TYPESCRIPT_VERSION}" -- tsc)
+NPM_REGISTRY="${NPM_REGISTRY:-https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/}"
+if ! command -v tsc &> /dev/null || [[ "$(tsc --version 2>/dev/null)" != "Version 7."* ]]; then
+    echo "❌ A TypeScript 7 'tsc' is required on PATH to type-check the generated API surface."
+    echo "   Found: $(command -v tsc &> /dev/null && tsc --version || echo 'no tsc on PATH')"
+    echo "   Install it from the approved feed with:"
+    echo "     npm install --global --registry \"${NPM_REGISTRY}\" \"typescript@${TYPESCRIPT_VERSION}\""
+    exit 1
 fi
+TYPESCRIPT_COMMAND=(tsc)
 
 detect_parallelism() {
     if [ -n "${MAX_PARALLEL_TYPESCRIPT_VALIDATIONS:-}" ]; then
@@ -166,6 +172,10 @@ typecheck_command_text() {
     echo "tsc --noEmit --project tsconfig.json"
 }
 
+declared_typecheck_command_text() {
+    echo "node_modules/.bin/tsc --noEmit --project tsconfig.json"
+}
+
 run_install() {
     case "$1" in
         npm) npm install --ignore-scripts --no-audit --no-fund ;;
@@ -177,6 +187,30 @@ run_install() {
 
 run_typecheck() {
     "${TYPESCRIPT_COMMAND[@]}" --noEmit --project tsconfig.json
+}
+
+# Compiles the generated API surface with the TypeScript the AppHost's own package.json declares,
+# rather than only with the native TypeScript 7 compiler the workflow supplies.
+#
+# Without this leg the installed toolchain is never used: CI would type-check with a compiler no
+# scaffolded AppHost actually has, so generated code that the declared compiler rejects would reach
+# users with the polyglot job green. The two legs answer different questions — this one is "does the
+# compiler users run accept the surface we generate", the TypeScript 7 leg is "will it still be
+# accepted once the native compiler is the default".
+#
+# Every package manager installs a `tsc` shim into node_modules/.bin, including Bun and pnpm with
+# --ignore-workspace, so the binary is resolved by path instead of through `npm exec`/`bunx`, which
+# would fall back to fetching the package when it is missing locally.
+run_declared_typecheck() {
+    local declared_tsc="node_modules/.bin/tsc"
+
+    if [ ! -x "$declared_tsc" ]; then
+        echo "  ❌ $declared_tsc is missing after install; the AppHost must declare typescript in its devDependencies"
+        return 1
+    fi
+
+    echo "  → declared TypeScript: $("$declared_tsc" --version)"
+    "$declared_tsc" --noEmit --project tsconfig.json
 }
 
 ensure_package_manager_available() {
@@ -271,6 +305,14 @@ validate_apphost() {
     if ! aspire restore --non-interactive --apphost apphost.mts 2>&1; then
         echo "  ❌ aspire restore failed for $integration_name"
         printf 'FAIL|%s|aspire restore\n' "$integration_name" > "$result_file"
+        return 1
+    fi
+
+    declared_typecheck_command=$(declared_typecheck_command_text)
+    echo "  → $declared_typecheck_command..."
+    if ! run_declared_typecheck 2>&1; then
+        echo "  ❌ Declared-toolchain TypeScript compilation failed for $integration_name"
+        printf 'FAIL|%s|declared tsc\n' "$integration_name" > "$result_file"
         return 1
     fi
 
