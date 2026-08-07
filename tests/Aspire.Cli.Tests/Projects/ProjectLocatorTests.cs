@@ -29,6 +29,24 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
             workingDirectory);
     }
 
+    // A single-file AppHost is recognized by the `#:sdk Aspire.AppHost.Sdk` file-based app
+    // directive rather than by a project file, so discovery tests need a file that carries it.
+    // See https://learn.microsoft.com/dotnet/core/sdk/file-based-programs for the directive format.
+    private static async Task<FileInfo> CreateSingleFileAppHostAsync(DirectoryInfo directory)
+    {
+        var appHostFile = new FileInfo(Path.Combine(directory.FullName, "apphost.cs"));
+        await File.WriteAllTextAsync(
+            appHostFile.FullName,
+            """
+            #:sdk Aspire.AppHost.Sdk
+            using Aspire.Hosting;
+            var builder = DistributedApplication.CreateBuilder(args);
+            builder.Build().Run();
+            """);
+
+        return appHostFile;
+    }
+
     [Fact]
     public async Task UseOrFindAppHostProjectFileThrowsIfExplicitProjectFileDoesNotExist()
     {
@@ -228,20 +246,11 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
     // existed. The legacy settings file is exercised here (rather than aspire.config.json) because
     // that is the shape reported in the issue.
     [Fact]
-    public async Task UseOrFindAppHostProjectFileFallsBackToSingleFileAppHostWhenLegacySettingsPathIsMissing()
+    public async Task UseOrFindAppHostProjectFileFallsBackToSingleFileAppHostWhenLegacySettingsFileSpecifiesMissingAppHostPath()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
-        var appHostDirectory = workspace.WorkspaceRoot.CreateSubdirectory("SingleFile");
-        var appHostFile = new FileInfo(Path.Combine(appHostDirectory.FullName, "apphost.cs"));
-        await File.WriteAllTextAsync(
-            appHostFile.FullName,
-            """
-            #:sdk Aspire.AppHost.Sdk
-            using Aspire.Hosting;
-            var builder = DistributedApplication.CreateBuilder(args);
-            builder.Build().Run();
-            """);
+        var appHostFile = await CreateSingleFileAppHostAsync(workspace.WorkspaceRoot.CreateSubdirectory("SingleFile"));
 
         // "../apphost.cs" is the exact relative path from the issue report: it resolves to the
         // workspace root, where no apphost.cs exists.
@@ -263,20 +272,11 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
     // Companion to the legacy-settings regression test above, covering the modern
     // aspire.config.json shape that replaced .aspire/settings.json.
     [Fact]
-    public async Task UseOrFindAppHostProjectFileFallsBackToSingleFileAppHostWhenConfigFilePathIsMissing()
+    public async Task UseOrFindAppHostProjectFileFallsBackToSingleFileAppHostWhenConfigFileSpecifiesMissingAppHostPath()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
-        var appHostDirectory = workspace.WorkspaceRoot.CreateSubdirectory("SingleFile");
-        var appHostFile = new FileInfo(Path.Combine(appHostDirectory.FullName, "apphost.cs"));
-        await File.WriteAllTextAsync(
-            appHostFile.FullName,
-            """
-            #:sdk Aspire.AppHost.Sdk
-            using Aspire.Hosting;
-            var builder = DistributedApplication.CreateBuilder(args);
-            builder.Build().Run();
-            """);
+        var appHostFile = await CreateSingleFileAppHostAsync(workspace.WorkspaceRoot.CreateSubdirectory("SingleFile"));
 
         var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
         await File.WriteAllTextAsync(configPath, JsonSerializer.Serialize(new
