@@ -3,7 +3,6 @@
 
 using System.Globalization;
 using System.Text;
-using Aspire.Cli.Backchannel;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Tests.TestServices;
@@ -138,79 +137,5 @@ public class ExtensionInteractionServiceTests(ITestOutputHelper outputHelper)
 
         // The background pump should exit promptly after disposal.
         await extensionInteractionService.PumpTask.DefaultTimeout();
-    }
-
-    [Fact]
-    public async Task WriteAppHostLogEntryAsync_BlocksTheProducerWhenTheExtensionStopsDraining()
-    {
-        var output = new StringBuilder();
-        var console = AnsiConsole.Create(new AnsiConsoleSettings
-        {
-            Ansi = AnsiSupport.Yes,
-            ColorSystem = ColorSystemSupport.TrueColor,
-            Out = new AnsiConsoleOutput(new StringWriter(output)),
-            Enrichment = new ProfileEnrichment { UseDefaultEnrichers = false }
-        });
-
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var consoleInteractionService = new ConsoleInteractionService(
-            new ConsoleEnvironment(console, console),
-            workspace.CreateExecutionContext(),
-            TestHelpers.CreateInteractiveHostEnvironment(),
-            new EnvironmentProcessPathProvider(),
-            NullLoggerFactory.Instance,
-            new ConsoleLogBufferContext());
-
-        // Wedge the extension on the first entry so the pump cannot drain, then keep writing.
-        // Without a bound the producer would never block and the CLI would buffer every record.
-        var firstEntryReceived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseExtension = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var written = 0;
-        var backchannel = new TestExtensionBackchannel
-        {
-            WriteAppHostLogEntryAsyncCallback = async _ =>
-            {
-                if (Interlocked.Increment(ref written) == 1)
-                {
-                    firstEntryReceived.TrySetResult();
-                    await releaseExtension.Task;
-                }
-            }
-        };
-        using var extensionInteractionService = new ExtensionInteractionService(
-            consoleInteractionService,
-            backchannel,
-            extensionPromptEnabled: false,
-            logger: NullLogger<ExtensionInteractionService>.Instance);
-
-        await extensionInteractionService.WriteAppHostLogEntryAsync(CreateEntry(1), CancellationToken.None).DefaultTimeout();
-        await firstEntryReceived.Task.DefaultTimeout();
-
-        var producer = Task.Run(async () =>
-        {
-            for (var sequenceNumber = 2L; sequenceNumber <= 4096; sequenceNumber++)
-            {
-                await extensionInteractionService.WriteAppHostLogEntryAsync(CreateEntry(sequenceNumber), CancellationToken.None);
-            }
-        });
-
-        Assert.False(producer.IsCompleted);
-        await Assert.ThrowsAsync<TimeoutException>(() => producer.WaitAsync(TimeSpan.FromMilliseconds(250)));
-
-        releaseExtension.TrySetResult();
-        await producer.DefaultTimeout();
-        await extensionInteractionService.FlushAsync().DefaultTimeout();
-
-        Assert.Equal(4096, Volatile.Read(ref written));
-
-        static ExtensionAppHostLogEntry CreateEntry(long sequenceNumber) => new()
-        {
-            SequenceNumber = sequenceNumber,
-            Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 0, TimeSpan.Zero),
-            LogLevel = "Information",
-            Message = "Message",
-            CategoryName = "Example.Category",
-            EventId = 0,
-        };
     }
 }

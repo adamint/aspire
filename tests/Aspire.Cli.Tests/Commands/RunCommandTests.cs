@@ -3391,9 +3391,9 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
         await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, extensionInteractionService, CancellationToken.None);
         await extensionInteractionService.FlushAsync();
 
+        // The Trace and Debug entries above are deliberately absent: they stay off the RPC pump,
+        // and the debug console still shows them via the AppHost's own console output.
         Assert.Collection(forwardedEntries,
-            entry => Assert.Equal((1L, "Trace", "Trace message", (string?)null), (entry.SequenceNumber, entry.LogLevel, entry.Message, entry.Exception)),
-            entry => Assert.Equal((2L, "Debug", "Debug message", (string?)null), (entry.SequenceNumber, entry.LogLevel, entry.Message, entry.Exception)),
             entry => Assert.Equal((3L, "Information", "Repeated message", (string?)null), (entry.SequenceNumber, entry.LogLevel, entry.Message, entry.Exception)),
             entry => Assert.Equal((4L, "Information", "Repeated message", (string?)null), (entry.SequenceNumber, entry.LogLevel, entry.Message, entry.Exception)),
             entry => Assert.Equal((5L, "Warning", "Warning message\nwith details", (string?)null), (entry.SequenceNumber, entry.LogLevel, entry.Message, entry.Exception)),
@@ -3649,6 +3649,100 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
                 Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 1, TimeSpan.Zero),
                 LogLevel = LogLevel.Information,
                 Message = "Identified message",
+                EventId = new EventId(),
+                CategoryName = "Example.Category",
+            };
+
+            await Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task CaptureAppHostLogsAsync_NeverForwardsTraceOrDebugToTheExtension()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var errorWriter = new TestStartupErrorWriter();
+        using var fileLoggerProvider = new FileLoggerProvider(logFilePath, errorWriter);
+        var forwardedMessages = new List<string>();
+        var forwardedEntries = new List<ExtensionAppHostLogEntry>();
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (capability, _) => Task.FromResult(capability == KnownCapabilities.AppHostLogOutput),
+            WriteAppHostLogEntryAsyncCallback = entry =>
+            {
+                forwardedEntries.Add(entry);
+                return Task.CompletedTask;
+            },
+            WriteDebugSessionMessageAsyncCallback = (message, _, _) =>
+            {
+                forwardedMessages.Add(message);
+                return Task.CompletedTask;
+            }
+        };
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+        var consoleInteractionService = new ConsoleInteractionService(
+            provider.GetRequiredService<ConsoleEnvironment>(),
+            workspace.CreateExecutionContext(logFilePath: logFilePath),
+            TestHelpers.CreateInteractiveHostEnvironment(),
+            new EnvironmentProcessPathProvider(),
+            NullLoggerFactory.Instance,
+            new ConsoleLogBufferContext());
+        using var extensionInteractionService = new ExtensionInteractionService(
+            consoleInteractionService,
+            extensionBackchannel,
+            extensionPromptEnabled: false,
+            logger: NullLogger<ExtensionInteractionService>.Instance);
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetAppHostLogEntriesAsyncCallback = YieldEntries
+        };
+
+        await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, extensionInteractionService, CancellationToken.None);
+        await extensionInteractionService.FlushAsync();
+
+        // Each forwarded entry costs a blocking JSON-RPC round trip on a single-reader pump, so
+        // the two highest-volume levels stay off it. Nothing is lost: the AppHost writes the same
+        // records to its own console, which reaches the debug console over the debug adapter.
+        Assert.Equal(["Information message"], forwardedEntries.Select(entry => entry.Message));
+        Assert.Empty(forwardedMessages);
+
+        // Every level still reaches the CLI log file, which is what diagnoses a bad run.
+        fileLoggerProvider.Dispose();
+        var logFileContent = await File.ReadAllTextAsync(logFilePath);
+        Assert.Contains("Trace message", logFileContent);
+        Assert.Contains("Debug message", logFileContent);
+        Assert.Contains("Information message", logFileContent);
+
+        static async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return new BackchannelLogEntry
+            {
+                SequenceNumber = 1,
+                Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 0, TimeSpan.Zero),
+                LogLevel = LogLevel.Trace,
+                Message = "Trace message",
+                EventId = new EventId(),
+                CategoryName = "Example.Category",
+            };
+
+            yield return new BackchannelLogEntry
+            {
+                SequenceNumber = 2,
+                Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 1, TimeSpan.Zero),
+                LogLevel = LogLevel.Debug,
+                Message = "Debug message",
+                EventId = new EventId(),
+                CategoryName = "Example.Category",
+            };
+
+            yield return new BackchannelLogEntry
+            {
+                SequenceNumber = 3,
+                Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 2, TimeSpan.Zero),
+                LogLevel = LogLevel.Information,
+                Message = "Information message",
                 EventId = new EventId(),
                 CategoryName = "Example.Category",
             };

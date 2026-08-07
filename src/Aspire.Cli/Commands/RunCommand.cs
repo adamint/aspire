@@ -1094,46 +1094,56 @@ internal sealed class RunCommand : BaseCommand
 
             await foreach (var entry in logEntries.WithCancellation(cancellationToken))
             {
-                if (extensionInteractionService is not null)
-                {
-                    // BackchannelLoggerProvider.WriteEntry stamps a sequence number starting at 1
-                    // under its lock and is the only producer of BackchannelLogEntry, so a non-zero
-                    // value proves the AppHost understands the identity-bearing shape. An AppHost
-                    // that predates it deserializes into the current type as 0, which the structured
-                    // path cannot use: the extension needs the sequence number to recognize replayed
-                    // entries after a reconnect and to correlate an entry with the console copy of
-                    // the same record. Testing the sentinel per entry also covers the auxiliary
-                    // backchannel, which re-exports this stream under a different capability
-                    // vocabulary that a negotiated token would not reach.
-                    if (extensionSupportsStructuredLogs && entry.SequenceNumber > 0)
-                    {
-                        await extensionInteractionService.WriteAppHostLogEntryAsync(new ExtensionAppHostLogEntry
-                        {
-                            SequenceNumber = entry.SequenceNumber,
-                            Timestamp = entry.Timestamp,
-                            LogLevel = entry.LogLevel.ToString(),
-                            Message = entry.Message,
-                            CategoryName = entry.CategoryName,
-                            EventId = entry.EventId.Id,
-                            EventName = entry.EventId.Name,
-                            Exception = entry.Exception,
-                        }, cancellationToken).ConfigureAwait(false);
-                    }
-                    else if (entry.LogLevel is not LogLevel.Trace and not LogLevel.Debug)
-                    {
-                        // Older extensions only accept plain debug-session messages.
-                        extensionInteractionService.WriteDebugSessionMessage(entry.Message, entry.LogLevel is not LogLevel.Error and not LogLevel.Critical, "\x1b[2m");
-                    }
-                }
-
-                // Write to the unified log file via FileLoggerProvider. The AppHost sends the
+                // Write to the unified log file via FileLoggerProvider first. The AppHost sends the
                 // exception separately because the default log formatter drops it, so append it
-                // here or the CLI log file keeps losing stack traces.
+                // here or the CLI log file keeps losing stack traces. This runs ahead of the
+                // extension forwarding below so a slow or wedged extension can never cost the CLI
+                // its own log file, which is the artifact used to diagnose exactly that failure.
                 var shortCategory = FileLoggerProvider.GetShortCategoryName(entry.CategoryName);
                 var message = entry.Exception is { Length: > 0 } exceptionText
                     ? $"{entry.Message}{Environment.NewLine}{exceptionText}"
                     : entry.Message;
                 fileLoggerProvider.WriteLog(entry.Timestamp, entry.LogLevel, $"AppHost/{shortCategory}", message);
+
+                // Trace and Debug are deliberately never forwarded to the extension. Each forwarded
+                // entry costs one blocking JSON-RPC round trip on a single-reader pump, so those two
+                // levels are the difference between a bounded trickle and an unbounded one, and the
+                // extension loses nothing by not receiving them: the AppHost also writes every record
+                // to its own console, which arrives over the debug adapter and is parsed and styled
+                // by the same code path. Forwarding them would only add a second copy to deduplicate.
+                if (extensionInteractionService is null || entry.LogLevel is LogLevel.Trace or LogLevel.Debug)
+                {
+                    continue;
+                }
+
+                // BackchannelLoggerProvider.WriteEntry stamps a sequence number starting at 1
+                // under its lock and is the only producer of BackchannelLogEntry, so a non-zero
+                // value proves the AppHost understands the identity-bearing shape. An AppHost
+                // that predates it deserializes into the current type as 0, which the structured
+                // path cannot use: the extension needs the sequence number to recognize replayed
+                // entries after a reconnect and to correlate an entry with the console copy of
+                // the same record. Testing the sentinel per entry also covers the auxiliary
+                // backchannel, which re-exports this stream under a different capability
+                // vocabulary that a negotiated token would not reach.
+                if (extensionSupportsStructuredLogs && entry.SequenceNumber > 0)
+                {
+                    extensionInteractionService.WriteAppHostLogEntry(new ExtensionAppHostLogEntry
+                    {
+                        SequenceNumber = entry.SequenceNumber,
+                        Timestamp = entry.Timestamp,
+                        LogLevel = entry.LogLevel.ToString(),
+                        Message = entry.Message,
+                        CategoryName = entry.CategoryName,
+                        EventId = entry.EventId.Id,
+                        EventName = entry.EventId.Name,
+                        Exception = entry.Exception,
+                    });
+                }
+                else
+                {
+                    // Older extensions only accept plain debug-session messages.
+                    extensionInteractionService.WriteDebugSessionMessage(entry.Message, entry.LogLevel is not LogLevel.Error and not LogLevel.Critical, "\x1b[2m");
+                }
             }
         }
         catch (OperationCanceledException)
