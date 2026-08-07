@@ -5,7 +5,8 @@ import { AppHostDiscoveryService, getDebugTargetForCandidate } from '../utils/ap
 import type { CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { appHostTelemetryTargetPathConfigKey } from './AspireDebugConfigurationMetadata';
+import { isDirectory } from '../utils/io';
+import { appHostSelectionOriginConfigKey, appHostTelemetryTargetPathConfigKey } from './AspireDebugConfigurationMetadata';
 
 export class AspireDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
     constructor(private readonly _appHostDiscoveryService: AppHostDiscoveryService) {
@@ -35,12 +36,14 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
             type: 'aspire',
             request: 'launch',
             name: defaultConfigurationName,
-            program: getDebugTargetForCandidate(candidate)
+            program: getDebugTargetForCandidate(candidate),
+            [appHostSelectionOriginConfigKey]: 'default-discovery',
         }];
     }
 
     async resolveDebugConfiguration(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration, token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration | null | undefined> {
         const aspireConfig = config as AspireExtendedDebugConfiguration;
+        this.ensureAppHostSelectionOrigin(aspireConfig);
         if (!aspireConfig.skipCliAvailabilityCheck) {
             const result = await checkCliAvailableOrRedirect('debug_gate');
             if (!result.available) {
@@ -69,10 +72,17 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
 
     async resolveDebugConfigurationWithSubstitutedVariables(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration, token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration | null | undefined> {
         const aspireConfig = config as AspireExtendedDebugConfiguration;
+        this.ensureAppHostSelectionOrigin(aspireConfig);
         delete aspireConfig.skipCliAvailabilityCheck;
 
         if (typeof config.program === 'string') {
             const program = config.program;
+            if (aspireConfig[appHostSelectionOriginConfigKey] === 'explicit-launch-configuration' && await isDirectory(program)) {
+                // A directory delegates AppHost selection to normal discovery; only a file identity
+                // is owned by the explicit launch configuration.
+                aspireConfig[appHostSelectionOriginConfigKey] = 'default-discovery';
+            }
+
             config.program = await this.resolveDebugTarget(program, folder);
 
             const telemetryTarget = await this.tryFindWorkspaceDefaultCandidate(program, folder);
@@ -122,7 +132,18 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
             type: 'aspire',
             request: 'launch',
             name: defaultConfigurationName,
-            program: folder.uri.fsPath
+            program: folder.uri.fsPath,
+            [appHostSelectionOriginConfigKey]: 'default-discovery',
         };
+    }
+
+    private ensureAppHostSelectionOrigin(config: AspireExtendedDebugConfiguration): void {
+        if (config[appHostSelectionOriginConfigKey]) {
+            return;
+        }
+
+        config[appHostSelectionOriginConfigKey] = config.program
+            ? 'explicit-launch-configuration'
+            : 'default-discovery';
     }
 }

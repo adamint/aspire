@@ -35,6 +35,9 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
         var projectFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "AppHost.csproj"));
+        var configFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName));
+        const string originalConfig = """{"appHost":{"path":"Default.csproj"}}""";
+        await File.WriteAllTextAsync(configFile.FullName, originalConfig);
 
         var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
         var projectLocator = CreateProjectLocator(executionContext);
@@ -44,6 +47,39 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         });
 
         Assert.Equal(ErrorStrings.ProjectFileDoesntExist, ex.Message);
+        Assert.Equal(originalConfig, await File.ReadAllTextAsync(configFile.FullName));
+    }
+
+    [Fact]
+    public async Task UseOrFindAppHostProjectFileDoesNotWriteConfigWhenValidationIsCanceled()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var projectFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "AppHost.csproj"));
+        await File.WriteAllTextAsync(projectFile.FullName, "Not a real project file.");
+        var configFile = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName));
+        const string originalConfig = """{"appHost":{"path":"Default.csproj"}}""";
+        await File.WriteAllTextAsync(configFile.FullName, originalConfig);
+
+        var projectFactory = new TestAppHostProjectFactory
+        {
+            ValidateAppHostAsyncCallback = (_, cancellationToken) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Task.FromResult(new AppHostValidationResult(IsValid: true));
+            }
+        };
+        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var projectLocator = CreateProjectLocator(executionContext, projectFactory: projectFactory);
+        using var cancellationTokenSource = new CancellationTokenSource();
+        cancellationTokenSource.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            projectLocator.UseOrFindAppHostProjectFileAsync(
+                projectFile,
+                createSettingsFile: true,
+                cancellationTokenSource.Token));
+
+        Assert.Equal(originalConfig, await File.ReadAllTextAsync(configFile.FullName));
     }
 
     [Fact]

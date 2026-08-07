@@ -551,9 +551,13 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
-    [InlineData("run", true)]
-    [InlineData("run --apphost ./AppHost.csproj", false)]
-    public async Task RunCommand_PersistsAppHostSelectionOnlyWhenImplicit(string commandLine, bool expectedCreateSettingsFile)
+    [InlineData("run", null, true)]
+    [InlineData("run --apphost ./AppHost.csproj", null, true)]
+    [InlineData("run", "default-discovery", true)]
+    [InlineData("run --apphost ./AppHost.csproj", "user-selection", true)]
+    [InlineData("run", "explicit-launch-configuration", false)]
+    [InlineData("run --apphost ./AppHost.csproj", "explicit-launch-configuration", false)]
+    public async Task RunCommand_PersistsAppHostSelectionBasedOnOrigin(string commandLine, string? selectionOrigin, bool expectedCreateSettingsFile)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         bool? createSettingsFile = null;
@@ -568,6 +572,10 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
         {
             options.ProjectLocatorFactory = _ => projectLocator;
+            if (selectionOrigin is not null)
+            {
+                options.ConfigurationCallback = config => config[KnownConfigNames.CliAppHostSelectionOrigin] = selectionOrigin;
+            }
         });
         using var provider = services.BuildServiceProvider();
 
