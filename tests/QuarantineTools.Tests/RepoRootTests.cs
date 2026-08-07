@@ -265,6 +265,95 @@ public class RepoRootTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task Tool_RefusesWithTheWrongTreeExitCode_AndLeavesTheOtherTreeUntouched()
+    {
+        Assert.SkipUnless(IsGitAvailable(), "git is not available on PATH");
+
+        // A stale GIT_DIR/GIT_WORK_TREE is the case this guard is for: git answers with a tree the
+        // caller is not standing in, so every edit would land there. It is not what fixes the reported
+        // nested-worktree bug, where the outer checkout genuinely is an ancestor of the caller.
+        var elsewhere = CreateRepositoryWithASampleTest("elsewhere");
+        var here = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "here")).FullName;
+        var sample = Path.Combine(elsewhere, "tests", "Sample", "SampleTests.cs");
+        var before = await File.ReadAllTextAsync(sample, TestContext.Current.CancellationToken);
+
+        var (exitCode, standardError) = await RunToolAsync(here, new Dictionary<string, string>
+        {
+            ["GIT_DIR"] = Path.Combine(elsewhere, ".git"),
+            ["GIT_WORK_TREE"] = elsewhere,
+        });
+
+        Assert.Equal(Program.ExitCodeWrongTree, exitCode);
+        Assert.Contains(elsewhere, standardError, StringComparison.Ordinal);
+        Assert.Contains(here, standardError, StringComparison.Ordinal);
+
+        // The payload assertion. Everything else here checks how the refusal is reported; this checks
+        // that the other tree was actually left alone.
+        Assert.Equal(before, await File.ReadAllTextAsync(sample, TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// Creates a git repository containing a single sample test file.
+    /// </summary>
+    private string CreateRepositoryWithASampleTest(string name)
+    {
+        var repository = Directory.CreateDirectory(Path.Combine(_scratch.FullName, name)).FullName;
+        Directory.CreateDirectory(Path.Combine(repository, "tests", "Sample"));
+        File.WriteAllText(
+            Path.Combine(repository, "tests", "Sample", "SampleTests.cs"),
+            "namespace N; public class C { public void M() { } }");
+
+        RunGit(repository, "init", "-q", "-b", "main", ".");
+        return repository;
+    }
+
+    /// <summary>
+    /// Runs the built tool in <paramref name="workingDirectory"/>. The environment is applied to the
+    /// child process only, so this stays safe under parallel test execution.
+    /// </summary>
+    private static async Task<(int ExitCode, string StandardError)> RunToolAsync(string workingDirectory, IDictionary<string, string> environment)
+    {
+        // The tool is a project reference, so its assembly and apphost sit in this test's output folder.
+        var toolAssembly = typeof(Program).Assembly.Location;
+        var appHost = Path.ChangeExtension(toolAssembly, OperatingSystem.IsWindows() ? ".exe" : null);
+        var useAppHost = File.Exists(appHost);
+
+        var startInfo = new ProcessStartInfo(useAppHost ? appHost : "dotnet")
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+
+        if (!useAppHost)
+        {
+            startInfo.ArgumentList.Add(toolAssembly);
+        }
+
+        startInfo.ArgumentList.Add("-q");
+        startInfo.ArgumentList.Add("-i");
+        startInfo.ArgumentList.Add("https://github.com/microsoft/aspire/issues/1234");
+        startInfo.ArgumentList.Add("N.C.M");
+
+        foreach (var (key, value) in environment)
+        {
+            startInfo.Environment[key] = value;
+        }
+
+        using var process = Process.Start(startInfo) ?? throw new InvalidOperationException("Failed to start the tool.");
+
+        // Read both streams concurrently to avoid deadlock when a pipe buffer fills.
+        var standardErrorTask = process.StandardError.ReadToEndAsync();
+        var standardOutputTask = process.StandardOutput.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        await Task.WhenAll(standardErrorTask, standardOutputTask);
+
+        return (process.ExitCode, standardErrorTask.Result);
+    }
+
     /// <summary>
     /// Creates a main checkout with a linked worktree nested inside it. The nesting is the point: the
     /// worktree's <c>.git</c> is a file, so a probe that only looks for a <c>.git</c> directory walks

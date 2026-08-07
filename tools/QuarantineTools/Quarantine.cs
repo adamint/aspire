@@ -52,7 +52,7 @@ public class Program
     /// Exit code for refusing to edit a tree the caller is not standing in. Distinct from the other
     /// failure codes (2 = tests folder not found, 3 = no matching test) so a caller can tell them apart.
     /// </summary>
-    private const int ExitCodeWrongTree = 4;
+    internal const int ExitCodeWrongTree = 4;
 
     /// <summary>
     /// Matches the conventional MAXSYMLINKS limit; bounds link resolution so a symlink cycle terminates.
