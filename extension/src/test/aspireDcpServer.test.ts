@@ -6,6 +6,7 @@ import * as https from 'https';
 import * as sinon from 'sinon';
 import WebSocket from 'ws';
 import type { AspireDebugSession } from '../debugger/AspireDebugSession';
+import { nodeDebuggerExtension } from '../debugger/languages/node';
 import AspireDcpServer, { DcpServerOptions, getSessionRoutingKey } from '../dcp/AspireDcpServer';
 import type { AspireResourceDebugSession, NodeLaunchConfiguration, ProcessRestartedNotification, RunSessionNotification, RunSessionPayload, ServiceLogsNotification, SessionMessageNotification, SessionTerminatedNotification } from '../dcp/types';
 import { extensionLogOutputChannel } from '../utils/logging';
@@ -262,6 +263,43 @@ suite('Aspire DCP server', () => {
             session_id: runId,
         });
         assert.strictEqual(getInternals(harness.dcpServer)._runSessions.get(runId)?.lifecycle, 'stopRequested');
+    });
+
+    test('DELETE during debug configuration creation prevents debug session launch', async () => {
+        const originalCreateDebugSessionConfigurationCallback = nodeDebuggerExtension.createDebugSessionConfigurationCallback;
+        const configurationCreationStarted = createDeferred<void>();
+        const configurationCreationCompleted = createDeferred<void>();
+        nodeDebuggerExtension.createDebugSessionConfigurationCallback = async (...args) => {
+            configurationCreationStarted.resolve();
+            await configurationCreationCompleted.promise;
+            return await originalCreateDebugSessionConfigurationCallback?.(...args);
+        };
+
+        try {
+            const client = await openNotificationClient(harness);
+
+            const createPromise = createRunSession(harness);
+            await configurationCreationStarted.promise;
+            const [{ runId }] = getInternals(harness.dcpServer)._runSessions.values();
+
+            const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+            const notification = await client.waitForNotification();
+            configurationCreationCompleted.resolve();
+            const createResponse = await createPromise;
+            await drainNotifications(client);
+
+            assert.strictEqual(deleteResponse.statusCode, 200);
+            assert.strictEqual(createResponse.statusCode, 409);
+            assert.strictEqual(harness.startAndGetDebugSession.notCalled, true);
+            assert.deepStrictEqual(client.notifications, [notification]);
+            assert.deepStrictEqual(notification, {
+                notification_type: 'sessionTerminated',
+                session_id: runId,
+            });
+            assert.strictEqual(getInternals(harness.dcpServer)._runSessions.get(runId)?.lifecycle, 'stopRequested');
+        } finally {
+            nodeDebuggerExtension.createDebugSessionConfigurationCallback = originalCreateDebugSessionConfigurationCallback;
+        }
     });
 
     test('startup failure and a late adapter exit produce one terminal notification', async () => {

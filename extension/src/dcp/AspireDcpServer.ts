@@ -438,6 +438,17 @@ export default class AspireDcpServer {
                         foundDebuggerExtension
                     );
 
+                    if (run.lifecycle !== 'starting') {
+                        cleanupRun(runId);
+                        const error: ErrorDetails = {
+                            code: 'RunSessionTerminated',
+                            message: `Run session ${runId} was terminated while its debug session was starting.`,
+                            details: []
+                        };
+                        res.status(409).json({ error }).end();
+                        return;
+                    }
+
                     const resourceDebugSession = preparedSession.alreadyStartedSession
                         ? aspireDebugSession.trackAlreadyStartedResourceSession(preparedSession.debugConfiguration, preparedSession.alreadyStartedSession)
                         : await aspireDebugSession.startAndGetDebugSession(preparedSession.debugConfiguration);
