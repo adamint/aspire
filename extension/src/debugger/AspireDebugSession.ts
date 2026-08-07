@@ -667,29 +667,42 @@ export class AspireDebugSession implements vscode.DebugAdapter {
             debugConfig,
             (runId, dcpId) => this.sendSessionTerminated(runId, dcpId));
 
-          if (this._disposed) {
-            extensionLogOutputChannel.info(`Stopping debug session that started after Aspire session disposal: ${session.name} (run id: ${session.configuration.runId})`);
-            resolved = true;
-            // Resolve once the stop has settled either way: a failed stop still finished the run
-            // (see ResourceSessionTermination.stopCore), and leaving this promise pending would
-            // stall startAndGetDebugSession until its 10s safety timeout.
-            void termination.stop().then(
-              () => resolve(undefined),
-              () => resolve(undefined));
-            return;
-          }
-
           const stopSession = () => {
             extensionLogOutputChannel.info(`Stopping debug session: ${session.name} (run id: ${session.configuration.runId})`);
 
             return termination.stop();
           };
 
+          // Built before the disposal check because both paths hand it out: the normal path tracks
+          // it, and the disposal path returns it when the stop fails so the caller can retry.
           const vsCodeDebugSession: AspireResourceDebugSession = {
             id: session.id,
             session: session,
             stopSession
           };
+
+          if (this._disposed) {
+            extensionLogOutputChannel.info(`Stopping debug session that started after Aspire session disposal: ${session.name} (run id: ${session.configuration.runId})`);
+            resolved = true;
+
+            // The Aspire session is gone, so this session will never be tracked in
+            // _resourceDebugSessions. Watch for its termination anyway: if the stop below fails, an
+            // end that arrives later is the only thing left that can finish the run's lifecycle.
+            termination.watchForDebugSessionEnd();
+
+            void termination.stop().then(
+              () => resolve(undefined),
+              () => {
+                // A rejected stop means the session started and is still running. Resolving
+                // undefined here would be read by the /run_session caller as "the debugger never
+                // started", and it responds to that by calling cleanupRun(runId) -- which for a
+                // browser recursively deletes the profile of the browser VS Code just failed to
+                // stop. Hand back the session instead so the caller keeps a handle it can retry
+                // with, which is the same invariant stopCore() preserves on the normal path.
+                resolve(vsCodeDebugSession);
+              });
+            return;
+          }
 
           termination.watchForDebugSessionEnd();
 

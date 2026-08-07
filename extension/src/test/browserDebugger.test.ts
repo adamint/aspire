@@ -677,6 +677,70 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
     });
 
+    // The DCP /run_session handler reads `undefined` from startAndGetDebugSession as "the debugger
+    // never started" and responds by calling cleanupRun(runId), which recursively deletes the
+    // browser profile. A session that started and then failed to stop is still running, so it must
+    // not be reported that way or the cleanup would delete a live browser's profile.
+    test('returns the session when a start after disposal cannot be stopped', async () => {
+        const harness = new DebugSessionHarness({ stopDebugging: 'deferred' });
+        harness.onBeforeSessionStarted = () => harness.aspireDebugSession.dispose();
+        const debugConfig = createResourceDebugConfig();
+        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
+
+        const resourceDebugSessionPromise = harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        harness.failStopDebugging(new Error('VS Code failed to stop the session'));
+        const resourceDebugSession = await resourceDebugSessionPromise;
+
+        // Handed back rather than undefined, so the caller does not treat this as a failed start.
+        assert.ok(resourceDebugSession, 'Expected the started session to be returned after a failed stop');
+        assert.strictEqual(resourceDebugSession.session.configuration.runId, 'run-1');
+        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
+        assert.strictEqual(harness.rm.called, false);
+
+        // The returned handle supports a real retry, and the profile is only cleaned up once the
+        // stop actually succeeds.
+        const retry = resourceDebugSession.stopSession();
+        harness.finishStopDebugging();
+        await retry;
+
+        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
+            notification_type: 'sessionTerminated',
+            session_id: 'run-1',
+            dcp_id: 'dcp-1'
+        }]);
+        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
+    });
+
+    // Even when nothing retries the stop, the run must still be able to complete: a session that
+    // ends on its own later is the only remaining path to reporting termination and cleaning up.
+    test('finishes a start after disposal when a failed stop is followed by a real termination', async () => {
+        const harness = new DebugSessionHarness({ stopDebugging: 'deferred' });
+        harness.onBeforeSessionStarted = () => harness.aspireDebugSession.dispose();
+        const debugConfig = createResourceDebugConfig();
+        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
+
+        const resourceDebugSessionPromise = harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        harness.failStopDebugging(new Error('VS Code failed to stop the session'));
+        const resourceDebugSession = await resourceDebugSessionPromise;
+        assert.ok(resourceDebugSession);
+        assert.strictEqual(harness.rm.called, false);
+
+        harness.terminateSession(resourceDebugSession.session);
+
+        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
+            notification_type: 'sessionTerminated',
+            session_id: 'run-1',
+            dcp_id: 'dcp-1'
+        }]);
+        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
+    });
+
     test('openDashboard debugFirefox launches the Firefox debug configuration', async () => {
         // The dashboard Firefox launch path is distinct from resource-based browser debugging:
         // it builds its own debug configuration in AspireDebugSession.launchDebugBrowser rather
