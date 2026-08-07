@@ -62,6 +62,29 @@ suite('AspireDebugSession tests', () => {
         tempDirs.length = 0;
     });
 
+    test('extension shutdown reuses an in-flight CLI stop request', async () => {
+        let completeStop!: () => void;
+        const stopRequest = new Promise<void>(resolve => {
+            completeStop = resolve;
+        });
+        const stopCli = sinon.stub().returns(stopRequest);
+        const parentDebugSession = {
+            id: 'aspire-session',
+            configuration: {},
+        } as unknown as vscode.DebugSession;
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession, {} as any, {} as any, {} as any, () => { });
+        (aspireDebugSession as any)._rpcClient = { stopCli };
+
+        const firstRequest = aspireDebugSession.requestCliStopForExtensionShutdown();
+        const secondRequest = aspireDebugSession.requestCliStopForExtensionShutdown();
+
+        assert.strictEqual(secondRequest, firstRequest);
+        sinon.assert.calledOnce(stopCli);
+
+        completeStop();
+        await firstRequest;
+    });
+
     test('suppresses the Aspire CLI first-run banner for extension-managed launches', async () => {
         const parentDebugSession = {
             id: 'aspire-session',

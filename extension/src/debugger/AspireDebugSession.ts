@@ -74,6 +74,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private readonly _disposables: vscode.Disposable[] = [];
   private _disposed = false;
   private _parentStopPromise: Thenable<void> | undefined;
+  private _cliStopPromise: Promise<void> | undefined;
   // Timestamp for the `debug/apphost/end` duration measurement. Captured the first
   // time we observe a `launch` request so it covers the actual user-visible session
   // lifetime, not the moment the AspireDebugSession object was constructed.
@@ -133,6 +134,15 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     finally {
       await this.stopParentDebugSessionOnce();
     }
+  }
+
+  requestCliStopForExtensionShutdown(): Promise<void> {
+    if (!this._rpcClient) {
+      return Promise.resolve();
+    }
+
+    this._cliStopPromise ??= this._rpcClient.stopCli();
+    return this._cliStopPromise;
   }
 
   private stopParentDebugSessionOnce(): Thenable<void> {
@@ -435,7 +445,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
     this._disposables.push({
       dispose: () => {
-        this._rpcClient?.stopCli().catch((err) => {
+        void this.requestCliStopForExtensionShutdown().catch((err) => {
           extensionLogOutputChannel.info(`stopCli failed (connection may already be closed): ${err}`);
         });
         extensionLogOutputChannel.info(`Requested Aspire CLI exit with args: ${args.join(' ')}`);
