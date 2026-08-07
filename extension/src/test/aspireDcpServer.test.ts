@@ -563,6 +563,97 @@ suite('Aspire DCP server', () => {
         });
     });
 
+    test('DELETE hands notifications queued for the previous owner to a same-prefix replacement', async () => {
+        const replacementDcpId = `${harness.dcpSessionId}-replacement`;
+        const ownerClient = await openNotificationClient(harness);
+        const createResponse = await createRunSession(harness);
+        const runLocation = createResponse.headers.location;
+        assert.ok(runLocation);
+        const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
+        const adapterNotificationHandler = harness.dcpServer.createRunSessionNotificationHandler(runId);
+        await closeNotificationClient(harness, ownerClient);
+
+        const log: ServiceLogsNotification = {
+            notification_type: 'serviceLogs',
+            session_id: runId,
+            dcp_id: harness.dcpId,
+            is_std_err: false,
+            log_message: 'before the owner went away',
+        };
+        adapterNotificationHandler(log);
+
+        // The exact owner requests the stop while its own socket is already gone, so the
+        // terminal notification is queued under the owner's DCP instance ID.
+        const ownerResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        assert.strictEqual(ownerResponse.statusCode, 200);
+        assert.deepStrictEqual(getInternals(harness.dcpServer).pendingNotificationQueueByDcpId.get(harness.dcpId), [
+            log,
+            {
+                notification_type: 'sessionTerminated',
+                session_id: runId,
+                dcp_id: harness.dcpId,
+            },
+        ]);
+
+        const replacementClient = await openNotificationClient(harness, replacementDcpId);
+        const replacementResponse = await request(harness, 'DELETE', `/run_session/${runId}`, undefined, replacementDcpId);
+        await replacementClient.waitForNotification(notification => notification.notification_type === 'sessionTerminated');
+
+        assert.strictEqual(replacementResponse.statusCode, 200);
+        assert.deepStrictEqual(replacementClient.notifications, [
+            {
+                notification_type: 'serviceLogs',
+                session_id: runId,
+                is_std_err: false,
+                log_message: 'before the owner went away',
+            },
+            {
+                notification_type: 'sessionTerminated',
+                session_id: runId,
+            },
+        ]);
+        assert.strictEqual(getInternals(harness.dcpServer).pendingNotificationQueueByDcpId.has(harness.dcpId), false);
+    });
+
+    test('DELETE leaves queued notifications for other runs with the previous owner', async () => {
+        const replacementDcpId = `${harness.dcpSessionId}-replacement`;
+        const ownerClient = await openNotificationClient(harness);
+        const transferredCreateResponse = await createRunSession(harness);
+        const transferredLocation = transferredCreateResponse.headers.location;
+        assert.ok(transferredLocation);
+        const transferredRunId = transferredLocation.substring(transferredLocation.lastIndexOf('/') + 1);
+        const retainedCreateResponse = await createRunSession(harness);
+        const retainedLocation = retainedCreateResponse.headers.location;
+        assert.ok(retainedLocation);
+        const retainedRunId = retainedLocation.substring(retainedLocation.lastIndexOf('/') + 1);
+        const retainedNotificationHandler = harness.dcpServer.createRunSessionNotificationHandler(retainedRunId);
+        await closeNotificationClient(harness, ownerClient);
+
+        const retainedLog: ServiceLogsNotification = {
+            notification_type: 'serviceLogs',
+            session_id: retainedRunId,
+            dcp_id: harness.dcpId,
+            is_std_err: false,
+            log_message: 'still owned by the previous DCP instance',
+        };
+        retainedNotificationHandler(retainedLog);
+        const ownerResponse = await request(harness, 'DELETE', `/run_session/${transferredRunId}`);
+        assert.strictEqual(ownerResponse.statusCode, 200);
+
+        const replacementClient = await openNotificationClient(harness, replacementDcpId);
+        const replacementResponse = await request(harness, 'DELETE', `/run_session/${transferredRunId}`, undefined, replacementDcpId);
+        await replacementClient.waitForNotification(notification => notification.notification_type === 'sessionTerminated');
+
+        assert.strictEqual(replacementResponse.statusCode, 200);
+        assert.deepStrictEqual(replacementClient.notifications, [
+            {
+                notification_type: 'sessionTerminated',
+                session_id: transferredRunId,
+            },
+        ]);
+        assert.deepStrictEqual(getInternals(harness.dcpServer).pendingNotificationQueueByDcpId.get(harness.dcpId), [retainedLog]);
+    });
+
     test('DELETE rejects a same-prefix replacement without a registered WebSocket', async () => {
         const replacementDcpId = `${harness.dcpSessionId}-replacement`;
         const ownerClient = await openNotificationClient(harness);

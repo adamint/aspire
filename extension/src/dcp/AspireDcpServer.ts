@@ -552,7 +552,18 @@ export default class AspireDcpServer {
                         // The full DCP instance ID distinguishes concurrent executions. Transfer
                         // ownership only after the old execution can no longer receive notifications
                         // and the same-session replacement has established its own socket.
+                        const previousOwnerDcpId = run.ownerDcpId;
                         run.ownerDcpId = dcpId;
+                        // Anything already queued for the previous owner would otherwise be
+                        // stranded: that execution is gone and will never reconnect under its
+                        // instance ID, so the queue is never drained. This matters most for a
+                        // `sessionTerminated` queued by an earlier DELETE from the exact owner
+                        // whose socket had already dropped — the terminal-state early return
+                        // below answers 200 without emitting anything new (the run is already
+                        // `stopRequested` and `terminalNotificationSent` is set), so the
+                        // replacement would never learn the session ended. Hand the queue over
+                        // before that early return.
+                        dcpServer._transferQueuedNotificationsToOwner(run, previousOwnerDcpId);
                     }
                     if (run.lifecycle === 'stopRequested' || run.lifecycle === 'completed') {
                         res.status(200).end();
@@ -865,6 +876,48 @@ export default class AspireDcpServer {
             ...(exitCode === undefined ? {} : { exit_code: exitCode }),
         };
         this._sendNotification(notification);
+    }
+
+    /**
+     * Moves notifications already queued for `previousDcpId` onto the run's current
+     * owner during a DELETE-driven ownership transfer.
+     *
+     * The pending queue is only drained when a WebSocket upgrade arrives for that exact
+     * DCP instance ID. A replaced execution never reconnects under its old ID, so
+     * anything left behind is dropped permanently — including the `sessionTerminated`
+     * that DCP needs to observe (https://github.com/microsoft/aspire/issues/15426).
+     *
+     * Only this run's notifications move. Other runs still owned by `previousDcpId`
+     * keep their place in the original queue and transfer with their own DELETE.
+     */
+    private _transferQueuedNotificationsToOwner(run: RunSessionState, previousDcpId: string): void {
+        if (this._disposed || previousDcpId === run.ownerDcpId) {
+            return;
+        }
+
+        const queued = this.pendingNotificationQueueByDcpId.get(previousDcpId);
+        if (!queued) {
+            return;
+        }
+
+        const transferred = queued.filter(notification => notification.session_id === run.runId);
+        if (transferred.length === 0) {
+            return;
+        }
+
+        const retained = queued.filter(notification => notification.session_id !== run.runId);
+        if (retained.length === 0) {
+            this.pendingNotificationQueueByDcpId.delete(previousDcpId);
+        } else {
+            this.pendingNotificationQueueByDcpId.set(previousDcpId, retained);
+        }
+
+        // Re-route in the original order so the new owner observes the same sequence the
+        // previous owner would have. `_sendNotification` delivers immediately when the new
+        // owner's socket is open and re-queues under the new ID otherwise.
+        for (const notification of transferred) {
+            this._sendNotification({ ...notification, dcp_id: run.ownerDcpId });
+        }
     }
 
     private _sendNotification(notification: RunSessionNotification): void {
