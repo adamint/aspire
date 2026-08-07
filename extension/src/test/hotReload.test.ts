@@ -1,20 +1,20 @@
 import * as assert from 'assert';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { announceHotReloadForSessionIfNeeded, getHotReloadDiagnostics, initializeHotReloadPromptState, isHotReloadSettingEnabled, logHotReloadDiagnostics, promptToEnableHotReloadIfNeeded } from '../debugger/hotReload';
+import { announceHotReloadForSessionIfNeeded, getHotReloadDiagnostics, initializeHotReloadPromptState, isHotReloadOnSaveEnabled, isHotReloadSettingEnabled, logHotReloadDiagnostics, promptToEnableHotReloadIfNeeded } from '../debugger/hotReload';
 import { hotReloadPromptSuppressedKey, hotReloadSessionNoticeShownKey } from '../utils/hotReloadNotificationState';
 import { createTestMemento } from './common';
-import { hotReloadActiveNotice, hotReloadAvailablePrompt, hotReloadEnabled } from '../loc/strings';
+import { hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadAvailablePrompt, hotReloadEnabled } from '../loc/strings';
 import { extensionLogOutputChannel } from '../utils/logging';
 
 suite('Hot Reload Tests', () => {
     teardown(() => sinon.restore());
 
     /**
-     * Stubs extension lookup so only C# Dev Kit resolves, with a caller-controlled exports shape and
-     * activation state. Anything else (including the C# extension) resolves to undefined.
+     * Stubs extension lookup so only C# Dev Kit resolves. Anything else (including the C#
+     * extension) resolves to undefined.
      */
-    function stubDevKit(options: { active?: boolean; exports?: unknown } = {}): void {
+    function stubDevKit(options: { active?: boolean; exports?: unknown; activate?: () => void } = {}): void {
         sinon.stub(vscode.extensions, 'getExtension').callsFake((extensionId: string) => {
             if (extensionId !== 'ms-dotnettools.csdevkit') {
                 return undefined;
@@ -23,7 +23,8 @@ suite('Hot Reload Tests', () => {
             return {
                 id: extensionId,
                 isActive: options.active ?? true,
-                exports: options.exports
+                exports: options.exports,
+                activate: options.activate
             } as unknown as vscode.Extension<unknown>;
         });
     }
@@ -32,31 +33,54 @@ suite('Hot Reload Tests', () => {
         sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
     }
 
+    /**
+     * `vscode.workspace.isTrusted` is a plain property, so it is replaced rather than stubbed.
+     */
+    function stubWorkspaceTrust(trusted: boolean): void {
+        const descriptor = Object.getOwnPropertyDescriptor(vscode.workspace, 'isTrusted');
+        Object.defineProperty(vscode.workspace, 'isTrusted', { value: trusted, configurable: true });
+        restoreTrust = () => {
+            if (descriptor) {
+                Object.defineProperty(vscode.workspace, 'isTrusted', descriptor);
+            }
+        };
+    }
+
+    let restoreTrust: (() => void) | undefined;
+    teardown(() => { restoreTrust?.(); restoreTrust = undefined; });
+
     test('reports Hot Reload as unavailable when C# Dev Kit is not installed', () => {
         stubNoExtensions();
 
         const diagnostics = getHotReloadDiagnostics();
 
         assert.strictEqual(diagnostics.devKitInstalled, false);
-        assert.strictEqual(diagnostics.devKitActive, false);
-        assert.strictEqual(diagnostics.devKitLimitedActivation, false);
     });
 
     test('does not activate C# Dev Kit when it has not activated itself', () => {
         // Activating Dev Kit from the resource launch path would add startup cost for a purely
-        // optional enhancement, so an installed-but-dormant Dev Kit must be reported as inactive
-        // rather than woken up.
+        // optional enhancement.
         const activate = sinon.spy();
-        sinon.stub(vscode.extensions, 'getExtension').callsFake((extensionId: string) =>
-            extensionId === 'ms-dotnettools.csdevkit'
-                ? ({ id: extensionId, isActive: false, exports: undefined, activate } as unknown as vscode.Extension<unknown>)
-                : undefined);
+        stubDevKit({ active: false, activate });
 
         const diagnostics = getHotReloadDiagnostics();
 
         assert.strictEqual(diagnostics.devKitInstalled, true);
-        assert.strictEqual(diagnostics.devKitActive, false);
         assert.strictEqual(activate.called, false, 'Dev Kit must never be activated from the resource launch path');
+    });
+
+    test('does not depend on C# Dev Kit having activated', () => {
+        // Regression guard. Availability used to be gated on `extension.isActive` and on Dev Kit's
+        // `isLimitedActivation` export, which are only readable once Dev Kit finishes activating.
+        // Resources can launch before that, so a cold start silently produced no prompt and no
+        // notice. Workspace trust carries the same information and is always readable.
+        stubDevKit({ active: false, exports: undefined });
+        stubWorkspaceTrust(true);
+
+        const diagnostics = getHotReloadDiagnostics();
+
+        assert.strictEqual(diagnostics.devKitInstalled, true);
+        assert.strictEqual(diagnostics.workspaceTrusted, true);
     });
 
     test('never reaches into C# Dev Kit private services to set up Hot Reload', () => {
@@ -75,40 +99,34 @@ suite('Hot Reload Tests', () => {
         assert.strictEqual(ensureInitialized.called, false);
     });
 
-    test('reports limited activation when C# Dev Kit activated for an untrusted workspace', () => {
-        // In limited activation Dev Kit returns ONLY this flag, and Hot Reload cannot work at all
-        // until the workspace is trusted.
-        stubDevKit({ exports: { isLimitedActivation: true } });
+    test('treats an untrusted workspace as unable to hot reload', () => {
+        // Dev Kit activates in limited mode for an untrusted workspace, returning only
+        // `{ isLimitedActivation: true }` and no service broker, so Hot Reload cannot work.
+        stubDevKit();
+        stubWorkspaceTrust(false);
 
-        const diagnostics = getHotReloadDiagnostics();
-
-        assert.strictEqual(diagnostics.devKitInstalled, true);
-        assert.strictEqual(diagnostics.devKitActive, true);
-        assert.strictEqual(diagnostics.devKitLimitedActivation, true);
+        assert.strictEqual(getHotReloadDiagnostics().workspaceTrusted, false);
     });
 
-    test('does not report limited activation for a fully activated C# Dev Kit', () => {
-        stubDevKit({ exports: { isLimitedActivation: false } });
+    test('reads whether Dev Kit applies edits on save', () => {
+        const getConfiguration = sinon.stub(vscode.workspace, 'getConfiguration');
+        getConfiguration.withArgs('csharp.debug').returns({
+            get: (name: string) => name === 'hotReloadOnSave' ? false : undefined
+        } as unknown as vscode.WorkspaceConfiguration);
+        getConfiguration.withArgs('csharp.experimental.debug').returns({
+            get: () => true
+        } as unknown as vscode.WorkspaceConfiguration);
 
-        assert.strictEqual(getHotReloadDiagnostics().devKitLimitedActivation, false);
+        assert.strictEqual(isHotReloadOnSaveEnabled(), false);
     });
 
-    test('tolerates undefined C# Dev Kit exports', () => {
-        stubDevKit({ exports: undefined });
+    test('treats an unset hotReloadOnSave as enabled, matching the Dev Kit default', () => {
+        const getConfiguration = sinon.stub(vscode.workspace, 'getConfiguration');
+        getConfiguration.withArgs('csharp.debug').returns({
+            get: () => undefined
+        } as unknown as vscode.WorkspaceConfiguration);
 
-        const diagnostics = getHotReloadDiagnostics();
-
-        assert.strictEqual(diagnostics.devKitActive, true);
-        assert.strictEqual(diagnostics.devKitLimitedActivation, false);
-    });
-
-    test('tolerates an unexpected C# Dev Kit exports shape', () => {
-        stubDevKit({ exports: { somethingElse: true } });
-
-        const diagnostics = getHotReloadDiagnostics();
-
-        assert.strictEqual(diagnostics.devKitInstalled, true);
-        assert.strictEqual(diagnostics.devKitLimitedActivation, false);
+        assert.strictEqual(isHotReloadOnSaveEnabled(), true);
     });
 
     test('reads the hot reload setting from the csharp.experimental.debug section', () => {
@@ -134,9 +152,9 @@ suite('Hot Reload Tests', () => {
 
         logHotReloadDiagnostics('api', {
             devKitInstalled: true,
-            devKitActive: true,
-            devKitLimitedActivation: false,
-            settingEnabled: false
+            workspaceTrusted: true,
+            settingEnabled: false,
+            reloadOnSaveEnabled: true
         });
 
         const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
@@ -151,9 +169,9 @@ suite('Hot Reload Tests', () => {
 
         logHotReloadDiagnostics('api', {
             devKitInstalled: true,
-            devKitActive: true,
-            devKitLimitedActivation: false,
-            settingEnabled: true
+            workspaceTrusted: true,
+            settingEnabled: true,
+            reloadOnSaveEnabled: true
         });
 
         const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
@@ -162,14 +180,48 @@ suite('Hot Reload Tests', () => {
         assert.ok(logged.includes('hotReloadOnSave'), logged);
     });
 
+    test('does not claim to cover the resource when Hot Reload cannot run', () => {
+        // Regression guard. The "Hot Reload covers <resource>" line used to be written whenever the
+        // setting was on, so an untrusted workspace produced a log that both reported the blocker
+        // and then contradicted it.
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+
+        logHotReloadDiagnostics('api', {
+            devKitInstalled: true,
+            workspaceTrusted: false,
+            settingEnabled: true,
+            reloadOnSaveEnabled: true
+        });
+
+        const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
+        assert.strictEqual(logged.includes('Hot Reload covers'), false, logged);
+    });
+
+    test('says that saving does not apply edits when hotReloadOnSave is off', () => {
+        // The gesture is read rather than assumed. Telling a user who turned the setting off that
+        // saving applies their edit sends them looking for a reload that never happened.
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+
+        logHotReloadDiagnostics('api', {
+            devKitInstalled: true,
+            workspaceTrusted: true,
+            settingEnabled: true,
+            reloadOnSaveEnabled: false
+        });
+
+        const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
+        assert.ok(logged.includes('Hot Reload covers api'), logged);
+        assert.ok(logged.includes('saving does not apply edits'), logged);
+    });
+
     test('reports an untrusted workspace instead of blaming the setting', () => {
         const info = sinon.stub(extensionLogOutputChannel, 'info');
 
         logHotReloadDiagnostics('api', {
             devKitInstalled: true,
-            devKitActive: true,
-            devKitLimitedActivation: true,
-            settingEnabled: true
+            workspaceTrusted: false,
+            settingEnabled: true,
+            reloadOnSaveEnabled: true
         });
 
         const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
@@ -182,9 +234,9 @@ suite('Hot Reload Tests', () => {
 
         logHotReloadDiagnostics('api', {
             devKitInstalled: false,
-            devKitActive: false,
-            devKitLimitedActivation: false,
-            settingEnabled: false
+            workspaceTrusted: true,
+            settingEnabled: false,
+            reloadOnSaveEnabled: true
         });
 
         assert.strictEqual(info.called, false, 'running .NET resources without Dev Kit is fully supported and must not be reported as a problem');
@@ -193,9 +245,9 @@ suite('Hot Reload Tests', () => {
     suite('active session notice', () => {
         const activeDiagnostics = {
             devKitInstalled: true,
-            devKitActive: true,
-            devKitLimitedActivation: false,
-            settingEnabled: true
+            workspaceTrusted: true,
+            settingEnabled: true,
+            reloadOnSaveEnabled: true
         };
 
         // The notice body is fire-and-forget so it cannot block the launch path, so let the
@@ -211,6 +263,37 @@ suite('Hot Reload Tests', () => {
 
             assert.strictEqual(notification.callCount, 1);
             assert.strictEqual(notification.firstCall.args[0], hotReloadActiveNotice);
+        });
+
+        test('does not tell the user saving applies edits when hotReloadOnSave is off', async () => {
+            initializeHotReloadPromptState(createTestMemento());
+            const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+
+            announceHotReloadForSessionIfNeeded({ ...activeDiagnostics, reloadOnSaveEnabled: false }, true);
+            await flush();
+
+            assert.strictEqual(notification.firstCall.args[0], hotReloadActiveNoticeSaveDisabled);
+        });
+
+        test('stays quiet in a window where the user was just offered the setting', async () => {
+            // The prompt and the notice describe mutually exclusive states. Resources launch over
+            // several seconds, so a resource arriving after the user accepted the prompt reads the
+            // new setting value; without this guard it would announce "Hot Reload is enabled"
+            // immediately after the prompt said to start debugging again for it to take effect.
+            initializeHotReloadPromptState(createTestMemento());
+            const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves('Enable Hot Reload' as unknown as vscode.MessageItem);
+            sinon.stub(vscode.workspace, 'getConfiguration').returns({
+                get: () => false,
+                update: sinon.stub().resolves()
+            } as unknown as vscode.WorkspaceConfiguration);
+
+            await promptToEnableHotReloadIfNeeded({ ...activeDiagnostics, settingEnabled: false }, true);
+            const callsAfterPrompt = notification.callCount;
+
+            announceHotReloadForSessionIfNeeded(activeDiagnostics, true);
+            await flush();
+
+            assert.strictEqual(notification.callCount, callsAfterPrompt, 'the notice must not follow the enable prompt in the same window');
         });
 
         test('makes no claim that depends on how many resources have launched', () => {
@@ -294,8 +377,8 @@ suite('Hot Reload Tests', () => {
 
             announceHotReloadForSessionIfNeeded(activeDiagnostics, false);
             announceHotReloadForSessionIfNeeded({ ...activeDiagnostics, devKitInstalled: false }, true);
-            announceHotReloadForSessionIfNeeded({ ...activeDiagnostics, devKitActive: false }, true);
-            announceHotReloadForSessionIfNeeded({ ...activeDiagnostics, devKitLimitedActivation: true }, true);
+            announceHotReloadForSessionIfNeeded({ ...activeDiagnostics, workspaceTrusted: false }, true);
+            announceHotReloadForSessionIfNeeded({ ...activeDiagnostics, settingEnabled: false }, true);
             await flush();
 
             assert.strictEqual(notification.called, false);
@@ -320,9 +403,9 @@ suite('Hot Reload Tests', () => {
     suite('enable prompt', () => {
         const enabledDiagnostics = {
             devKitInstalled: true,
-            devKitActive: true,
-            devKitLimitedActivation: false,
-            settingEnabled: false
+            workspaceTrusted: true,
+            settingEnabled: false,
+            reloadOnSaveEnabled: true
         };
 
         function stubPrompt(selection: string | undefined): sinon.SinonStub {
@@ -426,9 +509,8 @@ suite('Hot Reload Tests', () => {
 
         test('stays silent for cases where enabling the setting would not help', async () => {
             const cases: { name: string; diagnostics: typeof enabledDiagnostics; isDebug: boolean }[] = [
-                { name: 'Dev Kit not installed', diagnostics: { ...enabledDiagnostics, devKitInstalled: false, devKitActive: false }, isDebug: true },
-                { name: 'Dev Kit not active', diagnostics: { ...enabledDiagnostics, devKitActive: false }, isDebug: true },
-                { name: 'untrusted workspace', diagnostics: { ...enabledDiagnostics, devKitLimitedActivation: true }, isDebug: true },
+                { name: 'Dev Kit not installed', diagnostics: { ...enabledDiagnostics, devKitInstalled: false }, isDebug: true },
+                { name: 'untrusted workspace', diagnostics: { ...enabledDiagnostics, workspaceTrusted: false }, isDebug: true },
                 { name: 'setting already enabled', diagnostics: { ...enabledDiagnostics, settingEnabled: true }, isDebug: true },
                 { name: 'run without debugging', diagnostics: enabledDiagnostics, isDebug: false }
             ];

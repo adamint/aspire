@@ -186,9 +186,10 @@ export const lookingForDevkitBuildTask = vscode.l10n.t('C# Dev Kit is installed,
 export const csharpDevKitNotInstalled = vscode.l10n.t('C# Dev Kit is not installed, building using dotnet CLI...');
 export const hotReloadAvailablePrompt = vscode.l10n.t('.NET Hot Reload can apply code edits to running Aspire resources without restarting them. It is turned off in C# Dev Kit.');
 export const enableHotReloadLabel = vscode.l10n.t('Enable Hot Reload');
-export const hotReloadEnabled = vscode.l10n.t('.NET Hot Reload is enabled. Start debugging again to use it — after that, saving a file applies the change to the running resource.');
+export const hotReloadEnabled = vscode.l10n.t('.NET Hot Reload is enabled. Start debugging again to use it.');
 export const hotReloadEnableFailed = (error: string) => vscode.l10n.t('Could not enable .NET Hot Reload: {0}', error);
-export const hotReloadActiveNotice = vscode.l10n.t('.NET Hot Reload is active for the .NET resources in this Aspire app. Saving a file applies the change to the running resource without restarting it, and the Hot Reload button applies pending changes to all of them at once.');
+export const hotReloadActiveNotice = vscode.l10n.t('.NET Hot Reload is enabled for .NET project resources in this Aspire app. Saving a file asks C# Dev Kit to apply supported edits to the running resource without restarting it, and the Hot Reload button applies pending edits across them. Dev Kit reports results in the .NET Hot Reload output.');
+export const hotReloadActiveNoticeSaveDisabled = vscode.l10n.t('.NET Hot Reload is enabled for .NET project resources in this Aspire app, but \'csharp.debug.hotReloadOnSave\' is turned off, so saving does not apply edits. Use the Hot Reload button to apply pending edits. Dev Kit reports results in the .NET Hot Reload output.');
 export const showHotReloadOutputLabel = vscode.l10n.t('Show Hot Reload Output');
 export const dismissLabel = vscode.l10n.t('Dismiss');
 export const openCliInstallInstructions = vscode.l10n.t('See CLI installation instructions');

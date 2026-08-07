@@ -181,8 +181,6 @@ suite('Hot Reload Regression Tests', () => {
             const diagnostics = getHotReloadDiagnostics();
 
             assert.strictEqual(diagnostics.devKitInstalled, false);
-            assert.strictEqual(diagnostics.devKitActive, false);
-            assert.strictEqual(diagnostics.devKitLimitedActivation, false);
         });
 
         test('never offers to enable Hot Reload, because enabling it would not help', async () => {
