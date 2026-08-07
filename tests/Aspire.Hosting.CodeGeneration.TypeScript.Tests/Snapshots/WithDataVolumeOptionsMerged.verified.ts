@@ -1,4 +1,4 @@
-export interface WithDataVolumeOptions {
+﻿export interface CodeGenerationTypeScriptTestsWithDataVolumeOptions {
     name?: string;
     isReadOnly?: boolean;
 }

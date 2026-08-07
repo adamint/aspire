@@ -1816,9 +1816,12 @@ public partial class AtsTypeScriptCodeGeneratorTests
         // only included parameters from whichever overload was registered first.
         var code = GenerateTwoPassCode();
 
-        // Extract just the WithDataVolumeOptions interface for snapshot verification.
-        var interfaceStart = code.IndexOf("export interface WithDataVolumeOptions", StringComparison.Ordinal);
-        Assert.True(interfaceStart >= 0, "WithDataVolumeOptions interface not found in generated code");
+        // Extract just the merged options interface for snapshot verification. The fixture's
+        // withDataVolume overloads are owned by the test assembly, so they merge into that
+        // assembly's interface rather than into the core one of the same base name.
+        var interfaceName = $"{TestOptionsPrefix}WithDataVolumeOptions";
+        var interfaceStart = code.IndexOf($"export interface {interfaceName}", StringComparison.Ordinal);
+        Assert.True(interfaceStart >= 0, $"{interfaceName} interface not found in generated code");
 
         var interfaceEnd = code.IndexOf("}", interfaceStart, StringComparison.Ordinal);
         var interfaceBody = code[interfaceStart..(interfaceEnd + 1)];
@@ -1910,8 +1913,19 @@ public partial class AtsTypeScriptCodeGeneratorTests
     /// documented symbols; Aspire.Hosting contributes referenced types through the closure.
     /// </summary>
     private const string TestPackageName = "Aspire.Hosting.CodeGeneration.TypeScript.Tests";
-
     private const string TestPackageVersion = "13.5.0";
+
+    /// <summary>
+    /// The qualifier the projector derives from <see cref="TestPackageName"/> for options
+    /// interfaces it owns.
+    /// </summary>
+    /// <remarks>
+    /// Options interfaces are named after the assembly that exports the capability, so that a
+    /// package's export names an interface the same way whether it was projected on its own or
+    /// alongside every other package. Only <c>Aspire.Hosting</c> keeps unqualified names, so the
+    /// fixture's own interfaces carry this prefix.
+    /// </remarks>
+    private const string TestOptionsPrefix = "CodeGenerationTypeScriptTests";
 
     [Fact]
     public async Task ApiExportUsesTheSameResolvedSignaturesAsGeneratedSource()
@@ -2039,29 +2053,29 @@ public partial class AtsTypeScriptCodeGeneratorTests
             member => member.Name == "withOptionalString");
         Assert.Collection(
             withOptionalString.Parameters,
-            parameter => AssertParameter(parameter, "options", "WithOptionalStringOptions", isOptional: true));
+            parameter => AssertParameter(parameter, "options", $"{TestOptionsPrefix}WithOptionalStringOptions", isOptional: true));
 
         var withOptionsCollision = Assert.Single(
             testRedisResource.Members,
             member => member.Name == "withOptionsCollision");
         Assert.Equal(
-            "withOptionsCollision(options: string, optionsBag: string, _optionsBag?: WithOptionsCollisionOptions): Promise<boolean>",
+            $"withOptionsCollision(options: string, optionsBag: string, _optionsBag?: {TestOptionsPrefix}WithOptionsCollisionOptions): Promise<boolean>",
             withOptionsCollision.Declaration);
         Assert.Collection(
             withOptionsCollision.Parameters,
             parameter => AssertParameter(parameter, "options", "string", isOptional: false, "Required options value."),
             parameter => AssertParameter(parameter, "optionsBag", "string", isOptional: false, "Required options bag value."),
-            parameter => AssertParameter(parameter, "_optionsBag", "WithOptionsCollisionOptions", isOptional: true));
+            parameter => AssertParameter(parameter, "_optionsBag", $"{TestOptionsPrefix}WithOptionsCollisionOptions", isOptional: true));
 
         var withOptionalOptionsField = Assert.Single(
             testRedisResource.Members,
             member => member.Name == "withOptionalOptionsField");
         Assert.Equal(
-            "withOptionalOptionsField(options?: WithOptionalOptionsFieldOptions): Promise<boolean>",
+            $"withOptionalOptionsField(options?: {TestOptionsPrefix}WithOptionalOptionsFieldOptions): Promise<boolean>",
             withOptionalOptionsField.Declaration);
         Assert.Collection(
             withOptionalOptionsField.Parameters,
-            parameter => AssertParameter(parameter, "options", "WithOptionalOptionsFieldOptions", isOptional: true));
+            parameter => AssertParameter(parameter, "options", $"{TestOptionsPrefix}WithOptionalOptionsFieldOptions", isOptional: true));
 
         var withDirectOptionsAndCancellation = Assert.Single(
             testRedisResource.Members,
@@ -2083,7 +2097,7 @@ public partial class AtsTypeScriptCodeGeneratorTests
         Assert.Contains(withOptionalOptionsField.Declaration, testRedisResourceMembers);
         Assert.Contains(withDirectOptionsAndCancellation.Declaration, testRedisResourceMembers);
         Assert.Contains(
-            "async withOptionalOptionsField(optionsBag?: WithOptionalOptionsFieldOptions): Promise<boolean> {",
+            $$"""async withOptionalOptionsField(optionsBag?: {{TestOptionsPrefix}}WithOptionalOptionsFieldOptions): Promise<boolean> {""",
             generatedSource);
         Assert.Contains("const options = optionsBag?.options;", generatedSource);
         Assert.DoesNotContain("const options = options?.options;", generatedSource);
@@ -2508,6 +2522,166 @@ public partial class AtsTypeScriptCodeGeneratorTests
 
         Assert.Contains("ResourceBuilderBase", declaredNames);
         Assert.Contains("ContainerResource", declaredNames);
+    }
+
+    /// <summary>
+    /// Two packages that expose the same capability name with incompatible parameter types must
+    /// name their options interfaces the same way whether they are scanned together or apart.
+    /// </summary>
+    /// <remarks>
+    /// <c>sdk export</c> runs one app host per package, so the projector only ever sees the
+    /// requested package plus core, while <c>sdk generate</c> sees whatever the user's app host
+    /// references. Deriving the name from the exporting assembly is what makes those two views
+    /// agree: naming by method alone gave both packages <c>RunAsEmulatorOptions</c> when projected
+    /// apart, which is a duplicate declaration with conflicting members once aspire.dev
+    /// concatenates their fragments.
+    /// </remarks>
+    [Fact]
+    public void OptionsInterfaceNamesDoNotDependOnWhichOtherPackagesWereScanned()
+    {
+        var scannedTogether = new TypeScriptApiProjector(CreateEmulatorCollisionContext());
+        var hubsAlone = new TypeScriptApiProjector(CreateEmulatorCollisionContext(includeServiceBus: false));
+        var busAlone = new TypeScriptApiProjector(CreateEmulatorCollisionContext(includeEventHubs: false));
+
+        static string EmulatorInterfaceName(TypeScriptApiProjector projector, string packageName)
+            => projector.ResolveOptionsInterfaceName(
+                projector.Resolved.Context.Capabilities.Single(c => c.CapabilityId == $"{packageName}/runAsEmulator"));
+
+        Assert.Equal("AzureEventHubsRunAsEmulatorOptions", EmulatorInterfaceName(hubsAlone, CollisionPackageA));
+        Assert.Equal("AzureServiceBusRunAsEmulatorOptions", EmulatorInterfaceName(busAlone, CollisionPackageB));
+
+        Assert.Equal(
+            EmulatorInterfaceName(hubsAlone, CollisionPackageA),
+            EmulatorInterfaceName(scannedTogether, CollisionPackageA));
+        Assert.Equal(
+            EmulatorInterfaceName(busAlone, CollisionPackageB),
+            EmulatorInterfaceName(scannedTogether, CollisionPackageB));
+    }
+
+    /// <summary>
+    /// An options interface is documented by, and keyed to, the assembly whose capability produced
+    /// it rather than the package the export was requested for.
+    /// </summary>
+    /// <remarks>
+    /// The projector's context reaches beyond the requested package, so an unscoped emission would
+    /// let one package publish its dependencies' options interfaces under its own version. Keying
+    /// the declaration by the requesting package instead of the owner is the same bug from the
+    /// other side: the same interface would carry a different fragment id in every export that
+    /// reached it, so concatenation would redeclare it rather than deduplicate it.
+    /// </remarks>
+    [Fact]
+    public void ApiExportAttributesOptionsInterfacesToTheAssemblyThatOwnsThem()
+    {
+        var projector = new TypeScriptApiProjector(CreateEmulatorCollisionContext());
+        var model = projector.BuildApiModel(
+            new TypeScriptApiPackageIdentity(CollisionPackageA, TestPackageVersion),
+            [CollisionPackageA]);
+
+        var documentedOptions = model.Modules
+            .SelectMany(module => module.Items)
+            .Where(item => item.Kind == TypeScriptApiItemKind.Options)
+            .ToList();
+
+        Assert.Collection(
+            documentedOptions,
+            item =>
+            {
+                Assert.Equal("AzureEventHubsRunAsEmulatorOptions", item.Name);
+                Assert.Equal(CollisionPackageA, item.OwningAssemblyName);
+            });
+
+        var serviceBusDeclaration = Assert.Single(
+            model.Declarations,
+            declaration => declaration.Content.Contains("AzureServiceBusRunAsEmulatorOptions", StringComparison.Ordinal));
+
+        Assert.Equal($"{CollisionPackageB}:options:AzureServiceBusRunAsEmulatorOptions", serviceBusDeclaration.Id);
+        Assert.Equal(CollisionPackageB, serviceBusDeclaration.OwningAssemblyName);
+    }
+
+    private const string CollisionPackageA = "Aspire.Hosting.Azure.EventHubs";
+    private const string CollisionPackageB = "Aspire.Hosting.Azure.ServiceBus";
+
+    /// <summary>
+    /// Builds a manifest where both packages expose <c>runAsEmulator</c> with an optional parameter
+    /// of the same name but an incompatible type, which is what forced generation to suffix one of
+    /// the two options interfaces when names were derived from the method alone.
+    /// </summary>
+    /// <remarks>
+    /// The two package names are the real ones: <c>AzureEventHubsExtensions.RunAsEmulator</c> and
+    /// <c>AzureServiceBusExtensions.RunAsEmulator</c> both take an optional
+    /// <c>Action&lt;IResourceBuilder&lt;T&gt;&gt;</c> for different <c>T</c>, so their options
+    /// interfaces cannot be merged. The capabilities here are synthetic; only the shape matters.
+    /// </remarks>
+    private static AtsContext CreateEmulatorCollisionContext(bool includeEventHubs = true, bool includeServiceBus = true)
+    {
+        static AtsTypeInfo Resource(string packageName, string typeName) => new()
+        {
+            AtsTypeId = $"{packageName}/{typeName}",
+            IsInterface = false,
+            HasExposeMethods = true,
+            HasExposeProperties = false,
+            BaseTypeHierarchy = [],
+            ImplementedInterfaces = []
+        };
+
+        static AtsCapabilityInfo Emulator(string packageName, AtsTypeInfo target, string optionalTypeId) => new()
+        {
+            CapabilityId = $"{packageName}/runAsEmulator",
+            MethodName = "runAsEmulator",
+            Parameters =
+            [
+                new AtsParameterInfo
+                {
+                    Name = "configureContainer",
+                    Type = new AtsTypeRef { TypeId = optionalTypeId, Category = AtsTypeCategory.Primitive },
+                    IsOptional = true
+                }
+            ],
+            ReturnType = new AtsTypeRef { TypeId = target.AtsTypeId, Category = AtsTypeCategory.Handle },
+            TargetTypeId = target.AtsTypeId,
+            TargetType = new AtsTypeRef { TypeId = target.AtsTypeId, Category = AtsTypeCategory.Handle },
+            TargetParameterName = "builder",
+            ExpandedTargetTypes = [],
+            ReturnsBuilder = true,
+            CapabilityKind = AtsCapabilityKind.Method
+        };
+
+        var hubsResource = Resource(CollisionPackageA, "EventHubsResource");
+        var busResource = Resource(CollisionPackageB, "ServiceBusResource");
+
+        // The two differ in the type of their shared optional parameter, so the interfaces are not
+        // mergeable and one of them had to be renamed to make room for the other.
+        var hubsEmulator = Emulator(CollisionPackageA, hubsResource, AtsConstants.String);
+        var busEmulator = Emulator(CollisionPackageB, busResource, AtsConstants.Boolean);
+
+        List<AtsCapabilityInfo> capabilities = [];
+        List<AtsTypeInfo> handleTypes = [];
+        var exportingAssemblyNames = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        if (includeEventHubs)
+        {
+            capabilities.Add(hubsEmulator);
+            handleTypes.Add(hubsResource);
+            exportingAssemblyNames[hubsEmulator.CapabilityId] = CollisionPackageA;
+        }
+
+        if (includeServiceBus)
+        {
+            capabilities.Add(busEmulator);
+            handleTypes.Add(busResource);
+            exportingAssemblyNames[busEmulator.CapabilityId] = CollisionPackageB;
+        }
+
+        return new AtsContext
+        {
+            Capabilities = capabilities,
+            HandleTypes = handleTypes,
+            DtoTypes = [],
+            EnumTypes = [],
+            ExportedValues = [],
+            Diagnostics = [],
+            CapabilityExportingAssemblyNames = exportingAssemblyNames
+        };
     }
 
     /// <summary>
