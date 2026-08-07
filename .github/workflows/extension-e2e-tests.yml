@@ -165,7 +165,7 @@ jobs:
             useXvfb: false
           - name: Linux
             shardName: debug-dashboard
-            spec: out/test-e2e/test-e2e/debugDashboard.e2e.test.js
+            spec: 'out/test-e2e/test-e2e/{debugDashboard,buildOwnership}.e2e.test.js'
             runner: ubuntu-latest
             rid: linux-x64
             archivePattern: aspire-cli-linux-x64*.tar.gz
@@ -173,7 +173,7 @@ jobs:
             useXvfb: true
           - name: Windows
             shardName: debug-dashboard
-            spec: out/test-e2e/test-e2e/debugDashboard.e2e.test.js
+            spec: 'out/test-e2e/test-e2e/{debugDashboard,buildOwnership}.e2e.test.js'
             runner: windows-latest
             rid: win-x64
             archivePattern: aspire-cli-win-x64*.zip

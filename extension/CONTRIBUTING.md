@@ -117,7 +117,7 @@ ASPIRE_EXTENSION_E2E_SHARD=settings-files ASPIRE_EXTENSION_E2E_SPEC=out/test-e2e
 ASPIRE_EXTENSION_E2E_SHARD=discovery-configuration ASPIRE_EXTENSION_E2E_SPEC=out/test-e2e/test-e2e/discoveryConfiguration.e2e.test.js ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn test:e2e
 ASPIRE_EXTENSION_E2E_SHARD=apphost-tree ASPIRE_EXTENSION_E2E_SPEC=out/test-e2e/test-e2e/appHostTree.e2e.test.js ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn test:e2e
 ASPIRE_EXTENSION_E2E_SHARD=tree-actions ASPIRE_EXTENSION_E2E_SPEC=out/test-e2e/test-e2e/treeActions.e2e.test.js ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn test:e2e
-ASPIRE_EXTENSION_E2E_SHARD=debug-dashboard ASPIRE_EXTENSION_E2E_SPEC=out/test-e2e/test-e2e/debugDashboard.e2e.test.js ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn test:e2e
+ASPIRE_EXTENSION_E2E_SHARD=debug-dashboard ASPIRE_EXTENSION_E2E_SPEC='out/test-e2e/test-e2e/{debugDashboard,buildOwnership}.e2e.test.js' ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn test:e2e
 ASPIRE_EXTENSION_E2E_SHARD=zero-to-running ASPIRE_EXTENSION_E2E_SPEC=out/test-e2e/test-e2e/zeroToRunning.e2e.test.js ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn test:e2e
 ASPIRE_EXTENSION_E2E_SHARD=package-surface ASPIRE_EXTENSION_E2E_SPEC=out/test-e2e/test-e2e/packageSurface.e2e.test.js ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn test:e2e
 ASPIRE_EXTENSION_E2E_SHARD=edge-cases ASPIRE_EXTENSION_E2E_SPEC=out/test-e2e/test-e2e/edgeCases.e2e.test.js ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn test:e2e
@@ -130,7 +130,7 @@ The Azure Functions shard also requires Azure Functions Core Tools v4 (`func`) o
 
 ```bash
 corepack yarn compile-e2e
-ASPIRE_EXTENSION_E2E_SHARD=debug-dashboard-local ASPIRE_EXTENSION_E2E_SPEC=out/test-e2e/test-e2e/debugDashboard.e2e.test.js ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn test:e2e
+ASPIRE_EXTENSION_E2E_SHARD=debug-dashboard-local ASPIRE_EXTENSION_E2E_SPEC='out/test-e2e/test-e2e/{debugDashboard,buildOwnership}.e2e.test.js' ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn test:e2e
 ASPIRE_EXTENSION_E2E_SHARD=fast-subset ASPIRE_EXTENSION_E2E_SPEC='out/test-e2e/test-e2e/{commandPalette,settingsFiles}.e2e.test.js' ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn test:e2e
 ASPIRE_EXTENSION_E2E_SHARD=tree-subset ASPIRE_EXTENSION_E2E_SPEC='out/test-e2e/test-e2e/*Tree.e2e.test.js' ASPIRE_EXTENSION_E2E_CLI_PATH=/path/to/aspire corepack yarn test:e2e
 ```

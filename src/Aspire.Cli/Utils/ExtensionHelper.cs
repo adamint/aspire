@@ -32,7 +32,18 @@ internal static class KnownCapabilities
     public const string DevKit = "devkit";
     public const string Project = "project";
     public const string Node = "node";
-    public const string BuildDotnetUsingCli = "build-dotnet-using-cli";
+
+    // AppHost build ownership. Whichever side advertises this capability promises the AppHost is
+    // built exactly once before launch, so the other side skips its own build.
+    //
+    // The unversioned predecessor ("build-dotnet-using-cli", CLI 13.2.0-13.2.4) could not be
+    // trusted: on those CLI versions a no-debug launch from the extension forced watch mode, which
+    // skipped the CLI pre-build entirely even though the CLI still advertised the token. An
+    // extension that believed the token skipped its own build too, so nobody built and the user
+    // silently launched stale output (https://github.com/microsoft/aspire/issues/15850).
+    // The version suffix makes the promise verifiable, so build ownership only transfers when both
+    // sides understand the newer contract. Never accept the unversioned token here.
+    public const string BuildDotnetUsingCliV2 = "build-dotnet-using-cli.v2";
     public const string Baseline = "baseline.v1";
     public const string SecretPrompts = "secret-prompts.v1";
     public const string FilePickers = "file-pickers.v1";
@@ -50,5 +61,5 @@ internal static class KnownCapabilities
     /// <summary>
     /// Gets the set of capabilities this CLI advertises to extensions.
     /// </summary>
-    public static string[] GetAdvertisedCapabilities() => [DevKit, Project, BuildDotnetUsingCli, Baseline, SecretPrompts, FilePickers, Pipelines, DescribeIncludeDisabledCommands, LsJsonStream];
+    public static string[] GetAdvertisedCapabilities() => [DevKit, Project, BuildDotnetUsingCliV2, Baseline, SecretPrompts, FilePickers, Pipelines, DescribeIncludeDisabledCommands, LsJsonStream];
 }

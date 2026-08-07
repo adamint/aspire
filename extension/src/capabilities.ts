@@ -6,7 +6,7 @@ export type Capability =
     | 'baseline.v1'
     | 'secret-prompts.v1'
     | 'file-pickers.v1'
-    | 'build-dotnet-using-cli' // Support building .NET projects using the CLI
+    | 'build-dotnet-using-cli.v2' // Support transferring AppHost build ownership to the CLI
     | 'devkit' // Support for .NET DevKit extension (old, used for determining whether to build .NET projects in extension)
     | 'ms-dotnettools.csdevkit' // Older AppHost versions used this extension identifier instead of devkit
     | 'project' // Support for running C# projects
@@ -24,6 +24,18 @@ export type Capability =
     | 'azure-functions'; // Support for running Azure Functions projects
 
 export type Capabilities = Capability[];
+
+/**
+ * AppHost build ownership capability. Whichever side advertises this promises the AppHost is built
+ * exactly once before launch, so the other side skips its own build.
+ *
+ * The unversioned predecessor ('build-dotnet-using-cli', CLI 13.2.0-13.2.4) could not be trusted:
+ * on those CLI versions a no-debug launch forced watch mode, which skipped the CLI pre-build while
+ * the CLI still advertised the token. Trusting it meant nobody built and the user silently ran
+ * stale output (https://github.com/microsoft/aspire/issues/15850). Never treat the unversioned
+ * token as proof that the CLI built.
+ */
+export const buildDotnetUsingCliCapability = 'build-dotnet-using-cli.v2' satisfies Capability;
 
 function isExtensionInstalled(extensionId: string): boolean {
     const extension = vscode.extensions.getExtension(extensionId);
@@ -64,7 +76,7 @@ export function isBunInstalled() {
 }
 
 export function getSupportedCapabilities(): Capabilities {
-    const capabilities: Capabilities = ['prompting', 'baseline.v1', 'secret-prompts.v1', 'file-pickers.v1', 'build-dotnet-using-cli'];
+    const capabilities: Capabilities = ['prompting', 'baseline.v1', 'secret-prompts.v1', 'file-pickers.v1', buildDotnetUsingCliCapability];
 
     if (isCsDevKitInstalled()) {
         capabilities.push("devkit");
