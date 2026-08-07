@@ -99,6 +99,14 @@ internal sealed class RunCommand : BaseCommand
     // error. Keep guest AppHost startup waits alive briefly so those failures are reported instead of hidden.
     private static readonly TimeSpan s_startupFailureObservationWindow = TimeSpan.FromSeconds(2);
 
+    // Bounds the structured-log capability probe. A wedged extension host never answers the probe
+    // and never faults it, so without a bound the lazy await in CaptureAppHostLogsAsync would stall
+    // the AppHost log loop forever, taking the CLI log file down with it -- the artifact used to
+    // diagnose exactly that hang. Two seconds is generous for a JSON-RPC round trip to an
+    // already-connected local host, and the clock starts when the probe does, concurrently with
+    // stream setup, so a healthy extension has normally answered before the first entry arrives.
+    private static readonly TimeSpan s_structuredLogSupportProbeTimeout = TimeSpan.FromSeconds(2);
+
     protected override bool UpdateNotificationsEnabled => !_isDetachMode;
 
     protected override TimeSpan GracefulShutdownBudget => s_gracefulShutdownBudget;
@@ -1124,7 +1132,9 @@ internal sealed class RunCommand : BaseCommand
 
                 // Resolved on the first entry that is actually forwarded, and once only. The stream
                 // is already subscribed by this point, so waiting here can delay extension delivery
-                // but can no longer drop records from the CLI log file.
+                // but can no longer drop records from the CLI log file. The probe is bounded by
+                // s_structuredLogSupportProbeTimeout so an extension that never answers degrades to
+                // the legacy path instead of stalling this loop, and with it the log file.
                 extensionSupportsStructuredLogs ??= await structuredLogSupportProbe.ConfigureAwait(false);
 
                 // BackchannelLoggerProvider.WriteEntry stamps a sequence number starting at 1
@@ -1184,15 +1194,17 @@ internal sealed class RunCommand : BaseCommand
     {
         try
         {
-            return await extensionBackchannel.HasCapabilityAsync(KnownCapabilities.AppHostLogOutput, cancellationToken).ConfigureAwait(false);
+            return await extensionBackchannel.HasCapabilityAsync(KnownCapabilities.AppHostLogOutput, cancellationToken)
+                .WaitAsync(s_structuredLogSupportProbeTimeout, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception)
         {
-            // Every failure, including cancellation, degrades to the legacy path rather than
-            // propagating. The caller starts this probe without awaiting it and only awaits it if
-            // an entry is forwarded, so an exception escaping here could end up on a task nobody
-            // observes. Reporting "not supported" is also the right answer for the caller: an
-            // extension that cannot answer the probe cannot be sent the structured shape either.
+            // Every failure, including cancellation and the timeout above, degrades to the legacy
+            // path rather than propagating. The caller starts this probe without awaiting it and
+            // only awaits it if an entry is forwarded, so an exception escaping here could end up
+            // on a task nobody observes. Reporting "not supported" is also the right answer for the
+            // caller: an extension that cannot answer the probe in time cannot be sent the
+            // structured shape either.
             return false;
         }
     }

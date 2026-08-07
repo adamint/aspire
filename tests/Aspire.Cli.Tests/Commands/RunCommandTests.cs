@@ -3846,6 +3846,110 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task CaptureAppHostLogsAsync_KeepsWritingTheLogFileWhenTheCapabilityProbeNeverAnswers()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var errorWriter = new TestStartupErrorWriter();
+        using var fileLoggerProvider = new FileLoggerProvider(logFilePath, errorWriter);
+        var forwardedMessages = new List<string>();
+
+        // A wedged extension host: the probe never completes and never faults. That is the case a
+        // try/catch cannot cover, so only the timeout inside SupportsStructuredAppHostLogsAsync
+        // releases the log loop. Without that timeout this test fails by deadlock rather than by a
+        // failed assertion, which is what makes it a regression test for the bound itself.
+        var wedgedProbe = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (_, _) => wedgedProbe.Task,
+            WriteDebugSessionMessageAsyncCallback = (message, _, _) =>
+            {
+                forwardedMessages.Add(message);
+                return Task.CompletedTask;
+            },
+            WriteAppHostLogEntryAsyncCallback = entry =>
+            {
+                Assert.Fail($"An unanswered probe must not select the structured path, but '{entry.Message}' was forwarded on it.");
+                return Task.CompletedTask;
+            }
+        };
+
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+        var consoleInteractionService = new ConsoleInteractionService(
+            provider.GetRequiredService<ConsoleEnvironment>(),
+            workspace.CreateExecutionContext(logFilePath: logFilePath),
+            TestHelpers.CreateInteractiveHostEnvironment(),
+            new EnvironmentProcessPathProvider(),
+            NullLoggerFactory.Instance,
+            new ConsoleLogBufferContext());
+        using var extensionInteractionService = new ExtensionInteractionService(
+            consoleInteractionService,
+            extensionBackchannel,
+            extensionPromptEnabled: false,
+            logger: NullLogger<ExtensionInteractionService>.Instance);
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetAppHostLogEntriesAsyncCallback = YieldEntries
+        };
+
+        // Deliberately not cancellable. If the capture were given a token that fires, that token
+        // would release the wedged probe and the test would pass with or without the timeout under
+        // test -- it would assert nothing. The only thing that can unblock this call is the bound
+        // inside SupportsStructuredAppHostLogsAsync, so the outer budget is a plain timeout whose
+        // expiry fails the test.
+        await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, extensionInteractionService, CancellationToken.None)
+            .WaitAsync(TimeSpan.FromSeconds(30));
+        await extensionInteractionService.FlushAsync();
+
+        // Every record reached the CLI log file, not just the one written before the loop first
+        // awaited the probe. That file is the artifact used to diagnose a wedged extension, so it
+        // has to survive one.
+        fileLoggerProvider.Dispose();
+        var logFileContents = await File.ReadAllTextAsync(logFilePath);
+        Assert.Contains("First entry", logFileContents);
+        Assert.Contains("Second entry", logFileContents);
+        Assert.Contains("Third entry", logFileContents);
+
+        // The capture degraded to the legacy path for every entry rather than dropping any of them.
+        Assert.Equal(
+            ["First entry", "Second entry", "Third entry"],
+            forwardedMessages);
+
+        async static IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            foreach (var (sequenceNumber, message) in new[] { (1, "First entry"), (2, "Second entry"), (3, "Third entry") })
+            {
+                yield return new BackchannelLogEntry
+                {
+                    SequenceNumber = sequenceNumber,
+                    Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, sequenceNumber, TimeSpan.Zero),
+                    LogLevel = LogLevel.Information,
+                    Message = message,
+                    EventId = new EventId(),
+                    CategoryName = "Example.Category",
+                };
+            }
+
+            await Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public void AppHostLogOutputCapabilityMatchesTheLiteralTheExtensionAdvertises()
+    {
+        // The extension advertises this exact string (extension/src/capabilities.ts), and
+        // extension/src/test/appHostLogOutputCapability.test.ts pins it from that side. The two
+        // sides ship from different languages and different feeds, so a pair of hardcoded
+        // assertions is the only thing keeping them paired. Every other C# test here refers to the
+        // constant symbolically, so changing its value alone would leave all of them green while
+        // the capability silently stopped matching and AppHost logs reverted to the duplicated
+        // legacy path that https://github.com/microsoft/aspire/issues/18047 exists to fix.
+        Assert.Equal("apphost-log-output.v1", KnownCapabilities.AppHostLogOutput);
+    }
+
+    [Fact]
     public async Task CaptureAppHostLogsAsync_FallsBackToLegacyMessagesWhenCapabilityProbeFails()
     {        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
