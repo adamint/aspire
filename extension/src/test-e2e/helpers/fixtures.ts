@@ -708,6 +708,18 @@ function getRunningAppHostFromState(appHostPath: string) {
         : state.appHosts.find(candidate => isSamePath(candidate.appHostPath, appHostPath));
 }
 
+/**
+ * Reads the AppHost pid the extension state file currently reports for `appHostPath`.
+ *
+ * Callers that need to prove an AppHost stopped should capture this while it is still running and
+ * then assert on process liveness. The state file's AppHost list lags the real process after a stop
+ * (see the comment in `waitForNoRunningAppHostPathOrStopKnownProcess`), so the pid is only
+ * trustworthy as an identifier, not as evidence that the AppHost is still alive.
+ */
+export function getAppHostPidFromState(appHostPath: string): number | undefined {
+    return getRunningAppHostFromState(appHostPath)?.appHostPid;
+}
+
 export async function waitForProcessExit(pid: number, description: string, timeoutMs: number): Promise<void> {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {

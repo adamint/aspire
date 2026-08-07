@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { isSamePath, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
-import { clearBreakpoints, executeE2eControlCommand, getNodeAppBreakpointLine, isProcessAlive, runE2eTeardown, stopPrimaryAppHostIfRunning, waitForProcessExit } from './helpers/fixtures';
+import { clearBreakpoints, executeE2eControlCommand, getAppHostPidFromState, getNodeAppBreakpointLine, isProcessAlive, runE2eTeardown, stopPrimaryAppHostIfRunning, waitForProcessExit } from './helpers/fixtures';
 import { getNodeAppScriptPath, getPrimaryAppHostProjectPath } from './helpers/paths';
 import { openAspireView } from './helpers/vscode';
 
@@ -87,6 +87,11 @@ suite('Aspire resource debugger E2E', function () {
         assert.ok(isProcessAlive(debuggeePid), `Expected the Node resource process ${debuggeePid} to still be running before debugging stops.`);
         assert.ok(isProcessAlive(childPid), `Expected the Node child process ${childPid} to still be running before debugging stops.`);
 
+        // Captured while the AppHost is still running so the teardown assertion below can check the
+        // real process rather than the extension's view of it.
+        const appHostPid = getAppHostPidFromState(proof.appHostPath);
+        assert.ok(appHostPid !== undefined, 'Expected the extension state to report an AppHost pid while the AppHost is running.');
+
         // Only the start of the stop is awaited here. This test is about the debuggee's process tree,
         // and waiting for the whole Aspire stop to settle would fold AppHost shutdown timing into the
         // assertion. The suite teardown still performs and awaits the full stop.
@@ -104,7 +109,13 @@ suite('Aspire resource debugger E2E', function () {
         // applies one command at a time, so the teardown's commands would queue behind it. Stopping the
         // AppHost through the CLI does not use the control channel, so it lets that wait settle.
         await stopPrimaryAppHostIfRunning();
-        await waitForNoRunningAppHost(120000, proof.appHostPath);
+
+        // Assert on the AppHost process rather than on `waitForNoRunningAppHost`. The state file's
+        // AppHost list is a mirror that lags a stop and can still name a dead pid long afterwards
+        // (documented in `waitForNoRunningAppHostPathOrStopKnownProcess`, and why the teardown above
+        // tolerates that wait failing). Process liveness is the stronger claim and the one this test
+        // is actually making: stopping the debugger must leave no part of the tree running.
+        await waitForProcessExit(appHostPid, 'the AppHost process', 120000);
     });
 });
 
