@@ -9,18 +9,18 @@ namespace Aspire.Cli.Npm;
 
 internal sealed class NpmRegistryClient : INpmRegistryClient
 {
-    // Public npm is queried rather than the dnceng "dotnet-public-npm" mirror because an update
-    // check is only meaningful against the registry the resulting install actually resolves. The
-    // remediation this notice prints is "npm install -g @microsoft/aspire-cli@latest", which npm
-    // resolves against the *user's* configured registry - npmjs.org unless they have overridden it.
-    // Reading a different registry than the one the install uses makes the check a proxy for the
-    // answer instead of the answer. The mirror is also a downstream copy on a multi-day sync lag,
-    // so pointing here would silently under-report new releases for a week after they ship.
+    // The registry is whatever npm itself would resolve for this package, not a hardcoded address.
+    // An update check is only meaningful against the registry the resulting install actually uses:
+    // the remediation this notice prints is "npm install -g @microsoft/aspire-cli@latest", which npm
+    // resolves against the *user's* configured registry. Enterprises commonly block
+    // registry.npmjs.org and pin "registry=" to an internal proxy, so reading public npm
+    // unconditionally would fail the check for precisely the users whose install would have worked.
+    // INpmRegistryResolver applies npm's own precedence and falls back to public npm.
     //
-    // This is a read-only, anonymous metadata GET; no package is ever installed from this URL. The
-    // approved-feed rule in AGENTS.md governs NuGet.config restore sources for the build, not
-    // runtime endpoints, and SigstoreNpmProvenanceChecker already reads npmjs.org the same way.
-    internal const string PublicRegistryBaseUrl = "https://registry.npmjs.org/";
+    // This is a read-only, anonymous metadata GET; no package is ever installed from this URL, and
+    // no credential from the user's .npmrc is read or sent. The approved-feed rule in AGENTS.md
+    // governs NuGet.config restore sources for the build, not runtime endpoints, and
+    // SigstoreNpmProvenanceChecker already reads a registry over HTTP the same way.
 
     // The abbreviated packument omits README, maintainer, and per-version metadata that the update
     // check never reads. It still carries "dist-tags", and it is roughly a third of the size of the
@@ -35,23 +35,27 @@ internal sealed class NpmRegistryClient : INpmRegistryClient
     private static readonly TimeSpan s_defaultTimeout = TimeSpan.FromSeconds(10);
 
     private readonly HttpClient _httpClient;
+    private readonly INpmRegistryResolver _registryResolver;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _timeout;
 
-    public NpmRegistryClient(HttpClient httpClient)
-        : this(httpClient, TimeProvider.System)
+    public NpmRegistryClient(HttpClient httpClient, INpmRegistryResolver registryResolver)
+        : this(httpClient, registryResolver, TimeProvider.System)
     {
     }
 
     internal NpmRegistryClient(
         HttpClient httpClient,
+        INpmRegistryResolver registryResolver,
         TimeProvider timeProvider,
         TimeSpan? timeout = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
+        ArgumentNullException.ThrowIfNull(registryResolver);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         _httpClient = httpClient;
+        _registryResolver = registryResolver;
         _timeProvider = timeProvider;
         _timeout = timeout ?? s_defaultTimeout;
     }
@@ -60,7 +64,9 @@ internal sealed class NpmRegistryClient : INpmRegistryClient
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(packageName);
 
-        using var request = CreateRequest(packageName);
+        var registry = _registryResolver.Resolve(packageName);
+
+        using var request = CreateRequest(registry, packageName);
         using var timeoutCancellation = new CancellationTokenSource(_timeout, _timeProvider);
         using var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
@@ -87,17 +93,17 @@ internal sealed class NpmRegistryClient : INpmRegistryClient
             !cancellationToken.IsCancellationRequested)
         {
             throw new TimeoutException(
-                $"Timed out after {_timeout.TotalSeconds:g} seconds while resolving {NpmPackageInfo.FormatPackageSpecifier(packageName, LatestDistTag)} from the npm registry.",
+                $"Timed out after {_timeout.TotalSeconds:g} seconds while resolving {NpmPackageInfo.FormatPackageSpecifier(packageName, LatestDistTag)} from {registry.DisplayUri}.",
                 exception);
         }
     }
 
-    private static HttpRequestMessage CreateRequest(string packageName)
+    private static HttpRequestMessage CreateRequest(NpmRegistryResolution registry, string packageName)
     {
         // Scoped names carry a '/' that has to be percent-encoded, because the registry addresses a
         // package as a single path segment: "@microsoft/aspire-cli" is requested as
         // "%40microsoft%2Faspire-cli".
-        var requestUri = new Uri(new Uri(PublicRegistryBaseUrl), Uri.EscapeDataString(packageName));
+        var requestUri = new Uri(registry.RegistryUri, Uri.EscapeDataString(packageName));
         var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(AbbreviatedMetadataMediaType));
 

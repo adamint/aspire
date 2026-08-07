@@ -46,6 +46,53 @@ public class NpmRegistryClientTests
     }
 
     [Fact]
+    public async Task GetLatestVersionAsync_RequestsTheResolvedRegistry()
+    {
+        // A feed path must survive composition intact: the package is appended to the configured
+        // registry rather than replacing its last segment.
+        HttpRequestMessage? capturedRequest = null;
+        var client = CreateClient(
+            request =>
+            {
+                capturedRequest = request;
+                return CreateJsonResponse("""{ "dist-tags": { "latest": "1.0.0" } }""");
+            },
+            registry: "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/");
+
+        await client.GetLatestVersionAsync(PackageName, CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal(
+            "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/%40microsoft%2Faspire-cli",
+            capturedRequest?.RequestUri?.AbsoluteUri);
+    }
+
+    [Fact]
+    public async Task GetLatestVersionAsync_TimeoutMessageRedactsRegistryCredentials()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var timeout = TimeSpan.FromSeconds(10);
+        var bodyReadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client = CreateClient(
+            _ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new StallingStream(bodyReadStarted))
+            },
+            timeProvider,
+            timeout,
+            registry: "https://user:secret-token@npm.contoso.example/feed/");
+
+        var lookupTask = client.GetLatestVersionAsync(PackageName, CancellationToken.None);
+
+        await bodyReadStarted.Task.DefaultTimeout();
+        timeProvider.Advance(timeout);
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() => lookupTask).DefaultTimeout();
+        Assert.Equal(
+            "Timed out after 10 seconds while resolving @microsoft/aspire-cli@latest from https://npm.contoso.example/feed/.",
+            exception.Message);
+    }
+
+    [Fact]
     public async Task GetLatestVersionAsync_SendsNoAuthorizationOrCookies()
     {
         HttpRequestMessage? capturedRequest = null;
@@ -179,10 +226,22 @@ public class NpmRegistryClientTests
     private static NpmRegistryClient CreateClient(
         Func<HttpRequestMessage, HttpResponseMessage> handler,
         TimeProvider? timeProvider = null,
-        TimeSpan? timeout = null)
+        TimeSpan? timeout = null,
+        string? registry = null)
     {
         var httpClient = new HttpClient(new DelegateHttpMessageHandler(handler));
-        return new NpmRegistryClient(httpClient, timeProvider ?? TimeProvider.System, timeout);
+        var resolver = new StubNpmRegistryResolver(registry);
+        return new NpmRegistryClient(httpClient, resolver, timeProvider ?? TimeProvider.System, timeout);
+    }
+
+    private sealed class StubNpmRegistryResolver(string? registry) : INpmRegistryResolver
+    {
+        public NpmRegistryResolution Resolve(string packageName)
+        {
+            return new NpmRegistryResolution(
+                new Uri(registry ?? "https://registry.npmjs.org/"),
+                "test");
+        }
     }
 
     private static HttpResponseMessage CreateJsonResponse(string json)
