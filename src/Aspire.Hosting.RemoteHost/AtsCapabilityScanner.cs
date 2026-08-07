@@ -244,6 +244,8 @@ public static class AtsCapabilityScanner
         // Pass 5: Filter method name collisions (overloaded methods) after expansion
         FilterMethodNameCollisions(allCapabilities, allDiagnostics);
 
+        PruneRegistriesToSurvivingCapabilities(allCapabilities, allCapabilityExportingAssemblyNames, allMethods, allProperties);
+
         return new ScanResult
         {
             Capabilities = allCapabilities,
@@ -282,6 +284,8 @@ public static class AtsCapabilityScanner
 
         // Filter method name collisions (overloaded methods) after expansion
         FilterMethodNameCollisions(result.Capabilities, result.Diagnostics);
+
+        PruneRegistriesToSurvivingCapabilities(result.Capabilities, result.CapabilityExportingAssemblyNames, result.Methods, result.Properties);
 
         var exportedValues = DeduplicateExportedValues(result.ExportedValues, result.Diagnostics);
 
@@ -722,6 +726,55 @@ public static class AtsCapabilityScanner
             foreach (var memberType in typeRef.UnionTypes)
             {
                 ResolveTypeRef(memberType, validTypes);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Drops the per-capability registry entries for capabilities that scanning removed, so every
+    /// registry describes exactly the capabilities the scan kept.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// These registries are populated while assemblies are scanned, before
+    /// <see cref="FilterInvalidCapabilities"/> and <see cref="FilterMethodNameCollisions"/> run.
+    /// Those filters drop capabilities but cannot reach the registries, so an assembly whose every
+    /// capability was filtered out would still be named by them.
+    /// </para>
+    /// <para>
+    /// That is not cosmetic. <c>AtsContextFilter.TryResolveCanonicalAssemblyName</c> resolves a
+    /// requested package against the assembly names these registries carry, so such a package would
+    /// resolve, filter to nothing, and let <c>sdk export</c> publish an empty API document under a
+    /// successful exit code. Failing to resolve is what turns that into a reported error. The
+    /// ownership map alone is not enough: the method and property registries name the same assembly
+    /// through their declaring types.
+    /// </para>
+    /// <para>
+    /// Removing the entries is safe because every consumer reaches them by the capability id of a
+    /// capability it already holds, so an entry whose capability is gone is unreachable.
+    /// </para>
+    /// </remarks>
+    private static void PruneRegistriesToSurvivingCapabilities(
+        List<AtsCapabilityInfo> capabilities,
+        Dictionary<string, string> exportingAssemblyNames,
+        Dictionary<string, MethodInfo> methods,
+        Dictionary<string, PropertyInfo> properties)
+    {
+        // Expansion mutates ExpandedTargetTypes in place and never rewrites CapabilityId, so the
+        // surviving ids are exactly the keys that should remain.
+        var survivingCapabilityIds = new HashSet<string>(
+            capabilities.Select(capability => capability.CapabilityId),
+            StringComparer.Ordinal);
+
+        RemoveStaleKeys(exportingAssemblyNames, survivingCapabilityIds);
+        RemoveStaleKeys(methods, survivingCapabilityIds);
+        RemoveStaleKeys(properties, survivingCapabilityIds);
+
+        static void RemoveStaleKeys<T>(Dictionary<string, T> registry, HashSet<string> survivingCapabilityIds)
+        {
+            foreach (var capabilityId in registry.Keys.Where(id => !survivingCapabilityIds.Contains(id)).ToList())
+            {
+                registry.Remove(capabilityId);
             }
         }
     }

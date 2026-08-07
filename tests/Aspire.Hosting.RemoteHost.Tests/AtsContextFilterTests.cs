@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Reflection;
+using System.Reflection.Emit;
 using System.Text.Json.Nodes;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.TypeSystem;
@@ -77,6 +78,60 @@ public class AtsContextFilterTests
         Lower,
         Upper,
         AsDeclared
+    }
+
+    /// <summary>
+    /// An assembly whose capabilities were all removed by scan-time filtering exports nothing, so
+    /// canonicalization has to reject it. Resolving it instead is the silent failure: the export
+    /// filters to nothing and <c>sdk export</c> publishes an empty document under a successful exit
+    /// code rather than telling the caller the package contributed no API.
+    /// </summary>
+    [Fact]
+    public void TryResolveCanonicalAssemblyName_RejectsAnAssemblyWhoseCapabilitiesWereAllFiltered()
+    {
+        var losingAssembly = CreateCollidingCapabilityAssembly("ZzzFilterCollisionLoser");
+        var context = AtsCapabilityScanner.ScanAssemblies(
+            [
+                typeof(IDistributedApplicationBuilder).Assembly,
+                CreateCollidingCapabilityAssembly("AaaFilterCollisionWinner"),
+                losingAssembly
+            ]).ToAtsContext();
+        var losingAssemblyName = losingAssembly.GetName().Name!;
+
+        Assert.False(AtsContextFilter.TryResolveCanonicalAssemblyName(context, losingAssemblyName, out var resolvedName));
+        Assert.Null(resolvedName);
+        Assert.Empty(AtsContextFilter.FilterByExportingAssemblies(context, [losingAssemblyName]).Capabilities);
+    }
+
+    /// <summary>
+    /// A dynamic assembly whose single capability collides with an identically named export on the
+    /// same target, so the scan keeps only the ordinally first one and the other assembly is left
+    /// contributing nothing.
+    /// </summary>
+    private static Assembly CreateCollidingCapabilityAssembly(string assemblyNamePrefix)
+    {
+        var assemblyName = new AssemblyName($"{assemblyNamePrefix}_{Guid.NewGuid():N}");
+        var assemblyBuilder = AssemblyBuilder.DefineDynamicAssembly(assemblyName, AssemblyBuilderAccess.Run);
+        var moduleBuilder = assemblyBuilder.DefineDynamicModule(assemblyName.Name!);
+        var exportsTypeBuilder = moduleBuilder.DefineType(
+            "Generated.CollidingExports",
+            TypeAttributes.Public | TypeAttributes.Abstract | TypeAttributes.Sealed);
+        var methodBuilder = exportsTypeBuilder.DefineMethod(
+            "Collides",
+            MethodAttributes.Public | MethodAttributes.Static,
+            typeof(void),
+            [typeof(IDistributedApplicationBuilder), typeof(string)]);
+        methodBuilder.DefineParameter(1, ParameterAttributes.None, "builder");
+        methodBuilder.DefineParameter(2, ParameterAttributes.None, "value");
+        methodBuilder.SetCustomAttribute(
+            new CustomAttributeBuilder(
+                typeof(AspireExportAttribute).GetConstructor([typeof(string)])!,
+                ["collidingExport"]));
+        methodBuilder.GetILGenerator().Emit(OpCodes.Ret);
+
+        _ = exportsTypeBuilder.CreateType();
+
+        return assemblyBuilder;
     }
 
     [Fact]
