@@ -399,7 +399,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(spawnStub.called, false);
     });
 
-    test('stopDebugging stops resource sessions before the AppHost and Aspire parent sessions', async () => {
+    test('stopDebugging stops the AppHost debug session before the Aspire parent session', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
             type: 'aspire',
@@ -425,42 +425,22 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
                 name: 'AppHost',
             },
         };
-        const resourceDebugSession = {
-            id: 'resource-session',
-            type: 'pwa-node',
-            name: 'Node.js: app.js',
-            configuration: {
-                type: 'pwa-node',
-                request: 'launch',
-                name: 'Node.js: app.js',
-            },
-        };
         const terminalProvider = {
             isCliDebugLoggingEnabled: () => false,
         };
         const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').resolves();
         const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
-        const appHostSession = {
+        (aspireDebugSession as any)._appHostDebugSession = {
             id: appHostDebugSession.id,
             session: appHostDebugSession as unknown as vscode.DebugSession,
             stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
         };
-        (aspireDebugSession as any)._appHostDebugSession = appHostSession;
-        (aspireDebugSession as any)._resourceDebugSessions = [
-            appHostSession,
-            {
-                id: resourceDebugSession.id,
-                session: resourceDebugSession as unknown as vscode.DebugSession,
-                stopSession: () => vscode.debug.stopDebugging(resourceDebugSession as unknown as vscode.DebugSession),
-            },
-        ];
 
         await aspireDebugSession.stopDebugging();
 
-        assert.strictEqual(stopDebuggingStub.callCount, 3);
-        assert.strictEqual(stopDebuggingStub.firstCall.args[0], resourceDebugSession);
-        assert.strictEqual(stopDebuggingStub.secondCall.args[0], appHostDebugSession);
-        assert.strictEqual(stopDebuggingStub.thirdCall.args[0], parentDebugSession);
+        assert.strictEqual(stopDebuggingStub.callCount, 2);
+        assert.strictEqual(stopDebuggingStub.firstCall.args[0], appHostDebugSession);
+        assert.strictEqual(stopDebuggingStub.secondCall.args[0], parentDebugSession);
     });
 
     test('stopDebugging still stops the Aspire parent session when AppHost stop fails', async () => {

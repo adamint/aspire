@@ -124,31 +124,14 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   }
 
   async stopDebugging(): Promise<void> {
-    // A resource launched under a debugger can keep the AppHost shutdown in flight until its debug
-    // session exits. Stop those sessions before the AppHost to avoid waiting on a process whose
-    // debugger would otherwise only be stopped later by dispose().
-    let resourceStopError: unknown;
-    try {
-      const resourceDebugSessions = this._resourceDebugSessions.filter(session => session.id !== this._appHostDebugSession?.id);
-      await Promise.all(resourceDebugSessions.map(session => session.stopSession()));
-    }
-    catch (error) {
-      // The AppHost and synthetic Aspire parent still need to be stopped if a resource adapter fails.
-      resourceStopError = error;
-    }
-
-    // Global/E2E stop requests target the synthetic Aspire session. Stop the real AppHost session
-    // explicitly before the parent so we do not rely on VS Code cascading termination before the
-    // AppHost registry refresh runs.
+    // Global/E2E stop requests target the synthetic Aspire session. Stop the real
+    // AppHost session explicitly first so we do not rely on VS Code cascading
+    // termination from the parent session before the AppHost registry refresh runs.
     try {
       await this._appHostDebugSession?.stopSession();
     }
     finally {
       await this.stopParentDebugSessionOnce();
-    }
-
-    if (resourceStopError) {
-      throw resourceStopError;
     }
   }
 
