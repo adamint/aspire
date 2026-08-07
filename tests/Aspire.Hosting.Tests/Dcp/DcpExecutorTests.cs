@@ -5355,6 +5355,93 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task MauiProjectWithLaunchArgsOverrideAndSupportedLaunchConfiguration_StillAppliesMauiLaunchConfiguration()
+    {
+        // MAUI platform resources are ProjectResources that carry BOTH a ProjectLaunchArgsOverrideAnnotation
+        // (MauiPlatformHelper.ConfigurePlatformResource) and a "maui" SupportsDebuggingAnnotation
+        // (MauiPlatformHelper.WithMauiIdeLaunchConfiguration). The override pins the executable to Process
+        // execution, but the "maui" producer must still run so the IDE receives the MAUI launch configuration
+        // instead of the generic "project" one written by PrepareProjectExecutables.
+        var builder = DistributedApplication.CreateBuilder();
+
+        var projectBuilder = builder.AddProject<TestProject>("proj", launchProfileName: null);
+        var annotationToRemove = projectBuilder.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().FirstOrDefault();
+        if (annotationToRemove is not null)
+        {
+            projectBuilder.Resource.Annotations.Remove(annotationToRemove);
+        }
+
+#pragma warning disable ASPIREPROJECTS001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+        projectBuilder.Resource.Annotations.Add(new ProjectLaunchArgsOverrideAnnotation(["build", "--no-restore", "/t:Run", "-p:NoBuild=true"], leadingResourceArgumentToRemove: "run"));
+#pragma warning restore ASPIREPROJECTS001
+
+        projectBuilder
+            .WithDebugSupport(
+                context => Task.FromResult(new TestMauiLaunchConfiguration
+                {
+                    Mode = context.Mode,
+                    ProjectPath = "/mauiapp/MauiApp.csproj",
+                    TargetFramework = "net10.0-android",
+                    Platform = "android",
+                    TargetKind = "emulator",
+                    MsBuildProperties = new Dictionary<string, string>
+                    {
+                        ["AdbTarget"] = "-e"
+                    }
+                }),
+                "maui")
+            .WithArgs("run", "-f", "net10.0-android");
+
+        var runSessionInfo = new RunSessionInfo
+        {
+            ProtocolsSupported = ["coreclr"],
+            SupportedLaunchConfigurations = ["maui"]
+        };
+
+        var configDict = new Dictionary<string, string?>
+        {
+            [DcpExecutor.DebugSessionPortVar] = "12345",
+            [KnownConfigNames.DebugSessionInfo] = JsonSerializer.Serialize(runSessionInfo),
+            [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234",
+            [KnownConfigNames.DebugSessionRunMode] = "Debug"
+        };
+
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var distributedApplicationOptions = new DistributedApplicationOptions { AssemblyName = typeof(DcpExecutorTests).Assembly.FullName };
+        var expectedConfiguration = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyConfigurationAttribute>(typeof(DcpExecutorTests).Assembly)?.Configuration;
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration, distributedApplicationOptions: distributedApplicationOptions);
+
+        await appExecutor.RunApplicationAsync();
+
+        var exe = GetCreatedExecutableForResource(kubernetesService, "proj");
+
+        // The launch args override still owns execution: the resource runs 'dotnet build /t:Run' as a process.
+        Assert.Equal(ExecutionType.Process, exe.Spec.ExecutionType);
+
+        var expectedArgs = new List<string> { "build", "--no-restore", "/t:Run", "-p:NoBuild=true", "TestProject" };
+        if (!string.IsNullOrEmpty(expectedConfiguration))
+        {
+            expectedArgs.AddRange(["--configuration", expectedConfiguration]);
+        }
+        expectedArgs.AddRange(["-f", "net10.0-android"]);
+        Assert.Equal(expectedArgs, exe.Spec.Args);
+
+        Assert.True(exe.TryGetAnnotationAsObjectList<TestMauiLaunchConfiguration>(Executable.LaunchConfigurationsAnnotation, out var launchConfigs));
+        var launchConfig = Assert.Single(launchConfigs);
+        Assert.Equal("maui", launchConfig.Type);
+        Assert.Equal(ExecutableLaunchMode.Debug, launchConfig.Mode);
+        Assert.Equal("/mauiapp/MauiApp.csproj", launchConfig.ProjectPath);
+        Assert.Equal("net10.0-android", launchConfig.TargetFramework);
+        Assert.Equal("android", launchConfig.Platform);
+        Assert.Equal("emulator", launchConfig.TargetKind);
+        Assert.Equal("-e", launchConfig.MsBuildProperties!["AdbTarget"]);
+    }
+
+    [Fact]
     public async Task ProjectWithNonProjectAnnotationAndExecutableAnnotation_LaunchProfileArgsStayAfterDotnetRunArgs()
     {
         var builder = DistributedApplication.CreateBuilder();
@@ -5882,7 +5969,7 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
         Assert.NotNull(executableCreator);
 
         var renderedExecutable = Assert.Single(
-            await executableCreator.PrepareObjectsAsync(CancellationToken.None));
+            executableCreator.PrepareObjects(CancellationToken.None));
         var objectFactory = new RecordingDcpObjectFactory();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => executableCreator.CreateObjectAsync(

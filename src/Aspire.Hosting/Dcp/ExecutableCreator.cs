@@ -55,12 +55,11 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         _appResources = appResources;
     }
 
-    public Task<IEnumerable<RenderedModelResource<Executable>>> PrepareObjectsAsync(CancellationToken cancellationToken)
+    public IEnumerable<RenderedModelResource<Executable>> PrepareObjects(CancellationToken cancellationToken)
     {
         PrepareProjectExecutables(cancellationToken);
         PreparePlainExecutables();
-        return Task.FromResult<IEnumerable<RenderedModelResource<Executable>>>(
-            _appResources.Get().OfType<RenderedModelResource<Executable>>());
+        return _appResources.Get().OfType<RenderedModelResource<Executable>>();
     }
 
     public bool IsReadyToCreate(RenderedModelResource<Executable> resource, EmptyCreationContext context)
@@ -91,17 +90,29 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             spec.Args.AddRange(projectArgs);
         }
 
+        // PrepareProjectExecutables() takes a dedicated branch for project resources that carry a launch
+        // args override: it pins the executable to Process execution and writes the static "project"
+        // launch configuration itself. Both of those decisions have to be preserved here.
+        //
+        // This is NOT the same as "the resource has no launch configuration". MAUI platform resources are
+        // ProjectResources that carry both a ProjectLaunchArgsOverrideAnnotation and a "maui"
+        // SupportsDebuggingAnnotation, and their producer must still run below so the IDE receives the MAUI
+        // launch configuration rather than the generic "project" one.
+        var preparedFromLaunchArgsOverride = er.ModelResource is ProjectResource && HasProjectLaunchArgsOverride(er.ModelResource);
+
         SupportsDebuggingAnnotation? supportsDebuggingAnnotation = null;
-        if (!HasProjectLaunchArgsOverride(er.ModelResource)
-            && !er.ModelResource.HasAnnotationOfType<ForceProcessExecutionAnnotation>()
+        if (!er.ModelResource.HasAnnotationOfType<ForceProcessExecutionAnnotation>()
             && er.ModelResource.SupportsDebugging(_configuration, out var activeDebuggingAnnotation))
         {
             supportsDebuggingAnnotation = activeDebuggingAnnotation;
 
-            // Executable objects are reused for restarts, and a prior producer failure may have changed
-            // the execution type to Process. Reset it before building arguments because launch-profile
-            // arguments are executable in Process mode but display-only in IDE mode.
-            spec.ExecutionType = ExecutionType.IDE;
+            if (!preparedFromLaunchArgsOverride)
+            {
+                // Executable objects are reused for restarts, and a prior producer failure may have changed
+                // the execution type to Process. Reset it before building arguments because launch-profile
+                // arguments are executable in Process mode but display-only in IDE mode.
+                spec.ExecutionType = ExecutionType.IDE;
+            }
         }
 
         var (configuration, pemCertificates) = await BuildExecutableConfiguration(er, resourceLogger, cancellationToken).ConfigureAwait(false);
@@ -175,7 +186,13 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         // Invoke the active launch configuration producer only after the resource execution configuration
         // has been resolved. This gives every launch type, including "project", the exact arguments and
         // environment used for this executable creation.
-        if (supportsDebuggingAnnotation is not null)
+        //
+        // The single exception is the "project" type on a launch-args-override project resource:
+        // PrepareProjectExecutables() already wrote the launch configuration matching the overridden command
+        // line, so re-running that producer would describe a launch that never happens. Producers for every
+        // other launch type still run here, because nothing else supplies their configuration.
+        if (supportsDebuggingAnnotation is not null
+            && !(preparedFromLaunchArgsOverride && supportsDebuggingAnnotation.LaunchConfigurationType is KnownLaunchConfigurationTypes.Project))
         {
             var isProjectLaunchConfiguration =
                 supportsDebuggingAnnotation.LaunchConfigurationType is KnownLaunchConfigurationTypes.Project;
