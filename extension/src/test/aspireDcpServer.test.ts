@@ -8,6 +8,7 @@ import WebSocket from 'ws';
 import type { AspireDebugSession } from '../debugger/AspireDebugSession';
 import AspireDcpServer from '../dcp/AspireDcpServer';
 import type { AspireResourceDebugSession, NodeLaunchConfiguration, ProcessRestartedNotification, RunSessionNotification, RunSessionPayload, ServiceLogsNotification, SessionTerminatedNotification } from '../dcp/types';
+import { extensionLogOutputChannel } from '../utils/logging';
 import { __setReporterForTests } from '../utils/telemetry';
 
 interface RecordedTelemetryEvent {
@@ -36,7 +37,9 @@ class FakeTelemetryReporter {
 
 interface DcpServerInternals {
     _runTelemetryById: Map<string, unknown>;
-    _runsBySession: Map<string, unknown>;
+    _runsBySession: Map<string, { lifecycle: string }>;
+    _telemetryFallbackTimers: Set<NodeJS.Timeout>;
+    _terminalStateTimers: Set<NodeJS.Timeout>;
     pendingNotificationQueueByDcpId: Map<string, RunSessionNotification[]>;
     server: https.Server;
     wsBySession: Map<string, WebSocket>;
@@ -47,10 +50,10 @@ interface Harness {
     dcpSessionId: string;
     dcpServer: AspireDcpServer;
     disposed: boolean;
-    queuedStopSessions: sinon.SinonStub[];
+    queuedStopDebugging: sinon.SinonStub[];
     sockets: WebSocket[];
     startAndGetDebugSession: sinon.SinonStub;
-    stopSession: sinon.SinonStub;
+    stopDebugging: sinon.SinonStub;
 }
 
 interface WireNotification {
@@ -188,9 +191,8 @@ suite('Aspire DCP server', () => {
     });
 
     test('DELETE during startup prevents a late debug session from reviving the run', async () => {
-        await stopHarness(harness);
-        harness = await startHarness({ requestedStopTelemetryTimeoutMs: 25 });
-        const startupCompleted = createDeferred<AspireResourceDebugSession>();
+        const startupCompleted = createDeferred<AspireResourceDebugSession | undefined>();
+        const lateStopDebugging = sinon.stub().resolves();
         harness.startAndGetDebugSession.returns(startupCompleted.promise);
         const client = await openNotificationClient(harness);
 
@@ -204,24 +206,25 @@ suite('Aspire DCP server', () => {
         startupCompleted.resolve({
             id: 'late-resource-debug-session',
             session: {} as AspireResourceDebugSession['session'],
-            stopSession: harness.stopSession,
+            stopSession: createMemoizedStopSession(lateStopDebugging),
         });
         const createResponse = await createPromise;
-        await delay(100);
+        await waitFor(() => lateStopDebugging.called);
+        await drainNotifications(client);
 
         assert.strictEqual(deleteResponse.statusCode, 200);
+        assert.strictEqual(createResponse.statusCode, 409);
+        assert.strictEqual(lateStopDebugging.calledOnce, true);
+        assert.deepStrictEqual(client.notifications, [notification]);
         assert.deepStrictEqual(notification, {
             notification_type: 'sessionTerminated',
             session_id: runId,
         });
-        assert.strictEqual(createResponse.statusCode, 409);
-        assert.strictEqual(harness.stopSession.calledOnce, true);
-        assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.has(runId), false);
-        assert.strictEqual(getInternals(harness.dcpServer)._runTelemetryById.has(runId), false);
+        assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.get(runId)?.lifecycle, 'stopRequested');
     });
 
     test('startup failure after DELETE does not send a second terminal notification', async () => {
-        const startupCompleted = createDeferred<AspireResourceDebugSession>();
+        const startupCompleted = createDeferred<AspireResourceDebugSession | undefined>();
         harness.startAndGetDebugSession.returns(startupCompleted.promise);
         const client = await openNotificationClient(harness);
 
@@ -235,21 +238,55 @@ suite('Aspire DCP server', () => {
         const createResponse = await createPromise;
         await drainNotifications(client);
 
+        assert.strictEqual(deleteResponse.statusCode, 200);
+        assert.strictEqual(createResponse.statusCode, 409);
         assert.deepStrictEqual(client.notifications, [notification]);
         assert.deepStrictEqual(notification, {
             notification_type: 'sessionTerminated',
             session_id: runId,
         });
-        assert.strictEqual(deleteResponse.statusCode, 200);
-        assert.strictEqual(createResponse.statusCode, 409);
-        assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.has(runId), false);
+        assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.get(runId)?.lifecycle, 'stopRequested');
     });
 
-    test('DELETE waits for stop completion before notifying DCP and responding', async () => {
+    test('startup failure and a late adapter exit produce one terminal notification', async () => {
+        let adapterNotificationHandler: ((notification: RunSessionNotification) => void) | undefined;
+        harness.startAndGetDebugSession.callsFake((configuration: { runId: string }) => {
+            adapterNotificationHandler = harness.dcpServer.createRunSessionNotificationHandler(configuration.runId);
+            return Promise.reject(new Error('debug adapter startup failed'));
+        });
+        const client = await openNotificationClient(harness);
+
+        const createResponse = await createRunSession(harness);
+        const notification = await client.waitForNotification();
+        assert.ok(adapterNotificationHandler);
+        const runId = notification.session_id;
+
+        const lateAdapterNotification: SessionTerminatedNotification = {
+            notification_type: 'sessionTerminated',
+            session_id: runId,
+            dcp_id: harness.dcpId,
+            exit_code: 9,
+        };
+        adapterNotificationHandler(lateAdapterNotification);
+        adapterNotificationHandler(lateAdapterNotification);
+        await drainNotifications(client);
+
+        assert.strictEqual(createResponse.statusCode, 500);
+        assert.deepStrictEqual(client.notifications, [notification]);
+        assert.deepStrictEqual(notification, {
+            notification_type: 'sessionTerminated',
+            session_id: runId,
+            exit_code: -1,
+        });
+        assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.has(runId), false);
+        assert.strictEqual(telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end').length, 1);
+    });
+
+    test('DELETE notifies and responds before memoized debugger teardown completes', async () => {
         const stopStarted = createDeferred<void>();
         const stopCompleted = createDeferred<void>();
         const stopCompletedObserved = sinon.spy();
-        harness.stopSession.callsFake(() => {
+        harness.stopDebugging.callsFake(() => {
             stopStarted.resolve();
             return stopCompleted.promise.then(() => {
                 stopCompletedObserved();
@@ -261,89 +298,33 @@ suite('Aspire DCP server', () => {
         assert.ok(runLocation);
         const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
         const sendNotificationSpy = sinon.spy(AspireDcpServer, 'sendNotificationCore');
-        const responseObserved = sinon.spy();
-        let responseReceived = false;
 
-        const deletePromise = request(harness, 'DELETE', `/run_session/${runId}`).then(response => {
-            responseReceived = true;
-            responseObserved();
-            return response;
-        });
-        await stopStarted.promise;
-
-        assert.strictEqual(sendNotificationSpy.called, false);
-        assert.strictEqual(responseReceived, false);
-
-        stopCompleted.resolve();
         const [deleteResponse, notification] = await Promise.all([
-            deletePromise,
+            request(harness, 'DELETE', `/run_session/${runId}`),
             client.waitForNotification(),
         ]);
-
         assert.strictEqual(deleteResponse.statusCode, 200);
         assert.deepStrictEqual(notification, {
             notification_type: 'sessionTerminated',
             session_id: runId,
         });
-        assert.strictEqual(sendNotificationSpy.calledOnce, true);
-        assert.strictEqual(stopCompletedObserved.calledBefore(sendNotificationSpy), true);
-        assert.strictEqual(sendNotificationSpy.calledBefore(responseObserved), true);
-    });
-
-    test('DELETE completes within a bound while a debugger stop remains pending', async () => {
-        await stopHarness(harness);
-        harness = await startHarness({ stopRequestTimeoutMs: 25 });
-        const stopStarted = createDeferred<void>();
-        const stopCompleted = createDeferred<void>();
-        const stopCompletedObserved = sinon.spy();
-        harness.stopSession.callsFake(() => {
-            stopStarted.resolve();
-            return stopCompleted.promise.then(() => {
-                stopCompletedObserved();
-            });
-        });
-        const client = await openNotificationClient(harness);
-        const createResponse = await createRunSession(harness);
-        const runLocation = createResponse.headers.location;
-        assert.ok(runLocation);
-        const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
-
-        const deletePromise = request(harness, 'DELETE', `/run_session/${runId}`);
-        await stopStarted.promise;
-        const boundedResponse = await Promise.race([
-            deletePromise,
-            delay(250).then(() => undefined),
-        ]);
-
-        if (!boundedResponse) {
-            stopCompleted.resolve();
-            await deletePromise;
-            await client.waitForNotification();
-        }
-
-        assert.ok(boundedResponse, 'DELETE did not complete within the configured stop bound');
-        const notification = await client.waitForNotification();
-        assert.strictEqual(boundedResponse.statusCode, 200);
-        assert.deepStrictEqual(notification, {
-            notification_type: 'sessionTerminated',
-            session_id: runId,
-        });
         assert.strictEqual(stopCompletedObserved.called, false);
+        await stopStarted.promise;
+        assert.strictEqual(harness.stopDebugging.calledOnce, true);
+        assert.strictEqual(sendNotificationSpy.calledBefore(harness.stopDebugging), true);
 
         stopCompleted.resolve();
         await waitFor(() => stopCompletedObserved.called);
         await drainNotifications(client);
 
         assert.deepStrictEqual(client.notifications, [notification]);
-        assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.has(runId), false);
+        assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.get(runId)?.lifecycle, 'stopRequested');
     });
 
-    test('DELETE retries a stop attempt that previously timed out', async () => {
-        await stopHarness(harness);
-        harness = await startHarness({ stopRequestTimeoutMs: 25 });
-        const firstStop = createDeferred<void>();
-        harness.stopSession.onFirstCall().returns(firstStop.promise);
-        harness.stopSession.onSecondCall().resolves();
+    test('repeated DELETE does not retry production-memoized debugger teardown', async () => {
+        const stopFailure = new Error('memoized stop failed');
+        harness.stopDebugging.rejects(stopFailure);
+        const warn = sinon.stub(extensionLogOutputChannel, 'warn');
         const client = await openNotificationClient(harness);
         const createResponse = await createRunSession(harness);
         const runLocation = createResponse.headers.location;
@@ -351,51 +332,40 @@ suite('Aspire DCP server', () => {
         const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
 
         const firstDeleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        assert.strictEqual(firstDeleteResponse.statusCode, 200);
         const notification = await client.waitForNotification();
         const retryResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        await waitFor(() => warn.called);
 
-        assert.strictEqual(firstDeleteResponse.statusCode, 200);
         assert.strictEqual(retryResponse.statusCode, 200);
-        assert.strictEqual(harness.stopSession.callCount, 2);
-        assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.has(runId), false);
-
-        firstStop.reject(new Error('stale stop failure'));
+        assert.strictEqual(harness.stopDebugging.calledOnce, true);
+        assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.get(runId)?.lifecycle, 'stopRequested');
         await drainNotifications(client);
 
         assert.deepStrictEqual(client.notifications, [notification]);
     });
 
-    test('DELETE returns an error and allows retry when stop fails', async () => {
-        harness.stopSession.onFirstCall().rejects(new Error('stop failed'));
-        harness.stopSession.onSecondCall().resolves();
+    test('DELETE contains a synchronous debugger teardown failure after responding', async () => {
+        harness.stopDebugging.throws(new Error('stop threw synchronously'));
+        const warn = sinon.stub(extensionLogOutputChannel, 'warn');
         const client = await openNotificationClient(harness);
         const createResponse = await createRunSession(harness);
         const runLocation = createResponse.headers.location;
         assert.ok(runLocation);
         const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
-        const sendNotificationSpy = sinon.spy(AspireDcpServer, 'sendNotificationCore');
-
-        const failedResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
-
-        assert.strictEqual(failedResponse.statusCode, 500);
-        assert.deepStrictEqual(JSON.parse(failedResponse.body), {
-            error: {
-                code: 'DebugSessionStopFailed',
-                message: `Failed to stop debug session for run ID ${runId}: stop failed`,
-                details: [],
-            },
-        });
-        assert.strictEqual(sendNotificationSpy.called, false);
-
-        const retryResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        assert.strictEqual(deleteResponse.statusCode, 200);
         const notification = await client.waitForNotification();
+        await waitFor(() => warn.called);
+        const retryResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
 
         assert.strictEqual(retryResponse.statusCode, 200);
-        assert.strictEqual(harness.stopSession.callCount, 2);
+        assert.strictEqual(harness.stopDebugging.calledOnce, true);
         assert.deepStrictEqual(notification, {
             notification_type: 'sessionTerminated',
             session_id: runId,
         });
+        assert.match(warn.firstCall.args[0], /stop threw synchronously/);
     });
 
     test('DELETE rejects a DCP instance that does not own the run', async () => {
@@ -417,7 +387,7 @@ suite('Aspire DCP server', () => {
                 details: [],
             },
         });
-        assert.strictEqual(harness.stopSession.called, false);
+        assert.strictEqual(harness.stopDebugging.called, false);
         await Promise.all([drainNotifications(ownerClient), drainNotifications(intruderClient)]);
         assert.deepStrictEqual(ownerClient.notifications, []);
         assert.deepStrictEqual(intruderClient.notifications, []);
@@ -426,7 +396,7 @@ suite('Aspire DCP server', () => {
         const ownerNotification = await ownerClient.waitForNotification();
 
         assert.strictEqual(ownerResponse.statusCode, 200);
-        assert.strictEqual(harness.stopSession.calledOnce, true);
+        assert.strictEqual(harness.stopDebugging.calledOnce, true);
         assert.deepStrictEqual(ownerNotification, {
             notification_type: 'sessionTerminated',
             session_id: runId,
@@ -435,7 +405,7 @@ suite('Aspire DCP server', () => {
         assert.deepStrictEqual(intruderClient.notifications, []);
     });
 
-    test('requested stop omits exit code while late adapter exit still records its telemetry', async () => {
+    test('requested stop records the adapter exit when it arrives before telemetry fallback', async () => {
         const client = await openNotificationClient(harness);
         const createResponse = await createRunSession(harness);
         const runLocation = createResponse.headers.location;
@@ -452,8 +422,10 @@ suite('Aspire DCP server', () => {
             notification_type: 'sessionTerminated',
             session_id: runId,
         });
-        assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.has(runId), false);
+        assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.has(runId), true);
         assert.strictEqual(getInternals(harness.dcpServer)._runTelemetryById.has(runId), true);
+        assert.strictEqual(getInternals(harness.dcpServer)._telemetryFallbackTimers.size, 1);
+        assert.strictEqual(telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end').length, 0);
 
         const lateAdapterNotification: SessionTerminatedNotification = {
             notification_type: 'sessionTerminated',
@@ -467,6 +439,7 @@ suite('Aspire DCP server', () => {
 
         assert.deepStrictEqual(client.notifications, [requestedStopNotification]);
         assert.strictEqual(getInternals(harness.dcpServer)._runTelemetryById.has(runId), false);
+        assert.strictEqual(getInternals(harness.dcpServer)._telemetryFallbackTimers.size, 0);
         const runSessionEndEvents = telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end');
         assert.deepStrictEqual(runSessionEndEvents, [{
             name: 'aspire/vscode/debug/runsession/end',
@@ -484,20 +457,90 @@ suite('Aspire DCP server', () => {
         assert.strictEqual(harness.dcpServer.takeDebugSessionAggregateStats('aspire-extension-run-test')?.anyNonZeroExit, true);
     });
 
-    test('requested stop emits one canceled telemetry fallback when the adapter never completes', async () => {
+    test('requested stop records one canceled telemetry fallback without discarding terminal state', async () => {
         await stopHarness(harness);
-        harness = await startHarness({ requestedStopTelemetryTimeoutMs: 25 });
+        harness = await startHarness({
+            requestedStopTelemetryTimeoutMs: 25,
+            terminalStateRetentionMs: 5_000,
+        });
         const client = await openNotificationClient(harness);
         const createResponse = await createRunSession(harness);
         const runLocation = createResponse.headers.location;
         assert.ok(runLocation);
         const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
-        const adapterNotificationHandler = harness.dcpServer.createRunSessionNotificationHandler(runId);
-        assert.ok(adapterNotificationHandler);
+        const lateAdapterNotificationHandler = harness.dcpServer.createRunSessionNotificationHandler(runId);
+        assert.ok(lateAdapterNotificationHandler);
 
         const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
         const notification = await client.waitForNotification();
-        await delay(100);
+        await waitFor(() => telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end').length === 1);
+
+        const runSessionEndEvents = telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end');
+        assert.strictEqual(deleteResponse.statusCode, 200);
+        assert.deepStrictEqual(notification, {
+            notification_type: 'sessionTerminated',
+            session_id: runId,
+        });
+        assert.deepStrictEqual(runSessionEndEvents, [{
+            name: 'aspire/vscode/debug/runsession/end',
+            properties: {
+                resource_type: 'node',
+                mode: 'Debug',
+                exit_code_bucket: 'canceled',
+            },
+            measurements: {
+                duration_ms: runSessionEndEvents[0]?.measurements?.duration_ms,
+                exit_code: -1,
+            },
+        }]);
+        assert.strictEqual(getInternals(harness.dcpServer)._runTelemetryById.has(runId), false);
+        assert.strictEqual(getInternals(harness.dcpServer)._telemetryFallbackTimers.size, 0);
+        assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.get(runId)?.lifecycle, 'stopRequested');
+        assert.strictEqual(getInternals(harness.dcpServer)._terminalStateTimers.size, 1);
+
+        const lateAdapterNotification: SessionTerminatedNotification = {
+            notification_type: 'sessionTerminated',
+            session_id: runId,
+            dcp_id: harness.dcpId,
+            exit_code: 17,
+        };
+        lateAdapterNotificationHandler(lateAdapterNotification);
+        lateAdapterNotificationHandler(lateAdapterNotification);
+        await drainNotifications(client);
+
+        assert.deepStrictEqual(client.notifications, [notification]);
+        assert.strictEqual(telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end').length, 1);
+        assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.has(runId), false);
+        assert.strictEqual(getInternals(harness.dcpServer)._terminalStateTimers.size, 0);
+    });
+
+    test('requested stop retains a bounded terminal handler for late tracker registration', async () => {
+        await stopHarness(harness);
+        harness = await startHarness({
+            requestedStopTelemetryTimeoutMs: 5,
+            terminalStateRetentionMs: 25,
+        });
+        const client = await openNotificationClient(harness);
+        const createResponse = await createRunSession(harness);
+        const runLocation = createResponse.headers.location;
+        assert.ok(runLocation);
+        const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
+        const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        const notification = await client.waitForNotification();
+        const lateAdapterNotificationHandler = harness.dcpServer.createRunSessionNotificationHandler(runId);
+        assert.ok(lateAdapterNotificationHandler);
+        assert.strictEqual(getInternals(harness.dcpServer)._terminalStateTimers.size, 1);
+
+        const lateLog: ServiceLogsNotification = {
+            notification_type: 'serviceLogs',
+            session_id: runId,
+            dcp_id: harness.dcpId,
+            is_std_err: false,
+            log_message: 'after requested stop',
+        };
+        lateAdapterNotificationHandler(lateLog);
+        await waitFor(() => !getInternals(harness.dcpServer)._runsBySession.has(runId));
+        assert.strictEqual(getInternals(harness.dcpServer)._terminalStateTimers.size, 0);
 
         const runSessionEndEvents = telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end');
         assert.strictEqual(deleteResponse.statusCode, 200);
@@ -521,21 +564,15 @@ suite('Aspire DCP server', () => {
             dcp_id: harness.dcpId,
             exit_code: 17,
         };
-        adapterNotificationHandler(lateAdapterNotification);
-        adapterNotificationHandler(lateAdapterNotification);
+        lateAdapterNotificationHandler(lateAdapterNotification);
+        lateAdapterNotificationHandler(lateAdapterNotification);
         await drainNotifications(client);
 
         assert.deepStrictEqual(client.notifications, [notification]);
         assert.strictEqual(telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end').length, 1);
     });
 
-    test('adapter exit wins the stop race with its actual exit code', async () => {
-        const stopStarted = createDeferred<void>();
-        const stopCompleted = createDeferred<void>();
-        harness.stopSession.callsFake(() => {
-            stopStarted.resolve();
-            return stopCompleted.promise;
-        });
+    test('adapter exit before DELETE keeps its actual exit code', async () => {
         const intruderClient = await openNotificationClient(harness, 'aspire-extension-run-test-intruder');
         const client = await openNotificationClient(harness);
         const createResponse = await createRunSession(harness);
@@ -544,13 +581,6 @@ suite('Aspire DCP server', () => {
         const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
         const adapterNotificationHandler = harness.dcpServer.createRunSessionNotificationHandler(runId);
         assert.ok(adapterNotificationHandler);
-        let responseReceived = false;
-
-        const deletePromise = request(harness, 'DELETE', `/run_session/${runId}`).then(response => {
-            responseReceived = true;
-            return response;
-        });
-        await stopStarted.promise;
 
         const adapterNotification: SessionTerminatedNotification = {
             notification_type: 'sessionTerminated',
@@ -566,14 +596,13 @@ suite('Aspire DCP server', () => {
             session_id: runId,
             exit_code: 23,
         });
-        assert.strictEqual(responseReceived, false);
 
-        stopCompleted.resolve();
-        const deleteResponse = await deletePromise;
+        const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
         adapterNotificationHandler(adapterNotification);
         await Promise.all([drainNotifications(client), drainNotifications(intruderClient)]);
 
-        assert.strictEqual(deleteResponse.statusCode, 200);
+        assert.strictEqual(deleteResponse.statusCode, 204);
+        assert.strictEqual(harness.stopDebugging.called, false);
         assert.deepStrictEqual(client.notifications, [notification]);
         assert.deepStrictEqual(intruderClient.notifications, []);
         assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.has(runId), false);
@@ -583,34 +612,25 @@ suite('Aspire DCP server', () => {
         assert.strictEqual(runSessionEndEvents[0].isError, true);
     });
 
-    test('adapter exit keeps DELETE successful when the stop later rejects', async () => {
+    test('late debugger teardown rejection does not revive or duplicate a terminated run', async () => {
         const stopStarted = createDeferred<void>();
         const stopCompleted = createDeferred<void>();
-        harness.stopSession.callsFake(() => {
+        harness.stopDebugging.callsFake(() => {
             stopStarted.resolve();
             return stopCompleted.promise;
         });
+        const warn = sinon.stub(extensionLogOutputChannel, 'warn');
         const client = await openNotificationClient(harness);
         const createResponse = await createRunSession(harness);
         const runLocation = createResponse.headers.location;
         assert.ok(runLocation);
         const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
-        const adapterNotificationHandler = harness.dcpServer.createRunSessionNotificationHandler(runId);
-        assert.ok(adapterNotificationHandler);
-
         const deletePromise = request(harness, 'DELETE', `/run_session/${runId}`);
-        await stopStarted.promise;
-
-        const adapterNotification: SessionTerminatedNotification = {
-            notification_type: 'sessionTerminated',
-            session_id: runId,
-            dcp_id: harness.dcpId,
-            exit_code: 23,
-        };
-        adapterNotificationHandler(adapterNotification);
         const notification = await client.waitForNotification();
-        stopCompleted.reject(new Error('stop rejected after adapter exit'));
         const deleteResponse = await deletePromise;
+        await stopStarted.promise;
+        stopCompleted.reject(new Error('stop rejected after adapter exit'));
+        await waitFor(() => warn.called);
         await drainNotifications(client);
 
         assert.strictEqual(deleteResponse.statusCode, 200);
@@ -618,8 +638,8 @@ suite('Aspire DCP server', () => {
         assert.deepStrictEqual(notification, {
             notification_type: 'sessionTerminated',
             session_id: runId,
-            exit_code: 23,
         });
+        assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.get(runId)?.lifecycle, 'stopRequested');
     });
 
     test('terminal state and cleanup are isolated across concurrent runs', async () => {
@@ -723,6 +743,10 @@ suite('Aspire DCP server', () => {
 
         const server = getInternals(harness.dcpServer).server;
         const serverClosed = once(server, 'close');
+        const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        assert.strictEqual(deleteResponse.statusCode, 200);
+        assert.strictEqual(getInternals(harness.dcpServer)._telemetryFallbackTimers.size, 1);
+        assert.strictEqual(getInternals(harness.dcpServer)._terminalStateTimers.size, 1);
         harness.dcpServer.dispose();
         harness.disposed = true;
         await serverClosed;
@@ -740,20 +764,25 @@ suite('Aspire DCP server', () => {
         assert.strictEqual(getInternals(harness.dcpServer)._runTelemetryById.size, 0);
         assert.strictEqual(getInternals(harness.dcpServer).pendingNotificationQueueByDcpId.size, 0);
         assert.strictEqual(getInternals(harness.dcpServer).wsBySession.size, 0);
+        assert.strictEqual(getInternals(harness.dcpServer)._telemetryFallbackTimers.size, 0);
+        assert.strictEqual(getInternals(harness.dcpServer)._terminalStateTimers.size, 0);
     });
 });
 
-async function startHarness(options?: { stopRequestTimeoutMs?: number; requestedStopTelemetryTimeoutMs?: number }): Promise<Harness> {
+async function startHarness(options?: {
+    requestedStopTelemetryTimeoutMs?: number;
+    terminalStateRetentionMs?: number;
+}): Promise<Harness> {
     const dcpSessionId = 'aspire-extension-run-test';
     const dcpId = `${dcpSessionId}-resource`;
-    const stopSession = sinon.stub().resolves();
-    const queuedStopSessions: sinon.SinonStub[] = [];
+    const stopDebugging = sinon.stub().resolves();
+    const queuedStopDebugging: sinon.SinonStub[] = [];
     const startAndGetDebugSession = sinon.stub().callsFake(() => {
-        const resourceStopSession = queuedStopSessions.shift() ?? stopSession;
+        const resourceStopDebugging = queuedStopDebugging.shift() ?? stopDebugging;
         const resourceDebugSession: AspireResourceDebugSession = {
-            id: `resource-debug-session-${resourceStopSession.callCount}`,
+            id: `resource-debug-session-${resourceStopDebugging.callCount}`,
             session: {} as AspireResourceDebugSession['session'],
-            stopSession: resourceStopSession,
+            stopSession: createMemoizedStopSession(resourceStopDebugging),
         };
 
         return Promise.resolve(resourceDebugSession);
@@ -765,7 +794,10 @@ async function startHarness(options?: { stopRequestTimeoutMs?: number; requested
     const createDcpServer = AspireDcpServer.create as unknown as (
         getDebugSession: (debugSessionId: string) => AspireDebugSession | null,
         hooks: Record<string, never>,
-        options?: { stopRequestTimeoutMs?: number; requestedStopTelemetryTimeoutMs?: number },
+        options?: {
+            requestedStopTelemetryTimeoutMs?: number;
+            terminalStateRetentionMs?: number;
+        },
     ) => Promise<AspireDcpServer>;
     const dcpServer = await createDcpServer(debugSessionId => debugSessionId === dcpSessionId ? debugSession : null, {}, options);
 
@@ -774,21 +806,17 @@ async function startHarness(options?: { stopRequestTimeoutMs?: number; requested
         dcpSessionId,
         dcpServer,
         disposed: false,
-        queuedStopSessions,
+        queuedStopDebugging,
         sockets: [],
         startAndGetDebugSession,
-        stopSession,
+        stopDebugging,
     };
 }
 
 async function stopHarness(harness: Harness): Promise<void> {
     const socketsClosed = harness.sockets
         .filter(socket => socket.readyState !== WebSocket.CLOSED)
-        .map(socket => {
-            const closed = once(socket, 'close');
-            socket.terminate();
-            return closed;
-        });
+        .map(closeHarnessSocket);
 
     const server = getInternals(harness.dcpServer).server;
     const closed = server.listening ? once(server, 'close') : Promise.resolve();
@@ -798,7 +826,31 @@ async function stopHarness(harness: Harness): Promise<void> {
     await Promise.all([closed, ...socketsClosed]);
 }
 
-async function createRunSession(harness: Harness, stopSession?: sinon.SinonStub): Promise<HttpResponse> {
+async function closeHarnessSocket(socket: WebSocket): Promise<void> {
+    if (socket.readyState === WebSocket.CONNECTING) {
+        await new Promise<void>(resolve => {
+            const settled = () => {
+                socket.off('open', settled);
+                socket.off('error', settled);
+                socket.off('close', settled);
+                resolve();
+            };
+            socket.once('open', settled);
+            socket.once('error', settled);
+            socket.once('close', settled);
+        });
+    }
+
+    if (socket.readyState === WebSocket.CLOSED) {
+        return;
+    }
+
+    const closed = once(socket, 'close');
+    socket.close();
+    await closed;
+}
+
+async function createRunSession(harness: Harness, stopDebugging?: sinon.SinonStub): Promise<HttpResponse> {
     const launchConfiguration: NodeLaunchConfiguration = {
         type: 'node',
         mode: 'Debug',
@@ -808,8 +860,8 @@ async function createRunSession(harness: Harness, stopSession?: sinon.SinonStub)
     const payload: RunSessionPayload = {
         launch_configurations: [launchConfiguration],
     };
-    if (stopSession) {
-        harness.queuedStopSessions.push(stopSession);
+    if (stopDebugging) {
+        harness.queuedStopDebugging.push(stopDebugging);
     }
 
     return await request(harness, 'PUT', '/run_session', payload);
@@ -929,12 +981,20 @@ function createDeferred<T>(): {
     return { promise, resolve, reject };
 }
 
+function createMemoizedStopSession(stopDebugging: sinon.SinonStub): sinon.SinonStub {
+    let stopSessionPromise: Promise<void> | undefined;
+    return sinon.stub().callsFake(() => {
+        if (stopSessionPromise) {
+            return stopSessionPromise;
+        }
+
+        stopSessionPromise = stopDebugging();
+        return stopSessionPromise;
+    });
+}
+
 async function waitFor(predicate: () => boolean): Promise<void> {
     while (!predicate()) {
         await new Promise(resolve => setImmediate(resolve));
     }
-}
-
-async function delay(milliseconds: number): Promise<void> {
-    await new Promise(resolve => setTimeout(resolve, milliseconds));
 }

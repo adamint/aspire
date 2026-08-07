@@ -31,7 +31,7 @@ export interface DcpTelemetryHooks {
 
 interface DcpServerOptions {
     requestedStopTelemetryTimeoutMs?: number;
-    stopRequestTimeoutMs?: number;
+    terminalStateRetentionMs?: number;
 }
 
 type DebugSessionAggregateStats = {
@@ -43,11 +43,12 @@ type DebugSessionAggregateStats = {
 type RunSessionState = {
     adapterCompletionProcessed: boolean;
     debugSessions: AspireResourceDebugSession[];
-    lifecycle: 'starting' | 'running' | 'stopping' | 'completed';
+    lifecycle: 'starting' | 'running' | 'stopRequested' | 'completed';
     ownerDcpId: string;
     runId: string;
-    stopAttempt: number;
-    telemetryFallback?: NodeJS.Timeout;
+    teardownStarted: boolean;
+    telemetryFallbackTimer?: NodeJS.Timeout;
+    terminalStateTimer?: NodeJS.Timeout;
     terminalNotificationSent: boolean;
 };
 
@@ -71,6 +72,9 @@ export default class AspireDcpServer {
     // (and returned) by takeDebugSessionAggregateStats().
     private readonly _debugSessionStats: Map<string, DebugSessionAggregateStats>;
     private readonly _requestedStopTelemetryTimeoutMs: number;
+    private readonly _telemetryFallbackTimers = new Set<NodeJS.Timeout>();
+    private readonly _terminalStateRetentionMs: number;
+    private readonly _terminalStateTimers = new Set<NodeJS.Timeout>();
 
     public readonly connectionInfo: DcpServerConnectionInfo;
 
@@ -85,7 +89,8 @@ export default class AspireDcpServer {
         runsBySession: Map<string, RunSessionState>,
         runTelemetryById: Map<string, { startTimeMs: number; resourceType: string; mode: string; debugSessionId: string }>,
         debugSessionStats: Map<string, DebugSessionAggregateStats>,
-        requestedStopTelemetryTimeoutMs: number) {
+        requestedStopTelemetryTimeoutMs: number,
+        terminalStateRetentionMs: number) {
         this.connectionInfo = info;
         this.app = app;
         this.server = server;
@@ -97,6 +102,7 @@ export default class AspireDcpServer {
         this._runTelemetryById = runTelemetryById;
         this._debugSessionStats = debugSessionStats;
         this._requestedStopTelemetryTimeoutMs = requestedStopTelemetryTimeoutMs;
+        this._terminalStateRetentionMs = terminalStateRetentionMs;
     }
 
     /**
@@ -142,7 +148,7 @@ export default class AspireDcpServer {
         hooks: DcpTelemetryHooks = {},
         options: DcpServerOptions = {}): Promise<AspireDcpServer> {
         const requestedStopTelemetryTimeoutMs = options.requestedStopTelemetryTimeoutMs ?? 5_000;
-        const stopRequestTimeoutMs = options.stopRequestTimeoutMs ?? 5_000;
+        const terminalStateRetentionMs = options.terminalStateRetentionMs ?? 5_000;
         const runsBySession = new Map<string, RunSessionState>();
         const runTelemetryById = new Map<string, { startTimeMs: number; resourceType: string; mode: string; debugSessionId: string }>();
         const debugSessionStats = new Map<string, DebugSessionAggregateStats>();
@@ -412,7 +418,7 @@ export default class AspireDcpServer {
                     lifecycle: 'starting',
                     ownerDcpId: dcpId,
                     runId,
-                    stopAttempt: 0,
+                    teardownStarted: false,
                     terminalNotificationSent: false,
                 };
                 runsBySession.set(runId, run);
@@ -499,7 +505,6 @@ export default class AspireDcpServer {
                         return;
                     }
 
-                    runsBySession.delete(runId);
                     extensionLogOutputChannel.error(`Error creating debug session ${runId}: ${err}`);
 
                     // Synchronous launch failure — emit the matching end event and update
@@ -510,23 +515,12 @@ export default class AspireDcpServer {
                     // Clean up any processes associated with this run (registered by resource-type extensions)
                     cleanupRun(runId);
 
-                    // Notify DCP via WebSocket that the session terminated so it can update
-                    // resource state, AND respond with HTTP 500 so the original POST /run_session
-                    // request gets a proper error. Both are needed: the 500 tells DCP the launch
-                    // failed synchronously, while sessionTerminated handles async cleanup.
-                    const notification: SessionTerminatedNotification = {
-                        notification_type: 'sessionTerminated',
-                        session_id: runId,
-                        dcp_id: dcpId,
-                        exit_code: -1
-                    };
-
-                    const ws = wsBySession.get(dcpId);
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                        AspireDcpServer.sendNotificationCore(notification, ws);
-                    } else {
-                        pendingNotificationQueueByDcpId.set(dcpId, [...(pendingNotificationQueueByDcpId.get(dcpId) || []), notification]);
-                    }
+                    // The HTTP failure and terminal notification are both required, but the
+                    // adapter may still report its own exit after startup partially succeeded.
+                    // Route the notification through the run state so that late callbacks see
+                    // the completed protocol result and cannot publish it a second time.
+                    dcpServer._sendTerminalNotification(run, -1);
+                    dcpServer._completeRun(run);
 
                     const error: ErrorDetails = {
                         code: 'DebugSessionFailed',
@@ -539,73 +533,25 @@ export default class AspireDcpServer {
                 }
             });
 
-            app.delete('/run_session/:id', requireHeaders, async (req: Request, res: Response) => {
+            app.delete('/run_session/:id', requireHeaders, (req: Request, res: Response) => {
                 const runId = req.params.id as string;
                 const run = runsBySession.get(runId);
                 const dcpId = req.header('microsoft-developer-dcp-instance-id') as string;
                 if (run && run.ownerDcpId === dcpId) {
-                    run.lifecycle = 'stopping';
-                    const stopAttempt = ++run.stopAttempt;
-                    const stopResult = Promise.all(run.debugSessions.map(debugSession => debugSession.stopSession())).then(
-                        () => ({ kind: 'stopped' } as const),
-                        error => ({ kind: 'failed' as const, error }));
-                    let stopTimeout: NodeJS.Timeout | undefined;
-                    const stopOutcome = await Promise.race([
-                        stopResult,
-                        new Promise<{ kind: 'timedOut' }>(resolve => {
-                            stopTimeout = setTimeout(() => resolve({ kind: 'timedOut' }), stopRequestTimeoutMs);
-                        }),
-                    ]);
-                    if (stopTimeout) {
-                        clearTimeout(stopTimeout);
-                    }
-
-                    if (stopOutcome.kind === 'failed') {
-                        if (run.adapterCompletionProcessed) {
-                            res.status(200).end();
-                            return;
-                        }
-                        if (!run.adapterCompletionProcessed && run.stopAttempt === stopAttempt) {
-                            run.lifecycle = 'running';
-                        }
-                        const error: ErrorDetails = {
-                            code: 'DebugSessionStopFailed',
-                            message: `Failed to stop debug session for run ID ${runId}: ${stopOutcome.error instanceof Error ? stopOutcome.error.message : String(stopOutcome.error)}`,
-                            details: []
-                        };
-                        extensionLogOutputChannel.error(error.message);
-                        res.status(500).json({ error }).end();
-                        return;
-                    }
-
-                    if (stopOutcome.kind === 'timedOut') {
-                        void stopResult.then(result => {
-                            if (result.kind === 'stopped') {
-                                run.lifecycle = 'completed';
-                                if (runsBySession.get(runId) === run) {
-                                    runsBySession.delete(runId);
-                                }
-                            } else {
-                                if (!run.adapterCompletionProcessed && run.stopAttempt === stopAttempt) {
-                                    run.lifecycle = 'running';
-                                }
-                                extensionLogOutputChannel.warn(`Stop request for run ID ${runId} failed after the DELETE timeout: ${result.error instanceof Error ? result.error.message : String(result.error)}`);
-                            }
-                        });
-                        dcpServer.sendRequestedStopNotification(run);
+                    if (run.lifecycle === 'stopRequested' || run.lifecycle === 'completed') {
                         res.status(200).end();
                         return;
                     }
 
-                    // Preserve the existing server-side ordering: once every debugger confirms
-                    // the stop or the bounded wait expires, queue/send the terminal notification
-                    // before completing the HTTP response.
+                    run.lifecycle = 'stopRequested';
                     dcpServer.sendRequestedStopNotification(run);
-                    run.lifecycle = 'completed';
-                    if (runsBySession.get(runId) === run) {
-                        runsBySession.delete(runId);
-                    }
+                    dcpServer._scheduleTerminalStateCleanup(run);
+
+                    // DCP's DELETE contract is the protocol acknowledgement that the run has
+                    // terminated. Complete that contract before entering VS Code debugger
+                    // teardown, whose implementation may wait on another extension.
                     res.status(200).end();
+                    dcpServer._scheduleDebuggerTeardown(run);
                 } else if (run) {
                     const error: ErrorDetails = {
                         code: 'RunSessionOwnerMismatch',
@@ -696,7 +642,7 @@ export default class AspireDcpServer {
                         token: token,
                         certificate: certBase64
                     };
-                    dcpServer = new AspireDcpServer(info, app, server, wss, wsBySession, pendingNotificationQueueByDcpId, dashboardTelemetry, runsBySession, runTelemetryById, debugSessionStats, requestedStopTelemetryTimeoutMs);
+                    dcpServer = new AspireDcpServer(info, app, server, wss, wsBySession, pendingNotificationQueueByDcpId, dashboardTelemetry, runsBySession, runTelemetryById, debugSessionStats, requestedStopTelemetryTimeoutMs, terminalStateRetentionMs);
                     resolve(dcpServer);
                 } else {
                     reject(new Error('Failed to get server address'));
@@ -731,21 +677,84 @@ export default class AspireDcpServer {
 
     private sendRequestedStopNotification(run: RunSessionState): void {
         this._sendTerminalNotification(run);
-        if (run.telemetryFallback || !this._runTelemetryById.has(run.runId)) {
+        this._scheduleTelemetryFallback(run);
+    }
+
+    private _scheduleTelemetryFallback(run: RunSessionState): void {
+        if (run.telemetryFallbackTimer || !this._runTelemetryById.has(run.runId)) {
             return;
         }
 
-        // VS Code adapters normally report their real exit code after stopSession,
-        // but a faulty adapter can remain silent forever. Keep a bounded window for
-        // that real result, then close the telemetry pair as a user-requested cancel.
-        run.telemetryFallback = setTimeout(() => {
-            run.telemetryFallback = undefined;
+        // The DELETE response is a protocol result, not proof that the debug adapter has
+        // exited. Keep a bounded window for the adapter's real exit code, then close the
+        // telemetry pair as canceled without discarding the separately retained run state.
+        const timer = setTimeout(() => {
+            this._telemetryFallbackTimers.delete(timer);
+            if (run.telemetryFallbackTimer === timer) {
+                run.telemetryFallbackTimer = undefined;
+            }
             this._recordRunSessionCompletion(run, -1);
-            run.lifecycle = 'completed';
+        }, this._requestedStopTelemetryTimeoutMs);
+        run.telemetryFallbackTimer = timer;
+        this._telemetryFallbackTimers.add(timer);
+    }
+
+    private _scheduleDebuggerTeardown(run: RunSessionState): void {
+        if (run.teardownStarted) {
+            return;
+        }
+        run.teardownStarted = true;
+
+        setImmediate(() => {
+            if (this._disposed) {
+                return;
+            }
+
+            for (const debugSession of run.debugSessions) {
+                try {
+                    void Promise.resolve(debugSession.stopSession()).catch(error => {
+                        this._logDebuggerTeardownFailure(run.runId, error);
+                    });
+                } catch (error) {
+                    this._logDebuggerTeardownFailure(run.runId, error);
+                }
+            }
+        });
+    }
+
+    private _logDebuggerTeardownFailure(runId: string, error: unknown): void {
+        extensionLogOutputChannel.warn(`Failed to stop debug session for run ID ${runId} after DELETE completed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    private _scheduleTerminalStateCleanup(run: RunSessionState): void {
+        if (run.terminalStateTimer) {
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            this._terminalStateTimers.delete(timer);
+            if (run.terminalStateTimer === timer) {
+                run.terminalStateTimer = undefined;
+            }
             if (this._runsBySession.get(run.runId) === run) {
                 this._runsBySession.delete(run.runId);
             }
-        }, this._requestedStopTelemetryTimeoutMs);
+        }, this._terminalStateRetentionMs);
+        run.terminalStateTimer = timer;
+        this._terminalStateTimers.add(timer);
+    }
+
+    private _completeRun(run: RunSessionState): void {
+        if (run.terminalStateTimer) {
+            clearTimeout(run.terminalStateTimer);
+            this._terminalStateTimers.delete(run.terminalStateTimer);
+            run.terminalStateTimer = undefined;
+        }
+
+        run.lifecycle = 'completed';
+        if (this._runsBySession.get(run.runId) === run) {
+            this._runsBySession.delete(run.runId);
+        }
     }
 
     private _handleRunSessionNotification(run: RunSessionState, notification: RunSessionNotification): void {
@@ -774,16 +783,14 @@ export default class AspireDcpServer {
         const sessionTerminated = ownedNotification as SessionTerminatedNotification;
         this._recordRunSessionCompletion(run, sessionTerminated.exit_code);
         this._sendTerminalNotification(run, sessionTerminated.exit_code);
-        run.lifecycle = 'completed';
-        if (this._runsBySession.get(run.runId) === run) {
-            this._runsBySession.delete(run.runId);
-        }
+        this._completeRun(run);
     }
 
     private _recordRunSessionCompletion(run: RunSessionState, exitCode: number | undefined): void {
-        if (run.telemetryFallback) {
-            clearTimeout(run.telemetryFallback);
-            run.telemetryFallback = undefined;
+        if (run.telemetryFallbackTimer) {
+            clearTimeout(run.telemetryFallbackTimer);
+            this._telemetryFallbackTimers.delete(run.telemetryFallbackTimer);
+            run.telemetryFallbackTimer = undefined;
         }
 
         const entry = this._runTelemetryById.get(run.runId);
@@ -905,11 +912,14 @@ export default class AspireDcpServer {
             this.server.close();
         }
 
-        for (const run of this._runsBySession.values()) {
-            if (run.telemetryFallback) {
-                clearTimeout(run.telemetryFallback);
-            }
+        for (const timer of this._telemetryFallbackTimers) {
+            clearTimeout(timer);
         }
+        this._telemetryFallbackTimers.clear();
+        for (const timer of this._terminalStateTimers) {
+            clearTimeout(timer);
+        }
+        this._terminalStateTimers.clear();
         this._runsBySession.clear();
         this._runTelemetryById.clear();
         this.pendingNotificationQueueByDcpId.clear();
