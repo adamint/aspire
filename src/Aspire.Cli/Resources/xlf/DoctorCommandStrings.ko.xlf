@@ -486,9 +486,14 @@ The current layout continues to work — this is a non-blocking warning.</target
         <target state="new">Aspire extension for VS Code is installed</target>
         <note />
       </trans-unit>
-      <trans-unit id="VsCodeExtensionLatestVersionCheckFailedMessage">
-        <source>Could not check the latest Aspire extension version</source>
-        <target state="new">Could not check the latest Aspire extension version</target>
+      <trans-unit id="VsCodeExtensionLatestVersionCheckTimedOutDetails">
+        <source>Could not check for Aspire extension updates because the VS Code Marketplace request timed out.</source>
+        <target state="new">Could not check for Aspire extension updates because the VS Code Marketplace request timed out.</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="VsCodeExtensionLatestVersionCheckUnavailableDetails">
+        <source>Could not check for Aspire extension updates because the VS Code Marketplace is unavailable.</source>
+        <target state="new">Could not check for Aspire extension updates because the VS Code Marketplace is unavailable.</target>
         <note />
       </trans-unit>
       <trans-unit id="VsCodeExtensionMissingFix">
@@ -507,9 +512,9 @@ The current layout continues to work — this is a non-blocking warning.</target
         <note />
       </trans-unit>
       <trans-unit id="VsCodeExtensionOutOfDateMessageFormat">
-        <source>Aspire extension for VS Code version {0} is out of date. Latest version is {1}</source>
-        <target state="new">Aspire extension for VS Code version {0} is out of date. Latest version is {1}</target>
-        <note>{0} is the installed extension version. {1} is the latest Marketplace version.</note>
+        <source>Aspire extension for VS Code {0} is out of date (latest: {1})</source>
+        <target state="new">Aspire extension for VS Code {0} is out of date (latest: {1})</target>
+        <note>{0} is the installed extension version. {1} is the latest extension version.</note>
       </trans-unit>
     </body>
   </file>

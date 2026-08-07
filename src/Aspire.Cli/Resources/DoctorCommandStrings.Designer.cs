@@ -168,7 +168,7 @@ namespace Aspire.Cli.Resources {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to Aspire extension for VS Code version {0} is out of date. Latest version is {1}.
+        ///   Looks up a localized string similar to Aspire extension for VS Code {0} is out of date (latest: {1}).
         /// </summary>
         public static string VsCodeExtensionOutOfDateMessageFormat {
             get {
@@ -186,11 +186,20 @@ namespace Aspire.Cli.Resources {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to Could not check the latest Aspire extension version.
+        ///   Looks up a localized string similar to Could not check for Aspire extension updates because the VS Code Marketplace request timed out..
         /// </summary>
-        public static string VsCodeExtensionLatestVersionCheckFailedMessage {
+        public static string VsCodeExtensionLatestVersionCheckTimedOutDetails {
             get {
-                return ResourceManager.GetString("VsCodeExtensionLatestVersionCheckFailedMessage", resourceCulture);
+                return ResourceManager.GetString("VsCodeExtensionLatestVersionCheckTimedOutDetails", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Could not check for Aspire extension updates because the VS Code Marketplace is unavailable..
+        /// </summary>
+        public static string VsCodeExtensionLatestVersionCheckUnavailableDetails {
+            get {
+                return ResourceManager.GetString("VsCodeExtensionLatestVersionCheckUnavailableDetails", resourceCulture);
             }
         }
 
