@@ -54,19 +54,28 @@ export function isFolderOpenInWorkspace(folderPath: string): boolean {
 }
 
 export function getRelativePathToWorkspace(filePath: string): string {
-    if (!isWorkspaceOpen(false)) {
-        return filePath;
-    }
-
     const uri = vscode.Uri.file(filePath);
     const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
+    if (!workspaceFolder) {
+        return path.basename(filePath);
+    }
 
-    if (workspaceFolder) {
-        const relativePath = vscode.workspace.asRelativePath(uri);
+    const relativePath = vscode.workspace.asRelativePath(uri);
+    // `asRelativePath` returns the path unchanged when it cannot be made relative, and it resolves
+    // against the *workspace*, which may use different path semantics than the extension host. A
+    // Windows absolute path (`C:\Users\me\src\AppHost.csproj` or `\\server\share\src\AppHost.csproj`)
+    // therefore passes the host's `path.isAbsolute` on POSIX — which is what runs for remote/SSH,
+    // Codespaces and WSL windows — and the full path would leak into the debug configuration name.
+    // Reject both platforms' absolute forms so the workspace-name fallback runs either way.
+    if (relativePath && !isAbsoluteOnAnyPlatform(relativePath)) {
         return relativePath;
     }
 
-    return filePath;
+    return workspaceFolder.name || path.basename(filePath);
+}
+
+function isAbsoluteOnAnyPlatform(filePath: string): boolean {
+    return path.posix.isAbsolute(filePath) || path.win32.isAbsolute(filePath);
 }
 
 interface AppHostQuickPickItem extends vscode.QuickPickItem {
