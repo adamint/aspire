@@ -363,10 +363,26 @@ function stripCommentsAndStringLiterals(contents: string, language: AppHostSourc
     let lastCodeChar = '';
     let lastWord = '';
     let wordBuffer = '';
+    // A `)` or `}` can precede either a regex literal or a division operator depending on
+    // what the bracket closed: `if (x) /re/.test(s)` is a regex, `f(x) / 2` is division.
+    // Remembering what each open bracket started is what tells the two apart, and getting
+    // it wrong leaves a regex body in the executable view where its contents can satisfy
+    // the AppHost marker checks.
+    const bracketStack: BracketKind[] = [];
+    let lastClosedBracketKind: BracketKind | undefined;
 
     const emitCode = (span: string): void => {
         executable += span;
         for (const character of span) {
+            if (character === '(' || character === '[' || character === '{') {
+                // Classified before the word bookkeeping below runs, because that clears
+                // the very word (`if`, `while`, ...) this needs to read.
+                bracketStack.push(classifyOpenBracket(character, wordBuffer.length > 0 ? wordBuffer : lastWord, lastCodeChar));
+            }
+            else if (character === ')' || character === ']' || character === '}') {
+                lastClosedBracketKind = bracketStack.pop();
+            }
+
             if (/[A-Za-z0-9_$]/.test(character)) {
                 wordBuffer += character;
             }
@@ -419,7 +435,7 @@ function stripCommentsAndStringLiterals(contents: string, language: AppHostSourc
 
         const literalEnd = language === 'csharp'
             ? readCSharpLiteral(contents, index)
-            : readJsTsLiteral(contents, index, lastCodeChar, wordBuffer.length > 0 ? wordBuffer : lastWord);
+            : readJsTsLiteral(contents, index, lastCodeChar, wordBuffer.length > 0 ? wordBuffer : lastWord, lastClosedBracketKind);
         if (literalEnd !== undefined) {
             emitLiteral(contents.slice(index, literalEnd), index);
             index = literalEnd;
@@ -525,7 +541,12 @@ function readCSharpLiteral(contents: string, start: number): number | undefined 
  * Returns the end offset of the JS/TS literal starting at `start`, or `undefined` when no
  * literal starts there.
  */
-function readJsTsLiteral(contents: string, start: number, lastCodeChar: string, lastWord: string): number | undefined {
+function readJsTsLiteral(
+    contents: string,
+    start: number,
+    lastCodeChar: string,
+    lastWord: string,
+    lastClosedBracketKind: BracketKind | undefined): number | undefined {
     const current = contents[start];
     if (current === '"' || current === "'") {
         return readDelimitedLiteral(contents, start, current);
@@ -535,7 +556,7 @@ function readJsTsLiteral(contents: string, start: number, lastCodeChar: string, 
         return readTemplateLiteral(contents, start);
     }
 
-    if (current === '/' && canStartRegexLiteral(lastCodeChar, lastWord)) {
+    if (current === '/' && canStartRegexLiteral(lastCodeChar, lastWord, lastClosedBracketKind)) {
         return readRegexLiteral(contents, start);
     }
 
@@ -616,8 +637,15 @@ function readRegexLiteral(contents: string, start: number): number | undefined {
 /**
  * A `/` begins a regex literal only where an expression may begin. Everywhere else it is
  * division. This is the usual lexical heuristic: look at the previous significant token.
+ *
+ * `)` and `}` are the two tokens the previous-character rule alone cannot decide, so they
+ * are resolved from what the matching open bracket started. `if (x) /re/` and
+ * `function f() {} /re/` both begin regexes, while `f(x) / 2` and `{a: 1} / 2` are
+ * division. Leaving a regex unrecognized is the dangerous direction here: its body stays
+ * in the executable view, where `/createBuilder().build().run()/` would satisfy the
+ * AppHost marker checks from inside data.
  */
-function canStartRegexLiteral(lastCodeChar: string, lastWord: string): boolean {
+function canStartRegexLiteral(lastCodeChar: string, lastWord: string, lastClosedBracketKind: BracketKind | undefined): boolean {
     if (lastCodeChar === '') {
         return true;
     }
@@ -626,8 +654,45 @@ function canStartRegexLiteral(lastCodeChar: string, lastWord: string): boolean {
         return true;
     }
 
-    return !/[A-Za-z0-9_$)\]}"'`]/.test(lastCodeChar);
+    if (lastCodeChar === ')') {
+        return lastClosedBracketKind === 'control';
+    }
+
+    if (lastCodeChar === '}') {
+        return lastClosedBracketKind === 'block';
+    }
+
+    return !/[A-Za-z0-9_$\]"'`]/.test(lastCodeChar);
 }
+
+/**
+ * What an open bracket started, which decides whether a regex literal may follow the
+ * matching close bracket.
+ */
+type BracketKind = 'control' | 'block' | 'expression';
+
+function classifyOpenBracket(bracket: string, precedingWord: string, lastCodeChar: string): BracketKind {
+    if (bracket === '(') {
+        return controlStatementKeywords.has(precedingWord) ? 'control' : 'expression';
+    }
+
+    if (bracket === '[') {
+        return 'expression';
+    }
+
+    // A `{` opens a block when nothing that can end an expression precedes it. After `=`,
+    // `(`, `,`, `:` or `=>` it is an object literal or a function body in expression
+    // position, and a `/` after the matching `}` is then division.
+    return blockPrecedingKeywords.has(precedingWord) || lastCodeChar === '' || /[);{}]/.test(lastCodeChar)
+        ? 'block'
+        : 'expression';
+}
+
+/** Keywords whose parenthesized head is a statement clause rather than a call or grouping. */
+const controlStatementKeywords = new Set(['if', 'for', 'while', 'switch', 'catch', 'with']);
+
+/** Keywords that introduce a block with no parenthesized head. */
+const blockPrecedingKeywords = new Set(['else', 'do', 'try', 'finally']);
 
 const regexPrecedingKeywords = new Set([
     'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void',

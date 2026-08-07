@@ -860,7 +860,7 @@
       <source xml:lang="en">Workspace view selected because aspire ls found {0} buildable AppHosts.</source>
     </trans-unit>
     <trans-unit id="languageModelTool.aspireAppHost.appHostPath.description">
-      <source xml:lang="en">Workspace-relative path of the AppHost project file (for example &apos;AppHost/AppHost.csproj&apos;) or single-file AppHost (for example &apos;apphost.cs&apos;). Must already exist inside an open workspace folder. Absolute paths are rejected, so pass the path relative to the workspace folder that contains the AppHost.</source>
+      <source xml:lang="en">Workspace-relative path of the AppHost project file (for example &apos;AppHost/AppHost.csproj&apos;) or single-file AppHost (for example &apos;apphost.cs&apos;). Must already exist inside an open workspace folder. Absolute paths are rejected, so pass the path relative to the workspace folder that contains the AppHost. A single-file AppHost must be named &apos;apphost.cs&apos; and have no project file beside it; name the project file instead when one is present.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.yesLabel">
       <source xml:lang="en">Yes</source>

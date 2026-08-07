@@ -38,9 +38,17 @@ const appHostAliasKeySuffix = '\u0000apphost';
  * Case-folds on Windows only. macOS volumes are usually case-insensitive too, but the
  * extension consistently compares paths case-sensitively there, and diverging here would
  * make identity disagree with the rest of the extension.
+ *
+ * Existing paths are canonicalized through `realpathSync` so two routes to one file —
+ * most importantly an in-workspace symlink and its target — produce one key. Without
+ * that, launching `Linked.csproj` would not see the session already running the same
+ * file as `AppHost.csproj`, and the session, launching-flag, and lifecycle-lock checks
+ * would all miss, starting a duplicate process. Paths that do not exist (or that cannot
+ * be resolved) fall back to lexical normalization, which is still a stable key: nothing
+ * can be launched through them anyway, since launching requires the file to exist.
  */
 export function getAppHostPathComparisonKey(value: string): string {
-    const resolved = path.normalize(path.resolve(value));
+    const resolved = canonicalize(path.normalize(path.resolve(value)));
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
@@ -58,8 +66,10 @@ export function compareAppHostIdentity(left: string | undefined, right: string |
         return 'different';
     }
 
-    const leftPath = path.normalize(path.resolve(left));
-    const rightPath = path.normalize(path.resolve(right));
+    // Canonicalize first so a symlink and its target compare as one file, and so the
+    // directory shape below is read from the real location rather than the link's.
+    const leftPath = canonicalize(path.normalize(path.resolve(left)));
+    const rightPath = canonicalize(path.normalize(path.resolve(right)));
     if (getAppHostPathComparisonKey(leftPath) === getAppHostPathComparisonKey(rightPath)) {
         return 'same';
     }
@@ -109,7 +119,10 @@ export function compareAppHostIdentity(left: string | undefined, right: string |
  * the failure mode this replaced.
  */
 export function getAppHostIdentityKey(appHostPath: string): string {
-    const resolvedPath = path.normalize(path.resolve(appHostPath));
+    // Canonicalize before deriving the directory and the file shape. Identity belongs to
+    // the real file, so a symlinked project must land in the same equivalence class as
+    // its target rather than aliasing against whatever sits beside the link.
+    const resolvedPath = canonicalize(path.normalize(path.resolve(appHostPath)));
     if (!isAppHostProjectFile(resolvedPath) && !isAppHostSourceFile(resolvedPath)) {
         return getAppHostPathComparisonKey(resolvedPath);
     }
@@ -176,4 +189,20 @@ function readDirectoryAppHostShapes(directoryPath: string): DirectoryAppHostShap
 function containsPath(paths: readonly string[], candidate: string): boolean {
     const candidateKey = getAppHostPathComparisonKey(candidate);
     return paths.some(value => getAppHostPathComparisonKey(value) === candidateKey);
+}
+
+/**
+ * Resolves symlinks when the path exists, and returns the input unchanged otherwise.
+ *
+ * `realpathSync` throws for a path that does not exist, which is the common case while a
+ * caller is still validating input, so the miss is not an error here. Returning the
+ * lexical path in that case keeps the key stable and deterministic.
+ */
+function canonicalize(resolvedPath: string): string {
+    try {
+        return fs.realpathSync(resolvedPath);
+    }
+    catch {
+        return resolvedPath;
+    }
 }

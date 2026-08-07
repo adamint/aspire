@@ -530,13 +530,16 @@ suite('AppHost lifecycle language model tools', () => {
         });
 
         test('rejects AppHost markers that only appear in source comments', async () => {
-            const commentedSource = path.join(workspaceRoot, 'AppHost', 'Commented.cs');
-            fs.writeFileSync(commentedSource, [
+            // Its own directory with no sibling project, so the only thing that can fail
+            // this call is the commented-out markers.
+            const commentedDirectory = path.join(workspaceRoot, 'Commented');
+            fs.mkdirSync(commentedDirectory, { recursive: true });
+            fs.writeFileSync(path.join(commentedDirectory, 'apphost.cs'), [
                 '// var builder = DistributedApplication.CreateBuilder(args);',
                 '// builder.Build().Run();',
             ].join('\n'));
 
-            const result = await service.start({ appHostPath: 'AppHost/Commented.cs', mode: 'run' }, new vscode.CancellationTokenSource().token);
+            const result = await service.start({ appHostPath: 'Commented/apphost.cs', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
             assert.strictEqual(result.outcome, 'notAnAppHost');
             assert.strictEqual(launchService.launchCalls.length, 0);
@@ -550,13 +553,74 @@ suite('AppHost lifecycle language model tools', () => {
         });
 
         test('accepts a single-file AppHost and reports the workspace-relative path with forward slashes', async () => {
-            const singleFilePath = path.join(workspaceRoot, 'AppHost', 'apphost.cs');
-            fs.writeFileSync(singleFilePath, singleFileAppHostContents);
+            const singleFileDirectory = path.join(workspaceRoot, 'SingleFile');
+            fs.mkdirSync(singleFileDirectory, { recursive: true });
+            fs.writeFileSync(path.join(singleFileDirectory, 'apphost.cs'), singleFileAppHostContents);
 
-            const result = await service.start({ appHostPath: 'AppHost/apphost.cs', mode: 'run' }, new vscode.CancellationTokenSource().token);
+            const result = await service.start({ appHostPath: 'SingleFile/apphost.cs', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
             assert.strictEqual(result.outcome, 'started');
-            assert.strictEqual(result.appHostPath, 'AppHost/apphost.cs');
+            assert.strictEqual(result.appHostPath, 'SingleFile/apphost.cs');
+        });
+
+
+        test('rejects a single-file AppHost that sits next to a project file', async () => {
+            // The launcher only treats `apphost.cs` as a single-file AppHost when no
+            // sibling `.csproj` exists (`IsValidSingleFileAppHost` in
+            // `src/Aspire.Cli/Projects/DotNetAppHostProject.cs`). With one present it
+            // rejects the source file and searches for a project instead, so confirming
+            // the source path would name a target that is not the one about to run.
+            const directory = path.join(workspaceRoot, 'SiblingProject');
+            fs.mkdirSync(directory, { recursive: true });
+            fs.writeFileSync(path.join(directory, 'AppHost.csproj'), appHostProjectContents);
+            fs.writeFileSync(path.join(directory, 'apphost.cs'), singleFileAppHostContents);
+            const tool = new AppHostStartLanguageModelTool(service);
+
+            const prepared = await tool.prepareInvocation(
+                { input: { appHostPath: 'SiblingProject/apphost.cs', mode: 'run' } },
+                new vscode.CancellationTokenSource().token);
+            const result = await service.start({ appHostPath: 'SiblingProject/apphost.cs', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(prepared?.confirmationMessages?.message, 'Start the Aspire AppHost an unresolved path in run mode?');
+            assert.strictEqual(result.outcome, 'notAnAppHost');
+            assert.strictEqual(launchService.launchCalls.length, 0);
+        });
+
+        test('rejects a C# source file the launcher does not accept as a single-file AppHost', async () => {
+            // `apphost.cs` is the only name the launcher recognizes, so a differently
+            // named `.cs` file carrying the SDK directive is not runnable however its
+            // contents read.
+            const directory = path.join(workspaceRoot, 'MisnamedSingleFile');
+            fs.mkdirSync(directory, { recursive: true });
+            fs.writeFileSync(path.join(directory, 'Host.cs'), singleFileAppHostContents);
+
+            const result = await service.start({ appHostPath: 'MisnamedSingleFile/Host.cs', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'notAnAppHost');
+            assert.strictEqual(launchService.launchCalls.length, 0);
+        });
+
+        test('treats a symlinked AppHost as the AppHost it points at', async function () {
+            const directory = path.join(workspaceRoot, 'Symlinked');
+            fs.mkdirSync(directory, { recursive: true });
+            const realProject = path.join(directory, 'AppHost.csproj');
+            fs.writeFileSync(realProject, appHostProjectContents);
+            try {
+                fs.symlinkSync(realProject, path.join(directory, 'Linked.csproj'));
+            }
+            catch {
+                // Creating a symlink needs elevation or developer mode on Windows.
+                this.skip();
+                return;
+            }
+
+            // The editor is already running the AppHost under its real name. Addressing it
+            // through the link must find that session rather than start a second process.
+            editorSessions.push(new FakeEditorSession(realProject, { noDebug: false }));
+            const result = await service.start({ appHostPath: 'Symlinked/Linked.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'alreadyRunning');
+            assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
         test('rejects every tool call while the workspace is untrusted', async () => {
@@ -791,16 +855,17 @@ suite('AppHost lifecycle language model tools', () => {
 
         test('refuses to start when a session cannot be told apart from the requested AppHost', async () => {
             // `First.csproj`, `Second.csproj`, and `Program.cs` share a directory, so a
-            // session started for `First.csproj` cannot be attributed to `Program.cs`.
-            // Launching would risk a second process for an AppHost already running.
+            // session recorded against `Program.cs` cannot be attributed to `First.csproj`
+            // or to `Second.csproj`. Launching would risk a second process for an AppHost
+            // that is already running.
             const directory = path.join(workspaceRoot, 'Ambiguous');
             fs.mkdirSync(directory, { recursive: true });
             fs.writeFileSync(path.join(directory, 'First.csproj'), appHostProjectContents);
             fs.writeFileSync(path.join(directory, 'Second.csproj'), appHostProjectContents);
             fs.writeFileSync(path.join(directory, 'Program.cs'), singleFileAppHostContents);
-            editorSessions.push(new FakeEditorSession(path.join(directory, 'First.csproj'), { noDebug: false }));
+            editorSessions.push(new FakeEditorSession(path.join(directory, 'Program.cs'), { noDebug: false }));
 
-            const result = await service.start({ appHostPath: 'Ambiguous/Program.cs', mode: 'run' }, new vscode.CancellationTokenSource().token);
+            const result = await service.start({ appHostPath: 'Ambiguous/First.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
             assert.strictEqual(result.outcome, 'ambiguousSession');
             assert.strictEqual(launchService.launchCalls.length, 0);
@@ -909,35 +974,35 @@ suite('AppHost lifecycle language model tools', () => {
 
         test('refuses to stop a session whose AppHost cannot be told apart from the request', async () => {
             // `First.csproj`, `Second.csproj`, and `Program.cs` share a directory, so the
-            // running session for `First.csproj` cannot be attributed to `Program.cs`.
-            // Treating the sibling pairing as an identity here terminates an AppHost the
-            // caller never named.
+            // running session recorded against `Program.cs` cannot be attributed to
+            // `First.csproj`. Treating the sibling pairing as an identity here terminates
+            // an AppHost the caller never named.
             const directory = path.join(workspaceRoot, 'AmbiguousStop');
             fs.mkdirSync(directory, { recursive: true });
             fs.writeFileSync(path.join(directory, 'First.csproj'), appHostProjectContents);
             fs.writeFileSync(path.join(directory, 'Second.csproj'), appHostProjectContents);
             fs.writeFileSync(path.join(directory, 'Program.cs'), singleFileAppHostContents);
-            const session = new FakeEditorSession(path.join(directory, 'First.csproj'), { noDebug: false });
+            const session = new FakeEditorSession(path.join(directory, 'Program.cs'), { noDebug: false });
             editorSessions.push(session);
 
-            const result = await service.stop({ appHostPath: 'AmbiguousStop/Program.cs' }, new vscode.CancellationTokenSource().token);
+            const result = await service.stop({ appHostPath: 'AmbiguousStop/First.csproj' }, new vscode.CancellationTokenSource().token);
 
             assert.strictEqual(result.outcome, 'ambiguousSession');
             assert.strictEqual(session.stopCount, 0);
         });
 
-        test('stops the AppHost a directory unambiguously pairs with the requested source file', async () => {
+        test('stops the session a directory unambiguously pairs with the requested project', async () => {
             // The counterpart of the refusal above: one project and one AppHost source in
-            // a directory is a forced pairing, so addressing either form must still reach
-            // the running session.
+            // a directory is a forced pairing, so a session recorded against either form
+            // must still be reachable through the other.
             const directory = path.join(workspaceRoot, 'UnambiguousStop');
             fs.mkdirSync(directory, { recursive: true });
             fs.writeFileSync(path.join(directory, 'First.csproj'), appHostProjectContents);
             fs.writeFileSync(path.join(directory, 'Program.cs'), singleFileAppHostContents);
-            const session = new FakeEditorSession(path.join(directory, 'First.csproj'), { noDebug: false });
+            const session = new FakeEditorSession(path.join(directory, 'Program.cs'), { noDebug: false });
             editorSessions.push(session);
 
-            const result = await service.stop({ appHostPath: 'UnambiguousStop/Program.cs' }, new vscode.CancellationTokenSource().token);
+            const result = await service.stop({ appHostPath: 'UnambiguousStop/First.csproj' }, new vscode.CancellationTokenSource().token);
 
             assert.strictEqual(result.outcome, 'stopped');
             assert.strictEqual(session.stopCount, 1);

@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import { AspireExtendedDebugConfiguration } from '../dcp/types';
 import { appHostLifecycleBusy } from '../loc/strings';
 import { AppHostLaunchService, AppHostLifecycleLockTimeoutError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs } from '../services/AppHostLaunchService';
+import { getAppHostIdentityKey } from '../utils/appHostIdentity';
 import * as cliPathModule from '../utils/cliPath';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
 
@@ -514,6 +515,27 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(service.compareAppHostIdentity('/repo/AppHost/AppHost.csproj', '/repo/AppHost/Program.cs'), 'ambiguous');
         assert.strictEqual(service.compareAppHostIdentity('/repo/AppHost/AppHost.csproj', '/repo/AppHost/AppHost.csproj'), 'same');
         assert.strictEqual(service.compareAppHostIdentity('/repo/First/AppHost.csproj', '/repo/Second/AppHost.csproj'), 'different');
+    });
+
+
+    test('treats a symlink and its target as one AppHost for identity and locking', function () {
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const realProject = path.join(directory, 'AppHost.csproj');
+        const linkedProject = path.join(directory, 'Linked.csproj');
+        try {
+            fs.symlinkSync(realProject, linkedProject);
+        }
+        catch {
+            // Creating a symlink needs elevation or developer mode on Windows.
+            this.skip();
+            return;
+        }
+
+        // Lexical keys would report `different` here, so a lifecycle caller holding the
+        // link would miss the running session and the lock guarding the real file, and
+        // start a second process for one AppHost.
+        assert.strictEqual(service.compareAppHostIdentity(linkedProject, realProject), 'same');
+        assert.strictEqual(getAppHostIdentityKey(linkedProject), getAppHostIdentityKey(realProject));
     });
 
     test('returns only editor-owned run sessions for the requested AppHost identity', () => {

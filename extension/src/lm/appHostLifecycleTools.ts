@@ -32,6 +32,12 @@ export const aspireAppHostStopToolName = 'aspire_apphost_stop';
 const maxAppHostBytesInspected = 512 * 1024;
 
 /**
+ * The only file name the launcher accepts as a single-file C# AppHost. See
+ * `IsAppHostFile` in `src/Aspire.Cli/Projects/DotNetAppHostProject.cs`.
+ */
+const singleFileAppHostFileName = 'apphost.cs';
+
+/**
  * Upper bound on the workspace-relative path a confirmation may show.
  *
  * A path longer than this is refused outright rather than elided, because an elided path
@@ -805,6 +811,10 @@ function isAppHostFile(candidate: string): boolean {
         return false;
     }
 
+    if (!satisfiesSingleFileAppHostInvariant(candidate)) {
+        return false;
+    }
+
     try {
         const handle = fs.openSync(candidate, 'r');
         try {
@@ -821,6 +831,40 @@ function isAppHostFile(candidate: string): boolean {
     catch {
         return false;
     }
+}
+
+/**
+ * Mirrors the launcher's rule for what counts as a single-file C# AppHost: the file must
+ * be named `apphost.cs` and must have no sibling `.csproj`.
+ *
+ * See `IsAppHostFile` and `IsValidSingleFileAppHost` in
+ * `src/Aspire.Cli/Projects/DotNetAppHostProject.cs`. Content alone cannot decide this.
+ * A `.cs` file carrying the SDK directive next to a project file is not a single-file
+ * AppHost: the launcher rejects it and falls back to searching for a project, so
+ * confirming the source path would name a target that is not the one about to run. The
+ * caller must name the project file in that shape.
+ */
+function satisfiesSingleFileAppHostInvariant(candidate: string): boolean {
+    if (path.extname(candidate).toLowerCase() !== '.cs') {
+        return true;
+    }
+
+    if (path.basename(candidate).toLowerCase() !== singleFileAppHostFileName) {
+        return false;
+    }
+
+    let entries: fs.Dirent[];
+    try {
+        entries = fs.readdirSync(path.dirname(candidate), { withFileTypes: true });
+    }
+    catch {
+        // The directory holding the file cannot be read, so the invariant cannot be
+        // proven. Refuse rather than launch a shape the launcher may resolve elsewhere.
+        return false;
+    }
+
+    return !entries.some(entry =>
+        (entry.isFile() || entry.isSymbolicLink()) && path.extname(entry.name).toLowerCase() === '.csproj');
 }
 
 function findContainingWorkspaceFolder(folders: readonly vscode.WorkspaceFolder[], candidate: string): vscode.WorkspaceFolder | undefined {

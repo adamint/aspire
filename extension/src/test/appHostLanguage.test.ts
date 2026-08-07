@@ -344,6 +344,48 @@ suite('appHostLanguage.isRunnableAppHostFileContents', () => {
             [true, true, true]);
     });
 
+
+    test('rejects AppHost markers that only appear inside a regex after a control-statement head', () => {
+        // `if (x) /re/` starts a regex, but the previous-character rule alone sees `)` and
+        // calls it division, which would leave the regex body in the executable view where
+        // its contents satisfy the builder markers.
+        const contents = [
+            "import '@aspire/hosting';",
+            'const s = process.argv[1];',
+            'const x = s.length;',
+            'if (x) /createBuilder().build().run()/.test(s);',
+            '',
+        ].join('\n');
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', contents), false);
+    });
+
+    test('rejects AppHost markers that only appear inside a regex after a block', () => {
+        const contents = [
+            "import '@aspire/hosting';",
+            'function noop() {}',
+            'const s = String(noop);',
+            'if (s) { } /createBuilder().build().run()/.test(s);',
+            '',
+        ].join('\n');
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', contents), false);
+    });
+
+    test('still reads division after a call or an object literal as code', () => {
+        // The counterpart of the two refusals above: `)` and `}` in expression position
+        // are division, and treating them as regex starts would blank real code and
+        // reject a genuine AppHost.
+        const contents = [
+            "import { createBuilder } from '@aspire/hosting';",
+            'const size = Number(process.env.SIZE);',
+            'const half = Number(size) / 2 / 1;',
+            'const ratio = { value: 4 }.value / 2;',
+            'const builder = createBuilder();',
+            'builder.build().run();',
+            '',
+        ].join('\n');
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', contents), true);
+    });
+
     test('rejects a C# file whose SDK directive appears only inside a raw string literal', () => {
         // A raw string preserves the leading newline, so the directive lands at the start
         // of a line and satisfies a line-anchored match against text that only had its
