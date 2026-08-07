@@ -113,8 +113,10 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         Assert.Equal("SecondAppHost/SecondAppHost.csproj", ReadConfiguredAppHostPath(configPath));
     }
 
-    [Fact]
-    public async Task UseOrFindAppHostProjectFileDoesNotPersistSelectionFromExplicitLaunchConfiguration()
+    [Theory]
+    [InlineData("explicit-launch-configuration")]
+    [InlineData("agent-selection")]
+    public async Task UseOrFindAppHostProjectFileDoesNotPersistSelectionFromSessionScopedOrigins(string selectionOrigin)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
@@ -133,7 +135,7 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
         var projectLocator = CreateProjectLocator(
             executionContext,
-            configuration: CreateSelectionOriginConfiguration("explicit-launch-configuration"));
+            configuration: CreateSelectionOriginConfiguration(selectionOrigin));
 
         var result = await projectLocator.UseOrFindAppHostProjectFileAsync(
             appHostProjectFile,
@@ -1741,6 +1743,18 @@ builder.Build().Run();");
 
     private sealed class TestConfigurationService(CliExecutionContext executionContext) : IConfigurationService
     {
+        // Directory-scoped reads are answered by the real implementation rather than stubbed out.
+        // ProjectLocator uses them to decide whether the workspace already records an AppHost
+        // default, and that is a question about config files these tests actually write to disk, so
+        // a stub returning null would quietly make every preservation assertion vacuous. The global
+        // settings file is the one this double itself reports, which TestExecutionContextHelper
+        // roots inside the temporary workspace.
+        private readonly ConfigurationService _directoryScopedConfigurationService = new(
+            new ConfigurationBuilder().Build(),
+            executionContext,
+            new FileInfo(Path.Combine(executionContext.HomeDirectory.FullName, ".aspire", AspireConfigFile.FileName)),
+            NullLogger<ConfigurationService>.Instance);
+
         public Task SetConfigurationAsync(string key, string value, bool isGlobal = false, CancellationToken cancellationToken = default)
         {
             // For test purposes, just return a completed task
@@ -1776,7 +1790,7 @@ builder.Build().Run();");
 
         public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
         {
-            return Task.FromResult<string?>(null);
+            return _directoryScopedConfigurationService.GetConfigurationFromDirectoryAsync(key, startDirectory, continueSearchWhenKeyMissing, cancellationToken);
         }
 
         public string GetSettingsFilePath(bool isGlobal)

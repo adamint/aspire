@@ -158,6 +158,30 @@ internal sealed class ProjectLocator(
     private const string ExplicitLaunchConfigurationSelectionOrigin = "explicit-launch-configuration";
 
     /// <summary>
+    /// Identifies a CLI invocation whose AppHost target was chosen by an agent or language model
+    /// tool (for example the extension's <c>#aspireStartAppHost</c> tool) rather than by the user.
+    /// </summary>
+    private const string AgentSelectionOrigin = "agent-selection";
+
+    /// <summary>
+    /// The selection origins that name a target for one invocation rather than stating which AppHost
+    /// the workspace defaults to.
+    /// </summary>
+    /// <remarks>
+    /// Membership is decided here rather than by each producer so the persistence policy stays in
+    /// one place: <c>aspire.config.json</c> "describes what a <em>project</em> wants, not what the
+    /// <em>CLI binary</em> is" (<c>docs/specs/cli-identity-sidecar.md</c>), and an origin that is not
+    /// a user's statement about the project must not be able to rewrite it. Origins the CLI does not
+    /// know are treated as user selections, because an unrecognized value is far more likely to be a
+    /// newer editor than a new class of non-user launch.
+    /// </remarks>
+    private static readonly HashSet<string> s_sessionScopedSelectionOrigins = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ExplicitLaunchConfigurationSelectionOrigin,
+        AgentSelectionOrigin
+    };
+
+    /// <summary>
     /// How long to wait for the workspace config lock before giving up on it.
     /// </summary>
     /// <remarks>
@@ -1088,10 +1112,8 @@ internal sealed class ProjectLocator(
         // name any of those commands, and each one previously rewrote aspire.config.json to the
         // launched AppHost, so switching between per-AppHost launch configurations kept clobbering
         // the workspace default. See https://github.com/microsoft/aspire/issues/19080.
-        var isExplicitLaunchConfiguration = string.Equals(
-            configuration[KnownConfigNames.CliAppHostSelectionOrigin],
-            ExplicitLaunchConfigurationSelectionOrigin,
-            StringComparison.OrdinalIgnoreCase);
+        var selectionOrigin = configuration[KnownConfigNames.CliAppHostSelectionOrigin];
+        var isSessionScopedSelection = selectionOrigin is not null && s_sessionScopedSelectionOrigins.Contains(selectionOrigin);
 
         // Everything below reads the workspace config, can migrate a legacy layout onto disk,
         // decides whether the workspace already has a default to preserve, and then rewrites the
@@ -1111,21 +1133,41 @@ internal sealed class ProjectLocator(
         var settingsFile = configTarget.SettingsFile;
         var fileExisted = settingsFile.Exists;
 
-        // An explicit launch configuration names a target for one session; it is not a statement
-        // about which AppHost the workspace defaults to. It may still establish the default when
-        // there is nothing to preserve, so a single-AppHost repo keeps getting a config file from
-        // its first launch, but it must never replace a default the user already has. The read that
-        // decides this happened under the config lock taken above, so a launch that starts
-        // alongside the one establishing the default observes the establishing write rather than
-        // racing it.
-        if (isExplicitLaunchConfiguration && TryGetRecordedAppHostDefault(configTarget.RecordedConfig) is { } recordedDefault)
+        // A session-scoped selection names a target for one invocation; it is not a statement about
+        // which AppHost the workspace defaults to. It may still establish the default when there is
+        // nothing to preserve, so a single-AppHost repo keeps getting a config file from its first
+        // launch, but it must never replace a default the user already has. The read happens under
+        // the config lock taken above, so a launch that starts alongside the one establishing the
+        // default observes that write rather than racing it.
+        //
+        // The recorded default comes from the same directory-scoped reader the SDK version
+        // inheritance below uses, which covers both key spellings, both file layouts
+        // (aspire.config.json and the legacy .aspire/settings.json) and, when the workspace records
+        // nothing, the global settings that already take part in resolving the AppHost
+        // (ConfigurationHelper.RegisterSettingsFiles). Only its presence matters: resolving the path
+        // would mean calling Path.GetFullPath without the IsValidConfiguredAppHostPath guard the
+        // canonical readers apply, which throws on NUL bytes that survive JSON parsing
+        // (https://github.com/microsoft/aspire/issues/17624), and a recorded path has to count even
+        // when the file it names is missing, because a branch switch or a sparse checkout is
+        // indistinguishable from a deletion and would otherwise let the next launch permanently
+        // re-point the default. The cost is that a stale default is healed only by a selection the
+        // user actually made, from any other origin or `aspire config set`.
+        if (isSessionScopedSelection)
         {
-            logger.LogDebug(
-                "Not replacing recorded AppHost default {RecordedAppHost} in {ConfigDirectory} with {AppHost} because the latter was selected by an explicit launch configuration.",
-                recordedDefault,
-                configTarget.ConfigRootPath,
-                projectFile.FullName);
-            return;
+            var configRootDirectory = configTarget.ConfigRootDirectory;
+            var recordedDefault = await configurationService.GetConfigurationFromDirectoryAsync(AspireConfigAppHostPathKey, configRootDirectory, cancellationToken: cancellationToken)
+                ?? await configurationService.GetConfigurationFromDirectoryAsync(LegacySettingsAppHostPathKey, configRootDirectory, cancellationToken: cancellationToken);
+
+            if (!string.IsNullOrEmpty(recordedDefault))
+            {
+                logger.LogDebug(
+                    "Not replacing recorded AppHost default {RecordedAppHost} in {ConfigDirectory} with {AppHost} because the latter was selected by {SelectionOrigin}.",
+                    recordedDefault,
+                    configTarget.ConfigRootPath,
+                    projectFile.FullName,
+                    selectionOrigin);
+                return;
+            }
         }
 
         logger.LogDebug("Creating settings file at {SettingsFilePath}", settingsFile.FullName);
@@ -1161,45 +1203,11 @@ internal sealed class ProjectLocator(
     }
 
     /// <summary>
-    /// Returns the AppHost path <paramref name="recordedConfig"/> already records as the workspace
-    /// default, exactly as it appears in the config file, or <see langword="null"/> when it records
-    /// none.
+    /// Resolves the config file the selected AppHost should be recorded in, or
+    /// <see langword="null"/> when that config already records <paramref name="projectFile"/> and
+    /// there is nothing to write.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// The recorded path is deliberately not resolved. Only its presence decides whether there is a
-    /// user choice to preserve, and resolving it here would mean calling <see cref="Path.GetFullPath(string)"/>
-    /// without the <c>IsValidConfiguredAppHostPath</c> guard the canonical readers apply, which
-    /// throws on NUL bytes and other invalid characters that survive JSON parsing
-    /// (https://github.com/microsoft/aspire/issues/17624).
-    /// </para>
-    /// <para>
-    /// A recorded path counts even when the file is missing. The recorded string is the surviving
-    /// user choice, and "missing" is indistinguishable from transiently absent -- a branch switch or
-    /// a sparse checkout would otherwise let the next launch permanently re-point the default.
-    /// </para>
-    /// <para>
-    /// The cost of that choice is that a default left stale by a rename or move is no longer repaired
-    /// by a launch. Healing requires a selection the user actually made: a CLI invocation from any
-    /// other origin, a selection in the extension UI, or <c>aspire config set</c>. The extension's
-    /// startup prompt does not close the gap, because it only checks that <c>appHost.path</c> is
-    /// present, never that it resolves.
-    /// </para>
-    /// </remarks>
-    private static string? TryGetRecordedAppHostDefault(AspireConfigFile? recordedConfig)
-    {
-        return recordedConfig?.AppHost?.Path is { Length: > 0 } recordedPath ? recordedPath : null;
-    }
-
-    /// <summary>
-    /// Resolves the config file the selected AppHost should be recorded in, together with the config
-    /// already stored there, or <see langword="null"/> when that config already records
-    /// <paramref name="projectFile"/> and there is nothing to write.
-    /// </summary>
-    /// <remarks>
-    /// Resolution is the only place a <see cref="WorkspaceConfigTarget"/> is produced, which is what
-    /// makes <see cref="WorkspaceConfigTarget.RecordedConfig"/> the content of
-    /// <see cref="WorkspaceConfigTarget.SettingsFile"/> by construction rather than by convention.
     /// Call it only while the workspace config lock is held: a legacy layout is migrated onto disk
     /// as a side effect of being loaded here.
     /// </remarks>
@@ -1251,19 +1259,13 @@ internal sealed class ProjectLocator(
                 }
             }
 
-            return new WorkspaceConfigTarget(new FileInfo(targetSettingsFilePath), existingConfig, appHostDir);
+            return new WorkspaceConfigTarget(new FileInfo(targetSettingsFilePath), appHostDir);
         }
 
         // Only use the working-directory config after checking the selected AppHost's tree.
         // GetOrCreateLocalAspireConfigFile can migrate legacy .aspire/settings.json into
         // aspire.config.json, so calling it earlier would recreate the split-config bug.
-        var settingsFile = GetOrCreateLocalAspireConfigFile();
-
-        // Load after that call rather than before it. Today this also sees a legacy
-        // .aspire/settings.json workspace, but only because the call above persisted the migration
-        // moments earlier. That fallback is slated for removal
-        // (https://github.com/microsoft/aspire/issues/15239), so do not depend on it.
-        return new WorkspaceConfigTarget(settingsFile, AspireConfigFile.Load(settingsFile.DirectoryName!), AppHostDirectoryForScopedConfig: null);
+        return new WorkspaceConfigTarget(GetOrCreateLocalAspireConfigFile(), AppHostDirectoryForScopedConfig: null);
     }
 
     /// <summary>
@@ -1413,14 +1415,9 @@ internal sealed class ProjectLocator(
     }
 
     /// <summary>
-    /// The workspace config file the selected AppHost will be recorded in, together with the config
-    /// that is already stored there.
+    /// The workspace config file the selected AppHost will be recorded in.
     /// </summary>
     /// <param name="SettingsFile">The file that will be written.</param>
-    /// <param name="RecordedConfig">
-    /// The config loaded from <see cref="ConfigRootPath"/>, or <see langword="null"/> when the
-    /// workspace has none there yet.
-    /// </param>
     /// <param name="AppHostDirectoryForScopedConfig">
     /// The AppHost directory to inherit scoped settings such as the SDK version from, or
     /// <see langword="null"/> when the target came from the working directory instead of the
@@ -1430,19 +1427,21 @@ internal sealed class ProjectLocator(
     /// These travel together because every correctness question in this area is about whether they
     /// still agree: whether the config that decided "the workspace already has a default" is the one
     /// about to be overwritten, and whether the directory a relative AppHost path is resolved against
-    /// is the one that path will be stored in. Deriving <see cref="ConfigRootPath"/> from
+    /// is the one that path will be stored in. Deriving the config root from
     /// <see cref="SettingsFile"/> rather than tracking it separately makes disagreement
     /// unrepresentable, including across the legacy migration that rebases the config root onto the
     /// parent of <c>.aspire/</c>.
     /// </remarks>
-    private sealed record WorkspaceConfigTarget(FileInfo SettingsFile, AspireConfigFile? RecordedConfig, DirectoryInfo? AppHostDirectoryForScopedConfig)
+    private sealed record WorkspaceConfigTarget(FileInfo SettingsFile, DirectoryInfo? AppHostDirectoryForScopedConfig)
     {
         /// <summary>
-        /// The directory <see cref="SettingsFile"/> lives in, which is also the directory
-        /// <see cref="RecordedConfig"/> was loaded from and the one relative AppHost paths are
-        /// stored relative to.
+        /// The directory <see cref="SettingsFile"/> lives in, which is also the directory the
+        /// recorded default is read from and the one relative AppHost paths are stored relative to.
         /// </summary>
-        public string ConfigRootPath => SettingsFile.DirectoryName!;
+        public DirectoryInfo ConfigRootDirectory => SettingsFile.Directory!;
+
+        /// <inheritdoc cref="ConfigRootDirectory"/>
+        public string ConfigRootPath => ConfigRootDirectory.FullName;
     }
 }
 
