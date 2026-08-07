@@ -115,7 +115,7 @@ When VS Code is active, agents should prefer these editor operations over runnin
 | `aspire_apphost_start` | `#aspireStartAppHost` | Starts an apphost already in your workspace, in `run` (no debugger) or `debug` (debugger attached) mode |
 | `aspire_apphost_stop` | `#aspireStopAppHost` | Stops an apphost that this editor started |
 
-Both tools require the workspace-relative path of the apphost, always ask you to confirm before doing anything, and only work in a [trusted workspace](https://code.visualstudio.com/docs/editing/workspaces/workspace-trust). They never pick an apphost for you: if the path is missing, ambiguous, or outside your workspace the call fails instead of guessing. Starting an apphost that is already starting or running does not launch a second one, and stopping only works for apphosts this editor started — an apphost you started from a terminal is reported back rather than terminated.
+Both tools require the workspace-relative path of the apphost, ask a chat agent's user to confirm before doing anything, and only work in a [trusted workspace](https://code.visualstudio.com/docs/editing/workspaces/workspace-trust). They never pick an apphost for you: if the path is missing, ambiguous, or outside your workspace the call fails instead of guessing. Starting an apphost that is already starting or running does not launch a second one, and stopping only works for apphosts this editor started — an apphost you started from a terminal is reported back rather than terminated.
 
 ---
 

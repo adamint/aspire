@@ -4,7 +4,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { AspireExtendedDebugConfiguration } from '../dcp/types';
 import { appHostLifecycleBusy } from '../loc/strings';
-import { AppHostLaunchService, AppHostLifecycleLockTimeoutError, appHostLifecycleLockWaitTimeoutMs } from '../services/AppHostLaunchService';
+import { AppHostLaunchService, AppHostLifecycleLockTimeoutError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs } from '../services/AppHostLaunchService';
 import * as cliPathModule from '../utils/cliPath';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
 
@@ -281,9 +281,127 @@ suite('AppHostLaunchService', () => {
         }
     });
 
+    test('serializes lifecycle work across every path shape that names one AppHost', async () => {
+        // The lock key must be a pure function of the path. `AppHost.csproj` matches both
+        // a sibling `apphost.cs` and a sibling `Program.cs`, but those two do not match
+        // each other, so a key derived by scanning existing keys would hand the third
+        // caller its own lock and let two operations run against one AppHost.
+        const started: string[] = [];
+        let releaseFirst: (() => void) | undefined;
+        let signalFirstStarted: (() => void) | undefined;
+        const firstAction = new Promise<void>(resolve => { releaseFirst = resolve; });
+        const firstStarted = new Promise<void>(resolve => { signalFirstStarted = resolve; });
+
+        const first = service.runWithAppHostLifecycleLock('/repo/AppHost/apphost.cs', new vscode.CancellationTokenSource().token, async () => {
+            started.push('apphost.cs');
+            signalFirstStarted?.();
+            await firstAction;
+            return 'apphost.cs';
+        });
+        await firstStarted;
+
+        const second = service.runWithAppHostLifecycleLock('/repo/AppHost/AppHost.csproj', new vscode.CancellationTokenSource().token, async () => {
+            started.push('AppHost.csproj');
+            return 'AppHost.csproj';
+        });
+        const third = service.runWithAppHostLifecycleLock('/repo/AppHost/Program.cs', new vscode.CancellationTokenSource().token, async () => {
+            started.push('Program.cs');
+            return 'Program.cs';
+        });
+
+        assert.deepStrictEqual(started, ['apphost.cs']);
+
+        releaseFirst?.();
+        await Promise.all([first, second, third]);
+        assert.deepStrictEqual(started, ['apphost.cs', 'AppHost.csproj', 'Program.cs']);
+    });
+
+    test('does not share a lifecycle lock between AppHosts in different directories', async () => {
+        const started: string[] = [];
+        const active = service.runWithAppHostLifecycleLock('/repo/First/AppHost.csproj', new vscode.CancellationTokenSource().token, async () => {
+            started.push('first');
+            await new Promise<void>(() => { });
+        });
+
+        await service.runWithAppHostLifecycleLock('/repo/Second/AppHost.csproj', new vscode.CancellationTokenSource().token, async () => {
+            started.push('second');
+        });
+
+        assert.deepStrictEqual(started, ['first', 'second']);
+        void active;
+    });
+
+    test('releases a lifecycle lock that an operation never settles so later work is not blocked forever', async () => {
+        const clock = sinon.useFakeTimers();
+        try {
+            const wedged = service.runWithAppHostLifecycleLock(
+                '/repo/AppHost/AppHost.csproj',
+                new vscode.CancellationTokenSource().token,
+                () => new Promise<void>(() => { }));
+            await Promise.resolve();
+
+            // A caller already waiting still gives up on its own 10s budget.
+            const queued = service.runWithAppHostLifecycleLock(
+                '/repo/AppHost/AppHost.csproj',
+                new vscode.CancellationTokenSource().token,
+                async () => 'queued');
+            const queuedRejection = assert.rejects(queued, AppHostLifecycleLockTimeoutError);
+            await clock.tickAsync(appHostLifecycleLockWaitTimeoutMs);
+            await queuedRejection;
+
+            // Once the hold backstop fires, the AppHost is usable again instead of being
+            // wedged for the lifetime of the window.
+            await clock.tickAsync(appHostLifecycleLockMaxHoldMs);
+            const recovered = service.runWithAppHostLifecycleLock(
+                '/repo/AppHost/AppHost.csproj',
+                new vscode.CancellationTokenSource().token,
+                async () => 'recovered');
+            await clock.tickAsync(appHostLifecycleLockWaitTimeoutMs);
+            assert.strictEqual(await recovered, 'recovered');
+            void wedged;
+        }
+        finally {
+            clock.restore();
+        }
+    });
+
+    test('matches an editor session whose program is the workspace folder through its resolved AppHost', () => {
+        // `Aspire: Configure launch.json` writes `program: '${workspaceFolder}'`, so for
+        // the standard configure-then-F5 flow the session path is a directory and can
+        // never equal the AppHost file an agent names.
+        const folderSession = {
+            appHostPath: '/repo',
+            resolvedAppHostPath: '/repo/AppHost/AppHost.csproj',
+            operationKind: 'run' as const,
+            startupCompleted: true,
+            configuration: { noDebug: false },
+            stopDebugging: async () => { },
+        };
+        service.setEditorSessionProvider(() => [folderSession]);
+
+        assert.deepStrictEqual(service.getEditorOwnedRunSessions('/repo/AppHost/AppHost.csproj'), [folderSession]);
+        assert.deepStrictEqual(service.getEditorOwnedRunSessions('/repo/AppHost/Program.cs'), [folderSession]);
+        assert.deepStrictEqual(service.getEditorOwnedRunSessions('/repo/Other/AppHost.csproj'), []);
+    });
+
+    test('does not match a folder session that has no resolved AppHost', () => {
+        // Without a resolved candidate the extension genuinely does not know which
+        // AppHost under the folder is running, so it must not guess.
+        const folderSession = {
+            appHostPath: '/repo',
+            resolvedAppHostPath: undefined,
+            operationKind: 'run' as const,
+            startupCompleted: true,
+            configuration: { noDebug: false },
+            stopDebugging: async () => { },
+        };
+        service.setEditorSessionProvider(() => [folderSession]);
+
+        assert.deepStrictEqual(service.getEditorOwnedRunSessions('/repo/AppHost/AppHost.csproj'), []);
+    });
+
     test('matches project and AppHost source identities without matching sibling projects', () => {
-        assert.strictEqual(service.isSameAppHostIdentity('/repo/AppHost/AppHost.csproj', '/repo/AppHost/Program.cs'), true);
-        assert.strictEqual(service.isSameAppHostIdentity('/repo/AppHost/AppHost.csproj', '/repo/AppHost/apphost.cs'), true);
+        assert.strictEqual(service.isSameAppHostIdentity('/repo/AppHost/AppHost.csproj', '/repo/AppHost/Program.cs'), true);        assert.strictEqual(service.isSameAppHostIdentity('/repo/AppHost/AppHost.csproj', '/repo/AppHost/apphost.cs'), true);
         assert.strictEqual(service.isSameAppHostIdentity('/repo/AppHost/First.csproj', '/repo/AppHost/Second.csproj'), false);
         assert.strictEqual(service.isSameAppHostIdentity('/repo/AppHost/apphost.ts', '/repo/AppHost/apphost.mts'), false);
     });
@@ -292,6 +410,7 @@ suite('AppHostLaunchService', () => {
         const runSession = {
             appHostPath: '/repo/AppHost/Program.cs',
             operationKind: 'run' as const,
+            resolvedAppHostPath: undefined,
             startupCompleted: true,
             configuration: { noDebug: false },
             stopDebugging: async () => { },
@@ -299,6 +418,7 @@ suite('AppHostLaunchService', () => {
         const publishSession = {
             appHostPath: '/repo/AppHost/AppHost.csproj',
             operationKind: 'publish' as const,
+            resolvedAppHostPath: undefined,
             startupCompleted: true,
             configuration: { noDebug: true },
             stopDebugging: async () => { },
@@ -306,6 +426,7 @@ suite('AppHostLaunchService', () => {
         const testSession = {
             appHostPath: '/repo/AppHost/AppHost.csproj',
             operationKind: 'test' as const,
+            resolvedAppHostPath: undefined,
             startupCompleted: true,
             configuration: { noDebug: true },
             stopDebugging: async () => { },

@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { summarizeAppHostLanguages, classifyAppHostPath, classifyAppHostDirectory } from '../utils/appHostLanguage';
+import { summarizeAppHostLanguages, classifyAppHostPath, classifyAppHostDirectory, isRunnableAppHostFileContents } from '../utils/appHostLanguage';
 import type { CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 
 function c(language: string | null): CandidateAppHostDisplayInfo {
@@ -197,5 +197,114 @@ suite('appHostLanguage.classifyAppHostDirectory', () => {
         writeFileSync(join(dir, 'AppHost.csproj'), '');
         writeFileSync(join(dir, 'apphost.ts'), '');
         assert.strictEqual(await classifyAppHostDirectory(dir), 'csharp');
+    });
+});
+
+suite('appHostLanguage.isRunnableAppHostFileContents', () => {
+    function csharp(...body: string[]): string {
+        return ['#:sdk Aspire.AppHost.Sdk@13.0.0', 'var builder = DistributedApplication.CreateBuilder(args);', ...body, 'builder.Build().Run();', ''].join('\n');
+    }
+
+    function typescript(...body: string[]): string {
+        return ["import { createBuilder } from '@aspire/hosting';", ...body, 'const builder = createBuilder();', 'builder.build().run();', ''].join('\n');
+    }
+
+    test('accepts a minimal single-file C# AppHost', () => {
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.cs', csharp()), true);
+    });
+
+    test('accepts a C# AppHost containing a verbatim string with trailing backslashes', () => {
+        // `@"C:\data\"` is a normal Windows bind mount. A scanner that treats the
+        // backslash as an escape swallows the closing quote and blanks the rest of
+        // the file, which used to report a valid AppHost as not an AppHost.
+        assert.strictEqual(
+            isRunnableAppHostFileContents('/w/apphost.cs', csharp('builder.AddContainer("db", "postgres").WithBindMount(@"C:\\data\\", "/var/lib");')),
+            true);
+    });
+
+    test('accepts a C# AppHost containing an interpolated verbatim string', () => {
+        assert.strictEqual(
+            isRunnableAppHostFileContents('/w/apphost.cs', csharp('var p = $@"C:\\logs\\{DateTime.Now}\\";')),
+            true);
+    });
+
+    test('accepts a C# AppHost containing a raw string literal with embedded quotes', () => {
+        assert.strictEqual(
+            isRunnableAppHostFileContents('/w/apphost.cs', csharp('var s = """', 'he said "hi', '""";')),
+            true);
+    });
+
+    test('accepts a C# AppHost containing an escaped char literal', () => {
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.cs', csharp("var q = '\\'';")), true);
+    });
+
+    test('accepts a C# AppHost containing an apostrophe inside a string', () => {
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.cs', csharp('var msg = "it\'s fine";')), true);
+    });
+
+    test('rejects C# markers that appear only in comments', () => {
+        const contents = [
+            '#:sdk Aspire.AppHost.Sdk@13.0.0',
+            '// var builder = DistributedApplication.CreateBuilder(args);',
+            '/* builder.Build().Run(); */',
+            '',
+        ].join('\n');
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.cs', contents), false);
+    });
+
+    test('rejects C# markers that appear only inside string literals', () => {
+        const regular = '#:sdk Aspire.AppHost.Sdk@13.0.0\nvar doc = "DistributedApplication.CreateBuilder(args); builder.Build().Run();";\n';
+        const verbatim = '#:sdk Aspire.AppHost.Sdk@13.0.0\nvar doc = @"DistributedApplication.CreateBuilder(args); builder.Build().Run();";\n';
+        const raw = '#:sdk Aspire.AppHost.Sdk@13.0.0\nvar doc = """\nDistributedApplication.CreateBuilder(args); builder.Build().Run();\n""";\n';
+        assert.deepStrictEqual(
+            [regular, verbatim, raw].map(contents => isRunnableAppHostFileContents('/w/apphost.cs', contents)),
+            [false, false, false]);
+    });
+
+    test('rejects a C# file whose SDK directive appears only inside a string literal', () => {
+        const contents = 'var doc = "#:sdk Aspire.AppHost.Sdk@13.0.0";\nvar builder = DistributedApplication.CreateBuilder(args);\nbuilder.Build().Run();\n';
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.cs', contents), false);
+    });
+
+    test('rejects a C# file with no SDK directive', () => {
+        const contents = 'var builder = DistributedApplication.CreateBuilder(args);\nbuilder.Build().Run();\n';
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.cs', contents), false);
+    });
+
+    test('accepts a minimal TypeScript AppHost', () => {
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', typescript()), true);
+    });
+
+    test('accepts a TypeScript AppHost containing regex literals', () => {
+        // An unhandled regex literal makes the quote inside `/["']/` open a string that
+        // never closes, blanking every marker that follows it.
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', typescript('const quoteRe = /["\']/;')), true);
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', typescript('const pathRe = /[/\\\\]+/g;')), true);
+    });
+
+    test('treats a TypeScript slash after a value as division rather than a regex', () => {
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', typescript('const half = total / 2;')), true);
+    });
+
+    test('accepts a TypeScript AppHost containing a template literal', () => {
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', typescript('const url = `http://${host}/api`;')), true);
+    });
+
+    test('accepts a JavaScript AppHost using require', () => {
+        const contents = "const { createBuilder } = require('aspire');\nconst builder = createBuilder();\nbuilder.build().run();\n";
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.js', contents), true);
+    });
+
+    test('rejects TypeScript markers that appear only in comments or template literals', () => {
+        const commented = "import { createBuilder } from '@aspire/hosting';\n// const builder = createBuilder();\n// builder.build().run();\n";
+        const templated = "import { createBuilder } from '@aspire/hosting';\nconst doc = `createBuilder(); builder.build().run();`;\n";
+        assert.deepStrictEqual(
+            [commented, templated].map(contents => isRunnableAppHostFileContents('/w/apphost.ts', contents)),
+            [false, false]);
+    });
+
+    test('rejects a TypeScript file that does not import an Aspire module', () => {
+        const contents = "import { createBuilder } from 'other-package';\nconst builder = createBuilder();\nbuilder.build().run();\n";
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', contents), false);
     });
 });

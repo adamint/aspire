@@ -38,6 +38,7 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
     launchError: Error | undefined;
     markLaunchingOnLaunch = true;
     lifecycleLockError: Error | undefined;
+    onLifecycleLockHeld: (() => void) | undefined;
     private readonly lifecycleLocks = new Map<string, Promise<unknown>>();
 
     get pendingLifecycleLockCount(): number {
@@ -83,6 +84,7 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
                 throw new vscode.CancellationError();
             }
 
+            this.onLifecycleLockHeld?.();
             return await action();
         });
         const tracked = current.then(() => undefined, () => undefined);
@@ -703,6 +705,30 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(launchService.launchCalls.length, 0);
             assert.strictEqual(JSON.stringify(result).includes('/Users/private'), false);
         });
+
+        test('does not probe for external ownership while holding the lifecycle lock', async () => {
+            // `aspire ps` spawns the CLI and queries each AppHost over its backchannel,
+            // which can stall for tens of seconds when an AppHost is paused at a
+            // breakpoint. The lifecycle lock only gives the user's own Run/Debug a 10s
+            // wait budget, so the probe has to finish before the lock is taken.
+            let probedWhileLocked = false;
+            launchService.onLifecycleLockHeld = () => { probedWhileLocked = launchService.runningAppHostRequests === 0; };
+
+            const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'started');
+            assert.strictEqual(launchService.runningAppHostRequests, 1);
+            assert.strictEqual(probedWhileLocked, false, 'Expected the external ownership probe to complete before the lifecycle lock was taken.');
+        });
+
+        test('skips the external ownership probe when the editor already owns the AppHost', async () => {
+            editorSessions.push(new FakeEditorSession(appHostProjectPath, { noDebug: false }));
+
+            const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'alreadyRunning');
+            assert.strictEqual(launchService.runningAppHostRequests, 0);
+        });
     });
 
     suite('stop behavior', () => {
@@ -757,6 +783,32 @@ suite('AppHost lifecycle language model tools', () => {
             assert.deepStrictEqual(
                 { outcome: result.outcome, ownership: result.ownership },
                 { outcome: 'notRunning', ownership: 'none' });
+        });
+
+        test('reports notRunning rather than failed when external ownership cannot be determined', async () => {
+            // Unlike start, stop has nothing to lose by continuing: the editor owns no
+            // session either way, so a failed probe only leaves the outcome label
+            // undecided. Reporting `failed` would send the agent to the CLI for a call
+            // that had nothing to stop.
+            launchService.runningAppHostError = new Error('aspire ps failed: /Users/private/AppHost.csproj is unreadable');
+
+            const result = await service.stop({ appHostPath: 'AppHost/AppHost.csproj' }, new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(
+                { outcome: result.outcome, ownership: result.ownership },
+                { outcome: 'notRunning', ownership: 'none' });
+            assert.strictEqual(JSON.stringify(result).includes('/Users/private'), false);
+        });
+
+        test('does not probe for external ownership when the editor owns the session', async () => {
+            const session = new FakeEditorSession(appHostProjectPath, { noDebug: false });
+            editorSessions.push(session);
+            session.onStopped = () => { editorSessions.length = 0; };
+
+            const result = await service.stop({ appHostPath: 'AppHost/AppHost.csproj' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'stopped');
+            assert.strictEqual(launchService.runningAppHostRequests, 0);
         });
 
         test('refuses to stop when more than one editor-owned session matches', async () => {

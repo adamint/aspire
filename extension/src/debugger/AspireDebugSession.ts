@@ -112,6 +112,17 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     return typeof this.configuration.program === 'string' ? this.configuration.program : undefined;
   }
 
+  /**
+   * The AppHost the debug configuration provider resolved for this session when
+   * `program` points at a workspace folder instead of a file. It is only populated when
+   * the folder maps to a single unambiguous candidate, so consumers can treat it as an
+   * exact identity rather than a guess.
+   */
+  get resolvedAppHostPath(): string | undefined {
+    const resolvedPath = this.configuration[appHostTelemetryTargetPathConfigKey];
+    return typeof resolvedPath === 'string' ? resolvedPath : undefined;
+  }
+
   get dashboardUrl(): string | undefined {
     return this._dashboardUrl;
   }

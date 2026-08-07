@@ -239,19 +239,17 @@ export function isRunnableAppHostFileContents(filePath: string, contents: string
     }
 
     if (appHostCSharpSourceExtensions.includes(extension)) {
-        const uncommentedContents = stripSourceComments(contents);
-        const executableContents = stripStringLiterals(uncommentedContents);
-        return /^[ \t]*#:sdk[ \t]+Aspire\.AppHost\.Sdk\b/m.test(uncommentedContents)
-            && /\bDistributedApplication\s*\.\s*CreateBuilder\s*\(/.test(executableContents)
-            && /\.\s*Build\s*\(\s*\)\s*\.\s*Run\s*\(/.test(executableContents);
+        const { withoutComments, executable } = stripCommentsAndStringLiterals(contents, 'csharp');
+        return /^[ \t]*#:sdk[ \t]+Aspire\.AppHost\.Sdk\b/m.test(withoutComments)
+            && /\bDistributedApplication\s*\.\s*CreateBuilder\s*\(/.test(executable)
+            && /\.\s*Build\s*\(\s*\)\s*\.\s*Run\s*\(/.test(executable);
     }
 
     if (appHostJsTsSourceExtensions.includes(extension)) {
-        const uncommentedContents = stripSourceComments(contents);
-        const executableContents = stripStringLiterals(uncommentedContents);
-        return referencesAspireModule(uncommentedContents)
-            && /\bcreateBuilder\s*\(/.test(executableContents)
-            && /\.\s*build\s*\(\s*\)\s*\.\s*run\s*\(/.test(executableContents);
+        const { withoutComments, executable } = stripCommentsAndStringLiterals(contents, 'jsts');
+        return referencesAspireModule(withoutComments)
+            && /\bcreateBuilder\s*\(/.test(executable)
+            && /\.\s*build\s*\(\s*\)\s*\.\s*run\s*\(/.test(executable);
     }
 
     function referencesAspireModule(contents: string): boolean {
@@ -267,97 +265,6 @@ export function isRunnableAppHostFileContents(filePath: string, contents: string
                 || /(?:^|\/)\.aspire\/modules\/aspire(?:\.[^/]*)?$/.test(specifier ?? '')
                 || /(?:^|\/)\.modules\/aspire(?:\.[^/]*)?$/.test(specifier ?? '');
         });
-    }
-
-    function stripSourceComments(contents: string): string {
-        let result = '';
-        let index = 0;
-        let quote: '"' | "'" | '`' | undefined;
-
-        while (index < contents.length) {
-            const current = contents[index];
-            const next = contents[index + 1];
-
-            if (quote) {
-                result += current;
-                if (current === '\\') {
-                    result += next ?? '';
-                    index += 2;
-                    continue;
-                }
-                if (current === quote) {
-                    quote = undefined;
-                }
-                index++;
-                continue;
-            }
-
-            if (current === '"' || current === "'" || current === '`') {
-                quote = current;
-                result += current;
-                index++;
-                continue;
-            }
-
-            if (current === '/' && next === '/') {
-                while (index < contents.length && contents[index] !== '\n') {
-                    result += ' ';
-                    index++;
-                }
-                continue;
-            }
-
-            if (current === '/' && next === '*') {
-                result += '  ';
-                index += 2;
-                while (index < contents.length && !(contents[index] === '*' && contents[index + 1] === '/')) {
-                    result += contents[index] === '\n' ? '\n' : ' ';
-                    index++;
-                }
-                if (index < contents.length) {
-                    result += '  ';
-                    index += 2;
-                }
-                continue;
-            }
-
-            result += current;
-            index++;
-        }
-
-        return result;
-    }
-
-    function stripStringLiterals(contents: string): string {
-        let result = '';
-        let index = 0;
-
-        while (index < contents.length) {
-            const quote = contents[index];
-            if (quote !== '"' && quote !== "'" && quote !== '`') {
-                result += quote;
-                index++;
-                continue;
-            }
-
-            result += ' ';
-            index++;
-            while (index < contents.length) {
-                const current = contents[index];
-                result += current === '\n' ? '\n' : ' ';
-                index++;
-                if (current === '\\' && index < contents.length) {
-                    result += contents[index] === '\n' ? '\n' : ' ';
-                    index++;
-                    continue;
-                }
-                if (current === quote) {
-                    break;
-                }
-            }
-        }
-
-        return result;
     }
 
     return false;
@@ -378,3 +285,302 @@ function isTypescriptAppHostMarker(entry: string): boolean {
     return lower === 'apphost.ts' || lower === 'apphost.mts' || lower === 'apphost.cts' ||
         lower === 'apphost.js' || lower === 'apphost.mjs' || lower === 'apphost.cjs';
 }
+
+type AppHostSourceLanguage = 'csharp' | 'jsts';
+
+interface StrippedAppHostSource {
+    /** Comments blanked out, string literals left intact. */
+    readonly withoutComments: string;
+    /** Comments and string literal contents both blanked out. */
+    readonly executable: string;
+}
+
+/**
+ * Blanks a span while preserving line structure, so offsets and line-anchored
+ * regexes (like the `#:sdk` directive match) still line up with the original text.
+ */
+function blankOutSpan(span: string): string {
+    return span.replace(/[^\n]/g, ' ');
+}
+
+/**
+ * Single-pass scanner that produces both views the AppHost content gate needs.
+ *
+ * Accuracy matters in one direction here: every construct this scanner mis-reads
+ * desynchronizes it, and the rest of the file gets blanked out, so a perfectly valid
+ * AppHost is reported as `notAnAppHost`. That is why the language-specific literal
+ * forms below are handled explicitly instead of treating every quote the same way:
+ *
+ *   C#   `@"C:\bind\"`        verbatim - backslash is literal, `""` is the escape
+ *        `"""raw "quoted" """` raw - closes only on a quote run at least as long
+ *        `'\''`                char literal
+ *   JS/TS `/["']/`             regex literal - quotes inside are not string starts
+ *         `` `a ${b} c` ``     template literal
+ *
+ * See https://learn.microsoft.com/dotnet/csharp/language-reference/tokens/raw-string
+ * and https://tc39.es/ecma262/#sec-literals-regular-expression-literals.
+ */
+function stripCommentsAndStringLiterals(contents: string, language: AppHostSourceLanguage): StrippedAppHostSource {
+    let withoutComments = '';
+    let executable = '';
+    let index = 0;
+    // Tracks the last significant code character and word so a `/` in JS/TS can be
+    // classified as a regex literal or a division operator.
+    let lastCodeChar = '';
+    let lastWord = '';
+    let wordBuffer = '';
+
+    const emitCode = (span: string): void => {
+        withoutComments += span;
+        executable += span;
+        for (const character of span) {
+            if (/[A-Za-z0-9_$]/.test(character)) {
+                wordBuffer += character;
+            }
+            else {
+                if (wordBuffer.length > 0) {
+                    lastWord = wordBuffer;
+                    wordBuffer = '';
+                }
+                else if (!/\s/.test(character)) {
+                    lastWord = '';
+                }
+            }
+            if (!/\s/.test(character)) {
+                lastCodeChar = character;
+            }
+        }
+    };
+
+    const emitComment = (span: string): void => {
+        const blanked = blankOutSpan(span);
+        withoutComments += blanked;
+        executable += blanked;
+    };
+
+    const emitLiteral = (span: string): void => {
+        withoutComments += span;
+        executable += blankOutSpan(span);
+        wordBuffer = '';
+        lastWord = '';
+        lastCodeChar = span[span.length - 1] ?? lastCodeChar;
+    };
+
+    while (index < contents.length) {
+        const current = contents[index];
+        const next = contents[index + 1];
+
+        if (current === '/' && next === '/') {
+            const end = contents.indexOf('\n', index);
+            const stop = end === -1 ? contents.length : end;
+            emitComment(contents.slice(index, stop));
+            index = stop;
+            continue;
+        }
+
+        if (current === '/' && next === '*') {
+            const end = contents.indexOf('*/', index + 2);
+            const stop = end === -1 ? contents.length : end + 2;
+            emitComment(contents.slice(index, stop));
+            index = stop;
+            continue;
+        }
+
+        const literalEnd = language === 'csharp'
+            ? readCSharpLiteral(contents, index)
+            : readJsTsLiteral(contents, index, lastCodeChar, wordBuffer.length > 0 ? wordBuffer : lastWord);
+        if (literalEnd !== undefined) {
+            emitLiteral(contents.slice(index, literalEnd));
+            index = literalEnd;
+            continue;
+        }
+
+        emitCode(current);
+        index++;
+    }
+
+    return { withoutComments, executable };
+}
+
+/**
+ * Returns the end offset of the C# literal starting at `start`, or `undefined` when no
+ * literal starts there. Handles `$`/`@` prefixes, raw string fences, verbatim strings,
+ * regular strings, and char literals.
+ */
+function readCSharpLiteral(contents: string, start: number): number | undefined {
+    let index = start;
+    let verbatim = false;
+    while (index < contents.length && (contents[index] === '$' || contents[index] === '@')) {
+        verbatim ||= contents[index] === '@';
+        index++;
+    }
+
+    if (contents[index] === "'" && index === start) {
+        return readDelimitedLiteral(contents, index, "'");
+    }
+
+    if (contents[index] !== '"') {
+        return undefined;
+    }
+
+    let quoteRun = 0;
+    while (contents[index + quoteRun] === '"') {
+        quoteRun++;
+    }
+
+    // A raw string literal closes on the first quote run at least as long as its opening
+    // fence, so embedded quotes never terminate it.
+    if (quoteRun >= 3) {
+        index += quoteRun;
+        while (index < contents.length) {
+            if (contents[index] !== '"') {
+                index++;
+                continue;
+            }
+
+            let closingRun = 0;
+            while (contents[index + closingRun] === '"') {
+                closingRun++;
+            }
+            if (closingRun >= quoteRun) {
+                return index + closingRun;
+            }
+            index += closingRun;
+        }
+
+        return contents.length;
+    }
+
+    if (verbatim) {
+        index++;
+        while (index < contents.length) {
+            if (contents[index] === '"') {
+                if (contents[index + 1] === '"') {
+                    index += 2;
+                    continue;
+                }
+
+                return index + 1;
+            }
+            index++;
+        }
+
+        return contents.length;
+    }
+
+    return readDelimitedLiteral(contents, index, '"');
+}
+
+/**
+ * Returns the end offset of the JS/TS literal starting at `start`, or `undefined` when no
+ * literal starts there.
+ */
+function readJsTsLiteral(contents: string, start: number, lastCodeChar: string, lastWord: string): number | undefined {
+    const current = contents[start];
+    if (current === '"' || current === "'") {
+        return readDelimitedLiteral(contents, start, current);
+    }
+
+    if (current === '`') {
+        return readTemplateLiteral(contents, start);
+    }
+
+    if (current === '/' && canStartRegexLiteral(lastCodeChar, lastWord)) {
+        return readRegexLiteral(contents, start);
+    }
+
+    return undefined;
+}
+
+/** Reads a `\`-escaped literal that a raw newline terminates, so a stray quote cannot swallow the file. */
+function readDelimitedLiteral(contents: string, start: number, quote: string): number {
+    let index = start + 1;
+    while (index < contents.length) {
+        const current = contents[index];
+        if (current === '\\') {
+            index += 2;
+            continue;
+        }
+        if (current === quote) {
+            return index + 1;
+        }
+        if (current === '\n') {
+            return index;
+        }
+        index++;
+    }
+
+    return contents.length;
+}
+
+function readTemplateLiteral(contents: string, start: number): number {
+    let index = start + 1;
+    while (index < contents.length) {
+        const current = contents[index];
+        if (current === '\\') {
+            index += 2;
+            continue;
+        }
+        if (current === '`') {
+            return index + 1;
+        }
+        index++;
+    }
+
+    return contents.length;
+}
+
+function readRegexLiteral(contents: string, start: number): number | undefined {
+    let index = start + 1;
+    let inCharacterClass = false;
+    while (index < contents.length) {
+        const current = contents[index];
+        if (current === '\\') {
+            index += 2;
+            continue;
+        }
+        // An unescaped newline means this was a division operator, not a regex literal.
+        if (current === '\n') {
+            return undefined;
+        }
+        if (inCharacterClass) {
+            inCharacterClass = current !== ']';
+        }
+        else if (current === '[') {
+            inCharacterClass = true;
+        }
+        else if (current === '/') {
+            index++;
+            while (index < contents.length && /[a-z]/i.test(contents[index])) {
+                index++;
+            }
+
+            return index;
+        }
+        index++;
+    }
+
+    return undefined;
+}
+
+/**
+ * A `/` begins a regex literal only where an expression may begin. Everywhere else it is
+ * division. This is the usual lexical heuristic: look at the previous significant token.
+ */
+function canStartRegexLiteral(lastCodeChar: string, lastWord: string): boolean {
+    if (lastCodeChar === '') {
+        return true;
+    }
+
+    if (regexPrecedingKeywords.has(lastWord)) {
+        return true;
+    }
+
+    return !/[A-Za-z0-9_$)\]}"'`]/.test(lastCodeChar);
+}
+
+const regexPrecedingKeywords = new Set([
+    'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void',
+    'throw', 'case', 'do', 'else', 'yield', 'await',
+]);
+

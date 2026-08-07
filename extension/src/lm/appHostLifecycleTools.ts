@@ -161,9 +161,15 @@ type PreflightResult =
  *
  * The service is intentionally the only place that decides whether an agent request
  * may touch AppHost lifecycle state. It canonicalizes the requested path, enforces
- * workspace containment and trust, serializes work per AppHost so concurrent model
- * calls cannot start two processes, and refuses anything it cannot prove is an
+ * workspace containment and trust, and refuses anything it cannot prove is an
  * editor-owned Aspire debug session.
+ *
+ * Lifecycle work is serialized per AppHost through {@link AppHostLifecycleLaunchService},
+ * which the editor's own Run/Debug commands share, so a model call and a user action
+ * cannot start two processes for the same AppHost. That guarantee covers callers routed
+ * through those commands; starting a `launch.json` Aspire configuration with F5 goes
+ * straight to the debug adapter and bypasses the lock, which is why every decision here
+ * is re-validated against live session state rather than the lock alone.
  */
 export class AppHostLifecycleToolService implements vscode.Disposable {
     private readonly _dependencies: AppHostLifecycleToolDependencies;
@@ -197,6 +203,17 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         }
 
         try {
+            // Probe for a process this extension does not own *before* taking the
+            // lifecycle lock. `aspire ps` spawns the CLI and then queries each AppHost
+            // over its backchannel, which can take tens of seconds when an AppHost is
+            // paused at a breakpoint - the very situation this tool exists to protect.
+            // The lock only has a 10s wait budget, so holding it across the probe would
+            // make the user's own Run/Debug fail with `busy`. The duplicate-launch
+            // guarantee comes from the in-memory checks inside the lock, not from this.
+            const externalOwnershipBeforeLock = this.hasEditorOwnership(preflight.target.absolutePath)
+                ? undefined
+                : await this.isRunningOutsideEditor(preflight.target.absolutePath, token);
+
             return await this._dependencies.launchService.runWithAppHostLifecycleLock(preflight.target.absolutePath, token, async () => {
                 // Re-resolve after the confirmation and after waiting on the shared lock:
                 // the file can be deleted or replaced, and an editor command may already
@@ -226,7 +243,11 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                     return createResult(aspireAppHostStartToolName, 'alreadyStarting', current.relativePath, 'editor', requestedMode, undefined);
                 }
 
-                if (await this.isRunningOutsideEditor(current.absolutePath, token)) {
+                // Only re-probe when the pre-lock fast path skipped it because the editor
+                // owned this AppHost at the time and no longer does.
+                const runningExternally = externalOwnershipBeforeLock
+                    ?? await this.isRunningOutsideEditor(current.absolutePath, token);
+                if (runningExternally) {
                     // Launching again would start a second AppHost against the same project.
                     // Report it instead so the agent can decide, and never adopt or kill a
                     // process this extension does not own.
@@ -265,6 +286,14 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         }
 
         try {
+            // Same reasoning as `start`: the `aspire ps` probe stays outside the lock so a
+            // slow or wedged AppHost cannot block the user's own Run/Debug. Here the probe
+            // only labels the outcome, so it is skipped entirely when the editor already
+            // owns a session for this AppHost.
+            const externalOwnershipBeforeLock = this.hasEditorOwnership(preflight.target.absolutePath)
+                ? undefined
+                : await this.probeExternalOwnershipForStop(preflight.target.absolutePath, token);
+
             return await this._dependencies.launchService.runWithAppHostLifecycleLock(preflight.target.absolutePath, token, async () => {
                 const recheck = this.preflight(aspireAppHostStopToolName, input.appHostPath, token, undefined);
                 if (recheck.rejected) {
@@ -280,7 +309,8 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 }
 
                 if (editorSessions.length === 0) {
-                    const runningExternally = await this.isRunningOutsideEditor(current.absolutePath, token);
+                    const runningExternally = externalOwnershipBeforeLock
+                        ?? await this.probeExternalOwnershipForStop(current.absolutePath, token);
                     return createResult(
                         aspireAppHostStopToolName,
                         runningExternally ? 'notEditorOwned' : 'notRunning',
@@ -424,10 +454,38 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         return [...this._dependencies.launchService.getEditorOwnedRunSessions(appHostPath)];
     }
 
+    private hasEditorOwnership(appHostPath: string): boolean {
+        return this._dependencies.launchService.isLaunching(appHostPath) ||
+            this._dependencies.launchService.getEditorOwnedRunSessions(appHostPath).length > 0;
+    }
+
     private async isRunningOutsideEditor(appHostPath: string, token: vscode.CancellationToken): Promise<boolean> {
         const runningAppHosts = await this._dependencies.launchService.getRunningAppHosts(token);
         return runningAppHosts.some(runningAppHost =>
             this._dependencies.launchService.isSameAppHostIdentity(runningAppHost.appHostPath, appHostPath));
+    }
+
+    /**
+     * Ownership probe for `stop`, where a probe failure is not a reason to fail the call.
+     *
+     * `start` fails closed when the probe throws, because launching anyway could put a
+     * second AppHost on the ports of one the user started from a terminal. Stopping has
+     * no such hazard: the editor owns no session either way, so the only question left is
+     * whether to label the outcome `notEditorOwned` or `notRunning`. Reporting `failed`
+     * there would push the agent to the CLI for a call that had nothing to do.
+     */
+    private async probeExternalOwnershipForStop(appHostPath: string, token: vscode.CancellationToken): Promise<boolean> {
+        try {
+            return await this.isRunningOutsideEditor(appHostPath, token);
+        }
+        catch (error) {
+            if (isCommandCancellation(error)) {
+                throw error;
+            }
+
+            extensionLogOutputChannel.warn(`Aspire language model tool ${aspireAppHostStopToolName} could not determine external AppHost ownership: ${String(error)}`);
+            return false;
+        }
     }
 
     private createErrorResult(

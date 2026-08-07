@@ -6,6 +6,7 @@ import { appHostLifecycleBusy, startDebuggingDeclined } from '../loc/strings';
 import { classifyAppHostDirectory, classifyAppHostPath } from '../utils/appHostLanguage';
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';
 import { bucketAspireCommand } from '../utils/telemetryBuckets';
+import { extensionLogOutputChannel } from '../utils/logging';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
 
 function getComparisonKey(value: string): string {
@@ -41,6 +42,18 @@ export interface AppHostDebugSessionTerminatedEvent {
 
 export interface AppHostLaunchSession {
     readonly appHostPath: string | undefined;
+    /**
+     * The concrete AppHost the extension resolved for this session, when the session's
+     * own `program` is a workspace folder rather than a file.
+     *
+     * `Aspire: Configure launch.json` writes `program: '${workspaceFolder}'`, and
+     * `AspireDebugConfigurationProvider` also falls back to the folder when `program` is
+     * absent, so for the standard "configure launch.json then F5" flow `appHostPath` is a
+     * directory and can never match a requested AppHost file. The configuration provider
+     * has already resolved the unambiguous candidate for that folder, so carry it here
+     * instead of guessing which AppHost under the folder is running.
+     */
+    readonly resolvedAppHostPath: string | undefined;
     readonly operationKind: AspireOperationKind;
     readonly startupCompleted: boolean;
     readonly configuration: { readonly noDebug?: boolean;[key: string]: unknown };
@@ -52,6 +65,14 @@ export interface RunningAppHost {
 }
 
 export const appHostLifecycleLockWaitTimeoutMs = 10_000;
+
+/**
+ * Upper bound on how long one lifecycle operation may hold the per-AppHost lock.
+ *
+ * Generous on purpose: a real AppHost shutdown tears down containers and other
+ * resources, so this is a stuck-operation backstop rather than an operation timeout.
+ */
+export const appHostLifecycleLockMaxHoldMs = 120_000;
 
 export class AppHostLifecycleLockTimeoutError extends Error {
     constructor() {
@@ -144,7 +165,8 @@ export class AppHostLaunchService implements vscode.Disposable {
     getEditorOwnedRunSessions(appHostPath: string): readonly AppHostLaunchSession[] {
         return this._getEditorSessions().filter(session =>
             session.operationKind === 'run' &&
-            this.isSameAppHostIdentity(session.appHostPath, appHostPath));
+            (this.isSameAppHostIdentity(session.appHostPath, appHostPath) ||
+                this.isSameAppHostIdentity(session.resolvedAppHostPath, appHostPath)));
     }
 
     async getRunningAppHosts(token: vscode.CancellationToken): Promise<readonly RunningAppHost[]> {
@@ -180,13 +202,29 @@ export class AppHostLaunchService implements vscode.Disposable {
         });
 
         let acquired = false;
+        let holdTimeout: NodeJS.Timeout | undefined;
         try {
             await waitForPromise(previous, token, appHostLifecycleLockWaitTimeoutMs);
             acquired = true;
+            // A held lock is only ever released when its action settles, so an operation
+            // that never settles would leave this key occupied for the lifetime of the
+            // window and every later Run/Debug for this AppHost would fail with `busy`.
+            // Force the gate open after a generous bound so the lock self-heals. This can
+            // let a later operation overlap a stuck one, which is still far better than
+            // disabling the AppHost's lifecycle until the window is reloaded.
+            holdTimeout = setTimeout(() => {
+                extensionLogOutputChannel.warn(`AppHost lifecycle operation for ${appHostPath} exceeded ${appHostLifecycleLockMaxHoldMs}ms; releasing the lifecycle lock so later operations are not blocked.`);
+                release();
+            }, appHostLifecycleLockMaxHoldMs);
+            // The backstop must never be a reason for the host process to stay alive.
+            holdTimeout.unref?.();
             throwIfCancelled(token);
             return await action();
         }
         finally {
+            if (holdTimeout) {
+                clearTimeout(holdTimeout);
+            }
             if (acquired) {
                 release();
             }
@@ -197,15 +235,25 @@ export class AppHostLaunchService implements vscode.Disposable {
         }
     }
 
+    /**
+     * Maps every path that {@link isMatchingAppHostPath} considers the same AppHost onto
+     * one key.
+     *
+     * The key must be a pure function of the path. Deriving it by scanning the existing
+     * keys for a match would not be, because that relation is not transitive: an
+     * `AppHost.csproj` matches both a sibling `apphost.cs` and a sibling `Program.cs`,
+     * while those two do not match each other. Whichever key happened to be inserted
+     * first would then decide whether the next caller shared a lock or got its own,
+     * letting two operations run concurrently over the same AppHost.
+     *
+     * Since matching only ever relates a project file to a source file in the same
+     * directory, the directory is the identity for both shapes.
+     */
     private getLifecycleLockKey(appHostPath: string): string {
-        const resolvedPath = path.resolve(appHostPath);
-        for (const existingKey of this._lifecycleLocks.keys()) {
-            if (isMatchingAppHostPath(existingKey, resolvedPath)) {
-                return existingKey;
-            }
-        }
-
-        return getComparisonKey(path.normalize(resolvedPath));
+        const resolvedPath = path.normalize(path.resolve(appHostPath));
+        return isProjectFile(resolvedPath) || isSourceFile(resolvedPath)
+            ? `${getComparisonKey(path.dirname(resolvedPath))}${path.sep}`
+            : getComparisonKey(resolvedPath);
     }
 
     isLaunching(appHostPath: string): boolean {
