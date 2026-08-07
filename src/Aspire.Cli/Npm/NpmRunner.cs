@@ -506,12 +506,26 @@ internal sealed class NpmRunner : INpmRunner
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 await TerminateNpmProcessAsync(process).ConfigureAwait(false);
-                await ObserveProcessStreamsAfterTerminationAsync(outputTask, errorTask).ConfigureAwait(false);
+                await ObserveProcessStreamsAfterTerminationAsync(process, outputTask, errorTask).ConfigureAwait(false);
                 throw;
             }
 
             activity.SetProcessExitCode(process.ExitCode);
-            await Task.WhenAll(outputTask, errorTask).ConfigureAwait(false);
+
+            // npm exiting does NOT guarantee its redirected pipes are closed. Any descendant that
+            // inherited the stdout/stderr handles (an npm lifecycle script or wrapper that
+            // backgrounds work without detaching its handles) keeps the write ends open, so these
+            // reads can outlive npm indefinitely. Caller cancellation stopped applying the moment
+            // WaitForExitAsync returned, so an unbounded Task.WhenAll here would make the caller's
+            // update-check timeout unenforceable and leave the lookup running past the notifier's
+            // dispose budget. Bound the drain by both the caller's token and the same budget used
+            // after a kill.
+            if (!await DrainProcessStreamsAfterExitAsync(process, outputTask, errorTask, cancellationToken).ConfigureAwait(false))
+            {
+                activity.SetError($"npm output streams did not close within {ProcessTerminationTimeout} after exit.");
+                return null;
+            }
+
             var output = await outputTask.ConfigureAwait(false);
             var errorOutput = await errorTask.ConfigureAwait(false);
 
@@ -573,7 +587,7 @@ internal sealed class NpmRunner : INpmRunner
         }
     }
 
-    private async Task ObserveProcessStreamsAfterTerminationAsync(Task outputTask, Task errorTask)
+    private async Task ObserveProcessStreamsAfterTerminationAsync(Process process, Task outputTask, Task errorTask)
     {
         var streamsTask = Task.WhenAll(outputTask, errorTask);
 
@@ -584,12 +598,97 @@ internal sealed class NpmRunner : INpmRunner
                 _logger.LogDebug(
                     "npm output streams did not close within {Timeout} after process termination.",
                     ProcessTerminationTimeout);
+                AbandonProcessStreams(process, streamsTask);
             }
         }
         catch (Exception ex) when (IsExpectedProcessStreamTerminationException(ex))
         {
             _logger.LogDebug(ex, "npm output streams failed while draining after process termination.");
         }
+    }
+
+    /// <summary>
+    /// Drains the redirected stdout/stderr reads after npm exited on its own, bounded by both
+    /// <paramref name="cancellationToken"/> and <see cref="ProcessTerminationTimeout"/>.
+    /// </summary>
+    /// <returns><see langword="true"/> when both streams reached EOF and their output is usable.</returns>
+    /// <remarks>
+    /// <para>
+    /// A normal npm run reaches EOF the instant the process exits, and anything still buffered is
+    /// bounded by the OS pipe buffer, so this budget only ever expires when something other than
+    /// npm is holding a write end open.
+    /// </para>
+    /// <para>
+    /// When it does expire the partially read output is discarded rather than parsed: the reads are
+    /// still mid-stream, and a truncated last line would let the update check report a bogus
+    /// available version, which is worse than reporting nothing.
+    /// </para>
+    /// </remarks>
+    private async Task<bool> DrainProcessStreamsAfterExitAsync(
+        Process process,
+        Task outputTask,
+        Task errorTask,
+        CancellationToken cancellationToken)
+    {
+        var streamsTask = Task.WhenAll(outputTask, errorTask);
+
+        try
+        {
+            await streamsTask.WaitAsync(ProcessTerminationTimeout, _timeProvider, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogDebug("npm output streams were abandoned because the operation was cancelled after npm exited.");
+            AbandonProcessStreams(process, streamsTask);
+            throw;
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogDebug(
+                "npm output streams did not close within {Timeout} after npm exited; a descendant process still holds them.",
+                ProcessTerminationTimeout);
+            AbandonProcessStreams(process, streamsTask);
+            return false;
+        }
+        catch (Exception ex) when (IsExpectedProcessStreamTerminationException(ex))
+        {
+            _logger.LogDebug(ex, "npm output streams failed while draining after npm exited.");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Gives up on an unfinished stream drain without leaving anything running on our side.
+    /// </summary>
+    /// <remarks>
+    /// Closing the read ends is the part that matters: it releases the CLI's half of the pipes so
+    /// the abandoned reads fault immediately instead of lingering for the life of the process, and
+    /// it stops the surviving descendant from writing into a handle we still own. The descendant
+    /// itself cannot be killed from here — npm has already exited, so
+    /// <see cref="Process.Kill(bool)"/> with <c>entireProcessTree</c> throws, and the descendant has
+    /// been reparented away from any tree we can enumerate. Cancellation *before* npm exits is the
+    /// path that kills the tree, and that is handled by <see cref="TerminateNpmProcessAsync"/>.
+    /// </remarks>
+    private void AbandonProcessStreams(Process process, Task streamsTask)
+    {
+        try
+        {
+            process.StandardOutput.Close();
+            process.StandardError.Close();
+        }
+        catch (Exception ex) when (IsExpectedProcessStreamTerminationException(ex) || ex is InvalidOperationException)
+        {
+            _logger.LogDebug(ex, "Failed to close npm output streams while abandoning the drain.");
+        }
+
+        // WaitWithinTerminationBudgetAsync already observes its own abandoned wait, but the drain
+        // reached here can also be abandoned by cancellation, so observe unconditionally.
+        _ = streamsTask.ContinueWith(
+            static task => _ = task.Exception,
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     /// <summary>

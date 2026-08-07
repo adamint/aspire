@@ -399,6 +399,111 @@ public class NpmRunnerTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ResolvePackageAsync_ReturnsWhenDescendantHoldsPipesAfterNpmExits()
+    {
+        // The repro relies on POSIX job-control semantics (`cmd &` inherits the parent's
+        // stdout/stderr). There is no equally reliable way to force handle inheritance from a
+        // batch file, and a descendant that does NOT inherit would make this assert the opposite
+        // outcome, so the scenario is exercised on non-Windows only. The bounded drain itself is
+        // platform independent and is additionally covered by
+        // WaitWithinTerminationBudgetAsync_ReturnsFalseWhenBudgetExpires.
+        Assert.SkipUnless(!RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "Non-Windows-only test.");
+
+        var tempDirectory = Directory.CreateTempSubdirectory("aspire-npm-runner-test-");
+        int? holderProcessId = null;
+
+        try
+        {
+            WritePipeHoldingFakeNpm(tempDirectory);
+            var holderProcessIdPath = Path.Combine(tempDirectory.FullName, "holder-process-id.txt");
+            var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            using var pathOverride = new EnvVarOverride(
+                "PATH",
+                $"{tempDirectory.FullName}{Path.PathSeparator}{existingPath}");
+            using var holderProcessIdPathOverride = new EnvVarOverride("NPM_HOLDER_PID_FILE", holderProcessIdPath);
+            using var profilingTelemetry = new ProfilingTelemetry(new ConfigurationBuilder().Build());
+            var runner = new NpmRunner(
+                new TestEnvironment(),
+                NullLogger<NpmRunner>.Instance,
+                profilingTelemetry);
+
+            // npm itself exits immediately, so WaitForExitAsync returns and caller cancellation no
+            // longer covers the reads. The descendant keeps both redirected pipes open, so an
+            // unbounded drain here would never observe EOF and would hang the lookup forever.
+            var result = await runner.ResolvePackageAsync(
+                NpmInstallDetection.ExpectedPackageName,
+                "latest",
+                CancellationToken.None).DefaultTimeout();
+
+            // The drain budget expired before EOF, so the output is unusable and the lookup
+            // reports "unknown" rather than risking a truncated version string.
+            Assert.Null(result);
+
+            holderProcessId = await WaitForProcessIdAsync(holderProcessIdPath).DefaultTimeout();
+        }
+        finally
+        {
+            if (holderProcessId is { } runningProcessId)
+            {
+                TryKillProcess(runningProcessId);
+            }
+
+            tempDirectory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ResolvePackageAsync_CancellationUnblocksDrainWhenDescendantHoldsPipesAfterNpmExits()
+    {
+        Assert.SkipUnless(!RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "Non-Windows-only test.");
+
+        var tempDirectory = Directory.CreateTempSubdirectory("aspire-npm-runner-test-");
+        int? holderProcessId = null;
+
+        try
+        {
+            WritePipeHoldingFakeNpm(tempDirectory);
+            var holderProcessIdPath = Path.Combine(tempDirectory.FullName, "holder-process-id.txt");
+            var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            using var pathOverride = new EnvVarOverride(
+                "PATH",
+                $"{tempDirectory.FullName}{Path.PathSeparator}{existingPath}");
+            using var holderProcessIdPathOverride = new EnvVarOverride("NPM_HOLDER_PID_FILE", holderProcessIdPath);
+            using var profilingTelemetry = new ProfilingTelemetry(new ConfigurationBuilder().Build());
+            using var cancellationTokenSource = new CancellationTokenSource();
+
+            // The fake clock never advances, so the drain budget cannot expire. That leaves the
+            // caller's token as the only thing that can end the wait, which is precisely the
+            // guarantee under test: a caller-imposed timeout has to reach the post-exit drain.
+            var runner = new NpmRunner(
+                new TestEnvironment(),
+                NullLogger<NpmRunner>.Instance,
+                profilingTelemetry,
+                new FakeTimeProvider());
+
+            var resolutionTask = runner.ResolvePackageAsync(
+                NpmInstallDetection.ExpectedPackageName,
+                "latest",
+                cancellationTokenSource.Token);
+
+            holderProcessId = await WaitForProcessIdAsync(holderProcessIdPath).DefaultTimeout();
+            await cancellationTokenSource.CancelAsync();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => resolutionTask).DefaultTimeout();
+        }
+        finally
+        {
+            if (holderProcessId is { } runningProcessId)
+            {
+                TryKillProcess(runningProcessId);
+            }
+
+            tempDirectory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task CliUpdateNotifierDispose_TerminatesNpmProcessWithoutHanging()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -624,6 +729,40 @@ public class NpmRunnerTests(ITestOutputHelper outputHelper)
             if [ -n "$NPM_STDOUT" ]; then
               printf '%s\n' "$NPM_STDOUT"
             fi
+            exit 0
+            """);
+        File.SetUnixFileMode(
+            npmPath,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+            UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+            UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+    }
+
+    /// <summary>
+    /// Writes a fake npm that prints a version, leaves a descendant holding the inherited
+    /// stdout/stderr pipes, and then exits successfully.
+    /// </summary>
+    /// <remarks>
+    /// `sleep 600 &amp;` inherits the shell's stdout/stderr, which are the runner's redirected
+    /// pipes. npm exits immediately, but the write ends stay open, so a reader waiting for EOF
+    /// never completes. This is the real-world shape of an npm lifecycle script or wrapper that
+    /// backgrounds work without detaching its handles.
+    /// </remarks>
+    private static void WritePipeHoldingFakeNpm(DirectoryInfo directory)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException("The pipe-holding fake npm relies on POSIX job control.");
+        }
+
+        var npmPath = Path.Combine(directory.FullName, "npm");
+        File.WriteAllText(
+            npmPath,
+            """
+            #!/bin/sh
+            sleep 600 &
+            printf '%s\n' "$!" > "$NPM_HOLDER_PID_FILE"
+            printf '13.4.6\n'
             exit 0
             """);
         File.SetUnixFileMode(
