@@ -161,6 +161,21 @@ corepack yarn install
 
 The build rejects public registry URLs in `yarn.lock`; ensure regenerated entries resolve through the `dotnet-public-npm` feed (public, so no credentials are needed to consume it).
 
+> **Check feed availability before pinning a just-published version.** `dotnet-public-npm` mirrors npmjs on a lag of roughly a week, so a version published in the last few days is not resolvable there yet and CI fails at `yarn install --frozen-lockfile` with a 404 on the tarball:
+>
+> ```text
+> error Error: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/vscode-extension-tester/-/vscode-extension-tester-8.24.0.tgz: Request failed "404 Not Found"
+> ```
+>
+> This is easy to miss locally, because a global `.npmrc` pointing at another registry lets `yarn install` succeed on your machine while the rewritten `yarn.lock` URL still 404s for CI. Nothing in this repo can force the mirror to ingest a version — anonymous and authenticated requests both 404 until the sync picks it up — so the only options are to wait or to pin a version the feed already has. Check the whole set of new `resolved` URLs, since a bump also drags in transitive dependencies published at the same time:
+>
+> ```bash
+> git diff origin/main -- yarn.lock | grep '^+.*resolved "' | sed 's/^+ *resolved "//; s/".*$//' | sort -u \
+>   | while read -r url; do echo "$(curl -s -o /dev/null -w '%{http_code}' "$url")  $url"; done
+> ```
+>
+> A `404` means the feed does not have it yet; `303` means it is cached and safe to pin.
+
 ## Updating the Yarn version
 
 Edit the `"packageManager": "yarn@x.y.z"` field in `extension/package.json`. The next `build.sh` / `build.ps1` run seeds Corepack's cache with that version before calling `corepack yarn …`. No further changes are required in `build.sh`, `build.ps1`, or `extension/Extension.proj`.
