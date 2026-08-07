@@ -16,15 +16,23 @@ public class AtsContextFilterTests
     /// consumers key on, so a document published under the caller's spelling names a package nobody
     /// looks up. The loaded assembly is the authority on how it is spelled.
     /// </summary>
-    [Fact]
-    public void ResolveCanonicalAssemblyName_ReturnsTheSpellingTheAssemblyCarries()
+    [Theory]
+    [InlineData(NameCasing.Lower)]
+    [InlineData(NameCasing.Upper)]
+    [InlineData(NameCasing.AsDeclared)]
+    public void TryResolveCanonicalAssemblyName_ReturnsTheSpellingTheAssemblyCarries(NameCasing casing)
     {
         var context = CreateContext();
         var canonicalName = typeof(AtsContextFilterTests).Assembly.GetName().Name!;
+        var requestedName = casing switch
+        {
+            NameCasing.Lower => canonicalName.ToLowerInvariant(),
+            NameCasing.Upper => canonicalName.ToUpperInvariant(),
+            _ => canonicalName
+        };
 
-        Assert.Equal(canonicalName, AtsContextFilter.ResolveCanonicalAssemblyName(context, canonicalName.ToLowerInvariant()));
-        Assert.Equal(canonicalName, AtsContextFilter.ResolveCanonicalAssemblyName(context, canonicalName.ToUpperInvariant()));
-        Assert.Equal(canonicalName, AtsContextFilter.ResolveCanonicalAssemblyName(context, canonicalName));
+        Assert.True(AtsContextFilter.TryResolveCanonicalAssemblyName(context, requestedName, out var resolvedName));
+        Assert.Equal(canonicalName, resolvedName);
     }
 
     /// <summary>
@@ -34,7 +42,7 @@ public class AtsContextFilterTests
     /// name consumers cannot look up.
     /// </summary>
     [Fact]
-    public void ResolveCanonicalAssemblyName_ReachesAPackageThatSurvivesOnlyInItsIds()
+    public void TryResolveCanonicalAssemblyName_ReachesAPackageThatSurvivesOnlyInItsIds()
     {
         var context = CreateContext();
 
@@ -42,20 +50,33 @@ public class AtsContextFilterTests
             context.HandleTypes.Where(type => type.AtsTypeId.StartsWith("Aspire.Hosting.Redis/", StringComparison.Ordinal)),
             type => Assert.Null(type.ClrType));
 
-        Assert.Equal("Aspire.Hosting.Redis", AtsContextFilter.ResolveCanonicalAssemblyName(context, "aspire.hosting.redis"));
+        Assert.True(AtsContextFilter.TryResolveCanonicalAssemblyName(context, "aspire.hosting.redis", out var resolvedName));
+        Assert.Equal("Aspire.Hosting.Redis", resolvedName);
         Assert.NotEmpty(AtsContextFilter.FilterByExportingAssemblies(context, ["aspire.hosting.redis"]).HandleTypes);
     }
 
     /// <summary>
     /// A name no loaded assembly carries belongs to a package whose assembly is named differently.
-    /// Guessing would be worse than echoing the request, and the export filters to nothing either way.
+    /// The candidates canonicalization searches are a superset of what the filter matches on, so
+    /// that package exports nothing -- which the caller has to be told rather than left to publish
+    /// an empty document under a name it never confirmed.
     /// </summary>
     [Fact]
-    public void ResolveCanonicalAssemblyName_LeavesAnUnmatchedNameAlone()
+    public void TryResolveCanonicalAssemblyName_ReportsAnUnmatchedName()
     {
         var context = CreateContext();
 
-        Assert.Equal("contoso.not.loaded", AtsContextFilter.ResolveCanonicalAssemblyName(context, "contoso.not.loaded"));
+        Assert.False(AtsContextFilter.TryResolveCanonicalAssemblyName(context, "contoso.not.loaded", out var resolvedName));
+        Assert.Null(resolvedName);
+        Assert.Empty(AtsContextFilter.FilterByExportingAssemblies(context, ["contoso.not.loaded"]).HandleTypes);
+    }
+
+    /// <summary>Casing variants exercised by <see cref="TryResolveCanonicalAssemblyName_ReturnsTheSpellingTheAssemblyCarries"/>.</summary>
+    public enum NameCasing
+    {
+        Lower,
+        Upper,
+        AsDeclared
     }
 
     [Fact]

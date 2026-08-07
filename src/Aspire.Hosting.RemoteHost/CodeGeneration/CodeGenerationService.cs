@@ -320,17 +320,27 @@ internal sealed class CodeGenerationService
             // (https://learn.microsoft.com/nuget/consume-packages/finding-and-choosing-packages#package-identifiers)
             // but the exported document records this string verbatim as the identity consumers key
             // on, so `aspire.hosting.redis` would publish a document naming a package nobody looks
-            // up. The loaded assembly settles the spelling: this filter already treats the package
-            // id as an assembly name, so a package whose API is exportable at all is named here.
-            // A name with no loaded assembly is left exactly as asked for — that is a package whose
-            // assembly is named differently, and guessing would be worse than echoing the request.
-            packageName = AtsContextFilter.ResolveCanonicalAssemblyName(fullContext, packageName);
+            // up. The loaded assembly settles the spelling: every filter here treats the package id
+            // as an assembly name, so a package whose API is exportable at all is named in the
+            // context. One that is not has nothing to export under that id, and saying so beats
+            // publishing an empty document that claims to describe it.
+            if (!AtsContextFilter.TryResolveCanonicalAssemblyName(fullContext, packageName, out var canonicalPackageName))
+            {
+                throw new InvalidOperationException(
+                    $"'{packageName}' restored, but the app host loaded no assembly by that name, so there is no API to export under it. " +
+                    "An API export is scoped by assembly name, so this is what a package whose assembly is named something other than " +
+                    "its package id looks like from here.");
+            }
+
+            packageName = canonicalPackageName;
 
             var context = AtsContextFilter.FilterForApiExport(
                 fullContext,
                 [packageName]);
 
-            var export = exporter.ExportApi(context, new ApiReferenceExportOptions(packageName, packageVersion, [packageName]));
+            var export = exporter.ExportApi(
+                context,
+                new ApiReferenceExportOptions(packageName, packageVersion, [packageName], fullContext));
 
             _logger.LogDebug("<< exportApi({Language}, {PackageName}) completed in {ElapsedMs}ms", language, packageName, sw.ElapsedMilliseconds);
 

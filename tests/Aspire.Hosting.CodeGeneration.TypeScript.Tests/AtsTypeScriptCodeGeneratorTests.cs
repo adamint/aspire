@@ -2511,6 +2511,119 @@ public partial class AtsTypeScriptCodeGeneratorTests
     }
 
     /// <summary>
+    /// Options interfaces are named after the method that produced them, and generation resolves a
+    /// collision between two packages by suffixing the loser -- a decision it can only make while
+    /// looking at every package at once. Projecting a per-package export from its filtered context
+    /// alone sees no collision, so both packages would publish <c>RunAsEmulatorOptions</c> with
+    /// members that cannot merge, and aspire.dev concatenates and type-checks those fragments
+    /// together. Handing the exporter the manifest settles the names the way generation does.
+    /// </summary>
+    /// <remarks>
+    /// Not hypothetical: <c>Aspire.Hosting.Azure.EventHubs</c> and <c>Aspire.Hosting.Azure.ServiceBus</c>
+    /// both expose <c>RunAsEmulator</c> with a <c>configureContainer</c> callback over their own
+    /// emulator resource type.
+    /// </remarks>
+    [Fact]
+    public void ApiExportNamesOptionsInterfacesTheWayFullGenerationDoes()
+    {
+        var manifest = CreateEmulatorCollisionContext();
+
+        var generatedNames = new TypeScriptApiProjector(manifest)
+            .CapabilityOptionsInterfaceMap
+            .ToDictionary(entry => entry.Key, entry => entry.Value, StringComparer.Ordinal);
+
+        // Generation must have separated them, or this test is not exercising a collision.
+        Assert.Equal(2, generatedNames.Values.Distinct(StringComparer.Ordinal).Count());
+
+        foreach (var packageName in new[] { CollisionPackageA, CollisionPackageB })
+        {
+            var filtered = AtsContextFilter.FilterForApiExport(manifest, [packageName]);
+            var model = new TypeScriptApiProjector(filtered, manifest).BuildApiModel(
+                new TypeScriptApiPackageIdentity(packageName, TestPackageVersion),
+                [packageName]);
+
+            var expectedName = generatedNames[$"{packageName}/runAsEmulator"];
+
+            Assert.Equal(
+                [$"{packageName}:options:{expectedName}"],
+                model.Declarations
+                    .Where(declaration => declaration.Id.Contains(":options:", StringComparison.Ordinal))
+                    .Select(declaration => declaration.Id)
+                    .Order(StringComparer.Ordinal));
+
+            Assert.All(
+                model.Declarations,
+                declaration => Assert.DoesNotMatch(
+                    $@"\b(?!{Regex.Escape(expectedName)}\b)RunAsEmulator\d*Options\b",
+                    declaration.Content));
+        }
+    }
+
+    private const string CollisionPackageA = "Contoso.Hosting.EventHubs";
+
+    private const string CollisionPackageB = "Contoso.Hosting.ServiceBus";
+
+    /// <summary>
+    /// Builds a two-package manifest where both packages expose <c>runAsEmulator</c> with an
+    /// optional parameter of the same name but an incompatible type, which is what forces
+    /// generation to suffix one of the two options interfaces.
+    /// </summary>
+    private static AtsContext CreateEmulatorCollisionContext()
+    {
+        static AtsTypeInfo Resource(string packageName, string typeName) => new()
+        {
+            AtsTypeId = $"{packageName}/{typeName}",
+            IsInterface = false,
+            HasExposeMethods = true,
+            HasExposeProperties = false,
+            BaseTypeHierarchy = [],
+            ImplementedInterfaces = []
+        };
+
+        static AtsCapabilityInfo Emulator(string packageName, AtsTypeInfo target, string optionalTypeId) => new()
+        {
+            CapabilityId = $"{packageName}/runAsEmulator",
+            MethodName = "runAsEmulator",
+            Parameters =
+            [
+                new AtsParameterInfo
+                {
+                    Name = "configureContainer",
+                    Type = new AtsTypeRef { TypeId = optionalTypeId, Category = AtsTypeCategory.Primitive },
+                    IsOptional = true
+                }
+            ],
+            ReturnType = new AtsTypeRef { TypeId = target.AtsTypeId, Category = AtsTypeCategory.Handle },
+            TargetTypeId = target.AtsTypeId,
+            TargetType = new AtsTypeRef { TypeId = target.AtsTypeId, Category = AtsTypeCategory.Handle },
+            TargetParameterName = "builder",
+            ExpandedTargetTypes = [],
+            ReturnsBuilder = true,
+            CapabilityKind = AtsCapabilityKind.Method
+        };
+
+        var hubsResource = Resource(CollisionPackageA, "EventHubsResource");
+        var busResource = Resource(CollisionPackageB, "ServiceBusResource");
+        var hubsEmulator = Emulator(CollisionPackageA, hubsResource, AtsConstants.String);
+        var busEmulator = Emulator(CollisionPackageB, busResource, AtsConstants.Boolean);
+
+        return new AtsContext
+        {
+            Capabilities = [hubsEmulator, busEmulator],
+            HandleTypes = [hubsResource, busResource],
+            DtoTypes = [],
+            EnumTypes = [],
+            ExportedValues = [],
+            Diagnostics = [],
+            CapabilityExportingAssemblyNames = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [hubsEmulator.CapabilityId] = CollisionPackageA,
+                [busEmulator.CapabilityId] = CollisionPackageB
+            }
+        };
+    }
+
+    /// <summary>
     /// Builds the context the canonical exporter sees for a single package: the package's own
     /// capabilities plus the transitive closure of types they reference from other assemblies.
     /// This mirrors what RemoteHost passes to the exporter for one <c>Name@Version</c> request.

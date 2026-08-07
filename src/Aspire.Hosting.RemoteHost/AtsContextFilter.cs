@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using Aspire.TypeSystem;
 
@@ -12,23 +13,33 @@ namespace Aspire.Hosting.RemoteHost;
 internal static class AtsContextFilter
 {
     /// <summary>
-    /// Returns <paramref name="requestedName"/> spelled the way the assembly that carries it is
-    /// actually named, or unchanged when no loaded assembly matches.
+    /// Resolves <paramref name="requestedName"/> to the spelling the assembly that carries it
+    /// actually uses.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// A NuGet package id is case-insensitive
     /// (<see href="https://learn.microsoft.com/nuget/consume-packages/finding-and-choosing-packages#package-identifiers"/>),
     /// so a caller can name a package in any casing, but an API export records the id verbatim as
     /// the identity consumers key on. Every filter here treats the package id as an assembly name,
-    /// so the assemblies this context was scanned from are the authority on how it is spelled. A
-    /// name that matches nothing is returned unchanged rather than guessed at: the candidates below
-    /// are a superset of everything <see cref="FilterByExportingAssemblies(AtsContext, IReadOnlyCollection{string})"/>
-    /// can match on, so an unmatched name is one the export would filter to nothing anyway.
+    /// so the assemblies this context was scanned from are the authority on how it is spelled.
+    /// </para>
+    /// <para>
+    /// Failing to match is worth reporting rather than absorbing. The candidates below are a
+    /// superset of everything <see cref="FilterByExportingAssemblies(AtsContext, IReadOnlyCollection{string})"/>
+    /// can match on, so a name that matches nothing here is a name the export would filter to
+    /// nothing — a package that restored but whose assembly is named something else. Continuing
+    /// under the requested spelling would publish an empty document that claims to describe it.
+    /// </para>
     /// </remarks>
     /// <param name="context">The unfiltered ATS context.</param>
     /// <param name="requestedName">The assembly or package name as the caller spelled it.</param>
-    /// <returns>The canonical spelling, or <paramref name="requestedName"/> when unmatched.</returns>
-    public static string ResolveCanonicalAssemblyName(AtsContext context, string requestedName)
+    /// <param name="canonicalName">The canonical spelling, when a loaded assembly matches.</param>
+    /// <returns><see langword="true"/> when a loaded assembly matches; otherwise <see langword="false"/>.</returns>
+    public static bool TryResolveCanonicalAssemblyName(
+        AtsContext context,
+        string requestedName,
+        [NotNullWhen(true)] out string? canonicalName)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(requestedName);
@@ -42,7 +53,7 @@ internal static class AtsContextFilter
         // whose CLR types did not resolve.
         var candidates = GetKnownAssemblyNames(context, GetExportingAssemblyNames(context));
 
-        return candidates.TryGetValue(requestedName, out var canonicalName) ? canonicalName : requestedName;
+        return candidates.TryGetValue(requestedName, out canonicalName);
     }
 
     private static HashSet<string> GetExportingAssemblyNames(AtsContext context)
