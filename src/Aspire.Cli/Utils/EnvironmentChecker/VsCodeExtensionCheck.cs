@@ -187,13 +187,9 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         var latestVersion = installedVersion.IsPrerelease ? versions.PreReleaseVersion : versions.StableVersion;
         if (latestVersion is null)
         {
-            return
-            [
-                CreateMarketplaceUnavailableResult(
-                    metadata,
-                    new InvalidDataException(
-                        $"The VS Code Marketplace response did not include a {channel} version."))
-            ];
+            // Comparing a pre-release install against the stable feed (or vice versa) would produce a
+            // meaningless verdict, so report the lookup as unavailable rather than guessing.
+            return [CreateMarketplaceUnavailableResult(metadata, $"The Marketplace response did not include a {channel} version.")];
         }
 
         var updateAvailable = SemVersion.ComparePrecedence(installedVersion, latestVersion) < 0;
@@ -268,11 +264,22 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             ExtensionInstalled: IsExtensionInstalled(environment, homeDirectory));
     }
 
-    private EnvironmentCheckResult CreateMarketplaceUnavailableResult(
-        JsonObject metadata,
-        Exception exception)
+    private EnvironmentCheckResult CreateMarketplaceUnavailableResult(JsonObject metadata, Exception exception)
     {
         _logger.LogDebug(exception, "The VS Code Marketplace version check was unavailable.");
+
+        return CreateMarketplaceUnavailableResult(metadata);
+    }
+
+    private EnvironmentCheckResult CreateMarketplaceUnavailableResult(JsonObject metadata, string reason)
+    {
+        _logger.LogDebug("The VS Code Marketplace version check was unavailable. {Reason}", reason);
+
+        return CreateMarketplaceUnavailableResult(metadata);
+    }
+
+    private static EnvironmentCheckResult CreateMarketplaceUnavailableResult(JsonObject metadata)
+    {
         metadata["latestVersionError"] = "unavailable";
 
         return CreateInstalledResult(
