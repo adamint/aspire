@@ -144,48 +144,206 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task CheckAsync_ReturnsPassWithoutMarketplaceCall_WhenExtensionDidNotReportItsVersion()
+    public async Task CheckAsync_ComparesOnDiskVersion_WhenExtensionDidNotReportItsVersion()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
         var extensions = workspace.CreateDirectory("extensions");
-        // Outside a VS Code-created process nothing contributes the version, so the check falls back
-        // to the installed/not-installed answer without guessing a version off disk.
-        Directory.CreateDirectory(Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-1.2.3"));
-        var environment = new TestEnvironment(new Dictionary<string, string?>
+        // Regression test for the reported defect: an extension predating the environment variable, or
+        // a doctor run outside a VS Code-created process, must still be compared rather than passing.
+        CreateInstalledExtension(extensions, "1.2.3");
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
         {
-            ["TERM_PROGRAM"] = "vscode",
-            ["VSCODE_EXTENSIONS"] = extensions.FullName
-        });
-        var marketplaceClient = CreateUnusedMarketplaceClient();
+            StableVersionCallback = _ => Task.FromResult(SemVersion.Parse("1.9.0", SemVersionStyles.Strict))
+        };
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal(
+            string.Format(
+                CultureInfo.CurrentCulture,
+                DoctorCommandStrings.VsCodeExtensionOutOfDateMessageFormat,
+                "1.2.3",
+                "1.9.0"),
+            result.Message);
+        Assert.Equal("1.2.3", result.Metadata!["extensionVersion"]!.GetValue<string>());
+        Assert.Equal("manifest", result.Metadata["extensionVersionSource"]!.GetValue<string>());
+        Assert.True(result.Metadata["updateAvailable"]!.GetValue<bool>());
+        Assert.Equal(1, marketplaceClient.CallCount);
+    }
+
+    [Fact]
+    public async Task CheckAsync_ReturnsPass_WhenOnDiskVersionIsCurrent()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        CreateInstalledExtension(extensions, "1.9.0");
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            StableVersionCallback = _ => Task.FromResult(SemVersion.Parse("1.9.0", SemVersionStyles.Strict))
+        };
         var check = CreateCheck(environment, home, marketplaceClient);
 
         var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
         Assert.Equal(DoctorCommandStrings.VsCodeExtensionInstalledMessage, result.Message);
-        Assert.Null(result.Details);
-        Assert.True(result.Metadata!["extensionInstalled"]!.GetValue<bool>());
-        Assert.Null(result.Metadata["extensionVersion"]);
-        Assert.False(result.Metadata["latestVersionKnown"]!.GetValue<bool>());
+        Assert.Equal("1.9.0", result.Metadata!["extensionVersion"]!.GetValue<string>());
+        Assert.False(result.Metadata["updateAvailable"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task CheckAsync_PrefersManifestVersionOverFolderName()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        // The folder name is a convention; the manifest is the contract, so the manifest wins.
+        CreateInstalledExtension(extensions, folderVersion: "1.2.3", manifestVersion: "1.9.0");
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            StableVersionCallback = _ => Task.FromResult(SemVersion.Parse("1.9.0", SemVersionStyles.Strict))
+        };
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("1.9.0", result.Metadata!["extensionVersion"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task CheckAsync_UsesFolderVersion_WhenManifestIsMissing()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        CreateInstalledExtension(extensions, folderVersion: "1.2.3", manifestVersion: null);
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            StableVersionCallback = _ => Task.FromResult(SemVersion.Parse("1.2.3", SemVersionStyles.Strict))
+        };
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("1.2.3", result.Metadata!["extensionVersion"]!.GetValue<string>());
+    }
+
+    [Theory]
+    // VS Code leaves the previous directory behind after an upgrade, so the highest version wins.
+    // The 1.9.0/1.10.0 pair is ordered by semver precedence, where an ordinal string sort is wrong.
+    [InlineData(new[] { "1.9.0", "1.10.0" }, "1.10.0")]
+    [InlineData(new[] { "1.10.0", "1.9.0" }, "1.10.0")]
+    [InlineData(new[] { "1.2.3", "1.9.0", "1.10.2" }, "1.10.2")]
+    public async Task CheckAsync_SelectsHighestInstalledVersion(string[] installedVersions, string expectedVersion)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        foreach (var installedVersion in installedVersions)
+        {
+            CreateInstalledExtension(extensions, installedVersion);
+        }
+
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            StableVersionCallback = _ => Task.FromResult(SemVersion.Parse(expectedVersion, SemVersionStyles.Strict))
+        };
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal(expectedVersion, result.Metadata!["extensionVersion"]!.GetValue<string>());
+        Assert.False(result.Metadata["updateAvailable"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task CheckAsync_ReturnsUnknownWarning_WhenInstalledVersionCannotBeDetermined()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        // The extension is installed but neither the manifest nor the folder name yields a version, so
+        // the outcome must be a distinct "unknown" warning rather than a pass on absent evidence.
+        var extensionDirectory = Directory.CreateDirectory(
+            Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-1.x-dev"));
+        File.WriteAllText(Path.Combine(extensionDirectory.FullName, "package.json"), "{ \"name\": \"aspire-vscode\" }");
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = CreateUnusedMarketplaceClient();
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionVersionUnknownMessage, result.Message);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionVersionUnknownFix, result.Fix);
+        Assert.Equal(
+            string.Format(
+                CultureInfo.CurrentCulture,
+                DoctorCommandStrings.VsCodeExtensionVersionUnknownSearchedDetailsFormat,
+                extensions.FullName),
+            result.Details);
+        Assert.False(result.Metadata!["extensionVersionKnown"]!.GetValue<bool>());
+        Assert.Equal("unknown", result.Metadata["extensionVersionSource"]!.GetValue<string>());
         Assert.Equal(0, marketplaceClient.CallCount);
     }
 
     [Fact]
-    public async Task CheckAsync_ReturnsPassWithoutMarketplaceCall_WhenReportedVersionCannotBeParsed()
+    public async Task CheckAsync_FallsBackToDisk_WhenReportedVersionCannotBeParsed()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var environment = CreateVsCodeEnvironmentWithReportedVersion("not-a-version");
-        var marketplaceClient = CreateUnusedMarketplaceClient();
+        var extensions = workspace.CreateDirectory("extensions");
+        // A corrupted variable must not be trusted, and must not short-circuit the disk scan either.
+        CreateInstalledExtension(extensions, "1.2.3");
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = extensions.FullName,
+            [ReportedVersionVariable] = "not-a-version"
+        });
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            StableVersionCallback = _ => Task.FromResult(SemVersion.Parse("1.2.3", SemVersionStyles.Strict))
+        };
         var check = CreateCheck(environment, home, marketplaceClient);
 
         var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
 
         Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
-        Assert.Equal(DoctorCommandStrings.VsCodeExtensionInstalledMessage, result.Message);
-        Assert.Equal("not-a-version", result.Metadata!["extensionVersion"]!.GetValue<string>());
-        Assert.False(result.Metadata["latestVersionKnown"]!.GetValue<bool>());
+        Assert.Equal("1.2.3", result.Metadata!["extensionVersion"]!.GetValue<string>());
+        Assert.Equal("manifest", result.Metadata["extensionVersionSource"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task CheckAsync_IgnoresPlatformSuffixedFolderName_WhenManifestIsMissing()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        // A platform-specific VSIX unpacks to "<id>-1.2.3-darwin-arm64", whose suffix parses as the
+        // semver pre-release "1.2.3-darwin-arm64". Without a manifest that is not a usable version.
+        Directory.CreateDirectory(
+            Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-1.2.3-darwin-arm64"));
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = CreateUnusedMarketplaceClient();
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionVersionUnknownMessage, result.Message);
         Assert.Equal(0, marketplaceClient.CallCount);
     }
 
@@ -445,7 +603,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     [Theory]
     [InlineData("")]
     [InlineData("   ")]
-    public void Detect_IgnoresBlankReportedVersion(string reportedVersion)
+    public void Detect_FallsBackToDisk_WhenReportedVersionIsBlank(string reportedVersion)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
@@ -461,7 +619,8 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         var detection = VsCodeExtensionCheck.Detect(environment, home, _ => null);
 
         Assert.True(detection.ExtensionInstalled);
-        Assert.Null(detection.ExtensionVersion);
+        Assert.Equal("1.2.3", detection.ExtensionVersion);
+        Assert.Equal(VsCodeExtensionVersionSource.Manifest, detection.VersionSource);
     }
 
     [Fact]
@@ -481,7 +640,9 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
 
         Assert.True(detection.VsCodeInstalled);
         Assert.True(detection.ExtensionInstalled);
-        Assert.Null(detection.ExtensionVersion);
+        Assert.Equal("1.2.3", detection.ExtensionVersion);
+        Assert.Equal(VsCodeExtensionVersionSource.Manifest, detection.VersionSource);
+        Assert.Equal([extensions.FullName], detection.SearchedRoots);
     }
 
     [Fact]
@@ -664,6 +825,36 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
             ["TERM_PROGRAM"] = "vscode",
             [ReportedVersionVariable] = reportedVersion
         });
+
+    // Points the extension root at a temporary directory so the scan never reads the real
+    // ~/.vscode/extensions of the machine running the tests.
+    private static TestEnvironment CreateVsCodeEnvironmentWithoutReportedVersion(DirectoryInfo extensions)
+        => new(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = extensions.FullName
+        });
+
+    private static void CreateInstalledExtension(DirectoryInfo extensionsRoot, string version)
+        => CreateInstalledExtension(extensionsRoot, version, version);
+
+    // Lays out an extension the way VS Code extracts a VSIX: a "<publisher>.<name>-<version>" folder
+    // containing the manifest the extension host reads.
+    private static void CreateInstalledExtension(
+        DirectoryInfo extensionsRoot,
+        string folderVersion,
+        string? manifestVersion)
+    {
+        var directory = Directory.CreateDirectory(
+            Path.Combine(extensionsRoot.FullName, $"microsoft-aspire.aspire-vscode-{folderVersion}"));
+
+        if (manifestVersion is not null)
+        {
+            File.WriteAllText(
+                Path.Combine(directory.FullName, "package.json"),
+                $$"""{ "name": "aspire-vscode", "publisher": "microsoft-aspire", "version": "{{manifestVersion}}" }""");
+        }
+    }
 
     private static TestVsCodeExtensionMarketplaceClient CreateUnusedMarketplaceClient()
         => new()

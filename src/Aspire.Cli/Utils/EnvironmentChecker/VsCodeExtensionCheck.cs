@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -16,9 +17,10 @@ namespace Aspire.Cli.Utils.EnvironmentChecker;
 /// </summary>
 /// <remarks>
 /// The check is intentionally silent when VS Code is not detected. The installed version is taken
-/// from the environment variable the extension itself contributes, so the Marketplace comparison only
-/// runs when the active installation identified itself; otherwise the check falls back to reporting
-/// whether the extension is installed at all.
+/// from the environment variable the extension itself contributes when the CLI runs inside a process
+/// VS Code created for it, and otherwise resolved from the extension manifest on disk. The outcome is
+/// three-state: a known current version passes, a known outdated version warns, and a version that
+/// could not be determined warns separately rather than being reported as healthy.
 /// </remarks>
 internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
 {
@@ -44,6 +46,8 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
 
     private const string StableChannel = "stable";
     private const string PreReleaseChannel = "pre-release";
+
+    private const int MaximumManifestSize = 1024 * 1024;
 
     private readonly IEnvironment _environment;
     private readonly CliExecutionContext _executionContext;
@@ -136,15 +140,36 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             ];
         }
 
-        // Without a version the extension reported for itself there is nothing to compare, so the
-        // check answers the same question it did before the update comparison existed: is the
-        // extension installed at all. Guessing a version off disk cannot identify which of several
-        // installations the running window loaded.
-        if (!updateCheckEnabled ||
-            !SemVersion.TryParse(detection.ExtensionVersion, SemVersionStyles.Strict, out var installedVersion))
+        // A disabled update check is a deliberate opt-out, so it reports the same "installed" pass it
+        // did before the comparison existed. An unknown version is different: doctor is a diagnostic
+        // command, so reporting "healthy" when the version could not be read would end the user's
+        // investigation on absent evidence. That case gets its own warning instead.
+        if (!updateCheckEnabled)
         {
             return [CreateInstalledResult(metadata, EnvironmentCheckStatus.Pass)];
         }
+
+        if (!SemVersion.TryParse(detection.ExtensionVersion, SemVersionStyles.Strict, out var installedVersion))
+        {
+            metadata["extensionVersionKnown"] = false;
+
+            return
+            [
+                new EnvironmentCheckResult
+                {
+                    Category = EnvironmentCheckCategories.DevelopmentTools,
+                    Name = CheckName,
+                    Status = EnvironmentCheckStatus.Warning,
+                    Message = DoctorCommandStrings.VsCodeExtensionVersionUnknownMessage,
+                    Details = FormatSearchedRoots(detection.SearchedRoots),
+                    Fix = DoctorCommandStrings.VsCodeExtensionVersionUnknownFix,
+                    Link = MarketplaceUrl,
+                    Metadata = metadata
+                }
+            ];
+        }
+
+        metadata["extensionVersionKnown"] = true;
 
         VsCodeExtensionMarketplaceVersions versions;
         try
@@ -244,24 +269,198 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         }
 
         // The extension contributes its own version to every terminal, task, and debug process VS Code
-        // creates for it, so this is the version of the instance that is actually running. Nothing on
-        // disk can answer that: several extension roots can hold the extension at once (desktop plus
-        // .vscode-server for Remote/WSL/devcontainers), --extensions-dir is invisible to a child
-        // process, and portable mode relocates the whole root.
-        var reportedVersion = environment.GetEnvironmentVariable(ExtensionVersionEnvironmentVariable);
-        if (!string.IsNullOrWhiteSpace(reportedVersion))
+        // creates for it, so this is the version of the instance that is actually running. It is
+        // preferred over anything on disk: several extension roots can hold the extension at once
+        // (desktop plus .vscode-server for Remote/WSL/devcontainers), --extensions-dir is invisible to
+        // a child process, and portable mode relocates the whole root.
+        //
+        // The value is only trusted when it parses, so a truncated or corrupted variable falls through
+        // to the disk scan instead of being reported as an unknown version.
+        var reportedVersion = environment.GetEnvironmentVariable(ExtensionVersionEnvironmentVariable)?.Trim();
+        if (!string.IsNullOrEmpty(reportedVersion) &&
+            SemVersion.TryParse(reportedVersion, SemVersionStyles.Strict, out _))
         {
             return new VsCodeExtensionDetection(
                 VsCodeInstalled: true,
                 ExtensionInstalled: true,
-                ExtensionVersion: reportedVersion.Trim());
+                ExtensionVersion: reportedVersion,
+                VersionSource: VsCodeExtensionVersionSource.Extension);
         }
 
-        // Outside a VS Code-created process there is no signal, so fall back to answering only whether
-        // the extension is installed somewhere.
+        // Outside a VS Code-created process there is no environment signal. Older extension builds also
+        // predate the variable entirely, and those are exactly the installations this check exists to
+        // find, so the manifest on disk has to be read rather than treating the missing variable as a
+        // clean bill of health.
+        var (installed, diskVersion, searchedRoots) = ResolveExtensionFromDisk(environment, homeDirectory);
+
         return new VsCodeExtensionDetection(
             VsCodeInstalled: true,
-            ExtensionInstalled: IsExtensionInstalled(environment, homeDirectory));
+            ExtensionInstalled: installed,
+            ExtensionVersion: diskVersion,
+            VersionSource: diskVersion is null ? VsCodeExtensionVersionSource.None : VsCodeExtensionVersionSource.Manifest,
+            SearchedRoots: searchedRoots);
+    }
+
+    /// <summary>
+    /// Finds the highest Aspire extension version installed under any known extension root.
+    /// </summary>
+    /// <remarks>
+    /// VS Code leaves the previous directory in place after an upgrade, so a root routinely holds
+    /// several versions of the same extension at once. The highest version is the one VS Code loads,
+    /// and versions are ordered by semver precedence rather than as strings so <c>1.10.0</c> sorts
+    /// above <c>1.9.0</c>.
+    /// </remarks>
+    private static (bool Installed, string? Version, IReadOnlyList<string> SearchedRoots) ResolveExtensionFromDisk(
+        IEnvironment environment,
+        DirectoryInfo homeDirectory)
+    {
+        var searchedRoots = new List<string>();
+        SemVersion? highestVersion = null;
+        var installed = false;
+
+        foreach (var extensionsDirectory in VsCodeInstallLayout.GetExtensionRootPaths(environment, homeDirectory))
+        {
+            searchedRoots.Add(extensionsDirectory);
+
+            foreach (var extensionDirectory in EnumerateExtensionDirectories(extensionsDirectory))
+            {
+                installed = true;
+
+                if (TryResolveExtensionVersion(extensionDirectory, out var version) &&
+                    (highestVersion is null || SemVersion.ComparePrecedence(version, highestVersion) > 0))
+                {
+                    highestVersion = version;
+                }
+            }
+        }
+
+        return (installed, highestVersion?.ToString(), searchedRoots);
+    }
+
+    private static IEnumerable<string> EnumerateExtensionDirectories(string extensionsDirectory)
+    {
+        if (!Directory.Exists(extensionsDirectory))
+        {
+            yield break;
+        }
+
+        // IgnoreInaccessible lets the probe skip an unreadable extension folder and keep scanning the
+        // rest, instead of throwing and reporting the whole extensions root as "not found" (a false
+        // warning even when the Aspire extension is installed alongside an inaccessible one). The
+        // parameterless EnumerateDirectories overload uses legacy behavior that throws instead.
+        // AttributesToSkip is reset to None (the default EnumerationOptions skips Hidden/System) so an
+        // extension folder is never silently ignored because of an unexpected attribute.
+        var enumerationOptions = new EnumerationOptions
+        {
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.None
+        };
+
+        IEnumerator<string> enumerator;
+        try
+        {
+            enumerator = Directory.EnumerateDirectories(extensionsDirectory, "*", enumerationOptions).GetEnumerator();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Treat an unreadable extensions root as empty rather than failing the whole doctor run.
+            yield break;
+        }
+
+        using (enumerator)
+        {
+            while (true)
+            {
+                string current;
+                try
+                {
+                    // MoveNext performs the directory read, so enumeration faults surface here rather
+                    // than from the call above. It cannot sit inside a try with a yield in scope, so
+                    // the loop advances and yields in separate steps.
+                    if (!enumerator.MoveNext())
+                    {
+                        yield break;
+                    }
+
+                    current = enumerator.Current;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    yield break;
+                }
+
+                if (IsVersionedExtensionFolder(Path.GetFileName(current)))
+                {
+                    yield return current;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads the version of an installed extension, preferring the manifest over the folder name.
+    /// </summary>
+    /// <remarks>
+    /// The <c>&lt;publisher&gt;.&lt;name&gt;-&lt;version&gt;</c> folder name is a convention; the
+    /// <c>version</c> field of the extracted <c>package.json</c> is the manifest contract, so it wins.
+    /// The folder name is only consulted when the manifest is missing or unreadable, and then only a
+    /// plain release version is accepted: a platform-specific VSIX unpacks to a folder such as
+    /// <c>...-1.2.3-darwin-arm64</c>, whose suffix parses as the semver pre-release <c>1.2.3-darwin-arm64</c>
+    /// and would otherwise be mistaken for a pre-release build of the extension.
+    /// See https://code.visualstudio.com/api/working-with-extensions/publishing-extension#platformspecific-extensions.
+    /// </remarks>
+    private static bool TryResolveExtensionVersion(
+        string extensionDirectory,
+        [NotNullWhen(true)] out SemVersion? version)
+    {
+        if (TryReadManifestVersion(Path.Combine(extensionDirectory, "package.json"), out version))
+        {
+            return true;
+        }
+
+        var folderName = Path.GetFileName(extensionDirectory);
+        var versionSegment = folderName[(ExtensionId.Length + 1)..];
+
+        if (SemVersion.TryParse(versionSegment, SemVersionStyles.Strict, out var folderVersion) &&
+            !folderVersion.IsPrerelease &&
+            folderVersion.Metadata.Length == 0)
+        {
+            version = folderVersion;
+            return true;
+        }
+
+        version = null;
+        return false;
+    }
+
+    private static bool TryReadManifestVersion(string manifestPath, [NotNullWhen(true)] out SemVersion? version)
+    {
+        version = null;
+
+        try
+        {
+            var manifest = new FileInfo(manifestPath);
+
+            // An extension manifest is a few kilobytes. The cap stops doctor from reading an
+            // arbitrarily large file that happens to sit at this path into memory.
+            if (!manifest.Exists || manifest.Length > MaximumManifestSize)
+            {
+                return false;
+            }
+
+            using var stream = manifest.OpenRead();
+            using var document = JsonDocument.Parse(stream);
+
+            return document.RootElement.ValueKind == JsonValueKind.Object &&
+                document.RootElement.TryGetProperty("version", out var versionElement) &&
+                versionElement.ValueKind == JsonValueKind.String &&
+                SemVersion.TryParse(versionElement.GetString(), SemVersionStyles.Strict, out version);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            // A corrupt or locked manifest falls back to the folder name rather than failing the run.
+            return false;
+        }
     }
 
     private EnvironmentCheckResult CreateMarketplaceUnavailableResult(JsonObject metadata, Exception exception)
@@ -325,7 +524,32 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             metadata["extensionVersion"] = detection.ExtensionVersion;
         }
 
+        metadata["extensionVersionSource"] = detection.VersionSource switch
+        {
+            VsCodeExtensionVersionSource.Extension => "extension",
+            VsCodeExtensionVersionSource.Manifest => "manifest",
+            _ => "unknown"
+        };
+
         return metadata;
+    }
+
+    /// <summary>
+    /// Renders the extension roots that were searched so an unknown version says where it looked.
+    /// </summary>
+    private static string FormatSearchedRoots(IReadOnlyList<string>? searchedRoots)
+    {
+        // The environment variable path never touches disk, so there is nothing to list. That happens
+        // only when the variable itself was unreadable, which the fix text already covers.
+        if (searchedRoots is null || searchedRoots.Count == 0)
+        {
+            return DoctorCommandStrings.VsCodeExtensionVersionUnknownDetails;
+        }
+
+        return string.Format(
+            CultureInfo.CurrentCulture,
+            DoctorCommandStrings.VsCodeExtensionVersionUnknownSearchedDetailsFormat,
+            string.Join(", ", searchedRoots));
     }
 
     private static bool IsVsCodeInstalled(
@@ -343,57 +567,6 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             || commandResolver("code-insiders") is not null;
     }
 
-    private static bool IsExtensionInstalled(IEnvironment environment, DirectoryInfo homeDirectory)
-    {
-        foreach (var extensionsDirectory in VsCodeInstallLayout.GetExtensionRootPaths(environment, homeDirectory))
-        {
-            if (DirectoryContainsExtension(extensionsDirectory))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private static bool DirectoryContainsExtension(string extensionsDirectory)
-    {
-        if (!Directory.Exists(extensionsDirectory))
-        {
-            return false;
-        }
-
-        try
-        {
-            // IgnoreInaccessible lets the probe skip an unreadable extension folder and keep scanning
-            // the rest, instead of throwing and reporting the whole extensions root as "not found" (a
-            // false warning even when the Aspire extension is installed alongside an inaccessible one).
-            // The parameterless EnumerateDirectories overload uses legacy behavior that throws instead.
-            // AttributesToSkip is reset to None (the default EnumerationOptions skips Hidden/System) so an
-            // extension folder is never silently ignored because of an unexpected attribute.
-            var enumerationOptions = new EnumerationOptions
-            {
-                IgnoreInaccessible = true,
-                AttributesToSkip = FileAttributes.None
-            };
-
-            foreach (var directory in Directory.EnumerateDirectories(extensionsDirectory, "*", enumerationOptions))
-            {
-                if (IsVersionedExtensionFolder(Path.GetFileName(directory)))
-                {
-                    return true;
-                }
-            }
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Treat an unreadable extensions directory as "not found" rather than failing the whole doctor run.
-            return false;
-        }
-
-        return false;
-    }
-
     // Matches an extension folder name against the Aspire extension id. A case-insensitive prefix match
     // tolerates any installed version without spawning the VS Code CLI. Requiring a digit immediately
     // after the trailing '-' pins the match to the version segment so a different extension whose id
@@ -409,10 +582,41 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
 }
 
 /// <summary>
-/// Captures whether VS Code and the Aspire VS Code extension were detected, and the version the
-/// running extension reported for itself when it was available.
+/// Identifies where an installed extension version was read from.
 /// </summary>
+internal enum VsCodeExtensionVersionSource
+{
+    /// <summary>
+    /// No version could be determined.
+    /// </summary>
+    None,
+
+    /// <summary>
+    /// The running extension reported its own version through the environment.
+    /// </summary>
+    Extension,
+
+    /// <summary>
+    /// The version was read from an installed extension's manifest or folder name on disk.
+    /// </summary>
+    Manifest
+}
+
+/// <summary>
+/// Captures whether VS Code and the Aspire VS Code extension were detected, the version that was
+/// resolved for the extension, and where that version came from.
+/// </summary>
+/// <param name="VsCodeInstalled">Whether a VS Code build was detected.</param>
+/// <param name="ExtensionInstalled">Whether the Aspire extension was detected.</param>
+/// <param name="ExtensionVersion">The resolved extension version, or <see langword="null"/> when it could not be determined.</param>
+/// <param name="VersionSource">Where <paramref name="ExtensionVersion"/> was read from.</param>
+/// <param name="SearchedRoots">
+/// The extension roots the disk scan looked at, used to explain an unknown version. It is
+/// <see langword="null"/> when the version came from the environment and no scan ran.
+/// </param>
 internal sealed record VsCodeExtensionDetection(
     bool VsCodeInstalled,
     bool ExtensionInstalled,
-    string? ExtensionVersion = null);
+    string? ExtensionVersion = null,
+    VsCodeExtensionVersionSource VersionSource = VsCodeExtensionVersionSource.None,
+    IReadOnlyList<string>? SearchedRoots = null);
