@@ -37,7 +37,10 @@ fi
 # A `tsc` on PATH can be any TypeScript version (6.x and older are JavaScript builds), so it is only
 # accepted when it reports 7.x. `tsc --version` prints e.g. "Version 7.0.2".
 TYPESCRIPT_VERSION="${TYPESCRIPT_VERSION:-7}"
-NPM_REGISTRY="${NPM_REGISTRY:-https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/}"
+# Point every package manager at the approved dotnet-public-npm feed before anything is installed.
+# This also sets NPM_REGISTRY, used in the install hint below.
+source "$(dirname "${BASH_SOURCE[0]}")/npm-registry-env.sh"
+
 if ! command -v tsc &> /dev/null || [[ "$(tsc --version 2>/dev/null)" != "Version 7."* ]]; then
     echo "❌ A TypeScript 7 'tsc' is required on PATH to type-check the generated API surface."
     echo "   Found: $(command -v tsc &> /dev/null && tsc --version || echo 'no tsc on PATH')"

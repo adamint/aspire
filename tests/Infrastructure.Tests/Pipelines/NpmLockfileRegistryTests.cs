@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Xunit;
 using YamlDotNet.RepresentationModel;
 
@@ -46,6 +47,15 @@ public class NpmLockfileRegistryTests
     /// <c>git+ssh://git@github.com/...</c>, which a scheme-specific check would let through.
     /// </summary>
     private const string RemoteReferenceMarker = "://";
+
+    /// <summary>
+    /// Points every npm-ecosystem package manager at the approved feed. It is asserted on here,
+    /// rather than only in the workflow, because it is the sole enforcement point for the acquisition
+    /// paths whose lockfiles pin no tarball URLs.
+    /// </summary>
+    private const string PolyglotValidationDirectory = ".github/workflows/polyglot-validation";
+    private const string RegistryEnvScriptName = "npm-registry-env.sh";
+    private const string RegistryEnvScriptPath = $"{PolyglotValidationDirectory}/{RegistryEnvScriptName}";
 
     /// <summary>
     /// The shipped and fixture lockfiles are enumerated from known directories rather than by a
@@ -126,6 +136,155 @@ public class NpmLockfileRegistryTests
         Assert.Equal(YarnLockfileFormat.Berry, GetYarnLockfileFormat(contents));
 
         Assert.Empty(ScanYarnLockfile(contents).Offenders);
+    }
+
+    /// <summary>
+    /// A lockfile can only pin the feed for packages it already records, and two acquisition paths in
+    /// the polyglot job are not covered by the theories above at all.
+    /// tests/PolyglotAppHosts/Aspire.Hosting.Blazor/TypeScript has no lockfile, so `npm install`
+    /// resolves everything remotely, and the Yarn Berry fixture's lockfile stores locators rather than
+    /// tarball URLs, so Berry re-resolves through whatever registry is configured. For those, the
+    /// install-time registry configuration is the only thing standing between CI and the public
+    /// registry.
+    /// </summary>
+    /// <remarks>
+    /// The repository-root .npmrc does not cover them: npm resolves project config from
+    /// `localPrefix`, the nearest ancestor containing package.json or node_modules, which for every
+    /// AppHost is the AppHost directory itself. Environment variables outrank project config, so
+    /// exporting them is what actually reaches the AppHosts.
+    /// </remarks>
+    [Fact]
+    public void RegistryEnvScript_ExportsTheApprovedRegistryForEveryPackageManager()
+    {
+        var script = ReadRepoFile(RegistryEnvScriptPath);
+
+        // Each manager reads a different setting and they are not interchangeable — Yarn Berry
+        // ignores npm_config_registry, and npm ignores YARN_NPM_REGISTRY_SERVER — so assert on the
+        // whole set rather than on any one of them.
+        Assert.Equal(
+            new[]
+            {
+                "BUN_CONFIG_REGISTRY",
+                "COREPACK_NPM_REGISTRY",
+                "NPM_CONFIG_REGISTRY",
+                "YARN_NPM_REGISTRY_SERVER",
+                "npm_config_registry",
+            },
+            ExportedRegistryVariables(script));
+    }
+
+    [Fact]
+    public void RegistryEnvScript_DefaultsToTheApprovedFeed()
+    {
+        var script = ReadRepoFile(RegistryEnvScriptPath);
+
+        // NPM_REGISTRY="${NPM_REGISTRY:-https://...}" — the default is what CI runs with, because the
+        // workflow does not override it.
+        var match = Regex.Match(script, @"^NPM_REGISTRY=""\$\{NPM_REGISTRY:-(?<url>[^}""]+)\}""$", RegexOptions.Multiline);
+
+        Assert.True(match.Success, $"{RegistryEnvScriptPath} no longer defaults NPM_REGISTRY in the expected form.");
+        Assert.True(IsApprovedFeedUrl(match.Groups["url"].Value), $"NPM_REGISTRY defaults to {match.Groups["url"].Value}, which is not the approved feed.");
+    }
+
+    /// <summary>
+    /// Sourcing after the first acquisition would leave that acquisition on the ambient registry, so
+    /// position is part of the guarantee rather than a style preference.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(PackageAcquiringPolyglotScripts))]
+    public void PolyglotScript_SourcesTheRegistryEnvBeforeAcquiringPackages(string scriptName)
+    {
+        var script = ReadRepoFile($"{PolyglotValidationDirectory}/{scriptName}");
+
+        var sourceIndex = script.IndexOf($"/{RegistryEnvScriptName}\"", StringComparison.Ordinal);
+        Assert.True(sourceIndex > 0, $"{scriptName} does not source {RegistryEnvScriptName}, so its installs use the ambient registry.");
+
+        var firstAcquisitionIndex = FindFirstPackageAcquisition(script);
+        Assert.True(
+            sourceIndex < firstAcquisitionIndex,
+            $"{scriptName} sources {RegistryEnvScriptName} at offset {sourceIndex}, after it first acquires packages at offset {firstAcquisitionIndex}.");
+    }
+
+    /// <summary>
+    /// The guarantee belongs to the polyglot job rather than to any one script, so a newly added
+    /// script that acquires npm packages has to be guarded too. Discovering the set from disk means
+    /// that shows up as a failure here instead of as a silent gap.
+    /// </summary>
+    [Fact]
+    public void PolyglotScripts_ThatAcquireNpmPackagesAreAllGuarded()
+    {
+        var directory = Path.Combine(RepoRoot.Path, PolyglotValidationDirectory);
+
+        var acquiring = Directory.EnumerateFiles(directory, "*.sh")
+            .Where(path => Path.GetFileName(path) != RegistryEnvScriptName)
+            .Where(path => FindFirstPackageAcquisition(File.ReadAllText(path)) != int.MaxValue)
+            .Select(Path.GetFileName)
+            .OrderBy(name => name, StringComparer.Ordinal);
+
+        Assert.Equal(PackageAcquiringScriptNames, acquiring);
+    }
+
+    /// <summary>
+    /// Commands that acquire packages from the npm ecosystem, either directly or through the
+    /// TypeScript guest runtime. `aspire init --language typescript` installs the scaffolded AppHost's
+    /// dependencies with the guest runtime's package manager and passes no --registry, so it acquires
+    /// from the ambient registry just as a bare `npm install` would.
+    ///
+    /// Deliberately npm-specific: the Python, Go, Java, and Rust scripts also run `aspire init`, but
+    /// their guest runtimes use pip, Go modules, Maven, and Cargo, which these variables do not
+    /// configure.
+    /// </summary>
+    private static readonly string[] s_packageAcquisitionMarkers =
+    [
+        "npm install",
+        "npm exec",
+        "npx ",
+        "pnpm install",
+        "yarn install",
+        "bun install",
+        "bunx ",
+        "aspire init --language typescript",
+    ];
+
+    private static readonly string[] s_packageAcquiringScriptNames =
+    [
+        "test-typescript-playground.sh",
+        "test-typescript.sh",
+    ];
+
+    public static IEnumerable<string> PackageAcquiringScriptNames => s_packageAcquiringScriptNames;
+
+    public static TheoryData<string> PackageAcquiringPolyglotScripts => ToTheoryData(s_packageAcquiringScriptNames);
+
+    /// <summary>
+    /// Returns <see cref="int.MaxValue"/> when the script acquires nothing, so callers can compare
+    /// positions without special-casing the empty result.
+    /// </summary>
+    private static int FindFirstPackageAcquisition(string script)
+    {
+        // Comment lines describe these commands without running them — the explanation of why a
+        // script sources the registry env names the very commands it is guarding — so they would
+        // otherwise be found ahead of the real invocation. Blank them to the same width rather than
+        // dropping them, so the returned offset still refers to a position in the original script.
+        var executable = string.Join(
+            '\n',
+            script.Split('\n').Select(line => line.TrimStart().StartsWith('#') ? new string(' ', line.Length) : line));
+
+        return s_packageAcquisitionMarkers
+            .Select(marker => executable.IndexOf(marker, StringComparison.Ordinal))
+            .Where(index => index >= 0)
+            .DefaultIfEmpty(int.MaxValue)
+            .Min();
+    }
+
+    private static SortedSet<string> ExportedRegistryVariables(string script)
+    {
+        // Matches `export npm_config_registry="$NPM_REGISTRY"`. Only exports assigned from
+        // NPM_REGISTRY count: a hard-coded URL elsewhere would drift from the single source of truth
+        // the workflow can override.
+        var matches = Regex.Matches(script, @"^export (?<name>[A-Za-z_][A-Za-z0-9_]*)=""\$NPM_REGISTRY""$", RegexOptions.Multiline);
+
+        return new SortedSet<string>(matches.Select(match => match.Groups["name"].Value), StringComparer.Ordinal);
     }
 
     [Theory]
@@ -564,6 +723,14 @@ public class NpmLockfileRegistryTests
         Assert.True(File.Exists(lockfilePath), $"{relativePath} does not exist. Update the lockfile theory data if it moved or was removed.");
 
         return File.ReadAllText(lockfilePath);
+    }
+
+    private static string ReadRepoFile(string relativePath)
+    {
+        var path = Path.Combine(RepoRoot.Path, relativePath);
+        Assert.True(File.Exists(path), $"{relativePath} does not exist. Update this test if the file moved or was renamed.");
+
+        return File.ReadAllText(path);
     }
 
     /// <summary>
