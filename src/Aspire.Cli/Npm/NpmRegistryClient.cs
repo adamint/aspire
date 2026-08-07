@@ -9,6 +9,17 @@ namespace Aspire.Cli.Npm;
 
 internal sealed class NpmRegistryClient : INpmRegistryClient
 {
+    // Public npm is queried rather than the dnceng "dotnet-public-npm" mirror because an update
+    // check is only meaningful against the registry the resulting install actually resolves. The
+    // remediation this notice prints is "npm install -g @microsoft/aspire-cli@latest", which npm
+    // resolves against the *user's* configured registry - npmjs.org unless they have overridden it.
+    // Reading a different registry than the one the install uses makes the check a proxy for the
+    // answer instead of the answer. The mirror is also a downstream copy on a multi-day sync lag,
+    // so pointing here would silently under-report new releases for a week after they ship.
+    //
+    // This is a read-only, anonymous metadata GET; no package is ever installed from this URL. The
+    // approved-feed rule in AGENTS.md governs NuGet.config restore sources for the build, not
+    // runtime endpoints, and SigstoreNpmProvenanceChecker already reads npmjs.org the same way.
     internal const string PublicRegistryBaseUrl = "https://registry.npmjs.org/";
 
     // The abbreviated packument omits README, maintainer, and per-version metadata that the update
