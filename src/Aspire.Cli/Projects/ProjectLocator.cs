@@ -1082,6 +1082,8 @@ internal sealed class ProjectLocator(
 
         FileInfo? settingsFile = null;
         DirectoryInfo? appHostDirForScopedConfig = null;
+        AspireConfigFile? recordedConfig = null;
+        string? recordedConfigDir = null;
 
         // Search from the apphost's directory upward for an existing config file.
         // This handles the case where "aspire new" created a project in a subdirectory
@@ -1112,6 +1114,9 @@ internal sealed class ProjectLocator(
                 {
                     existingConfig = AspireConfigFile.Load(configDir);
                 }
+
+                recordedConfig = existingConfig;
+                recordedConfigDir = configDir;
 
                 if (existingConfig?.AppHost?.Path is { } existingPath)
                 {
@@ -1145,13 +1150,24 @@ internal sealed class ProjectLocator(
         // about which AppHost the workspace defaults to. It may still establish the default when
         // there is nothing to preserve, so a single-AppHost repo keeps getting a config file from
         // its first launch, but it must never replace a default the user already has.
-        if (isExplicitLaunchConfiguration && TryGetRecordedAppHostDefault(settingsFile) is { } recordedDefault)
+        if (isExplicitLaunchConfiguration)
         {
-            logger.LogDebug(
-                "Not replacing recorded AppHost default {RecordedAppHost} with {AppHost} because the latter was selected by an explicit launch configuration.",
-                recordedDefault,
-                projectFile.FullName);
-            return;
+            // Reuse the config the upward search already loaded when it found one. Today a plain
+            // Load would also see a legacy .aspire/settings.json workspace, but only because
+            // LoadOrCreate persisted the migration as a side effect moments earlier. That fallback
+            // is slated for removal (https://github.com/microsoft/aspire/issues/15239), so do not
+            // depend on it.
+            var configDirForRecordedDefault = recordedConfigDir ?? settingsFile.Directory!.FullName;
+            recordedConfig ??= AspireConfigFile.Load(configDirForRecordedDefault);
+
+            if (TryGetRecordedAppHostDefault(recordedConfig, configDirForRecordedDefault) is { } recordedDefault)
+            {
+                logger.LogDebug(
+                    "Not replacing recorded AppHost default {RecordedAppHost} with {AppHost} because the latter was selected by an explicit launch configuration.",
+                    recordedDefault,
+                    projectFile.FullName);
+                return;
+            }
         }
 
         logger.LogDebug("Creating settings file at {SettingsFilePath}", settingsFile.FullName);
@@ -1187,26 +1203,26 @@ internal sealed class ProjectLocator(
     }
 
     /// <summary>
-    /// Returns the AppHost project file the given config file already records as the workspace
-    /// default, or <see langword="null"/> when it records none or the recorded one no longer exists.
-    /// A dangling path is treated as absent so the config can still be healed.
+    /// Returns the AppHost path <paramref name="recordedConfig"/> already records as the workspace
+    /// default, or <see langword="null"/> when it records none.
     /// </summary>
-    private static string? TryGetRecordedAppHostDefault(FileInfo settingsFile)
+    /// <remarks>
+    /// A recorded path counts even when the file is missing. The recorded string is the surviving
+    /// user choice, and "missing" is indistinguishable from transiently absent -- a branch switch or
+    /// a sparse checkout would otherwise let the next launch permanently re-point the default. Stale
+    /// entries are still healed by every other origin, which is where a deliberate choice comes from.
+    /// </remarks>
+    private static string? TryGetRecordedAppHostDefault(AspireConfigFile? recordedConfig, string configDir)
     {
-        if (settingsFile.Directory?.FullName is not { } configDir)
+        if (recordedConfig?.AppHost?.Path is not { Length: > 0 } recordedPath)
         {
             return null;
         }
 
-        if (AspireConfigFile.Load(configDir)?.AppHost?.Path is not { Length: > 0 } recordedPath)
-        {
-            return null;
-        }
-
-        var resolvedPath = Path.GetFullPath(
+        // Resolve exactly as GetAppHostProjectFileFromSettingsAsync does, so a config authored on
+        // Windows ("First\\First.csproj") means the same thing to both readers.
+        return PathNormalizer.NormalizePathForCurrentPlatform(
             Path.IsPathRooted(recordedPath) ? recordedPath : Path.Combine(configDir, recordedPath));
-
-        return File.Exists(resolvedPath) ? resolvedPath : null;
     }
 
     private FileInfo GetOrCreateLocalAspireConfigFile()
