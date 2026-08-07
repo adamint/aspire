@@ -10,6 +10,7 @@ import { AspireDebugConfigurationProvider } from '../debugger/AspireDebugConfigu
 import type { AspireExtendedDebugConfiguration } from '../dcp/types';
 import * as cliPathModule from '../utils/cliPath';
 import { AppHostDiscoveryService } from '../utils/appHostDiscovery';
+import { appHostSelectionOriginConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 
 suite('AspireDebugConfigurationProvider', () => {
     let tempDir: string;
@@ -110,6 +111,56 @@ suite('AspireDebugConfigurationProvider', () => {
         assert.strictEqual(config?.program, folder.uri.fsPath);
         assert.strictEqual(config?.__aspireAppHostTelemetryTargetPath, appHostPath);
         assert.strictEqual(config?.__aspireAppHostSelectionOrigin, 'default-discovery');
+    });
+
+    test('treats launch target in an AppHost subdirectory as an explicit launch configuration', async () => {
+        const folder = createWorkspaceFolder(tempDir);
+        const appHostDirectory = path.join(tempDir, 'FirstAppHost');
+        fs.mkdirSync(appHostDirectory);
+        const appHostPath = path.join(appHostDirectory, 'FirstAppHost.csproj');
+        fs.writeFileSync(appHostPath, '<Project Sdk="Microsoft.NET.Sdk" />');
+
+        const provider = new AspireDebugConfigurationProvider(createAppHostDiscoveryService(appHostPath));
+
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: appHostDirectory
+        });
+
+        assert.strictEqual(config?.__aspireAppHostSelectionOrigin, 'explicit-launch-configuration');
+    });
+
+    test('omits the selection origin from initial launch configurations written to launch.json', async () => {
+        const folder = createWorkspaceFolder(tempDir);
+        const programPath = path.join(tempDir, 'AppHost', 'Program.cs');
+        const projectPath = path.join(tempDir, 'AppHost', 'AppHost.csproj');
+        const provider = new AspireDebugConfigurationProvider(
+            createAppHostDiscoveryService(projectPath),
+            vscode.DebugConfigurationProviderTriggerKind.Initial);
+        setActiveEditor(programPath, folder);
+
+        const configs = await provider.provideDebugConfigurations(folder);
+
+        assert.strictEqual(configs.length, 1);
+        assert.strictEqual(configs[0].program, projectPath);
+        assert.ok(!(appHostSelectionOriginConfigKey in configs[0]));
+    });
+
+    test('classifies an initial launch configuration as explicit once it is resolved from launch.json', async () => {
+        const folder = createWorkspaceFolder(tempDir);
+        const programPath = path.join(tempDir, 'AppHost', 'Program.cs');
+        const projectPath = path.join(tempDir, 'AppHost', 'AppHost.csproj');
+        const provider = new AspireDebugConfigurationProvider(
+            createAppHostDiscoveryService(projectPath),
+            vscode.DebugConfigurationProviderTriggerKind.Initial);
+        setActiveEditor(programPath, folder);
+
+        const [provided] = await provider.provideDebugConfigurations(folder);
+        const config = await provider.resolveDebugConfiguration(folder, { ...provided, skipCliAvailabilityCheck: true });
+
+        assert.strictEqual(config?.__aspireAppHostSelectionOrigin, 'explicit-launch-configuration');
     });
 
     test('provides dynamic launch config when active file resolves to AppHost candidate', async () => {
