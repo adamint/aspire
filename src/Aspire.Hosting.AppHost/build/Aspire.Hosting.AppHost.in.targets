@@ -64,10 +64,11 @@
          is $(TargetName), which defaults to $(AssemblyName), so %(Filename) is the evaluated assembly name including
          anything contributed by an imported Directory.Build.props or conditioned on Configuration/TargetFramework.
 
-    Single-targeted references are deliberately asked without an explicit TargetFramework: that matches the global
-    properties ResolveProjectReferences already uses, so MSBuild serves the result from its project cache instead of
-    evaluating the reference a second time. For those references TargetFramework is also undefined so a multi-targeted
-    AppHost's inner build cannot force its own TFM onto a reference that does not build for it.
+    When a single-targeted reference does not specify SetTargetFramework, it is deliberately asked without an explicit
+    TargetFramework: that matches the global properties ResolveProjectReferences already uses, so MSBuild serves the
+    result from its project cache instead of evaluating the reference a second time. For those references
+    TargetFramework is also undefined so a multi-targeted AppHost's inner build cannot force its own TFM onto a
+    reference that does not build for it.
   -->
   <Target Name="_GetAspireProjectResourceAssemblyNames"
           DependsOnTargets="_CreateAspireProjectResources"
@@ -95,23 +96,24 @@
     -->
     <ItemGroup>
       <_AspireProjectResourceTargetFrameworkInfo Update="@(_AspireProjectResourceTargetFrameworkInfo)">
-        <SetTargetFramework Condition="'%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' != 'true' and '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' != ''">TargetFramework=$([System.Text.RegularExpressions.Regex]::Match('%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)', '^[^;]*'))</SetTargetFramework>
+        <SetTargetFramework Condition="'%(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)' == '' and '%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' != 'true' and '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' != ''">TargetFramework=$([System.Text.RegularExpressions.Regex]::Match('%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)', '^[^;]*'))</SetTargetFramework>
         <!--
-          RemoveProperties wins over Properties in the MSBuild task, so TargetFramework can only be undefined for the
-          references that are not being asked for a specific one. Undefining it matters for a multi-targeted AppHost,
-          whose inner build would otherwise push its own TFM onto a single-targeted reference.
+          RemoveProperties wins over Properties in the MSBuild task, so TargetFramework is only undefined when the
+          ProjectReference did not specify one and the reference does not need an inner build. Undefining it matters
+          for a multi-targeted AppHost, whose inner build would otherwise push its own TFM onto a single-targeted
+          reference.
         -->
-        <RemoveGlobalProperties Condition="'%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' != 'true' and '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' != ''">RuntimeIdentifier;SelfContained</RemoveGlobalProperties>
-        <RemoveGlobalProperties Condition="'%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' == 'true' or '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' == ''">TargetFramework;RuntimeIdentifier;SelfContained</RemoveGlobalProperties>
+        <RemoveGlobalProperties Condition="'%(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)' != '' or ('%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' != 'true' and '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' != '')">RuntimeIdentifier;SelfContained</RemoveGlobalProperties>
+        <RemoveGlobalProperties Condition="'%(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)' == '' and ('%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' == 'true' or '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' == '')">TargetFramework;RuntimeIdentifier;SelfContained</RemoveGlobalProperties>
       </_AspireProjectResourceTargetFrameworkInfo>
     </ItemGroup>
 
     <MSBuild Projects="@(_AspireProjectResourceTargetFrameworkInfo)"
              Targets="GetTargetPath"
              BuildInParallel="$(BuildInParallel)"
-             Properties="%(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)"
+             Properties="%(_AspireProjectResourceTargetFrameworkInfo.SetConfiguration); %(_AspireProjectResourceTargetFrameworkInfo.SetPlatform); %(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)"
              ContinueOnError="true"
-             RemoveProperties="%(_AspireProjectResourceTargetFrameworkInfo.RemoveGlobalProperties);$(_GlobalPropertiesToRemoveFromProjectReferences)"
+             RemoveProperties="%(_AspireProjectResourceTargetFrameworkInfo.GlobalPropertiesToRemove);%(_AspireProjectResourceTargetFrameworkInfo.RemoveGlobalProperties);$(_GlobalPropertiesToRemoveFromProjectReferences)"
              SkipNonexistentProjects="true"
              SkipNonexistentTargets="true">
       <Output TaskParameter="TargetOutputs" ItemName="_AspireProjectResourceTargetPath" />
