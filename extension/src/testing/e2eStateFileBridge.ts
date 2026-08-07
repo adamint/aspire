@@ -495,6 +495,8 @@ async function executeE2eControlCommand(
 
       // VS Code repopulates the launch-configuration cache from a file watcher, so a test that has
       // just written launch.json can otherwise race ahead of the entry becoming resolvable by name.
+      // The budget stays below the test-side control-command timeout (10s in applyE2eControl) so a
+      // genuine propagation failure surfaces as the diagnostic below rather than an opaque timeout.
       await waitForLaunchConfiguration(workspaceFolder, command.configurationName);
 
       const startPromise = vscode.debug.startDebugging(workspaceFolder, command.configurationName);
@@ -1497,7 +1499,7 @@ export function isE2eBridgeEnabled(): boolean {
     Boolean(process.env.ASPIRE_EXTENSION_E2E_STATE_FILE && process.env.ASPIRE_EXTENSION_E2E_CONTROL_FILE);
 }
 
-async function waitForLaunchConfiguration(workspaceFolder: vscode.WorkspaceFolder, configurationName: string, timeoutMs = 15000): Promise<void> {
+async function waitForLaunchConfiguration(workspaceFolder: vscode.WorkspaceFolder, configurationName: string, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const configurations = vscode.workspace

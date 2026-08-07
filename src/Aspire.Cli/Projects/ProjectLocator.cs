@@ -1070,21 +1070,15 @@ internal sealed class ProjectLocator(
 
     private async Task CreateSettingsFileAsync(FileInfo projectFile, CancellationToken cancellationToken)
     {
-        // Enforced here rather than at each call site so every command that resolves an AppHost
+        // Checked here rather than at each call site so every command that resolves an AppHost
         // (run, publish, deploy, do, add, update) honors it. A VS Code launch configuration can
         // name any of those commands, and each one previously rewrote aspire.config.json to the
         // launched AppHost, so switching between per-AppHost launch configurations kept clobbering
         // the workspace default. See https://github.com/microsoft/aspire/issues/19080.
-        if (string.Equals(
+        var isExplicitLaunchConfiguration = string.Equals(
             configuration[KnownConfigNames.CliAppHostSelectionOrigin],
             ExplicitLaunchConfigurationSelectionOrigin,
-            StringComparison.OrdinalIgnoreCase))
-        {
-            logger.LogDebug(
-                "Not persisting AppHost {AppHost} because it was selected by an explicit launch configuration.",
-                projectFile.FullName);
-            return;
-        }
+            StringComparison.OrdinalIgnoreCase);
 
         FileInfo? settingsFile = null;
         DirectoryInfo? appHostDirForScopedConfig = null;
@@ -1147,6 +1141,19 @@ internal sealed class ProjectLocator(
         settingsFile ??= GetOrCreateLocalAspireConfigFile();
         var fileExisted = settingsFile.Exists;
 
+        // An explicit launch configuration names a target for one session; it is not a statement
+        // about which AppHost the workspace defaults to. It may still establish the default when
+        // there is nothing to preserve, so a single-AppHost repo keeps getting a config file from
+        // its first launch, but it must never replace a default the user already has.
+        if (isExplicitLaunchConfiguration && TryGetRecordedAppHostDefault(settingsFile) is { } recordedDefault)
+        {
+            logger.LogDebug(
+                "Not replacing recorded AppHost default {RecordedAppHost} with {AppHost} because the latter was selected by an explicit launch configuration.",
+                recordedDefault,
+                projectFile.FullName);
+            return;
+        }
+
         logger.LogDebug("Creating settings file at {SettingsFilePath}", settingsFile.FullName);
 
         var relativePathToProjectFile = Path.GetRelativePath(settingsFile.Directory!.FullName, projectFile.FullName).Replace(Path.DirectorySeparatorChar, '/');
@@ -1177,6 +1184,29 @@ internal sealed class ProjectLocator(
         var relativeSettingsFilePath = Path.GetRelativePath(executionContext.WorkingDirectory.FullName, settingsFile.FullName).Replace(Path.DirectorySeparatorChar, '/');
         var message = fileExisted ? InteractionServiceStrings.UpdatedSettingsFile : InteractionServiceStrings.CreatedSettingsFile;
         interactionService.DisplayMessage(KnownEmojis.FloppyDisk, string.Format(CultureInfo.CurrentCulture, message, $"[bold]'{relativeSettingsFilePath.EscapeMarkup()}'[/]"), allowMarkup: true);
+    }
+
+    /// <summary>
+    /// Returns the AppHost project file the given config file already records as the workspace
+    /// default, or <see langword="null"/> when it records none or the recorded one no longer exists.
+    /// A dangling path is treated as absent so the config can still be healed.
+    /// </summary>
+    private static string? TryGetRecordedAppHostDefault(FileInfo settingsFile)
+    {
+        if (settingsFile.Directory?.FullName is not { } configDir)
+        {
+            return null;
+        }
+
+        if (AspireConfigFile.Load(configDir)?.AppHost?.Path is not { Length: > 0 } recordedPath)
+        {
+            return null;
+        }
+
+        var resolvedPath = Path.GetFullPath(
+            Path.IsPathRooted(recordedPath) ? recordedPath : Path.Combine(configDir, recordedPath));
+
+        return File.Exists(resolvedPath) ? resolvedPath : null;
     }
 
     private FileInfo GetOrCreateLocalAspireConfigFile()

@@ -118,6 +118,10 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
+        var firstAppHostDirectory = workspace.WorkspaceRoot.CreateSubdirectory("FirstAppHost");
+        var firstAppHostProjectFile = new FileInfo(Path.Combine(firstAppHostDirectory.FullName, "FirstAppHost.csproj"));
+        await File.WriteAllTextAsync(firstAppHostProjectFile.FullName, "Not a real apphost");
+
         var appHostDirectory = workspace.WorkspaceRoot.CreateSubdirectory("SecondAppHost");
         var appHostProjectFile = new FileInfo(Path.Combine(appHostDirectory.FullName, "SecondAppHost.csproj"));
         await File.WriteAllTextAsync(appHostProjectFile.FullName, "Not a real apphost");
@@ -143,7 +147,7 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task UseOrFindAppHostProjectFileFromLaunchConfigurationDoesNotCreateConfigWhenNoneExists()
+    public async Task UseOrFindAppHostProjectFileFromLaunchConfigurationEstablishesDefaultWhenNoneExists()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
@@ -164,8 +168,38 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
             createSettingsFile: true,
             CancellationToken.None).DefaultTimeout();
 
+        // Suppressing the write entirely would leave a single-AppHost repo without a config file and
+        // keep re-prompting the user to create one on every window open.
         Assert.Equal(appHostProjectFile.FullName, result.SelectedProjectFile?.FullName);
-        Assert.False(File.Exists(configPath));
+        Assert.Equal("SecondAppHost/SecondAppHost.csproj", ReadConfiguredAppHostPath(configPath));
+    }
+
+    [Fact]
+    public async Task UseOrFindAppHostProjectFileFromLaunchConfigurationHealsDanglingWorkspaceDefault()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var appHostDirectory = workspace.WorkspaceRoot.CreateSubdirectory("SecondAppHost");
+        var appHostProjectFile = new FileInfo(Path.Combine(appHostDirectory.FullName, "SecondAppHost.csproj"));
+        await File.WriteAllTextAsync(appHostProjectFile.FullName, "Not a real apphost");
+
+        var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        await File.WriteAllTextAsync(configPath, """{"appHost":{"path":"DeletedAppHost/DeletedAppHost.csproj"}}""");
+
+        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var projectLocator = CreateProjectLocator(
+            executionContext,
+            configuration: CreateSelectionOriginConfiguration("explicit-launch-configuration"));
+
+        var result = await projectLocator.UseOrFindAppHostProjectFileAsync(
+            appHostProjectFile,
+            MultipleAppHostProjectsFoundBehavior.Prompt,
+            createSettingsFile: true,
+            CancellationToken.None).DefaultTimeout();
+
+        // There is no user choice left to preserve once the recorded AppHost is gone.
+        Assert.Equal(appHostProjectFile.FullName, result.SelectedProjectFile?.FullName);
+        Assert.Equal("SecondAppHost/SecondAppHost.csproj", ReadConfiguredAppHostPath(configPath));
     }
 
     [Fact]
