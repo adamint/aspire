@@ -1063,18 +1063,23 @@ suite('AppHost lifecycle language model tools', () => {
             // The confirmation body renders as Markdown. Deleting `_`, `*`, or `[` would
             // show `foobar/AppHost.csproj` for a directory really named `foo_bar`, and the
             // user would approve a path that is not the one about to be launched.
-            const directory = path.join(workspaceRoot, 'foo_bar*[x]');
+            // `*` is only exercised off Windows: Win32 forbids it in a file name, so no
+            // real path there can contain one.
+            const escapesAsterisk = process.platform !== 'win32';
+            const directoryName = escapesAsterisk ? 'foo_bar*[x](y)' : 'foo_bar[x](y)';
+            const expectedDisplay = escapesAsterisk ? 'foo\\_bar\\*\\[x\\]\\(y\\)' : 'foo\\_bar\\[x\\]\\(y\\)';
+            const directory = path.join(workspaceRoot, directoryName);
             fs.mkdirSync(directory, { recursive: true });
             fs.writeFileSync(path.join(directory, 'AppHost.csproj'), appHostProjectContents);
             const tool = new AppHostStartLanguageModelTool(service);
 
             const prepared = await tool.prepareInvocation(
-                { input: { appHostPath: 'foo_bar*[x]/AppHost.csproj', mode: 'debug' } },
+                { input: { appHostPath: `${directoryName}/AppHost.csproj`, mode: 'debug' } },
                 new vscode.CancellationTokenSource().token);
 
             assert.strictEqual(
                 prepared?.confirmationMessages?.message,
-                'Start the Aspire AppHost foo\\_bar\\*\\[x\\]/AppHost.csproj in debug mode?');
+                `Start the Aspire AppHost ${expectedDisplay}/AppHost.csproj in debug mode?`);
         });
 
         test('confirms the workspace-folder-qualified target that invocation will launch', async () => {
