@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Collections.Immutable;
 using Aspire.Dashboard.Model;
 using Aspire.Hosting.Dcp;
 using Aspire.Hosting.Dcp.Model;
@@ -145,6 +146,73 @@ public class ResourceSnapshotBuilderTests
                 KnownProperties.Resource.AppArgsSensitivity,
             ],
             snapshot.Properties.Select(p => p.Name).Order(StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void ProjectSnapshotRemovesStaleAssemblyNameWhenProjectMetadataNoLongerSuppliesIt(string? assemblyName)
+    {
+        var project = new ProjectResource("project");
+        project.Annotations.Add(new TestProjectMetadata { AssemblyName = assemblyName });
+        project.Annotations.Add(new LaunchProfileAnnotation("https"));
+
+        var executable = Executable.Create("project", "dotnet");
+        executable.Annotate(DcpCustomResource.ResourceNameAnnotation, project.Name);
+        executable.Status = new ExecutableStatus
+        {
+            EffectiveArgs = ["run"],
+            ProcessId = 1234
+        };
+
+        // Snapshots are merged into the previously published one, so a carried-forward assembly name has to be
+        // removed rather than just omitted. Absence is the capability signal, and a surviving stale value would
+        // tell consumers the evaluated assembly name is still available.
+        var previous = CreatePreviousSnapshot(properties: [new(KnownProperties.Project.AssemblyName, "Stale.Assembly.Name")]);
+
+        var snapshot = CreateSnapshotBuilder(new Dictionary<string, IResource>
+        {
+            [project.Name] = project
+        }).ToSnapshot(executable, previous);
+
+        Assert.Equal(
+            [
+                KnownProperties.Executable.Args,
+                KnownProperties.Executable.Path,
+                KnownProperties.Executable.Pid,
+                KnownProperties.Executable.WorkDir,
+                KnownProperties.Project.LaunchProfile,
+                KnownProperties.Project.Path,
+                KnownProperties.Resource.AppArgs,
+                KnownProperties.Resource.AppArgsSensitivity,
+            ],
+            snapshot.Properties.Select(p => p.Name).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void ProjectSnapshotReplacesStaleAssemblyNameWhenProjectMetadataStillSuppliesIt()
+    {
+        var project = new ProjectResource("project");
+        project.Annotations.Add(new TestProjectMetadata { AssemblyName = "My Attach Service" });
+        project.Annotations.Add(new LaunchProfileAnnotation("https"));
+
+        var executable = Executable.Create("project", "dotnet");
+        executable.Annotate(DcpCustomResource.ResourceNameAnnotation, project.Name);
+        executable.Status = new ExecutableStatus
+        {
+            EffectiveArgs = ["run"],
+            ProcessId = 1234
+        };
+
+        var previous = CreatePreviousSnapshot(properties: [new(KnownProperties.Project.AssemblyName, "Stale.Assembly.Name")]);
+
+        var snapshot = CreateSnapshotBuilder(new Dictionary<string, IResource>
+        {
+            [project.Name] = project
+        }).ToSnapshot(executable, previous);
+
+        Assert.Equal("My Attach Service", GetProperty(snapshot, KnownProperties.Project.AssemblyName).Value);
     }
 
     [Fact]
@@ -342,12 +410,12 @@ public class ResourceSnapshotBuilderTests
         return new(new DcpResourceState(applicationModel ?? new Dictionary<string, IResource>(), []));
     }
 
-    private static CustomResourceSnapshot CreatePreviousSnapshot(string resourceType = "resource")
+    private static CustomResourceSnapshot CreatePreviousSnapshot(string resourceType = "resource", ImmutableArray<ResourcePropertySnapshot> properties = default)
     {
         return new()
         {
             ResourceType = resourceType,
-            Properties = []
+            Properties = properties.IsDefault ? [] : properties
         };
     }
 
