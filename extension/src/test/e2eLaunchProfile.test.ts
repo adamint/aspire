@@ -235,6 +235,29 @@ suite('E2E launch profile', () => {
         assert.ok(runner.includes("path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_FUNCTIONS_VSIX')"));
     });
 
+    test('runs every E2E spec file from a workflow shard', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
+
+        // Each matrix entry names one compiled spec, and the workflow only fails when the
+        // path is missing on disk. A spec that is never referenced silently never runs, so
+        // the mapping is asserted in both directions here instead.
+        const referencedSpecs = new Set(Array.from(workflow.matchAll(/^\s*spec: (\S+)$/gm), match => match[1]));
+        const sourceSpecs = fs.readdirSync(path.join(extensionRoot, 'src', 'test-e2e'))
+            .filter(entry => entry.endsWith('.e2e.test.ts'));
+
+        assert.ok(sourceSpecs.length > 0);
+        for (const spec of sourceSpecs) {
+            const compiled = `out/test-e2e/test-e2e/${spec.replace(/\.ts$/, '.js')}`;
+            assert.ok(referencedSpecs.has(compiled), `No extension-e2e-tests.yml matrix entry runs '${compiled}'.`);
+        }
+
+        for (const spec of referencedSpecs) {
+            const expectedSource = path.basename(spec).replace(/\.js$/, '.ts');
+            assert.ok(sourceSpecs.includes(expectedSource), `extension-e2e-tests.yml references '${spec}', which no src/test-e2e spec produces.`);
+        }
+    });
+
     test('keeps Linux E2E recordings for successful runs by default', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
