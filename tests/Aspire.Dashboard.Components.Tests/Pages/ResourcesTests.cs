@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reflection;
 using System.Threading.Channels;
@@ -20,6 +21,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Localization;
 using Microsoft.FluentUI.AspNetCore.Components;
+using Microsoft.JSInterop;
 using OpenTelemetry.Proto.Logs.V1;
 using Xunit;
 using TelemetryTestHelpers = Aspire.Tests.Shared.Telemetry.TelemetryTestHelpers;
@@ -899,7 +901,7 @@ public partial class ResourcesTests : DashboardTestContext
     }
 
     [Fact]
-    public void UpdateResources_SelectedParentDeleted_LeavesOrphanedReplicaChildren()
+    public async Task UpdateResources_SelectedParentDeleted_LeavesOrphanedReplicaChildren()
     {
         var viewport = new ViewportInformation(IsDesktop: true, IsUltraLowHeight: false, IsUltraLowWidth: false);
         var parent = CreateResource("syndule-api", "Azure Container App", "Scaled to zero", null);
@@ -920,7 +922,22 @@ public partial class ResourcesTests : DashboardTestContext
             Assert.Equal("Running", updatedParent.State);
         });
 
-        cut.InvokeAsync(() => cut.Instance.PageViewModel.SelectedResource = cut.Instance.GetFilteredResources().Single(r => r.Name == parent.Name));
+        var resourceGraphModule = new RecordingJsObjectReference();
+        var jsModuleField = typeof(Components.Pages.Resources).GetField("_jsModule", BindingFlags.Instance | BindingFlags.NonPublic);
+        var graphInitializedField = typeof(Components.Pages.Resources).GetField("_graphInitialized", BindingFlags.Instance | BindingFlags.NonPublic);
+        Assert.NotNull(jsModuleField);
+        Assert.NotNull(graphInitializedField);
+        jsModuleField.SetValue(cut.Instance, resourceGraphModule);
+        graphInitializedField.SetValue(cut.Instance, true);
+
+        await cut.InvokeAsync(() =>
+        {
+            cut.Instance.PageViewModel.SelectedViewKind = Components.Pages.Resources.ResourceViewKind.Graph;
+            cut.Instance.PageViewModel.SelectedResource = cut.Instance.GetFilteredResources().Single(r => r.Name == parent.Name);
+        });
+
+        var graphSelectionInvocationCount = resourceGraphModule.Invocations.Count(
+            invocation => invocation.Identifier == "updateResourcesGraphSelected");
 
         // Deleting the parent leaves children whose parentName points at a resource that no longer
         // exists. Derivation must simply skip them instead of resurrecting or faulting on the parent.
@@ -934,6 +951,11 @@ public partial class ResourcesTests : DashboardTestContext
 
             // The details view must not keep showing a resource that no longer exists.
             Assert.Null(cut.Instance.PageViewModel.SelectedResource);
+
+            var clearSelectionInvocation = Assert.Single(
+                resourceGraphModule.Invocations.Skip(graphSelectionInvocationCount),
+                invocation => invocation.Identifier == "updateResourcesGraphSelected");
+            Assert.Null(Assert.Single(clearSelectionInvocation.Arguments!));
 
             var orphanedChild = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == child.Name);
             Assert.Equal("Running", orphanedChild.State);
@@ -1900,5 +1922,24 @@ public partial class ResourcesTests : DashboardTestContext
         }
 
         System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    private sealed class RecordingJsObjectReference : IJSObjectReference
+    {
+        public ConcurrentQueue<(string Identifier, object?[]? Arguments)> Invocations { get; } = new();
+
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args)
+        {
+            Invocations.Enqueue((identifier, args));
+            return ValueTask.FromResult(default(TValue)!);
+        }
+
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier, CancellationToken cancellationToken, object?[]? args)
+        {
+            Invocations.Enqueue((identifier, args));
+            return ValueTask.FromResult(default(TValue)!);
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

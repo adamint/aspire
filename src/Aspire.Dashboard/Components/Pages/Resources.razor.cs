@@ -286,6 +286,7 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
                     await InvokeAsync(async () =>
                     {
                         var selectedResourceHasChanged = false;
+                        var selectedResourceWasDeleted = false;
                         var resourcesMayAffectParentReplicaState = false;
 
                         bool IsResourceTypeVisible(string type) => !PageViewModel.ResourceTypesToVisibility.TryGetValue(type, out var value) || value;
@@ -324,6 +325,7 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
                                     // The details view can't keep showing a resource that no longer exists.
                                     PageViewModel.SelectedResource = null;
                                     selectedResourceHasChanged = true;
+                                    selectedResourceWasDeleted = true;
                                 }
 
                                 resourcesMayAffectParentReplicaState = true;
@@ -337,6 +339,13 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
 
                         UpdateMaxHighlightedCount();
                         await UpdateResourceGraphResourcesAsync();
+                        if (selectedResourceWasDeleted)
+                        {
+                            // updateResourcesGraph removes the node but doesn't clear its selected/highlight
+                            // state. Notify the graph explicitly so deleting the selected resource doesn't
+                            // leave stale client-side selection after the details view closes.
+                            await UpdateResourceGraphSelectedAsync();
+                        }
                         await _dataGrid.SafeRefreshDataAsync();
                         if (selectedResourceHasChanged)
                         {
@@ -1167,9 +1176,17 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
         _cts.Cancel();
         _logsSubscription?.Dispose();
         TelemetryContext.Dispose();
-        await JSInteropHelpers.SafeDisposeAsync(_jsModule);
 
-        await TaskHelpers.WaitIgnoreCancelAsync(_resourceSubscriptionTask);
+        // A resource batch can already be running on the renderer dispatcher and using the graph
+        // module when cancellation begins. Drain that task before disposing its JS dependency.
+        try
+        {
+            await TaskHelpers.WaitIgnoreCancelAsync(_resourceSubscriptionTask);
+        }
+        finally
+        {
+            await JSInteropHelpers.SafeDisposeAsync(_jsModule);
+        }
     }
 
     private async Task ContextMenuClosedAsync(Microsoft.AspNetCore.Components.Web.MouseEventArgs args)
