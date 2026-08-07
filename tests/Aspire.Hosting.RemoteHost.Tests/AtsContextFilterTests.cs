@@ -11,6 +11,34 @@ namespace Aspire.Hosting.RemoteHost.Tests;
 
 public class AtsContextFilterTests
 {
+    /// <summary>
+    /// A NuGet package id is case-insensitive, but an API export records it verbatim as the identity
+    /// consumers key on, so a document published under the caller's spelling names a package nobody
+    /// looks up. The loaded assembly is the authority on how it is spelled.
+    /// </summary>
+    [Fact]
+    public void ResolveCanonicalAssemblyName_ReturnsTheSpellingTheAssemblyCarries()
+    {
+        var context = CreateContext();
+        var canonicalName = typeof(AtsContextFilterTests).Assembly.GetName().Name!;
+
+        Assert.Equal(canonicalName, AtsContextFilter.ResolveCanonicalAssemblyName(context, canonicalName.ToLowerInvariant()));
+        Assert.Equal(canonicalName, AtsContextFilter.ResolveCanonicalAssemblyName(context, canonicalName.ToUpperInvariant()));
+        Assert.Equal(canonicalName, AtsContextFilter.ResolveCanonicalAssemblyName(context, canonicalName));
+    }
+
+    /// <summary>
+    /// A name no loaded assembly carries belongs to a package whose assembly is named differently.
+    /// Guessing would be worse than echoing the request, and the export filters to nothing either way.
+    /// </summary>
+    [Fact]
+    public void ResolveCanonicalAssemblyName_LeavesAnUnmatchedNameAlone()
+    {
+        var context = CreateContext();
+
+        Assert.Equal("contoso.not.loaded", AtsContextFilter.ResolveCanonicalAssemblyName(context, "contoso.not.loaded"));
+    }
+
     [Fact]
     public void FilterByExportingAssemblies_StrictFilterKeepsOnlySelectedAssemblyExports()
     {

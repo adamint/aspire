@@ -151,7 +151,9 @@ internal sealed class SdkExportCommand : BaseCommand
             {
                 // Pin the requested version: a bare NuGet version is a minimum, so an unavailable
                 // version would restore as a later one and be published under the wrong number.
-                integrations.Add(IntegrationReference.FromExactPackage(reference.Name, reference.Version));
+                // Use packageName rather than reference.Name so the restored reference and the
+                // exported label can never name the package differently.
+                integrations.Add(IntegrationReference.FromExactPackage(packageName, reference.Version));
             }
         }
 

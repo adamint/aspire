@@ -12,6 +12,80 @@ namespace Aspire.Hosting.RemoteHost;
 internal static class AtsContextFilter
 {
     /// <summary>
+    /// Returns <paramref name="requestedName"/> spelled the way the assembly that carries it is
+    /// actually named, or unchanged when no loaded assembly matches.
+    /// </summary>
+    /// <remarks>
+    /// A NuGet package id is case-insensitive
+    /// (<see href="https://learn.microsoft.com/nuget/consume-packages/finding-and-choosing-packages#package-identifiers"/>),
+    /// so a caller can name a package in any casing, but an API export records the id verbatim as
+    /// the identity consumers key on. Every filter here treats the package id as an assembly name,
+    /// so the loaded assemblies are the authority on how it is spelled. A name that matches nothing
+    /// is returned unchanged rather than guessed at: that is a package whose assembly is named
+    /// differently, which the export would already have filtered to nothing.
+    /// </remarks>
+    /// <param name="context">The unfiltered ATS context.</param>
+    /// <param name="requestedName">The assembly or package name as the caller spelled it.</param>
+    /// <returns>The canonical spelling, or <paramref name="requestedName"/> when unmatched.</returns>
+    public static string ResolveCanonicalAssemblyName(AtsContext context, string requestedName)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentException.ThrowIfNullOrWhiteSpace(requestedName);
+
+        foreach (var candidate in EnumerateAssemblyNames(context))
+        {
+            if (string.Equals(candidate, requestedName, StringComparison.OrdinalIgnoreCase))
+            {
+                return candidate;
+            }
+        }
+
+        return requestedName;
+    }
+
+    private static IEnumerable<string> EnumerateAssemblyNames(AtsContext context)
+    {
+        foreach (var assemblyName in context.CapabilityExportingAssemblyNames.Values)
+        {
+            if (!string.IsNullOrWhiteSpace(assemblyName))
+            {
+                yield return assemblyName;
+            }
+        }
+
+        foreach (var type in context.HandleTypes)
+        {
+            if (type.ClrType?.Assembly.GetName().Name is { Length: > 0 } name)
+            {
+                yield return name;
+            }
+        }
+
+        foreach (var type in context.DtoTypes)
+        {
+            if (type.ClrType?.Assembly.GetName().Name is { Length: > 0 } name)
+            {
+                yield return name;
+            }
+        }
+
+        foreach (var type in context.EnumTypes)
+        {
+            if (type.ClrType?.Assembly.GetName().Name is { Length: > 0 } name)
+            {
+                yield return name;
+            }
+        }
+
+        foreach (var exportedValue in context.ExportedValues)
+        {
+            if (exportedValue.OwningAssemblyName is { Length: > 0 } name)
+            {
+                yield return name;
+            }
+        }
+    }
+    /// <summary>
     /// Filters the given ATS context to include only capabilities and types exported by the specified assemblies.
     /// </summary>
     /// <param name="context">The ATS context to filter.</param>

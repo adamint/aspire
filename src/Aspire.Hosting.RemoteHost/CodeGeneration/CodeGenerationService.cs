@@ -314,8 +314,20 @@ internal sealed class CodeGenerationService
             // Referenced handle capabilities determine wrapper and resource-union signatures.
             // Keep only their projection support shape without publishing their API as part of this
             // package.
+            var fullContext = _atsContextFactory.GetContext();
+
+            // A NuGet package id is case-insensitive
+            // (https://learn.microsoft.com/nuget/consume-packages/finding-and-choosing-packages#package-identifiers)
+            // but the exported document records this string verbatim as the identity consumers key
+            // on, so `aspire.hosting.redis` would publish a document naming a package nobody looks
+            // up. The loaded assembly settles the spelling: this filter already treats the package
+            // id as an assembly name, so a package whose API is exportable at all is named here.
+            // A name with no loaded assembly is left exactly as asked for — that is a package whose
+            // assembly is named differently, and guessing would be worse than echoing the request.
+            packageName = AtsContextFilter.ResolveCanonicalAssemblyName(fullContext, packageName);
+
             var context = AtsContextFilter.FilterForApiExport(
-                _atsContextFactory.GetContext(),
+                fullContext,
                 [packageName]);
 
             var export = exporter.ExportApi(context, new ApiReferenceExportOptions(packageName, packageVersion, [packageName]));
