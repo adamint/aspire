@@ -19,7 +19,7 @@ export const nodeDebuggerExtension: ResourceDebuggerExtension = {
     debugAdapter: 'pwa-node',
     extensionId: null,
     // The debuggee is a process this adapter owns, so its exit is the run's lifetime signal.
-    terminationSignal: 'adapter-exit',
+    terminationSignal: 'adapterExit',
     getDisplayName: (launchConfig) => getJavaScriptRuntimeDisplayName(launchConfig, 'node', nodeDisplayName, nodeLabel),
     getSupportedFileTypes: () => jsRuntimeBaseFileTypes,
     getProjectFile: (launchConfig) => getJavaScriptRuntimeTargetPath(asNodeConfig(launchConfig)),

@@ -134,9 +134,18 @@ export class DebugSessionHarness {
             this._startListener = listener;
             return { dispose: () => { } };
         });
+        // Honors dispose() rather than returning a no-op Disposable. A fake that keeps invoking a
+        // released listener cannot observe a listener leak, which is precisely what the
+        // failed-stop lifecycle tests need to assert.
         sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(listener => {
             this._terminateListener = listener;
-            return { dispose: () => { } };
+            return {
+                dispose: () => {
+                    if (this._terminateListener === listener) {
+                        this._terminateListener = undefined;
+                    }
+                }
+            };
         });
         this.startDebugging = sinon.stub(vscode.debug, 'startDebugging').callsFake(async (_folder, configuration) => {
             if (autoStartSession) {
@@ -184,13 +193,19 @@ export class DebugSessionHarness {
         this._startListener(session);
     }
 
-    /** Fires the captured `vscode.debug.onDidTerminateDebugSession` listener. */
-    terminateSession(session: vscode.DebugSession): void {
+    /**
+     * Fires the captured `vscode.debug.onDidTerminateDebugSession` listener, if one is still
+     * registered. Returns whether a listener was there to receive it, so tests can distinguish
+     * "the event was ignored" from "nobody was listening any more".
+     */
+    terminateSession(session: vscode.DebugSession): boolean {
         if (!this._terminateListener) {
-            throw new Error('No onDidTerminateDebugSession listener was registered.');
+            return false;
         }
 
         this._terminateListener(session);
+
+        return true;
     }
 
     /** Completes an in-flight `'deferred'` stop successfully. */
@@ -229,7 +244,7 @@ export function createResourceDebugConfig(overrides: Partial<AspireResourceExten
         debugSessionId: 'dcp-1',
         // Default to the process-backed signal so tests opt in to the browser lifecycle
         // explicitly, matching how every non-browser debugger integration declares it.
-        terminationSignal: 'adapter-exit',
+        terminationSignal: 'adapterExit',
         type: 'browser',
         name: 'Browser: https://localhost:5001',
         request: 'launch',
@@ -246,7 +261,7 @@ export function createResourceDebugConfig(overrides: Partial<AspireResourceExten
  * The termination signal is stamped from `browserDebuggerExtension.terminationSignal` rather than
  * hardcoded, mirroring `applyAspireOwnedFields` in production. Taking it from the extension keeps
  * these lifecycle tests honest: if the browser integration ever re-declares itself as
- * `adapter-exit`, the tests below start exercising that instead of silently passing against a
+ * `adapterExit`, the tests below start exercising that instead of silently passing against a
  * literal the tests supplied themselves.
  */
 export async function configureBrowserDebugSession(launchConfig: BrowserLaunchConfiguration, debugConfig: AspireResourceExtendedDebugConfiguration): Promise<void> {

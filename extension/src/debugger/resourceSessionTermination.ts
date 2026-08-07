@@ -10,10 +10,10 @@ import { cleanupRun } from './runCleanupRegistry';
  * configuration round-trips through VS Code as untyped JSON (`vscode.DebugSession.configuration`
  * is a plain object rebuilt by VS Code), so the field is not guaranteed to still match its
  * declared type by the time a consumer sees it. Anything unrecognized falls back to
- * `adapter-exit`, the behavior every process-backed resource type has.
+ * `adapterExit`, the behavior every process-backed resource type has.
  */
 export function getResourceTerminationSignal(configuration: AspireResourceExtendedDebugConfiguration): ResourceTerminationSignal {
-    return configuration.terminationSignal === 'debug-session-end' ? 'debug-session-end' : 'adapter-exit';
+    return configuration.terminationSignal === 'debugSessionEnd' ? 'debugSessionEnd' : 'adapterExit';
 }
 
 /** Emits the terminal DCP notification for a run. Implemented by `AspireDebugSession`. */
@@ -63,7 +63,7 @@ export class ResourceSessionTermination {
      * driven by the session ending rather than by a debug adapter exit. No-op otherwise.
      */
     watchForDebugSessionEnd(): void {
-        if (this._signal !== 'debug-session-end') {
+        if (this._signal !== 'debugSessionEnd') {
             return;
         }
 
@@ -95,7 +95,13 @@ export class ResourceSessionTermination {
         // A run whose lifetime is the debug session reports its own termination. `dcpId` is the
         // same `debugSessionId` the adapter tracker addresses its notifications to; there is no
         // separate id, so there is nothing to keep in sync.
-        if (this._signal === 'debug-session-end' && this._dcpId) {
+        //
+        // This is the seam with #19125, which owns the run-scoped termination registry. When that
+        // lands, emission moves behind its `runSessions.terminate(runId)` and this call goes away;
+        // dedupe and retention are its concerns, not this class's. What stays here is stop
+        // orchestration and profile cleanup, which are per-debug-session and have no home in a
+        // run-keyed registry.
+        if (this._signal === 'debugSessionEnd' && this._dcpId) {
             this._sendSessionTerminated(this._runId, this._dcpId);
         }
 
@@ -122,6 +128,26 @@ export class ResourceSessionTermination {
     stopAndLogFailure(): void {
         // stopCore() already logged the failure; swallow here only to keep the rejection handled.
         void this.stop().catch(() => { });
+    }
+
+    /**
+     * Releases the termination listener without finishing the run.
+     *
+     * A failed stop deliberately leaves this instance waiting for a real termination, which means
+     * a session that never ends would otherwise hold the listener for the life of the extension
+     * host. This is the bounded exit from that state, and it is an explicit disposal path rather
+     * than a timeout on purpose: a timeout would have to guess how long a browser may legitimately
+     * stay open, and firing it would mean reporting `sessionTerminated` for a run that never
+     * actually ended — the exact false claim the failed-stop handling exists to avoid. Tying
+     * teardown to the owning AspireDebugSession instead bounds the listener by something real,
+     * because the extension is no longer tracking the run once that session is gone.
+     *
+     * Deliberately does not report termination or clean up: at this point nothing has observed the
+     * debuggee ending, so the profile directory is left for the OS to reclaim.
+     */
+    dispose(): void {
+        this._terminationListener?.dispose();
+        this._terminationListener = undefined;
     }
 
     private async stopCore(): Promise<void> {

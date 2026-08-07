@@ -104,7 +104,7 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
                     // Runs whose termination is owned by the debug-session-end handler in
                     // AspireDebugSession (browser/js-debug) must not also report an adapter exit,
                     // or DCP would observe the run terminate twice.
-                    if (getResourceTerminationSignal(configuration) !== 'adapter-exit') {
+                    if (getResourceTerminationSignal(configuration) !== 'adapterExit') {
                         return;
                     }
 

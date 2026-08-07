@@ -425,7 +425,7 @@ suite('Debug Adapter Tracker Tests', () => {
     });
 
     test('service logs stay enabled when session termination is handled by VS Code debug session end', async () => {
-        (debugSession.configuration as AspireResourceExtendedDebugConfiguration).terminationSignal = 'debug-session-end';
+        (debugSession.configuration as AspireResourceExtendedDebugConfiguration).terminationSignal = 'debugSessionEnd';
         const disposable = createDebugAdapterTracker(dcpServer as any, 'pwa-msedge');
         const factory = registerFactoryStub.lastCall.args[1];
         const tracker = factory.createDebugAdapterTracker(debugSession);

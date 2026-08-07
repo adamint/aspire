@@ -80,7 +80,7 @@ function createDebugConfig(): AspireResourceExtendedDebugConfiguration {
     return {
         runId: '1',
         debugSessionId: '1',
-        terminationSignal: 'adapter-exit',
+        terminationSignal: 'adapterExit',
         type: 'node',
         name: 'Node',
         request: 'launch',

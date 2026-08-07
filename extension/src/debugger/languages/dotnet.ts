@@ -397,7 +397,7 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
         debugAdapter: 'coreclr',
         extensionId: 'ms-dotnettools.csharp',
         // The debuggee is a process this adapter owns, so its exit is the run's lifetime signal.
-        terminationSignal: 'adapter-exit',
+        terminationSignal: 'adapterExit',
         getDisplayName: (launchConfig: ExecutableLaunchConfiguration) => `C#: ${path.basename((launchConfig as ProjectLaunchConfiguration).project_path)}`,
         getSupportedFileTypes: () => ['.cs', '.csproj'],
         getProjectFile: (launchConfig) => {

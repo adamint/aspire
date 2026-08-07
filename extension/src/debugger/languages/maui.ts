@@ -756,7 +756,7 @@ export const mauiDebuggerExtension: ResourceDebuggerExtension = {
     debugAdapter: 'maui',
     extensionId: 'ms-dotnettools.dotnet-maui',
     // The debuggee is a process this adapter owns, so its exit is the run's lifetime signal.
-    terminationSignal: 'adapter-exit',
+    terminationSignal: 'adapterExit',
     getDisplayName,
     getSupportedFileTypes: () => ['.csproj'],
     getProjectFile: (launchConfig) => getProjectFile(launchConfig),

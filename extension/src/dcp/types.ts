@@ -199,10 +199,10 @@ export interface AspireResourceDebugSession {
  * Which observable event marks the end of a resource run, and therefore which component emits
  * the terminal `sessionTerminated` notification to DCP.
  *
- * - `adapter-exit` — the debug adapter exiting is the lifetime signal. `adapterTracker` emits
+ * - `adapterExit` — the debug adapter exiting is the lifetime signal. `adapterTracker` emits
  *   `sessionTerminated` from `onExit`, carrying the observed debuggee exit code. This is correct
  *   for every resource type whose debuggee is a process the adapter owns.
- * - `debug-session-end` — the VS Code debug session ending is the lifetime signal, and
+ * - `debugSessionEnd` — the VS Code debug session ending is the lifetime signal, and
  *   `AspireDebugSession` emits `sessionTerminated`. Used by browser (js-debug) runs: js-debug is
  *   a server-hosted adapter shared across sessions, so its `onExit` is not a per-run signal, and
  *   it tears down child target sessions independently of the root session.
@@ -214,8 +214,16 @@ export interface AspireResourceDebugSession {
  * could set this field would be choosing who reports run termination — for example silently
  * rewiring the DCP lifecycle of `node`/`dotnet` resources, whose callbacks never overwrite it.
  * Deciding it at authoring time keeps it out of reach of settings entirely.
+ *
+ * The member names deliberately match the `kind` values of the `TerminationTrigger` union in
+ * #19125, which owns the run-scoped termination state machine (dedupe, retention, telemetry).
+ * That PR currently registers every `PUT /run_session` run as `adapterExit` on the assumption
+ * that such resources always launch through a debug adapter — browser runs are the counterexample
+ * this signal exists to describe. Keeping the names identical means the two models join by
+ * reading `{ kind: configuration.terminationSignal }` at the registration site rather than
+ * needing a translation table.
  */
-export type ResourceTerminationSignal = 'adapter-exit' | 'debug-session-end';
+export type ResourceTerminationSignal = 'adapterExit' | 'debugSessionEnd';
 
 export interface AspireResourceExtendedDebugConfiguration extends vscode.DebugConfiguration {
     runId: string;

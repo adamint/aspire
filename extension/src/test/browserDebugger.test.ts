@@ -73,7 +73,7 @@ suite('Browser Debugger Tests', () => {
         // The signal is declared by the integration, not written by the callback, so assert it at
         // its source. js-debug is server-hosted and tears down child target sessions on its own, so
         // the root debug session ending is the only reliable run lifetime signal for browsers.
-        assert.strictEqual(browserDebuggerExtension.terminationSignal, 'debug-session-end');
+        assert.strictEqual(browserDebuggerExtension.terminationSignal, 'debugSessionEnd');
         assert.strictEqual(debugConfig.program, undefined);
         assert.strictEqual(debugConfig.args, undefined);
         assert.strictEqual(debugConfig.cwd, undefined);
@@ -266,7 +266,7 @@ suite('Browser Debugger Tests', () => {
                     browser: {
                         runId: '..',
                         debugSessionId: 'workspace-supplied-dcp-id',
-                        terminationSignal: 'adapter-exit',
+                        terminationSignal: 'adapterExit',
                         isApphost: true,
                         args: ['--user-supplied']
                     } as never
@@ -282,7 +282,7 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(configuration.runId, 'run-1');
         assert.strictEqual(configuration.debugSessionId, 'dcp-1');
         assert.strictEqual(configuration.isApphost, false);
-        assert.strictEqual(configuration.terminationSignal, 'debug-session-end');
+        assert.strictEqual(configuration.terminationSignal, 'debugSessionEnd');
         assert.strictEqual(configuration.userDataDir, profileDirFor('run-1'));
 
         cleanupRun('run-1');
@@ -293,7 +293,7 @@ suite('Browser Debugger Tests', () => {
         // The browser extension overwrites several fields itself, which can mask an override. Node
         // touches none of them, so this is the case that proves the guarantee comes from
         // prepareDebugSession rather than from a language callback happening to win the race.
-        // A workspace that could set `terminationSignal: 'debug-session-end'` here would silence
+        // A workspace that could set `terminationSignal: 'debugSessionEnd'` here would silence
         // adapterTracker's onExit notification and leave every node run alive forever in DCP.
         const prepared = await prepareDebugSession(
             {
@@ -303,7 +303,7 @@ suite('Browser Debugger Tests', () => {
                 program: '/workspace/apphost.cs',
                 debuggers: {
                     node: {
-                        terminationSignal: 'debug-session-end',
+                        terminationSignal: 'debugSessionEnd',
                         runId: '../../etc',
                         debugSessionId: 'workspace-supplied-dcp-id'
                     } as never
@@ -315,7 +315,7 @@ suite('Browser Debugger Tests', () => {
             { debug: true, runId: 'node-run', debugSessionId: 'node-dcp', isApphost: false, debugSession: {} as AspireDebugSession },
             nodeDebuggerExtension);
 
-        assert.strictEqual(prepared.debugConfiguration.terminationSignal, 'adapter-exit');
+        assert.strictEqual(prepared.debugConfiguration.terminationSignal, 'adapterExit');
         assert.strictEqual(prepared.debugConfiguration.runId, 'node-run');
         assert.strictEqual(prepared.debugConfiguration.debugSessionId, 'node-dcp');
     });
@@ -459,8 +459,8 @@ suite('Browser Debugger Tests', () => {
     });
 
     test('stopSession is awaitable and single-shot for a non-browser resource session', async () => {
-        // Only browser runs use the `debug-session-end` signal; the AppHost and every normal resource
-        // session go through this same stop path with `adapter-exit`. It has to make the same
+        // Only browser runs use the `debugSessionEnd` signal; the AppHost and every normal resource
+        // session go through this same stop path with `adapterExit`. It has to make the same
         // ordering promise, because AspireDebugSession.stopDebugging() stops the AppHost first and only
         // then the Aspire parent — a stop that resolved early would let VS Code's parent session
         // cascade race the AppHost registry refresh.
@@ -484,7 +484,7 @@ suite('Browser Debugger Tests', () => {
 
         assert.strictEqual(stopResolved, true);
         assert.strictEqual(harness.stopDebugging.callCount, 1, 'Expected the second stop to reuse the in-flight stop');
-        // `adapter-exit` runs report termination from the debug adapter's onExit, not from here.
+        // `adapterExit` runs report termination from the debug adapter's onExit, not from here.
         assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
 
         harness.dispose();
@@ -579,7 +579,7 @@ suite('Browser Debugger Tests', () => {
             name: 'Browser: https://localhost:5001',
         });
         const debugConfig = createResourceDebugConfig({
-            terminationSignal: 'debug-session-end'
+            terminationSignal: 'debugSessionEnd'
         });
 
         const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
@@ -599,7 +599,7 @@ suite('Browser Debugger Tests', () => {
     test('does not send sessionTerminated for a transient browser child target', async () => {
         const harness = new DebugSessionHarness();
         const debugConfig = createResourceDebugConfig({
-            terminationSignal: 'debug-session-end'
+            terminationSignal: 'debugSessionEnd'
         });
 
         const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
@@ -675,6 +675,34 @@ suite('Browser Debugger Tests', () => {
             dcp_id: 'dcp-1'
         }]);
         assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
+    });
+
+    // A failed stop deliberately keeps waiting for a real termination, so something has to bound
+    // that wait or a browser that never closes would hold the listener for the life of the
+    // extension host. Disposing the owning Aspire session is that bound.
+    test('releases the termination listener when the owning session is disposed after a failed stop', async () => {
+        const harness = new DebugSessionHarness({ stopDebugging: 'deferred' });
+        const debugConfig = createResourceDebugConfig();
+        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
+        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
+        assert.ok(resourceDebugSession);
+
+        const stop = Promise.resolve(resourceDebugSession.stopSession());
+        harness.failStopDebugging(new Error('VS Code failed to stop the session'));
+        await assert.rejects(stop);
+
+        // Still armed: a termination arriving before disposal must still finish the run.
+        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
+        assert.strictEqual(harness.rm.called, false);
+
+        harness.aspireDebugSession.dispose();
+        const hadListener = harness.terminateSession(resourceDebugSession.session);
+
+        assert.strictEqual(hadListener, false, 'Expected the termination listener to have been released on disposal');
+        // Nothing observed the debuggee ending before the session went away, so the run is not
+        // reported as terminated and the profile is left for the OS rather than deleted blindly.
+        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
+        assert.strictEqual(harness.rm.called, false);
     });
 
     // The DCP /run_session handler reads `undefined` from startAndGetDebugSession as "the debugger

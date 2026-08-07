@@ -25,7 +25,7 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
     // a per-run signal, and it tears down child target sessions (page/worker) independently of the
     // root session. The end of the root VS Code debug session is the only reliable run lifetime
     // signal, so AspireDebugSession reports termination for browser runs.
-    terminationSignal: 'debug-session-end',
+    terminationSignal: 'debugSessionEnd',
     getDisplayName: (launchConfiguration: ExecutableLaunchConfiguration) => {
         if (isBrowserLaunchConfiguration(launchConfiguration) && launchConfiguration.url) {
             return browserDisplayName(launchConfiguration.url);

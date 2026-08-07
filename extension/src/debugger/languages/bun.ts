@@ -19,7 +19,7 @@ export const bunDebuggerExtension: ResourceDebuggerExtension = {
     debugAdapter: 'bun',
     extensionId: 'oven.bun-vscode',
     // The debuggee is a process this adapter owns, so its exit is the run's lifetime signal.
-    terminationSignal: 'adapter-exit',
+    terminationSignal: 'adapterExit',
     getDisplayName: (launchConfig) => getJavaScriptRuntimeDisplayName(launchConfig, 'bun', bunDisplayName, bunLabel),
     getSupportedFileTypes: () => [...jsRuntimeBaseFileTypes, '.jsx', '.tsx'],
     getProjectFile: (launchConfig) => getJavaScriptRuntimeTargetPath(asBunConfig(launchConfig)),
