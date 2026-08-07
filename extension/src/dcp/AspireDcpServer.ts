@@ -409,9 +409,9 @@ export default class AspireDcpServer {
                 }
 
                 // Reserve the run before starting VS Code's debug session. The debug adapter
-                // tracker is created during startup and binds to this object so a late adapter
-                // callback can still deduplicate against a requested stop after the map entry
-                // has been removed.
+                // tracker is created during startup and binds to this object. The map keeps
+                // the same state for bounded late registration, and a registered tracker can
+                // continue deduplicating callbacks after the tombstone expires.
                 const run: RunSessionState = {
                     adapterCompletionProcessed: false,
                     debugSessions: processes,
@@ -519,7 +519,7 @@ export default class AspireDcpServer {
                     // adapter may still report its own exit after startup partially succeeded.
                     // Route the notification through the run state so that late callbacks see
                     // the completed protocol result and cannot publish it a second time.
-                    dcpServer._sendTerminalNotification(run, -1);
+                    dcpServer._sendTerminalNotification(run);
                     dcpServer._completeRun(run);
 
                     const error: ErrorDetails = {

@@ -279,7 +279,6 @@ suite('Aspire DCP server', () => {
         assert.deepStrictEqual(notification, {
             notification_type: 'sessionTerminated',
             session_id: runId,
-            exit_code: -1,
         });
         assert.strictEqual(getInternals(harness.dcpServer)._runsBySession.get(runId)?.lifecycle, 'completed');
         assert.strictEqual(telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end').length, 1);
