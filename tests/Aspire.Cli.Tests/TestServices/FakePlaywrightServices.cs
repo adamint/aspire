@@ -27,6 +27,12 @@ internal sealed class FakeNpmRunner : INpmRunner
         CancellationToken cancellationToken)
         => ResolvePackageAsyncCallback(packageName, versionRange, cancellationToken);
 
+    public Task<NpmPackageInfo?> ResolvePackageFromAnonymousInternalRegistryAsync(
+        string packageName,
+        string versionRange,
+        CancellationToken cancellationToken)
+        => ResolvePackageAsyncCallback(packageName, versionRange, cancellationToken);
+
     public Task<string?> PackAsync(string packageName, string version, string outputDirectory, CancellationToken cancellationToken)
         => Task.FromResult<string?>(null);
 

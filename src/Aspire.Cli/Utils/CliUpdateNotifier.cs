@@ -47,9 +47,12 @@ internal class CliUpdateNotifier(
     INpmRunner npmRunner,
     IInteractionService interactionService,
     IProcessPathProvider processPathProvider,
-    CliExecutionContext executionContext) : ICliUpdateNotifier, IDisposable
+    CliExecutionContext executionContext,
+    TimeProvider timeProvider) : ICliUpdateNotifier, IDisposable
 {
     private const string LatestNpmVersionRange = "latest";
+    private static readonly TimeSpan s_npmResolutionTimeout = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan s_npmResolutionDisposeTimeout = TimeSpan.FromSeconds(2);
 
     private readonly object _npmResolutionLock = new();
     private readonly CancellationTokenSource _npmResolutionCancellationSource = new();
@@ -58,8 +61,13 @@ internal class CliUpdateNotifier(
     private Task<NpmPackageInfo>? _npmResolutionTask;
     private bool _disposed;
 
+    internal static TimeSpan NpmResolutionTimeout => s_npmResolutionTimeout;
+    internal static TimeSpan NpmResolutionDisposeTimeout => s_npmResolutionDisposeTimeout;
+
     public async Task CheckForCliUpdatesAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
     {
+        ThrowIfDisposed();
+
         if (NpmInstallDetection.IsRunningFromNpm())
         {
             _availablePackages = null;
@@ -73,6 +81,7 @@ internal class CliUpdateNotifier(
 
     public void NotifyIfUpdateAvailable()
     {
+        ThrowIfDisposed();
         ValidateCliPackageMetadataPrefetching();
         var status = GetCachedVersionStatus();
         if (status.LatestVersion is not null)
@@ -83,6 +92,8 @@ internal class CliUpdateNotifier(
 
     public async Task<CliVersionStatus> GetVersionStatusAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
     {
+        ThrowIfDisposed();
+
         try
         {
             // Callers that need a synchronous answer cannot rely on the background
@@ -106,6 +117,7 @@ internal class CliUpdateNotifier(
 
     public bool IsUpdateAvailable()
     {
+        ThrowIfDisposed();
         ValidateCliPackageMetadataPrefetching();
         return GetCachedVersionStatus().LatestVersion is not null;
     }
@@ -137,6 +149,8 @@ internal class CliUpdateNotifier(
 
         lock (_npmResolutionLock)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
             resolutionTask = _npmResolutionTask ??= ResolveLatestNpmPackageAsync();
         }
 
@@ -164,12 +178,37 @@ internal class CliUpdateNotifier(
 
     private async Task<NpmPackageInfo> ResolveLatestNpmPackageAsync()
     {
-        return await npmRunner.ResolvePackageAsync(
+        var packageSpecifier = NpmPackageInfo.FormatPackageSpecifier(
             NpmInstallDetection.ExpectedPackageName,
-            LatestNpmVersionRange,
-            _npmResolutionCancellationSource.Token)
-            ?? throw new InvalidOperationException(
-                $"Unable to resolve {NpmPackageInfo.FormatPackageSpecifier(NpmInstallDetection.ExpectedPackageName, LatestNpmVersionRange)} from the internal npm registry.");
+            LatestNpmVersionRange);
+
+        if (!npmRunner.IsAvailable)
+        {
+            throw new InvalidOperationException(
+                "Unable to check for Aspire CLI updates because npm was not found on PATH.");
+        }
+
+        using var timeoutSource = new CancellationTokenSource(NpmResolutionTimeout, timeProvider);
+        using var resolutionSource = CancellationTokenSource.CreateLinkedTokenSource(
+            _npmResolutionCancellationSource.Token,
+            timeoutSource.Token);
+
+        try
+        {
+            return await npmRunner.ResolvePackageFromAnonymousInternalRegistryAsync(
+                NpmInstallDetection.ExpectedPackageName,
+                LatestNpmVersionRange,
+                resolutionSource.Token)
+                ?? throw new InvalidOperationException(
+                    $"Unable to resolve {packageSpecifier} from the internal npm registry.");
+        }
+        catch (OperationCanceledException) when (
+            timeoutSource.IsCancellationRequested &&
+            !_npmResolutionCancellationSource.IsCancellationRequested)
+        {
+            throw new TimeoutException(
+                $"Timed out after {NpmResolutionTimeout.TotalSeconds:g} seconds while resolving {packageSpecifier} from the internal npm registry.");
+        }
     }
 
     private CliVersionStatus GetCachedVersionStatus(string? updateCheckError = null)
@@ -251,6 +290,7 @@ internal class CliUpdateNotifier(
     public void Dispose()
     {
         Task<NpmPackageInfo>? resolutionTask;
+        Task cancellationTask;
 
         lock (_npmResolutionLock)
         {
@@ -259,16 +299,29 @@ internal class CliUpdateNotifier(
                 return;
             }
 
-            _disposed = true;
-            _npmResolutionCancellationSource.Cancel();
+            Volatile.Write(ref _disposed, true);
             resolutionTask = _npmResolutionTask;
+            cancellationTask = _npmResolutionCancellationSource.CancelAsync();
         }
+
+        var shutdownTask = resolutionTask is null
+            ? cancellationTask
+            : Task.WhenAll(cancellationTask, resolutionTask);
 
         try
         {
-            // The host disposes services synchronously after stopping hosted services. Drain the
-            // shared lookup here so cancellation has time to terminate its npm process tree.
-            resolutionTask?.GetAwaiter().GetResult();
+            // The host disposes services synchronously after stopping hosted services. Give the
+            // shared lookup a short drain budget, but never let a stuck npm process hold shutdown.
+            shutdownTask
+                .WaitAsync(NpmResolutionDisposeTimeout, timeProvider)
+                .GetAwaiter()
+                .GetResult();
+        }
+        catch (TimeoutException)
+        {
+            logger.LogDebug(
+                "npm update resolution did not stop within {Timeout} during disposal.",
+                NpmResolutionDisposeTimeout);
         }
         catch (OperationCanceledException) when (_npmResolutionCancellationSource.IsCancellationRequested)
         {
@@ -279,7 +332,28 @@ internal class CliUpdateNotifier(
         }
         finally
         {
-            _npmResolutionCancellationSource.Dispose();
+            if (shutdownTask.IsCompleted)
+            {
+                _npmResolutionCancellationSource.Dispose();
+            }
+            else
+            {
+                _ = shutdownTask.ContinueWith(
+                    static (task, state) =>
+                    {
+                        _ = task.Exception;
+                        ((CancellationTokenSource)state!).Dispose();
+                    },
+                    _npmResolutionCancellationSource,
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
         }
+    }
+
+    private void ThrowIfDisposed()
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed), this);
     }
 }

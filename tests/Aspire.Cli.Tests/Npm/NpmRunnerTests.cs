@@ -12,12 +12,14 @@ using Aspire.Cli.Tests.Utils;
 using Aspire.Cli.Utils;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Aspire.Cli.Tests.Npm;
 
 [Collection(EnvVarMutatingTestCollection.Name)]
-public class NpmRunnerTests
+public class NpmRunnerTests(ITestOutputHelper outputHelper)
 {
     [Fact]
     public void PackageRegistry_UsesCanonicalInternalFeed()
@@ -238,6 +240,61 @@ public class NpmRunnerTests
     }
 
     [Fact]
+    public async Task ResolvePackageFromAnonymousInternalRegistryAsync_IgnoresConflictingNpmConfiguration()
+    {
+        await using var registry = new TestNpmRegistry("13.4.6");
+        var tempDirectory = Directory.CreateTempSubdirectory("aspire-npm-runner-test-");
+
+        try
+        {
+            var npmrcPath = Path.Combine(tempDirectory.FullName, "conflicting.npmrc");
+            await File.WriteAllTextAsync(
+                npmrcPath,
+                $"""
+                @microsoft:registry=http://127.0.0.1:9/
+                json=true
+                //127.0.0.1:{registry.RegistryUri.Port}/:_authToken=ambient-secret
+                always-auth=true
+                """,
+                TestContext.Current.CancellationToken);
+
+            using var userConfigOverride = new EnvVarOverride("NPM_CONFIG_USERCONFIG", npmrcPath);
+            using var jsonOverride = new EnvVarOverride("NPM_CONFIG_JSON", "true");
+            using var nodeAuthTokenOverride = new EnvVarOverride("NODE_AUTH_TOKEN", "ambient-secret");
+            using var npmTokenOverride = new EnvVarOverride("NPM_TOKEN", "ambient-secret");
+            using var profilingTelemetry = new ProfilingTelemetry(new ConfigurationBuilder().Build());
+            var runner = new NpmRunner(
+                new TestEnvironment(),
+                NullLogger<NpmRunner>.Instance,
+                profilingTelemetry,
+                TimeProvider.System,
+                registry.RegistryUri.AbsoluteUri);
+
+            Assert.SkipUnless(runner.IsAvailable, "npm is required for this test.");
+
+            var package = await runner.ResolvePackageFromAnonymousInternalRegistryAsync(
+                NpmInstallDetection.ExpectedPackageName,
+                "latest",
+                TestContext.Current.CancellationToken);
+
+            Assert.NotNull(package);
+            Assert.Equal("13.4.6", package.Version.ToString());
+
+            var request = await registry.WaitForRequestAsync(
+                request => Uri.UnescapeDataString(request.Target) == "/@microsoft/aspire-cli",
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("GET", request.Method);
+            Assert.Equal("/@microsoft/aspire-cli", Uri.UnescapeDataString(request.Target));
+            Assert.False(request.Headers.ContainsKey("Authorization"));
+        }
+        finally
+        {
+            tempDirectory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ResolvePackageAsync_CancellationTerminatesNpmProcess()
     {
         var tempDirectory = Directory.CreateTempSubdirectory("aspire-npm-runner-test-");
@@ -286,9 +343,98 @@ public class NpmRunnerTests
     }
 
     [Fact]
-    public void IsExpectedProcessTerminationException_AggregateException_ReturnsTrue()
+    public async Task CliUpdateNotifierDispose_TerminatesNpmProcessWithoutHanging()
     {
-        Assert.True(NpmRunner.IsExpectedProcessTerminationException(new AggregateException()));
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(
+            new Dictionary<string, string?>
+            {
+                [NpmInstallDetection.PackageEnvironmentVariableName] = NpmInstallDetection.ExpectedPackageName,
+                [NpmInstallDetection.PackageVersionEnvironmentVariableName] = "13.4.0",
+                [NpmInstallDetection.PackageRidEnvironmentVariableName] = "osx-arm64"
+            });
+        var tempDirectory = Directory.CreateTempSubdirectory("aspire-npm-runner-test-");
+        int? processId = null;
+
+        try
+        {
+            WriteBlockingFakeNpm(tempDirectory);
+            var processIdPath = Path.Combine(tempDirectory.FullName, "process-id.txt");
+            var existingPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+            using var pathOverride = new EnvVarOverride(
+                "PATH",
+                $"{tempDirectory.FullName}{Path.PathSeparator}{existingPath}");
+            using var pathExtensionsOverride = OperatingSystem.IsWindows()
+                ? new EnvVarOverride("PATHEXT", ".CMD")
+                : null;
+            using var processIdPathOverride = new EnvVarOverride("NPM_PID_FILE", processIdPath);
+            using var profilingTelemetry = new ProfilingTelemetry(new ConfigurationBuilder().Build());
+            var runner = new NpmRunner(
+                new TestEnvironment(),
+                NullLogger<NpmRunner>.Instance,
+                profilingTelemetry);
+            var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
+            {
+                configure.NpmRunnerFactory = _ => runner;
+            });
+            var provider = services.BuildServiceProvider();
+            var notifier = provider.GetRequiredService<ICliUpdateNotifier>();
+            var statusTask = notifier.GetVersionStatusAsync(
+                workspace.WorkspaceRoot,
+                CancellationToken.None);
+
+            processId = await WaitForProcessIdAsync(processIdPath).DefaultTimeout();
+            await Task.Run(provider.Dispose).DefaultTimeout();
+            await WaitForProcessExitAsync(processId.Value).DefaultTimeout();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => statusTask).DefaultTimeout();
+        }
+        finally
+        {
+            if (processId is { } runningProcessId)
+            {
+                TryKillProcess(runningProcessId);
+            }
+
+            tempDirectory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void IsExpectedProcessTerminationException_AggregateWithOnlyExpectedExceptions_ReturnsTrue()
+    {
+        Assert.True(NpmRunner.IsExpectedProcessTerminationException(
+            new AggregateException(
+                new InvalidOperationException(),
+                new System.ComponentModel.Win32Exception())));
+    }
+
+    [Fact]
+    public void IsExpectedProcessTerminationException_AggregateWithUnexpectedException_ReturnsFalse()
+    {
+        Assert.False(NpmRunner.IsExpectedProcessTerminationException(
+            new AggregateException(
+                new InvalidOperationException(),
+                new IOException())));
+    }
+
+    [Fact]
+    public void IsExpectedProcessTerminationException_EmptyAggregate_ReturnsFalse()
+    {
+        Assert.False(NpmRunner.IsExpectedProcessTerminationException(new AggregateException()));
+    }
+
+    [Fact]
+    public async Task WaitForProcessExitAfterTerminationAsync_ReturnsFalseWhenBudgetExpires()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var processExit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var waitTask = NpmRunner.WaitForProcessExitAfterTerminationAsync(processExit.Task, timeProvider);
+        await Task.Yield();
+        timeProvider.Advance(NpmRunner.ProcessTerminationTimeout);
+
+        Assert.False(await waitTask.DefaultTimeout());
     }
 
     [Fact]

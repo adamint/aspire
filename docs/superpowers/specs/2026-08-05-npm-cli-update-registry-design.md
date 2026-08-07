@@ -90,16 +90,17 @@ The gate will:
 
 2. Run `npmAuthenticate@0` against that file. The task uses the release
    pipeline's `internal Build Service (dnceng)` identity.
-3. In an isolated temporary directory, install the exact public
-   pointer-package version through `dotnet-public-npm` with the equivalent of:
+3. Read `optionalDependencies` from the staged pointer tarball. In an isolated
+   temporary directory, fetch that exact pointer and every exact RID dependency
+   through `dotnet-public-npm` with the equivalent of:
 
    ```text
-   npm install --ignore-scripts --no-audit --no-fund --no-save --package-lock=false @microsoft/aspire-cli@<version>
+   npm pack <package>@<version> --ignore-scripts --pack-destination <directory>
    ```
 
-   This is a local temporary install, not a global install. It avoids lifecycle
-   scripts and persistent project files while causing Azure Artifacts to save
-   the package from its npm upstream.
+   `npm pack` bypasses the pointer's `os`/`cpu` filtering, avoids lifecycle
+   scripts and persistent project files, and causes Azure Artifacts to save
+   every package tarball from its npm upstream.
 4. Switch to a fresh working directory, empty user and global npm
    configurations, and a separate empty cache, then retry with online metadata
    preferred:
@@ -110,18 +111,21 @@ The gate will:
 
    against `dotnet-public-npm`.
 5. Parse a stable SemVer result and require the anonymous internal `latest`
-   version to be at-or-above the selected pointer-package version.
-6. Best-effort clean up the temporary npm configuration, cache, prefix, and
-   install directory without masking a successful mirror validation.
+   version to be at-or-above the selected pointer-package version. Anonymously
+   pack that exact mirrored pointer, read its optional dependencies, and pack
+   every exact RID dependency.
+6. Best-effort clean up the temporary work directories and caches without
+   masking a successful mirror validation. `npmAuthenticate@0` retains its
+   normal post-job credential cleanup.
 
 The at-or-above rule handles safe reruns after a newer stable release has
 already advanced `latest`. A normal release should resolve the exact version
 that was just published.
 
-The seeding gate runs on real stable release paths, including reruns where
-`SkipNpmPointerPublish=true` because the public pointer package already exists.
-It does not run during dry runs or prerelease runs because it mutates the
-internal upstream cache.
+The seeding gate runs by default on real stable release paths, including
+mirror-only reruns where both npm publish flags are `true`, unless the operator
+explicitly sets `SkipNpmMirrorValidation=true`. It does not run during dry runs
+or prerelease runs because it mutates the internal upstream cache.
 
 Stable publish-skipped reruns still stage the selected source build's pointer
 package and validation summaries. Public smoke and mirror validation need the
@@ -307,5 +311,6 @@ Update:
 - An npm-launched CLI never recommends a NuGet-only Aspire CLI version.
 - Every automatic notifier consumer agrees on the mirrored npm version.
 - A stable release cannot promote until the internal mirror anonymously serves
-  an `@latest` version at-or-above the published pointer package.
+  an `@latest` version at-or-above the published pointer package and allows the
+  pointer plus every exact optional RID tarball to be downloaded anonymously.
 - Non-npm update behavior remains unchanged.

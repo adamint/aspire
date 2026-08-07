@@ -4,7 +4,7 @@
 
 **Goal:** Discover npm-installed Aspire CLI updates through `dotnet-public-npm` and make every stable release seed and anonymously verify the mirrored `@microsoft/aspire-cli` package before channel promotion.
 
-**Architecture:** `CliUpdateNotifier` will branch before NuGet lookup: npm launches resolve `@microsoft/aspire-cli@latest` through the existing `INpmRunner`, while non-npm launches retain the current NuGet path. The notifier will share one in-flight npm resolution, retain successful metadata for the process lifetime, clear failures so an explicit `aspire doctor` check can retry, and cancel and drain the npm child process when the notifier is disposed. The release pipeline will continue publishing only to public npm, stage the selected source build's npm artifacts even on stable publish-skipped reruns, authenticate to `dotnet-public-npm`, install the exact released pointer package to trigger upstream ingestion, switch to a fresh credential-free working directory, user/global configuration, and cache, and require anonymous `@latest` resolution at or above the released version before promotion.
+**Architecture:** `CliUpdateNotifier` will branch before NuGet lookup: npm launches resolve `@microsoft/aspire-cli@latest` through the existing `INpmRunner`, while non-npm launches retain the current NuGet path. The notifier will share one in-flight npm resolution, retain successful metadata for the process lifetime, clear failures so an explicit `aspire doctor` check can retry, and cancel and drain the npm child process when the notifier is disposed. The release pipeline will continue publishing only to public npm, stage the selected source build's npm artifacts even on stable publish-skipped reruns, authenticate to `dotnet-public-npm`, pack the staged pointer and every exact optional RID package to trigger upstream ingestion, switch to fresh credential-free working directories, user/global configuration, and caches, and anonymously pack the mirrored `@latest` pointer plus all of its exact optional dependencies before promotion.
 
 **Tech Stack:** .NET 10, C# 13, `Semver`, xUnit v3 with Microsoft.Testing.Platform, Azure Pipelines YAML, PowerShell 7, npm, Azure Artifacts `npmAuthenticate@0`
 
@@ -830,7 +830,7 @@ Move this existing block from below the public smoke test to immediately above t
 ```yaml
               - ${{ if and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true)) }}:
                 - powershell: |
-                    Write-Host "=== Skipping npm Publishing (SkipNpmRidPublish=true and SkipNpmPointerPublish=true) ==="
+                    Write-Host "=== Skipping npm Package Publishing (SkipNpmRidPublish=true and SkipNpmPointerPublish=true); internal mirror handling follows SkipNpmMirrorValidation ==="
                   displayName: 'Skip npm Packages (flagged)'
 ```
 
@@ -1008,7 +1008,7 @@ Add immediately after authentication:
                   displayName: 'Seed and Validate npm Internal Mirror'
 ```
 
-The authenticated install triggers upstream ingestion without adding another publication destination. The anonymous phase uses a fresh working directory, credential-free user and global configs, a separate empty cache, and online metadata preference. The at-or-above comparison permits a later stable release already mirrored on a safe rerun, and cleanup cannot mask a successful validation.
+The authenticated pointer and RID packs trigger upstream ingestion without adding another publication destination. The anonymous phase uses a fresh working directory, credential-free user and global configs, separate empty caches, and online metadata preference to prove every tarball downloads. The at-or-above comparison permits a later stable release already mirrored on a safe rerun, and cleanup cannot mask a successful validation.
 
 - [ ] **Step 9: Run the release pipeline tests**
 
@@ -1065,13 +1065,13 @@ git commit -m "Seed npm CLI package into internal mirror" \
 In `docs/specs/npm-cli-package.md`, add after the publication-destination paragraph:
 
 ```markdown
-The package is still published only to the public npm registry. npm-installed CLI update checks resolve `@microsoft/aspire-cli@latest` through the anonymously readable `dotnet-public-npm` Azure Artifacts feed. Stable releases authenticate to that feed after the public npm smoke test, install the exact released pointer package to trigger upstream ingestion, then switch to a credential-free npm configuration and cache to verify that anonymous `@latest` resolution is at or above the released version before channel promotion.
+The package is still published only to the public npm registry. npm-installed CLI update checks resolve `@microsoft/aspire-cli@latest` through the anonymously readable `dotnet-public-npm` Azure Artifacts feed. Stable releases authenticate to that feed after the public npm smoke test, pack the staged pointer and every exact optional RID dependency to trigger upstream ingestion, then switch to credential-free npm configuration and caches to pack the mirrored `@latest` pointer and every exact optional dependency before channel promotion.
 ```
 
 Replace the update-notification paragraph with:
 
 ```markdown
-The CLI checks how it was installed before selecting an update source. NuGet-installed or standalone launches retain the existing NuGet package lookup. npm-installed launches skip NuGet entirely and use the existing npm resolver for `@microsoft/aspire-cli@latest` from `dotnet-public-npm`; when that concrete version is newer than the running CLI, the notification shows `npm install -g @microsoft/aspire-cli@latest`. Routine commands suppress lookup failures, while `aspire doctor` reports the update-check warning and retries a failed lookup. Explicit `aspire update --self` behavior is unchanged.
+The CLI checks how it was installed before selecting an update source. NuGet-installed or standalone launches retain the existing NuGet package lookup. npm-installed launches skip NuGet entirely and resolve `@microsoft/aspire-cli@latest` anonymously from `dotnet-public-npm` with isolated npm configuration/cache and a bounded shared timeout; when that concrete version is newer than the running CLI, the notification shows `npm install -g @microsoft/aspire-cli@latest`. Routine commands suppress lookup failures, while `aspire doctor` reports a specific update-check warning and retries a failed or timed-out lookup. Explicit `aspire update --self` behavior is unchanged.
 ```
 
 - [ ] **Step 2: Document safe publish-skipped reruns**
@@ -1083,9 +1083,9 @@ In `docs/release-process.md`, add immediately after `### npm publish fails`:
 
 The release pipeline seeds `@microsoft/aspire-cli` into `dotnet-public-npm` only after the public npm package smoke test succeeds. It then verifies `@microsoft/aspire-cli@latest` with a credential-free npm configuration and cache before channel promotion.
 
-If public npm publication already succeeded, rerun the release with both `SkipNpmRidPublish=true` and `SkipNpmPointerPublish=true`. Keep `DryRun=false` so the public-registry smoke test and internal-mirror gate run, and set `SkipChannelPromotion=true` when validating a pipeline change or retrying the mirror independently. The rerun does not republish npm packages; it validates the existing public package, triggers authenticated upstream ingestion, and repeats anonymous verification.
+If public npm publication already succeeded, rerun the release with `SkipNpmRidPublish=true`, `SkipNpmPointerPublish=true`, and `SkipNpmMirrorValidation=false`. Keep `DryRun=false` so the public-registry smoke test and internal-mirror gate run, and set `SkipChannelPromotion=true` when validating a pipeline change or retrying the mirror independently. The rerun does not republish npm packages; it validates the existing public package, triggers authenticated pointer/RID tarball ingestion, and repeats anonymous pointer/RID tarball verification. Unrelated stable recovery runs set `SkipNpmMirrorValidation=true`.
 
-If the authenticated install fails, verify that the release build identity still has contributor access to `dotnet-public-npm` and that the feed's npm.org upstream is enabled. If anonymous verification exhausts its retries, check the package version directly with a credential-free npm configuration:
+If an authenticated pack fails, verify that the release build identity still has contributor access to `dotnet-public-npm` and that the feed's npm.org upstream is enabled. If anonymous verification exhausts its retries, check the package version directly with a credential-free npm configuration:
 
 ```bash
 NPM_CONFIG_USERCONFIG=/dev/null npm view @microsoft/aspire-cli@latest version \
@@ -1181,6 +1181,7 @@ IsPrerelease=false
 SkipNuGetPublish=true
 SkipNpmRidPublish=true
 SkipNpmPointerPublish=true
+SkipNpmMirrorValidation=false
 SkipChannelPromotion=true
 SkipWinGetPublish=true
 SkipGitHubTasks=true
@@ -1190,7 +1191,7 @@ SkipNixPackageUpdate=true
 SkipVSCodeExtensionPublish=true
 ```
 
-Expected: no public publication or channel promotion occurs. `Validate Published npm Package from Registry`, `Authenticate to npm Internal Mirror`, and `Seed and Validate npm Internal Mirror` run and pass.
+Expected: no public publication or channel promotion occurs. `Validate Published npm Package from Registry`, `Authenticate to npm Internal Mirror`, and `Seed and Validate npm Internal Mirror` run and prove every pointer/RID tarball is available.
 
 - [ ] **Step 5: Independently verify anonymous resolution**
 
