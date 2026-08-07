@@ -84,7 +84,6 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
     public async Task DoctorCommand_Json_IncludesOutdatedVsCodeExtensionStatus()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var extensions = CreateVsCodeExtensionFixture(workspace, "1.2.3", isPreReleaseVersion: false);
         var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
         {
             GetLatestVersionsAsyncCallback = _ => Task.FromResult(new VsCodeExtensionMarketplaceVersions(
@@ -95,7 +94,7 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
         using var doc = await RunDoctorJsonAsync(
             workspace,
             configureOptions: options => options.CliUpdateNotifierFactory = _ => new TestCliUpdateNotifier(),
-            configureServices: services => ConfigureVsCodeExtensionServices(services, extensions, marketplaceClient));
+            configureServices: services => ConfigureVsCodeExtensionServices(services, "1.2.3", marketplaceClient));
 
         var extensionCheck = GetCheckByName(doc, VsCodeExtensionCheck.CheckName);
         Assert.Equal("warning", extensionCheck.GetProperty("status").GetString());
@@ -112,7 +111,6 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
     public async Task DoctorCommand_HumanReadable_HidesMarketplaceFailureDetails()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var extensions = CreateVsCodeExtensionFixture(workspace, "1.2.3", isPreReleaseVersion: false);
         const string rawFailure = "Proxy proxy.internal.example rejected the request.";
         var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
         {
@@ -133,7 +131,7 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
         {
             options.CliUpdateNotifierFactory = _ => new TestCliUpdateNotifier();
         });
-        ConfigureVsCodeExtensionServices(services, extensions, marketplaceClient);
+        ConfigureVsCodeExtensionServices(services, "1.2.3", marketplaceClient);
         services.RemoveAll<IAnsiConsole>();
         services.AddSingleton<IAnsiConsole>(console);
         using var provider = services.BuildServiceProvider();
@@ -153,7 +151,6 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
     public async Task DoctorCommand_Json_ReportsMarketplaceFailureAsNeutralWarning()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        var extensions = CreateVsCodeExtensionFixture(workspace, "1.2.3", isPreReleaseVersion: false);
         var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
         {
             GetLatestVersionsAsyncCallback = _ => Task.FromException<VsCodeExtensionMarketplaceVersions>(
@@ -163,7 +160,7 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
         using var doc = await RunDoctorJsonAsync(
             workspace,
             configureOptions: options => options.CliUpdateNotifierFactory = _ => new TestCliUpdateNotifier(),
-            configureServices: services => ConfigureVsCodeExtensionServices(services, extensions, marketplaceClient));
+            configureServices: services => ConfigureVsCodeExtensionServices(services, "1.2.3", marketplaceClient));
 
         var extensionCheck = GetCheckByName(doc, VsCodeExtensionCheck.CheckName);
         Assert.Equal("warning", extensionCheck.GetProperty("status").GetString());
@@ -1160,56 +1157,18 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
         return services;
     }
 
-    private static DirectoryInfo CreateVsCodeExtensionFixture(
-        TemporaryWorkspace workspace,
-        string version,
-        bool isPreReleaseVersion)
-    {
-        var extensions = workspace.CreateDirectory("vscode-extensions");
-        var relativeLocation = $"{VsCodeExtensionCheck.ExtensionId}-{version}";
-        Directory.CreateDirectory(Path.Combine(extensions.FullName, relativeLocation));
-        var entries = new[]
-        {
-            new Dictionary<string, object?>
-            {
-                ["identifier"] = new Dictionary<string, object?>
-                {
-                    ["id"] = VsCodeExtensionCheck.ExtensionId,
-                    ["uuid"] = "8e7be971-be8c-4936-8301-1ee17742ac25"
-                },
-                ["location"] = new Dictionary<string, object?>
-                {
-                    ["$mid"] = 1,
-                    ["path"] = Path.Combine(extensions.FullName, relativeLocation),
-                    ["scheme"] = "file"
-                },
-                ["relativeLocation"] = relativeLocation,
-                ["version"] = version,
-                ["metadata"] = new Dictionary<string, object?>
-                {
-                    ["source"] = "gallery",
-                    ["isPreReleaseVersion"] = isPreReleaseVersion,
-                    ["hasPreReleaseVersion"] = isPreReleaseVersion,
-                    ["preRelease"] = isPreReleaseVersion
-                }
-            }
-        };
-        File.WriteAllText(
-            Path.Combine(extensions.FullName, "extensions.json"),
-            JsonSerializer.Serialize(entries));
-        return extensions;
-    }
-
     private static void ConfigureVsCodeExtensionServices(
         IServiceCollection services,
-        DirectoryInfo extensions,
+        string reportedExtensionVersion,
         IVsCodeExtensionMarketplaceClient marketplaceClient)
     {
         services.RemoveAll<IEnvironment>();
+        // Mirrors what the VS Code extension contributes to the terminals, tasks, and debug processes
+        // it creates (see extension/src/utils/cliPathEnvironment.ts).
         services.AddSingleton<IEnvironment>(new TestEnvironment(new Dictionary<string, string?>
         {
             ["TERM_PROGRAM"] = "vscode",
-            ["VSCODE_EXTENSIONS"] = extensions.FullName
+            [VsCodeExtensionCheck.ExtensionVersionEnvironmentVariable] = reportedExtensionVersion
         }));
         services.RemoveAll<IVsCodeExtensionMarketplaceClient>();
         services.AddSingleton(marketplaceClient);

@@ -463,9 +463,6 @@ The JSON form includes secret values. Do not redirect it to logs or files unless
         "vsCodeInstalled": true,
         "extensionInstalled": true,
         "extensionId": "microsoft-aspire.aspire-vscode",
-        "vsCodeChannel": "stable",
-        "extensionReleaseChannel": "stable",
-        "extensionSource": "gallery",
         "updateCheckEnabled": true,
         "latestVersionKnown": true,
         "extensionVersion": "1.2.3",
@@ -487,9 +484,11 @@ The JSON form includes secret values. Do not redirect it to logs or files unless
 
 The `devtools` category surfaces development-tooling recommendations. The `vscode-extension` check only appears when VS Code is detected. It reports `warning` when the [Aspire VS Code extension](https://aka.ms/aspire/vscode-extension) is missing, when the installed extension is behind the latest Marketplace version on its own release channel, or when the Marketplace lookup could not complete. It reports `pass` when the installed extension is current or newer.
 
-Its `metadata` always exposes `vsCodeInstalled` (bool), `extensionInstalled` (bool), and `extensionId` (string). An installed extension adds `vsCodeChannel` (`stable`, `insiders`, or `unknown`), `extensionReleaseChannel` (`stable`, `pre-release`, or `unknown`), `extensionSource` (`gallery`, `vsix`, `resource`, or `unknown`), `updateCheckEnabled` (bool), `latestVersionKnown` (bool), and `extensionVersion` (string) when the installed version can be read.
+Its `metadata` always exposes `vsCodeInstalled` (bool), `extensionInstalled` (bool), and `extensionId` (string). An installed extension adds `updateCheckEnabled` (bool), `latestVersionKnown` (bool), and `extensionVersion` (string) when the running extension reported its version.
 
-The Marketplace is only queried for a gallery install whose active extension root and release channel are both identifiable, and only while update notifications are enabled. A successful lookup sets `latestVersionKnown` to `true` and adds `latestVersion` (string), `latestVersionChannel` (string), and `updateAvailable` (bool). A lookup that times out or is unavailable leaves `latestVersionKnown` as `false`, adds `latestVersionError` (`timeout` or `unavailable`), and reports the reason in `details` without a `fix` or `link`.
+The installed version comes from the `ASPIRE_VSCODE_EXTENSION_VERSION` environment variable, which the Aspire VS Code extension contributes to every terminal, task, and debug process VS Code creates for it. Only the extension host knows which installation is loaded — several extension roots can hold the extension at once (a desktop install plus `.vscode-server` for Remote, WSL, and dev containers), `--extensions-dir` is invisible to a child process, and portable mode relocates the whole root — so the CLI does not attempt to derive the version from disk. When the variable is absent (the CLI was not launched from VS Code), the check reports only whether the extension is installed and omits `extensionVersion`.
+
+The Marketplace is only queried when the running extension reported a parseable [semantic version](https://semver.org) and update notifications are enabled. A semver pre-release tag selects the Marketplace pre-release channel; anything else compares against the stable channel. A successful lookup sets `latestVersionKnown` to `true` and adds `latestVersion` (string), `latestVersionChannel` (`stable` or `pre-release`), and `updateAvailable` (bool). A lookup that times out, is unavailable, or omits the requested channel leaves `latestVersionKnown` as `false`, adds `latestVersionError` (`timeout` or `unavailable`), and reports the reason in `details` without a `fix` or `link`.
 
 ### `aspire config info`
 

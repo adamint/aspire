@@ -15,33 +15,35 @@ namespace Aspire.Cli.Utils.EnvironmentChecker;
 /// Checks whether the Aspire VS Code extension is installed and current.
 /// </summary>
 /// <remarks>
-/// The check is intentionally silent when VS Code is not detected. Marketplace access is limited
-/// to gallery installations whose active extension root and release channel can be identified.
+/// The check is intentionally silent when VS Code is not detected. The installed version is taken
+/// from the environment variable the extension itself contributes, so the Marketplace comparison only
+/// runs when the active installation identified itself; otherwise the check falls back to reporting
+/// whether the extension is installed at all.
 /// </remarks>
 internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
 {
     internal const string CheckName = "vscode-extension";
+
+    /// <summary>
+    /// The unique identifier of the Aspire VS Code extension (<c>&lt;publisher&gt;.&lt;name&gt;</c>).
+    /// </summary>
     internal const string ExtensionId = "microsoft-aspire.aspire-vscode";
+
+    /// <summary>
+    /// The marketplace URL used as the fix link when the extension is missing. This is an aka.ms
+    /// redirect so the ultimate destination can be updated without shipping a new CLI build.
+    /// </summary>
     internal const string MarketplaceUrl = "https://aka.ms/aspire/vscode-extension";
 
-    private const string UnknownValue = "unknown";
+    /// <summary>
+    /// The environment variable the Aspire VS Code extension contributes to every terminal, task, and
+    /// debug process it creates, carrying the version of the extension instance that is actually
+    /// running. See <c>extension/src/utils/cliPathEnvironment.ts</c>.
+    /// </summary>
+    internal const string ExtensionVersionEnvironmentVariable = "ASPIRE_VSCODE_EXTENSION_VERSION";
+
     private const string StableChannel = "stable";
     private const string PreReleaseChannel = "pre-release";
-    private static readonly string[] s_targetPlatformSuffixes =
-    [
-        "win32-x64",
-        "win32-ia32",
-        "win32-arm64",
-        "linux-x64",
-        "linux-arm64",
-        "linux-armhf",
-        "alpine-x64",
-        "alpine-arm64",
-        "darwin-x64",
-        "darwin-arm64",
-        "universal",
-        "web"
-    ];
 
     private readonly IEnvironment _environment;
     private readonly CliExecutionContext _executionContext;
@@ -134,7 +136,12 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             ];
         }
 
-        if (!ShouldCheckMarketplace(detection, updateCheckEnabled, out var installedVersion))
+        // Without a version the extension reported for itself there is nothing to compare, so the
+        // check answers the same question it did before the update comparison existed: is the
+        // extension installed at all. Guessing a version off disk cannot identify which of several
+        // installations the running window loaded.
+        if (!updateCheckEnabled ||
+            !SemVersion.TryParse(detection.ExtensionVersion, SemVersionStyles.Strict, out var installedVersion))
         {
             return [CreateInstalledResult(metadata, EnvironmentCheckStatus.Pass)];
         }
@@ -170,9 +177,14 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             return [CreateMarketplaceUnavailableResult(metadata, exception)];
         }
 
-        var latestVersion = detection.IsPreReleaseVersion == true
-            ? versions.PreReleaseVersion
-            : versions.StableVersion;
+        // The extension host API exposes the manifest version but not the gallery's pre-release flag,
+        // so the channel is inferred from the version itself. Daily and PR builds carry a semver
+        // pre-release tag and compare against the pre-release feed. A gallery pre-release install
+        // published without such a tag compares against stable, which is safe: the gallery requires a
+        // pre-release version to sort above the stable one, so the comparison passes instead of
+        // nagging.
+        var channel = installedVersion.IsPrerelease ? PreReleaseChannel : StableChannel;
+        var latestVersion = installedVersion.IsPrerelease ? versions.PreReleaseVersion : versions.StableVersion;
         if (latestVersion is null)
         {
             return
@@ -180,13 +192,13 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
                 CreateMarketplaceUnavailableResult(
                     metadata,
                     new InvalidDataException(
-                        $"The VS Code Marketplace response did not include a {detection.ExtensionReleaseChannel} version."))
+                        $"The VS Code Marketplace response did not include a {channel} version."))
             ];
         }
 
         var updateAvailable = SemVersion.ComparePrecedence(installedVersion, latestVersion) < 0;
         metadata["latestVersion"] = latestVersion.ToString();
-        metadata["latestVersionChannel"] = detection.ExtensionReleaseChannel;
+        metadata["latestVersionChannel"] = channel;
         metadata["latestVersionKnown"] = true;
         metadata["updateAvailable"] = updateAvailable;
 
@@ -235,32 +247,25 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             return new VsCodeExtensionDetection(VsCodeInstalled: false, ExtensionInstalled: false);
         }
 
-        // When the environment names the active extension root, probe only that root. Falling
-        // through to the defaults could report an extension from ~/.vscode that the running
-        // VS Code instance would never load.
-        if (TryGetExplicitExtensionRoot(environment, homeDirectory, out var explicitRoot))
+        // The extension contributes its own version to every terminal, task, and debug process VS Code
+        // creates for it, so this is the version of the instance that is actually running. Nothing on
+        // disk can answer that: several extension roots can hold the extension at once (desktop plus
+        // .vscode-server for Remote/WSL/devcontainers), --extensions-dir is invisible to a child
+        // process, and portable mode relocates the whole root.
+        var reportedVersion = environment.GetEnvironmentVariable(ExtensionVersionEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(reportedVersion))
         {
-            return DetectInRoot(explicitRoot, activeInstallationKnown: true);
-        }
-
-        var detections = GetDefaultExtensionRoots(homeDirectory)
-            .Select(root => DetectInRoot(root, activeInstallationKnown: true))
-            .Where(detection => detection.ExtensionInstalled)
-            .ToArray();
-
-        // Without an environment variable naming the active root, several installs can be present
-        // at once (desktop plus Insiders plus a remote server). Any of them could be the one the
-        // running VS Code loads, so report the extension as installed but mark the active
-        // installation unknown rather than comparing an arbitrary copy against the Marketplace.
-        return detections.Length switch
-        {
-            0 => new VsCodeExtensionDetection(VsCodeInstalled: true, ExtensionInstalled: false),
-            1 => detections[0],
-            _ => new VsCodeExtensionDetection(
+            return new VsCodeExtensionDetection(
                 VsCodeInstalled: true,
                 ExtensionInstalled: true,
-                ActiveInstallationKnown: false)
-        };
+                ExtensionVersion: reportedVersion.Trim());
+        }
+
+        // Outside a VS Code-created process there is no signal, so fall back to answering only whether
+        // the extension is installed somewhere.
+        return new VsCodeExtensionDetection(
+            VsCodeInstalled: true,
+            ExtensionInstalled: IsExtensionInstalled(environment, homeDirectory));
     }
 
     private EnvironmentCheckResult CreateMarketplaceUnavailableResult(
@@ -290,31 +295,6 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             Metadata = metadata
         };
 
-    private static bool ShouldCheckMarketplace(
-        VsCodeExtensionDetection detection,
-        bool updateCheckEnabled,
-        out SemVersion installedVersion)
-    {
-        // Only query the Marketplace when an update is both meaningful and actionable. A VSIX or
-        // sideloaded build has no Marketplace counterpart to compare against, an ambiguous root
-        // means the version found may not be the one VS Code actually loads, and an unknown
-        // release channel would risk comparing a pre-release install against the stable feed.
-        // Each of those would produce a warning the user cannot act on, so the check stays quiet.
-        if (updateCheckEnabled &&
-            detection.ActiveInstallationKnown &&
-            string.Equals(detection.ExtensionSource, "gallery", StringComparison.Ordinal) &&
-            detection.IsPreReleaseVersion is not null &&
-            SemVersion.TryParse(detection.ExtensionVersion, SemVersionStyles.Strict, out var parsedVersion) &&
-            parsedVersion is not null)
-        {
-            installedVersion = parsedVersion;
-            return true;
-        }
-
-        installedVersion = null!;
-        return false;
-    }
-
     private static JsonObject BuildMetadata(
         VsCodeExtensionDetection detection,
         bool updateCheckEnabled)
@@ -331,9 +311,6 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             return metadata;
         }
 
-        metadata["vsCodeChannel"] = detection.VsCodeChannel;
-        metadata["extensionReleaseChannel"] = detection.ExtensionReleaseChannel;
-        metadata["extensionSource"] = detection.ExtensionSource;
         metadata["updateCheckEnabled"] = updateCheckEnabled;
         metadata["latestVersionKnown"] = false;
         if (detection.ExtensionVersion is not null)
@@ -350,6 +327,7 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
     {
         // VS Code sets TERM_PROGRAM for integrated terminals. Outside an integrated terminal,
         // probe the stable and Insiders launchers without spawning either process.
+        // See https://code.visualstudio.com/docs/terminal/shell-integration.
         return string.Equals(
                 environment.GetEnvironmentVariable("TERM_PROGRAM"),
                 "vscode",
@@ -358,394 +336,61 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             || commandResolver("code-insiders") is not null;
     }
 
-    private static bool TryGetExplicitExtensionRoot(
-        IEnvironment environment,
-        DirectoryInfo homeDirectory,
-        out ExtensionRoot root)
+    private static bool IsExtensionInstalled(IEnvironment environment, DirectoryInfo homeDirectory)
     {
-        // Ordered most to least authoritative. VSCODE_EXTENSIONS replaces the extension location
-        // outright, VSCODE_PORTABLE names the portable-mode data folder that owns the extension
-        // root, VSCODE_AGENT_FOLDER names a remote server install root, the IPC pair marks a
-        // remote/server terminal, and the askpass helper path is the desktop fallback because its
-        // location encodes the installed channel:
-        //   /Applications/Visual Studio Code.app/.../extensions/git/dist/askpass-main.js
-        //   /Applications/Visual Studio Code - Insiders.app/.../askpass-main.js
-        // See https://code.visualstudio.com/docs/terminal/shell-integration.
-        var overrideDirectory = environment.GetEnvironmentVariable("VSCODE_EXTENSIONS");
-        if (!string.IsNullOrWhiteSpace(overrideDirectory))
+        foreach (var extensionsDirectory in VsCodeInstallLayout.GetExtensionRootPaths(environment, homeDirectory))
         {
-            root = new ExtensionRoot(overrideDirectory, DetermineChannel(environment));
-            return true;
+            if (DirectoryContainsExtension(extensionsDirectory))
+            {
+                return true;
+            }
         }
 
-        // Portable mode moves every VS Code data folder next to the application, so extensions live
-        // under "<portable data folder>/extensions" and the home-directory defaults hold either
-        // nothing or an unrelated installation. VS Code resolves the extension root in this order:
-        //   --extensions-dir, VSCODE_EXTENSIONS, VSCODE_PORTABLE/extensions, home data folder
-        // so VSCODE_PORTABLE has to be probed after VSCODE_EXTENSIONS and before every default.
-        // The CLI cannot observe the running window's --extensions-dir, and portable mode overrides
-        // that switch anyway, so VSCODE_EXTENSIONS is the most authoritative signal available here.
-        // VSCODE_PORTABLE is one of the few VSCODE_* variables VS Code deliberately preserves when
-        // it sanitizes a child process environment, so it does reach the integrated terminal.
-        // See https://code.visualstudio.com/docs/setup/portable,
-        // https://github.com/microsoft/vscode/blob/main/src/vs/platform/environment/common/environmentService.ts
-        // (AbstractNativeEnvironmentService.extensionsPath), and
-        // https://github.com/microsoft/vscode/blob/main/src/vs/base/common/processes.ts
-        // (sanitizeProcessEnvironment).
-        var portableDataFolder = environment.GetEnvironmentVariable("VSCODE_PORTABLE");
-        if (!string.IsNullOrWhiteSpace(portableDataFolder))
-        {
-            root = new ExtensionRoot(
-                Path.Combine(portableDataFolder, "extensions"),
-                DetermineChannel(environment));
-            return true;
-        }
-
-        var agentFolder = environment.GetEnvironmentVariable("VSCODE_AGENT_FOLDER");
-        if (!string.IsNullOrWhiteSpace(agentFolder))
-        {
-            root = new ExtensionRoot(Path.Combine(agentFolder, "extensions"), DetermineChannel(environment));
-            return true;
-        }
-
-        var clientCommand = environment.GetEnvironmentVariable("VSCODE_CLIENT_COMMAND");
-        if (!string.IsNullOrWhiteSpace(environment.GetEnvironmentVariable("VSCODE_IPC_HOOK_CLI")) &&
-            !string.IsNullOrWhiteSpace(clientCommand))
-        {
-            var channel = ContainsInsiders(clientCommand) ? "insiders" : StableChannel;
-            var serverRoot = channel == "insiders" ? ".vscode-server-insiders" : ".vscode-server";
-            root = new ExtensionRoot(
-                Path.Combine(homeDirectory.FullName, serverRoot, "extensions"),
-                channel);
-            return true;
-        }
-
-        var askPassPath = environment.GetEnvironmentVariable("VSCODE_GIT_ASKPASS_MAIN");
-        if (!string.IsNullOrWhiteSpace(askPassPath))
-        {
-            var channel = ContainsInsiders(askPassPath) ? "insiders" : StableChannel;
-            var desktopRoot = channel == "insiders" ? ".vscode-insiders" : ".vscode";
-            root = new ExtensionRoot(
-                Path.Combine(homeDirectory.FullName, desktopRoot, "extensions"),
-                channel);
-            return true;
-        }
-
-        root = default!;
         return false;
     }
 
-    private static string DetermineChannel(IEnvironment environment)
-    {
-        var clientCommand = environment.GetEnvironmentVariable("VSCODE_CLIENT_COMMAND");
-        var askPassPath = environment.GetEnvironmentVariable("VSCODE_GIT_ASKPASS_MAIN");
-        if (ContainsInsiders(clientCommand) || ContainsInsiders(askPassPath))
-        {
-            return "insiders";
-        }
-
-        return UnknownValue;
-    }
-
-    private static bool ContainsInsiders(string? value)
-        => value?.Contains("insiders", StringComparison.OrdinalIgnoreCase) == true;
-
-    private static IEnumerable<ExtensionRoot> GetDefaultExtensionRoots(DirectoryInfo homeDirectory)
-    {
-        var home = homeDirectory.FullName;
-
-        yield return new ExtensionRoot(Path.Combine(home, ".vscode", "extensions"), StableChannel);
-        yield return new ExtensionRoot(Path.Combine(home, ".vscode-insiders", "extensions"), "insiders");
-        yield return new ExtensionRoot(Path.Combine(home, ".vscode-server", "extensions"), StableChannel);
-        yield return new ExtensionRoot(Path.Combine(home, ".vscode-server-insiders", "extensions"), "insiders");
-    }
-
-    private static VsCodeExtensionDetection DetectInRoot(
-        ExtensionRoot root,
-        bool activeInstallationKnown)
-    {
-        var installedExtensions = FindInstalledExtensions(root.Path);
-        if (installedExtensions.Count == 0)
-        {
-            return new VsCodeExtensionDetection(
-                VsCodeInstalled: true,
-                ExtensionInstalled: false,
-                VsCodeChannel: root.Channel,
-                ActiveInstallationKnown: activeInstallationKnown);
-        }
-
-        var selectedExtension = installedExtensions
-            .Where(extension => extension.Version is not null)
-            .OrderByDescending(
-                extension => extension.Version,
-                SemVersionPrecedenceComparer.Instance)
-            .FirstOrDefault()
-            // Every copy has an unreadable version, so nothing can be ordered. Report the
-            // extension as installed with an unknown version rather than as missing.
-            ?? installedExtensions[0];
-
-        return new VsCodeExtensionDetection(
-            VsCodeInstalled: true,
-            ExtensionInstalled: true,
-            ExtensionVersion: selectedExtension.Version?.ToString(),
-            VsCodeChannel: root.Channel,
-            ExtensionReleaseChannel: selectedExtension.IsPreReleaseVersion switch
-            {
-                true => PreReleaseChannel,
-                false => StableChannel,
-                null => UnknownValue
-            },
-            ExtensionSource: NormalizeExtensionSource(selectedExtension.Source),
-            IsPreReleaseVersion: selectedExtension.IsPreReleaseVersion,
-            ActiveInstallationKnown: activeInstallationKnown);
-    }
-
-    private static List<InstalledExtension> FindInstalledExtensions(string extensionsDirectory)
+    private static bool DirectoryContainsExtension(string extensionsDirectory)
     {
         if (!Directory.Exists(extensionsDirectory))
-        {
-            return [];
-        }
-
-        var indexEntries = ReadExtensionsIndex(extensionsDirectory);
-        var obsoleteExtensions = ReadObsoleteExtensions(extensionsDirectory);
-        var installedExtensions = new List<InstalledExtension>();
-        var enumerationOptions = new EnumerationOptions
-        {
-            IgnoreInaccessible = true,
-            AttributesToSkip = FileAttributes.None
-        };
-
-        try
-        {
-            foreach (var directory in Directory.EnumerateDirectories(
-                extensionsDirectory,
-                "*",
-                enumerationOptions))
-            {
-                var folderName = Path.GetFileName(directory);
-                if (!IsVersionedExtensionFolder(folderName) ||
-                    obsoleteExtensions.Contains(folderName))
-                {
-                    continue;
-                }
-
-                indexEntries.TryGetValue(folderName, out var indexEntry);
-                var version = TryReadPackageVersion(directory)
-                    ?? TryReadFolderVersion(folderName);
-                installedExtensions.Add(
-                    new InstalledExtension(
-                        version,
-                        indexEntry?.IsPreReleaseVersion,
-                        indexEntry?.Source));
-            }
-        }
-        catch (IOException)
-        {
-            return [];
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return [];
-        }
-
-        return installedExtensions;
-    }
-
-    private static Dictionary<string, ExtensionIndexEntry> ReadExtensionsIndex(
-        string extensionsDirectory)
-    {
-        var indexPath = Path.Combine(extensionsDirectory, "extensions.json");
-        if (!File.Exists(indexPath))
-        {
-            return new Dictionary<string, ExtensionIndexEntry>(StringComparer.OrdinalIgnoreCase);
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(File.ReadAllBytes(indexPath));
-            if (document.RootElement.ValueKind != JsonValueKind.Array)
-            {
-                return new Dictionary<string, ExtensionIndexEntry>(StringComparer.OrdinalIgnoreCase);
-            }
-
-            var entries = new Dictionary<string, ExtensionIndexEntry>(StringComparer.OrdinalIgnoreCase);
-            foreach (var entry in document.RootElement.EnumerateArray())
-            {
-                if (!TryReadExtensionIndexEntry(entry, out var relativeLocation, out var indexEntry))
-                {
-                    continue;
-                }
-
-                entries[relativeLocation] = indexEntry;
-            }
-
-            return entries;
-        }
-        catch (IOException)
-        {
-            return new Dictionary<string, ExtensionIndexEntry>(StringComparer.OrdinalIgnoreCase);
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return new Dictionary<string, ExtensionIndexEntry>(StringComparer.OrdinalIgnoreCase);
-        }
-        catch (JsonException)
-        {
-            return new Dictionary<string, ExtensionIndexEntry>(StringComparer.OrdinalIgnoreCase);
-        }
-    }
-
-    private static bool TryReadExtensionIndexEntry(
-        JsonElement entry,
-        out string relativeLocation,
-        out ExtensionIndexEntry indexEntry)
-    {
-        // Entries in extensions.json look like:
-        //   { "identifier": { "id": "microsoft-aspire.aspire-vscode" },
-        //     "version": "1.16.0",
-        //     "relativeLocation": "microsoft-aspire.aspire-vscode-1.16.0",
-        //     "metadata": { "isPreReleaseVersion": false, "source": "gallery" } }
-        // "metadata" is absent for extensions VS Code did not install from the gallery, so both
-        // fields stay null and the caller skips the Marketplace comparison rather than guessing.
-        relativeLocation = string.Empty;
-        indexEntry = default!;
-
-        if (!entry.TryGetProperty("identifier", out var identifier) ||
-            !identifier.TryGetProperty("id", out var id) ||
-            !string.Equals(id.GetString(), ExtensionId, StringComparison.OrdinalIgnoreCase) ||
-            !entry.TryGetProperty("relativeLocation", out var relativeLocationElement) ||
-            relativeLocationElement.ValueKind != JsonValueKind.String)
         {
             return false;
         }
 
-        relativeLocation = relativeLocationElement.GetString()!;
-        bool? isPreReleaseVersion = null;
-        string? source = null;
-        if (entry.TryGetProperty("metadata", out var metadata) &&
-            metadata.ValueKind == JsonValueKind.Object)
-        {
-            if (metadata.TryGetProperty("isPreReleaseVersion", out var preReleaseElement) &&
-                preReleaseElement.ValueKind is JsonValueKind.True or JsonValueKind.False)
-            {
-                isPreReleaseVersion = preReleaseElement.GetBoolean();
-            }
-
-            if (metadata.TryGetProperty("source", out var sourceElement) &&
-                sourceElement.ValueKind == JsonValueKind.String)
-            {
-                source = sourceElement.GetString();
-            }
-        }
-
-        indexEntry = new ExtensionIndexEntry(isPreReleaseVersion, source);
-        return true;
-    }
-
-    private static HashSet<string> ReadObsoleteExtensions(string extensionsDirectory)
-    {
-        // VS Code marks an extension folder for deletion by adding it to `.obsolete` before the
-        // folder itself is removed, keyed by folder name:
-        //   { "microsoft-aspire.aspire-vscode-1.15.0": true }
-        // Those folders can outlive the uninstall for a whole session, so skipping them prevents
-        // a superseded copy from being reported as the installed version.
-        var obsoletePath = Path.Combine(extensionsDirectory, ".obsolete");
-        var obsoleteExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (!File.Exists(obsoletePath))
-        {
-            return obsoleteExtensions;
-        }
-
         try
         {
-            using var document = JsonDocument.Parse(File.ReadAllBytes(obsoletePath));
-            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            // IgnoreInaccessible lets the probe skip an unreadable extension folder and keep scanning
+            // the rest, instead of throwing and reporting the whole extensions root as "not found" (a
+            // false warning even when the Aspire extension is installed alongside an inaccessible one).
+            // The parameterless EnumerateDirectories overload uses legacy behavior that throws instead.
+            // AttributesToSkip is reset to None (the default EnumerationOptions skips Hidden/System) so an
+            // extension folder is never silently ignored because of an unexpected attribute.
+            var enumerationOptions = new EnumerationOptions
             {
-                return obsoleteExtensions;
-            }
+                IgnoreInaccessible = true,
+                AttributesToSkip = FileAttributes.None
+            };
 
-            foreach (var property in document.RootElement.EnumerateObject())
+            foreach (var directory in Directory.EnumerateDirectories(extensionsDirectory, "*", enumerationOptions))
             {
-                if (property.Value.ValueKind == JsonValueKind.True)
+                if (IsVersionedExtensionFolder(Path.GetFileName(directory)))
                 {
-                    obsoleteExtensions.Add(property.Name);
+                    return true;
                 }
             }
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
-        catch (JsonException)
-        {
+            // Treat an unreadable extensions directory as "not found" rather than failing the whole doctor run.
+            return false;
         }
 
-        return obsoleteExtensions;
+        return false;
     }
 
-    private static SemVersion? TryReadPackageVersion(string extensionDirectory)
-    {
-        var packageJsonPath = Path.Combine(extensionDirectory, "package.json");
-        if (!File.Exists(packageJsonPath))
-        {
-            return null;
-        }
-
-        try
-        {
-            using var document = JsonDocument.Parse(File.ReadAllBytes(packageJsonPath));
-            return document.RootElement.TryGetProperty("version", out var versionElement) &&
-                versionElement.ValueKind == JsonValueKind.String &&
-                SemVersion.TryParse(
-                    versionElement.GetString(),
-                    SemVersionStyles.Strict,
-                    out var version)
-                    ? version
-                    : null;
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return null;
-        }
-        catch (JsonException)
-        {
-            return null;
-        }
-    }
-
-    private static SemVersion? TryReadFolderVersion(string folderName)
-    {
-        // Installed extensions live in per-version folders that VS Code lowercases as
-        // "<publisher>.<name>-<version>", optionally followed by a target platform for
-        // platform-specific builds:
-        //   microsoft-aspire.aspire-vscode-1.16.0
-        //   microsoft-aspire.aspire-vscode-1.16.0-darwin-arm64
-        // The platform suffix has to be stripped before parsing, otherwise it reads as a
-        // semver pre-release tag and makes a stable build compare as older than it is.
-        // See https://code.visualstudio.com/api/working-with-extensions/publishing-extension#platformspecific-extensions.
-        var versionText = folderName[(ExtensionId.Length + 1)..];
-        foreach (var suffix in s_targetPlatformSuffixes)
-        {
-            var platformSuffix = "-" + suffix;
-            if (versionText.EndsWith(platformSuffix, StringComparison.OrdinalIgnoreCase))
-            {
-                versionText = versionText[..^platformSuffix.Length];
-                break;
-            }
-        }
-
-        return SemVersion.TryParse(versionText, SemVersionStyles.Strict, out var version)
-            ? version
-            : null;
-    }
-
+    // Matches an extension folder name against the Aspire extension id. A case-insensitive prefix match
+    // tolerates any installed version without spawning the VS Code CLI. Requiring a digit immediately
+    // after the trailing '-' pins the match to the version segment so a different extension whose id
+    // starts with ours (e.g. "microsoft-aspire.aspire-vscode-extras-1.0.0") is not treated as a match.
     private static bool IsVersionedExtensionFolder(string folderName)
     {
         const string prefix = ExtensionId + "-";
@@ -754,57 +399,13 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             folderName.Length > prefix.Length &&
             char.IsAsciiDigit(folderName[prefix.Length]);
     }
-
-    private static string NormalizeExtensionSource(string? source)
-        => source?.ToLowerInvariant() switch
-        {
-            "gallery" => "gallery",
-            "vsix" => "vsix",
-            "resource" => "resource",
-            _ => UnknownValue
-        };
-
-    private sealed record ExtensionRoot(string Path, string Channel);
-
-    private sealed record ExtensionIndexEntry(bool? IsPreReleaseVersion, string? Source);
-
-    private sealed record InstalledExtension(
-        SemVersion? Version,
-        bool? IsPreReleaseVersion,
-        string? Source);
-
-    private sealed class SemVersionPrecedenceComparer : IComparer<SemVersion?>
-    {
-        internal static SemVersionPrecedenceComparer Instance { get; } = new();
-
-        public int Compare(SemVersion? x, SemVersion? y)
-        {
-            if (ReferenceEquals(x, y))
-            {
-                return 0;
-            }
-
-            if (x is null)
-            {
-                return -1;
-            }
-
-            if (y is null)
-            {
-                return 1;
-            }
-
-            return SemVersion.ComparePrecedence(x, y);
-        }
-    }
 }
 
+/// <summary>
+/// Captures whether VS Code and the Aspire VS Code extension were detected, and the version the
+/// running extension reported for itself when it was available.
+/// </summary>
 internal sealed record VsCodeExtensionDetection(
     bool VsCodeInstalled,
     bool ExtensionInstalled,
-    string? ExtensionVersion = null,
-    string VsCodeChannel = "unknown",
-    string ExtensionReleaseChannel = "unknown",
-    string ExtensionSource = "unknown",
-    bool? IsPreReleaseVersion = null,
-    bool ActiveInstallationKnown = false);
+    string? ExtensionVersion = null);
