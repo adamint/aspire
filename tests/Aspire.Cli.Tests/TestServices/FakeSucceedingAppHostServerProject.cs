@@ -23,11 +23,12 @@ internal sealed class FakeSucceedingAppHostServerProject(string appDirectoryPath
     /// <c>src/</c> and the requested package version is discarded.
     /// </summary>
     /// <remarks>
-    /// The comparer is ordinal on purpose. The real implementation resolves a substitution through
-    /// <c>File.Exists</c>, so it is case-sensitive on Linux and case-insensitive on macOS and
-    /// Windows. Modelling the strictest platform here means a caller that looks a substitution up
-    /// under an arbitrary spelling fails everywhere rather than only on the platform CI happens not
-    /// to be running.
+    /// The comparer is ordinal on purpose, which is stricter than the real implementation: that one
+    /// matches a package id case-insensitively the way a feed does. Requiring the canonical spelling
+    /// here keeps the command's own canonicalization under test rather than resting on the probe,
+    /// which matters because <see cref="IAppHostServerProject"/> implementations that report no
+    /// substitution at all — the prebuilt scanner — leave the command as the only thing that
+    /// settles the spelling before the export is labelled.
     /// </remarks>
     public Dictionary<string, LocalProjectSubstitution> LocalProjectSubstitutions { get; } = new(StringComparer.Ordinal);
 

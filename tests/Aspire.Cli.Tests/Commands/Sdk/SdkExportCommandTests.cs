@@ -417,6 +417,37 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
     }
 
     /// <summary>
+    /// Rejecting a bad request under any spelling is half of it. The exported document records the
+    /// package name verbatim as the identity documentation is keyed on, and the scanner builds
+    /// <c>src/Aspire.Hosting</c> whatever was typed, so a good request has to be published under the
+    /// canonical id rather than the caller's spelling.
+    /// </summary>
+    [Fact]
+    public async Task SdkExportOfTheCorePackageIsPublishedUnderItsCanonicalNameWhateverTheCasing()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(
+            interactionService,
+            workspace,
+            rpcClient,
+            appHostServerProject,
+            identityVersion: "13.5.0");
+        appHostServerProject.AddLocalProjectSubstitution("Aspire.Hosting", "13.5.0");
+
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package aspire.hosting@13.5.0");
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal(("typescript", "Aspire.Hosting", "13.5.0"), rpcClient.LastExportRequest);
+
+        var stdout = Assert.Single(interactionService.DisplayedRawText, entry => entry.ConsoleOverride == ConsoleOutput.Standard);
+        using var document = JsonDocument.Parse(stdout.Text);
+        Assert.Equal("Aspire.Hosting", document.RootElement.GetProperty("package").GetProperty("name").GetString());
+    }
+
+    /// <summary>
     /// The same checkout on the same version line is exactly what the label claims, so it exports.
     /// </summary>
     [Fact]

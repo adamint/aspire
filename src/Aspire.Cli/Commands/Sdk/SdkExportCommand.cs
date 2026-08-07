@@ -115,12 +115,23 @@ internal sealed class SdkExportCommand : BaseCommand
                     $"Invalid package '{package}'. Expected PackageName@Version (e.g. Aspire.Hosting.Redis@13.5.0); project references are not supported by sdk export.");
             }
 
-            packageName = reference.Name;
             packageVersion = reference.Version;
+
+            // NuGet package ids are case-insensitive, so `aspire.hosting` names the core package
+            // exactly as `Aspire.Hosting` does:
+            // https://learn.microsoft.com/nuget/consume-packages/finding-and-choosing-packages#package-identifiers.
+            // Nothing downstream is. The substitution probe resolves the name through the
+            // filesystem, the generated scanner project-references src/Aspire.Hosting under the
+            // canonical spelling no matter what was asked for, and the exported document records
+            // this string verbatim as the package identity documentation is keyed on. Settling on
+            // the canonical spelling here — before the scanner project is created and validated —
+            // is what keeps the guard, the scanner, and the label describing one package.
+            var isCorePackage = string.Equals(reference.Name, CorePackageName, StringComparison.OrdinalIgnoreCase);
+            packageName = isCorePackage ? CorePackageName : reference.Name;
 
             // The core package is always restored by the scanner AppHost, so adding it again would
             // produce a duplicate package reference.
-            if (string.Equals(packageName, CorePackageName, StringComparison.OrdinalIgnoreCase))
+            if (isCorePackage)
             {
                 // The scanner loads the core assemblies this CLI was built against, so a different
                 // requested version would be exported as this CLI's surface under someone else's
@@ -258,19 +269,16 @@ internal sealed class SdkExportCommand : BaseCommand
                    $"Re-run without the override, or export {CorePackageName} from an installed CLI.";
         }
 
-        // The core package is matched case-insensitively but resolved through the filesystem, and
-        // the generated scanner project-references src/Aspire.Hosting under that exact spelling no
-        // matter how the caller spelled it. Looking the substitution up under the caller's spelling
-        // would miss on a case-sensitive filesystem — `--package aspire.hosting` on Linux — and skip
-        // the whole check while the scanner still built the checkout's core surface.
-        var lookupName = isCorePackage ? CorePackageName : packageName;
-
-        if (serverProject.GetLocalProjectSubstitution(lookupName) is not { } substitution)
+        // The name arrives canonical: the caller settles the core package on CorePackageName before
+        // the scanner project is created, because this lookup resolves through the filesystem and
+        // would miss `aspire.hosting` on a case-sensitive one while the scanner still built
+        // src/Aspire.Hosting.
+        if (serverProject.GetLocalProjectSubstitution(packageName) is not { } substitution)
         {
             return null;
         }
 
-        var preamble = $"This CLI runs from an Aspire repository checkout, so {lookupName} is built from {substitution.ProjectPath} " +
+        var preamble = $"This CLI runs from an Aspire repository checkout, so {packageName} is built from {substitution.ProjectPath} " +
                        $"instead of being restored from a package feed.";
 
         if (ExecutionContext.IdentityOverridden)
@@ -297,7 +305,7 @@ internal sealed class SdkExportCommand : BaseCommand
             return isCorePackage
                 ? $"{preamble} That checkout builds {checkoutPrefix}, but this CLI is {packageVersion}, and exporting it " +
                   $"would describe the checkout's API surface under this CLI's version. " +
-                  $"Export {lookupName} from a {checkoutPrefix} CLI, or point this one at a {StripBuildMetadata(packageVersion)} checkout."
+                  $"Export {packageName} from a {checkoutPrefix} CLI, or point this one at a {StripBuildMetadata(packageVersion)} checkout."
                 : $"{preamble} That checkout builds {checkoutPrefix}, but {packageVersion} was requested, and exporting it " +
                   $"would describe the checkout's API surface under the requested version. " +
                   $"Run the export with the {StripBuildMetadata(packageVersion)} CLI instead.";

@@ -156,6 +156,69 @@ public class DotNetBasedAppHostServerPackageReferenceTests(ITestOutputHelper out
     }
 
     /// <summary>
+    /// A NuGet package id is case-insensitive, but this resolves one through the filesystem, which
+    /// is not on Linux. Probing the caller's spelling let it decide whether the checkout was
+    /// substituted at all: <c>aspire.hosting.redis</c> found nothing there while macOS and Windows
+    /// found <c>src/Aspire.Hosting.Redis</c>, so a caller that publishes version-keyed artifacts saw
+    /// no substitution to guard against on the one platform the docs pipeline runs on.
+    /// </summary>
+    [Fact]
+    public void GetLocalProjectSubstitution_ResolvesFirstPartyProjectsUnderAnyCasing()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appPath = workspace.WorkspaceRoot.FullName;
+
+        var redisProjectPath = Path.Combine(appPath, "src", "Aspire.Hosting.Redis", "Aspire.Hosting.Redis.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(redisProjectPath)!);
+        File.WriteAllText(redisProjectPath, "<Project />");
+
+        var project = CreateProject(appPath, Path.Combine(appPath, ".aspire_server"));
+
+        // The on-disk spelling, not the caller's. Asserting the canonical path is what makes this
+        // meaningful on a case-insensitive filesystem too, where probing the caller's spelling
+        // succeeds but hands back a path spelled the way the request was.
+        Assert.Equal(redisProjectPath, project.GetLocalProjectSubstitution("aspire.hosting.redis")?.ProjectPath);
+        Assert.Equal(redisProjectPath, project.GetLocalProjectSubstitution("ASPIRE.HOSTING.REDIS")?.ProjectPath);
+
+        // Case-insensitive matching still only reports what the checkout actually contains.
+        Assert.Null(project.GetLocalProjectSubstitution("aspire.hosting.qdrant"));
+    }
+
+    /// <summary>
+    /// The substitution check and the generated project have to make the same decision, or a caller
+    /// that was told nothing would be substituted still gets a scanner built from the checkout.
+    /// </summary>
+    [Fact]
+    public async Task CreateProjectFiles_SubstitutesTheCheckoutProjectUnderAnyCasing()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appPath = workspace.WorkspaceRoot.FullName;
+        var projectModelPath = Path.Combine(appPath, ".aspire_server");
+
+        var redisProjectPath = Path.Combine(appPath, "src", "Aspire.Hosting.Redis", "Aspire.Hosting.Redis.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(redisProjectPath)!);
+        File.WriteAllText(redisProjectPath, "<Project />");
+
+        var project = CreateProject(appPath, projectModelPath);
+
+        await project.CreateProjectFilesAsync(
+            [IntegrationReference.FromExactPackage("aspire.hosting.redis", "13.4.0")]);
+
+        var document = XDocument.Load(Path.Combine(projectModelPath, "AppHostServer.csproj"));
+
+        Assert.Equal(
+            [redisProjectPath],
+            document.Descendants("ProjectReference").Select(element => element.Attribute("Include")!.Value));
+
+        // No package reference for the integration: the checkout supplies it, which is exactly what
+        // GetLocalProjectSubstitution reports to callers that publish version-keyed artifacts. The
+        // two the template always carries are all that is left.
+        Assert.Equal(
+            ["StreamJsonRpc", "Google.Protobuf"],
+            document.Descendants("PackageReference").Select(element => element.Attribute("Include")!.Value));
+    }
+
+    /// <summary>
     /// The version a checkout builds has to come from the checkout, because the version this CLI
     /// reports is overrideable. <c>eng/Versions.props</c> is where the repository states it.
     /// </summary>

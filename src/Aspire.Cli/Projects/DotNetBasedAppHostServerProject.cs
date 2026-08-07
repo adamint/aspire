@@ -502,10 +502,22 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
 
     /// <inheritdoc />
     /// <remarks>
+    /// <para>
     /// This is the same decision <see cref="CreateProjectFile"/> makes, kept in one place so a
     /// caller asking "will my requested version survive?" cannot drift from what the generated
     /// project actually does. Only first-party <c>Aspire.Hosting.*</c> packages live under
     /// <c>src/</c>, so a third-party integration is always restored from a feed even here.
+    /// </para>
+    /// <para>
+    /// The name is matched case-insensitively, because a NuGet package id is
+    /// (<see href="https://learn.microsoft.com/nuget/consume-packages/finding-and-choosing-packages#package-identifiers"/>)
+    /// while the filesystem this resolves through is not on Linux. Probing the caller's spelling
+    /// directly meant <c>aspire.hosting.redis</c> found nothing there and <c>src/Aspire.Hosting.Redis</c>
+    /// on macOS and Windows, so how a package was spelled decided whether the checkout was used at
+    /// all — and callers that publish version-keyed artifacts saw no substitution to guard against.
+    /// The returned path is always the on-disk spelling so the generated project reference and the
+    /// caller's check name the same project.
+    /// </para>
     /// </remarks>
     public LocalProjectSubstitution? GetLocalProjectSubstitution(string packageName)
     {
@@ -514,10 +526,33 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
             return null;
         }
 
-        var projectPath = Path.Combine(_repoRoot, "src", packageName, $"{packageName}.csproj");
-        return File.Exists(projectPath)
-            ? new LocalProjectSubstitution(projectPath, GetRepositoryVersionPrefix())
-            : null;
+        var srcPath = Path.Combine(_repoRoot, "src");
+        if (!Directory.Exists(srcPath))
+        {
+            return null;
+        }
+
+        // The directory listing settles the spelling on every platform. Probing
+        // Path.Combine(src, packageName) instead would hand back the caller's spelling wherever
+        // File.Exists is case-insensitive, so the same request produced two different project paths
+        // depending on the filesystem. Enumerate and compare rather than passing the caller's name
+        // as a search pattern, so a package id that happens to contain a wildcard cannot match a
+        // directory it does not name.
+        foreach (var directory in Directory.EnumerateDirectories(srcPath))
+        {
+            var canonicalName = Path.GetFileName(directory);
+            if (!string.Equals(canonicalName, packageName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var projectPath = Path.Combine(directory, $"{canonicalName}.csproj");
+            return File.Exists(projectPath)
+                ? new LocalProjectSubstitution(projectPath, GetRepositoryVersionPrefix())
+                : null;
+        }
+
+        return null;
     }
 
     /// <summary>
