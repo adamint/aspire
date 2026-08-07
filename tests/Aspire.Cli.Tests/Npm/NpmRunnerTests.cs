@@ -481,16 +481,58 @@ public class NpmRunnerTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task WaitForProcessExitAfterTerminationAsync_ReturnsFalseWhenBudgetExpires()
+    public async Task WaitWithinTerminationBudgetAsync_ReturnsFalseWhenBudgetExpires()
     {
         var timeProvider = new FakeTimeProvider();
         var processExit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var waitTask = NpmRunner.WaitForProcessExitAfterTerminationAsync(processExit.Task, timeProvider);
+        var waitTask = NpmRunner.WaitWithinTerminationBudgetAsync(processExit.Task, timeProvider);
         await Task.Yield();
         timeProvider.Advance(NpmRunner.ProcessTerminationTimeout);
 
         Assert.False(await waitTask.DefaultTimeout());
+    }
+
+    [Fact]
+    public async Task WaitWithinTerminationBudgetAsync_ReturnsTrueWhenTaskCompletesInsideBudget()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var processExit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var waitTask = NpmRunner.WaitWithinTerminationBudgetAsync(processExit.Task, timeProvider);
+        await Task.Yield();
+        timeProvider.Advance(NpmRunner.ProcessTerminationTimeout - TimeSpan.FromMilliseconds(1));
+        processExit.SetResult();
+
+        Assert.True(await waitTask.DefaultTimeout());
+    }
+
+    [Fact]
+    public void CreateAnonymousInternalRegistryViewArguments_IsolatesEveryAmbientNpmConfigurationSource()
+    {
+        var arguments = NpmRunner.CreateAnonymousInternalRegistryViewArguments(
+            "@microsoft/aspire-cli@latest",
+            "https://example.test/registry/",
+            "/isolated/user.npmrc",
+            "/isolated/global.npmrc",
+            "/isolated/cache");
+
+        // --registry alone does not override a user-level `@microsoft:registry`, and an inherited
+        // `json=true` makes `npm view <pkg> version` emit a quoted JSON string the parser rejects.
+        // Assert the whole list so dropping any one of these silently loses the isolation.
+        Assert.Equal(
+            [
+                "view",
+                "@microsoft/aspire-cli@latest",
+                "version",
+                "--registry", "https://example.test/registry/",
+                "--userconfig", "/isolated/user.npmrc",
+                "--globalconfig", "/isolated/global.npmrc",
+                "--cache", "/isolated/cache",
+                "--prefer-online",
+                "--json=false"
+            ],
+            arguments);
     }
 
     [Fact]

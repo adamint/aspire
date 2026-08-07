@@ -474,7 +474,6 @@ jobs:
             echo "   | \`SkipNuGetPublish\` | \`true\` |"
             echo "   | \`SkipNpmRidPublish\` | \`true\` |"
             echo "   | \`SkipNpmPointerPublish\` | \`true\` |"
-            echo "   | \`SkipNpmMirrorValidation\` | \`true\` |"
             echo "   | \`SkipChannelPromotion\` | \`true\` |"
             echo "   | \`SkipWinGetPublish\` | \`true\` |"
             echo "   | \`SkipHomebrewValidation\` | \`true\` |"

@@ -10,12 +10,35 @@ public sealed class ReleasePublishNugetPipelineTests
     private readonly string _repoRoot = RepoRoot.Path;
 
     /// <summary>
-    /// The public registry smoke test runs whenever the release publishes npm packages or seeds the
-    /// internal mirror. It is skipped only for stable recovery runs unrelated to npm, which set all
-    /// three npm skips to <c>true</c>.
+    /// The public registry smoke test runs whenever the release publishes npm packages or performs
+    /// a mirror-only rerun. It is never gated on <c>NpmInternalMirrorAction</c> being enabled, so a
+    /// run that publishes npm packages always proves the public package installs.
     /// </summary>
     private const string PublicNpmSmokeCondition =
-        "condition: and(succeeded(), or(eq('${{ parameters.SkipNpmRidPublish }}', 'false'), eq('${{ parameters.SkipNpmPointerPublish }}', 'false'), eq('${{ parameters.SkipNpmMirrorValidation }}', 'false')))";
+        "condition: and(succeeded(), or(eq('${{ parameters.SkipNpmRidPublish }}', 'false'), eq('${{ parameters.SkipNpmPointerPublish }}', 'false'), eq('${{ parameters.NpmInternalMirrorAction }}', 'only')))";
+
+    /// <summary>
+    /// Internal mirror seeding and validation is its own release action: it runs when
+    /// <c>NpmInternalMirrorAction</c> is <c>auto</c> and this run publishes npm packages, or when it
+    /// is <c>only</c> (an intentional mirror-only rerun).
+    /// </summary>
+    private const string InternalMirrorCondition =
+        "condition: and(succeeded(), or(and(eq('${{ parameters.NpmInternalMirrorAction }}', 'auto'), or(eq('${{ parameters.SkipNpmRidPublish }}', 'false'), eq('${{ parameters.SkipNpmPointerPublish }}', 'false'))), eq('${{ parameters.NpmInternalMirrorAction }}', 'only')))";
+
+    /// <summary>
+    /// Compile-time gate for every stable npm step in the release job. A release rerun that is
+    /// unrelated to npm (both publish skips set, <c>NpmInternalMirrorAction</c> left at
+    /// <c>auto</c>) emits none of these steps.
+    /// </summary>
+    private const string StableNpmWorkGate =
+        "- ${{ if and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), eq(parameters.NpmInternalMirrorAction, 'only'))) }}:";
+
+    /// <summary>
+    /// Compile-time gate for staging npm artifacts. npm artifacts are staged when the run publishes
+    /// npm packages, or for a stable mirror-only rerun that validates already-published packages.
+    /// </summary>
+    private const string StableNpmStagingGate =
+        "- ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), eq(parameters.NpmInternalMirrorAction, 'only'))) }}:";
 
     [Fact]
     public async Task ValidatesNpmPublishPreconditionsBeforeNuGetPublish()
@@ -122,14 +145,109 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.DoesNotContain("SkipNpmPublish", spec);
         Assert.Contains("displayName: '[Advanced] Skip npm RID Package Publishing", pipeline);
         Assert.Contains("displayName: '[Advanced] Skip npm Pointer Package Publishing", pipeline);
-        Assert.Contains("displayName: '[Advanced] Skip npm Internal Mirror Seeding and Validation", pipeline);
-        Assert.Equal("false", FindYamlParameterDefault(pipeline, "SkipNpmMirrorValidation"));
+        Assert.DoesNotContain("SkipNpmMirrorValidation", pipeline);
+        Assert.DoesNotContain("SkipNpmMirrorValidation", spec);
+        Assert.Contains("displayName: '[Advanced] npm Internal Mirror Seeding and Validation", pipeline);
+        Assert.Equal("auto", FindYamlParameterDefault(pipeline, "NpmInternalMirrorAction"));
         Assert.Contains(
-            "or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), eq(parameters.SkipNpmMirrorValidation, false)))",
+            "or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), eq(parameters.NpmInternalMirrorAction, 'only')))",
             pipeline);
         Assert.Contains(
-            "and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true), or(eq(parameters.DryRun, true), eq(parameters.IsPrerelease, true), eq(parameters.SkipNpmMirrorValidation, true)))",
+            "and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true), or(eq(parameters.DryRun, true), eq(parameters.IsPrerelease, true), ne(parameters.NpmInternalMirrorAction, 'only')))",
             pipeline);
+    }
+
+    /// <summary>
+    /// Evaluates the npm gates against the operator recipes documented in
+    /// <c>docs/release-process.md</c>. The decisive case is the recovery rerun that is unrelated to
+    /// npm (both publish skips set, <c>NpmInternalMirrorAction</c> left at its <c>auto</c> default):
+    /// it must emit no npm steps at all, so it cannot fail on a source build whose npm pointer
+    /// package was never published.
+    /// </summary>
+    [Theory]
+    // ridSkip, pointerSkip, mirrorAction, dryRun, prerelease, stagesNpmArtifacts, runsStableNpmSteps, seedsMirror, runsPublicSmoke
+    [InlineData(false, false, "auto", false, false, true, true, true, true)]
+    [InlineData(true, true, "only", false, false, true, true, true, true)]
+    [InlineData(false, true, "auto", false, false, true, true, true, true)]
+    [InlineData(false, false, "skip", false, false, true, true, false, true)]
+    [InlineData(true, true, "auto", false, false, false, false, false, false)]
+    [InlineData(true, true, "skip", false, false, false, false, false, false)]
+    [InlineData(false, false, "auto", true, false, true, false, false, false)]
+    [InlineData(true, true, "auto", false, true, false, false, false, false)]
+    public async Task NpmGatesFollowDocumentedReleaseRecipes(
+        bool ridSkip,
+        bool pointerSkip,
+        string mirrorAction,
+        bool dryRun,
+        bool prerelease,
+        bool stagesNpmArtifacts,
+        bool runsStableNpmSteps,
+        bool seedsMirror,
+        bool runsPublicSmoke)
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+        const string placeholderGate =
+            "- ${{ if and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true), or(eq(parameters.DryRun, true), eq(parameters.IsPrerelease, true), ne(parameters.NpmInternalMirrorAction, 'only'))) }}:";
+
+        foreach (var gate in new[] { StableNpmStagingGate, StableNpmWorkGate, placeholderGate })
+        {
+            Assert.Contains(gate, pipeline, StringComparison.Ordinal);
+        }
+
+        foreach (var condition in new[] { PublicNpmSmokeCondition, InternalMirrorCondition })
+        {
+            Assert.Contains(condition, pipeline, StringComparison.Ordinal);
+        }
+
+        var parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["SkipNpmRidPublish"] = ridSkip ? "true" : "false",
+            ["SkipNpmPointerPublish"] = pointerSkip ? "true" : "false",
+            ["NpmInternalMirrorAction"] = mirrorAction,
+            ["DryRun"] = dryRun ? "true" : "false",
+            ["IsPrerelease"] = prerelease ? "true" : "false"
+        };
+
+        var stages = EvaluateGate(StableNpmStagingGate, parameters);
+        var stableSteps = EvaluateGate(StableNpmWorkGate, parameters);
+
+        Assert.Equal(stagesNpmArtifacts, stages);
+        Assert.Equal(runsStableNpmSteps, stableSteps);
+
+        // The empty-placeholder gate must stay the exact negation of the staging gate, otherwise a
+        // release either stages nothing and fails on missing artifacts, or double-declares them.
+        Assert.Equal(!stages, EvaluateGate(placeholderGate, parameters));
+
+        // Mirror and smoke steps live inside the stable gate, so their effective behavior is the
+        // gate combined with the step condition.
+        Assert.Equal(seedsMirror, stableSteps && EvaluateCondition(InternalMirrorCondition, parameters));
+        Assert.Equal(runsPublicSmoke, stableSteps && EvaluateCondition(PublicNpmSmokeCondition, parameters));
+
+        // Comment 5 regression guard: the public install smoke never depends on mirror seeding.
+        if (stableSteps && mirrorAction == "skip")
+        {
+            Assert.True(EvaluateCondition(PublicNpmSmokeCondition, parameters));
+        }
+    }
+
+    private static bool EvaluateGate(string gate, IReadOnlyDictionary<string, string> parameters)
+    {
+        const string prefix = "- ${{ if ";
+        const string suffix = " }}:";
+
+        Assert.StartsWith(prefix, gate, StringComparison.Ordinal);
+        Assert.EndsWith(suffix, gate, StringComparison.Ordinal);
+
+        return AzurePipelinesExpression.Evaluate(gate[prefix.Length..^suffix.Length], parameters);
+    }
+
+    private static bool EvaluateCondition(string condition, IReadOnlyDictionary<string, string> parameters)
+    {
+        const string prefix = "condition: ";
+
+        Assert.StartsWith(prefix, condition, StringComparison.Ordinal);
+
+        return AzurePipelinesExpression.Evaluate(condition[prefix.Length..], parameters);
     }
 
     [Fact]
@@ -224,7 +342,7 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.All(
             installerOnlyModeBlocks.Cast<System.Text.RegularExpressions.Match>(),
             block => Assert.Contains(
-                "\"${{ parameters.SkipNpmMirrorValidation }}\" -eq \"true\"",
+                "\"${{ parameters.NpmInternalMirrorAction }}\" -ne \"only\"",
                 block.Groups["body"].Value,
                 StringComparison.Ordinal));
         Assert.Equal(
@@ -337,10 +455,10 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.Contains("aspire --version output matched the published npm package version", pipeline);
         Assert.Contains("npm view $packageSpec version --registry=https://registry.npmjs.org/", pipeline);
         Assert.Contains(
-            "Registry validation still runs unless SkipNpmRidPublish, SkipNpmPointerPublish, and SkipNpmMirrorValidation are all true.",
+            "Registry validation still runs unless this run neither publishes npm packages nor sets NpmInternalMirrorAction=only.",
             pipeline);
 
-        // The public smoke test must not be gated on SkipNpmMirrorValidation alone. A run that
+        // The public smoke test must not be gated on the internal mirror action. A run that
         // publishes npm packages has to prove the package installs from registry.npmjs.org before
         // channel promotion, even when the operator opted out of internal mirror seeding.
         Assert.Contains(
@@ -354,10 +472,8 @@ public sealed class ReleasePublishNugetPipelineTests
     {
         var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
 
-        var stableRealGate =
-            "- ${{ if and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false)) }}:";
-        const string mirrorCondition =
-            "condition: and(succeeded(), eq('${{ parameters.SkipNpmMirrorValidation }}', 'false'))";
+        var stableRealGate = StableNpmWorkGate;
+        const string mirrorCondition = InternalMirrorCondition;
         const string anonymousViewCommand =
             "$viewOutput = npm view \"$packageName@latest\" version --prefer-online --registry=$internalRegistry --userconfig=$anonymousNpmrc --globalconfig=$anonymousGlobalNpmrc --cache=$attemptCache --json=false --loglevel=warn 2>&1";
         var stableRealGateIndex = FindRequiredText(pipeline, stableRealGate);
@@ -502,10 +618,8 @@ public sealed class ReleasePublishNugetPipelineTests
     {
         var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
 
-        var nodeSetupGate =
-            "- ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), eq(parameters.SkipNpmMirrorValidation, false))) }}:";
-        var stableRealGate =
-            "- ${{ if and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false)) }}:";
+        var nodeSetupGate = StableNpmStagingGate;
+        var stableRealGate = StableNpmWorkGate;
         var bothSkippedMessageIndex = FindRequiredText(
             pipeline,
             "displayName: 'Skip npm Packages (flagged)'");
@@ -536,7 +650,7 @@ public sealed class ReleasePublishNugetPipelineTests
             pipeline,
             StringComparison.Ordinal);
         Assert.Contains(
-            "condition: and(succeeded(), eq('${{ parameters.SkipNpmMirrorValidation }}', 'true'))",
+            "condition: and(succeeded(), eq('${{ parameters.NpmInternalMirrorAction }}', 'skip'))",
             ExtractYamlStep(pipeline, "displayName: 'Skip npm Internal Mirror Validation (flagged)'"),
             StringComparison.Ordinal);
     }
@@ -549,8 +663,7 @@ public sealed class ReleasePublishNugetPipelineTests
             pipeline,
             "displayName: 'Download and Re-publish Artifacts'",
             "displayName: 'Validate, Publish, and Promote'");
-        var stableNpmGate =
-            "- ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), eq(parameters.SkipNpmMirrorValidation, false))) }}:";
+        var stableNpmGate = StableNpmStagingGate;
 
         var downloadGateIndex = FindRequiredText(prepareStage, stableNpmGate);
         var downloadIndex = FindRequiredText(
@@ -568,7 +681,7 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.True(prepareGateIndex > downloadIndex);
         Assert.True(prepareGateIndex < prepareIndex);
         Assert.Contains(
-            "- ${{ if and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true), or(eq(parameters.DryRun, true), eq(parameters.IsPrerelease, true), eq(parameters.SkipNpmMirrorValidation, true))) }}:",
+            "- ${{ if and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true), or(eq(parameters.DryRun, true), eq(parameters.IsPrerelease, true), ne(parameters.NpmInternalMirrorAction, 'only'))) }}:",
             prepareStage,
             StringComparison.Ordinal);
 
@@ -720,7 +833,6 @@ public sealed class ReleasePublishNugetPipelineTests
             "SkipNuGetPublish",
             "SkipNpmRidPublish",
             "SkipNpmPointerPublish",
-            "SkipNpmMirrorValidation",
             "SkipChannelPromotion",
             "SkipWinGetPublish",
             "SkipGitHubTasks",
@@ -730,9 +842,11 @@ public sealed class ReleasePublishNugetPipelineTests
             "SkipVSCodeExtensionPublish"
         })
         {
-            var expectedValue = parameterName == "SkipNpmMirrorValidation" ? "false" : "true";
-            Assert.Contains($"{parameterName}={expectedValue}", mirrorRecovery, StringComparison.Ordinal);
+            Assert.Contains($"{parameterName}=true", mirrorRecovery, StringComparison.Ordinal);
         }
+
+        // The mirror-only rerun is expressed by the dedicated action, not by an extra skip flag.
+        Assert.Contains("NpmInternalMirrorAction=only", mirrorRecovery, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -759,13 +873,13 @@ public sealed class ReleasePublishNugetPipelineTests
 
         Assert.DoesNotContain("=== Skipping npm Publishing", pipeline);
         Assert.Contains(
-            "=== Skipping npm Package Publishing (SkipNpmRidPublish=true and SkipNpmPointerPublish=true); internal mirror handling follows SkipNpmMirrorValidation ===",
+            "=== Skipping npm Package Publishing (SkipNpmRidPublish=true and SkipNpmPointerPublish=true); internal mirror handling follows NpmInternalMirrorAction=${{ parameters.NpmInternalMirrorAction }} ===",
             pipeline);
         Assert.DoesNotContain(
             "Registry validation will still install the selected source build's pointer package version from npm.",
             pipeline);
         Assert.Contains(
-            "Registry validation still runs unless SkipNpmRidPublish, SkipNpmPointerPublish, and SkipNpmMirrorValidation are all true.",
+            "Registry validation still runs unless this run neither publishes npm packages nor sets NpmInternalMirrorAction=only.",
             pipeline);
         Assert.Contains(
             "Write-Host \" (PARTIAL - pointer publish skipped; registry smoke still ran)\"",
@@ -773,7 +887,7 @@ public sealed class ReleasePublishNugetPipelineTests
 
         // Reaching the pointer-skip summary branch means RID publishing ran, so the public smoke
         // test ran too. A "registry smoke skipped" summary there would contradict the step's
-        // condition, which only skips the smoke test when all three npm skips are true.
+        // condition, which never skips the smoke test for a run that publishes npm packages.
         Assert.DoesNotContain(
             "Write-Host \" (PARTIAL - pointer publish skipped; registry smoke skipped)\"",
             pipeline);
@@ -784,12 +898,18 @@ public sealed class ReleasePublishNugetPipelineTests
             pipeline,
             "Write-Host \" (PARTIAL - pointer publish skipped; registry smoke still ran)\"");
         var mirrorSummaryConditionIndex = pipeline.IndexOf(
-            "if (\"${{ parameters.SkipNpmMirrorValidation }}\" -eq \"true\") {",
+            "} elseif (\"${{ parameters.NpmInternalMirrorAction }}\" -eq \"skip\") {",
             partialPointerSummaryIndex,
             StringComparison.Ordinal);
         Assert.True(partialPointerSummaryIndex < ranSmokeSummaryIndex);
         Assert.True(ranSmokeSummaryIndex < mirrorSummaryConditionIndex);
-        Assert.Contains("║ npm Mirror Skip: ${{ parameters.SkipNpmMirrorValidation }}", pipeline);
+        Assert.Contains("║ npm Mirror:     ${{ parameters.NpmInternalMirrorAction }}", pipeline);
+
+        // 'auto' with both publish skips set is a release that did no npm work at all. The summary
+        // must not report the mirror as EXECUTED for those runs.
+        Assert.Contains(
+            "Write-Host \" (NOT RUN - this release published no npm packages)\"",
+            pipeline);
     }
 
     [Fact]
@@ -800,14 +920,13 @@ public sealed class ReleasePublishNugetPipelineTests
             pipeline,
             "displayName: 'Validate Published npm Package from Registry'");
 
-        // Regression guard: gating this pre-existing step on SkipNpmMirrorValidation alone let a
-        // run publish @microsoft/aspire-cli to npm and promote the channel without ever proving
+        // Regression guard: gating this pre-existing step on the internal mirror flag let a run
+        // publish @microsoft/aspire-cli to npm and promote the channel without ever proving
         // `npm install -g @microsoft/aspire-cli@<version>` works.
         Assert.Contains(PublicNpmSmokeCondition, smokeStep, StringComparison.Ordinal);
 
-        Assert.DoesNotContain(
-            "condition: and(succeeded(), eq('${{ parameters.SkipNpmMirrorValidation }}', 'false'))",
-            smokeStep);
+        Assert.DoesNotContain(InternalMirrorCondition, smokeStep);
+        Assert.DoesNotContain("NpmInternalMirrorAction }}', 'skip'", smokeStep);
 
         // The mirror seed step reads NpmPublishedPointerVersion from the smoke test, so the smoke
         // test must run in every configuration where the mirror steps run.
@@ -815,7 +934,7 @@ public sealed class ReleasePublishNugetPipelineTests
             pipeline,
             "displayName: 'Seed and Validate npm Internal Mirror'");
         Assert.Contains(
-            "condition: and(succeeded(), eq('${{ parameters.SkipNpmMirrorValidation }}', 'false'))",
+            InternalMirrorCondition,
             mirrorStep,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1093,8 +1212,13 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.Contains("| \\`SkipNuGetPublish\\` | \\`true\\` |", instructions);
         Assert.Contains("| \\`SkipNpmRidPublish\\` | \\`true\\` |", instructions);
         Assert.Contains("| \\`SkipNpmPointerPublish\\` | \\`true\\` |", instructions);
-        Assert.Contains("| \\`SkipNpmMirrorValidation\\` | \\`true\\` |", instructions);
         Assert.Contains("| \\`SkipChannelPromotion\\` | \\`true\\` |", instructions);
+
+        // The extension-only recipe must not have to opt out of npm mirror work. Leaving
+        // NpmInternalMirrorAction at its 'auto' default already emits no npm steps for a run that
+        // publishes no npm packages, so listing a mirror flag here would be a regression.
+        Assert.DoesNotContain("NpmInternalMirrorAction", instructions);
+        Assert.DoesNotContain("SkipNpmMirrorValidation", instructions);
         Assert.Contains("| \\`SkipWinGetPublish\\` | \\`true\\` |", instructions);
         Assert.Contains("| \\`SkipHomebrewValidation\\` | \\`true\\` |", instructions);
         Assert.Contains("| \\`SkipGitHubTasks\\` | \\`true\\` |", instructions);

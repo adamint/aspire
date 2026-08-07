@@ -164,17 +164,12 @@ internal sealed class NpmRunner : INpmRunner
 
             var versionOutput = await RunNpmCommandInDirectoryAsync(
                 npmPath,
-                [
-                    "view",
+                CreateAnonymousInternalRegistryViewArguments(
                     packageSpecifier,
-                    "version",
-                    "--registry", _internalRegistry,
-                    "--userconfig", userConfigPath,
-                    "--globalconfig", globalConfigPath,
-                    "--cache", cacheDirectory,
-                    "--prefer-online",
-                    "--json=false"
-                ],
+                    _internalRegistry,
+                    userConfigPath,
+                    globalConfigPath,
+                    cacheDirectory),
                 projectDirectory,
                 removeAmbientNpmConfiguration: true,
                 cancellationToken);
@@ -293,6 +288,51 @@ internal sealed class NpmRunner : INpmRunner
 
         return npmPath;
     }
+
+    /// <summary>
+    /// Builds the <c>npm view</c> argument list that resolves a package from the internal registry
+    /// with no ambient npm configuration in effect.
+    /// </summary>
+    /// <remarks>
+    /// Every argument here is load-bearing, so this list is built in one place and asserted by
+    /// <c>NpmRunnerTests</c>:
+    /// <list type="bullet">
+    /// <item><description>
+    /// <c>--registry</c> alone is NOT enough. A user-level <c>@microsoft:registry=</c> takes
+    /// precedence over it, so <c>--userconfig</c> and <c>--globalconfig</c> point at freshly
+    /// created empty files to make <c>--registry</c> authoritative.
+    /// </description></item>
+    /// <item><description>
+    /// <c>--cache</c> uses a private directory so a previously cached answer from a different
+    /// registry cannot satisfy the request, and <c>--prefer-online</c> revalidates metadata.
+    /// </description></item>
+    /// <item><description>
+    /// <c>--json=false</c> forces deterministic text output. An inherited <c>json=true</c> makes
+    /// <c>npm view &lt;pkg&gt; version</c> print a quoted JSON string (<c>"13.4.6"</c>), which the
+    /// version parser rejects.
+    /// </description></item>
+    /// </list>
+    /// See https://docs.npmjs.com/cli/v11/using-npm/config and
+    /// https://docs.npmjs.com/cli/v11/configuring-npm/npmrc#files.
+    /// </remarks>
+    internal static string[] CreateAnonymousInternalRegistryViewArguments(
+        string packageSpecifier,
+        string registry,
+        string userConfigPath,
+        string globalConfigPath,
+        string cacheDirectory)
+        =>
+        [
+            "view",
+            packageSpecifier,
+            "version",
+            "--registry", registry,
+            "--userconfig", userConfigPath,
+            "--globalconfig", globalConfigPath,
+            "--cache", cacheDirectory,
+            "--prefer-online",
+            "--json=false"
+        ];
 
     private string CreateIsolatedTempDirectory()
     {
@@ -517,7 +557,7 @@ internal sealed class NpmRunner : INpmRunner
 
             _logger.LogDebug("Terminating npm process {ProcessId} because the operation was cancelled.", process.Id);
             process.Kill(entireProcessTree: true);
-            if (!await WaitForProcessExitAfterTerminationAsync(
+            if (!await WaitWithinTerminationBudgetAsync(
                 process.WaitForExitAsync(CancellationToken.None),
                 _timeProvider).ConfigureAwait(false))
             {
@@ -539,24 +579,12 @@ internal sealed class NpmRunner : INpmRunner
 
         try
         {
-            await streamsTask.WaitAsync(ProcessTerminationTimeout, _timeProvider).ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            _logger.LogDebug(
-                "npm output streams did not close within {Timeout} after process termination.",
-                ProcessTerminationTimeout);
-
-            _ = streamsTask.ContinueWith(
-                static (task, state) =>
-                {
-                    var logger = (ILogger<NpmRunner>)state!;
-                    logger.LogDebug(task.Exception, "npm output streams faulted after the termination drain timed out.");
-                },
-                _logger,
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+            if (!await WaitWithinTerminationBudgetAsync(streamsTask, _timeProvider).ConfigureAwait(false))
+            {
+                _logger.LogDebug(
+                    "npm output streams did not close within {Timeout} after process termination.",
+                    ProcessTerminationTimeout);
+            }
         }
         catch (Exception ex) when (IsExpectedProcessStreamTerminationException(ex))
         {
@@ -564,19 +592,30 @@ internal sealed class NpmRunner : INpmRunner
         }
     }
 
-    internal static async Task<bool> WaitForProcessExitAfterTerminationAsync(
-        Task processExitTask,
+    /// <summary>
+    /// Waits up to <see cref="ProcessTerminationTimeout"/> for <paramref name="task"/> and reports
+    /// whether it completed within that budget.
+    /// </summary>
+    /// <remarks>
+    /// Both post-kill waits go through this helper because killing a process guarantees neither
+    /// that it is reaped nor that its redirected pipes close: an orphaned grandchild that inherited
+    /// the stdout/stderr handles keeps them open. Awaiting either without a budget would let a stuck
+    /// npm process tree hang CLI exit indefinitely. On timeout the wait is abandoned with a fault
+    /// observer attached so the abandoned task cannot resurface as an unobserved task exception.
+    /// </remarks>
+    internal static async Task<bool> WaitWithinTerminationBudgetAsync(
+        Task task,
         TimeProvider timeProvider)
     {
         try
         {
-            await processExitTask.WaitAsync(ProcessTerminationTimeout, timeProvider).ConfigureAwait(false);
+            await task.WaitAsync(ProcessTerminationTimeout, timeProvider).ConfigureAwait(false);
             return true;
         }
         catch (TimeoutException)
         {
-            _ = processExitTask.ContinueWith(
-                static task => _ = task.Exception,
+            _ = task.ContinueWith(
+                static continuedTask => _ = continuedTask.Exception,
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
                 TaskScheduler.Default);

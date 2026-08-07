@@ -66,10 +66,26 @@ parameters:
     type: boolean
     default: false
 
-  - name: SkipNpmMirrorValidation
-    displayName: '[Advanced] Skip npm Internal Mirror Seeding and Validation (set true for unrelated stable recovery runs)'
-    type: boolean
-    default: false
+  # Internal mirror seeding/validation is modeled as its own release action rather than
+  # a boolean skip. A skip flag forces every unrelated recovery rerun (for example the
+  # VS Code extension-only recipe, which already sets both npm publish skips) to opt out
+  # of npm work it never asked for, and failing to do so fails the run before it reaches
+  # the action being recovered.
+  #   auto - seed and validate the mirror only when this run publishes npm packages (default)
+  #   only - mirror-only rerun: seed and validate without resubmitting npm packages
+  #   skip - never seed or validate the mirror, even when this run publishes npm packages
+  # This parameter controls ONLY the internal dotnet-public-npm mirror steps. The public
+  # registry install smoke test is deliberately not gated on it, so a run that publishes
+  # npm packages always proves `npm install -g @microsoft/aspire-cli@<version>` works
+  # before channel promotion.
+  - name: NpmInternalMirrorAction
+    displayName: '[Advanced] npm Internal Mirror Seeding and Validation (auto = only when this run publishes npm; only = mirror-only rerun; skip = never)'
+    type: string
+    default: auto
+    values:
+      - auto
+      - only
+      - skip
 
   - name: SkipChannelPromotion
     displayName: '[Advanced] Skip Channel Promotion (re-run after success)'
@@ -268,7 +284,7 @@ extends:
                     "${{ parameters.SkipNuGetPublish }}" -eq "true" -and
                     "${{ parameters.SkipNpmRidPublish }}" -eq "true" -and
                     "${{ parameters.SkipNpmPointerPublish }}" -eq "true" -and
-                    "${{ parameters.SkipNpmMirrorValidation }}" -eq "true" -and
+                    "${{ parameters.NpmInternalMirrorAction }}" -ne "only" -and
                     "${{ parameters.SkipChannelPromotion }}" -eq "true"
                   )
                   Write-Host "Installer-only mode: $installerOnlyMode"
@@ -376,7 +392,7 @@ extends:
                   artifact: PackageArtifacts
                   patterns: '**/*.nupkg'
 
-              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), eq(parameters.SkipNpmMirrorValidation, false))) }}:
+              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), eq(parameters.NpmInternalMirrorAction, 'only'))) }}:
                 - download: aspire-build
                   displayName: 'Download npm packages from Source Build'
                   artifact: BlobArtifacts
@@ -472,7 +488,7 @@ extends:
                     Write-Host "Installer-only run detected; created empty PackageArtifacts placeholder."
                   displayName: 'Prepare Empty PackageArtifacts Placeholder'
 
-              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), eq(parameters.SkipNpmMirrorValidation, false))) }}:
+              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), eq(parameters.NpmInternalMirrorAction, 'only'))) }}:
                 - powershell: |
                     $sourcePath = "$(Pipeline.Workspace)/aspire-build/BlobArtifacts"
                     $ridTargetPath = "$(Pipeline.Workspace)/npm/rid-packages"
@@ -503,7 +519,7 @@ extends:
                         "npm CLI packages ship as flat blobs in BlobArtifacts (configured via eng/Publishing.props).",
                         "Possible causes:",
                         "  1. The source build (azure-pipelines.yml) ran before the npm CLI package work landed.",
-                        "     If this run does not publish npm or recover the internal mirror, re-run with SkipNpmRidPublish=true, SkipNpmPointerPublish=true, and SkipNpmMirrorValidation=true.",
+                        "     If this run does not publish npm or recover the internal mirror, re-run with SkipNpmRidPublish=true and SkipNpmPointerPublish=true (NpmInternalMirrorAction stays at its 'auto' default).",
                         "     Otherwise rebuild from a newer commit that contains the npm artifacts.",
                         "  2. The source build failed to produce or publish the BlobArtifacts pipeline artifact.",
                         "  3. The wrong source build was selected."
@@ -645,7 +661,7 @@ extends:
                     Write-Host "Prepared $($ridPackages.Count) RID npm package(s), pointer package version $($versions[0]), and $($signatureSidecars.Count) detached signature sidecar(s)."
                   displayName: 'Prepare npm Artifacts for Publishing'
 
-              - ${{ if and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true), or(eq(parameters.DryRun, true), eq(parameters.IsPrerelease, true), eq(parameters.SkipNpmMirrorValidation, true))) }}:
+              - ${{ if and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true), or(eq(parameters.DryRun, true), eq(parameters.IsPrerelease, true), ne(parameters.NpmInternalMirrorAction, 'only'))) }}:
                 - powershell: |
                     New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/rid-packages" -Force | Out-Null
                     New-Item -ItemType Directory -Path "$(Pipeline.Workspace)/npm/pointer-package" -Force | Out-Null
@@ -814,14 +830,14 @@ extends:
                   Write-Host "Skip NuGet Publish: ${{ parameters.SkipNuGetPublish }}"
                   Write-Host "Skip npm RID Publish: ${{ parameters.SkipNpmRidPublish }}"
                   Write-Host "Skip npm Pointer Publish: ${{ parameters.SkipNpmPointerPublish }}"
-                  Write-Host "Skip npm Mirror Validation: ${{ parameters.SkipNpmMirrorValidation }}"
+                  Write-Host "npm Internal Mirror Action: ${{ parameters.NpmInternalMirrorAction }}"
                   Write-Host "Skip Channel Promotion: ${{ parameters.SkipChannelPromotion }}"
                   Write-Host "Skip Nix Package Update: ${{ parameters.SkipNixPackageUpdate }}"
                   $installerOnlyMode = (
                     "${{ parameters.SkipNuGetPublish }}" -eq "true" -and
                     "${{ parameters.SkipNpmRidPublish }}" -eq "true" -and
                     "${{ parameters.SkipNpmPointerPublish }}" -eq "true" -and
-                    "${{ parameters.SkipNpmMirrorValidation }}" -eq "true" -and
+                    "${{ parameters.NpmInternalMirrorAction }}" -ne "only" -and
                     "${{ parameters.SkipChannelPromotion }}" -eq "true"
                   )
                   Write-Host "Installer-only mode: $installerOnlyMode"
@@ -1128,13 +1144,13 @@ extends:
                   displayName: 'Skip NuGet Publish (flagged)'
 
               # ===== PUBLISH TO npm =====
-              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), eq(parameters.SkipNpmMirrorValidation, false))) }}:
+              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), eq(parameters.NpmInternalMirrorAction, 'only'))) }}:
                 - task: NodeTool@0
                   displayName: 'Install Node.js for npm Validation'
                   inputs:
                     versionSpec: '22.x'
 
-              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), eq(parameters.SkipNpmMirrorValidation, false))) }}:
+              - ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), eq(parameters.NpmInternalMirrorAction, 'only'))) }}:
                 - powershell: |
                     $ErrorActionPreference = 'Stop'
                     $validationRoot = "$(Pipeline.Workspace)/npm/validation-summary"
@@ -1470,10 +1486,15 @@ extends:
 
               - ${{ if and(eq(parameters.SkipNpmRidPublish, true), eq(parameters.SkipNpmPointerPublish, true)) }}:
                 - powershell: |
-                    Write-Host "=== Skipping npm Package Publishing (SkipNpmRidPublish=true and SkipNpmPointerPublish=true); internal mirror handling follows SkipNpmMirrorValidation ==="
+                    Write-Host "=== Skipping npm Package Publishing (SkipNpmRidPublish=true and SkipNpmPointerPublish=true); internal mirror handling follows NpmInternalMirrorAction=${{ parameters.NpmInternalMirrorAction }} ==="
                   displayName: 'Skip npm Packages (flagged)'
 
-              - ${{ if and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false)) }}:
+              # Everything below runs only when this stable, non-dry-run release actually has npm
+              # work to do: it publishes at least one npm package, or the operator explicitly asked
+              # for a mirror-only rerun. Recovery reruns that are unrelated to npm (both publish
+              # skips set, NpmInternalMirrorAction left at 'auto') emit none of these steps, so they
+              # cannot fail on a source build whose pointer package was never published.
+              - ${{ if and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), eq(parameters.NpmInternalMirrorAction, 'only'))) }}:
                 - pwsh: |
                     $ErrorActionPreference = 'Stop'
 
@@ -1817,7 +1838,7 @@ extends:
 
                 - ${{ if eq(parameters.SkipNpmPointerPublish, true) }}:
                   - powershell: |
-                      Write-Host "Skipping npm pointer package publish because SkipNpmPointerPublish=true. Registry validation still runs unless SkipNpmRidPublish, SkipNpmPointerPublish, and SkipNpmMirrorValidation are all true."
+                      Write-Host "Skipping npm pointer package publish because SkipNpmPointerPublish=true. Registry validation still runs unless this run neither publishes npm packages nor sets NpmInternalMirrorAction=only."
                     displayName: 'Skip npm Pointer Publish (flagged)'
 
                 - pwsh: |
@@ -1999,27 +2020,29 @@ extends:
                       }
                     }
                   displayName: 'Validate Published npm Package from Registry'
-                  # This public-registry smoke test predates the internal mirror gate, so it must
-                  # not be gated on SkipNpmMirrorValidation alone: a run that actually publishes
-                  # npm packages has to prove `npm install -g @microsoft/aspire-cli@<version>`
-                  # works before the channel is promoted, even when the operator opted out of
-                  # mirror seeding. It is therefore skipped only when the run neither publishes
-                  # npm nor touches the mirror, which is the documented "unrelated stable
-                  # recovery run" recipe that sets all three npm skips to true. Mirror-only
-                  # reruns keep it enabled because the seed step below reads the
-                  # NpmPublishedPointerVersion variable that this step sets.
-                  condition: and(succeeded(), or(eq('${{ parameters.SkipNpmRidPublish }}', 'false'), eq('${{ parameters.SkipNpmPointerPublish }}', 'false'), eq('${{ parameters.SkipNpmMirrorValidation }}', 'false')))
+                  # The public-registry smoke test is deliberately NOT gated on
+                  # NpmInternalMirrorAction: a run that actually publishes npm packages has to
+                  # prove `npm install -g @microsoft/aspire-cli@<version>` works before the channel
+                  # is promoted, even when the operator set NpmInternalMirrorAction=skip. A
+                  # mirror-only rerun keeps it enabled too, because the seed step below reads the
+                  # NpmPublishedPointerVersion variable that this step sets. This repeats the
+                  # enclosing compile-time gate on purpose so widening that gate can never silently
+                  # promote a stable release without a public install smoke.
+                  condition: and(succeeded(), or(eq('${{ parameters.SkipNpmRidPublish }}', 'false'), eq('${{ parameters.SkipNpmPointerPublish }}', 'false'), eq('${{ parameters.NpmInternalMirrorAction }}', 'only')))
 
                 - pwsh: |
                     $npmrcPath = "$(Agent.TempDirectory)\aspire-cli-internal-mirror.npmrc"
                     "registry=$(NPM_REGISTRY)" |
                       Set-Content -LiteralPath $npmrcPath -Encoding utf8NoBOM
                   displayName: 'Prepare npm Internal Mirror Authentication'
-                  condition: and(succeeded(), eq('${{ parameters.SkipNpmMirrorValidation }}', 'false'))
+                  # Mirror seeding/validation runs when NpmInternalMirrorAction is 'auto' and this
+                  # run publishes npm packages, or when it is 'only' (an intentional mirror-only
+                  # rerun). 'skip' turns off these mirror steps and nothing else.
+                  condition: and(succeeded(), or(and(eq('${{ parameters.NpmInternalMirrorAction }}', 'auto'), or(eq('${{ parameters.SkipNpmRidPublish }}', 'false'), eq('${{ parameters.SkipNpmPointerPublish }}', 'false'))), eq('${{ parameters.NpmInternalMirrorAction }}', 'only')))
 
                 - task: npmAuthenticate@0
                   displayName: 'Authenticate to npm Internal Mirror'
-                  condition: and(succeeded(), eq('${{ parameters.SkipNpmMirrorValidation }}', 'false'))
+                  condition: and(succeeded(), or(and(eq('${{ parameters.NpmInternalMirrorAction }}', 'auto'), or(eq('${{ parameters.SkipNpmRidPublish }}', 'false'), eq('${{ parameters.SkipNpmPointerPublish }}', 'false'))), eq('${{ parameters.NpmInternalMirrorAction }}', 'only')))
                   inputs:
                     workingFile: '$(Agent.TempDirectory)\aspire-cli-internal-mirror.npmrc'
 
@@ -2295,12 +2318,12 @@ extends:
                       }
                     }
                   displayName: 'Seed and Validate npm Internal Mirror'
-                  condition: and(succeeded(), eq('${{ parameters.SkipNpmMirrorValidation }}', 'false'))
+                  condition: and(succeeded(), or(and(eq('${{ parameters.NpmInternalMirrorAction }}', 'auto'), or(eq('${{ parameters.SkipNpmRidPublish }}', 'false'), eq('${{ parameters.SkipNpmPointerPublish }}', 'false'))), eq('${{ parameters.NpmInternalMirrorAction }}', 'only')))
 
                 - powershell: |
-                    Write-Host "Skipping public npm smoke and internal mirror seeding/validation because SkipNpmMirrorValidation=true."
+                    Write-Host "Skipping internal npm mirror seeding and validation because NpmInternalMirrorAction=skip. The public npm registry smoke test still ran."
                   displayName: 'Skip npm Internal Mirror Validation (flagged)'
-                  condition: and(succeeded(), eq('${{ parameters.SkipNpmMirrorValidation }}', 'true'))
+                  condition: and(succeeded(), eq('${{ parameters.NpmInternalMirrorAction }}', 'skip'))
 
               # ===== PROMOTE TO CHANNEL =====
               - ${{ if eq(parameters.SkipChannelPromotion, false) }}:
@@ -2402,7 +2425,7 @@ extends:
                     # The public registry smoke test is skipped only when this run neither
                     # publishes npm nor seeds the mirror, and that case is already reported by
                     # the "(SKIPPED)" branch above. Reaching here means RID publishing ran, so
-                    # the smoke test ran too regardless of SkipNpmMirrorValidation.
+                    # the smoke test ran too regardless of NpmInternalMirrorAction.
                     Write-Host " (PARTIAL - pointer publish skipped; registry smoke still ran)"
                   } elseif ("${{ parameters.SkipNpmRidPublish }}" -eq "true") {
                     Write-Host " (PARTIAL - RID publish skipped; pointer publish still ran)"
@@ -2411,11 +2434,15 @@ extends:
                   }
                   Write-Host "║ npm RID Skip:   ${{ parameters.SkipNpmRidPublish }}"
                   Write-Host "║ npm Ptr Skip:   ${{ parameters.SkipNpmPointerPublish }}"
-                  Write-Host "║ npm Mirror Skip: ${{ parameters.SkipNpmMirrorValidation }}" -NoNewline
+                  Write-Host "║ npm Mirror:     ${{ parameters.NpmInternalMirrorAction }}" -NoNewline
                   if ("${{ parameters.DryRun }}" -eq "true" -or "${{ parameters.IsPrerelease }}" -eq "true") {
                     Write-Host " (NOT RUN)"
-                  } elseif ("${{ parameters.SkipNpmMirrorValidation }}" -eq "true") {
+                  } elseif ("${{ parameters.NpmInternalMirrorAction }}" -eq "skip") {
                     Write-Host " (SKIPPED)"
+                  } elseif ("${{ parameters.NpmInternalMirrorAction }}" -eq "auto" -and
+                            "${{ parameters.SkipNpmRidPublish }}" -eq "true" -and
+                            "${{ parameters.SkipNpmPointerPublish }}" -eq "true") {
+                    Write-Host " (NOT RUN - this release published no npm packages)"
                   } else {
                     Write-Host " (EXECUTED)"
                   }
