@@ -1,5 +1,5 @@
 import path from "path";
-import { ExecutableLaunchConfiguration, EnvVar, LaunchOptions, AspireResourceExtendedDebugConfiguration, AspireExtendedDebugConfiguration, AspireResourceDebugSession, DebugLaunchSettings } from "../dcp/types";
+import { ExecutableLaunchConfiguration, EnvVar, LaunchOptions, AspireResourceExtendedDebugConfiguration, AspireExtendedDebugConfiguration, AspireResourceDebugSession, DebugLaunchSettings, ResourceTerminationSignal } from "../dcp/types";
 import { debugProject, runProject } from "../loc/strings";
 import { getEnvironmentWithoutE2EBridgeVariables, mergeEnvs } from "../utils/environment";
 import { extensionLogOutputChannel } from "../utils/logging";
@@ -20,6 +20,12 @@ export interface ResourceDebuggerExtension {
     resourceType: string;
     debugAdapter: string;
     extensionId: string | null;
+    /**
+     * Which observable event ends a run of this resource type. Required so that adding a debugger
+     * integration is a deliberate decision about run lifetime rather than an inherited default,
+     * and so the choice lives in code the workspace cannot influence.
+     */
+    terminationSignal: ResourceTerminationSignal;
     getDisplayName: (launchConfig: ExecutableLaunchConfiguration) => string;
     getProjectFile: (launchConfig: ExecutableLaunchConfiguration) => string;
     getSupportedFileTypes: () => string[];
@@ -59,9 +65,12 @@ export async function prepareDebugSession(debugSessionConfig: AspireExtendedDebu
         justMyCode: false,
         stopAtEntry: false,
         noDebug: !launchOptions.debug,
+        console: 'internalConsole',
+        // Placeholder values only. The authoritative assignment happens in
+        // applyAspireOwnedFields() below, after the workspace `debuggers` merge.
         runId: launchOptions.runId,
         debugSessionId: launchOptions.debugSessionId,
-        console: 'internalConsole',
+        terminationSignal: debuggerExtension.terminationSignal,
         isApphost: launchOptions.isApphost
     };
 
@@ -77,6 +86,11 @@ export async function prepareDebugSession(debugSessionConfig: AspireExtendedDebu
         }
     }
 
+    // Re-apply the fields Aspire owns *after* the workspace merge, so a workspace setting can
+    // never win no matter what it contains. applyUserDebuggerSettings() also refuses to write
+    // them, but that check is a denylist someone can forget to extend when adding a field;
+    // this write-last ordering is what actually makes the guarantee structural.
+    applyAspireOwnedFields(configuration, launchOptions, debuggerExtension);
 
     let alreadyStartedSession: AlreadyStartedResourceDebugSession | undefined;
     if (debuggerExtension.createDebugSessionConfigurationCallback) {
@@ -90,35 +104,57 @@ export async function prepareDebugSession(debugSessionConfig: AspireExtendedDebu
 }
 
 /**
- * Fields on the resource debug configuration that Aspire owns and that the workspace
- * `debuggers` setting must never override.
+ * Fields on the resource debug configuration that Aspire owns, and that the workspace
+ * `debuggers` setting must never influence.
  *
  * These are not user-facing knobs. They correlate the VS Code session with the DCP run
- * (`runId`, `debugSessionId`), decide who reports the run's termination (`sessionTermination`),
- * and select AppHost-specific behavior (`isApphost`). Letting a workspace-controlled setting
- * rewrite them is a safety problem and not just a confusing override: `runId` is used to derive
- * an on-disk scratch directory that is later deleted recursively (`getBrowserUserDataDir` in
- * `languages/browser.ts`), so a workspace-supplied `runId` could aim that delete outside the
- * directory Aspire owns. `browser.ts` re-validates containment independently, but the override
- * is blocked here too so a future consumer of `runId` does not inherit the same hazard.
+ * (`runId`, `debugSessionId`), decide which event ends the run and therefore who reports it
+ * (`terminationSignal`), and select AppHost-specific behavior (`isApphost`).
+ *
+ * Letting workspace-controlled JSON reach any of them is a safety problem rather than just a
+ * confusing override:
+ *
+ * - `runId` is used to derive an on-disk scratch directory that is later deleted recursively
+ *   (`getBrowserUserDataDir` in `languages/browser.ts`), so a workspace-supplied `runId` could
+ *   aim that delete outside the directory Aspire owns.
+ * - `debugSessionId` is written as `dcp_id` onto DCP wire notifications, so a workspace-supplied
+ *   value would let settings address another run's lifecycle messages.
+ * - `terminationSignal` decides whether the adapter tracker or the debug session emits
+ *   `sessionTerminated`, so a workspace-supplied value could suppress or duplicate the terminal
+ *   notification for resource types whose callbacks never set it (`node`, `dotnet`, ...).
  */
-const internalDebugConfigurationFieldNames: readonly string[] = [
+const aspireOwnedDebugConfigurationFieldNames: readonly string[] = [
     'runId',
     'debugSessionId',
-    'sessionTermination',
+    'terminationSignal',
     'isApphost'
 ];
 
-const internalDebugConfigurationFields: ReadonlySet<string> = new Set<string>(internalDebugConfigurationFieldNames);
+const aspireOwnedDebugConfigurationFields: ReadonlySet<string> = new Set<string>(aspireOwnedDebugConfigurationFieldNames);
+
+function applyAspireOwnedFields(configuration: AspireResourceExtendedDebugConfiguration, launchOptions: LaunchOptions, debuggerExtension: ResourceDebuggerExtension): void {
+    configuration.runId = launchOptions.runId;
+    configuration.debugSessionId = launchOptions.debugSessionId;
+    configuration.isApphost = launchOptions.isApphost;
+    // Declared by the debugger integration at authoring time, never taken from the configuration
+    // object, so workspace settings have no path to it.
+    configuration.terminationSignal = debuggerExtension.terminationSignal;
+}
 
 /**
- * Merges a workspace `debuggers.<key>` block into the generated debug configuration, skipping the
- * fields Aspire owns. `DebugLaunchSettings` declares only user-facing properties, but the value
- * comes from unvalidated `launch.json`/settings JSON, so unknown keys reach this code at runtime.
+ * Merges a workspace `debuggers.<key>` block into the generated debug configuration, refusing the
+ * fields Aspire owns.
+ *
+ * `DebugLaunchSettings` declares only user-facing properties, but the value comes from unvalidated
+ * `launch.json` JSON and the contributed schema for `debuggers` is an open object, so arbitrary
+ * keys reach this code at runtime. Unknown keys are still forwarded on purpose: passing extra
+ * options through to the underlying debug adapter is the feature. Only the Aspire-owned fields are
+ * refused, and refusing them is logged rather than silent so a workspace author can see why their
+ * setting had no effect.
  */
 function applyUserDebuggerSettings(configuration: AspireResourceExtendedDebugConfiguration, settings: DebugLaunchSettings): void {
     for (const [key, value] of Object.entries(settings)) {
-        if (internalDebugConfigurationFields.has(key)) {
+        if (aspireOwnedDebugConfigurationFields.has(key)) {
             extensionLogOutputChannel.warn(`Ignoring '${key}' from the 'debuggers' debug configuration because it is managed by Aspire.`);
             continue;
         }

@@ -6,9 +6,10 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import { browserDebuggerExtension } from '../debugger/languages/browser';
+import { nodeDebuggerExtension } from '../debugger/languages/node';
 import { prepareDebugSession } from '../debugger/debuggerExtensions';
 import { cleanupRun } from '../debugger/runCleanupRegistry';
-import { BrowserLaunchConfiguration } from '../dcp/types';
+import { BrowserLaunchConfiguration, ExecutableLaunchConfiguration } from '../dcp/types';
 import { extensionLogOutputChannel } from '../utils/logging';
 import {
     configureBrowserDebugSession,
@@ -52,7 +53,10 @@ suite('Browser Debugger Tests', () => {
         ]);
         assert.strictEqual(debugConfig.userDataDir, path.join(browserProfileRoot, 'run-1'));
         assert.strictEqual(debugConfig.debugSessionId, 'dcp-1');
-        assert.deepStrictEqual(debugConfig.sessionTermination, { kind: 'debugSessionEnd', dcpId: 'dcp-1' });
+        // The signal is declared by the integration, not written by the callback, so assert it at
+        // its source. js-debug is server-hosted and tears down child target sessions on its own, so
+        // the root debug session ending is the only reliable run lifetime signal for browsers.
+        assert.strictEqual(browserDebuggerExtension.terminationSignal, 'debug-session-end');
         assert.strictEqual(debugConfig.program, undefined);
         assert.strictEqual(debugConfig.args, undefined);
         assert.strictEqual(debugConfig.cwd, undefined);
@@ -151,8 +155,12 @@ suite('Browser Debugger Tests', () => {
 
     test('ignores workspace debugger settings that try to take over Aspire-owned configuration fields', async () => {
         // `prepareDebugSession` merges the workspace `debuggers.<type>` block into the generated
-        // configuration before the resource extension runs. Without an allow-list a workspace could
-        // set `runId: '..'` and steer the recursive profile-directory delete at the OS temp directory.
+        // configuration. Every field on the configuration is therefore workspace-writable unless it
+        // is re-applied afterwards, and several of them are not user knobs:
+        //   - `runId` derives a directory that is later deleted recursively, so `'..'` would aim
+        //     that delete at the OS temp directory.
+        //   - `debugSessionId` becomes `dcp_id` on DCP wire notifications.
+        //   - `terminationSignal` decides who reports the run terminating.
         const rmStub = sinon.stub(fs.promises, 'rm').resolves();
         const prepared = await prepareDebugSession(
             {
@@ -164,7 +172,7 @@ suite('Browser Debugger Tests', () => {
                     browser: {
                         runId: '..',
                         debugSessionId: 'workspace-supplied-dcp-id',
-                        sessionTermination: { kind: 'debugAdapterExit' },
+                        terminationSignal: 'adapter-exit',
                         isApphost: true,
                         args: ['--user-supplied']
                     } as never
@@ -180,11 +188,42 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(configuration.runId, 'run-1');
         assert.strictEqual(configuration.debugSessionId, 'dcp-1');
         assert.strictEqual(configuration.isApphost, false);
-        assert.deepStrictEqual(configuration.sessionTermination, { kind: 'debugSessionEnd', dcpId: 'dcp-1' });
+        assert.strictEqual(configuration.terminationSignal, 'debug-session-end');
         assert.strictEqual(configuration.userDataDir, path.join(browserProfileRoot, 'run-1'));
 
         cleanupRun('run-1');
         assert.strictEqual(rmStub.calledOnceWithExactly(path.join(browserProfileRoot, 'run-1'), expectedRmOptions), true);
+    });
+
+    test('ignores a workspace attempt to rewire the termination signal of a non-browser resource', async () => {
+        // The browser extension overwrites several fields itself, which can mask an override. Node
+        // touches none of them, so this is the case that proves the guarantee comes from
+        // prepareDebugSession rather than from a language callback happening to win the race.
+        // A workspace that could set `terminationSignal: 'debug-session-end'` here would silence
+        // adapterTracker's onExit notification and leave every node run alive forever in DCP.
+        const prepared = await prepareDebugSession(
+            {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                debuggers: {
+                    node: {
+                        terminationSignal: 'debug-session-end',
+                        runId: '../../etc',
+                        debugSessionId: 'workspace-supplied-dcp-id'
+                    } as never
+                }
+            },
+            { type: 'node', program: '/workspace/app/index.js' } as unknown as ExecutableLaunchConfiguration,
+            [],
+            [],
+            { debug: true, runId: 'node-run', debugSessionId: 'node-dcp', isApphost: false, debugSession: {} as AspireDebugSession },
+            nodeDebuggerExtension);
+
+        assert.strictEqual(prepared.debugConfiguration.terminationSignal, 'adapter-exit');
+        assert.strictEqual(prepared.debugConfiguration.runId, 'node-run');
+        assert.strictEqual(prepared.debugConfiguration.debugSessionId, 'node-dcp');
     });
 
     test('maps Firefox to the VS Code Firefox debug adapter', async () => {
@@ -326,8 +365,8 @@ suite('Browser Debugger Tests', () => {
     });
 
     test('stopSession is awaitable and single-shot for a non-browser resource session', async () => {
-        // Only browser runs use the `debugSessionEnd` strategy; the AppHost and every normal resource
-        // session go through this same stop path with `debugAdapterExit`. It has to make the same
+        // Only browser runs use the `debug-session-end` signal; the AppHost and every normal resource
+        // session go through this same stop path with `adapter-exit`. It has to make the same
         // ordering promise, because AspireDebugSession.stopDebugging() stops the AppHost first and only
         // then the Aspire parent — a stop that resolved early would let VS Code's parent session
         // cascade race the AppHost registry refresh.
@@ -351,7 +390,7 @@ suite('Browser Debugger Tests', () => {
 
         assert.strictEqual(stopResolved, true);
         assert.strictEqual(harness.stopDebugging.callCount, 1, 'Expected the second stop to reuse the in-flight stop');
-        // `debugAdapterExit` runs report termination from the debug adapter's onExit, not from here.
+        // `adapter-exit` runs report termination from the debug adapter's onExit, not from here.
         assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
 
         harness.dispose();
@@ -409,8 +448,7 @@ suite('Browser Debugger Tests', () => {
             name: 'Browser: https://localhost:5001',
         });
         const debugConfig = createResourceDebugConfig({
-            debugSessionId: null,
-            sessionTermination: { kind: 'debugSessionEnd', dcpId: 'dcp-1' }
+            terminationSignal: 'debug-session-end'
         });
 
         const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
@@ -430,8 +468,7 @@ suite('Browser Debugger Tests', () => {
     test('does not send sessionTerminated for a transient browser child target', async () => {
         const harness = new DebugSessionHarness();
         const debugConfig = createResourceDebugConfig({
-            debugSessionId: null,
-            sessionTermination: { kind: 'debugSessionEnd', dcpId: 'dcp-1' }
+            terminationSignal: 'debug-session-end'
         });
 
         const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
@@ -447,7 +484,34 @@ suite('Browser Debugger Tests', () => {
 
         harness.terminateSession(resourceDebugSession.session);
 
-        assert.strictEqual(harness.sessionTerminatedNotifications().length, 1);
+        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
+            notification_type: 'sessionTerminated',
+            session_id: 'run-1',
+            dcp_id: 'dcp-1'
+        }]);
+
+        harness.dispose();
+    });
+
+    test('skips the termination notification when the run has no DCP session id', async () => {
+        // `debugSessionId` is typed nullable and every other DCP notification path in
+        // AspireDebugSession skips with a warning when it is missing rather than inventing an id
+        // (see trackAlreadyStartedResourceSession). Termination has to agree: a notification
+        // addressed to no run is not deliverable, and guessing an id would target another run.
+        const harness = new DebugSessionHarness();
+        const debugConfig = createResourceDebugConfig({ debugSessionId: null });
+        // Configure through the real browser path so the profile-directory cleanup is registered
+        // and the assertion below proves cleanup is independent of the notification.
+        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
+
+        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
+
+        assert.ok(resourceDebugSession);
+        harness.terminateSession(resourceDebugSession.session);
+
+        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
+        // Cleanup still has to run, otherwise the browser profile directory leaks.
+        assert.strictEqual(harness.rm.calledOnceWithExactly(path.join(browserProfileRoot, 'run-1'), expectedRmOptions), true);
 
         harness.dispose();
     });

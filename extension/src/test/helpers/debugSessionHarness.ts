@@ -178,6 +178,9 @@ export function createResourceDebugConfig(overrides: Partial<AspireResourceExten
     return {
         runId: 'run-1',
         debugSessionId: 'dcp-1',
+        // Default to the process-backed signal so tests opt in to the browser lifecycle
+        // explicitly, matching how every non-browser debugger integration declares it.
+        terminationSignal: 'adapter-exit',
         type: 'browser',
         name: 'Browser: https://localhost:5001',
         request: 'launch',
@@ -187,7 +190,16 @@ export function createResourceDebugConfig(overrides: Partial<AspireResourceExten
     };
 }
 
-/** Runs the browser debugger extension's configuration callback against a resource debug config. */
+/**
+ * Runs the browser debugger extension's configuration callback against a resource debug config,
+ * reproducing the parts of `prepareDebugSession` that the callback depends on.
+ *
+ * The termination signal is stamped from `browserDebuggerExtension.terminationSignal` rather than
+ * hardcoded, mirroring `applyAspireOwnedFields` in production. Taking it from the extension keeps
+ * these lifecycle tests honest: if the browser integration ever re-declares itself as
+ * `adapter-exit`, the tests below start exercising that instead of silently passing against a
+ * literal the tests supplied themselves.
+ */
 export async function configureBrowserDebugSession(launchConfig: BrowserLaunchConfiguration, debugConfig: AspireResourceExtendedDebugConfiguration): Promise<void> {
     const fakeAspireDebugSession = {} as AspireDebugSession;
     await browserDebuggerExtension.createDebugSessionConfigurationCallback!(
@@ -196,4 +208,5 @@ export async function configureBrowserDebugSession(launchConfig: BrowserLaunchCo
         [],
         { debug: true, runId: debugConfig.runId, debugSessionId: 'dcp-1', isApphost: false, debugSession: fakeAspireDebugSession },
         debugConfig);
+    debugConfig.terminationSignal = browserDebuggerExtension.terminationSignal;
 }

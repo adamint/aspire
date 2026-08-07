@@ -196,38 +196,39 @@ export interface AspireResourceDebugSession {
 }
 
 /**
- * Identifies which component owns emitting the terminal `sessionTerminated` notification
- * for a resource run, and carries everything that owner needs.
+ * Which observable event marks the end of a resource run, and therefore which component emits
+ * the terminal `sessionTerminated` notification to DCP.
  *
- * This is a discriminated union rather than a set of independent optional flags so that
- * ownership is a single value that is read once. With separate booleans every consumer had
- * to re-derive "does this run report its own termination, and to which DCP id?", and a
- * consumer that forgot part of the derivation silently produced a duplicated or missing
- * `sessionTerminated`.
+ * - `adapter-exit` — the debug adapter exiting is the lifetime signal. `adapterTracker` emits
+ *   `sessionTerminated` from `onExit`, carrying the observed debuggee exit code. This is correct
+ *   for every resource type whose debuggee is a process the adapter owns.
+ * - `debug-session-end` — the VS Code debug session ending is the lifetime signal, and
+ *   `AspireDebugSession` emits `sessionTerminated`. Used by browser (js-debug) runs: js-debug is
+ *   a server-hosted adapter shared across sessions, so its `onExit` is not a per-run signal, and
+ *   it tears down child target sessions independently of the root session.
  *
- * - `debugAdapterExit` — the debug adapter's exit is the lifetime signal. `adapterTracker`
- *   emits `sessionTerminated` from `onExit` with the observed debuggee exit code. This is
- *   the default for every resource type whose debuggee is a process.
- * - `debugSessionEnd` — the VS Code debug session ending is the lifetime signal, and
- *   `AspireDebugSession` emits `sessionTerminated` addressed to `dcpId`. Used by browser
- *   (js-debug) runs, which have no reliable DAP adapter-exit signal: js-debug keeps the
- *   adapter alive across page navigations and tears down child target sessions
- *   independently of the root session.
+ * This is a property of the *debugger integration*, not of an individual run, so it is declared
+ * once per {@link ResourceDebuggerExtension} rather than assigned per session. That placement is
+ * deliberate and load-bearing for safety: the resource debug configuration is merged with the
+ * workspace `debuggers` setting, so anything stored there is workspace-writable. A workspace that
+ * could set this field would be choosing who reports run termination — for example silently
+ * rewiring the DCP lifecycle of `node`/`dotnet` resources, whose callbacks never overwrite it.
+ * Deciding it at authoring time keeps it out of reach of settings entirely.
  */
-export type SessionTerminationStrategy =
-    | { kind: 'debugAdapterExit' }
-    | { kind: 'debugSessionEnd'; dcpId: string };
+export type ResourceTerminationSignal = 'adapter-exit' | 'debug-session-end';
 
 export interface AspireResourceExtendedDebugConfiguration extends vscode.DebugConfiguration {
     runId: string;
     debugSessionId: string | null;
     /**
-     * Who reports this run's termination. Absent means {@link SessionTerminationStrategy}
-     * `debugAdapterExit`; use `getSessionTerminationStrategy` in
-     * `debugger/resourceSessionTermination.ts` rather than reading this field directly, so
-     * the default and validation stay in one place.
+     * Which event ends this run. Stamped from the resource's {@link ResourceDebuggerExtension}
+     * after workspace settings are merged, so it always reflects the integration's declaration.
+     *
+     * Read it through `getResourceTerminationSignal` in `debugger/resourceSessionTermination.ts`
+     * rather than directly: `vscode.DebugSession.configuration` is untyped JSON rebuilt by
+     * VS Code, so validation and the default belong in one place.
      */
-    sessionTermination?: SessionTerminationStrategy;
+    terminationSignal: ResourceTerminationSignal;
     projectFile?: string;
     isApphost?: boolean;
 }

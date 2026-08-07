@@ -12,7 +12,7 @@ import { AnsiColors } from "../utils/AspireTerminalProvider";
 import { applyTextStyle } from "../utils/strings";
 import { nodeDebuggerExtension } from "./languages/node";
 import { cleanupRun } from "./runCleanupRegistry";
-import { getSessionTerminationStrategy, ResourceSessionTermination } from "./resourceSessionTermination";
+import { ResourceSessionTermination } from "./resourceSessionTermination";
 import { runWithRunStartWrappers } from "./runStartRegistry";
 import AspireRpcServer from "../server/AspireRpcServer";
 import { AlreadyStartedResourceDebugSession, createDebugSessionConfiguration } from "./debuggerExtensions";
@@ -664,8 +664,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
           disposable.dispose();
           const termination = new ResourceSessionTermination(
             session,
-            debugConfig.runId,
-            getSessionTerminationStrategy(debugConfig),
+            debugConfig,
             (runId, dcpId) => this.sendSessionTerminated(runId, dcpId));
 
           if (this._disposed) {

@@ -425,7 +425,7 @@ suite('Debug Adapter Tracker Tests', () => {
     });
 
     test('service logs stay enabled when session termination is handled by VS Code debug session end', async () => {
-        (debugSession.configuration as AspireResourceExtendedDebugConfiguration).sessionTermination = { kind: 'debugSessionEnd', dcpId: 'debug-456' };
+        (debugSession.configuration as AspireResourceExtendedDebugConfiguration).terminationSignal = 'debug-session-end';
         const disposable = createDebugAdapterTracker(dcpServer as any, 'pwa-msedge');
         const factory = registerFactoryStub.lastCall.args[1];
         const tracker = factory.createDebugAdapterTracker(debugSession);
@@ -450,11 +450,11 @@ suite('Debug Adapter Tracker Tests', () => {
         disposable.dispose();
     });
 
-    test('reports the adapter exit when the session termination strategy is malformed', async () => {
-        // `configuration` round-trips through VS Code as untyped JSON, so a partially-formed strategy
-        // has to fall back to the debug-adapter-exit behavior every process-backed resource relies on.
+    test('reports the adapter exit when the termination signal is unrecognized', async () => {
+        // `configuration` round-trips through VS Code as untyped JSON, so an unrecognized signal has
+        // to fall back to the adapter-exit behavior every process-backed resource relies on.
         // Silently treating it as "someone else reports this" would leave the run alive forever in DCP.
-        (debugSession.configuration as AspireResourceExtendedDebugConfiguration).sessionTermination = { kind: 'debugSessionEnd' } as never;
+        (debugSession.configuration as AspireResourceExtendedDebugConfiguration).terminationSignal = 'not-a-real-signal' as never;
         const disposable = createDebugAdapterTracker(dcpServer as any, 'pwa-msedge');
         const factory = registerFactoryStub.lastCall.args[1];
         const tracker = factory.createDebugAdapterTracker(debugSession);

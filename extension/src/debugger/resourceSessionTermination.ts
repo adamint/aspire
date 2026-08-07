@@ -1,25 +1,19 @@
 import * as vscode from 'vscode';
-import { AspireResourceExtendedDebugConfiguration, SessionTerminationStrategy } from '../dcp/types';
+import { AspireResourceExtendedDebugConfiguration, ResourceTerminationSignal } from '../dcp/types';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { cleanupRun } from './runCleanupRegistry';
 
 /**
- * Reads the termination strategy off a resource debug configuration.
+ * Reads the termination signal off a resource debug configuration.
  *
- * Always go through this instead of reading `configuration.sessionTermination`. The
+ * Always go through this instead of reading `configuration.terminationSignal` directly. The
  * configuration round-trips through VS Code as untyped JSON (`vscode.DebugSession.configuration`
  * is a plain object rebuilt by VS Code), so the field is not guaranteed to still match its
- * declared type by the time a consumer sees it. Anything that is not a well-formed
- * `debugSessionEnd` falls back to `debugAdapterExit`, which is the behavior every
- * process-backed resource type already had before this field existed.
+ * declared type by the time a consumer sees it. Anything unrecognized falls back to
+ * `adapter-exit`, the behavior every process-backed resource type has.
  */
-export function getSessionTerminationStrategy(configuration: AspireResourceExtendedDebugConfiguration): SessionTerminationStrategy {
-    const strategy = configuration.sessionTermination;
-    if (strategy?.kind === 'debugSessionEnd' && typeof strategy.dcpId === 'string' && strategy.dcpId.length > 0) {
-        return strategy;
-    }
-
-    return { kind: 'debugAdapterExit' };
+export function getResourceTerminationSignal(configuration: AspireResourceExtendedDebugConfiguration): ResourceTerminationSignal {
+    return configuration.terminationSignal === 'debug-session-end' ? 'debug-session-end' : 'adapter-exit';
 }
 
 /** Emits the terminal DCP notification for a run. Implemented by `AspireDebugSession`. */
@@ -41,23 +35,25 @@ export type SendSessionTerminated = (runId: string, dcpId: string) => void;
  *   it stops the AppHost first and only then the Aspire parent, which keeps VS Code's parent
  *   session cascade from racing the AppHost registry refresh.
  *
- * Collecting both transitions here is the point: the strategy is read once, in the constructor,
- * so no caller can partially reconstruct termination ownership.
+ * Collecting both transitions here is the point: the signal is read once, in the constructor, so
+ * no caller can partially reconstruct termination ownership.
  */
 export class ResourceSessionTermination {
     private readonly _session: vscode.DebugSession;
     private readonly _runId: string;
-    private readonly _strategy: SessionTerminationStrategy;
+    private readonly _dcpId: string | null;
+    private readonly _signal: ResourceTerminationSignal;
     private readonly _sendSessionTerminated: SendSessionTerminated;
 
     private _terminationListener: vscode.Disposable | undefined;
     private _finished = false;
     private _stopPromise: Promise<void> | undefined;
 
-    constructor(session: vscode.DebugSession, runId: string, strategy: SessionTerminationStrategy, sendSessionTerminated: SendSessionTerminated) {
+    constructor(session: vscode.DebugSession, configuration: AspireResourceExtendedDebugConfiguration, sendSessionTerminated: SendSessionTerminated) {
         this._session = session;
-        this._runId = runId;
-        this._strategy = strategy;
+        this._runId = configuration.runId;
+        this._dcpId = configuration.debugSessionId;
+        this._signal = getResourceTerminationSignal(configuration);
         this._sendSessionTerminated = sendSessionTerminated;
     }
 
@@ -66,7 +62,7 @@ export class ResourceSessionTermination {
      * driven by the session ending rather than by a debug adapter exit. No-op otherwise.
      */
     watchForDebugSessionEnd(): void {
-        if (this._strategy.kind !== 'debugSessionEnd') {
+        if (this._signal !== 'debug-session-end') {
             return;
         }
 
@@ -95,8 +91,11 @@ export class ResourceSessionTermination {
         this._terminationListener?.dispose();
         this._terminationListener = undefined;
 
-        if (this._strategy.kind === 'debugSessionEnd') {
-            this._sendSessionTerminated(this._runId, this._strategy.dcpId);
+        // A run whose lifetime is the debug session reports its own termination. `dcpId` is the
+        // same `debugSessionId` the adapter tracker addresses its notifications to; there is no
+        // separate id, so there is nothing to keep in sync.
+        if (this._signal === 'debug-session-end' && this._dcpId) {
+            this._sendSessionTerminated(this._runId, this._dcpId);
         }
 
         cleanupRun(this._runId);

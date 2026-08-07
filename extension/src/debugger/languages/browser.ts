@@ -21,6 +21,11 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
     resourceType: 'browser',
     debugAdapter: 'pwa-msedge',
     extensionId: null, // built-in to VS Code via js-debug
+    // js-debug is a server-hosted adapter shared across debug sessions, so its adapter exit is not
+    // a per-run signal, and it tears down child target sessions (page/worker) independently of the
+    // root session. The end of the root VS Code debug session is the only reliable run lifetime
+    // signal, so AspireDebugSession reports termination for browser runs.
+    terminationSignal: 'debug-session-end',
     getDisplayName: (launchConfiguration: ExecutableLaunchConfiguration) => {
         if (isBrowserLaunchConfiguration(launchConfiguration) && launchConfiguration.url) {
             return browserDisplayName(launchConfiguration.url);
@@ -73,12 +78,6 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
             // debugging still works and only profile isolation is lost.
             extensionLogOutputChannel.warn(`Could not derive a contained browser debug profile directory for run '${debugConfiguration.runId}'; launching without an isolated profile.`);
         }
-        // Browser/js-debug child sessions do not provide a reliable DAP onExit
-        // lifetime signal. Keep debugSessionId so adapterTracker still forwards
-        // browser output as service logs, and let AspireDebugSession send the DCP
-        // termination notification from the VS Code root session end event.
-        debugConfiguration.sessionTermination = { kind: 'debugSessionEnd', dcpId: launchOptions.debugSessionId };
-
         // Remove program/args/cwd since browser debugging doesn't use them
         delete debugConfiguration.program;
         delete debugConfiguration.args;
