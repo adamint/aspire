@@ -541,17 +541,17 @@ export default class AspireDcpServer {
                 const isExactOwner = run?.ownerDcpId === dcpId;
                 const ownerWebSocket = run ? wsBySession.get(run.ownerDcpId) : undefined;
                 const replacementWebSocket = wsBySession.get(dcpId);
-                const canReplaceDisconnectedOwner = run
+                const canReplaceUnavailableOwner = run
                     && !isExactOwner
                     && ownerPrefix !== null
                     && ownerPrefix === getDcpIdPrefix(dcpId)
                     && replacementWebSocket?.readyState === WebSocket.OPEN
-                    && (!ownerWebSocket || ownerWebSocket.readyState === WebSocket.CLOSED);
-                if (run && (isExactOwner || canReplaceDisconnectedOwner)) {
-                    if (canReplaceDisconnectedOwner) {
+                    && ownerWebSocket?.readyState !== WebSocket.OPEN;
+                if (run && (isExactOwner || canReplaceUnavailableOwner)) {
+                    if (canReplaceUnavailableOwner) {
                         // The full DCP instance ID distinguishes concurrent executions. Transfer
-                        // ownership only after the old execution's notification socket is gone and
-                        // the same-session replacement has established its own socket.
+                        // ownership only after the old execution can no longer receive notifications
+                        // and the same-session replacement has established its own socket.
                         run.ownerDcpId = dcpId;
                     }
                     if (run.lifecycle === 'stopRequested' || run.lifecycle === 'completed') {
