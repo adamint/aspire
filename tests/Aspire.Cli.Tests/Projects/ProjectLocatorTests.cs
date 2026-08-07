@@ -440,6 +440,23 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         Assert.Single(settingsFileMessages);
     }
 
+    [Fact]
+    public void WorkspaceConfigLockFileNameIgnoresConfigRootCasing()
+    {
+        // macOS ships a case-insensitive volume by default, so two launches can spell one config
+        // root differently and still resolve to the same aspire.config.json. If they derived
+        // different lock names they would never contend, and both would establish the default.
+        var configRoot = Path.Combine(Path.DirectorySeparatorChar.ToString(), "Workspaces", "Repo", "src");
+
+        Assert.Equal(
+            ProjectLocator.GetWorkspaceConfigLockFileName(configRoot),
+            ProjectLocator.GetWorkspaceConfigLockFileName(configRoot.ToUpperInvariant()));
+
+        Assert.NotEqual(
+            ProjectLocator.GetWorkspaceConfigLockFileName(configRoot),
+            ProjectLocator.GetWorkspaceConfigLockFileName(Path.Combine(configRoot, "nested")));
+    }
+
     private static IConfiguration CreateSelectionOriginConfiguration(string? selectionOrigin)
     {
         var builder = new ConfigurationBuilder();

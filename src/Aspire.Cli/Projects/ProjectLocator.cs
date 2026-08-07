@@ -1322,15 +1322,9 @@ internal sealed class ProjectLocator(
             : ConfigurationHelper.GetConfigRootDirectory(executionContext.WorkingDirectory);
 
         // Two processes only exclude each other when they derive the same file name, so fold away
-        // the spellings that name one directory: symlinks (macOS resolves /tmp to /private/tmp, and
-        // checkouts are routinely reached through links) and, on Windows, case.
+        // the spellings that name one directory. Symlinks first: macOS resolves /tmp to
+        // /private/tmp, and checkouts are routinely reached through links.
         var normalizedRoot = PathNormalizer.ResolveSymlinks(configRoot.FullName);
-        if (OperatingSystem.IsWindows())
-        {
-            normalizedRoot = normalizedRoot.ToLowerInvariant();
-        }
-
-        var lockFileName = Convert.ToHexString(XxHash3.Hash(Encoding.UTF8.GetBytes(normalizedRoot))).ToLowerInvariant();
 
         // The lock lives in the CLI's cache directory rather than in the workspace. The workspace
         // can be read-only, and dropping even a transient file into it would show up in git status
@@ -1338,7 +1332,29 @@ internal sealed class ProjectLocator(
         // (https://github.com/microsoft/aspire/issues/17615). CacheDirectory is derived from the
         // user profile rather than the working directory, so every CLI process on the machine
         // computes the same path for a given config root.
-        return Path.Combine(executionContext.CacheDirectory.FullName, "workspace-config-locks", $"{lockFileName}.lock");
+        return Path.Combine(executionContext.CacheDirectory.FullName, "workspace-config-locks", GetWorkspaceConfigLockFileName(normalizedRoot));
+    }
+
+    /// <summary>
+    /// Returns the lock file name that identifies the workspace config rooted at
+    /// <paramref name="configRootPath"/>.
+    /// </summary>
+    internal static string GetWorkspaceConfigLockFileName(string configRootPath)
+    {
+        // Case-fold on every platform rather than only on Windows. macOS ships a case-insensitive
+        // volume by default, so two launches can spell one config root differently and still land on
+        // the same aspire.config.json, and resolving symlinks canonicalizes links but not casing.
+        //
+        // Folding on a genuinely case-sensitive volume can only make two distinct roots share one
+        // lock, which briefly over-serializes a critical section measured in milliseconds. Not
+        // folding lets two processes that share a config file miss each other entirely, which is the
+        // failure this lock exists to prevent, so it has to fail toward blocking. Probing the volume
+        // for case sensitivity would be more precise, but it adds IO to every launch and could
+        // answer differently in two processes, which is the one thing a lock key must never do.
+        //
+        // ToLowerInvariant rather than the current culture for the same reason: two CLI processes in
+        // different locales must derive the same name.
+        return $"{Convert.ToHexString(XxHash3.Hash(Encoding.UTF8.GetBytes(configRootPath.ToLowerInvariant()))).ToLowerInvariant()}.lock";
     }
 
     private FileInfo GetOrCreateLocalAspireConfigFile()
