@@ -95,36 +95,77 @@ public class NpmLockfileRegistryTests
     /// <remarks>
     /// The theory above guards a named set, which cannot notice a lockfile that was never added to
     /// it. Every `package-lock.json` under src/ ships to users, so this discovers them from disk and
-    /// pins the exact set that is not yet on the approved feed. Normalizing one makes this fail until
-    /// it is removed from the list; adding a new unnormalized one makes it fail immediately.
+    /// pins both the exact set that is not yet on the approved feed and the exact origins each one is
+    /// still allowed to use.
     ///
-    /// These four are pre-existing and predate the lockfile guard — the `frontend/` lockfiles resolve
-    /// every package from registry.npmjs.org, and aspire-ts-cs-starter carries the
-    /// ms-feed-*.pkgs.visualstudio.com redirect drift. Normalizing them means regenerating against the
-    /// approved feed, which changes what `aspire new` ships and is deliberately not bundled into this
-    /// change.
+    /// Pinning the paths alone is not enough: an allow-list keyed only on file path would stay green
+    /// if someone swapped registry.npmjs.org for an arbitrary external host, because the set of
+    /// offending files would not change. Recording the origins means the only tolerated drift is the
+    /// drift that already exists — a new host in any of these files fails immediately.
+    ///
+    /// These four are pre-existing and predate the lockfile guard. Normalizing them means regenerating
+    /// against the approved feed, which changes what `aspire new` ships and is deliberately not
+    /// bundled into this change. Normalizing one makes this fail until its entry is removed; adding a
+    /// new unnormalized lockfile fails immediately.
     /// </remarks>
     [Fact]
-    public void ShippedLockfiles_NotYetOnTheApprovedFeed_AreExactlyTheKnownSet()
+    public void ShippedLockfiles_NotYetOnTheApprovedFeed_UseExactlyTheKnownOrigins()
     {
         var sourceRoot = Path.Combine(RepoRoot.Path, "src");
 
         var unnormalized = Directory.EnumerateFiles(sourceRoot, "package-lock.json", SearchOption.AllDirectories)
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}node_modules{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
-            .Where(path => ScanNpmLockfile(File.ReadAllText(path)).Offenders.Count > 0)
-            .Select(path => Path.GetRelativePath(RepoRoot.Path, path).Replace(Path.DirectorySeparatorChar, '/'))
-            .OrderBy(path => path, StringComparer.Ordinal)
-            .ToArray();
+            .Select(path => (
+                Path: Path.GetRelativePath(RepoRoot.Path, path).Replace(Path.DirectorySeparatorChar, '/'),
+                Origins: OriginsOf(ScanNpmLockfile(File.ReadAllText(path)).Offenders)))
+            .Where(entry => entry.Origins.Length > 0)
+            .OrderBy(entry => entry.Path, StringComparer.Ordinal)
+            .ToDictionary(entry => entry.Path, entry => entry.Origins, StringComparer.Ordinal);
 
-        Assert.Equal(
-            new[]
-            {
-                "src/Aspire.Cli/Templating/Templates/java-starter/frontend/package-lock.json",
-                "src/Aspire.Cli/Templating/Templates/py-starter/frontend/package-lock.json",
-                "src/Aspire.Cli/Templating/Templates/ts-starter/frontend/package-lock.json",
-                "src/Aspire.ProjectTemplates/templates/aspire-ts-cs-starter/frontend/package-lock.json",
-            },
-            unnormalized);
+        var expected = new Dictionary<string, string[]>(StringComparer.Ordinal)
+        {
+            ["src/Aspire.Cli/Templating/Templates/java-starter/frontend/package-lock.json"] = ["https://registry.npmjs.org"],
+            ["src/Aspire.Cli/Templating/Templates/py-starter/frontend/package-lock.json"] = ["https://registry.npmjs.org"],
+            ["src/Aspire.Cli/Templating/Templates/ts-starter/frontend/package-lock.json"] = ["https://registry.npmjs.org"],
+            ["src/Aspire.ProjectTemplates/templates/aspire-ts-cs-starter/frontend/package-lock.json"] = ["https://ms-feed-2.pkgs.visualstudio.com"],
+        };
+
+        Assert.Equal(expected.Keys.Order(StringComparer.Ordinal), unnormalized.Keys.Order(StringComparer.Ordinal));
+
+        foreach (var (path, origins) in expected)
+        {
+            Assert.Equal(origins, unnormalized[path]);
+        }
+    }
+
+    /// <summary>
+    /// Reduces offending references to their distinct scheme+authority so the expectation records
+    /// where a lockfile still resolves from without pinning every individual package URL.
+    /// </summary>
+    /// <remarks>
+    /// Offenders are recorded as "&lt;entry name&gt; -&gt; &lt;url&gt;", for example:
+    ///   node_modules/@emnapi/core -&gt; https://registry.npmjs.org/@emnapi/core/-/core-1.5.0.tgz
+    /// The entry name can itself contain "-" and "&gt;", so split on the first " -&gt; " only.
+    /// </remarks>
+    private static string[] OriginsOf(IReadOnlyList<string> offenders)
+    {
+        const string ReferenceSeparator = " -> ";
+
+        var origins = new SortedSet<string>(StringComparer.Ordinal);
+
+        foreach (var offender in offenders)
+        {
+            var separatorIndex = offender.IndexOf(ReferenceSeparator, StringComparison.Ordinal);
+            var url = separatorIndex < 0 ? offender : offender[(separatorIndex + ReferenceSeparator.Length)..];
+
+            // An offender that is not a well-formed absolute URI is still drift, so surface it
+            // verbatim rather than dropping it and shrinking the recorded set.
+            origins.Add(Uri.TryCreate(url, UriKind.Absolute, out var uri)
+                ? uri.GetLeftPart(UriPartial.Authority)
+                : url);
+        }
+
+        return [.. origins];
     }
 
     [Theory]
