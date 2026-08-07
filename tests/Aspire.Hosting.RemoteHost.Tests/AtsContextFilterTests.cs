@@ -28,6 +28,25 @@ public class AtsContextFilterTests
     }
 
     /// <summary>
+    /// A package whose CLR types did not resolve survives only as the prefix of its capability and
+    /// type ids, and the filter still matches it there. Canonicalization has to reach the same names
+    /// the filter does, or that package is the one case that returns a populated document under a
+    /// name consumers cannot look up.
+    /// </summary>
+    [Fact]
+    public void ResolveCanonicalAssemblyName_ReachesAPackageThatSurvivesOnlyInItsIds()
+    {
+        var context = CreateContext();
+
+        Assert.DoesNotContain(
+            context.HandleTypes,
+            type => type.AtsTypeId.StartsWith("Aspire.Hosting.Redis/", StringComparison.Ordinal) && type.ClrType is not null);
+
+        Assert.Equal("Aspire.Hosting.Redis", AtsContextFilter.ResolveCanonicalAssemblyName(context, "aspire.hosting.redis"));
+        Assert.NotEmpty(AtsContextFilter.FilterByExportingAssemblies(context, ["aspire.hosting.redis"]).HandleTypes);
+    }
+
+    /// <summary>
     /// A name no loaded assembly carries belongs to a package whose assembly is named differently.
     /// Guessing would be worse than echoing the request, and the export filters to nothing either way.
     /// </summary>

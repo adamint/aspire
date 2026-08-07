@@ -20,9 +20,10 @@ internal static class AtsContextFilter
     /// (<see href="https://learn.microsoft.com/nuget/consume-packages/finding-and-choosing-packages#package-identifiers"/>),
     /// so a caller can name a package in any casing, but an API export records the id verbatim as
     /// the identity consumers key on. Every filter here treats the package id as an assembly name,
-    /// so the loaded assemblies are the authority on how it is spelled. A name that matches nothing
-    /// is returned unchanged rather than guessed at: that is a package whose assembly is named
-    /// differently, which the export would already have filtered to nothing.
+    /// so the assemblies this context was scanned from are the authority on how it is spelled. A
+    /// name that matches nothing is returned unchanged rather than guessed at: the candidates below
+    /// are a superset of everything <see cref="FilterByExportingAssemblies(AtsContext, IReadOnlyCollection{string})"/>
+    /// can match on, so an unmatched name is one the export would filter to nothing anyway.
     /// </remarks>
     /// <param name="context">The unfiltered ATS context.</param>
     /// <param name="requestedName">The assembly or package name as the caller spelled it.</param>
@@ -32,59 +33,30 @@ internal static class AtsContextFilter
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(requestedName);
 
-        foreach (var candidate in EnumerateAssemblyNames(context))
-        {
-            if (string.Equals(candidate, requestedName, StringComparison.OrdinalIgnoreCase))
-            {
-                return candidate;
-            }
-        }
+        // Seed with the exporting assembly names rather than gathering them afterwards. They are the
+        // first thing IsCapabilityOwnedBySelectedAssembly consults, so when a capability's recorded
+        // exporter disagrees with its declaring assembly, the exporter is the spelling that decides
+        // ownership and must be the one that wins here too. Everything else comes from
+        // GetKnownAssemblyNames so this cannot drift from the names the filter recognizes -- notably
+        // the ones parsed out of capability and type ids, which are the only trace of an assembly
+        // whose CLR types did not resolve.
+        var candidates = GetKnownAssemblyNames(context, GetExportingAssemblyNames(context));
 
-        return requestedName;
+        return candidates.TryGetValue(requestedName, out var canonicalName) ? canonicalName : requestedName;
     }
 
-    private static IEnumerable<string> EnumerateAssemblyNames(AtsContext context)
+    private static HashSet<string> GetExportingAssemblyNames(AtsContext context)
     {
+        var exportingAssemblyNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var assemblyName in context.CapabilityExportingAssemblyNames.Values)
         {
-            if (!string.IsNullOrWhiteSpace(assemblyName))
-            {
-                yield return assemblyName;
-            }
+            AddAssemblyName(exportingAssemblyNames, assemblyName);
         }
 
-        foreach (var type in context.HandleTypes)
-        {
-            if (type.ClrType?.Assembly.GetName().Name is { Length: > 0 } name)
-            {
-                yield return name;
-            }
-        }
-
-        foreach (var type in context.DtoTypes)
-        {
-            if (type.ClrType?.Assembly.GetName().Name is { Length: > 0 } name)
-            {
-                yield return name;
-            }
-        }
-
-        foreach (var type in context.EnumTypes)
-        {
-            if (type.ClrType?.Assembly.GetName().Name is { Length: > 0 } name)
-            {
-                yield return name;
-            }
-        }
-
-        foreach (var exportedValue in context.ExportedValues)
-        {
-            if (exportedValue.OwningAssemblyName is { Length: > 0 } name)
-            {
-                yield return name;
-            }
-        }
+        return exportingAssemblyNames;
     }
+
     /// <summary>
     /// Filters the given ATS context to include only capabilities and types exported by the specified assemblies.
     /// </summary>
