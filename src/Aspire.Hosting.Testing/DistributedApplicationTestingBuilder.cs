@@ -423,13 +423,23 @@ public static class DistributedApplicationTestingBuilder
     {
         private readonly SemaphoreSlim _continueBuilding = new(0);
 
+        // Guards the pair of (continuation state, outstanding build count). They have to move together: a caller
+        // may only start waiting for the application while no other caller has abandoned it, and an abandoning
+        // caller may only claim it once no other caller is still waiting. Interlocked operations on the two fields
+        // cannot express that, and nothing is awaited while the lock is held.
+        private readonly object _buildStateLock = new();
+
         // Tracks whether the suspended AppHost entry point has been released, and why. Disposal must win over a
         // concurrent BuildAsync so a rejected builder cannot continue into Build() after the factory is gone.
         private const int ContinuationSuspended = 0;
         private const int ContinuationReleased = 1;
-        private const int ContinuationDisposed = 2;
+        private const int ContinuationAbandoned = 2;
+        private const int ContinuationDisposed = 3;
 
         private int _buildingContinuationState;
+
+        // Number of BuildAsync calls that have released the AppHost and are still waiting for the application.
+        private int _outstandingBuilds;
 
         // Resolved while the builder is being constructed, because dashboard services and dashboard authentication
         // are selected during construction and the post-construction half of the configuration has to agree with it.
@@ -465,32 +475,74 @@ public static class DistributedApplicationTestingBuilder
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var previousState = Interlocked.CompareExchange(ref _buildingContinuationState, ContinuationReleased, ContinuationSuspended);
-            if (previousState == ContinuationDisposed)
+            bool releaseAppHost;
+            lock (_buildStateLock)
             {
-                throw CreateDisposedException();
+                switch (_buildingContinuationState)
+                {
+                    case ContinuationDisposed:
+                        throw CreateDisposedException();
+                    case ContinuationAbandoned:
+                        throw CreateAbandonedException();
+                }
+
+                releaseAppHost = _buildingContinuationState == ContinuationSuspended;
+                Volatile.Write(ref _buildingContinuationState, ContinuationReleased);
+                _outstandingBuilds++;
             }
 
-            if (previousState == ContinuationSuspended)
+            if (releaseAppHost)
             {
                 _continueBuilding.Release();
             }
 
+            var canceled = false;
             try
             {
                 return await ResolveApplicationAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                // Once the AppHost has been released, it can still finish building after the caller stops waiting.
-                // Cancellation must return to the caller promptly, so reclaim that application on a background
-                // continuation rather than blocking here until an AppHost that may never finish completes.
-                ReclaimApplicationInBackground();
+                canceled = true;
                 throw;
             }
             catch (OperationCanceledException) when (Volatile.Read(ref _buildingContinuationState) == ContinuationDisposed)
             {
                 throw CreateDisposedException();
+            }
+            finally
+            {
+                if (TryAbandonApplication(canceled))
+                {
+                    // Once the AppHost has been released, it can still finish building after the caller stops waiting.
+                    // Cancellation must return to the caller promptly, so reclaim that application on a background
+                    // continuation rather than blocking here until an AppHost that may never finish completes.
+                    ReclaimApplicationInBackground();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Records that a <see cref="BuildAsync"/> call stopped waiting for the application, and reports whether it
+        /// abandoned it, meaning no caller is left to take ownership of an application that still arrives.
+        /// </summary>
+        private bool TryAbandonApplication(bool canceled)
+        {
+            lock (_buildStateLock)
+            {
+                _outstandingBuilds--;
+
+                // A caller that is still waiting takes ownership of the application and disposes it through the
+                // builder, so only the last caller to cancel may reclaim it. Disposal already owns the teardown.
+                if (!canceled || _outstandingBuilds > 0 || _buildingContinuationState != ContinuationReleased)
+                {
+                    return false;
+                }
+
+                // The AppHost entry point produces exactly one application, and it is now spoken for by the
+                // background reclaim, so later builds have to be rejected rather than handed a disposed instance.
+                Volatile.Write(ref _buildingContinuationState, ContinuationAbandoned);
+                return true;
             }
         }
 
@@ -529,6 +581,14 @@ public static class DistributedApplicationTestingBuilder
                 "The testing builder was disposed before the application was built.");
         }
 
+        private static InvalidOperationException CreateAbandonedException()
+        {
+            return new InvalidOperationException(
+                "The application was abandoned because the BuildAsync call that released the AppHost was canceled, " +
+                "and it is being disposed. An AppHost entry point builds a single application, so building again " +
+                "requires a new testing builder.");
+        }
+
         public override async ValueTask DisposeAsync()
         {
             PrepareForDisposal();
@@ -543,8 +603,14 @@ public static class DistributedApplicationTestingBuilder
 
         private void PrepareForDisposal()
         {
-            var previousState = Interlocked.Exchange(ref _buildingContinuationState, ContinuationDisposed);
-            if (previousState == ContinuationSuspended)
+            bool releaseAppHost;
+            lock (_buildStateLock)
+            {
+                releaseAppHost = _buildingContinuationState == ContinuationSuspended;
+                Volatile.Write(ref _buildingContinuationState, ContinuationDisposed);
+            }
+
+            if (releaseAppHost)
             {
                 // Abort on the AppHost entry-point thread instead of allowing a rejected or canceled
                 // builder to continue into Build() after the factory has already been disposed.

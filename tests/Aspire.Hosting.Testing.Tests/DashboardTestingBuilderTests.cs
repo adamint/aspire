@@ -336,6 +336,81 @@ public class DashboardTestingBuilderTests
         Assert.Equal(nameof(IDistributedApplicationTestingBuilder), exception.ObjectName);
     }
 
+    [Fact]
+    public async Task BuildAsyncAfterCancellationAbandonedTheApplicationIsRejected()
+    {
+        var probe = TestingAppHostBuildProbe.Create();
+        var builder =
+            await DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
+                [$"--block-apphost-build={probe.Id}"]);
+        try
+        {
+            using var cancellationTokenSource = new CancellationTokenSource();
+            var buildTask = builder.BuildAsync(cancellationTokenSource.Token);
+            await probe.BuildEntered.DefaultTimeout();
+
+            cancellationTokenSource.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => buildTask.DefaultTimeout());
+
+            // No caller was left waiting, so the application the AppHost is still building belongs to the
+            // background reclaim. Handing it to a retry would give that caller an application being disposed.
+            // The budget only bounds a regression: rejection happens before this token can be observed.
+            using var retryTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+                () => builder.BuildAsync(retryTimeout.Token));
+
+            Assert.Equal(
+                "The application was abandoned because the BuildAsync call that released the AppHost was canceled, " +
+                "and it is being disposed. An AppHost entry point builds a single application, so building again " +
+                "requires a new testing builder.",
+                exception.Message);
+        }
+        finally
+        {
+            probe.ContinueBuilding();
+            await builder.DisposeAsync();
+            probe.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task BuildAsyncCancellationLeavesTheApplicationToAConcurrentBuild()
+    {
+        var probe = TestingAppHostBuildProbe.Create();
+        var builder =
+            await DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
+                [$"--block-apphost-build={probe.Id}"]);
+        try
+        {
+            using var cancellationTokenSource = new CancellationTokenSource();
+            var canceledBuildTask = builder.BuildAsync(cancellationTokenSource.Token);
+            await probe.BuildEntered.DefaultTimeout();
+
+            // BuildAsync registers the caller as waiting before it reaches its first await, so by the time this
+            // returns a task the surviving build is already accounted for by the cancellation below.
+            var survivingBuildTask = builder.BuildAsync(CancellationToken.None);
+
+            cancellationTokenSource.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => canceledBuildTask.DefaultTimeout());
+
+            probe.ContinueBuilding();
+            var application = await survivingBuildTask.WaitAsync(TimeSpan.FromSeconds(60));
+
+            // A background reclaim would dispose the factory as soon as the application arrived, which flips the
+            // builder into its disposed state. Owning the application means the builder still hands it back.
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            var rebuiltApplication = await builder.BuildAsync().DefaultTimeout();
+            Assert.Same(application.Services, rebuiltApplication.Services);
+            Assert.False(probe.ApplicationDisposed.IsCompleted);
+        }
+        finally
+        {
+            probe.ContinueBuilding();
+            await builder.DisposeAsync();
+            probe.Dispose();
+        }
+    }
+
     [Theory]
     [InlineData(CreationSurface.Generic, "--operation", "publish")]
     [InlineData(CreationSurface.Generic, "--publisher", "manifest")]
