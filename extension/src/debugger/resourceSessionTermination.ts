@@ -29,11 +29,12 @@ export type SendSessionTerminated = (runId: string, dcpId: string) => void;
  * - `finish()` performs the terminal bookkeeping exactly once: it stops listening for the VS Code
  *   termination event, emits `sessionTerminated` when this run owns that notification, and runs
  *   the per-run cleanup handlers (browser profile directory, Azure Functions host, ...).
- * - `stop()` requests a VS Code stop and then finishes. It is memoized so concurrent stops issue a
- *   single `vscode.debug.stopDebugging`, and it resolves only after VS Code has finished stopping
- *   so callers can sequence teardown. `AspireDebugSession.stopDebugging()` depends on that:
- *   it stops the AppHost first and only then the Aspire parent, which keeps VS Code's parent
- *   session cascade from racing the AppHost registry refresh.
+ * - `stop()` requests a VS Code stop and finishes only if that stop succeeded. It is memoized so
+ *   concurrent stops issue a single `vscode.debug.stopDebugging`, and it resolves only after
+ *   VS Code has finished stopping so callers can sequence teardown.
+ *   `AspireDebugSession.stopDebugging()` depends on that: it stops the AppHost first and only then
+ *   the Aspire parent, which keeps VS Code's parent session cascade from racing the AppHost
+ *   registry refresh. A failed stop leaves the run unfinished on purpose - see `stopCore`.
  *
  * Collecting both transitions here is the point: the signal is read once, in the constructor, so
  * no caller can partially reconstruct termination ownership.
@@ -129,13 +130,20 @@ export class ResourceSessionTermination {
         }
         catch (error) {
             extensionLogOutputChannel.warn(`Failed to stop debug session '${this._session.name}': ${error instanceof Error ? error.message : String(error)}`);
+            // Deliberately do not finish here. A rejected stop means VS Code never confirmed the
+            // session ended, so the debuggee may well still be running. Reporting sessionTerminated
+            // would tell DCP the run is over while it is not, and running cleanup would delete the
+            // browser profile directory out from under a live browser.
+            //
+            // Leaving the state pending is recoverable: the termination listener stays registered,
+            // so a session that later ends for real still finishes the lifecycle normally. Clearing
+            // the memoized promise lets a subsequent stop retry rather than replaying the failure.
+            // The cost is a leaked profile directory if the session never ends, which is strictly
+            // better than corrupting a running browser or lying to DCP about the run's state.
+            this._stopPromise = undefined;
             throw error;
         }
-        finally {
-            // Finish even when VS Code reported a failed stop. The run still has to be terminated in
-            // DCP and its cleanup handlers still have to run, otherwise the resource stays "running"
-            // in the dashboard forever and its scratch state (browser profile directory) leaks.
-            this.finish();
-        }
+
+        this.finish();
     }
 }

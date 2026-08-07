@@ -5,6 +5,53 @@ import { AspireDebugSession } from '../../debugger/AspireDebugSession';
 import { browserDebuggerExtension } from '../../debugger/languages/browser';
 import { AspireResourceExtendedDebugConfiguration, BrowserLaunchConfiguration, SessionTerminatedNotification } from '../../dcp/types';
 
+/** Stubs installed over the filesystem calls the browser profile directory setup makes. */
+export interface BrowserProfileFsStubs {
+    mkdir: sinon.SinonStub;
+    lstat: sinon.SinonStub;
+    mkdtemp: sinon.SinonStub;
+}
+
+/** Suffix the stubbed `mkdtemp` appends, standing in for Node's random six characters. */
+export const stubbedMkdtempSuffix = 'A1b2C3';
+
+function asStub(candidate: unknown): sinon.SinonStub | undefined {
+    return typeof candidate === 'function' && typeof (candidate as { restore?: unknown }).restore === 'function'
+        ? candidate as unknown as sinon.SinonStub
+        : undefined;
+}
+
+/**
+ * Stubs the filesystem calls `createBrowserUserDataDir` makes, so tests exercise the real ownership
+ * and containment logic without touching the actual filesystem.
+ *
+ * Defaults describe a healthy profile root: a real directory owned by this process. `mkdtemp`
+ * mirrors Node's contract by appending characters to the prefix it is given, so assertions can tell
+ * a generated leaf apart from a deterministic path. Individual tests override a stub to describe a
+ * hostile root.
+ *
+ * Calling this twice in one test returns the stubs already installed rather than stacking a second
+ * layer. Suites install it once in `setup` so no test can accidentally create real directories under
+ * the shared temp directory, and tests that need the handles call it again to get them.
+ */
+export function stubBrowserProfileFs(): BrowserProfileFsStubs {
+    const existingMkdir = asStub(fs.promises.mkdir);
+    const existingLstat = asStub(fs.promises.lstat);
+    const existingMkdtemp = asStub(fs.promises.mkdtemp);
+    if (existingMkdir && existingLstat && existingMkdtemp) {
+        return { mkdir: existingMkdir, lstat: existingLstat, mkdtemp: existingMkdtemp };
+    }
+
+    const mkdir = sinon.stub(fs.promises, 'mkdir').resolves(undefined);
+    const lstat = sinon.stub(fs.promises, 'lstat').resolves({
+        isDirectory: () => true,
+        uid: typeof process.getuid === 'function' ? process.getuid() : 0
+    } as unknown as fs.Stats);
+    const mkdtemp = sinon.stub(fs.promises, 'mkdtemp').callsFake(async (prefix: fs.PathLike) => `${String(prefix)}${stubbedMkdtempSuffix}`);
+
+    return { mkdir, lstat, mkdtemp };
+}
+
 export interface Deferred<T> {
     promise: Promise<T>;
     resolve: (value: T | PromiseLike<T>) => void;
@@ -66,6 +113,7 @@ export class DebugSessionHarness {
     readonly startDebugging: sinon.SinonStub;
     readonly stopDebugging: sinon.SinonStub;
     readonly rm: sinon.SinonStub;
+    readonly profileFs: BrowserProfileFsStubs;
 
     /**
      * Invoked immediately before the synthesized session is announced. Tests use it to interleave
@@ -81,6 +129,7 @@ export class DebugSessionHarness {
         const { stopDebugging = 'immediate', startedSessionId = 'browser-session-id', autoStartSession = true } = options;
 
         this.rm = sinon.stub(fs.promises, 'rm').resolves();
+        this.profileFs = stubBrowserProfileFs();
         sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(listener => {
             this._startListener = listener;
             return { dispose: () => { } };

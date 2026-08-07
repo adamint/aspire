@@ -12,6 +12,8 @@ import { cleanupRun } from '../debugger/runCleanupRegistry';
 import { BrowserLaunchConfiguration, ExecutableLaunchConfiguration } from '../dcp/types';
 import { extensionLogOutputChannel } from '../utils/logging';
 import {
+    stubBrowserProfileFs,
+    stubbedMkdtempSuffix,
     configureBrowserDebugSession,
     createDebugSession,
     createResourceDebugConfig,
@@ -21,7 +23,21 @@ import {
 const browserProfileRoot = path.join(os.tmpdir(), 'aspire-vscode-browser-debug');
 const expectedRmOptions = { recursive: true, force: true, maxRetries: 3, retryDelay: 100 };
 
+/**
+ * The profile directory `stubBrowserProfileFs` produces for a run id. The leaf carries a generated
+ * suffix because the real code creates it with `mkdtemp` rather than deriving a guessable name.
+ */
+function profileDirFor(runId: string): string {
+    return path.join(browserProfileRoot, `${runId}-${stubbedMkdtempSuffix}`);
+}
+
 suite('Browser Debugger Tests', () => {
+    setup(() => {
+        // Installed for every test so none of them can create real directories under the shared OS
+        // temp directory. Tests that assert on the calls request the same stubs back.
+        stubBrowserProfileFs();
+    });
+
     teardown(() => {
         cleanupRun('run-1');
         sinon.restore();
@@ -29,6 +45,7 @@ suite('Browser Debugger Tests', () => {
 
     test('configures js-debug browser launch with isolated profile and clean-exit flags', async () => {
         const rmStub = sinon.stub(fs.promises, 'rm').resolves();
+        stubBrowserProfileFs();
         const launchConfig: BrowserLaunchConfiguration = {
             type: 'browser',
             mode: 'Debug',
@@ -51,7 +68,7 @@ suite('Browser Debugger Tests', () => {
             '--no-default-browser-check',
             '--disable-background-mode'
         ]);
-        assert.strictEqual(debugConfig.userDataDir, path.join(browserProfileRoot, 'run-1'));
+        assert.strictEqual(debugConfig.userDataDir, profileDirFor('run-1'));
         assert.strictEqual(debugConfig.debugSessionId, 'dcp-1');
         // The signal is declared by the integration, not written by the callback, so assert it at
         // its source. js-debug is server-hosted and tears down child target sessions on its own, so
@@ -62,7 +79,7 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(debugConfig.cwd, undefined);
 
         cleanupRun('run-1');
-        assert.strictEqual(rmStub.calledOnceWithExactly(path.join(browserProfileRoot, 'run-1'), expectedRmOptions), true);
+        assert.strictEqual(rmStub.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
     });
 
     test('defaults to Edge and preserves user runtime args', async () => {
@@ -90,13 +107,13 @@ suite('Browser Debugger Tests', () => {
 
         await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
 
-        assert.strictEqual(debugConfig.userDataDir, path.join(browserProfileRoot, 'custom-run-id'));
+        assert.strictEqual(debugConfig.userDataDir, profileDirFor('custom-run-id'));
 
         cleanupRun('run-1');
         assert.strictEqual(rmStub.called, false);
 
         cleanupRun('custom-run-id');
-        assert.strictEqual(rmStub.calledOnceWithExactly(path.join(browserProfileRoot, 'custom-run-id'), expectedRmOptions), true);
+        assert.strictEqual(rmStub.calledOnceWithExactly(profileDirFor('custom-run-id'), expectedRmOptions), true);
     });
 
     // Path containment. The profile directory is deleted recursively when the run ends, so a run id
@@ -120,6 +137,7 @@ suite('Browser Debugger Tests', () => {
     for (const { runId, description } of escapingRunIds) {
         test(`keeps the browser profile directory inside the profile root for ${description}`, async () => {
             const rmStub = sinon.stub(fs.promises, 'rm').resolves();
+            stubBrowserProfileFs();
             const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
             const debugConfig = createResourceDebugConfig({ runId });
 
@@ -153,6 +171,81 @@ suite('Browser Debugger Tests', () => {
         });
     }
 
+    // Directory creation, not path derivation, is what makes the profile directory safe. os.tmpdir()
+    // is shared and world-writable on Linux, so another local process can create
+    // `aspire-vscode-browser-debug` first. The browser follows userDataDir when it writes, so a
+    // hostile root would redirect profile data - cookies and tokens for the app being debugged -
+    // into a directory that process controls. No amount of string validation detects that.
+    test('refuses a browser profile root that is not a real directory', async () => {
+        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
+        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
+        const profileFs = stubBrowserProfileFs();
+        // A symlink planted at the profile root: lstat reports the link itself, not its target.
+        profileFs.lstat.resolves({ isDirectory: () => false, uid: process.getuid?.() ?? 0 } as never);
+        const debugConfig = createResourceDebugConfig();
+
+        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
+
+        assert.strictEqual(debugConfig.userDataDir, undefined, 'Expected no profile directory to be handed to the browser');
+        assert.strictEqual(profileFs.mkdtemp.called, false, 'Expected no directory to be created under an untrusted root');
+        assert.ok(warnStub.getCalls().some(call => /not a real directory/.test(call.args[0])));
+
+        cleanupRun('run-1');
+        assert.strictEqual(rmStub.called, false, 'Expected nothing to be deleted when the root was refused');
+    });
+
+    test('refuses a browser profile root owned by another user', async () => {
+        if (typeof process.getuid !== 'function') {
+            return; // POSIX-only ownership model; %TEMP% is per-user on Windows.
+        }
+
+        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
+        const profileFs = stubBrowserProfileFs();
+        profileFs.lstat.resolves({ isDirectory: () => true, uid: process.getuid() + 1 } as never);
+        const debugConfig = createResourceDebugConfig();
+
+        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
+
+        assert.strictEqual(debugConfig.userDataDir, undefined);
+        assert.strictEqual(profileFs.mkdtemp.called, false);
+        assert.ok(warnStub.getCalls().some(call => /owned by another user/.test(call.args[0])));
+    });
+
+    test('creates the browser profile directory atomically instead of using a guessable path', async () => {
+        // A deterministic child path can be pre-created as a symlink by another local process and
+        // then followed. mkdtemp fails rather than following an existing entry, so creation itself
+        // is the race protection.
+        const profileFs = stubBrowserProfileFs();
+        const debugConfig = createResourceDebugConfig({ runId: 'run-1' });
+
+        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
+
+        assert.strictEqual(profileFs.mkdtemp.calledOnce, true);
+        assert.strictEqual(profileFs.mkdtemp.firstCall.args[0], path.join(browserProfileRoot, 'run-1-'));
+        // The directory handed to the browser is the one mkdtemp actually created, not the prefix.
+        assert.strictEqual(debugConfig.userDataDir, profileDirFor('run-1'));
+        assert.strictEqual(profileFs.mkdir.calledOnce, true);
+        assert.deepStrictEqual(profileFs.mkdir.firstCall.args[1], { recursive: true, mode: 0o700 });
+    });
+
+    test('refuses a created profile directory that resolves outside the profile root', async () => {
+        // Defense in depth behind mkdtemp: whatever produced the final path, a recursive delete must
+        // never be aimed outside the tree Aspire owns.
+        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
+        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
+        const profileFs = stubBrowserProfileFs();
+        profileFs.mkdtemp.resolves(path.join(os.tmpdir(), 'somewhere-else'));
+        const debugConfig = createResourceDebugConfig();
+
+        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
+
+        assert.strictEqual(debugConfig.userDataDir, undefined);
+        assert.ok(warnStub.getCalls().some(call => /outside/.test(call.args[0])));
+
+        cleanupRun('run-1');
+        assert.strictEqual(rmStub.called, false);
+    });
+
     test('ignores workspace debugger settings that try to take over Aspire-owned configuration fields', async () => {
         // `prepareDebugSession` merges the workspace `debuggers.<type>` block into the generated
         // configuration. Every field on the configuration is therefore workspace-writable unless it
@@ -162,6 +255,7 @@ suite('Browser Debugger Tests', () => {
         //   - `debugSessionId` becomes `dcp_id` on DCP wire notifications.
         //   - `terminationSignal` decides who reports the run terminating.
         const rmStub = sinon.stub(fs.promises, 'rm').resolves();
+        stubBrowserProfileFs();
         const prepared = await prepareDebugSession(
             {
                 type: 'aspire',
@@ -189,10 +283,10 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(configuration.debugSessionId, 'dcp-1');
         assert.strictEqual(configuration.isApphost, false);
         assert.strictEqual(configuration.terminationSignal, 'debug-session-end');
-        assert.strictEqual(configuration.userDataDir, path.join(browserProfileRoot, 'run-1'));
+        assert.strictEqual(configuration.userDataDir, profileDirFor('run-1'));
 
         cleanupRun('run-1');
-        assert.strictEqual(rmStub.calledOnceWithExactly(path.join(browserProfileRoot, 'run-1'), expectedRmOptions), true);
+        assert.strictEqual(rmStub.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
     });
 
     test('ignores a workspace attempt to rewire the termination signal of a non-browser resource', async () => {
@@ -296,7 +390,7 @@ suite('Browser Debugger Tests', () => {
             session_id: 'run-1',
             dcp_id: 'dcp-1'
         }]);
-        assert.strictEqual(harness.rm.calledOnceWithExactly(path.join(browserProfileRoot, 'run-1'), expectedRmOptions), true);
+        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
 
         harness.dispose();
     });
@@ -317,7 +411,7 @@ suite('Browser Debugger Tests', () => {
         harness.finishStopDebugging();
         await stop;
 
-        assert.strictEqual(harness.rm.calledOnceWithExactly(path.join(browserProfileRoot, 'run-1'), expectedRmOptions), true);
+        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
 
         harness.dispose();
     });
@@ -358,7 +452,7 @@ suite('Browser Debugger Tests', () => {
             session_id: 'run-1',
             dcp_id: 'dcp-1'
         }]);
-        assert.strictEqual(harness.rm.calledOnceWithExactly(path.join(browserProfileRoot, 'run-1'), expectedRmOptions), true);
+        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
 
         harness.dispose();
         assert.strictEqual(harness.sessionTerminatedNotifications().length, 1, 'Expected disposal after a requested stop to stay single-shot');
@@ -413,6 +507,43 @@ suite('Browser Debugger Tests', () => {
 
         await assert.rejects(() => stop, /VS Code failed to stop the session/);
         assert.strictEqual(harness.stopDebugging.callCount, 1);
+        // A rejected stop means VS Code never confirmed the session ended, so the run must not be
+        // reported as terminated. Claiming termination here would mark the resource stopped in the
+        // dashboard while its process is still running.
+        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
+
+        harness.dispose();
+    });
+
+    test('does not delete the browser profile or report termination when the stop fails', async () => {
+        // The browser is potentially still running after a failed stop, and its profile directory is
+        // its live working state. Deleting it would corrupt a running browser, so cleanup has to wait
+        // for a stop that actually succeeded (or for the session to end on its own).
+        const harness = new DebugSessionHarness({ stopDebugging: 'deferred' });
+        const debugConfig = createResourceDebugConfig();
+        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
+
+        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
+
+        assert.ok(resourceDebugSession);
+        const stop = Promise.resolve(resourceDebugSession.stopSession());
+        await Promise.resolve();
+        harness.failStopDebugging(new Error('VS Code failed to stop the session'));
+
+        await assert.rejects(() => stop, /VS Code failed to stop the session/);
+        assert.strictEqual(harness.rm.called, false, 'Expected the profile directory to survive a failed stop');
+        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
+
+        // The termination listener has to survive the failure, otherwise a session that later ends
+        // for real would never terminate the run in DCP.
+        harness.terminateSession(resourceDebugSession.session);
+
+        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
+            notification_type: 'sessionTerminated',
+            session_id: 'run-1',
+            dcp_id: 'dcp-1'
+        }]);
+        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
 
         harness.dispose();
     });
@@ -437,7 +568,7 @@ suite('Browser Debugger Tests', () => {
             session_id: 'run-1',
             dcp_id: 'dcp-1'
         }]);
-        assert.strictEqual(harness.rm.calledOnceWithExactly(path.join(browserProfileRoot, 'run-1'), expectedRmOptions), true);
+        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
     });
 
     test('does not send sessionTerminated for a browser child session from another parent', async () => {
@@ -511,7 +642,7 @@ suite('Browser Debugger Tests', () => {
 
         assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);
         // Cleanup still has to run, otherwise the browser profile directory leaks.
-        assert.strictEqual(harness.rm.calledOnceWithExactly(path.join(browserProfileRoot, 'run-1'), expectedRmOptions), true);
+        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
 
         harness.dispose();
     });
@@ -543,7 +674,7 @@ suite('Browser Debugger Tests', () => {
             session_id: 'run-1',
             dcp_id: 'dcp-1'
         }]);
-        assert.strictEqual(harness.rm.calledOnceWithExactly(path.join(browserProfileRoot, 'run-1'), expectedRmOptions), true);
+        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
     });
 
     test('openDashboard debugFirefox launches the Firefox debug configuration', async () => {

@@ -60,12 +60,13 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
         debugConfiguration.sourceMaps = true;
         debugConfiguration.resolveSourceMapLocations = ['**', '!**/node_modules/**'];
         debugConfiguration.runtimeArgs = mergeRuntimeArgs(debugConfiguration.runtimeArgs, defaultBrowserRuntimeArgs);
-        const userDataDir = getBrowserUserDataDir(debugConfiguration.runId);
+        const userDataDir = await createBrowserUserDataDir(debugConfiguration.runId);
         if (userDataDir) {
             debugConfiguration.userDataDir = userDataDir;
-            // Only a path that getBrowserUserDataDir() proved is inside the profile root ever reaches
-            // this recursive delete; that check is the single gate for both the launch argument and
-            // the cleanup, so the two can never disagree about which directory Aspire owns.
+            // Only a path that createBrowserUserDataDir() created itself, inside a profile root it
+            // verified, ever reaches this recursive delete. That function is the single gate for
+            // both the launch argument and the cleanup, so the two can never disagree about which
+            // directory Aspire owns.
             registerRunCleanup(debugConfiguration.runId, () => {
                 void fs.rm(userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(error => {
                     extensionLogOutputChannel.warn(`Failed to delete browser debug profile directory '${userDataDir}': ${error instanceof Error ? error.message : String(error)}`);
@@ -73,10 +74,10 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
             });
         }
         else {
-            // Fail closed: run without an isolated profile rather than aiming a recursive delete at a
-            // directory Aspire does not own. js-debug falls back to its own default profile, so
-            // debugging still works and only profile isolation is lost.
-            extensionLogOutputChannel.warn(`Could not derive a contained browser debug profile directory for run '${debugConfiguration.runId}'; launching without an isolated profile.`);
+            // Fail closed: run without an isolated profile rather than pointing the browser at, or
+            // aiming a recursive delete at, a directory Aspire does not own. js-debug falls back to
+            // its own default profile, so debugging still works and only profile isolation is lost.
+            extensionLogOutputChannel.warn(`Could not create a contained browser debug profile directory for run '${debugConfiguration.runId}'; launching without an isolated profile.`);
         }
         // Remove program/args/cwd since browser debugging doesn't use them
         delete debugConfiguration.program;
@@ -121,17 +122,78 @@ function mergeRuntimeArgs(existingRuntimeArgs: unknown, argsToAdd: string[]): st
     return runtimeArgs;
 }
 
-function getBrowserUserDataDir(runId: string): string | undefined {
-    // Only reject characters that are unsafe in a path segment. `.` and `-` are deliberately kept
-    // because run ids legitimately contain them, which is exactly why sanitizing alone is not a
-    // containment guarantee: `..` and `.` survive this replacement untouched.
-    const runSegment = runId.replace(/[^a-zA-Z0-9._-]/g, '-');
-    const candidate = path.resolve(getBrowserProfileRoot(), runSegment);
-    if (!isWithinBrowserProfileRoot(candidate)) {
+/**
+ * Creates the isolated browser profile directory for a run, or returns `undefined` when a directory
+ * Aspire can safely own could not be established.
+ *
+ * The directory is created here rather than left for the browser to create lazily, because creating
+ * it is what makes it safe. `os.tmpdir()` is shared and world-writable on Linux, so
+ * `aspire-vscode-browser-debug` is a name any other local process can create first — including as a
+ * symlink. The browser follows `userDataDir` when it writes, so a symlinked root would quietly
+ * redirect profile data (which holds cookies and tokens for the app being debugged) into a
+ * directory chosen by that process, and a symlink pre-created at a guessable child path would do
+ * the same. Deriving and validating a path string cannot detect either, because both are decided
+ * by whoever wins the race to create the directory.
+ */
+async function createBrowserUserDataDir(runId: string): Promise<string | undefined> {
+    const root = getBrowserProfileRoot();
+
+    try {
+        // 0o700 keeps other local users out of profiles this process creates. `recursive: true` does
+        // not fail when the path already exists and does not re-apply the mode to an existing entry,
+        // so the inspection below is what decides whether an existing entry can be trusted.
+        await fs.mkdir(root, { recursive: true, mode: 0o700 });
+
+        // lstat, not stat: it reports on the link itself rather than following it, which is the
+        // whole point of the check.
+        const rootStats = await fs.lstat(root);
+        if (!rootStats.isDirectory()) {
+            extensionLogOutputChannel.warn(`Browser debug profile root '${root}' is not a real directory; refusing to use it.`);
+
+            return undefined;
+        }
+
+        // process.getuid is undefined on Windows, where %TEMP% is per-user and this ownership model
+        // does not apply.
+        if (typeof process.getuid === 'function' && rootStats.uid !== process.getuid()) {
+            extensionLogOutputChannel.warn(`Browser debug profile root '${root}' is owned by another user; refusing to use it.`);
+
+            return undefined;
+        }
+
+        // mkdtemp creates the leaf atomically with an unpredictable suffix. A symlink pre-created at
+        // the child path cannot win the race, because creation fails outright instead of following
+        // an existing entry. See https://nodejs.org/api/fs.html#fspromisesmkdtempprefix-options.
+        // The run id is only a readability prefix here; it is no longer what makes the path unique.
+        const created = await fs.mkdtemp(path.join(root, `${sanitizeRunIdSegment(runId)}-`));
+
+        // Defense in depth. The prefix above is sanitized and suffixed, so it cannot traverse on its
+        // own, but this directory is deleted recursively when the run ends and that delete must
+        // never be aimed outside the tree Aspire owns.
+        if (!isWithinBrowserProfileRoot(created)) {
+            extensionLogOutputChannel.warn(`Refusing to use browser debug profile directory '${created}' because it is outside '${root}'.`);
+
+            return undefined;
+        }
+
+        return created;
+    }
+    catch (error) {
+        extensionLogOutputChannel.warn(`Failed to create a browser debug profile directory under '${root}': ${error instanceof Error ? error.message : String(error)}`);
+
         return undefined;
     }
+}
 
-    return candidate;
+/**
+ * Reduces a run id to a single safe path segment.
+ *
+ * Only characters that are unsafe in a path segment are replaced. `.` and `-` are deliberately kept
+ * because run ids legitimately contain them, which is why sanitizing alone was never a containment
+ * guarantee on its own: `..` and `.` survive this replacement untouched.
+ */
+function sanitizeRunIdSegment(runId: string): string {
+    return runId.replace(/[^a-zA-Z0-9._-]/g, '-');
 }
 
 function getBrowserProfileRoot(): string {
@@ -146,14 +208,11 @@ function getBrowserProfileRoot(): string {
  * test so `..` segments are resolved instead of merely matched, and the root itself is rejected as
  * well as anything above it — deleting the root would wipe the profiles of other concurrent runs.
  *
- * Two deliberate limits:
- * - The comparison is lexical and case-sensitive. On a case-insensitive filesystem a differently
- *   cased path would be rejected rather than accepted, which is the safe direction; both sides are
- *   built from the same `os.tmpdir()` and the same constant, so this does not occur in practice.
- * - Symlinks are not resolved (the directory usually does not exist yet when the configuration is
- *   built, so `fs.realpath` is not an option). That is safe here because `fs.rm` does not follow a
- *   symlink at the path it is given: removing a symlinked directory entry removes the link and
- *   leaves the target intact. See https://nodejs.org/api/fs.html#fspromisesrmpath-options.
+ * The comparison is lexical and case-sensitive. On a case-insensitive filesystem a differently
+ * cased path would be rejected rather than accepted, which is the safe direction; both sides are
+ * built from the same `os.tmpdir()` and the same constant, so this does not occur in practice.
+ * Symlinks are handled by `createBrowserUserDataDir` creating the directory itself, which is
+ * stronger than resolving them here would be.
  */
 function isWithinBrowserProfileRoot(candidate: string): boolean {
     const relative = path.relative(getBrowserProfileRoot(), candidate);
