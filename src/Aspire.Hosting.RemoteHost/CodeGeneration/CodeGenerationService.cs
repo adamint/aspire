@@ -327,7 +327,7 @@ internal sealed class CodeGenerationService
             if (!AtsContextFilter.TryResolveCanonicalAssemblyName(fullContext, packageName, out var canonicalPackageName))
             {
                 throw new InvalidOperationException(
-                    $"'{packageName}' restored, but the app host loaded no assembly by that name, so there is no API to export under it. " +
+                    $"'{packageName}' restored, but the scanned API surface contains nothing under that name, so there is no API to export under it. " +
                     "An API export is scoped by assembly name, so this is what a package whose assembly is named something other than " +
                     "its package id looks like from here.");
             }
@@ -338,9 +338,7 @@ internal sealed class CodeGenerationService
                 fullContext,
                 [packageName]);
 
-            var export = exporter.ExportApi(
-                context,
-                new ApiReferenceExportOptions(packageName, packageVersion, [packageName], fullContext));
+            var export = exporter.ExportApi(context, new ApiReferenceExportOptions(packageName, packageVersion, [packageName]));
 
             _logger.LogDebug("<< exportApi({Language}, {PackageName}) completed in {ElapsedMs}ms", language, packageName, sw.ElapsedMilliseconds);
 

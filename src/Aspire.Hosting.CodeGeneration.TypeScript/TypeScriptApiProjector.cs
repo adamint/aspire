@@ -73,32 +73,6 @@ internal sealed partial class TypeScriptApiProjector
         _resolved = Resolve(context);
     }
 
-    /// <summary>
-    /// Initializes a projector for an export narrowed out of a larger manifest.
-    /// </summary>
-    /// <param name="context">The filtered context to project.</param>
-    /// <param name="manifestContext">The unfiltered context <paramref name="context"/> was narrowed from.</param>
-    /// <remarks>
-    /// Options interface names are settled by collision across every package at once, so a
-    /// projection that can only see one package would name them differently than generation does.
-    /// Resolving the manifest first records the names generation would assign; projecting the
-    /// filtered context afterwards reuses them, so the fragment carries the SDK's names while still
-    /// declaring only what this package contributes. See <see cref="ApiReferenceExportOptions.ManifestContext"/>.
-    /// </remarks>
-    public TypeScriptApiProjector(AtsContext context, AtsContext manifestContext)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-        ArgumentNullException.ThrowIfNull(manifestContext);
-
-        var manifestProjector = new TypeScriptApiProjector(manifestContext);
-        foreach (var (capabilityId, interfaceName) in manifestProjector._capabilityOptionsInterfaceMap)
-        {
-            _manifestOptionsInterfaceNames[capabilityId] = interfaceName;
-        }
-
-        _resolved = Resolve(context);
-    }
-
     /// <summary>Gets the resolved projection of the context this projector was built from.</summary>
     internal TypeScriptResolvedModel Resolved => _resolved;
 
@@ -1142,13 +1116,6 @@ internal sealed partial class TypeScriptApiProjector
 
     private readonly Dictionary<string, string> _capabilityOptionsInterfaceMap = new(StringComparer.Ordinal);
 
-    // Options interface names assigned while resolving the unfiltered manifest, keyed by capability
-    // ID. Populated only for exports narrowed out of a larger context, and deliberately not cleared
-    // by Resolve: it records a decision made before this projection began, not state derived from
-    // the context being projected.
-
-    private readonly Dictionary<string, string> _manifestOptionsInterfaceNames = new(StringComparer.Ordinal);
-
     // Mapping of enum type IDs to TypeScript enum names
 
     private readonly Dictionary<string, string> _enumTypeNames = new(StringComparer.Ordinal);
@@ -1686,16 +1653,6 @@ internal sealed partial class TypeScriptApiProjector
     {
         if (optionalParams.Count == 0)
         {
-            return;
-        }
-
-        // An export narrowed out of a larger manifest already knows the name generation settled on
-        // for this capability. Reusing it verbatim is the whole point: rerunning collision
-        // resolution here would only see this package's methods and could hand two packages the
-        // same interface name for members that cannot merge. See the two-argument constructor.
-        if (_manifestOptionsInterfaceNames.TryGetValue(capabilityId, out var manifestInterfaceName))
-        {
-            AssignOptionsInterface(capabilityId, manifestInterfaceName, optionalParams);
             return;
         }
 

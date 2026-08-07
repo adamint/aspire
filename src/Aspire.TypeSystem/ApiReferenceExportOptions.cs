@@ -24,14 +24,9 @@ public sealed class ApiReferenceExportOptions
     /// The assemblies whose symbols this package owns and documents. Symbols outside this set are
     /// present only to complete the reference closure.
     /// </param>
-    /// <param name="manifestContext">
-    /// The unfiltered context the export was narrowed from, used to reproduce names that generation
-    /// assigns across the whole manifest rather than per package.
-    /// </param>
     /// <exception cref="ArgumentNullException">
-    /// Thrown when <paramref name="packageName"/>, <paramref name="packageVersion"/>,
-    /// <paramref name="exportingAssemblyNames"/>, or <paramref name="manifestContext"/> is
-    /// <see langword="null"/>.
+    /// Thrown when <paramref name="packageName"/>, <paramref name="packageVersion"/>, or
+    /// <paramref name="exportingAssemblyNames"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="packageName"/> or <paramref name="packageVersion"/> is empty or
@@ -40,18 +35,15 @@ public sealed class ApiReferenceExportOptions
     public ApiReferenceExportOptions(
         string packageName,
         string packageVersion,
-        IReadOnlyCollection<string> exportingAssemblyNames,
-        AtsContext manifestContext)
+        IReadOnlyCollection<string> exportingAssemblyNames)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(packageName);
         ArgumentException.ThrowIfNullOrWhiteSpace(packageVersion);
         ArgumentNullException.ThrowIfNull(exportingAssemblyNames);
-        ArgumentNullException.ThrowIfNull(manifestContext);
 
         PackageName = packageName;
         PackageVersion = packageVersion;
         ExportingAssemblyNames = exportingAssemblyNames;
-        ManifestContext = manifestContext;
     }
 
     /// <summary>
@@ -78,21 +70,4 @@ public sealed class ApiReferenceExportOptions
     /// Gets the assemblies whose symbols this package owns and documents.
     /// </summary>
     public IReadOnlyCollection<string> ExportingAssemblyNames { get; }
-
-    /// <summary>
-    /// Gets the unfiltered context this export was narrowed from.
-    /// </summary>
-    /// <remarks>
-    /// Most generated names derive from the symbol they describe, so a package filtered out of the
-    /// context cannot change them. Options interfaces are the exception: they are named after the
-    /// method that produced them, and two packages can expose the same method name with parameters
-    /// that cannot share one interface. Generation resolves that by suffixing the loser, which it
-    /// can only decide while looking at every package at once. An export projected from a filtered
-    /// context sees no collision, so both packages would publish the same interface name with
-    /// different members. TypeScript merges identical interface declarations, so agreeing fragments
-    /// are harmless, but disagreeing ones fail to type-check the moment aspire.dev concatenates
-    /// them — and neither would have matched the SDK. Keeping the manifest lets the exporter settle
-    /// those names exactly as generation does before narrowing to what the package documents.
-    /// </remarks>
-    public AtsContext ManifestContext { get; }
 }

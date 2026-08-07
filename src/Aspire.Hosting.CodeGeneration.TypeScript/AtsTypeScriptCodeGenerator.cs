@@ -452,9 +452,8 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
 
         // Build the projector from the same context the generator would use, so the exported
         // documentation describes the exact signatures generation would emit rather than a
-        // second, independently derived reading of the ATS context. The manifest goes along for
-        // the names generation assigns by looking at every package at once.
-        var projector = new TypeScriptApiProjector(context, options.ManifestContext);
+        // second, independently derived reading of the ATS context.
+        var projector = new TypeScriptApiProjector(context);
         var model = projector.BuildApiModel(
             new TypeScriptApiPackageIdentity(options.PackageName, options.PackageVersion),
             options.ExportingAssemblyNames);
