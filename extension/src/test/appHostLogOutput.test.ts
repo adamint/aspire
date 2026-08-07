@@ -411,6 +411,54 @@ suite('AppHost log output coordinator tests', () => {
         // releasing the held copy renders the same line a second time.
         assert.deepStrictEqual(coordinator.flush(), []);
     });
+
+    test('does not let a write on one stream terminate a record being assembled on another', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('warn: Example.Category[7]\n', 'stdout'),
+            []);
+
+        // stdout, stderr and console interleave freely. An unrelated write must not close a
+        // record being assembled on a different stream, or the header renders on its own and
+        // the body that follows is passed through as raw text.
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('Unrelated native write.\n', 'stderr'),
+            [{ output: 'Unrelated native write.\n', category: 'stderr' }]);
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('      Port is already allocated.\n', 'stdout'),
+            []);
+
+        assert.deepStrictEqual(
+            coordinator.flush(),
+            [{
+                output: '\x1b[33mExample.Category: Warning: Port is already allocated.\x1b[0m\n',
+                category: 'stdout'
+            }]);
+    });
+
+    test('assembles records on two streams at the same time', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(coordinator.handleDebugAdapterOutput('warn: Example.Category[7]\n', 'stdout'), []);
+        assert.deepStrictEqual(coordinator.handleDebugAdapterOutput('fail: Example.Category[7]\n', 'stderr'), []);
+        assert.deepStrictEqual(coordinator.handleDebugAdapterOutput('      Warning body.\n', 'stdout'), []);
+        assert.deepStrictEqual(coordinator.handleDebugAdapterOutput('      Error body.\n', 'stderr'), []);
+
+        assert.deepStrictEqual(
+            coordinator.flush(),
+            [
+                {
+                    output: '\x1b[33mExample.Category: Warning: Warning body.\x1b[0m\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'Example.Category: Error: Error body.\n',
+                    category: 'stderr'
+                }
+            ]);
+    });
 });
 
 

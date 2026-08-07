@@ -49,7 +49,11 @@ export class AppHostLogOutputCoordinator {
     private readonly _fallbackFilter = new AppHostParentOutputFilter();
     private readonly _partialLines = new Map<string, string>();
     private _highestBackchannelSequence = 0;
-    private _pendingRecord: PendingConsoleRecord | undefined;
+    // `stdout`, `stderr` and `console` are independent streams that interleave freely, so a
+    // record being assembled on one of them says nothing about the others. A single pending
+    // record would let an unrelated write on another stream terminate a record mid-assembly,
+    // rendering the truncated half and leaking the rest.
+    private readonly _pendingRecords = new Map<string, PendingConsoleRecord>();
 
     handleBackchannelEntry(entry: AppHostLogEntry): AppHostParentOutput | undefined {
         if (entry.sequenceNumber > 0) {
@@ -131,7 +135,9 @@ export class AppHostLogOutputCoordinator {
             this.consumeLines(partial, category, outputs);
         }
 
-        this.flushPendingRecord(outputs);
+        for (const category of [...this._pendingRecords.keys()]) {
+            this.flushPendingRecord(category, outputs);
+        }
 
         return outputs;
     }
@@ -139,7 +145,7 @@ export class AppHostLogOutputCoordinator {
     reset(): void {
         this._correlatedRecords.length = 0;
         this._highestBackchannelSequence = 0;
-        this._pendingRecord = undefined;
+        this._pendingRecords.clear();
         this._partialLines.clear();
         this._fallbackFilter.reset();
     }
@@ -162,7 +168,7 @@ export class AppHostLogOutputCoordinator {
             return true;
         }
 
-        if (this._pendingRecord?.category === category) {
+        if (this._pendingRecords.has(category)) {
             return true;
         }
 
@@ -198,16 +204,17 @@ export class AppHostLogOutputCoordinator {
         };
 
         for (const line of lines) {
-            if (this._pendingRecord?.category === category && isConsoleLoggerContinuation(line)) {
-                this._pendingRecord.body += line;
+            const pending = this._pendingRecords.get(category);
+            if (pending && isConsoleLoggerContinuation(line)) {
+                pending.body += line;
                 continue;
             }
 
-            this.flushPendingRecord(outputs);
+            this.flushPendingRecord(category, outputs);
 
             if (isConsoleLoggerHeader(line)) {
                 flushPassthrough();
-                this._pendingRecord = { header: line, body: '', category };
+                this._pendingRecords.set(category, { header: line, body: '', category });
                 continue;
             }
 
@@ -217,13 +224,13 @@ export class AppHostLogOutputCoordinator {
         flushPassthrough();
     }
 
-    private flushPendingRecord(outputs: AppHostParentOutput[]): void {
-        const pending = this._pendingRecord;
+    private flushPendingRecord(category: string, outputs: AppHostParentOutput[]): void {
+        const pending = this._pendingRecords.get(category);
         if (!pending) {
             return;
         }
 
-        this._pendingRecord = undefined;
+        this._pendingRecords.delete(category);
         const text = `${pending.header}${pending.body}`;
 
         const record = parseConsoleLoggerRecord(text);
