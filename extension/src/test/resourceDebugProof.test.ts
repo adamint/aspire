@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { findBreakpointRemovalRequest, getResourceDebugProofRequest, isBreakpointRemovalAcknowledged, type DebugAdapterMessageSummary } from '../testing/e2eStateFileBridge';
+import { findBreakpointRemovalRequest, getResourceDebugProofRequest, isBreakpointRemovalAcknowledged, resourceDebugProofPhaseBudgetMs, type DebugAdapterMessageSummary } from '../testing/e2eStateFileBridge';
 import type { AspireExtensionE2EControlCommand } from '../types/extensionApi';
 
 suite('Resource debug proof request', () => {
@@ -98,6 +98,51 @@ suite('Resource debug proof request', () => {
         assert.throws(
             () => getResourceDebugProofRequest({ name: 'proveRustResourceDebugging' } as unknown as Extract<AspireExtensionE2EControlCommand, { name: 'proveResourceDebugging' }>),
             /Unsupported Aspire resource debug proof command/);
+    });
+});
+
+suite('Resource debug proof phase budget', () => {
+    const appHostPath = '/workspace/AspireE2E.AppHost/AspireE2E.AppHost.csproj';
+    const sourcePath = '/workspace/AspireE2E.NodeApp/app.js';
+
+    test('keeps the phases inside the requested timeout even at their ceilings', () => {
+        const timeoutMs = 300000;
+        const request = getResourceDebugProofRequest({
+            name: 'proveResourceDebugging',
+            appHostPath,
+            resourceName: 'e2e-node',
+            sourcePath,
+            breakpointLine: 12,
+            timeoutMs,
+        });
+
+        // The ceilings on their own sum past the request, which is the whole point of the deadline:
+        // without it a proof asked for 300s could run for 600s.
+        const ceilingTotal = request.appHostStartupTimeoutMs + request.resourceStartTimeoutMs + request.breakpointTimeoutMs;
+        assert.ok(ceilingTotal > timeoutMs, `Expected the phase ceilings to exceed the request on their own, got ${ceilingTotal}.`);
+
+        // Walk the phases with each one consuming everything it is granted, which is the worst case.
+        const start = 1_000_000;
+        const deadline = start + timeoutMs;
+        let now = start;
+        let granted = 0;
+        for (const ceiling of [request.appHostStartupTimeoutMs, request.resourceStartTimeoutMs, request.breakpointTimeoutMs]) {
+            const budget = resourceDebugProofPhaseBudgetMs(ceiling, deadline, now);
+            granted += budget;
+            now += budget;
+        }
+
+        assert.strictEqual(granted, timeoutMs, 'The phases together must not be granted more than the requested timeout.');
+    });
+
+    test('still caps a single phase at its own ceiling when budget remains', () => {
+        const start = 1_000_000;
+        assert.strictEqual(resourceDebugProofPhaseBudgetMs(180000, start + 300000, start), 180000);
+    });
+
+    test('grants nothing once the deadline has passed', () => {
+        const start = 1_000_000;
+        assert.strictEqual(resourceDebugProofPhaseBudgetMs(180000, start, start + 5000), 0);
     });
 });
 

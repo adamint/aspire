@@ -766,8 +766,20 @@ export interface ResourceDebugProofRequest {
   breakpointTimeoutMs: number;
 }
 
-export function getResourceDebugProofRequest(command: ResourceDebugProofCommand): ResourceDebugProofRequest {
-  if (command.name !== 'proveResourceDebugging') {
+/**
+ * The wait a single proof phase gets: the smaller of its own ceiling and what is left of the
+ * overall deadline, never negative.
+ *
+ * The phase ceilings alone are not a budget. They sum well past the timeoutMs a caller asks for
+ * (180s + 180s + 240s against a 300s request), so without a shared deadline a proof can outlive the
+ * E2E caller that is polling for it and leave that caller's teardown queued behind a command that
+ * is still, by its own reckoning, within budget.
+ */
+export function resourceDebugProofPhaseBudgetMs(phaseCeilingMs: number, deadlineMs: number, nowMs: number): number {
+  return Math.max(0, Math.min(phaseCeilingMs, deadlineMs - nowMs));
+}
+
+export function getResourceDebugProofRequest(command: ResourceDebugProofCommand): ResourceDebugProofRequest {  if (command.name !== 'proveResourceDebugging') {
     throw new Error(`Unsupported Aspire resource debug proof command: ${getUnknownCommandName(command)}`);
   }
 
@@ -788,8 +800,9 @@ export function getResourceDebugProofRequest(command: ResourceDebugProofCommand)
     // do not have to remember to tear it down. A teardown test flips this to false because it needs
     // the debuggee alive when the proof returns so it can observe the stop itself.
     stopDebuggingOnCompletion: command.stopDebuggingOnCompletion !== false,
-    // Each phase gets its own budget rather than sharing one deadline, so a slow AppHost start
-    // cannot silently starve the breakpoint wait.
+    // Per-phase ceilings so a slow AppHost start cannot silently starve the breakpoint wait. They
+    // are ceilings, not the budget: proveResourceDebugging also anchors every phase to one overall
+    // deadline derived from timeoutMs, so the phases cannot sum past what the caller asked for.
     appHostStartupTimeoutMs: Math.min(timeoutMs, 180000),
     resourceStartTimeoutMs: Math.min(timeoutMs, 180000),
     breakpointTimeoutMs: Math.min(timeoutMs, 240000),
@@ -876,6 +889,13 @@ async function proveResourceDebugging(command: ResourceDebugProofCommand, aspire
   const appHostPath = getE2eWorkspacePath(request.appHostPath);
   const sourcePath = getE2eWorkspacePath(request.sourcePath);
   const { resourceName, breakpointLine, pauseOnBreakpointMs, appHostStartupTimeoutMs, resourceStartTimeoutMs, breakpointTimeoutMs } = request;
+  // The per-phase ceilings above stop one slow phase from silently starving a later one, but they
+  // are ceilings rather than a budget: summed, they exceed the timeoutMs the caller asked for, so a
+  // proof could outlive the E2E caller's own polling limit and leave its teardown queued behind it.
+  // Anchor every phase to one overall deadline as well, so a phase waits for the smaller of its
+  // ceiling and whatever remains, and the whole proof stays inside timeoutMs.
+  const deadline = Date.now() + request.timeoutMs;
+  const remainingBudgetMs = (phaseCeilingMs: number) => resourceDebugProofPhaseBudgetMs(phaseCeilingMs, deadline, Date.now());
   const sourceText = fs.readFileSync(sourcePath, 'utf8');
   const breakpointText = sourceText.split(/\r?\n/)[breakpointLine]?.trim();
 
@@ -999,7 +1019,7 @@ async function proveResourceDebugging(command: ResourceDebugProofCommand, aspire
 
     const aspireDebugSession = await waitForE2eValue(
       'Aspire AppHost debug startup completion',
-      appHostStartupTimeoutMs,
+      remainingBudgetMs(appHostStartupTimeoutMs),
       () => aspireContext.aspireDebugSessions.find(session =>
         session.startupCompleted &&
         typeof session.appHostPath === 'string' &&
@@ -1009,14 +1029,14 @@ async function proveResourceDebugging(command: ResourceDebugProofCommand, aspire
       terminalProvider,
       ['resource', resourceName, 'start', '--apphost', appHostPath, '--non-interactive', '--nologo'],
       path.dirname(appHostPath),
-      resourceStartTimeoutMs,
+      remainingBudgetMs(resourceStartTimeoutMs),
       aspireDebugSession.debugSessionId);
 
     let stoppedEvent: { stoppedEvent: DebugAdapterStoppedEvent; stackTrace: { stackFrames?: Array<{ source?: { path?: string }; line?: number }> }; matchingFrame: { source?: { path?: string }; line?: number } };
     try {
       stoppedEvent = await waitForE2eValue(
         `resource breakpoint in ${sourcePath}:${breakpointLine + 1}`,
-        breakpointTimeoutMs,
+        remainingBudgetMs(breakpointTimeoutMs),
         async () => {
           for (const stoppedEvent of stoppedEvents) {
             if (stoppedEvent.threadId === undefined) {
