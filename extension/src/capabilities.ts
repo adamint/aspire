@@ -7,7 +7,6 @@ export type Capability =
     | 'secret-prompts.v1'
     | 'file-pickers.v1'
     | 'build-dotnet-using-cli' // Support building .NET projects using the CLI
-    | 'apphost-log-output.v1' // Support structured AppHost log correlation in the debug console
     | 'devkit' // Support for .NET DevKit extension (old, used for determining whether to build .NET projects in extension)
     | 'ms-dotnettools.csdevkit' // Older AppHost versions used this extension identifier instead of devkit
     | 'project' // Support for running C# projects
@@ -22,7 +21,8 @@ export type Capability =
     | 'browser' // Support for browser debugging (built-in to VS Code via js-debug)
     | 'maui' // Support for running .NET MAUI projects
     | 'ms-dotnettools.dotnet-maui' // MAUI debug adapter extension identifier
-    | 'azure-functions'; // Support for running Azure Functions projects
+    | 'azure-functions' // Support for running Azure Functions projects
+    | 'apphost-log-output.v1'; // Support structured AppHost log correlation in the debug console
 
 export type Capabilities = Capability[];
 
@@ -65,7 +65,14 @@ export function isBunInstalled() {
 }
 
 export function getSupportedCapabilities(): Capabilities {
-    const capabilities: Capabilities = ['prompting', 'baseline.v1', 'secret-prompts.v1', 'file-pickers.v1', 'build-dotnet-using-cli', 'apphost-log-output.v1'];
+    const capabilities: Capabilities = ['prompting', 'baseline.v1', 'secret-prompts.v1', 'file-pickers.v1', 'build-dotnet-using-cli'];
+
+    // Pushed rather than added to the literal above so this feature never has to be reconciled
+    // with the build-ownership token that shares that line. Resolving a conflict there by keeping
+    // both sides is what would restore the unversioned 'build-dotnet-using-cli' and with it
+    // https://github.com/microsoft/aspire/issues/15850, so the line is left to the change that
+    // owns it.
+    capabilities.push('apphost-log-output.v1');
 
     if (isCsDevKitInstalled()) {
         capabilities.push("devkit");
