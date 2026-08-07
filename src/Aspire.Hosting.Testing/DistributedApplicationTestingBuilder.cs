@@ -303,9 +303,12 @@ public static class DistributedApplicationTestingBuilder
             return;
         }
 
+        var browserToken = TokenGenerator.GenerateToken();
+
         dashboardTestingState = new DashboardTestingState(
             Enabled: true,
-            DefaultWaitBehavior: testingOptions?.DefaultWaitBehavior ?? WaitBehavior.StopOnResourceUnavailable);
+            DefaultWaitBehavior: testingOptions?.DefaultWaitBehavior ?? WaitBehavior.StopOnResourceUnavailable,
+            BrowserToken: browserToken);
 
         applicationOptions.DisableDashboard = false;
 
@@ -331,7 +334,7 @@ public static class DistributedApplicationTestingBuilder
         [
             .. existingArgs,
             $"{KnownConfigNames.DashboardUnsecuredAllowAnonymous}=false",
-            $"{KnownConfigNames.DashboardFrontendBrowserToken}={TokenGenerator.GenerateToken()}"
+            $"{KnownConfigNames.DashboardFrontendBrowserToken}={browserToken}"
         ];
         applicationOptions.Args = hostBuilderOptions.Args;
 
@@ -356,6 +359,20 @@ public static class DistributedApplicationTestingBuilder
         // Callers can still override runtime settings through the returned builder; constructor-time service
         // selection, including dashboard authentication, has already completed.
         AddDashboardTestingConfiguration(builder.Configuration);
+
+        // Restore the generated browser token if something cleared it. DistributedApplicationBuilder freezes the
+        // token into AppHost:BrowserToken during construction, but DashboardOptions does not read that key until the
+        // application starts, so AppHost code running between those two points can blank it. DashboardEventHandlers
+        // treats a null or empty token as a request for Unsecured frontend authentication, which would silently
+        // downgrade the authenticated default this opt-in promises, so the guard mirrors that same emptiness check
+        // and leaves any non-empty token, including a deliberately chosen one, alone. This runs after the AppHost
+        // entry point has finished configuring, because the builder is not handed back until it reaches Build(), and
+        // before the caller sees the builder, so a test that wants the anonymous dashboard can still choose it
+        // through the returned builder.
+        if (string.IsNullOrEmpty(builder.Configuration["AppHost:BrowserToken"]))
+        {
+            builder.Configuration["AppHost:BrowserToken"] = dashboardTestingState.BrowserToken;
+        }
 
         // Enabling the dashboard makes the hosting default wait indefinitely when a dependency becomes unavailable,
         // which would hang a test run instead of failing it. Re-pin the testing builder's fail-fast default unless
@@ -412,7 +429,7 @@ public static class DistributedApplicationTestingBuilder
     /// The dashboard testing configuration resolved during builder construction. Carried as a single value so the
     /// pre-construction and post-construction halves of the configuration cannot drift apart.
     /// </summary>
-    private readonly record struct DashboardTestingState(bool Enabled, WaitBehavior DefaultWaitBehavior);
+    private readonly record struct DashboardTestingState(bool Enabled, WaitBehavior DefaultWaitBehavior, string? BrowserToken);
 
     private sealed class SuspendingDistributedApplicationFactory(
         Type entryPoint,

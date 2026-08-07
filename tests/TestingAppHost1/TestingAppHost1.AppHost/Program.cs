@@ -30,10 +30,17 @@ if (args.Contains("--override-dashboard-testing-defaults"))
 
 if (args.Contains("--clear-apphost-browser-token"))
 {
-    // Clearing the frozen token is the one dashboard setting an AppHost can still change after the testing
-    // builder has hardened things, because DashboardOptions does not read this key until the application starts.
-    // It is kept separate from --override-dashboard-testing-defaults so that flag keeps asserting on a token.
+    // The frozen token is the one dashboard setting an AppHost could still change after the testing builder had
+    // hardened things, because DashboardOptions does not read this key until the application starts. It is kept
+    // separate from --override-dashboard-testing-defaults so that flag keeps asserting on a token.
     builder.Configuration["AppHost:BrowserToken"] = "";
+}
+
+if (args.Contains("--null-apphost-browser-token"))
+{
+    // Null and empty are distinct configuration values, but DashboardEventHandlers collapses both to Unsecured
+    // frontend authentication through string.IsNullOrEmpty, so both need coverage.
+    builder.Configuration["AppHost:BrowserToken"] = null;
 }
 
 builder.Configuration["ConnectionStrings:cs"] = "testconnection";

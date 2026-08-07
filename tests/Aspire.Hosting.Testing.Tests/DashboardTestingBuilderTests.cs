@@ -457,20 +457,32 @@ public class DashboardTestingBuilderTests
     }
 
     [Theory]
+    [InlineData(CreationSurface.Generic, "--clear-apphost-browser-token")]
+    [InlineData(CreationSurface.Generic, "--null-apphost-browser-token")]
+    [InlineData(CreationSurface.Type, "--clear-apphost-browser-token")]
+    [InlineData(CreationSurface.Type, "--null-apphost-browser-token")]
+    public async Task DashboardTestingRestoresTheBrowserTokenAnAppHostCleared(CreationSurface creationSurface, string appHostFlag)
+    {
+        // DistributedApplicationBuilder freezes the token into AppHost:BrowserToken during construction, but
+        // DashboardOptions does not read that key until the application starts. AppHost code runs between those
+        // points, so without the restore it can blank the key and DashboardEventHandlers launches the dashboard
+        // with Unsecured frontend authentication, defeating the authenticated default this opt-in promises.
+        await using var builder = await CreateDashboardBuilderAsync(creationSurface, [appHostFlag]);
+        await using var app = await builder.BuildAsync();
+
+        var dashboardOptions = app.Services.GetRequiredService<IOptions<DashboardOptions>>().Value;
+        Assert.False(string.IsNullOrEmpty(dashboardOptions.DashboardToken));
+    }
+
+    [Theory]
     [InlineData(CreationSurface.Generic)]
     [InlineData(CreationSurface.Type)]
-    public async Task DashboardTestingDoesNotPinTheBrowserTokenAgainstTheAppHost(CreationSurface creationSurface)
+    public async Task DashboardTestingLeavesTheBrowserTokenToTheCallersBuilder(CreationSurface creationSurface)
     {
-        // Anonymous access is settled while the builder is constructed and cannot be taken back, but the browser
-        // token is only read out of AppHost:BrowserToken when DashboardOptions is first resolved, so an AppHost
-        // that clears the key still gets a dashboard with no credential. That asymmetry is deliberate rather than
-        // a hole: clearing this key is the only way to reach the anonymous dashboard path once EnableDashboard has
-        // appended its own arguments, the same escape hatch a test uses through the returned builder, and it does
-        // not fail silently because GetDashboardLoginUrlAsync then reports anonymous access instead of handing
-        // back an unauthenticated URL. Re-pinning the token here would take the escape hatch away from both.
-        await using var builder = await CreateDashboardBuilderAsync(
-            creationSurface,
-            ["--clear-apphost-browser-token"]);
+        // The restore above runs before the caller sees the builder, so a test that deliberately wants the
+        // anonymous dashboard keeps the documented escape hatch through the returned builder.
+        await using var builder = await CreateDashboardBuilderAsync(creationSurface, []);
+        builder.Configuration["AppHost:BrowserToken"] = "";
         await using var app = await builder.BuildAsync();
 
         var dashboardOptions = app.Services.GetRequiredService<IOptions<DashboardOptions>>().Value;
