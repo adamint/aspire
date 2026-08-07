@@ -1024,6 +1024,111 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         Assert.False(detection.ExtensionInstalled);
     }
 
+    [Fact]
+    public void Detect_UsesPortableRoot_WhenPortableModeIsActive()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var portableDataFolder = workspace.CreateDirectory("code-portable-data");
+        // Portable mode keeps every VS Code data folder next to the application, so the running
+        // window loads "<portable data folder>/extensions" and never the home-directory default.
+        Directory.CreateDirectory(
+            Path.Combine(portableDataFolder.FullName, "extensions", "microsoft-aspire.aspire-vscode-1.5.0"));
+        Directory.CreateDirectory(
+            Path.Combine(home.FullName, ".vscode", "extensions", "microsoft-aspire.aspire-vscode-3.0.0"));
+
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_PORTABLE"] = portableDataFolder.FullName,
+            ["VSCODE_GIT_ASKPASS_MAIN"] = "/Volumes/VSCode-darwin-x64/Visual Studio Code.app/Contents/Resources/app/extensions/git/dist/askpass-main.js"
+        });
+
+        var detection = VsCodeExtensionCheck.Detect(environment, home, _ => null);
+
+        Assert.True(detection.VsCodeInstalled);
+        Assert.True(detection.ExtensionInstalled);
+        Assert.Equal("1.5.0", detection.ExtensionVersion);
+    }
+
+    [Fact]
+    public void Detect_ReportsExtensionMissing_WhenPortableRootHasNoExtension()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var portableDataFolder = workspace.CreateDirectory("data");
+        Directory.CreateDirectory(Path.Combine(portableDataFolder.FullName, "extensions"));
+        // A leftover non-portable install must not be reported: the portable window would never
+        // load it, so comparing it against the Marketplace would describe the wrong installation.
+        Directory.CreateDirectory(
+            Path.Combine(home.FullName, ".vscode", "extensions", "microsoft-aspire.aspire-vscode-1.2.3"));
+
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_PORTABLE"] = portableDataFolder.FullName
+        });
+
+        var detection = VsCodeExtensionCheck.Detect(environment, home, _ => null);
+
+        Assert.True(detection.VsCodeInstalled);
+        Assert.False(detection.ExtensionInstalled);
+    }
+
+    [Fact]
+    public void Detect_PrefersVsCodeExtensionsOverride_OverPortableRoot()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var overrideDirectory = workspace.CreateDirectory("override");
+        var portableDataFolder = workspace.CreateDirectory("data");
+        // VS Code resolves the extension root as --extensions-dir, VSCODE_EXTENSIONS,
+        // VSCODE_PORTABLE/extensions, then the home data folder, so the explicit override wins.
+        Directory.CreateDirectory(
+            Path.Combine(overrideDirectory.FullName, "microsoft-aspire.aspire-vscode-2.0.0"));
+        Directory.CreateDirectory(
+            Path.Combine(portableDataFolder.FullName, "extensions", "microsoft-aspire.aspire-vscode-1.5.0"));
+        Directory.CreateDirectory(
+            Path.Combine(home.FullName, ".vscode", "extensions", "microsoft-aspire.aspire-vscode-3.0.0"));
+
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = overrideDirectory.FullName,
+            ["VSCODE_PORTABLE"] = portableDataFolder.FullName
+        });
+
+        var detection = VsCodeExtensionCheck.Detect(environment, home, _ => null);
+
+        Assert.True(detection.ExtensionInstalled);
+        Assert.Equal("2.0.0", detection.ExtensionVersion);
+    }
+
+    [Fact]
+    public void Detect_UsesHomeDefaultRoot_WhenNeitherOverrideNorPortableModeIsSet()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var portableDataFolder = workspace.CreateDirectory("data");
+        // The portable data folder exists on disk but VSCODE_PORTABLE is unset, so VS Code is not
+        // running in portable mode and detection must fall through to the home-directory defaults.
+        Directory.CreateDirectory(
+            Path.Combine(portableDataFolder.FullName, "extensions", "microsoft-aspire.aspire-vscode-1.5.0"));
+        Directory.CreateDirectory(
+            Path.Combine(home.FullName, ".vscode", "extensions", "microsoft-aspire.aspire-vscode-3.0.0"));
+
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_GIT_ASKPASS_MAIN"] = "/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/git/dist/askpass-main.js"
+        });
+
+        var detection = VsCodeExtensionCheck.Detect(environment, home, _ => null);
+
+        Assert.True(detection.ExtensionInstalled);
+        Assert.Equal("3.0.0", detection.ExtensionVersion);
+    }
+
     [Theory]
     [InlineData("code")]
     [InlineData("code-insiders")]

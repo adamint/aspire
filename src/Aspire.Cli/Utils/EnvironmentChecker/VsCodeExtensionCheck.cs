@@ -364,7 +364,8 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         out ExtensionRoot root)
     {
         // Ordered most to least authoritative. VSCODE_EXTENSIONS replaces the extension location
-        // outright, VSCODE_AGENT_FOLDER names a remote server install root, the IPC pair marks a
+        // outright, VSCODE_PORTABLE names the portable-mode data folder that owns the extension
+        // root, VSCODE_AGENT_FOLDER names a remote server install root, the IPC pair marks a
         // remote/server terminal, and the askpass helper path is the desktop fallback because its
         // location encodes the installed channel:
         //   /Applications/Visual Studio Code.app/.../extensions/git/dist/askpass-main.js
@@ -374,6 +375,29 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         if (!string.IsNullOrWhiteSpace(overrideDirectory))
         {
             root = new ExtensionRoot(overrideDirectory, DetermineChannel(environment));
+            return true;
+        }
+
+        // Portable mode moves every VS Code data folder next to the application, so extensions live
+        // under "<portable data folder>/extensions" and the home-directory defaults hold either
+        // nothing or an unrelated installation. VS Code resolves the extension root in this order:
+        //   --extensions-dir, VSCODE_EXTENSIONS, VSCODE_PORTABLE/extensions, home data folder
+        // so VSCODE_PORTABLE has to be probed after VSCODE_EXTENSIONS and before every default.
+        // The CLI cannot observe the running window's --extensions-dir, and portable mode overrides
+        // that switch anyway, so VSCODE_EXTENSIONS is the most authoritative signal available here.
+        // VSCODE_PORTABLE is one of the few VSCODE_* variables VS Code deliberately preserves when
+        // it sanitizes a child process environment, so it does reach the integrated terminal.
+        // See https://code.visualstudio.com/docs/setup/portable,
+        // https://github.com/microsoft/vscode/blob/main/src/vs/platform/environment/common/environmentService.ts
+        // (AbstractNativeEnvironmentService.extensionsPath), and
+        // https://github.com/microsoft/vscode/blob/main/src/vs/base/common/processes.ts
+        // (sanitizeProcessEnvironment).
+        var portableDataFolder = environment.GetEnvironmentVariable("VSCODE_PORTABLE");
+        if (!string.IsNullOrWhiteSpace(portableDataFolder))
+        {
+            root = new ExtensionRoot(
+                Path.Combine(portableDataFolder, "extensions"),
+                DetermineChannel(environment));
             return true;
         }
 

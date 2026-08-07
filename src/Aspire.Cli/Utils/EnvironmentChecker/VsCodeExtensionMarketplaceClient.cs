@@ -51,13 +51,23 @@ internal sealed class VsCodeExtensionMarketplaceClient : IVsCodeExtensionMarketp
             cancellationToken,
             timeoutCancellation.Token);
 
-        HttpResponseMessage response;
         try
         {
-            response = await _httpClient.SendAsync(
+            // ResponseHeadersRead returns as soon as the response headers arrive, so the body is
+            // still streaming after SendAsync completes. Both the send and the body read observe the
+            // private timeout token, so the whole operation has to sit inside the translation: a
+            // server that returns headers and then stalls would otherwise surface a bare
+            // OperationCanceledException, and doctor drops the check on cancellation instead of
+            // reporting the documented timeout warning.
+            using var response = await _httpClient.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 linkedCancellation.Token);
+
+            response.EnsureSuccessStatusCode();
+            var responseBytes = await ReadBoundedResponseAsync(response.Content, linkedCancellation.Token);
+
+            return ParseVersions(responseBytes);
         }
         catch (OperationCanceledException exception) when (
             timeoutCancellation.IsCancellationRequested &&
@@ -66,14 +76,6 @@ internal sealed class VsCodeExtensionMarketplaceClient : IVsCodeExtensionMarketp
             throw new TimeoutException(
                 $"The VS Code Marketplace request timed out after {_timeout.TotalSeconds:g} seconds.",
                 exception);
-        }
-
-        using (response)
-        {
-            response.EnsureSuccessStatusCode();
-            var responseBytes = await ReadBoundedResponseAsync(response.Content, linkedCancellation.Token);
-
-            return ParseVersions(responseBytes);
         }
     }
 

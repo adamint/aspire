@@ -240,6 +240,52 @@ public class VsCodeExtensionMarketplaceClientTests
     }
 
     [Fact]
+    public async Task GetLatestVersionsAsync_ThrowsTimeoutException_WhenResponseBodyStallsAfterHeaders()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var bodyReadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // ResponseHeadersRead completes the send as soon as the headers arrive, so this stall happens
+        // strictly after SendAsync returned. The private timeout still has to surface as a
+        // TimeoutException, because doctor drops the check entirely on a bare cancellation.
+        using var handler = new MockHttpMessageHandler((_, _) => Task.FromResult(
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new StallingReadStream(bodyReadStarted))
+            }));
+        using var httpClient = new HttpClient(handler);
+        var timeout = TimeSpan.FromSeconds(5);
+        var client = new VsCodeExtensionMarketplaceClient(httpClient, timeProvider, timeout);
+
+        var requestTask = client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
+        await bodyReadStarted.Task;
+        timeProvider.Advance(timeout);
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() => requestTask);
+        Assert.Equal("The VS Code Marketplace request timed out after 5 seconds.", exception.Message);
+    }
+
+    [Fact]
+    public async Task GetLatestVersionsAsync_PropagatesCallerCancellationDuringResponseBodyRead()
+    {
+        var timeProvider = new FakeTimeProvider();
+        var bodyReadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var handler = new MockHttpMessageHandler((_, _) => Task.FromResult(
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new StallingReadStream(bodyReadStarted))
+            }));
+        using var httpClient = new HttpClient(handler);
+        var client = new VsCodeExtensionMarketplaceClient(httpClient, timeProvider, TimeSpan.FromHours(1));
+        using var cancellationTokenSource = new CancellationTokenSource();
+
+        var requestTask = client.GetLatestVersionsAsync(cancellationTokenSource.Token);
+        await bodyReadStarted.Task;
+        await cancellationTokenSource.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => requestTask);
+    }
+
+    [Fact]
     public async Task GetLatestVersionsAsync_PropagatesCallerCancellation()
     {
         var timeProvider = new FakeTimeProvider();
