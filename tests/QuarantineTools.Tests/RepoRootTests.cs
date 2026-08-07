@@ -97,6 +97,52 @@ public class RepoRootTests : IDisposable
         Assert.Equal(expected, Program.IsSameOrAncestorDirectory(a, d));
     }
 
+    [Fact]
+    public void IsSameOrAncestorDirectory_CaseOnlyDifference_IsRejectedOnACaseSensitiveVolume()
+    {
+        // Two distinct trees whose paths differ only by case are the exact cross-tree write this guard
+        // exists to block, so folding case here would approve the wrong root.
+        var ancestor = Path.Combine(_scratch.FullName, "OUTER");
+        var directory = Path.Combine(_scratch.FullName, "outer", "tests");
+
+        Assert.False(Program.IsSameOrAncestorDirectory(ancestor, directory, caseSensitive: true));
+    }
+
+    [Fact]
+    public void IsSameOrAncestorDirectory_CaseOnlyDifference_IsAcceptedOnACaseInsensitiveVolume()
+    {
+        // The mirrored case. git canonicalizes --show-toplevel to the on-disk casing; getcwd(3) does the
+        // same on Unix, but the Windows current directory keeps the casing the process was given, so a
+        // difference that means nothing can reach this guard and must not be refused.
+        var ancestor = Path.Combine(_scratch.FullName, "OUTER");
+        var directory = Path.Combine(_scratch.FullName, "outer", "tests");
+
+        Assert.True(Program.IsSameOrAncestorDirectory(ancestor, directory, caseSensitive: false));
+    }
+
+    [Fact]
+    public void IsCaseSensitiveDirectory_AgreesWithTheFilesystemItProbes()
+    {
+        // Self-validating on any host: whatever this volume actually does, the probe must report it.
+        var probed = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "CaseProbe")).FullName;
+        var reachableThroughAnotherCasing = Directory.Exists(Path.Combine(_scratch.FullName, "caseprobe"));
+
+        Assert.Equal(!reachableThroughAnotherCasing, Program.IsCaseSensitiveDirectory(probed));
+    }
+
+    [Fact]
+    public async Task FindRepoRoot_WhenTheCallerCancels_PropagatesCancellationInsteadOfFallingBack()
+    {
+        var (_, nested) = CreateOuterRepoWithNestedWorktree();
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        // Swallowing this would run the fallback walk and let ExecuteAsync enumerate the whole tests
+        // tree before cancellation is next observed.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => Program.FindRepoRootAsync(nested, cancelled.Token));
+    }
+
     /// <summary>
     /// Creates a main checkout with a linked worktree nested inside it. The nesting is the point: the
     /// worktree's <c>.git</c> is a file, so a probe that only looks for a <c>.git</c> directory walks

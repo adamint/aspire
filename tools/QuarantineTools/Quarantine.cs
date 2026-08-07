@@ -565,6 +565,13 @@ public class Program
             catch (OperationCanceledException)
             {
                 TryKill(process);
+
+                // The linked source cancels for two unrelated reasons, and only one of them is a probe
+                // failure. If the caller cancelled (Ctrl+C), swallowing it here would send
+                // FindRepoRootAsync into the fallback walk and let ExecuteAsync enumerate the whole
+                // tests tree before cancellation is next observed. Re-throw that; fall back only for
+                // the internal timeout.
+                cancellationToken.ThrowIfCancellationRequested();
                 return null;
             }
 
@@ -602,13 +609,27 @@ public class Program
     /// one of its ancestors.
     /// </summary>
     internal static bool IsSameOrAncestorDirectory(string candidateAncestor, string directory)
+        => IsSameOrAncestorDirectory(candidateAncestor, directory, IsCaseSensitiveDirectory(candidateAncestor));
+
+    /// <summary>
+    /// Returns true when <paramref name="candidateAncestor"/> is <paramref name="directory"/> itself or
+    /// one of its ancestors, comparing names with the supplied casing rule.
+    /// </summary>
+    /// <param name="candidateAncestor">The directory being tested as an ancestor.</param>
+    /// <param name="directory">The directory whose ancestry is walked.</param>
+    /// <param name="caseSensitive">Whether directory names on the volume holding the paths distinguish case.</param>
+    internal static bool IsSameOrAncestorDirectory(string candidateAncestor, string directory, bool caseSensitive)
     {
         var ancestor = new DirectoryInfo(Path.GetFullPath(candidateAncestor));
         var current = new DirectoryInfo(Path.GetFullPath(directory));
 
-        // Directory names are compared with the platform's file-name casing rules: Windows and the
-        // default macOS volume format are case-insensitive, Linux is not.
-        var comparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        // Comparing case-insensitively on a case-sensitive volume would let two genuinely different
+        // trees whose paths differ only by case satisfy this guard, which is the one outcome it exists
+        // to prevent. Comparing case-sensitively everywhere is not the answer either: git canonicalizes
+        // --show-toplevel to the on-disk casing, and while getcwd(3) does the same on Unix, the Windows
+        // current directory keeps whatever casing the process was given - so an ordinary Windows run
+        // could then be refused over a difference that means nothing. Follow the volume instead.
+        var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
         while (current != null)
         {
@@ -619,6 +640,46 @@ public class Program
             current = current.Parent;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Probes whether directory names alongside <paramref name="directory"/> distinguish case, by
+    /// asking whether it is reachable through a case-flipped spelling of its own final segment.
+    /// </summary>
+    /// <remarks>
+    /// The operating system is not a reliable proxy for the volume: macOS APFS can be formatted
+    /// case-sensitive, Windows exposes a per-directory case-sensitivity flag that WSL sets, and Linux
+    /// can mount case-insensitive volumes. The probe is read-only - it only tests for existence.
+    /// </remarks>
+    internal static bool IsCaseSensitiveDirectory(string directory)
+    {
+        var full = TrimTrailingSeparator(Path.GetFullPath(directory));
+        var name = Path.GetFileName(full);
+        var parent = Path.GetDirectoryName(full);
+        var flipped = FlipCase(name);
+
+        // A volume root has no segment to flip, and a segment with no cased letters cannot answer the
+        // question. Neither is a reason to refuse, so fall back to the platform's usual default.
+        if (parent is null || name.Length == 0 || string.Equals(flipped, name, StringComparison.Ordinal))
+        {
+            return !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS();
+        }
+
+        // A case-sensitive volume that happens to hold a real sibling differing only by case is read as
+        // case-insensitive here. That is acceptable: it only restores the behavior this guard had
+        // before the probe existed, and such a pair is not something a checkout layout produces.
+        return !Directory.Exists(Path.Combine(parent, flipped));
+    }
+
+    private static string FlipCase(string value)
+    {
+        return string.Create(value.Length, value, static (destination, source) =>
+        {
+            for (var i = 0; i < source.Length; i++)
+            {
+                destination[i] = char.IsUpper(source[i]) ? char.ToLowerInvariant(source[i]) : char.ToUpperInvariant(source[i]);
+            }
+        });
     }
 
     private static string TrimTrailingSeparator(string path)
