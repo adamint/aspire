@@ -1,4 +1,6 @@
 import * as assert from 'assert';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
 import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
@@ -36,6 +38,24 @@ class FakeTelemetryReporter {
     }
     sendRawTelemetryEvent(): void { /* not used here */ }
     dispose(): Promise<void> { return Promise.resolve(); }
+}
+
+/**
+ * Creates a real directory holding the given entries.
+ *
+ * AppHost identity is decided from the containing directory's contents - a project file
+ * only aliases a source file when the directory forces exactly one pairing - so the tests
+ * that exercise that relationship cannot use fabricated paths.
+ */
+function createAppHostDirectory(...entries: readonly string[]): string {
+    const fixtureRoot = path.resolve(__dirname, '..', '..', '.test-workspace', 'launch-service');
+    const directory = path.join(fixtureRoot, `apphost-${crypto.randomBytes(6).toString('hex')}`);
+    fs.mkdirSync(directory, { recursive: true });
+    for (const entry of entries) {
+        fs.writeFileSync(path.join(directory, entry), '');
+    }
+
+    return directory;
 }
 
 suite('AppHostLaunchService', () => {
@@ -148,27 +168,40 @@ suite('AppHostLaunchService', () => {
     });
 
     test('clearMatchingLaunching matches project paths to AppHost source files in the same directory', async () => {
-        await service.launch('/repo/AppHost/AppHost.csproj', 'run', true);
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        await service.launch(path.join(directory, 'AppHost.csproj'), 'run', true);
 
-        service.clearMatchingLaunching('/repo/AppHost/Program.cs');
+        service.clearMatchingLaunching(path.join(directory, 'Program.cs'));
 
-        assert.strictEqual(service.isLaunching('/repo/AppHost/AppHost.csproj'), false);
+        assert.strictEqual(service.isLaunching(path.join(directory, 'AppHost.csproj')), false);
     });
 
     test('isLaunching matches project paths to AppHost source files in the same directory', async () => {
-        await service.launch('/repo/AppHost/Program.cs', 'run', true);
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        await service.launch(path.join(directory, 'Program.cs'), 'run', true);
 
-        assert.strictEqual(service.isLaunching('/repo/AppHost/AppHost.csproj'), true);
+        assert.strictEqual(service.isLaunching(path.join(directory, 'AppHost.csproj')), true);
     });
 
     test('clearMatchingLaunching does not clear unrelated paths in the same directory', async () => {
-        await service.launch('/repo/AppHost/First.csproj', 'run', true);
-        await service.launch('/repo/AppHost/Second.csproj', 'run', true);
+        const directory = createAppHostDirectory('First.csproj', 'Second.csproj', 'Program.cs');
+        await service.launch(path.join(directory, 'First.csproj'), 'run', true);
+        await service.launch(path.join(directory, 'Second.csproj'), 'run', true);
 
-        service.clearMatchingLaunching('/repo/AppHost/Program.cs');
+        service.clearMatchingLaunching(path.join(directory, 'Program.cs'));
 
-        assert.strictEqual(service.isLaunching('/repo/AppHost/First.csproj'), true);
-        assert.strictEqual(service.isLaunching('/repo/AppHost/Second.csproj'), true);
+        assert.strictEqual(service.isLaunching(path.join(directory, 'First.csproj')), true);
+        assert.strictEqual(service.isLaunching(path.join(directory, 'Second.csproj')), true);
+    });
+
+    test('isLaunching reports an unprovable project/source association as launching', async () => {
+        // Two projects share the directory, so `Program.cs` cannot be attributed to either.
+        // Reporting "not launching" would let a second process start against whichever one
+        // it actually belongs to.
+        const directory = createAppHostDirectory('First.csproj', 'Second.csproj', 'Program.cs');
+        await service.launch(path.join(directory, 'First.csproj'), 'run', true);
+
+        assert.strictEqual(service.isLaunching(path.join(directory, 'Program.cs')), true);
     });
 
     test('multiple paths can be tracked independently', async () => {
@@ -192,13 +225,14 @@ suite('AppHostLaunchService', () => {
         const firstAction = new Promise<void>(resolve => { releaseFirst = resolve; });
         const firstStarted = new Promise<void>(resolve => { signalFirstStarted = resolve; });
 
-        const editorLaunch = service.runWithAppHostLifecycleLock('/repo/AppHost/AppHost.csproj', new vscode.CancellationTokenSource().token, async () => {
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const editorLaunch = service.runWithAppHostLifecycleLock(path.join(directory, 'AppHost.csproj'), new vscode.CancellationTokenSource().token, async () => {
             firstActionStarted = true;
             signalFirstStarted?.();
             await firstAction;
             return 'editor';
         });
-        const toolLaunch = service.runWithAppHostLifecycleLock('/repo/AppHost/Program.cs', new vscode.CancellationTokenSource().token, async () => {
+        const toolLaunch = service.runWithAppHostLifecycleLock(path.join(directory, 'Program.cs'), new vscode.CancellationTokenSource().token, async () => {
             secondActionStarted = true;
             return 'tool';
         });
@@ -225,17 +259,18 @@ suite('AppHostLaunchService', () => {
     });
 
     test('bounds lifecycle lock waits when the active operation does not settle', async () => {
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
         const clock = sinon.useFakeTimers();
         let releaseActive: (() => void) | undefined;
         try {
             const active = service.runWithAppHostLifecycleLock(
-                '/repo/AppHost/AppHost.csproj',
+                path.join(directory, 'AppHost.csproj'),
                 new vscode.CancellationTokenSource().token,
                 () => new Promise<void>(resolve => { releaseActive = resolve; }));
             await Promise.resolve();
 
             const queued = service.runWithAppHostLifecycleLock(
-                '/repo/AppHost/Program.cs',
+                path.join(directory, 'Program.cs'),
                 new vscode.CancellationTokenSource().token,
                 async () => 'queued');
             const rejection = assert.rejects(queued, AppHostLifecycleLockTimeoutError);
@@ -282,17 +317,18 @@ suite('AppHostLaunchService', () => {
     });
 
     test('serializes lifecycle work across every path shape that names one AppHost', async () => {
-        // The lock key must be a pure function of the path. `AppHost.csproj` matches both
-        // a sibling `apphost.cs` and a sibling `Program.cs`, but those two do not match
-        // each other, so a key derived by scanning existing keys would hand the third
-        // caller its own lock and let two operations run against one AppHost.
+        // The lock key must be a pure function of the path, so it is derived from the
+        // directory listing rather than by scanning the keys already in flight. Scanning
+        // would make the key depend on insertion order and could hand a later caller its
+        // own lock while an operation was already running against the same AppHost.
+        const directory = createAppHostDirectory('AppHost.csproj', 'apphost.cs');
         const started: string[] = [];
         let releaseFirst: (() => void) | undefined;
         let signalFirstStarted: (() => void) | undefined;
         const firstAction = new Promise<void>(resolve => { releaseFirst = resolve; });
         const firstStarted = new Promise<void>(resolve => { signalFirstStarted = resolve; });
 
-        const first = service.runWithAppHostLifecycleLock('/repo/AppHost/apphost.cs', new vscode.CancellationTokenSource().token, async () => {
+        const first = service.runWithAppHostLifecycleLock(path.join(directory, 'apphost.cs'), new vscode.CancellationTokenSource().token, async () => {
             started.push('apphost.cs');
             signalFirstStarted?.();
             await firstAction;
@@ -300,20 +336,35 @@ suite('AppHostLaunchService', () => {
         });
         await firstStarted;
 
-        const second = service.runWithAppHostLifecycleLock('/repo/AppHost/AppHost.csproj', new vscode.CancellationTokenSource().token, async () => {
+        const second = service.runWithAppHostLifecycleLock(path.join(directory, 'AppHost.csproj'), new vscode.CancellationTokenSource().token, async () => {
             started.push('AppHost.csproj');
             return 'AppHost.csproj';
-        });
-        const third = service.runWithAppHostLifecycleLock('/repo/AppHost/Program.cs', new vscode.CancellationTokenSource().token, async () => {
-            started.push('Program.cs');
-            return 'Program.cs';
         });
 
         assert.deepStrictEqual(started, ['apphost.cs']);
 
         releaseFirst?.();
-        await Promise.all([first, second, third]);
-        assert.deepStrictEqual(started, ['apphost.cs', 'AppHost.csproj', 'Program.cs']);
+        await Promise.all([first, second]);
+        assert.deepStrictEqual(started, ['apphost.cs', 'AppHost.csproj']);
+    });
+
+    test('does not share a lifecycle lock between sibling AppHost projects in one directory', async () => {
+        // Keying the lock on the directory would serialize two AppHosts that identity
+        // comparison proves are distinct, so a slow start of one would make starting the
+        // other fail with `busy` once the 10s wait budget expired.
+        const directory = createAppHostDirectory('First.csproj', 'Second.csproj');
+        const started: string[] = [];
+        const active = service.runWithAppHostLifecycleLock(path.join(directory, 'First.csproj'), new vscode.CancellationTokenSource().token, async () => {
+            started.push('first');
+            await new Promise<void>(() => { });
+        });
+
+        await service.runWithAppHostLifecycleLock(path.join(directory, 'Second.csproj'), new vscode.CancellationTokenSource().token, async () => {
+            started.push('second');
+        });
+
+        assert.deepStrictEqual(started, ['first', 'second']);
+        void active;
     });
 
     test('does not share a lifecycle lock between AppHosts in different directories', async () => {
@@ -369,9 +420,11 @@ suite('AppHostLaunchService', () => {
         // `Aspire: Configure launch.json` writes `program: '${workspaceFolder}'`, so for
         // the standard configure-then-F5 flow the session path is a directory and can
         // never equal the AppHost file an agent names.
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const otherDirectory = createAppHostDirectory('AppHost.csproj');
         const folderSession = {
-            appHostPath: '/repo',
-            resolvedAppHostPath: '/repo/AppHost/AppHost.csproj',
+            appHostPath: path.dirname(directory),
+            resolvedAppHostPath: path.join(directory, 'AppHost.csproj'),
             operationKind: 'run' as const,
             startupCompleted: true,
             configuration: { noDebug: false },
@@ -379,16 +432,17 @@ suite('AppHostLaunchService', () => {
         };
         service.setEditorSessionProvider(() => [folderSession]);
 
-        assert.deepStrictEqual(service.getEditorOwnedRunSessions('/repo/AppHost/AppHost.csproj'), [folderSession]);
-        assert.deepStrictEqual(service.getEditorOwnedRunSessions('/repo/AppHost/Program.cs'), [folderSession]);
-        assert.deepStrictEqual(service.getEditorOwnedRunSessions('/repo/Other/AppHost.csproj'), []);
+        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'AppHost.csproj')), { sessions: [folderSession], ambiguous: false });
+        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'Program.cs')), { sessions: [folderSession], ambiguous: false });
+        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(otherDirectory, 'AppHost.csproj')), { sessions: [], ambiguous: false });
     });
 
     test('does not match a folder session that has no resolved AppHost', () => {
         // Without a resolved candidate the extension genuinely does not know which
         // AppHost under the folder is running, so it must not guess.
+        const directory = createAppHostDirectory('AppHost.csproj');
         const folderSession = {
-            appHostPath: '/repo',
+            appHostPath: path.dirname(directory),
             resolvedAppHostPath: undefined,
             operationKind: 'run' as const,
             startupCompleted: true,
@@ -397,18 +451,75 @@ suite('AppHostLaunchService', () => {
         };
         service.setEditorSessionProvider(() => [folderSession]);
 
-        assert.deepStrictEqual(service.getEditorOwnedRunSessions('/repo/AppHost/AppHost.csproj'), []);
+        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'AppHost.csproj')), { sessions: [], ambiguous: false });
+    });
+
+    test('reports an unprovable session association as ambiguous rather than owned', () => {
+        // Two AppHost projects share the directory, so a session started for `First.csproj`
+        // cannot be attributed to `Program.cs`. Reporting it as owned would let the stop
+        // tool terminate a session the caller never named.
+        const directory = createAppHostDirectory('First.csproj', 'Second.csproj', 'Program.cs');
+        const session = {
+            appHostPath: path.join(directory, 'First.csproj'),
+            resolvedAppHostPath: undefined,
+            operationKind: 'run' as const,
+            startupCompleted: true,
+            configuration: { noDebug: false },
+            stopDebugging: async () => { },
+        };
+        service.setEditorSessionProvider(() => [session]);
+
+        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'Program.cs')), { sessions: [], ambiguous: true });
+        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'Second.csproj')), { sessions: [], ambiguous: false });
+        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'First.csproj')), { sessions: [session], ambiguous: false });
+    });
+
+    test('prefers the resolved AppHost over the session program when both are present', () => {
+        // `appHostPath` is whatever the debug configuration named; only the resolved path
+        // is authoritative, and trusting the former would attribute the session to the
+        // wrong AppHost in a directory that holds more than one.
+        const directory = createAppHostDirectory('First.csproj', 'Second.csproj');
+        const session = {
+            appHostPath: path.join(directory, 'First.csproj'),
+            resolvedAppHostPath: path.join(directory, 'Second.csproj'),
+            operationKind: 'run' as const,
+            startupCompleted: true,
+            configuration: { noDebug: false },
+            stopDebugging: async () => { },
+        };
+        service.setEditorSessionProvider(() => [session]);
+
+        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'Second.csproj')), { sessions: [session], ambiguous: false });
+        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'First.csproj')), { sessions: [], ambiguous: false });
     });
 
     test('matches project and AppHost source identities without matching sibling projects', () => {
-        assert.strictEqual(service.isSameAppHostIdentity('/repo/AppHost/AppHost.csproj', '/repo/AppHost/Program.cs'), true);        assert.strictEqual(service.isSameAppHostIdentity('/repo/AppHost/AppHost.csproj', '/repo/AppHost/apphost.cs'), true);
-        assert.strictEqual(service.isSameAppHostIdentity('/repo/AppHost/First.csproj', '/repo/AppHost/Second.csproj'), false);
-        assert.strictEqual(service.isSameAppHostIdentity('/repo/AppHost/apphost.ts', '/repo/AppHost/apphost.mts'), false);
+        const singlePair = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const singleSourcePair = createAppHostDirectory('AppHost.csproj', 'apphost.cs');
+        const siblingProjects = createAppHostDirectory('First.csproj', 'Second.csproj', 'Program.cs');
+        const siblingSources = createAppHostDirectory('apphost.ts', 'apphost.mts');
+
+        assert.strictEqual(service.compareAppHostIdentity(path.join(singlePair, 'AppHost.csproj'), path.join(singlePair, 'Program.cs')), 'same');
+        assert.strictEqual(service.compareAppHostIdentity(path.join(singleSourcePair, 'AppHost.csproj'), path.join(singleSourcePair, 'apphost.cs')), 'same');
+        assert.strictEqual(service.compareAppHostIdentity(path.join(siblingProjects, 'First.csproj'), path.join(siblingProjects, 'Second.csproj')), 'different');
+        assert.strictEqual(service.compareAppHostIdentity(path.join(siblingSources, 'apphost.ts'), path.join(siblingSources, 'apphost.mts')), 'different');
+        // One project cannot be paired with one of two candidate sources, or one source
+        // with one of two candidate projects, so neither relation can be proven.
+        assert.strictEqual(service.compareAppHostIdentity(path.join(siblingProjects, 'First.csproj'), path.join(siblingProjects, 'Program.cs')), 'ambiguous');
+    });
+
+    test('refuses to prove an identity it cannot enumerate', () => {
+        // A directory that cannot be listed gives no evidence either way, and answering
+        // `different` there would let two operations run against one AppHost.
+        assert.strictEqual(service.compareAppHostIdentity('/repo/AppHost/AppHost.csproj', '/repo/AppHost/Program.cs'), 'ambiguous');
+        assert.strictEqual(service.compareAppHostIdentity('/repo/AppHost/AppHost.csproj', '/repo/AppHost/AppHost.csproj'), 'same');
+        assert.strictEqual(service.compareAppHostIdentity('/repo/First/AppHost.csproj', '/repo/Second/AppHost.csproj'), 'different');
     });
 
     test('returns only editor-owned run sessions for the requested AppHost identity', () => {
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
         const runSession = {
-            appHostPath: '/repo/AppHost/Program.cs',
+            appHostPath: path.join(directory, 'Program.cs'),
             operationKind: 'run' as const,
             resolvedAppHostPath: undefined,
             startupCompleted: true,
@@ -416,7 +527,7 @@ suite('AppHostLaunchService', () => {
             stopDebugging: async () => { },
         };
         const publishSession = {
-            appHostPath: '/repo/AppHost/AppHost.csproj',
+            appHostPath: path.join(directory, 'AppHost.csproj'),
             operationKind: 'publish' as const,
             resolvedAppHostPath: undefined,
             startupCompleted: true,
@@ -424,7 +535,7 @@ suite('AppHostLaunchService', () => {
             stopDebugging: async () => { },
         };
         const testSession = {
-            appHostPath: '/repo/AppHost/AppHost.csproj',
+            appHostPath: path.join(directory, 'AppHost.csproj'),
             operationKind: 'test' as const,
             resolvedAppHostPath: undefined,
             startupCompleted: true,
@@ -433,8 +544,9 @@ suite('AppHostLaunchService', () => {
         };
         service.setEditorSessionProvider(() => [runSession, publishSession, testSession]);
 
-        assert.deepStrictEqual(service.getEditorOwnedRunSessions('/repo/AppHost/AppHost.csproj'), [runSession]);
+        assert.deepStrictEqual(service.getEditorOwnedRunSessions(path.join(directory, 'AppHost.csproj')), { sessions: [runSession], ambiguous: false });
     });
+
 
     test('reads an authoritative running snapshot independent of tree visibility', async () => {
         const expected = [{ appHostPath: path.resolve('/repo/AppHost/AppHost.csproj') }];

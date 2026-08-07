@@ -13,6 +13,7 @@ import {
     appHostLifecycleUnspecifiedMode,
 } from '../loc/strings';
 import { isRunnableAppHostFileContents, isSupportedAppHostFileExtension } from '../utils/appHostLanguage';
+import { type AppHostIdentityRelation } from '../utils/appHostIdentity';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { isCommandCancellation } from '../utils/telemetry';
 import { AppHostLifecycleLockTimeoutError } from '../services/AppHostLaunchService';
@@ -30,20 +31,42 @@ export const aspireAppHostStopToolName = 'aspire_apphost_stop';
 /** Largest AppHost file we will read while classifying a tool target. */
 const maxAppHostBytesInspected = 512 * 1024;
 
-/** Upper bound on model-supplied text echoed back into a confirmation dialog. */
-const maxConfirmationPathLength = 120;
+/**
+ * Upper bound on the workspace-relative path a confirmation may show.
+ *
+ * A path longer than this is refused outright rather than elided, because an elided path
+ * no longer identifies one file: two AppHosts sharing a long prefix would produce the same
+ * prompt. The bound is far above any realistic repository path (Windows' own MAX_PATH is
+ * 260 for a full path), so refusing beyond it costs nothing in practice.
+ */
+const maxConfirmationPathLength = 512;
 
 /** Reject model-supplied paths large enough to make path normalization itself expensive. */
 const maxAppHostPathLength = 4096;
+
+/**
+ * Characters that change what a path *is* without changing, or while changing, how it
+ * looks: C0/C1 controls and DEL, plus every Unicode format character (`\p{Cf}`).
+ *
+ * Bidi controls (U+202A-U+202E, U+2066-U+2069) reorder the run that follows them, so a
+ * path can render as a completely different one. Zero-width characters (U+200B-U+200D)
+ * are invisible, so two distinct files can produce identical-looking prompts. Deleting
+ * them would break the one-to-one relationship between the confirmed identity and the
+ * executed target, so they are rejected instead.
+ * See https://unicode.org/reports/tr9/ and https://unicode.org/reports/tr36/#Bidirectional_Text_Spoofing
+ */
+const identityChangingCharacters = /[\u0000-\u001F\u007F-\u009F]|\p{Cf}/u;
 
 export type AppHostLifecycleMode = 'run' | 'debug';
 
 /**
  * Who owns the AppHost process the tool acted on. `editor` means an Aspire debug
  * session created by this extension, `external` means a process the extension can
- * observe but did not start (a terminal, another window, or the CLI directly).
+ * observe but did not start (a terminal, another window, or the CLI directly), and
+ * `unknown` means the ownership probe itself failed, which is deliberately not
+ * collapsed into `none`.
  */
-export type AppHostLifecycleOwnership = 'editor' | 'external' | 'none';
+export type AppHostLifecycleOwnership = 'editor' | 'external' | 'none' | 'unknown';
 
 export type AppHostLifecycleOutcome =
     | 'started'
@@ -96,11 +119,20 @@ export interface AppHostLifecycleToolResult {
  */
 export interface AppHostLifecycleLaunchService {
     isLaunching(appHostPath: string): boolean;
-    getEditorOwnedRunSessions(appHostPath: string): readonly AppHostLifecycleEditorSession[];
+    getEditorOwnedRunSessions(appHostPath: string): AppHostLifecycleOwnedSessions;
     getRunningAppHosts(token: vscode.CancellationToken): Promise<readonly AppHostLifecycleRunningAppHost[]>;
-    isSameAppHostIdentity(left: string | undefined, right: string | undefined): boolean;
+    compareAppHostIdentity(left: string | undefined, right: string | undefined): AppHostIdentityRelation;
     runWithAppHostLifecycleLock<T>(appHostPath: string, token: vscode.CancellationToken, action: () => Promise<T>): Promise<T>;
     launchFromLifecycleOwner(appHostPath: string, command: 'run', noDebug: boolean, token: vscode.CancellationToken): Promise<void>;
+}
+
+/**
+ * Editor-owned sessions for a requested AppHost, plus whether any session's relationship
+ * to it could not be proven. See {@link AppHostIdentityRelation}.
+ */
+export interface AppHostLifecycleOwnedSessions {
+    readonly sessions: readonly AppHostLifecycleEditorSession[];
+    readonly ambiguous: boolean;
 }
 
 export interface AppHostLifecycleRunningAppHost {
@@ -146,6 +178,12 @@ interface ResolvedAppHostTarget {
     absolutePath: string;
     /** Path relative to the containing workspace folder, always with `/` separators. */
     relativePath: string;
+    /**
+     * The identity shown in the confirmation dialog. Identical to `relativePath` in a
+     * single-root workspace, and prefixed with the workspace folder name otherwise, so a
+     * relative path that exists under only one root still names that root in the prompt.
+     */
+    displayPath: string;
 }
 
 type AppHostTargetResolution =
@@ -184,11 +222,18 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
     }
 
     /**
-     * Resolves the requested path for display purposes only. Used by
-     * `prepareInvocation`, which the VS Code API requires to be side-effect free.
+     * Renders the identity the confirmation dialog must show for a requested path.
+     *
+     * This runs the *same* resolution `invoke` runs and displays its result, so the target
+     * the user approves is the target that gets executed. It reads the filesystem to do so,
+     * which `prepareInvocation` allows: the API requires it to be free of side effects, not
+     * free of I/O. Input that does not resolve is described with a fixed placeholder rather
+     * than echoed, because such a call is always rejected anyway and echoing it would hand
+     * the model free-form prose inside the trusted prompt that gates "Always allow".
      */
     describeTarget(rawAppHostPath: unknown): string {
-        return describeModelSuppliedPath(rawAppHostPath);
+        const resolution = this.resolveTarget(rawAppHostPath);
+        return resolution.resolved ? resolution.target.displayPath : appHostLifecycleUnresolvedPath;
     }
 
     async start(input: AppHostStartToolInput, token: vscode.CancellationToken): Promise<AppHostLifecycleToolResult> {
@@ -204,15 +249,23 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
 
         try {
             // Probe for a process this extension does not own *before* taking the
-            // lifecycle lock. `aspire ps` spawns the CLI and then queries each AppHost
-            // over its backchannel, which can take tens of seconds when an AppHost is
-            // paused at a breakpoint - the very situation this tool exists to protect.
-            // The lock only has a 10s wait budget, so holding it across the probe would
-            // make the user's own Run/Debug fail with `busy`. The duplicate-launch
-            // guarantee comes from the in-memory checks inside the lock, not from this.
-            const externalOwnershipBeforeLock = this.hasEditorOwnership(preflight.target.absolutePath)
-                ? undefined
-                : await this.isRunningOutsideEditor(preflight.target.absolutePath, token);
+            // lifecycle lock, and return early when the answer is "yes".
+            //
+            // `aspire ps` spawns the CLI and then queries each AppHost over its
+            // backchannel, which can take tens of seconds when an AppHost is paused at a
+            // breakpoint - the very situation this tool exists to protect. That slow case
+            // is exactly the case this early exit covers, so the expensive probe never
+            // runs while the lock is held. When the answer is "no" the probe result is
+            // discarded: it is only a fast path, never the authority, because an AppHost
+            // started from a terminal while this call waited up to 10s for the lock would
+            // leave a stale `false` behind and allow a duplicate launch.
+            if (!this.hasEditorOwnership(preflight.target.absolutePath) &&
+                await this.isRunningOutsideEditor(preflight.target.absolutePath, token)) {
+                // Launching again would start a second AppHost against the same project.
+                // Report it instead so the agent can decide, and never adopt or kill a
+                // process this extension does not own.
+                return createResult(aspireAppHostStartToolName, 'alreadyRunning', preflight.target.relativePath, 'external', requestedMode, undefined);
+            }
 
             return await this._dependencies.launchService.runWithAppHostLifecycleLock(preflight.target.absolutePath, token, async () => {
                 // Re-resolve after the confirmation and after waiting on the shared lock:
@@ -224,11 +277,11 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 }
 
                 const current = recheck.target;
-                const editorSessions = this.findEditorOwnedSessions(current.absolutePath);
+                const owned = this.findEditorOwnedSessions(current.absolutePath);
                 // A session that finished startup is checked before the launching flag on
                 // purpose. That flag is only cleared once `aspire ps` reconciliation observes
                 // the process, which can lag far behind the session itself.
-                const runningSession = editorSessions.find(session => session.startupCompleted);
+                const runningSession = owned.sessions.find(session => session.startupCompleted);
                 if (runningSession) {
                     return createResult(
                         aspireAppHostStartToolName,
@@ -239,18 +292,21 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                         getSessionMode(runningSession));
                 }
 
-                if (this._dependencies.launchService.isLaunching(current.absolutePath) || editorSessions.length > 0) {
+                if (this._dependencies.launchService.isLaunching(current.absolutePath) || owned.sessions.length > 0) {
                     return createResult(aspireAppHostStartToolName, 'alreadyStarting', current.relativePath, 'editor', requestedMode, undefined);
                 }
 
-                // Only re-probe when the pre-lock fast path skipped it because the editor
-                // owned this AppHost at the time and no longer does.
-                const runningExternally = externalOwnershipBeforeLock
-                    ?? await this.isRunningOutsideEditor(current.absolutePath, token);
-                if (runningExternally) {
-                    // Launching again would start a second AppHost against the same project.
-                    // Report it instead so the agent can decide, and never adopt or kill a
-                    // process this extension does not own.
+                if (owned.ambiguous) {
+                    // A session exists whose AppHost cannot be told apart from this one -
+                    // for example a sibling project file and a `Program.cs` in a directory
+                    // holding several projects. Launching would risk a second process for
+                    // an AppHost that is already running, so refuse instead of guessing.
+                    return createResult(aspireAppHostStartToolName, 'ambiguousSession', current.relativePath, 'editor', requestedMode, undefined);
+                }
+
+                // Authoritative ownership check immediately before launching. This is the
+                // one that matters: everything before it could be stale by now.
+                if (await this.isRunningOutsideEditor(current.absolutePath, token)) {
                     return createResult(aspireAppHostStartToolName, 'alreadyRunning', current.relativePath, 'external', requestedMode, undefined);
                 }
 
@@ -287,9 +343,9 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
 
         try {
             // Same reasoning as `start`: the `aspire ps` probe stays outside the lock so a
-            // slow or wedged AppHost cannot block the user's own Run/Debug. Here the probe
-            // only labels the outcome, so it is skipped entirely when the editor already
-            // owns a session for this AppHost.
+            // slow or wedged AppHost cannot block the user's own Run/Debug. The probe only
+            // labels the outcome here, so its result is safe to carry into the lock, and it
+            // is skipped entirely when the editor already owns a session for this AppHost.
             const externalOwnershipBeforeLock = this.hasEditorOwnership(preflight.target.absolutePath)
                 ? undefined
                 : await this.probeExternalOwnershipForStop(preflight.target.absolutePath, token);
@@ -301,26 +357,41 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 }
 
                 const current = recheck.target;
-                const editorSessions = this.findEditorOwnedSessions(current.absolutePath);
-                if (editorSessions.length > 1) {
+                const owned = this.findEditorOwnedSessions(current.absolutePath);
+                if (owned.sessions.length > 1) {
                     // Two sessions claim the same AppHost. Stopping "one of them" would be an
                     // arbitrary choice, so refuse and let the user disambiguate in the UI.
                     return createResult(aspireAppHostStopToolName, 'ambiguousSession', current.relativePath, 'editor', undefined, undefined);
                 }
 
-                if (editorSessions.length === 0) {
-                    const runningExternally = externalOwnershipBeforeLock
+                if (owned.sessions.length === 0 && owned.ambiguous) {
+                    // A session exists that this AppHost cannot be told apart from - a
+                    // sibling project file and a `Program.cs` in a directory holding several
+                    // projects, for instance. Stopping it would terminate an AppHost the
+                    // caller never named, so refuse.
+                    return createResult(aspireAppHostStopToolName, 'ambiguousSession', current.relativePath, 'editor', undefined, undefined);
+                }
+
+                if (owned.sessions.length === 0) {
+                    const externalOwnership = externalOwnershipBeforeLock
                         ?? await this.probeExternalOwnershipForStop(current.absolutePath, token);
+                    if (externalOwnership === 'unknown') {
+                        // The probe failed, so "nothing is running" would be an assertion the
+                        // extension cannot make. Report the failure and let the agent retry
+                        // or fall back rather than telling it the AppHost is not running.
+                        return createResult(aspireAppHostStopToolName, 'failed', current.relativePath, 'unknown', undefined, undefined);
+                    }
+
                     return createResult(
                         aspireAppHostStopToolName,
-                        runningExternally ? 'notEditorOwned' : 'notRunning',
+                        externalOwnership === 'external' ? 'notEditorOwned' : 'notRunning',
                         current.relativePath,
-                        runningExternally ? 'external' : 'none',
+                        externalOwnership,
                         undefined,
                         undefined);
                 }
 
-                const session = editorSessions[0];
+                const session = owned.sessions[0];
                 const effectiveMode = getSessionMode(session);
                 if (token.isCancellationRequested) {
                     return createResult(aspireAppHostStopToolName, 'cancelled', current.relativePath, 'editor', undefined, effectiveMode);
@@ -343,9 +414,10 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
     /**
      * Canonicalizes a model-supplied AppHost path against the open workspace folders.
      *
-     * Resolution never guesses: a relative path that matches files in several folders
-     * is ambiguous, a path that leaves the workspace lexically or through a symlink is
-     * rejected, and a file that does not look like a runnable Aspire AppHost is refused.
+     * Resolution never guesses: only workspace-relative input is accepted, a relative
+     * path that matches files in several folders is ambiguous, a path that leaves the
+     * workspace lexically or through a symlink is rejected, and a file that does not look
+     * like a runnable Aspire AppHost is refused.
      */
     resolveTarget(rawAppHostPath: unknown): AppHostTargetResolution {
         if (typeof rawAppHostPath !== 'string') {
@@ -355,10 +427,19 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         const requestedPath = rawAppHostPath.trim();
         // A NUL byte truncates the path inside libuv, so a value such as
         // "AppHost/AppHost.csproj\u0000/../../etc/passwd" could pass string checks and
-        // then address a different file on disk.
+        // then address a different file on disk. Format characters are rejected for a
+        // different reason; see `identityChangingCharacters`.
         if (requestedPath.length === 0 ||
             requestedPath.length > maxAppHostPathLength ||
-            /[\u0000-\u001F\u007F]/.test(requestedPath)) {
+            identityChangingCharacters.test(requestedPath)) {
+            return { resolved: false, outcome: 'invalidInput' };
+        }
+
+        // The tool contract, the manifest input schema, and the README all require a
+        // workspace-relative path. Accepting an absolute path that happens to land inside
+        // a workspace folder would widen the surface beyond what the user was told the
+        // tool can address, so it is refused before any candidate is built.
+        if (path.isAbsolute(requestedPath)) {
             return { resolved: false, outcome: 'invalidInput' };
         }
 
@@ -367,12 +448,9 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             return { resolved: false, outcome: 'pathOutsideWorkspace' };
         }
 
-        const candidates = path.isAbsolute(requestedPath)
-            ? [path.resolve(requestedPath)]
-            : workspaceFolders.map(folder => path.resolve(folder.uri.fsPath, requestedPath));
-        const lexicallyContained = candidates
-            .map(candidate => ({ candidate, folder: findContainingWorkspaceFolder(workspaceFolders, candidate) }))
-            .filter((value): value is { candidate: string; folder: string } => value.folder !== undefined);
+        const lexicallyContained = workspaceFolders
+            .map(folder => ({ candidate: path.resolve(folder.uri.fsPath, requestedPath), folder }))
+            .filter(({ candidate, folder }) => isContainedIn(folder.uri.fsPath, candidate));
         if (lexicallyContained.length === 0) {
             return { resolved: false, outcome: 'pathOutsideWorkspace' };
         }
@@ -381,7 +459,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             candidate,
             folder,
             realCandidate: realPathOrUndefined(candidate),
-            realFolder: realPathOrUndefined(folder),
+            realFolder: realPathOrUndefined(folder.uri.fsPath),
         }));
         if (realPathCandidates.some(({ realCandidate, realFolder }) =>
             realCandidate && realFolder && !isContainedIn(realFolder, realCandidate))) {
@@ -403,17 +481,35 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             return { resolved: false, outcome: 'pathAmbiguous' };
         }
 
-        const { candidate: absolutePath, folder: containingFolder } = existing[0];
+        const { candidate: absolutePath, folder } = existing[0];
 
         if (!isAppHostFile(absolutePath)) {
             return { resolved: false, outcome: 'notAnAppHost' };
+        }
+
+        // Workspace folders can nest. The deepest folder that contains the file wins so
+        // the reported path matches the folder the user would recognize in the explorer.
+        const containingFolder = findContainingWorkspaceFolder(workspaceFolders, absolutePath) ?? folder;
+        const relativePath = toPosixRelativePath(containingFolder.uri.fsPath, absolutePath);
+        // In a multi-root workspace the relative path alone does not say which root was
+        // selected, and resolution *did* select one. Qualify it so the confirmed identity
+        // is the identity that gets launched.
+        const displayPath = workspaceFolders.length > 1
+            ? `${containingFolder.name}/${relativePath}`
+            : relativePath;
+        // The display string is derived from real entries on disk, but a file or folder
+        // name can itself carry invisible characters. Refuse anything that cannot be shown
+        // exactly as it is rather than showing an identity the tool would not execute.
+        if (identityChangingCharacters.test(displayPath) || displayPath.length > maxConfirmationPathLength) {
+            return { resolved: false, outcome: 'invalidInput' };
         }
 
         return {
             resolved: true,
             target: {
                 absolutePath,
-                relativePath: toPosixRelativePath(containingFolder, absolutePath),
+                relativePath,
+                displayPath: escapeMarkdown(displayPath),
             },
         };
     }
@@ -450,33 +546,36 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         return { rejected: false, target: resolution.target };
     }
 
-    private findEditorOwnedSessions(appHostPath: string): AppHostLifecycleEditorSession[] {
-        return [...this._dependencies.launchService.getEditorOwnedRunSessions(appHostPath)];
+    private findEditorOwnedSessions(appHostPath: string): AppHostLifecycleOwnedSessions {
+        return this._dependencies.launchService.getEditorOwnedRunSessions(appHostPath);
     }
 
     private hasEditorOwnership(appHostPath: string): boolean {
+        const owned = this._dependencies.launchService.getEditorOwnedRunSessions(appHostPath);
         return this._dependencies.launchService.isLaunching(appHostPath) ||
-            this._dependencies.launchService.getEditorOwnedRunSessions(appHostPath).length > 0;
+            owned.sessions.length > 0 ||
+            owned.ambiguous;
     }
 
     private async isRunningOutsideEditor(appHostPath: string, token: vscode.CancellationToken): Promise<boolean> {
         const runningAppHosts = await this._dependencies.launchService.getRunningAppHosts(token);
+        // An identity that cannot be proven distinct counts as running. Treating it as a
+        // different AppHost would let `start` put a second process on the ports of the one
+        // the CLI already reported.
         return runningAppHosts.some(runningAppHost =>
-            this._dependencies.launchService.isSameAppHostIdentity(runningAppHost.appHostPath, appHostPath));
+            this._dependencies.launchService.compareAppHostIdentity(runningAppHost.appHostPath, appHostPath) !== 'different');
     }
 
     /**
-     * Ownership probe for `stop`, where a probe failure is not a reason to fail the call.
+     * Ownership probe for `stop`, which distinguishes "not running" from "could not tell".
      *
-     * `start` fails closed when the probe throws, because launching anyway could put a
-     * second AppHost on the ports of one the user started from a terminal. Stopping has
-     * no such hazard: the editor owns no session either way, so the only question left is
-     * whether to label the outcome `notEditorOwned` or `notRunning`. Reporting `failed`
-     * there would push the agent to the CLI for a call that had nothing to do.
+     * Collapsing a probe failure into `none` would make the tool report `notRunning` for an
+     * AppHost that is running outside the editor, contradicting the ownership contract the
+     * agent relies on. The caller turns `unknown` into a `failed` outcome instead.
      */
-    private async probeExternalOwnershipForStop(appHostPath: string, token: vscode.CancellationToken): Promise<boolean> {
+    private async probeExternalOwnershipForStop(appHostPath: string, token: vscode.CancellationToken): Promise<AppHostLifecycleOwnership> {
         try {
-            return await this.isRunningOutsideEditor(appHostPath, token);
+            return await this.isRunningOutsideEditor(appHostPath, token) ? 'external' : 'none';
         }
         catch (error) {
             if (isCommandCancellation(error)) {
@@ -484,7 +583,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             }
 
             extensionLogOutputChannel.warn(`Aspire language model tool ${aspireAppHostStopToolName} could not determine external AppHost ownership: ${String(error)}`);
-            return false;
+            return 'unknown';
         }
     }
 
@@ -517,8 +616,9 @@ export class AppHostStartLanguageModelTool implements vscode.LanguageModelTool<A
     constructor(private readonly _service: AppHostLifecycleToolService) {
     }
 
-    // Preparation performs lexical path formatting only. Filesystem validation is
-    // deferred to invoke(), after trust and cancellation checks.
+    // Preparation resolves the requested path so the confirmation shows the exact target
+    // `invoke` will act on. It reads the filesystem but performs no lifecycle work, which
+    // is what the API requires of a preparation step.
     prepareInvocation(options: vscode.LanguageModelToolInvocationPrepareOptions<AppHostStartToolInput>, _token: vscode.CancellationToken): vscode.PreparedToolInvocation {
         const displayPath = this._service.describeTarget(options.input?.appHostPath);
         const displayMode = describeRequestedMode(options.input?.mode);
@@ -665,62 +765,19 @@ function getSessionMode(session: AppHostLifecycleEditorSession): AppHostLifecycl
 }
 
 /**
- * Bounds and neutralizes model-supplied text before it is rendered in a confirmation
- * dialog. Confirmation messages render as Markdown, so a crafted path could otherwise
- * inject formatting or a wall of text into the prompt the user must approve.
- */
-function sanitizeModelSuppliedText(value: unknown, maxLength: number): string {
-    if (typeof value !== 'string') {
-        return '';
-    }
-
-    const singleLine = value
-        .replace(/[\u0000-\u001F\u007F]+/g, ' ')
-        // Unicode format characters are invisible but reorder or hide what follows them:
-        // a bidi isolate/override run (U+2066-U+2069, U+202A-U+202E) can make a path render
-        // as a completely different one while the surrounding prompt text stays intact, and
-        // zero-width characters (U+200B-U+200D) can split a name the user would recognize.
-        // They are neither `\s` nor C0 controls, so they need their own pass.
-        // See https://unicode.org/reports/tr9/ and https://unicode.org/reports/tr36/#Bidirectional_Text_Spoofing
-        .replace(/\p{Cf}/gu, '')
-        .replace(/[`*_[\]<>|]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-
-    return singleLine.length > maxLength ? `${singleLine.slice(0, maxLength)}…` : singleLine;
-}
-
-/**
- * Renders the requested AppHost for the confirmation dialog as a workspace-relative path.
+ * Escapes the Markdown constructs that change how a path renders inline.
  *
- * Input that cannot be mapped into an open workspace folder is described with a fixed
- * placeholder rather than echoed. Such a call is always rejected by {@link
- * AppHostLifecycleToolService.resolveTarget} anyway, so echoing it would only hand the
- * model free-form prose inside the trusted prompt that gates "Always allow".
+ * The confirmation body renders as Markdown, so an unescaped `*`, `_`, `` ` ``, `[`, or
+ * `<` in a real file name would show the user something other than the file the tool is
+ * about to launch. Escaping keeps the rendered text one-to-one with the path instead of
+ * deleting characters, which would break that relationship in the other direction.
+ * Characters that are only meaningful at the start of a line (`.`, `-`, `{`, `}`) are
+ * left alone: the path is always interpolated mid-sentence and they are extremely common
+ * in real project paths.
+ * See https://spec.commonmark.org/0.31.2/#backslash-escapes
  */
-function describeModelSuppliedPath(value: unknown): string {
-    if (typeof value !== 'string') {
-        return appHostLifecycleUnresolvedPath;
-    }
-
-    const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
-    const requestedPath = value.trim();
-    const candidate = requestedPath.length > 0 &&
-        requestedPath.length <= maxAppHostPathLength &&
-        !/[\u0000-\u001F\u007F]/.test(requestedPath)
-        ? path.isAbsolute(requestedPath)
-            ? path.resolve(requestedPath)
-            : workspaceFolders.length === 1
-                ? path.resolve(workspaceFolders[0].uri.fsPath, requestedPath)
-                : undefined
-        : undefined;
-    const containingFolder = candidate ? findContainingWorkspaceFolder(workspaceFolders, candidate) : undefined;
-    if (!containingFolder || !candidate) {
-        return appHostLifecycleUnresolvedPath;
-    }
-
-    const sanitized = sanitizeModelSuppliedText(toPosixRelativePath(containingFolder, candidate), maxConfirmationPathLength);
-    return sanitized.length > 0 ? sanitized : appHostLifecycleUnresolvedPath;
+function escapeMarkdown(value: string): string {
+    return value.replace(/[\\`*_[\]()<>#+~|!]/g, character => `\\${character}`);
 }
 
 /**
@@ -766,14 +823,14 @@ function isAppHostFile(candidate: string): boolean {
     }
 }
 
-function findContainingWorkspaceFolder(folders: readonly vscode.WorkspaceFolder[], candidate: string): string | undefined {
+function findContainingWorkspaceFolder(folders: readonly vscode.WorkspaceFolder[], candidate: string): vscode.WorkspaceFolder | undefined {
     // Workspace folders can nest. The deepest match wins so the reported relative path
     // matches the folder the user would recognize in the explorer.
-    let bestMatch: string | undefined;
+    let bestMatch: vscode.WorkspaceFolder | undefined;
     for (const folder of folders) {
         const folderPath = folder.uri.fsPath;
-        if (isContainedIn(folderPath, candidate) && (!bestMatch || folderPath.length > bestMatch.length)) {
-            bestMatch = folderPath;
+        if (isContainedIn(folderPath, candidate) && (!bestMatch || folderPath.length > bestMatch.uri.fsPath.length)) {
+            bestMatch = folder;
         }
     }
 

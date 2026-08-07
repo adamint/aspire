@@ -551,10 +551,10 @@
       <source xml:lang="en">Polling interval in milliseconds for fetching running AppHosts. Minimum: 1000.</source>
     </trans-unit>
     <trans-unit id="languageModelTool.aspireAppHostStart.modelDescription">
-      <source xml:lang="en">Prefer this tool over invoking Aspire AppHost lifecycle commands in a terminal whenever VS Code is active. Start an Aspire AppHost that already exists in the current workspace, using the editor&apos;s own debug lifecycle. Requires the workspace-relative path of the AppHost project or single-file AppHost, and whether to start it in &apos;run&apos; mode (no debugger attached) or &apos;debug&apos; mode (debugger attached). Does not create, pick, or guess an AppHost: if the path is missing, ambiguous, or outside the workspace the call fails. If the AppHost is already starting or already running, no second process is started.</source>
+      <source xml:lang="en">Prefer this tool over invoking Aspire AppHost lifecycle commands in a terminal whenever VS Code is active. Start an Aspire AppHost that already exists in the current workspace, using the editor&apos;s own debug lifecycle. Requires the workspace-relative path of the AppHost project or single-file AppHost; absolute paths are rejected. Also requires whether to start it in &apos;run&apos; mode (no debugger attached) or &apos;debug&apos; mode (debugger attached). Does not create, pick, or guess an AppHost: if the path is missing, ambiguous, or outside the workspace the call fails. If the AppHost is already starting or already running, no second process is started.</source>
     </trans-unit>
     <trans-unit id="languageModelTool.aspireAppHostStop.modelDescription">
-      <source xml:lang="en">Prefer this tool over invoking Aspire AppHost lifecycle commands in a terminal whenever VS Code is active. Stop an Aspire AppHost that this editor started, using the editor&apos;s own debug lifecycle so the AppHost and its child resources shut down together. Requires the workspace-relative path of the AppHost. Only AppHosts started by this editor can be stopped; an AppHost started outside the editor is reported instead of being terminated.</source>
+      <source xml:lang="en">Prefer this tool over invoking Aspire AppHost lifecycle commands in a terminal whenever VS Code is active. Stop an Aspire AppHost that this editor started, using the editor&apos;s own debug lifecycle so the AppHost and its child resources shut down together. Requires the workspace-relative path of the AppHost; absolute paths are rejected. Only AppHosts started by this editor can be stopped; an AppHost started outside the editor is reported instead of being terminated. If the extension cannot determine whether the AppHost is running outside the editor, the call fails rather than reporting that nothing is running.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.processExitedWithCode">
       <source xml:lang="en">Process exited with code {0}.</source>
@@ -860,7 +860,7 @@
       <source xml:lang="en">Workspace view selected because aspire ls found {0} buildable AppHosts.</source>
     </trans-unit>
     <trans-unit id="languageModelTool.aspireAppHost.appHostPath.description">
-      <source xml:lang="en">Workspace-relative path of the AppHost project file (for example &apos;AppHost/AppHost.csproj&apos;) or single-file AppHost (for example &apos;apphost.cs&apos;). Must already exist inside an open workspace folder.</source>
+      <source xml:lang="en">Workspace-relative path of the AppHost project file (for example &apos;AppHost/AppHost.csproj&apos;) or single-file AppHost (for example &apos;apphost.cs&apos;). Must already exist inside an open workspace folder. Absolute paths are rejected, so pass the path relative to the workspace folder that contains the AppHost.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.yesLabel">
       <source xml:lang="en">Yes</source>

@@ -239,31 +239,52 @@ export function isRunnableAppHostFileContents(filePath: string, contents: string
     }
 
     if (appHostCSharpSourceExtensions.includes(extension)) {
-        const { withoutComments, executable } = stripCommentsAndStringLiterals(contents, 'csharp');
-        return /^[ \t]*#:sdk[ \t]+Aspire\.AppHost\.Sdk\b/m.test(withoutComments)
+        const { executable } = stripCommentsAndStringLiterals(contents, 'csharp');
+        // The directive is matched against the executable view, not the raw contents, so a
+        // raw string literal containing a `#:sdk` line cannot satisfy the gate.
+        return /^[ \t]*#:sdk[ \t]+Aspire\.AppHost\.Sdk\b/m.test(executable)
             && /\bDistributedApplication\s*\.\s*CreateBuilder\s*\(/.test(executable)
             && /\.\s*Build\s*\(\s*\)\s*\.\s*Run\s*\(/.test(executable);
     }
 
     if (appHostJsTsSourceExtensions.includes(extension)) {
-        const { withoutComments, executable } = stripCommentsAndStringLiterals(contents, 'jsts');
-        return referencesAspireModule(withoutComments)
-            && /\bcreateBuilder\s*\(/.test(executable)
-            && /\.\s*build\s*\(\s*\)\s*\.\s*run\s*\(/.test(executable);
+        const stripped = stripCommentsAndStringLiterals(contents, 'jsts');
+        return referencesAspireModule(stripped)
+            && /\bcreateBuilder\s*\(/.test(stripped.executable)
+            && /\.\s*build\s*\(\s*\)\s*\.\s*run\s*\(/.test(stripped.executable);
     }
 
-    function referencesAspireModule(contents: string): boolean {
-        const moduleSpecifiers = [
-            ...contents.matchAll(/\bfrom\s*(["'])(?<specifier>[^"']+)\1/g),
-            ...contents.matchAll(/\brequire\s*\(\s*(["'])(?<specifier>[^"']+)\1\s*\)/g),
-        ];
+    /**
+     * True only when an Aspire module specifier appears in genuine import/require
+     * position.
+     *
+     * Matching the specifier text anywhere in the source would accept it inside data -
+     * `const doc = "require('aspire')"` - and a file that only mentions Aspire in a
+     * string while defining its own `createBuilder().build().run()` is arbitrary JS/TS
+     * that this gate would then authorize the extension to execute. So the check starts
+     * from the scanner's literal spans and requires the code immediately before each one
+     * to be import syntax.
+     */
+    function referencesAspireModule(source: StrippedAppHostSource): boolean {
+        return source.literals.some(literal => {
+            if (literal.value === undefined) {
+                return false;
+            }
 
-        return moduleSpecifiers.some(match => {
-            const specifier = match.groups?.specifier?.toLowerCase();
+            // `executable` has every literal and comment blanked to spaces of the same
+            // length, so offsets still line up with the original text and the preceding
+            // code cannot itself be literal or comment text.
+            //   `import x from ` | `export { x } from ` | `require ( ` | `import ( ` | `import `
+            const precedingCode = source.executable.slice(0, literal.start);
+            if (!/(?:\bfrom|\brequire\s*\(|\bimport\s*\()\s*$|\bimport\s+$/.test(precedingCode)) {
+                return false;
+            }
+
+            const specifier = literal.value.toLowerCase();
             return specifier === 'aspire'
-                || specifier?.startsWith('@aspire/') === true
-                || /(?:^|\/)\.aspire\/modules\/aspire(?:\.[^/]*)?$/.test(specifier ?? '')
-                || /(?:^|\/)\.modules\/aspire(?:\.[^/]*)?$/.test(specifier ?? '');
+                || specifier.startsWith('@aspire/')
+                || /(?:^|\/)\.aspire\/modules\/aspire(?:\.[^/]*)?$/.test(specifier)
+                || /(?:^|\/)\.modules\/aspire(?:\.[^/]*)?$/.test(specifier);
         });
     }
 
@@ -288,11 +309,24 @@ function isTypescriptAppHostMarker(entry: string): boolean {
 
 type AppHostSourceLanguage = 'csharp' | 'jsts';
 
+interface AppHostSourceLiteral {
+    /** Offset of the opening quote in the original contents. */
+    readonly start: number;
+    /**
+     * Decoded literal text, or `undefined` when the literal is not a plain, fully
+     * terminated JS/TS `'`/`"` string. Escapes, template literals, regex literals, and
+     * every C# literal form are left undecoded on purpose: a module specifier never
+     * needs them, so refusing to interpret them keeps the gate closed rather than
+     * guessing at a value that decides whether a file may be executed.
+     */
+    readonly value: string | undefined;
+}
+
 interface StrippedAppHostSource {
-    /** Comments blanked out, string literals left intact. */
-    readonly withoutComments: string;
     /** Comments and string literal contents both blanked out. */
     readonly executable: string;
+    /** Every literal span the scanner recognized, in source order. */
+    readonly literals: readonly AppHostSourceLiteral[];
 }
 
 /**
@@ -321,8 +355,8 @@ function blankOutSpan(span: string): string {
  * and https://tc39.es/ecma262/#sec-literals-regular-expression-literals.
  */
 function stripCommentsAndStringLiterals(contents: string, language: AppHostSourceLanguage): StrippedAppHostSource {
-    let withoutComments = '';
     let executable = '';
+    const literals: AppHostSourceLiteral[] = [];
     let index = 0;
     // Tracks the last significant code character and word so a `/` in JS/TS can be
     // classified as a regex literal or a division operator.
@@ -331,7 +365,6 @@ function stripCommentsAndStringLiterals(contents: string, language: AppHostSourc
     let wordBuffer = '';
 
     const emitCode = (span: string): void => {
-        withoutComments += span;
         executable += span;
         for (const character of span) {
             if (/[A-Za-z0-9_$]/.test(character)) {
@@ -353,14 +386,12 @@ function stripCommentsAndStringLiterals(contents: string, language: AppHostSourc
     };
 
     const emitComment = (span: string): void => {
-        const blanked = blankOutSpan(span);
-        withoutComments += blanked;
-        executable += blanked;
+        executable += blankOutSpan(span);
     };
 
-    const emitLiteral = (span: string): void => {
-        withoutComments += span;
+    const emitLiteral = (span: string, start: number): void => {
         executable += blankOutSpan(span);
+        literals.push({ start, value: language === 'jsts' ? readPlainJsTsLiteralValue(span) : undefined });
         wordBuffer = '';
         lastWord = '';
         lastCodeChar = span[span.length - 1] ?? lastCodeChar;
@@ -390,7 +421,7 @@ function stripCommentsAndStringLiterals(contents: string, language: AppHostSourc
             ? readCSharpLiteral(contents, index)
             : readJsTsLiteral(contents, index, lastCodeChar, wordBuffer.length > 0 ? wordBuffer : lastWord);
         if (literalEnd !== undefined) {
-            emitLiteral(contents.slice(index, literalEnd));
+            emitLiteral(contents.slice(index, literalEnd), index);
             index = literalEnd;
             continue;
         }
@@ -399,7 +430,26 @@ function stripCommentsAndStringLiterals(contents: string, language: AppHostSourc
         index++;
     }
 
-    return { withoutComments, executable };
+    return { executable, literals };
+}
+
+/**
+ * Decodes a JS/TS string literal span, or returns `undefined` when the span is anything
+ * this gate refuses to interpret.
+ *
+ * Only plain, fully terminated `'`/`"` literals with no backslash at all are decoded.
+ * A specifier such as `'aspire'` never needs an escape, so refusing every escaped or
+ * unterminated form avoids re-implementing JS escape semantics on the path that decides
+ * whether a file may be launched as code.
+ */
+function readPlainJsTsLiteralValue(span: string): string | undefined {
+    const quote = span[0];
+    if ((quote !== '"' && quote !== '\'') || span.length < 2 || span[span.length - 1] !== quote) {
+        return undefined;
+    }
+
+    const inner = span.slice(1, -1);
+    return inner.includes('\\') || inner.includes(quote) || inner.includes('\n') ? undefined : inner;
 }
 
 /**

@@ -4,14 +4,11 @@ import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration, AspireOperationKind } from '../dcp/types';
 import { appHostLifecycleBusy, startDebuggingDeclined } from '../loc/strings';
 import { classifyAppHostDirectory, classifyAppHostPath } from '../utils/appHostLanguage';
+import { compareAppHostIdentity, getAppHostIdentityKey, getAppHostPathComparisonKey, type AppHostIdentityRelation } from '../utils/appHostIdentity';
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';
 import { bucketAspireCommand } from '../utils/telemetryBuckets';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
-
-function getComparisonKey(value: string): string {
-    return process.platform === 'win32' ? value.toLowerCase() : value;
-}
 
 function isAspireCommandType(value: unknown): value is AspireCommandType {
     return value === 'run' || value === 'deploy' || value === 'publish' || value === 'do';
@@ -62,6 +59,20 @@ export interface AppHostLaunchSession {
 
 export interface RunningAppHost {
     readonly appHostPath: string;
+}
+
+/**
+ * Sessions proven to belong to a requested AppHost, plus whether any session could not be
+ * proven either way.
+ *
+ * `ambiguous` exists because a project file and a sibling `Program.cs` only describe one
+ * AppHost when the directory forces that pairing. When it does not, an ownership answer
+ * of "no sessions" would be a guess that lets a caller start a duplicate AppHost, and an
+ * answer of "this session" would let a caller stop the wrong one.
+ */
+export interface AppHostOwnedSessions {
+    readonly sessions: readonly AppHostLaunchSession[];
+    readonly ambiguous: boolean;
 }
 
 export const appHostLifecycleLockWaitTimeoutMs = 10_000;
@@ -118,7 +129,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         this._debugSessionSubscription = vscode.debug.onDidTerminateDebugSession(session => {
             const appHostPath = session.configuration?.program;
             if (appHostPath && session.configuration?.type === 'aspire') {
-                const key = getComparisonKey(path.resolve(appHostPath));
+                const key = getAppHostPathComparisonKey(appHostPath);
                 if (this._launchingPaths.delete(key)) {
                     this._onDidChangeLaunchingState.fire();
                 }
@@ -162,11 +173,36 @@ export class AppHostLaunchService implements vscode.Disposable {
         this._getRunningAppHosts = provider;
     }
 
-    getEditorOwnedRunSessions(appHostPath: string): readonly AppHostLaunchSession[] {
-        return this._getEditorSessions().filter(session =>
-            session.operationKind === 'run' &&
-            (this.isSameAppHostIdentity(session.appHostPath, appHostPath) ||
-                this.isSameAppHostIdentity(session.resolvedAppHostPath, appHostPath)));
+    /**
+     * Returns the editor-owned `run` sessions for an AppHost, and whether any session's
+     * relationship to it could not be proven.
+     *
+     * A session's own {@link AppHostLaunchSession.resolvedAppHostPath} is authoritative
+     * when present: the debug configuration provider only sets it after resolving a
+     * folder to a single unambiguous candidate, whereas `appHostPath` is then just the
+     * folder. Falling back to `appHostPath` for those sessions would compare a directory
+     * against a file and quietly report "not owned".
+     */
+    getEditorOwnedRunSessions(appHostPath: string): AppHostOwnedSessions {
+        const sessions: AppHostLaunchSession[] = [];
+        let ambiguous = false;
+        for (const session of this._getEditorSessions()) {
+            if (session.operationKind !== 'run') {
+                continue;
+            }
+
+            const sessionPath = session.resolvedAppHostPath ?? session.appHostPath;
+            switch (compareAppHostIdentity(sessionPath, appHostPath)) {
+                case 'same':
+                    sessions.push(session);
+                    break;
+                case 'ambiguous':
+                    ambiguous = true;
+                    break;
+            }
+        }
+
+        return { sessions, ambiguous };
     }
 
     async getRunningAppHosts(token: vscode.CancellationToken): Promise<readonly RunningAppHost[]> {
@@ -176,12 +212,8 @@ export class AppHostLaunchService implements vscode.Disposable {
         return appHosts;
     }
 
-    isSameAppHostIdentity(left: string | undefined, right: string | undefined): boolean {
-        if (!left || !right) {
-            return false;
-        }
-
-        return isMatchingAppHostPath(path.resolve(left), path.resolve(right));
+    compareAppHostIdentity(left: string | undefined, right: string | undefined): AppHostIdentityRelation {
+        return compareAppHostIdentity(left, right);
     }
 
     async runWithAppHostLifecycleLock<T>(appHostPath: string, token: vscode.CancellationToken, action: () => Promise<T>): Promise<T> {
@@ -236,29 +268,20 @@ export class AppHostLaunchService implements vscode.Disposable {
     }
 
     /**
-     * Maps every path that {@link isMatchingAppHostPath} considers the same AppHost onto
-     * one key.
+     * Maps every path that {@link compareAppHostIdentity} reports as the same AppHost onto
+     * one lifecycle lock key.
      *
-     * The key must be a pure function of the path. Deriving it by scanning the existing
-     * keys for a match would not be, because that relation is not transitive: an
-     * `AppHost.csproj` matches both a sibling `apphost.cs` and a sibling `Program.cs`,
-     * while those two do not match each other. Whichever key happened to be inserted
-     * first would then decide whether the next caller shared a lock or got its own,
-     * letting two operations run concurrently over the same AppHost.
-     *
-     * Since matching only ever relates a project file to a source file in the same
-     * directory, the directory is the identity for both shapes.
+     * The key must be a pure function of the path, which is why it is derived from the
+     * directory listing rather than by scanning the existing keys for a match. Scanning
+     * would make the key depend on insertion order, and the aliasing relation only becomes
+     * transitive once the directory forces a single project/source pairing.
      */
     private getLifecycleLockKey(appHostPath: string): string {
-        const resolvedPath = path.normalize(path.resolve(appHostPath));
-        return isProjectFile(resolvedPath) || isSourceFile(resolvedPath)
-            ? `${getComparisonKey(path.dirname(resolvedPath))}${path.sep}`
-            : getComparisonKey(resolvedPath);
+        return getAppHostIdentityKey(appHostPath);
     }
 
     isLaunching(appHostPath: string): boolean {
-        const resolvedAppHostPath = path.resolve(appHostPath);
-        const exactKey = getComparisonKey(path.normalize(resolvedAppHostPath));
+        const exactKey = getAppHostPathComparisonKey(appHostPath);
         if (this._launchingPaths.has(exactKey)) {
             return true;
         }
@@ -266,8 +289,10 @@ export class AppHostLaunchService implements vscode.Disposable {
         // The editor can discover a C# AppHost by its project while an agent addresses
         // the same AppHost by Program.cs/AppHost.cs (or vice versa). Keep the launching
         // guard active across that identity boundary after the shared launch lock releases.
+        // An association that cannot be proven also counts as launching: reporting "not
+        // launching" would let a second process start against the same AppHost.
         return Array.from(this._launchingPaths).some(launchingPath =>
-            isMatchingAppHostPath(launchingPath, resolvedAppHostPath));
+            compareAppHostIdentity(launchingPath, appHostPath) !== 'different');
     }
 
     /**
@@ -275,21 +300,23 @@ export class AppHostLaunchService implements vscode.Disposable {
      * appears in the running AppHosts list).
      */
     clearLaunching(appHostPath: string): void {
-        const key = getComparisonKey(path.resolve(appHostPath));
+        const key = getAppHostPathComparisonKey(appHostPath);
         if (this._launchingPaths.delete(key)) {
             this._onDidChangeLaunchingState.fire();
         }
     }
 
     clearMatchingLaunching(appHostPath: string): void {
-        const resolvedAppHostPath = path.resolve(appHostPath);
-        const exactKey = getComparisonKey(path.normalize(resolvedAppHostPath));
+        const exactKey = getAppHostPathComparisonKey(appHostPath);
         if (this._launchingPaths.delete(exactKey)) {
             this._onDidChangeLaunchingState.fire();
             return;
         }
 
-        const matchingPaths = Array.from(this._launchingPaths).filter(launchingPath => isMatchingAppHostPath(launchingPath, resolvedAppHostPath));
+        // Only a proven identity clears another path's launching flag. An ambiguous
+        // association would otherwise hide a launch that is still in flight.
+        const matchingPaths = Array.from(this._launchingPaths).filter(launchingPath =>
+            compareAppHostIdentity(launchingPath, appHostPath) === 'same');
         if (matchingPaths.length !== 1) {
             return;
         }
@@ -375,7 +402,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             // "Starting..." immediately after the user invokes the command. Every pre-start
             // failure path below clears it because VS Code will not emit a terminate event.
             // See https://code.visualstudio.com/api/references/vscode-api#debug.startDebugging
-            this._launchingPaths.add(getComparisonKey(path.resolve(appHostPath)));
+            this._launchingPaths.add(getAppHostPathComparisonKey(appHostPath));
             this._onDidChangeLaunchingState.fire();
 
             const cliAvailability = await checkCliAvailableOrRedirect('debug_gate');
@@ -489,28 +516,4 @@ function isE2eDebugLaunchSuppressed(): boolean {
         !!process.env.ASPIRE_EXTENSION_E2E_STATE_FILE &&
         !!process.env.ASPIRE_EXTENSION_E2E_CONTROL_FILE &&
         process.env.ASPIRE_EXTENSION_E2E_SUPPRESS_DEBUG_LAUNCH === 'true';
-}
-
-function isMatchingAppHostPath(left: string, right: string): boolean {
-    const normalizedLeft = path.normalize(left);
-    const normalizedRight = path.normalize(right);
-    if (getComparisonKey(normalizedLeft) === getComparisonKey(normalizedRight)) {
-        return true;
-    }
-
-    return getComparisonKey(path.dirname(normalizedLeft)) === getComparisonKey(path.dirname(normalizedRight)) &&
-        isProjectFileToSourceFileMatch(normalizedLeft, normalizedRight);
-}
-
-function isProjectFileToSourceFileMatch(left: string, right: string): boolean {
-    return (isProjectFile(left) && isSourceFile(right)) || (isSourceFile(left) && isProjectFile(right));
-}
-
-function isProjectFile(value: string): boolean {
-    return path.extname(value).toLowerCase() === '.csproj';
-}
-
-function isSourceFile(value: string): boolean {
-    const fileName = path.basename(value).toLowerCase();
-    return fileName === 'apphost.cs' || fileName === 'program.cs';
 }

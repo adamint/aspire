@@ -307,4 +307,48 @@ suite('appHostLanguage.isRunnableAppHostFileContents', () => {
         const contents = "import { createBuilder } from 'other-package';\nconst builder = createBuilder();\nbuilder.build().run();\n";
         assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', contents), false);
     });
+
+    test('rejects a TypeScript file whose only Aspire module reference sits inside data', () => {
+        // The scanner preserves string literals, so matching the specifier anywhere in the
+        // source accepts a file that merely quotes an import. Combined with a locally
+        // defined `createBuilder().build().run()` that is arbitrary JS/TS the extension
+        // would then be authorized to execute.
+        const contents = [
+            `const doc = "require('aspire')";`,
+            'function createBuilder() { return { build: () => ({ run: () => {} }) }; }',
+            'const builder = createBuilder();',
+            'builder.build().run();',
+            '',
+        ].join('\n');
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', contents), false);
+    });
+
+    test('rejects an Aspire module specifier that is only assigned to a variable', () => {
+        const contents = [
+            "const specifier = 'aspire';",
+            "const from = '@aspire/hosting';",
+            'function createBuilder() { return { build: () => ({ run: () => {} }) }; }',
+            'const builder = createBuilder();',
+            'builder.build().run();',
+            '',
+        ].join('\n');
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', contents), false);
+    });
+
+    test('accepts every genuine import form that names an Aspire module', () => {
+        const sideEffectImport = "import 'aspire';\nfunction createBuilder() { return { build: () => ({ run: () => {} }) }; }\nconst builder = createBuilder();\nbuilder.build().run();\n";
+        const dynamicImport = "const m = await import('@aspire/hosting');\nconst createBuilder = m.createBuilder;\nconst builder = createBuilder();\nbuilder.build().run();\n";
+        const reExport = "export { createBuilder } from '@aspire/hosting';\nconst builder = createBuilder();\nbuilder.build().run();\n";
+        assert.deepStrictEqual(
+            [sideEffectImport, dynamicImport, reExport].map(contents => isRunnableAppHostFileContents('/w/apphost.ts', contents)),
+            [true, true, true]);
+    });
+
+    test('rejects a C# file whose SDK directive appears only inside a raw string literal', () => {
+        // A raw string preserves the leading newline, so the directive lands at the start
+        // of a line and satisfies a line-anchored match against text that only had its
+        // comments removed.
+        const contents = 'var doc = """\n#:sdk Aspire.AppHost.Sdk@13.0.0\n""";\nvar builder = DistributedApplication.CreateBuilder(args);\nbuilder.Build().Run();\n';
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.cs', contents), false);
+    });
 });
