@@ -132,12 +132,50 @@ suite('debugger install hints', () => {
         const { dependencies, extensionChanges } = createDependencies({ showInformationMessage });
         const service = new DebuggerInstallHintService(globalState, dependencies);
 
-        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddPythonApp')!);
-        await service.showNotificationIfNeeded(getDebuggerInstallHint('addPythonModule')!);
-        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddGoApp')!);
-        await service.showNotificationIfNeeded(getDebuggerInstallHint('addGoApp')!);
+        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddPythonApp')!, 1);
+        await service.showNotificationIfNeeded(getDebuggerInstallHint('addPythonModule')!, 1);
+        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddGoApp')!, 1);
+        await service.showNotificationIfNeeded(getDebuggerInstallHint('addGoApp')!, 1);
 
         assert.strictEqual(showInformationMessage.callCount, 2);
+        service.dispose();
+        extensionChanges.dispose();
+    });
+
+    test('reports the number of affected resources in the notification', async () => {
+        const showInformationMessage = sinon.stub().resolves(undefined);
+        const { dependencies, extensionChanges } = createDependencies({ showInformationMessage });
+        const service = new DebuggerInstallHintService(createTestMemento(), dependencies);
+
+        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddPythonApp')!, 1);
+        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddGoApp')!, 4);
+        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddBunApp')!, 2);
+
+        assert.deepStrictEqual(
+            showInformationMessage.args.map(args => args[0]),
+            [
+                'Debug 1 Aspire resource by installing the Python debugger extension.',
+                'Debug 4 Aspire resources by installing the Go debugger extension.',
+                'Debug 2 Aspire resources by installing the Bun debugger extension.',
+            ]);
+
+        service.dispose();
+        extensionChanges.dispose();
+    });
+
+    test('keeps the count from the notification it actually showed', async () => {
+        const showInformationMessage = sinon.stub().resolves(undefined);
+        const { dependencies, extensionChanges } = createDependencies({ showInformationMessage });
+        const service = new DebuggerInstallHintService(createTestMemento(), dependencies);
+        const hint = getDebuggerInstallHint('AddPythonApp')!;
+
+        await service.showNotificationIfNeeded(hint, 2);
+        await service.showNotificationIfNeeded(hint, 5);
+
+        assert.deepStrictEqual(
+            showInformationMessage.args.map(args => args[0]),
+            ['Debug 2 Aspire resources by installing the Python debugger extension.']);
+
         service.dispose();
         extensionChanges.dispose();
     });
@@ -149,8 +187,8 @@ suite('debugger install hints', () => {
         const { dependencies, extensionChanges } = createDependencies({ showInformationMessage });
         const service = new DebuggerInstallHintService(createTestMemento(), dependencies);
 
-        const first = service.showNotificationIfNeeded(getDebuggerInstallHint('AddPythonApp')!);
-        const second = service.showNotificationIfNeeded(getDebuggerInstallHint('addPythonModule')!);
+        const first = service.showNotificationIfNeeded(getDebuggerInstallHint('AddPythonApp')!, 1);
+        const second = service.showNotificationIfNeeded(getDebuggerInstallHint('addPythonModule')!, 1);
 
         assert.strictEqual(showInformationMessage.callCount, 1);
         resolveNotification(undefined);
@@ -166,13 +204,13 @@ suite('debugger install hints', () => {
         const first = createDependencies({ showInformationMessage });
         const firstService = new DebuggerInstallHintService(globalState, first.dependencies);
 
-        await firstService.showNotificationIfNeeded(getDebuggerInstallHint('AddPythonApp')!);
+        await firstService.showNotificationIfNeeded(getDebuggerInstallHint('AddPythonApp')!, 1);
         firstService.dispose();
         first.extensionChanges.dispose();
 
         const second = createDependencies({ showInformationMessage });
         const secondService = new DebuggerInstallHintService(globalState, second.dependencies);
-        await secondService.showNotificationIfNeeded(getDebuggerInstallHint('AddPythonApp')!);
+        await secondService.showNotificationIfNeeded(getDebuggerInstallHint('AddPythonApp')!, 1);
 
         assert.strictEqual(showInformationMessage.callCount, 2);
         secondService.dispose();
@@ -185,13 +223,13 @@ suite('debugger install hints', () => {
         const first = createDependencies({ showInformationMessage });
         const firstService = new DebuggerInstallHintService(globalState, first.dependencies);
 
-        await firstService.showNotificationIfNeeded(getDebuggerInstallHint('AddGoApp')!);
+        await firstService.showNotificationIfNeeded(getDebuggerInstallHint('AddGoApp')!, 1);
         firstService.dispose();
         first.extensionChanges.dispose();
 
         const second = createDependencies({ showInformationMessage });
         const secondService = new DebuggerInstallHintService(globalState, second.dependencies);
-        await secondService.showNotificationIfNeeded(getDebuggerInstallHint('addGoApp')!);
+        await secondService.showNotificationIfNeeded(getDebuggerInstallHint('addGoApp')!, 1);
 
         assert.strictEqual(showInformationMessage.callCount, 1);
         secondService.dispose();
@@ -207,7 +245,7 @@ suite('debugger install hints', () => {
         });
         const service = new DebuggerInstallHintService(createTestMemento(), dependencies);
 
-        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddBunApp')!);
+        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddBunApp')!, 1);
 
         assert.strictEqual(showInformationMessage.firstCall.args[1], debuggerInstallAction);
         assert.strictEqual(showInformationMessage.firstCall.args[2], debuggerInstallDontShowAgain);
@@ -224,7 +262,7 @@ suite('debugger install hints', () => {
         });
         const service = new DebuggerInstallHintService(createTestMemento(), dependencies);
 
-        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddGoApp')!);
+        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddGoApp')!, 1);
 
         assert.strictEqual(installExtension.callCount, 0);
         service.dispose();
@@ -253,13 +291,13 @@ suite('debugger install hints', () => {
         const firstService = new DebuggerInstallHintService(globalState, first.dependencies);
         const hint = getDebuggerInstallHint('AddGoApp')!;
 
-        await assert.rejects(firstService.showNotificationIfNeeded(hint), /persistence failed/);
+        await assert.rejects(firstService.showNotificationIfNeeded(hint, 1), /persistence failed/);
         firstService.dispose();
         first.extensionChanges.dispose();
 
         const second = createDependencies({ showInformationMessage });
         const secondService = new DebuggerInstallHintService(globalState, second.dependencies);
-        await secondService.showNotificationIfNeeded(hint);
+        await secondService.showNotificationIfNeeded(hint, 1);
 
         assert.strictEqual(showInformationMessage.callCount, 2);
         secondService.dispose();
@@ -274,8 +312,8 @@ suite('debugger install hints', () => {
         const service = new DebuggerInstallHintService(createTestMemento(), dependencies);
         const hint = getDebuggerInstallHint('AddBunApp')!;
 
-        await assert.rejects(service.showNotificationIfNeeded(hint), /display failed/);
-        await service.showNotificationIfNeeded(hint);
+        await assert.rejects(service.showNotificationIfNeeded(hint, 1), /display failed/);
+        await service.showNotificationIfNeeded(hint, 1);
 
         assert.strictEqual(showInformationMessage.callCount, 2);
         service.dispose();
@@ -350,7 +388,7 @@ suite('debugger install hints', () => {
         });
         const service = new DebuggerInstallHintService(createTestMemento(), dependencies);
 
-        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddPythonApp')!);
+        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddPythonApp')!, 1);
 
         assert.deepStrictEqual(
             showErrorMessage.args,
@@ -374,10 +412,10 @@ suite('debugger install hints', () => {
 
         assert.strictEqual(service.hasPendingNotifications(), true);
 
-        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddPythonApp')!);
+        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddPythonApp')!, 1);
         assert.strictEqual(service.hasPendingNotifications(), true);
 
-        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddBunApp')!);
+        await service.showNotificationIfNeeded(getDebuggerInstallHint('AddBunApp')!, 1);
         assert.strictEqual(service.hasPendingNotifications(), false);
 
         service.dispose();

@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { codeLensInstallDebugger, debuggerInstallFailed, debuggerInstallNotification, debuggerInstalledRestartAppHost, launchingWithAppHost, launchingWithDirectory } from '../loc/strings';
+import { codeLensInstallDebugger, debuggerInstallFailed, debuggerInstallLensTooltip, debuggerInstallNotification, debuggerInstalledRestartAppHost, launchingWithAppHost, launchingWithDirectory } from '../loc/strings';
 import { formatText } from '../utils/strings';
 
 suite('utils/strings tests', () => {
@@ -86,7 +86,9 @@ suite('loc/strings tests', () => {
 
 		assert.deepStrictEqual(
 			{
-				debuggerInstallNotification: packageNls['aspire-vscode.strings.debuggerInstallNotification'],
+				debuggerInstallNotificationSingleResource: packageNls['aspire-vscode.strings.debuggerInstallNotificationSingleResource'],
+				debuggerInstallNotificationMultipleResources: packageNls['aspire-vscode.strings.debuggerInstallNotificationMultipleResources'],
+				debuggerInstallLensTooltip: packageNls['aspire-vscode.strings.debuggerInstallLensTooltip'],
 				debuggerInstalledRestartAppHost: packageNls['aspire-vscode.strings.debuggerInstalledRestartAppHost'],
 				debuggerInstallFailed: packageNls['aspire-vscode.strings.debuggerInstallFailed'],
 				debuggerInstallAction: packageNls['aspire-vscode.strings.debuggerInstallAction'],
@@ -94,7 +96,9 @@ suite('loc/strings tests', () => {
 				codeLensInstallDebugger: packageNls['aspire-vscode.strings.codeLensInstallDebugger'],
 			},
 			{
-				debuggerInstallNotification: 'Install the {0} debugger extension to debug this Aspire resource.',
+				debuggerInstallNotificationSingleResource: 'Debug {0} Aspire resource by installing the {1} debugger extension.',
+				debuggerInstallNotificationMultipleResources: 'Debug {0} Aspire resources by installing the {1} debugger extension.',
+				debuggerInstallLensTooltip: 'Install the {0} debugger extension to debug this Aspire resource.',
 				debuggerInstalledRestartAppHost: 'The {0} debugger extension is installed. Restart the AppHost to debug {0} resources.',
 				debuggerInstallFailed: 'The {0} debugger extension could not be installed: {1}',
 				debuggerInstallAction: 'Install',
@@ -104,12 +108,18 @@ suite('loc/strings tests', () => {
 
 		assert.deepStrictEqual(
 			[
-				debuggerInstallNotification('Python'),
+				debuggerInstallNotification('Python', 1),
+				debuggerInstallNotification('Python', 2),
+				debuggerInstallNotification('Go', 11),
+				debuggerInstallLensTooltip('Python'),
 				debuggerInstalledRestartAppHost('Go'),
 				debuggerInstallFailed('Bun', 'offline'),
 				codeLensInstallDebugger('Python'),
 			],
 			[
+				'Debug 1 Aspire resource by installing the Python debugger extension.',
+				'Debug 2 Aspire resources by installing the Python debugger extension.',
+				'Debug 11 Aspire resources by installing the Go debugger extension.',
 				'Install the Python debugger extension to debug this Aspire resource.',
 				'The Go debugger extension is installed. Restart the AppHost to debug Go resources.',
 				'The Bun debugger extension could not be installed: offline',

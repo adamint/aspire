@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { DebuggerInstallHintService } from '../debugger/debuggerInstallHints';
+import { DebuggerInstallHint, DebuggerInstallHintService } from '../debugger/debuggerInstallHints';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { AppHostDataRepository, isMatchingAppHostPath, ResourceJson } from '../views/AppHostDataRepository';
 import { resolveAppHostSourcePath } from '../views/AspireAppHostTreeProvider';
@@ -68,6 +68,11 @@ export class DebuggerInstallHintWatcher implements vscode.Disposable {
             return;
         }
 
+        // The toast is coalesced to one per debugger extension, so it has to speak for every
+        // resource it covers. Collect the matching running resources across all AppHosts first and
+        // notify after the scan, instead of firing on the first match with no count.
+        const matchesByExtensionId = new Map<string, { hint: DebuggerInstallHint; resourceKeys: Set<string> }>();
+
         for (const appHost of this._repository.appHosts) {
             if (this._disposed) {
                 return;
@@ -103,22 +108,37 @@ export class DebuggerInstallHintWatcher implements vscode.Disposable {
             }
 
             for (const parsedResource of parsedResources) {
-                if (this._disposed) {
-                    return;
-                }
-
                 if (!runningResourceNames.has(parsedResource.name)) {
                     continue;
                 }
 
                 const hint = this._debuggerInstallHintService.getMissingDebugger(parsedResource.methodName);
-                if (hint) {
-                    // The notification promise remains pending while the toast is visible. Do not block
-                    // resource refreshes on user interaction; the service coalesces concurrent prompts.
-                    void this._debuggerInstallHintService.showNotificationIfNeeded(hint)
-                        .catch(error => this._dependencies.reportError(error));
+                if (!hint) {
+                    continue;
                 }
+
+                let match = matchesByExtensionId.get(hint.extensionId);
+                if (!match) {
+                    match = { hint, resourceKeys: new Set<string>() };
+                    matchesByExtensionId.set(hint.extensionId, match);
+                }
+
+                // Two AppHosts can each declare a resource named "api", and a single source can
+                // yield the same name twice, so key the count by AppHost path plus resource name
+                // rather than counting parse results.
+                match.resourceKeys.add(`${appHost.appHostPath}\u0000${parsedResource.name}`);
             }
+        }
+
+        for (const { hint, resourceKeys } of matchesByExtensionId.values()) {
+            if (this._disposed) {
+                return;
+            }
+
+            // The notification promise remains pending while the toast is visible. Do not block
+            // resource refreshes on user interaction; the service coalesces concurrent prompts.
+            void this._debuggerInstallHintService.showNotificationIfNeeded(hint, resourceKeys.size)
+                .catch(error => this._dependencies.reportError(error));
         }
     }
 

@@ -217,6 +217,12 @@
     <trans-unit id="aspire-vscode.strings.debugProject">
       <source xml:lang="en">Debug {0}</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.debuggerInstallNotificationSingleResource">
+      <source xml:lang="en">Debug {0} Aspire resource by installing the {1} debugger extension.</source>
+    </trans-unit>
+    <trans-unit id="aspire-vscode.strings.debuggerInstallNotificationMultipleResources">
+      <source xml:lang="en">Debug {0} Aspire resources by installing the {1} debugger extension.</source>
+    </trans-unit>
     <trans-unit id="command.deploy">
       <source xml:lang="en">Deploy app</source>
     </trans-unit>
@@ -376,7 +382,7 @@
     <trans-unit id="walkthrough.getStarted.installCli.title">
       <source xml:lang="en">Install the Aspire CLI</source>
     </trans-unit>
-    <trans-unit id="aspire-vscode.strings.debuggerInstallNotification">
+    <trans-unit id="aspire-vscode.strings.debuggerInstallLensTooltip">
       <source xml:lang="en">Install the {0} debugger extension to debug this Aspire resource.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.invalidLaunchConfiguration">

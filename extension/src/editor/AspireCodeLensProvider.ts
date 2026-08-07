@@ -33,7 +33,7 @@ import {
     codeLensViewAppHostLogs,
     codeLensResourceValueMissing,
     codeLensInstallDebugger,
-    debuggerInstallNotification,
+    debuggerInstallLensTooltip,
 } from '../loc/strings';
 import { DebuggerInstallHint, DebuggerInstallHintService } from '../debugger/debuggerInstallHints';
 
@@ -166,7 +166,7 @@ export class AspireCodeLensProvider implements vscode.CodeLensProvider {
         lenses.push(new vscode.CodeLens(range, {
             title: codeLensInstallDebugger(hint.debuggerName),
             command: 'aspire-vscode.installDebuggerExtension',
-            tooltip: debuggerInstallNotification(hint.debuggerName),
+            tooltip: debuggerInstallLensTooltip(hint.debuggerName),
             arguments: [hint.extensionId],
         }));
     }

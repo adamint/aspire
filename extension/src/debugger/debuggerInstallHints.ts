@@ -132,7 +132,12 @@ export class DebuggerInstallHintService implements vscode.Disposable {
         return false;
     }
 
-    async showNotificationIfNeeded(hint: DebuggerInstallHint): Promise<void> {
+    /**
+     * Shows the coalesced install toast for `hint`. `resourceCount` is the number of running
+     * resources across every AppHost that need this debugger extension, because the toast is shown
+     * at most once per extension id and therefore has to speak for all of them.
+     */
+    async showNotificationIfNeeded(hint: DebuggerInstallHint, resourceCount: number): Promise<void> {
         if (!this._canShowNotification(hint)) {
             return;
         }
@@ -145,7 +150,7 @@ export class DebuggerInstallHintService implements vscode.Disposable {
         let selected: string | undefined;
         try {
             selected = await this._dependencies.showInformationMessage(
-                debuggerInstallNotification(hint.debuggerName),
+                debuggerInstallNotification(hint.debuggerName, resourceCount),
                 debuggerInstallAction,
                 debuggerInstallDontShowAgain);
         } catch (error) {

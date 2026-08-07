@@ -116,7 +116,9 @@ suite('DebuggerInstallHintWatcher', () => {
         await notificationShown;
 
         assert.ok(parseAppHostResources.calledOnceWithExactly(appHostPath));
-        assert.strictEqual(showInformationMessage.callCount, 1);
+        assert.deepStrictEqual(
+            showInformationMessage.args.map(args => args[0]),
+            ['Debug 1 Aspire resource by installing the Python debugger extension.']);
         watcher.dispose();
         service.dispose();
         extensionChanges.dispose();
@@ -182,7 +184,7 @@ suite('DebuggerInstallHintWatcher', () => {
         repositoryChanges.dispose();
     });
 
-    test('shows one notification for the same missing debugger across AppHosts and resources', async () => {
+    test('shows one notification counting the same missing debugger across AppHosts and resources', async () => {
         const repositoryChanges = new vscode.EventEmitter<void>();
         const repository = createRepository(repositoryChanges, [
             {
@@ -218,6 +220,94 @@ suite('DebuggerInstallHintWatcher', () => {
         await watcher.refresh();
 
         assert.strictEqual(parseAppHostResources.callCount, 2);
+        assert.deepStrictEqual(
+            showInformationMessage.args.map(args => args[0]),
+            ['Debug 3 Aspire resources by installing the Python debugger extension.']);
+        watcher.dispose();
+        service.dispose();
+        extensionChanges.dispose();
+        repositoryChanges.dispose();
+    });
+
+    test('counts same-named resources in different AppHosts separately', async () => {
+        const repositoryChanges = new vscode.EventEmitter<void>();
+        const repository = createRepository(repositoryChanges, [
+            {
+                appHostPath: '/repo/First/AppHost.csproj',
+                appHostPid: 123,
+                cliPid: null,
+                dashboardUrl: null,
+                resources: [makeResource('api')],
+            },
+            {
+                appHostPath: '/repo/Second/AppHost.csproj',
+                appHostPid: 456,
+                cliPid: null,
+                dashboardUrl: null,
+                resources: [makeResource('api')],
+            },
+        ]);
+        const showInformationMessage = sinon.stub().resolves(undefined);
+        const { service, extensionChanges } = createHintService(showInformationMessage);
+        const watcher = new DebuggerInstallHintWatcher(repository, service, {
+            parseAppHostResources: () => Promise.resolve([makeParsedResource('api', 'AddGoApp')]),
+            reportError: error => assert.fail(String(error)),
+        });
+
+        await watcher.refresh();
+
+        assert.deepStrictEqual(
+            showInformationMessage.args.map(args => args[0]),
+            ['Debug 2 Aspire resources by installing the Go debugger extension.']);
+        watcher.dispose();
+        service.dispose();
+        extensionChanges.dispose();
+        repositoryChanges.dispose();
+    });
+
+    test('counts the resources that are running when the notification is first shown', async () => {
+        const repositoryChanges = new vscode.EventEmitter<void>();
+        const resources = [
+            makeResource('python-one', ResourceState.Starting),
+            makeResource('python-two', ResourceState.Starting),
+            makeResource('python-three', ResourceState.Starting),
+        ];
+        const repository = createRepository(repositoryChanges, [{
+            appHostPath: '/repo/AppHost/AppHost.csproj',
+            appHostPid: 123,
+            cliPid: null,
+            dashboardUrl: null,
+            resources,
+        }]);
+        const showInformationMessage = sinon.stub().resolves(undefined);
+        const { service, extensionChanges } = createHintService(showInformationMessage);
+        const watcher = new DebuggerInstallHintWatcher(repository, service, {
+            parseAppHostResources: () => Promise.resolve([
+                makeParsedResource('python-one', 'AddPythonApp'),
+                makeParsedResource('python-two', 'AddPythonApp'),
+                makeParsedResource('python-three', 'AddUvicornApp'),
+            ]),
+            reportError: error => assert.fail(String(error)),
+        });
+
+        await watcher.refresh();
+        assert.strictEqual(showInformationMessage.callCount, 0);
+
+        // Resources start staggered, so the count has to be recomputed on every scan until the
+        // toast is actually shown.
+        resources[0].state = ResourceState.Running;
+        resources[1].state = ResourceState.Running;
+        await watcher.refresh();
+
+        assert.deepStrictEqual(
+            showInformationMessage.args.map(args => args[0]),
+            ['Debug 2 Aspire resources by installing the Python debugger extension.']);
+
+        // The toast is shown at most once per extension id per session, so a resource that starts
+        // later does not produce a second, larger toast.
+        resources[2].state = ResourceState.Running;
+        await watcher.refresh();
+
         assert.strictEqual(showInformationMessage.callCount, 1);
         watcher.dispose();
         service.dispose();

@@ -168,7 +168,17 @@ export const goDebuggerName = vscode.l10n.t('Go');
 export const bunDebuggerName = vscode.l10n.t('Bun');
 export const debuggerInstallAction = vscode.l10n.t('Install');
 export const debuggerInstallDontShowAgain = vscode.l10n.t("Don't show again");
-export const debuggerInstallNotification = (debuggerName: string) => vscode.l10n.t('Install the {0} debugger extension to debug this Aspire resource.', debuggerName);
+// The CodeLens is anchored to the AppHost line that declares one resource, so "this Aspire
+// resource" has a referent there. The toast is coalesced to one per debugger extension across
+// every resource and AppHost, so it reports a count instead.
+export const debuggerInstallLensTooltip = (debuggerName: string) => vscode.l10n.t('Install the {0} debugger extension to debug this Aspire resource.', debuggerName);
+// `vscode.l10n.t` has no plural support (there is no ICU/message-format layer in the l10n bundle),
+// so singular and plural are separate source strings selected by the caller. Both take the count so
+// translators can place the numeral wherever their language requires.
+export const debuggerInstallNotification = (debuggerName: string, resourceCount: number) =>
+    resourceCount === 1
+        ? vscode.l10n.t('Debug {0} Aspire resource by installing the {1} debugger extension.', resourceCount, debuggerName)
+        : vscode.l10n.t('Debug {0} Aspire resources by installing the {1} debugger extension.', resourceCount, debuggerName);
 export const debuggerInstalledRestartAppHost = (debuggerName: string) => vscode.l10n.t('The {0} debugger extension is installed. Restart the AppHost to debug {0} resources.', debuggerName);
 export const debuggerInstallFailed = (debuggerName: string, error: string) => vscode.l10n.t('The {0} debugger extension could not be installed: {1}', debuggerName, error);
 export const dontShowAgainLabel = vscode.l10n.t("Don't Show Again");
