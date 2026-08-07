@@ -9,6 +9,14 @@ public sealed class ReleasePublishNugetPipelineTests
 {
     private readonly string _repoRoot = RepoRoot.Path;
 
+    /// <summary>
+    /// The public registry smoke test runs whenever the release publishes npm packages or seeds the
+    /// internal mirror. It is skipped only for stable recovery runs unrelated to npm, which set all
+    /// three npm skips to <c>true</c>.
+    /// </summary>
+    private const string PublicNpmSmokeCondition =
+        "condition: and(succeeded(), or(eq('${{ parameters.SkipNpmRidPublish }}', 'false'), eq('${{ parameters.SkipNpmPointerPublish }}', 'false'), eq('${{ parameters.SkipNpmMirrorValidation }}', 'false')))";
+
     [Fact]
     public async Task ValidatesNpmPublishPreconditionsBeforeNuGetPublish()
     {
@@ -328,7 +336,17 @@ public sealed class ReleasePublishNugetPipelineTests
 
         Assert.Contains("aspire --version output matched the published npm package version", pipeline);
         Assert.Contains("npm view $packageSpec version --registry=https://registry.npmjs.org/", pipeline);
-        Assert.Contains("Registry validation follows SkipNpmMirrorValidation.", pipeline);
+        Assert.Contains(
+            "Registry validation still runs unless SkipNpmRidPublish, SkipNpmPointerPublish, and SkipNpmMirrorValidation are all true.",
+            pipeline);
+
+        // The public smoke test must not be gated on SkipNpmMirrorValidation alone. A run that
+        // publishes npm packages has to prove the package installs from registry.npmjs.org before
+        // channel promotion, even when the operator opted out of internal mirror seeding.
+        Assert.Contains(
+            PublicNpmSmokeCondition,
+            ExtractYamlStep(pipeline, "displayName: 'Validate Published npm Package from Registry'"),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -373,14 +391,13 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.True(anonymousViewIndex < seedIndex);
         Assert.True(seedIndex < promotionIndex);
         Assert.Equal(
-            4,
+            3,
             System.Text.RegularExpressions.Regex.Matches(
                 pipeline,
                 System.Text.RegularExpressions.Regex.Escape(mirrorCondition)).Count);
 
         foreach (var displayName in new[]
         {
-            "displayName: 'Validate Published npm Package from Registry'",
             "displayName: 'Prepare npm Internal Mirror Authentication'",
             "displayName: 'Authenticate to npm Internal Mirror'",
             "displayName: 'Seed and Validate npm Internal Mirror'"
@@ -748,31 +765,63 @@ public sealed class ReleasePublishNugetPipelineTests
             "Registry validation will still install the selected source build's pointer package version from npm.",
             pipeline);
         Assert.Contains(
-            "Registry validation follows SkipNpmMirrorValidation.",
-            pipeline);
-        Assert.Contains(
-            "Write-Host \" (PARTIAL - pointer publish skipped; registry smoke skipped)\"",
+            "Registry validation still runs unless SkipNpmRidPublish, SkipNpmPointerPublish, and SkipNpmMirrorValidation are all true.",
             pipeline);
         Assert.Contains(
             "Write-Host \" (PARTIAL - pointer publish skipped; registry smoke still ran)\"",
             pipeline);
+
+        // Reaching the pointer-skip summary branch means RID publishing ran, so the public smoke
+        // test ran too. A "registry smoke skipped" summary there would contradict the step's
+        // condition, which only skips the smoke test when all three npm skips are true.
+        Assert.DoesNotContain(
+            "Write-Host \" (PARTIAL - pointer publish skipped; registry smoke skipped)\"",
+            pipeline);
         var partialPointerSummaryIndex = FindRequiredText(
             pipeline,
             "} elseif (\"${{ parameters.SkipNpmPointerPublish }}\" -eq \"true\") {");
+        var ranSmokeSummaryIndex = FindRequiredText(
+            pipeline,
+            "Write-Host \" (PARTIAL - pointer publish skipped; registry smoke still ran)\"");
         var mirrorSummaryConditionIndex = pipeline.IndexOf(
             "if (\"${{ parameters.SkipNpmMirrorValidation }}\" -eq \"true\") {",
             partialPointerSummaryIndex,
             StringComparison.Ordinal);
-        var skippedSmokeSummaryIndex = FindRequiredText(
-            pipeline,
-            "Write-Host \" (PARTIAL - pointer publish skipped; registry smoke skipped)\"");
-        var ranSmokeSummaryIndex = FindRequiredText(
-            pipeline,
-            "Write-Host \" (PARTIAL - pointer publish skipped; registry smoke still ran)\"");
-        Assert.True(partialPointerSummaryIndex < mirrorSummaryConditionIndex);
-        Assert.True(mirrorSummaryConditionIndex < skippedSmokeSummaryIndex);
-        Assert.True(skippedSmokeSummaryIndex < ranSmokeSummaryIndex);
+        Assert.True(partialPointerSummaryIndex < ranSmokeSummaryIndex);
+        Assert.True(ranSmokeSummaryIndex < mirrorSummaryConditionIndex);
         Assert.Contains("║ npm Mirror Skip: ${{ parameters.SkipNpmMirrorValidation }}", pipeline);
+    }
+
+    [Fact]
+    public async Task PublicNpmRegistrySmokeTestIsNotGatedOnMirrorValidationAlone()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+        var smokeStep = ExtractYamlStep(
+            pipeline,
+            "displayName: 'Validate Published npm Package from Registry'");
+
+        // Regression guard: gating this pre-existing step on SkipNpmMirrorValidation alone let a
+        // run publish @microsoft/aspire-cli to npm and promote the channel without ever proving
+        // `npm install -g @microsoft/aspire-cli@<version>` works.
+        Assert.Contains(PublicNpmSmokeCondition, smokeStep, StringComparison.Ordinal);
+
+        Assert.DoesNotContain(
+            "condition: and(succeeded(), eq('${{ parameters.SkipNpmMirrorValidation }}', 'false'))",
+            smokeStep);
+
+        // The mirror seed step reads NpmPublishedPointerVersion from the smoke test, so the smoke
+        // test must run in every configuration where the mirror steps run.
+        var mirrorStep = ExtractYamlStep(
+            pipeline,
+            "displayName: 'Seed and Validate npm Internal Mirror'");
+        Assert.Contains(
+            "condition: and(succeeded(), eq('${{ parameters.SkipNpmMirrorValidation }}', 'false'))",
+            mirrorStep,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$packageVersion = '$(NpmPublishedPointerVersion)'",
+            mirrorStep,
+            StringComparison.Ordinal);
     }
 
     [Fact]

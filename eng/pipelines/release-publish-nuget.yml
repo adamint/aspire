@@ -1817,7 +1817,7 @@ extends:
 
                 - ${{ if eq(parameters.SkipNpmPointerPublish, true) }}:
                   - powershell: |
-                      Write-Host "Skipping npm pointer package publish because SkipNpmPointerPublish=true. Registry validation follows SkipNpmMirrorValidation."
+                      Write-Host "Skipping npm pointer package publish because SkipNpmPointerPublish=true. Registry validation still runs unless SkipNpmRidPublish, SkipNpmPointerPublish, and SkipNpmMirrorValidation are all true."
                     displayName: 'Skip npm Pointer Publish (flagged)'
 
                 - pwsh: |
@@ -1999,7 +1999,16 @@ extends:
                       }
                     }
                   displayName: 'Validate Published npm Package from Registry'
-                  condition: and(succeeded(), eq('${{ parameters.SkipNpmMirrorValidation }}', 'false'))
+                  # This public-registry smoke test predates the internal mirror gate, so it must
+                  # not be gated on SkipNpmMirrorValidation alone: a run that actually publishes
+                  # npm packages has to prove `npm install -g @microsoft/aspire-cli@<version>`
+                  # works before the channel is promoted, even when the operator opted out of
+                  # mirror seeding. It is therefore skipped only when the run neither publishes
+                  # npm nor touches the mirror, which is the documented "unrelated stable
+                  # recovery run" recipe that sets all three npm skips to true. Mirror-only
+                  # reruns keep it enabled because the seed step below reads the
+                  # NpmPublishedPointerVersion variable that this step sets.
+                  condition: and(succeeded(), or(eq('${{ parameters.SkipNpmRidPublish }}', 'false'), eq('${{ parameters.SkipNpmPointerPublish }}', 'false'), eq('${{ parameters.SkipNpmMirrorValidation }}', 'false')))
 
                 - pwsh: |
                     $npmrcPath = "$(Agent.TempDirectory)\aspire-cli-internal-mirror.npmrc"
@@ -2390,11 +2399,11 @@ extends:
                   } elseif ("${{ parameters.IsPrerelease }}" -eq "true") {
                     Write-Host " (BLOCKED - prerelease requires non-latest npm dist-tag support)"
                   } elseif ("${{ parameters.SkipNpmPointerPublish }}" -eq "true") {
-                    if ("${{ parameters.SkipNpmMirrorValidation }}" -eq "true") {
-                      Write-Host " (PARTIAL - pointer publish skipped; registry smoke skipped)"
-                    } else {
-                      Write-Host " (PARTIAL - pointer publish skipped; registry smoke still ran)"
-                    }
+                    # The public registry smoke test is skipped only when this run neither
+                    # publishes npm nor seeds the mirror, and that case is already reported by
+                    # the "(SKIPPED)" branch above. Reaching here means RID publishing ran, so
+                    # the smoke test ran too regardless of SkipNpmMirrorValidation.
+                    Write-Host " (PARTIAL - pointer publish skipped; registry smoke still ran)"
                   } elseif ("${{ parameters.SkipNpmRidPublish }}" -eq "true") {
                     Write-Host " (PARTIAL - RID publish skipped; pointer publish still ran)"
                   } else {

@@ -66,6 +66,13 @@ internal sealed class NpmRunner : INpmRunner
     /// <inheritdoc />
     public bool IsAvailable => _npmPath.Value is not null;
 
+    /// <summary>
+    /// Overrides the parent directory used for isolated npm working directories. Tests set this to
+    /// stage an ancestor directory that npm's local-prefix walk would find, without mutating the
+    /// process-wide temp environment variables that concurrently running tests also depend on.
+    /// </summary>
+    internal string? TempDirectoryRootOverride { get; init; }
+
     /// <inheritdoc />
     public async Task<NpmPackageInfo?> ResolvePackageAsync(string packageName, string versionRange, CancellationToken cancellationToken)
     {
@@ -83,6 +90,8 @@ internal sealed class NpmRunner : INpmRunner
 
         try
         {
+            await PinNpmLocalPrefixAsync(tempDir, cancellationToken);
+
             // Resolve version: npm view <package>@<range> version
             var versionOutput = await RunNpmCommandInDirectoryAsync(
                 npmPath,
@@ -148,6 +157,7 @@ internal sealed class NpmRunner : INpmRunner
             Directory.CreateDirectory(cacheDirectory);
             await File.WriteAllTextAsync(userConfigPath, string.Empty, cancellationToken);
             await File.WriteAllTextAsync(globalConfigPath, string.Empty, cancellationToken);
+            await PinNpmLocalPrefixAsync(projectDirectory, cancellationToken);
 
             var packageSpecifier = NpmPackageInfo.FormatPackageSpecifier(packageName, versionRange);
             _logger.LogDebug("Resolving npm package {PackageSpecifier} anonymously from the internal registry", packageSpecifier);
@@ -248,6 +258,8 @@ internal sealed class NpmRunner : INpmRunner
 
         try
         {
+            await PinNpmLocalPrefixAsync(tempDir, cancellationToken);
+
             // The root tarball is provenance-verified, but its transitive dependencies are not.
             // Prevent dependency lifecycle scripts from executing during installation.
             var output = await RunNpmCommandInDirectoryAsync(
@@ -282,9 +294,40 @@ internal sealed class NpmRunner : INpmRunner
         return npmPath;
     }
 
-    private static string CreateIsolatedTempDirectory()
+    private string CreateIsolatedTempDirectory()
     {
-        return Directory.CreateTempSubdirectory("aspire-npm-").FullName;
+        if (TempDirectoryRootOverride is not { } root)
+        {
+            return Directory.CreateTempSubdirectory("aspire-npm-").FullName;
+        }
+
+        // Only tests reach this branch, and they supply a directory they already created and own.
+        // Directory.CreateTempSubdirectory has no overload that accepts a parent, so the unique-name
+        // behavior is mirrored here rather than composing a path under Path.GetTempPath().
+        return Directory.CreateDirectory(Path.Combine(root, $"aspire-npm-{Path.GetRandomFileName()}")).FullName;
+    }
+
+    /// <summary>
+    /// Pins npm's "local prefix" to <paramref name="directory"/> by writing a private marker
+    /// <c>package.json</c> into it.
+    /// </summary>
+    /// <remarks>
+    /// npm resolves the local prefix by walking UP from the working directory until it finds a
+    /// directory containing <c>package.json</c> or <c>node_modules</c>, and then reads that
+    /// directory's <c>.npmrc</c> as the per-project config. Without a marker file the walk escapes
+    /// our temp directory into the shared temp root (for example the world-writable <c>/tmp</c> on
+    /// Linux), where a planted <c>.npmrc</c> can set a scoped registry such as
+    /// <c>@microsoft:registry=</c>. A scoped registry takes precedence over the <c>--registry</c>
+    /// argument, so the marker is what actually makes <c>--registry</c> authoritative here.
+    /// See https://docs.npmjs.com/cli/v11/configuring-npm/npmrc#files and
+    /// https://docs.npmjs.com/cli/v11/using-npm/config#npmrc-files.
+    /// </remarks>
+    private static async Task PinNpmLocalPrefixAsync(string directory, CancellationToken cancellationToken)
+    {
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "package.json"),
+            """{"name":"aspire-npm-isolated","version":"0.0.0","private":true}""",
+            cancellationToken);
     }
 
     private void CleanupTempDirectory(string tempDir)

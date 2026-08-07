@@ -854,9 +854,10 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
         var timeProvider = new FakeTimeProvider();
+        var disposeTimerObserver = new TimerObservingTimeProvider(
+            timeProvider,
+            CliUpdateNotifier.NpmResolutionDisposeTimeout);
         var resolutionStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        var cancellationObserved = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         var resolution = new TaskCompletionSource<NpmPackageInfo?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -864,13 +865,12 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
 
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
         {
-            configure.TimeProvider = timeProvider;
+            configure.TimeProvider = disposeTimerObserver;
             configure.NpmRunnerFactory = _ => new FakeNpmRunner
             {
                 ResolvePackageAsyncCallback = (_, _, cancellationToken) =>
                 {
                     resolutionToken = cancellationToken;
-                    cancellationToken.Register(cancellationObserved.SetResult);
                     resolutionStarted.TrySetResult();
                     return resolution.Task;
                 }
@@ -886,14 +886,24 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
         await resolutionStarted.Task.DefaultTimeout();
 
         var disposeTask = Task.Run(provider.Dispose);
-        await cancellationObserved.Task.DefaultTimeout();
-        await Task.Yield();
-        timeProvider.Advance(CliUpdateNotifier.NpmResolutionDisposeTimeout);
 
-        await disposeTask.DefaultTimeout();
-        Assert.False(statusTask.IsCompleted);
+        try
+        {
+            // Dispose only becomes time-dependent once it registers its drain timer. Advancing
+            // before that point would leave the timer permanently pending and block Dispose.
+            await disposeTimerObserver.TimerCreated.DefaultTimeout();
+            timeProvider.Advance(CliUpdateNotifier.NpmResolutionDisposeTimeout);
 
-        resolution.SetCanceled(resolutionToken);
+            await disposeTask.DefaultTimeout();
+            Assert.False(statusTask.IsCompleted);
+        }
+        finally
+        {
+            // Release the fake resolution even if an assertion above fails, so a failing test
+            // reports that failure instead of hanging the test host on a blocked Dispose.
+            resolution.TrySetCanceled(resolutionToken);
+        }
+
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => statusTask).DefaultTimeout();
     }

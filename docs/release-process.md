@@ -100,7 +100,7 @@ Before starting a release:
    | `SkipNuGetPublish` | Set `true` if re-running after NuGet success. | `false` |
    | `SkipNpmRidPublish` | Set `true` if npm RID packages published but the pointer package did not. | `false` |
    | `SkipNpmPointerPublish` | Set `true` if the pointer package published but a later validation or promotion step failed. | `false` |
-   | `SkipNpmMirrorValidation` | Set `true` for stable recovery runs unrelated to npm. The default keeps the public npm smoke test plus internal mirror seeding and anonymous tarball validation enabled. | `false` |
+   | `SkipNpmMirrorValidation` | Set `true` for stable recovery runs unrelated to npm, together with both npm publish skips. Controls internal mirror seeding and anonymous tarball validation. The public npm smoke test is not gated on this flag alone: it still runs whenever the release publishes npm packages, and is skipped only when `SkipNpmRidPublish`, `SkipNpmPointerPublish`, and `SkipNpmMirrorValidation` are all `true`. | `false` |
    | `SkipChannelPromotion` | Set `true` if re-running after darc success. | `false` |
    | `SkipWinGetPublish` | Set `true` if re-running after WinGet success. | `true` |
    | `SkipGitHubTasks` | Set `true` to skip dispatching the GH workflow. | `false` |

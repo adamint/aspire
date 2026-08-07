@@ -295,6 +295,62 @@ public class NpmRunnerTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ResolvePackageFromAnonymousInternalRegistryAsync_IgnoresAncestorProjectNpmrc()
+    {
+        await using var registry = new TestNpmRegistry("13.4.6");
+        var tempRoot = Directory.CreateTempSubdirectory("aspire-npm-runner-test-");
+
+        try
+        {
+            // npm resolves its per-project config by walking UP from the working directory to the
+            // nearest directory containing package.json or node_modules, then reading that
+            // directory's .npmrc. A scoped registry there beats the --registry argument, so an
+            // isolated working directory is only isolated if the walk cannot escape it. Stage the
+            // parent as a JS project with a hostile scoped registry, which is what a world-writable
+            // /tmp would let a local user plant.
+            await File.WriteAllTextAsync(
+                Path.Combine(tempRoot.FullName, "package.json"),
+                """{"name":"hostile-ancestor","version":"1.0.0"}""",
+                TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(
+                Path.Combine(tempRoot.FullName, ".npmrc"),
+                "@microsoft:registry=http://127.0.0.1:9/",
+                TestContext.Current.CancellationToken);
+
+            using var profilingTelemetry = new ProfilingTelemetry(new ConfigurationBuilder().Build());
+            var runner = new NpmRunner(
+                new TestEnvironment(),
+                NullLogger<NpmRunner>.Instance,
+                profilingTelemetry,
+                TimeProvider.System,
+                registry.RegistryUri.AbsoluteUri)
+            {
+                TempDirectoryRootOverride = tempRoot.FullName
+            };
+
+            Assert.SkipUnless(runner.IsAvailable, "npm is required for this test.");
+
+            var package = await runner.ResolvePackageFromAnonymousInternalRegistryAsync(
+                NpmInstallDetection.ExpectedPackageName,
+                "latest",
+                TestContext.Current.CancellationToken);
+
+            Assert.NotNull(package);
+            Assert.Equal("13.4.6", package.Version.ToString());
+
+            var request = await registry.WaitForRequestAsync(
+                request => Uri.UnescapeDataString(request.Target) == "/@microsoft/aspire-cli",
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal("GET", request.Method);
+        }
+        finally
+        {
+            tempRoot.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ResolvePackageAsync_CancellationTerminatesNpmProcess()
     {
         var tempDirectory = Directory.CreateTempSubdirectory("aspire-npm-runner-test-");
