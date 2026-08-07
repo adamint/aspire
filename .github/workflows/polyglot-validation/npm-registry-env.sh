@@ -36,6 +36,8 @@
 #   corepack   COREPACK_NPM_REGISTRY - AppHosts declare `packageManager`, so if corepack shims are
 #              active it fetches the pinned manager itself before any install begins.
 
+#   npm scopes  NPM_CONFIG_USERCONFIG / NPM_CONFIG_GLOBALCONFIG - see below.
+
 NPM_REGISTRY="${NPM_REGISTRY:-https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/}"
 
 export NPM_REGISTRY
@@ -44,6 +46,27 @@ export NPM_CONFIG_REGISTRY="$NPM_REGISTRY"
 export BUN_CONFIG_REGISTRY="$NPM_REGISTRY"
 export YARN_NPM_REGISTRY_SERVER="$NPM_REGISTRY"
 export COREPACK_NPM_REGISTRY="$NPM_REGISTRY"
+
+# ---------------------------------------------------------------------------------------------
+# Why the default registry alone is not enough
+#
+# `registry` sets the default only. A per-scope `@scope:registry` key is a separate setting that
+# always wins for that scope, and neither npm_config_registry nor `npm --registry` overrides it.
+# Measured with npm 11.4.2, a user-level `@types:registry=https://scoped.example.invalid/` and
+# npm_config_registry pointing at the approved feed:
+#
+#   npm config get registry        -> https://pkgs.dev.azure.com/.../npm/registry/
+#   npm config get @types:registry -> https://scoped.example.invalid/
+#   npm install @types/node        -> request to https://scoped.example.invalid/@types%2fnode
+#
+# The AppHosts install scoped packages (@types/*, @esbuild/*), so an ambient user- or global-level
+# scoped key in the image would silently redirect exactly the packages the guard exists to protect.
+# Point both config paths at files this script owns so no ambient scoped key can apply.
+NPM_REGISTRY_CONFIG_DIR="$(mktemp -d)"
+printf 'registry=%s\n' "$NPM_REGISTRY" > "$NPM_REGISTRY_CONFIG_DIR/npmrc"
+: > "$NPM_REGISTRY_CONFIG_DIR/globalrc"
+export NPM_CONFIG_USERCONFIG="$NPM_REGISTRY_CONFIG_DIR/npmrc"
+export NPM_CONFIG_GLOBALCONFIG="$NPM_REGISTRY_CONFIG_DIR/globalrc"
 
 # Trailing slashes are not significant to any of these managers, and they do not all echo the value
 # back verbatim, so compare against a single normalized form.
@@ -60,6 +83,20 @@ check_manager_registry() {
     return 0
 }
 
+# Every query below runs from NPM_REGISTRY_CONFIG_DIR rather than the caller's directory. These
+# managers refuse to answer inside a project claimed by a different one — from an AppHost whose
+# package.json says `"packageManager": "yarn@4.14.1"`, `pnpm config get registry` exits 1 with
+# "This project is configured to use yarn" and prints nothing. Reading that empty output as a
+# registry value would fail the job for a project that is configured correctly, so ask in a
+# directory that belongs to no project and the answer depends only on the environment.
+#
+# What this deliberately does not cover is a per-project .npmrc or .yarnrc.yml, which is invisible
+# from here. That is asserted statically instead, by
+# NpmLockfileRegistryTests.PolyglotFixtures_DoNotOverrideTheRegistry.
+config_in_neutral_directory() {
+    (cd "$NPM_REGISTRY_CONFIG_DIR" && "$@" 2>/dev/null) || true
+}
+
 # Exporting the variables above is not proof that they took effect. A package manager bump could
 # rename a setting, or an image could bake in a conflicting config with higher precedence, and the
 # installs would quietly fall back to the public registry with the job still green. Ask each manager
@@ -67,17 +104,47 @@ check_manager_registry() {
 #
 # Bun has no config-read command, so it is covered by the two environment variables above rather than
 # by an assertion.
+# A scoped key that survives the config paths above — from a project .npmrc, or from a source a
+# future npm adds — would redirect only the scoped packages, which is the easiest form of this drift
+# to miss. Enumerate every "@scope:registry" npm reports and require each to be the approved feed.
+#
+# `npm config list` prints one setting per line, quoted:
+#   @types:registry = "https://scoped.example.invalid/"
+#   registry = "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/"
+# Comment lines beginning with ';' name the file each block came from and are skipped by the match.
+check_scoped_registries() {
+    local failed=0
+    local scope reported line
+
+    while IFS= read -r line; do
+        scope="${line%%:registry*}"
+        reported="${line#*= }"
+        reported="${reported%\"}"
+        reported="${reported#\"}"
+
+        if [ "${reported%/}" != "${NPM_REGISTRY%/}" ]; then
+            echo "  ❌ npm resolves $scope packages from '$reported' instead of the approved feed '$NPM_REGISTRY'"
+            failed=1
+        else
+            echo "  ✅ npm $scope -> $reported"
+        fi
+    done < <(config_in_neutral_directory npm config list | grep -E '^@[^:]+:registry = ' || true)
+
+    return "$failed"
+}
+
 verify_registry_configuration() {
     local failed=0
 
     echo "Package registry configuration:"
 
     if command -v npm &> /dev/null; then
-        check_manager_registry "npm" "$(npm config get registry 2>/dev/null || true)" || failed=1
+        check_manager_registry "npm" "$(config_in_neutral_directory npm config get registry)" || failed=1
+        check_scoped_registries || failed=1
     fi
 
     if command -v pnpm &> /dev/null; then
-        check_manager_registry "pnpm" "$(pnpm config get registry 2>/dev/null || true)" || failed=1
+        check_manager_registry "pnpm" "$(config_in_neutral_directory pnpm config get registry)" || failed=1
     fi
 
     if command -v yarn &> /dev/null; then
@@ -89,7 +156,7 @@ verify_registry_configuration() {
             echo "  ❌ yarn on PATH is Yarn Classic ($(yarn --version 2>/dev/null)), which cannot be pointed at the approved feed. Install Yarn 4 or later."
             failed=1
         else
-            check_manager_registry "yarn" "$(yarn config get npmRegistryServer 2>/dev/null || true)" || failed=1
+            check_manager_registry "yarn" "$(config_in_neutral_directory yarn config get npmRegistryServer)" || failed=1
         fi
     fi
 

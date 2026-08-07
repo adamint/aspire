@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.IO.Enumeration;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Xunit;
@@ -87,6 +88,108 @@ public class NpmLockfileRegistryTests
     public static TheoryData<string> PnpmLockfilePaths => ToTheoryData(EnumeratePolyglotLockfiles("pnpm-lock.yaml"));
 
     public static TheoryData<string> YarnLockfilePaths => ToTheoryData(EnumeratePolyglotLockfiles("yarn.lock"));
+
+    /// <summary>
+    /// The lockfile names each package manager writes, and which the theories above parse.
+    /// </summary>
+    private static readonly string[] s_recognizedLockfileNames =
+    [
+        "package-lock.json",
+        "bun.lock",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+    ];
+
+    /// <summary>
+    /// Lockfiles belonging to ecosystems this guard is not about. Named explicitly so that skipping
+    /// them is a decision on the record rather than a pattern that happens not to match.
+    /// </summary>
+    private static readonly string[] s_ignoredLockfilePatterns = ["pylock.*.toml"];
+
+    /// <summary>
+    /// Fails when a fixture introduces a lockfile format none of the theories above parse.
+    /// </summary>
+    /// <remarks>
+    /// The four theories each ask for a filename they already know how to read, so adding a package
+    /// manager to the polyglot fixtures — Deno, or Bun's binary bun.lockb — would add an acquisition
+    /// path that no theory enumerates and nothing would go red. That is the same failure this PR is
+    /// about: a guard that silently stops covering what it is supposed to cover. Discovering
+    /// lockfile-shaped files and requiring each to be claimed turns "unparsed" into a build break.
+    /// </remarks>
+    [Fact]
+    public void PolyglotFixtures_ContainNoLockfileFormatThisGuardCannotParse()
+    {
+        var unrecognized = EnumeratePolyglotFiles()
+            .Where(path => IsLockfileShaped(Path.GetFileName(path)))
+            .Where(path => !s_recognizedLockfileNames.Contains(Path.GetFileName(path), StringComparer.Ordinal))
+            .Select(path => Path.GetRelativePath(RepoRoot.Path, path).Replace(Path.DirectorySeparatorChar, '/'))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal([], unrecognized);
+    }
+
+    /// <summary>
+    /// Fails when a polyglot fixture ships package-manager config that redirects acquisition.
+    /// </summary>
+    /// <remarks>
+    /// npm-registry-env.sh verifies the environment from a directory owned by no project, because a
+    /// package manager refuses to answer config questions inside a project claimed by a different
+    /// one. That leaves per-project .npmrc and .yarnrc.yml unchecked at runtime, and project config
+    /// outranks the environment for npm and pnpm, so a fixture could opt itself back onto the public
+    /// registry. Asserting it here covers the half the preflight structurally cannot.
+    /// </remarks>
+    [Fact]
+    public void PolyglotFixtures_DoNotOverrideTheRegistry()
+    {
+        // Matches an .npmrc `registry=` or `@scope:registry=` key and a .yarnrc.yml
+        // `npmRegistryServer:` / `npmScopes.<scope>.npmRegistryServer:` key, in both cases capturing
+        // everything after the delimiter so an unapproved value is reported rather than skipped.
+        var registryKey = new Regex(
+            @"^\s*(?<key>(@[^\s:]+:)?registry|npmRegistryServer|npmPublishRegistry)\s*[=:]\s*(?<value>\S+)\s*$",
+            RegexOptions.Multiline);
+
+        var overrides = EnumeratePolyglotFiles()
+            .Where(path => Path.GetFileName(path) is ".npmrc" or ".yarnrc" or ".yarnrc.yml")
+            .SelectMany(path => registryKey.Matches(File.ReadAllText(path))
+                .Where(match => !IsApprovedFeedUrl(match.Groups["value"].Value.Trim('"', '\'')))
+                .Select(match => $"{Path.GetRelativePath(RepoRoot.Path, path).Replace(Path.DirectorySeparatorChar, '/')} -> {match.Groups["key"].Value}={match.Groups["value"].Value}"))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal([], overrides);
+    }
+
+    /// <summary>
+    /// A file is lockfile-shaped when its name ends in .lock/.lockb, or pairs a "lock" or
+    /// "shrinkwrap" word with a data extension — package-lock.json, pnpm-lock.yaml,
+    /// npm-shrinkwrap.json. Deliberately broader than the recognized set so a new format is caught.
+    /// </summary>
+    private static bool IsLockfileShaped(string fileName)
+    {
+        if (s_ignoredLockfilePatterns.Any(pattern => FileSystemName.MatchesSimpleExpression(pattern, fileName)))
+        {
+            return false;
+        }
+
+        if (fileName.EndsWith(".lock", StringComparison.OrdinalIgnoreCase) ||
+            fileName.EndsWith(".lockb", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return (fileName.Contains("lock", StringComparison.OrdinalIgnoreCase) ||
+                fileName.Contains("shrinkwrap", StringComparison.OrdinalIgnoreCase)) &&
+               Path.GetExtension(fileName) is ".json" or ".yaml" or ".yml" or ".toml";
+    }
+
+    private static IEnumerable<string> EnumeratePolyglotFiles()
+    {
+        var polyglotRoot = Path.Combine(RepoRoot.Path, "tests", "PolyglotAppHosts");
+
+        return Directory.EnumerateFiles(polyglotRoot, "*", SearchOption.AllDirectories)
+            .Where(path => !path.Split(Path.DirectorySeparatorChar).Contains("node_modules", StringComparer.Ordinal));
+    }
 
     /// <summary>
     /// Records which shipped lockfiles still resolve through an unapproved registry, so the gap is
@@ -251,6 +354,33 @@ public class NpmLockfileRegistryTests
                 "npm_config_registry",
             },
             ExportedRegistryVariables(script));
+    }
+
+    /// <summary>
+    /// Fails if the helper stops isolating npm from ambient user- and global-level config.
+    /// </summary>
+    /// <remarks>
+    /// `registry` sets the default only. A `@scope:registry` key is a separate setting that wins for
+    /// that scope, and neither npm_config_registry nor `npm --registry` overrides it. Measured with
+    /// npm 11.4.2, a user-level `@types:registry=https://scoped.example.invalid/` sent
+    /// `npm install @types/node` to that host while `npm config get registry` still reported the
+    /// approved feed. The AppHosts install @types/* and @esbuild/*, so pointing both config paths at
+    /// files the helper owns is what keeps an ambient scoped key from redirecting them.
+    /// </remarks>
+    [Fact]
+    public void RegistryEnvScript_IsolatesNpmFromAmbientScopedRegistries()
+    {
+        var script = ReadRepoFile(RegistryEnvScriptPath);
+
+        var isolatingExports = Regex.Matches(script, @"^export (?<name>NPM_CONFIG_(?:USERCONFIG|GLOBALCONFIG))=", RegexOptions.Multiline)
+            .Select(match => match.Groups["name"].Value)
+            .Order(StringComparer.Ordinal);
+
+        Assert.Equal(new[] { "NPM_CONFIG_GLOBALCONFIG", "NPM_CONFIG_USERCONFIG" }, isolatingExports);
+
+        // Isolation alone would not notice a scoped key from a source it does not control, so the
+        // helper also enumerates what npm reports and fails on any scope off the approved feed.
+        Assert.Contains("@[^:]+:registry", script, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -484,6 +614,11 @@ public class NpmLockfileRegistryTests
     [InlineData("http://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/ms/-/ms-2.1.3.tgz", false)]
     // Approved-feed text pushed into the path of an attacker-controlled host.
     [InlineData("https://evil.example.com/pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/ms/-/ms-2.1.3.tgz", false)]
+    // Approved-feed text pushed into the query string of an attacker-controlled host.
+    [InlineData("https://evil.example.com/ms-2.1.3.tgz?from=https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/", false)]
+    // Approved host and approved feed name, but a different Azure DevOps organization. The org is
+    // the first path segment, so matching the host alone would accept every org on the service.
+    [InlineData("https://pkgs.dev.azure.com/contoso/public/_packaging/dotnet-public-npm/npm/registry/ms/-/ms-2.1.3.tgz", false)]
     // Userinfo trick: everything before '@' is credentials, so the real host is evil.example.com.
     [InlineData("https://pkgs.dev.azure.com@evil.example.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/ms/-/ms-2.1.3.tgz", false)]
     // Suffix host spoof.
