@@ -195,11 +195,39 @@ export interface AspireResourceDebugSession {
     stopSession(): Thenable<void>;
 }
 
+/**
+ * Identifies which component owns emitting the terminal `sessionTerminated` notification
+ * for a resource run, and carries everything that owner needs.
+ *
+ * This is a discriminated union rather than a set of independent optional flags so that
+ * ownership is a single value that is read once. With separate booleans every consumer had
+ * to re-derive "does this run report its own termination, and to which DCP id?", and a
+ * consumer that forgot part of the derivation silently produced a duplicated or missing
+ * `sessionTerminated`.
+ *
+ * - `debugAdapterExit` — the debug adapter's exit is the lifetime signal. `adapterTracker`
+ *   emits `sessionTerminated` from `onExit` with the observed debuggee exit code. This is
+ *   the default for every resource type whose debuggee is a process.
+ * - `debugSessionEnd` — the VS Code debug session ending is the lifetime signal, and
+ *   `AspireDebugSession` emits `sessionTerminated` addressed to `dcpId`. Used by browser
+ *   (js-debug) runs, which have no reliable DAP adapter-exit signal: js-debug keeps the
+ *   adapter alive across page navigations and tears down child target sessions
+ *   independently of the root session.
+ */
+export type SessionTerminationStrategy =
+    | { kind: 'debugAdapterExit' }
+    | { kind: 'debugSessionEnd'; dcpId: string };
+
 export interface AspireResourceExtendedDebugConfiguration extends vscode.DebugConfiguration {
     runId: string;
     debugSessionId: string | null;
-    sessionTerminatedDcpId?: string;
-    sendSessionTerminatedOnDebugSessionEnd?: boolean;
+    /**
+     * Who reports this run's termination. Absent means {@link SessionTerminationStrategy}
+     * `debugAdapterExit`; use `getSessionTerminationStrategy` in
+     * `debugger/resourceSessionTermination.ts` rather than reading this field directly, so
+     * the default and validation stay in one place.
+     */
+    sessionTermination?: SessionTerminationStrategy;
     projectFile?: string;
     isApphost?: boolean;
 }

@@ -1,5 +1,5 @@
 import path from "path";
-import { ExecutableLaunchConfiguration, EnvVar, LaunchOptions, AspireResourceExtendedDebugConfiguration, AspireExtendedDebugConfiguration, AspireResourceDebugSession } from "../dcp/types";
+import { ExecutableLaunchConfiguration, EnvVar, LaunchOptions, AspireResourceExtendedDebugConfiguration, AspireExtendedDebugConfiguration, AspireResourceDebugSession, DebugLaunchSettings } from "../dcp/types";
 import { debugProject, runProject } from "../loc/strings";
 import { getEnvironmentWithoutE2EBridgeVariables, mergeEnvs } from "../utils/environment";
 import { extensionLogOutputChannel } from "../utils/logging";
@@ -68,12 +68,12 @@ export async function prepareDebugSession(debugSessionConfig: AspireExtendedDebu
     if (debugSessionConfig.debuggers) {
         // 1. Check if this is the apphost
         if (launchOptions.isApphost && debugSessionConfig.debuggers['apphost']) {
-            Object.assign(configuration, debugSessionConfig.debuggers['apphost']);
+            applyUserDebuggerSettings(configuration, debugSessionConfig.debuggers['apphost']);
         }
 
         // 2. Check for resource type specific debugger settings
         if (debugSessionConfig.debuggers[launchConfig.type]) {
-            Object.assign(configuration, debugSessionConfig.debuggers[launchConfig.type]);
+            applyUserDebuggerSettings(configuration, debugSessionConfig.debuggers[launchConfig.type]);
         }
     }
 
@@ -87,6 +87,44 @@ export async function prepareDebugSession(debugSessionConfig: AspireExtendedDebu
         debugConfiguration: configuration,
         alreadyStartedSession
     };
+}
+
+/**
+ * Fields on the resource debug configuration that Aspire owns and that the workspace
+ * `debuggers` setting must never override.
+ *
+ * These are not user-facing knobs. They correlate the VS Code session with the DCP run
+ * (`runId`, `debugSessionId`), decide who reports the run's termination (`sessionTermination`),
+ * and select AppHost-specific behavior (`isApphost`). Letting a workspace-controlled setting
+ * rewrite them is a safety problem and not just a confusing override: `runId` is used to derive
+ * an on-disk scratch directory that is later deleted recursively (`getBrowserUserDataDir` in
+ * `languages/browser.ts`), so a workspace-supplied `runId` could aim that delete outside the
+ * directory Aspire owns. `browser.ts` re-validates containment independently, but the override
+ * is blocked here too so a future consumer of `runId` does not inherit the same hazard.
+ */
+const internalDebugConfigurationFieldNames: readonly string[] = [
+    'runId',
+    'debugSessionId',
+    'sessionTermination',
+    'isApphost'
+];
+
+const internalDebugConfigurationFields: ReadonlySet<string> = new Set<string>(internalDebugConfigurationFieldNames);
+
+/**
+ * Merges a workspace `debuggers.<key>` block into the generated debug configuration, skipping the
+ * fields Aspire owns. `DebugLaunchSettings` declares only user-facing properties, but the value
+ * comes from unvalidated `launch.json`/settings JSON, so unknown keys reach this code at runtime.
+ */
+function applyUserDebuggerSettings(configuration: AspireResourceExtendedDebugConfiguration, settings: DebugLaunchSettings): void {
+    for (const [key, value] of Object.entries(settings)) {
+        if (internalDebugConfigurationFields.has(key)) {
+            extensionLogOutputChannel.warn(`Ignoring '${key}' from the 'debuggers' debug configuration because it is managed by Aspire.`);
+            continue;
+        }
+
+        (configuration as Record<string, unknown>)[key] = value;
+    }
 }
 
 export function getResourceDebuggerExtensions(): ResourceDebuggerExtension[] {

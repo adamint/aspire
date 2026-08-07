@@ -4,6 +4,7 @@ import { extensionLogOutputChannel } from "../utils/logging";
 import AspireDcpServer from '../dcp/AspireDcpServer';
 import { removeTrailingNewline } from '../utils/strings';
 import { dcpServerNotInitialized } from '../loc/strings';
+import { getSessionTerminationStrategy } from './resourceSessionTermination';
 
 /**
  * Callback invoked when a restart is requested on an app host debug session.
@@ -100,9 +101,10 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
                     }
                 },
                 onExit(code: number | undefined) {
-                    // Browser debug sessions send `sessionTerminated` from the debug-session-end
-                    // handler instead, so returning here avoids sending the notification twice.
-                    if (configuration.sendSessionTerminatedOnDebugSessionEnd) {
+                    // Runs whose termination is owned by the debug-session-end handler in
+                    // AspireDebugSession (browser/js-debug) must not also report an adapter exit,
+                    // or DCP would observe the run terminate twice.
+                    if (getSessionTerminationStrategy(configuration).kind !== 'debugAdapterExit') {
                         return;
                     }
 

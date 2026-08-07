@@ -12,6 +12,7 @@ import { AnsiColors } from "../utils/AspireTerminalProvider";
 import { applyTextStyle } from "../utils/strings";
 import { nodeDebuggerExtension } from "./languages/node";
 import { cleanupRun } from "./runCleanupRegistry";
+import { getSessionTerminationStrategy, ResourceSessionTermination } from "./resourceSessionTermination";
 import { runWithRunStartWrappers } from "./runStartRegistry";
 import AspireRpcServer from "../server/AspireRpcServer";
 import { AlreadyStartedResourceDebugSession, createDebugSessionConfiguration } from "./debuggerExtensions";
@@ -661,89 +662,44 @@ export class AspireDebugSession implements vscode.DebugAdapter {
         if (session.configuration.runId === debugConfig.runId) {
           extensionLogOutputChannel.info(`Debug session started: ${session.name} (run id: ${session.configuration.runId})`);
           disposable.dispose();
-          const dcpIdForSessionTermination = debugConfig.sendSessionTerminatedOnDebugSessionEnd
-            ? debugConfig.sessionTerminatedDcpId ?? debugConfig.debugSessionId
-            : undefined;
-          let terminationDisposable: vscode.Disposable | undefined;
-          let finishedSession = false;
-          const finishSession = () => {
-            if (finishedSession) {
-              return;
-            }
-
-            finishedSession = true;
-            terminationDisposable?.dispose();
-            terminationDisposable = undefined;
-            if (dcpIdForSessionTermination) {
-              this.sendSessionTerminated(debugConfig.runId, dcpIdForSessionTermination);
-            }
-            cleanupRun(debugConfig.runId);
-          };
-          const stopDebugSession = async () => {
-            const stopDebuggingTask = vscode.debug.stopDebugging(session);
-            if (dcpIdForSessionTermination) {
-              try {
-                await stopDebuggingTask;
-              }
-              catch (error) {
-                extensionLogOutputChannel.warn(`Failed to stop debug session '${session.name}': ${error instanceof Error ? error.message : String(error)}`);
-              }
-
-              finishSession();
-            }
-            else {
-              void stopDebuggingTask.then(undefined, error => {
-                extensionLogOutputChannel.warn(`Failed to stop debug session '${session.name}': ${error instanceof Error ? error.message : String(error)}`);
-              });
-              finishSession();
-            }
-          };
+          const termination = new ResourceSessionTermination(
+            session,
+            debugConfig.runId,
+            getSessionTerminationStrategy(debugConfig),
+            (runId, dcpId) => this.sendSessionTerminated(runId, dcpId));
 
           if (this._disposed) {
             extensionLogOutputChannel.info(`Stopping debug session that started after Aspire session disposal: ${session.name} (run id: ${session.configuration.runId})`);
             resolved = true;
-            void stopDebugSession().then(() => resolve(undefined));
+            // Resolve once the stop has settled either way: a failed stop still finished the run
+            // (see ResourceSessionTermination.stopCore), and leaving this promise pending would
+            // stall startAndGetDebugSession until its 10s safety timeout.
+            void termination.stop().then(
+              () => resolve(undefined),
+              () => resolve(undefined));
             return;
           }
 
-          let stopSessionPromise: Thenable<void> | undefined;
-          const disposalFunction = () => {
-            if (stopSessionPromise) {
-              return stopSessionPromise;
-            }
-
+          const stopSession = () => {
             extensionLogOutputChannel.info(`Stopping debug session: ${session.name} (run id: ${session.configuration.runId})`);
-            // stopDebugSession() owns the full teardown: it stops the VS Code session, emits
-            // `sessionTerminated` to DCP when this run owns the DCP session, and runs the resource-type
-            // cleanup (e.g. func host for Azure Functions) through finishSession(). Memoize the promise
-            // so repeated disposal is idempotent and callers can await the stop.
-            stopSessionPromise = stopDebugSession();
 
-            return stopSessionPromise;
+            return termination.stop();
           };
 
           const vsCodeDebugSession: AspireResourceDebugSession = {
             id: session.id,
             session: session,
-            stopSession: disposalFunction
+            stopSession
           };
 
-          if (dcpIdForSessionTermination) {
-            terminationDisposable = vscode.debug.onDidTerminateDebugSession(terminatedSession => {
-              // js-debug can terminate target/page child sessions while the browser
-              // debug session is still alive, so only the root session is the DCP
-              // lifetime signal.
-              if (terminatedSession.id !== session.id) {
-                return;
-              }
-
-              finishSession();
-            });
-          }
+          termination.watchForDebugSessionEnd();
 
           this._resourceDebugSessions.push(vsCodeDebugSession);
           this._disposables.push({
-            dispose: disposalFunction
+            // Disposal has no caller to surface a stop failure to, so it must not hand back a
+            // rejected promise. It shares the memoized stop with stopSession(), so an in-flight
+            // DCP-requested stop is joined rather than duplicated.
+            dispose: () => termination.stopAndLogFailure()
           });
 
           resolved = true;

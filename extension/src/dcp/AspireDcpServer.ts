@@ -463,7 +463,12 @@ export default class AspireDcpServer {
                 if (runsBySession.has(runId)) {
                     const baseDebugSessions = runsBySession.get(runId);
                     for (const debugSession of baseDebugSessions || []) {
-                        debugSession.stopSession();
+                        // The DELETE response is not gated on the stop completing, but the stop can
+                        // now reject (AspireResourceDebugSession.stopSession surfaces VS Code stop
+                        // failures), so attach a handler to keep the rejection from going unhandled.
+                        void Promise.resolve(debugSession.stopSession()).catch(error => {
+                            extensionLogOutputChannel.warn(`Failed to stop debug session for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+                        });
                     }
 
                     runsBySession.delete(runId);

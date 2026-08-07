@@ -425,7 +425,7 @@ suite('Debug Adapter Tracker Tests', () => {
     });
 
     test('service logs stay enabled when session termination is handled by VS Code debug session end', async () => {
-        (debugSession.configuration as AspireResourceExtendedDebugConfiguration).sendSessionTerminatedOnDebugSessionEnd = true;
+        (debugSession.configuration as AspireResourceExtendedDebugConfiguration).sessionTermination = { kind: 'debugSessionEnd', dcpId: 'debug-456' };
         const disposable = createDebugAdapterTracker(dcpServer as any, 'pwa-msedge');
         const factory = registerFactoryStub.lastCall.args[1];
         const tracker = factory.createDebugAdapterTracker(debugSession);
@@ -446,6 +446,25 @@ suite('Debug Adapter Tracker Tests', () => {
         assert.strictEqual(notification.session_id, 'run-123');
         assert.strictEqual(notification.dcp_id, 'debug-456');
         assert.strictEqual(notification.log_message, 'browser log');
+
+        disposable.dispose();
+    });
+
+    test('reports the adapter exit when the session termination strategy is malformed', async () => {
+        // `configuration` round-trips through VS Code as untyped JSON, so a partially-formed strategy
+        // has to fall back to the debug-adapter-exit behavior every process-backed resource relies on.
+        // Silently treating it as "someone else reports this" would leave the run alive forever in DCP.
+        (debugSession.configuration as AspireResourceExtendedDebugConfiguration).sessionTermination = { kind: 'debugSessionEnd' } as never;
+        const disposable = createDebugAdapterTracker(dcpServer as any, 'pwa-msedge');
+        const factory = registerFactoryStub.lastCall.args[1];
+        const tracker = factory.createDebugAdapterTracker(debugSession);
+
+        tracker.onExit(0);
+
+        const notification = findSessionTerminated(dcpServer);
+        assert.strictEqual(notification.session_id, 'run-123');
+        assert.strictEqual(notification.dcp_id, 'debug-456');
+        assert.strictEqual(notification.exit_code, 0);
 
         disposable.dispose();
     });
