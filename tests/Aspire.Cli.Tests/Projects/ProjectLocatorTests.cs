@@ -211,12 +211,25 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
         // Keep the AppHost out of any config's tree so the upward search finds nothing and the
         // working-directory config becomes the one the preservation check reads. That fallback is
         // the only place this method resolves a config the canonical readers never validated.
+        //
+        // CreateForCli plants .aspire/settings.json at the workspace root specifically to stop
+        // FindNearestConfigFilePath from walking out to the real user profile, so removing it also
+        // removes that barrier. The walk is unbounded (it stops only at the volume root), and on
+        // Windows the temp directory lives under the user profile, so an ancestor aspire.config.json
+        // or .aspire/settings.json can be picked up. That would not fail the assertions below -- it
+        // would quietly stop covering the fallback and could migrate or write a config in the user's
+        // home directory. Skip instead of running outside the sandbox.
         Directory.Delete(Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire"), recursive: true);
 
         var isolatedRoot = workspace.WorkspaceRoot.CreateSubdirectory("isolated");
         var appHostDirectory = isolatedRoot.CreateSubdirectory("SecondAppHost");
         var appHostProjectFile = new FileInfo(Path.Combine(appHostDirectory.FullName, "SecondAppHost.csproj"));
         await File.WriteAllTextAsync(appHostProjectFile.FullName, "Not a real apphost");
+
+        if (ConfigurationHelper.FindNearestConfigFilePath(appHostDirectory) is { } escapedConfigPath)
+        {
+            Assert.Skip($"An Aspire config outside the test workspace is reachable from '{appHostDirectory.FullName}': '{escapedConfigPath}'.");
+        }
 
         var workingDirectory = workspace.WorkspaceRoot.CreateSubdirectory("workspace");
 
