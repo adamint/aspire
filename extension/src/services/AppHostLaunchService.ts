@@ -206,7 +206,17 @@ export class AppHostLaunchService implements vscode.Disposable {
     }
 
     isLaunching(appHostPath: string): boolean {
-        return this._launchingPaths.has(getComparisonKey(path.resolve(appHostPath)));
+        const resolvedAppHostPath = path.resolve(appHostPath);
+        const exactKey = getComparisonKey(path.normalize(resolvedAppHostPath));
+        if (this._launchingPaths.has(exactKey)) {
+            return true;
+        }
+
+        // The editor can discover a C# AppHost by its project while an agent addresses
+        // the same AppHost by Program.cs/AppHost.cs (or vice versa). Keep the launching
+        // guard active across that identity boundary after the shared launch lock releases.
+        return Array.from(this._launchingPaths).some(launchingPath =>
+            isMatchingAppHostPath(launchingPath, resolvedAppHostPath));
     }
 
     /**

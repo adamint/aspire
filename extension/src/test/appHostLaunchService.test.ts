@@ -154,6 +154,12 @@ suite('AppHostLaunchService', () => {
         assert.strictEqual(service.isLaunching('/repo/AppHost/AppHost.csproj'), false);
     });
 
+    test('isLaunching matches project paths to AppHost source files in the same directory', async () => {
+        await service.launch('/repo/AppHost/Program.cs', 'run', true);
+
+        assert.strictEqual(service.isLaunching('/repo/AppHost/AppHost.csproj'), true);
+    });
+
     test('clearMatchingLaunching does not clear unrelated paths in the same directory', async () => {
         await service.launch('/repo/AppHost/First.csproj', 'run', true);
         await service.launch('/repo/AppHost/Second.csproj', 'run', true);
