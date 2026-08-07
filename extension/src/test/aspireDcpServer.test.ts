@@ -168,18 +168,29 @@ suite('Aspire DCP server', () => {
         assert.strictEqual(getInternals(harness.dcpServer).pendingNotificationsByRoutingKey.has(harness.dcpSessionId), false);
     });
 
-    test('a replacement WebSocket for the same debug session supersedes the previous socket', async () => {
+    test('a replacement WebSocket for the same debug session supersedes the previous socket and closes it', async () => {
         const firstClient = await openNotificationClient(harness);
         const firstServerSocket = getInternals(harness.dcpServer).wsByRoutingKey.get(harness.dcpSessionId);
         assert.ok(firstServerSocket);
+        assert.strictEqual(firstClient.socket.readyState, WebSocket.OPEN);
 
-        // A reconnecting DCP instance uses a new instance ID suffix but the same debug
-        // session, so it takes over that session's delivery slot.
+        // A second authenticated socket shares the debug-session prefix but reports a different
+        // DCP instance ID, which is what a reconnecting or restarted DCP instance looks like. It
+        // wins the delivery slot, and the displaced owner has to be told: leaving it open would
+        // redirect every later log and terminal notification to the new socket while the old
+        // client sat there believing it was still subscribed.
+        const displacedClosed = once(firstClient.socket, 'close') as Promise<[number, Buffer]>;
         const replacementClient = await openNotificationClient(harness, `${harness.dcpSessionId}-replacement`);
         const replacementServerSocket = getInternals(harness.dcpServer).wsByRoutingKey.get(harness.dcpSessionId);
         assert.ok(replacementServerSocket);
         assert.notStrictEqual(replacementServerSocket, firstServerSocket);
 
+        const [closeCode, closeReason] = await displacedClosed;
+        assert.strictEqual(closeCode, 4001);
+        assert.strictEqual(closeReason.toString(), 'Superseded by a newer DCP notification connection');
+        assert.strictEqual(firstClient.socket.readyState, WebSocket.CLOSED);
+
+        // Closing the predecessor must not clear the map entry the replacement just claimed.
         const createResponse = await createRunSession(harness);
         const runLocation = createResponse.headers.location;
         assert.ok(runLocation);
@@ -192,7 +203,6 @@ suite('Aspire DCP server', () => {
             notification_type: 'sessionTerminated',
             session_id: runId,
         });
-        await drainNotifications(firstClient);
         assert.deepStrictEqual(firstClient.notifications, []);
     });
 

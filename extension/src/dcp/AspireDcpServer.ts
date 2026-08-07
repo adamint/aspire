@@ -44,6 +44,14 @@ type DebugSessionAggregateStats = {
     anyNonZeroExit: boolean;
 };
 
+/**
+ * Close code sent to a `/run_session/notify` socket that a newer connection for the same
+ * debug session has replaced. 4000-4999 is the range RFC 6455 reserves for private
+ * application use, so it cannot collide with a protocol-defined code.
+ * See https://datatracker.ietf.org/doc/html/rfc6455#section-7.4.2.
+ */
+const supersededNotificationSocketCloseCode = 4001;
+
 interface AspireDcpServerParts {
     app: express.Express;
     dashboardTelemetry: DashboardTelemetryPassthrough;
@@ -586,10 +594,11 @@ export default class AspireDcpServer {
                     //     processes) and `sessionTerminated` notifications
                     //     by guessing or predicting a `dcpId`.
                     //   - Hijack notification delivery for an active debug
-                    //     session — `wsByRoutingKey.set(...)` below replaces
-                    //     any existing entry, so a second connection for the
-                    //     same debug session silently steals all future
-                    //     notifications from the legitimate DCP client.
+                    //     session — the newest socket for a debug session owns
+                    //     delivery, so a second connection takes over the stream
+                    //     from the legitimate DCP client. The displaced socket is
+                    //     closed rather than starved (see below), but the takeover
+                    //     itself is only prevented by requiring these headers.
                     const authHeader = request.headers['authorization'] as string | undefined;
                     const dcpId = request.headers['microsoft-developer-dcp-instance-id'] as string | undefined;
                     if (!dcpId) {
@@ -605,12 +614,28 @@ export default class AspireDcpServer {
                     }
                     wss.handleUpgrade(request, socket, head, (ws) => {
                         // Route on the debug-session prefix so a reconnecting or replaced DCP
-                        // instance inherits the same queue. The latest socket for a debug session
-                        // wins; the superseded socket is left to close on its own, which is what
-                        // DCP does when it rotates instances.
+                        // instance inherits the same queue instead of stranding it under an
+                        // instance ID that never comes back.
                         const routingKey = getSessionRoutingKey(dcpId);
                         extensionLogOutputChannel.info(`WebSocket connection established for DCP ID: ${dcpId} (routing key: ${routingKey})`);
+
+                        // A debug session has exactly one notification subscriber: the spec assigns
+                        // /run_session/notify to DCP (docs/specs/IDE-execution.md
+                        // #subscribe-to-session-change-notifications-request). The newest socket wins so
+                        // a restarted DCP instance is never locked out by a half-open predecessor,
+                        // but the displaced socket is closed here rather than left open. Leaving it
+                        // open would silently redirect its log and terminal notification stream with
+                        // no signal that it had stopped receiving anything; closing makes the loss of
+                        // ownership positive and observable to whoever was displaced.
+                        //
+                        // Set before closing: the predecessor's onclose handler below only clears the
+                        // map when it is still the registered socket, so the new owner survives.
+                        const supersededWs = wsByRoutingKey.get(routingKey);
                         wsByRoutingKey.set(routingKey, ws);
+                        if (supersededWs && supersededWs !== ws) {
+                            extensionLogOutputChannel.warn(`DCP ID ${dcpId} superseded the notification socket for routing key ${routingKey}; closing the displaced connection.`);
+                            supersededWs.close(supersededNotificationSocketCloseCode, 'Superseded by a newer DCP notification connection');
+                        }
 
                         const pendingNotifications = pendingNotificationsByRoutingKey.get(routingKey);
                         if (pendingNotifications) {
