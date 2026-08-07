@@ -204,6 +204,46 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task UseOrFindAppHostProjectFileFromLaunchConfigurationDoesNotThrowOnHostileRecordedPath()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        // Keep the AppHost out of any config's tree so the upward search finds nothing and the
+        // working-directory config becomes the one the preservation check reads. That fallback is
+        // the only place this method resolves a config the canonical readers never validated.
+        Directory.Delete(Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire"), recursive: true);
+
+        var isolatedRoot = workspace.WorkspaceRoot.CreateSubdirectory("isolated");
+        var appHostDirectory = isolatedRoot.CreateSubdirectory("SecondAppHost");
+        var appHostProjectFile = new FileInfo(Path.Combine(appHostDirectory.FullName, "SecondAppHost.csproj"));
+        await File.WriteAllTextAsync(appHostProjectFile.FullName, "Not a real apphost");
+
+        var workingDirectory = workspace.WorkspaceRoot.CreateSubdirectory("workspace");
+
+        // A NUL byte survives JSON parsing but makes Path.GetFullPath throw
+        // ("Null character in path."), which surfaces as "An unexpected error occurred"
+        // -- see https://github.com/microsoft/aspire/issues/17624. Deciding whether a default
+        // exists must not depend on resolving it.
+        var configPath = Path.Combine(workingDirectory.FullName, AspireConfigFile.FileName);
+        const string originalConfig = """{"appHost":{"path":"First\u0000AppHost.csproj"}}""";
+        await File.WriteAllTextAsync(configPath, originalConfig);
+
+        var executionContext = CreateExecutionContext(workingDirectory);
+        var projectLocator = CreateProjectLocator(
+            executionContext,
+            configuration: CreateSelectionOriginConfiguration("explicit-launch-configuration"));
+
+        var result = await projectLocator.UseOrFindAppHostProjectFileAsync(
+            appHostProjectFile,
+            MultipleAppHostProjectsFoundBehavior.Prompt,
+            createSettingsFile: true,
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal(appHostProjectFile.FullName, result.SelectedProjectFile?.FullName);
+        Assert.Equal(originalConfig, await File.ReadAllTextAsync(configPath));
+    }
+
+    [Fact]
     public async Task UseOrFindAppHostProjectFileFromLaunchConfigurationPreservesRecordedDefaultAuthoredOnWindows()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -253,8 +293,9 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
 
         var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
 
-        // The legacy layout stores appHostPath relative to .aspire/, and only LoadOrCreate knows how
-        // to read and re-base it. A plain aspire.config.json read would see no recorded default here.
+        // A workspace that predates aspire.config.json stores appHostPath relative to .aspire/.
+        // Covers migration and preservation end to end: the legacy default must be re-based into
+        // aspire.config.json and still survive the launch configuration.
         var aspireSettingsDir = new DirectoryInfo(Path.Combine(workspace.WorkspaceRoot.FullName, ".aspire"));
         aspireSettingsDir.Create();
         var aspireSettingsFile = new FileInfo(Path.Combine(aspireSettingsDir.FullName, "settings.json"));

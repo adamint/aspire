@@ -1160,11 +1160,12 @@ internal sealed class ProjectLocator(
             var configDirForRecordedDefault = recordedConfigDir ?? settingsFile.Directory!.FullName;
             recordedConfig ??= AspireConfigFile.Load(configDirForRecordedDefault);
 
-            if (TryGetRecordedAppHostDefault(recordedConfig, configDirForRecordedDefault) is { } recordedDefault)
+            if (TryGetRecordedAppHostDefault(recordedConfig) is { } recordedDefault)
             {
                 logger.LogDebug(
-                    "Not replacing recorded AppHost default {RecordedAppHost} with {AppHost} because the latter was selected by an explicit launch configuration.",
+                    "Not replacing recorded AppHost default {RecordedAppHost} in {ConfigDirectory} with {AppHost} because the latter was selected by an explicit launch configuration.",
                     recordedDefault,
+                    configDirForRecordedDefault,
                     projectFile.FullName);
                 return;
             }
@@ -1204,25 +1205,33 @@ internal sealed class ProjectLocator(
 
     /// <summary>
     /// Returns the AppHost path <paramref name="recordedConfig"/> already records as the workspace
-    /// default, or <see langword="null"/> when it records none.
+    /// default, exactly as it appears in the config file, or <see langword="null"/> when it records
+    /// none.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// The recorded path is deliberately not resolved. Only its presence decides whether there is a
+    /// user choice to preserve, and resolving it here would mean calling <see cref="Path.GetFullPath(string)"/>
+    /// without the <c>IsValidConfiguredAppHostPath</c> guard the canonical readers apply, which
+    /// throws on NUL bytes and other invalid characters that survive JSON parsing
+    /// (https://github.com/microsoft/aspire/issues/17624).
+    /// </para>
+    /// <para>
     /// A recorded path counts even when the file is missing. The recorded string is the surviving
     /// user choice, and "missing" is indistinguishable from transiently absent -- a branch switch or
-    /// a sparse checkout would otherwise let the next launch permanently re-point the default. Stale
-    /// entries are still healed by every other origin, which is where a deliberate choice comes from.
+    /// a sparse checkout would otherwise let the next launch permanently re-point the default.
+    /// </para>
+    /// <para>
+    /// The cost of that choice is that a default left stale by a rename or move is no longer repaired
+    /// by a launch. Healing requires a selection the user actually made: a CLI invocation from any
+    /// other origin, a selection in the extension UI, or <c>aspire config set</c>. The extension's
+    /// startup prompt does not close the gap, because it only checks that <c>appHost.path</c> is
+    /// present, never that it resolves.
+    /// </para>
     /// </remarks>
-    private static string? TryGetRecordedAppHostDefault(AspireConfigFile? recordedConfig, string configDir)
+    private static string? TryGetRecordedAppHostDefault(AspireConfigFile? recordedConfig)
     {
-        if (recordedConfig?.AppHost?.Path is not { Length: > 0 } recordedPath)
-        {
-            return null;
-        }
-
-        // Resolve exactly as GetAppHostProjectFileFromSettingsAsync does, so a config authored on
-        // Windows ("First\\First.csproj") means the same thing to both readers.
-        return PathNormalizer.NormalizePathForCurrentPlatform(
-            Path.IsPathRooted(recordedPath) ? recordedPath : Path.Combine(configDir, recordedPath));
+        return recordedConfig?.AppHost?.Path is { Length: > 0 } recordedPath ? recordedPath : null;
     }
 
     private FileInfo GetOrCreateLocalAspireConfigFile()
