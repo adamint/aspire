@@ -72,6 +72,71 @@ public class AtsContextFilterTests
     }
 
     [Fact]
+    public void FilterForApiExport_IncludesOnlyReferencedHandleCapabilityShape()
+    {
+        var context = CreateContext();
+        var referencedHandleType = Assert.Single(
+            context.HandleTypes,
+            type => type.AtsTypeId == "Aspire.Hosting/Aspire.Hosting.ApplicationModel.ResourceBuilder`1");
+        var supportingCapability = new AtsCapabilityInfo
+        {
+            CapabilityId = "Aspire.Hosting/getResourceName",
+            MethodName = "getResourceName",
+            Parameters =
+            [
+                new AtsParameterInfo
+                {
+                    Name = "unused",
+                    Type = new AtsTypeRef
+                    {
+                        TypeId = "Aspire.TypeSystem/AtsContext",
+                        Category = AtsTypeCategory.Dto
+                    }
+                }
+            ],
+            ReturnType = new AtsTypeRef
+            {
+                TypeId = "Aspire.Hosting/Aspire.Hosting.DistributedApplication",
+                Category = AtsTypeCategory.Handle
+            },
+            TargetTypeId = referencedHandleType.AtsTypeId,
+            TargetType = new AtsTypeRef
+            {
+                TypeId = referencedHandleType.AtsTypeId,
+                ClrType = referencedHandleType.ClrType,
+                Category = AtsTypeCategory.Handle,
+                IsInterface = true
+            },
+            CapabilityKind = AtsCapabilityKind.InstanceMethod
+        };
+        context = new AtsContext
+        {
+            Capabilities = [.. context.Capabilities, supportingCapability],
+            HandleTypes = context.HandleTypes,
+            DtoTypes = context.DtoTypes,
+            EnumTypes = context.EnumTypes,
+            ExportedValues = context.ExportedValues,
+            Diagnostics = context.Diagnostics
+        };
+
+        var filteredContext = AtsContextFilter.FilterForApiExport(
+            context,
+            [typeof(AtsContextFilterTests).Assembly.GetName().Name!]);
+
+        var filteredSupport = Assert.Single(
+            filteredContext.Capabilities,
+            capability => capability.CapabilityId == supportingCapability.CapabilityId);
+        var supportParameter = Assert.Single(filteredSupport.Parameters);
+        Assert.False(supportParameter.IsOptional);
+        Assert.Equal("Aspire.Hosting/Aspire.Hosting.DistributedApplication", supportParameter.Type?.TypeId);
+        Assert.Equal(AtsConstants.Void, filteredSupport.ReturnType.TypeId);
+        Assert.Equal(referencedHandleType.AtsTypeId, filteredSupport.TargetTypeId);
+        Assert.DoesNotContain(
+            filteredContext.Capabilities,
+            capability => capability.CapabilityId == "Aspire.Hosting/createBuilder");
+    }
+
+    [Fact]
     public void FilterByExportingAssemblies_CodeGenerationFilterExpandsOwnedDtoPropertyTypes()
     {
         // An owned DTO is seeded into the included set up front rather than discovered by walking a

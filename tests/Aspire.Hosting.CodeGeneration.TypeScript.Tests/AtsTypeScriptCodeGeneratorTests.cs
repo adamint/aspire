@@ -1128,15 +1128,29 @@ public partial class AtsTypeScriptCodeGeneratorTests
 
     private static AtsContext WithAdditionalCapabilities(AtsContext context, params AtsCapabilityInfo[] capabilities)
     {
-        return new AtsContext
+        var result = new AtsContext
         {
             Capabilities = [.. context.Capabilities, .. capabilities],
             HandleTypes = context.HandleTypes,
             DtoTypes = context.DtoTypes,
             EnumTypes = context.EnumTypes,
             ExportedValues = context.ExportedValues,
-            Diagnostics = context.Diagnostics
+            Diagnostics = context.Diagnostics,
+            CapabilityExportingAssemblyNames = context.CapabilityExportingAssemblyNames
+                .Concat(capabilities.Select(capability =>
+                    new KeyValuePair<string, string>(capability.CapabilityId, TestPackageName)))
+                .ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.Ordinal)
         };
+
+        foreach (var (id, method) in context.Methods)
+        {
+            result.Methods[id] = method;
+        }
+        foreach (var (id, property) in context.Properties)
+        {
+            result.Properties[id] = property;
+        }
+        return result;
     }
 
     private static AtsCapabilityInfo CreateDistributedApplicationBuilderCapability(
@@ -1980,6 +1994,22 @@ public partial class AtsTypeScriptCodeGeneratorTests
                     Documentation = new AtsDocumentationInfo { Summary = "Whether the behavior is enabled." }
                 }),
             CreateCapability(
+                "withOptionalOptionsField",
+                new AtsParameterInfo
+                {
+                    Name = "options",
+                    Type = stringParameter.Type,
+                    IsOptional = true,
+                    Documentation = new AtsDocumentationInfo { Summary = "An optional value stored in the generated options bag." }
+                },
+                new AtsParameterInfo
+                {
+                    Name = "enabled",
+                    Type = boolParameter.Type,
+                    IsOptional = true,
+                    Documentation = new AtsDocumentationInfo { Summary = "Whether the behavior is enabled." }
+                }),
+            CreateCapability(
                 "withDirectOptionsAndCancellation",
                 new AtsParameterInfo
                 {
@@ -2023,6 +2053,16 @@ public partial class AtsTypeScriptCodeGeneratorTests
             parameter => AssertParameter(parameter, "optionsBag", "string", isOptional: false, "Required options bag value."),
             parameter => AssertParameter(parameter, "_optionsBag", "WithOptionsCollisionOptions", isOptional: true));
 
+        var withOptionalOptionsField = Assert.Single(
+            testRedisResource.Members,
+            member => member.Name == "withOptionalOptionsField");
+        Assert.Equal(
+            "withOptionalOptionsField(options?: WithOptionalOptionsFieldOptions): Promise<boolean>",
+            withOptionalOptionsField.Declaration);
+        Assert.Collection(
+            withOptionalOptionsField.Parameters,
+            parameter => AssertParameter(parameter, "options", "WithOptionalOptionsFieldOptions", isOptional: true));
+
         var withDirectOptionsAndCancellation = Assert.Single(
             testRedisResource.Members,
             member => member.Name == "withDirectOptionsAndCancellation");
@@ -2040,7 +2080,13 @@ public partial class AtsTypeScriptCodeGeneratorTests
         var testRedisResourceMembers = generatedInterfaceMembers[nameof(TestRedisResource)];
 
         Assert.Contains(withOptionsCollision.Declaration, testRedisResourceMembers);
+        Assert.Contains(withOptionalOptionsField.Declaration, testRedisResourceMembers);
         Assert.Contains(withDirectOptionsAndCancellation.Declaration, testRedisResourceMembers);
+        Assert.Contains(
+            "async withOptionalOptionsField(optionsBag?: WithOptionalOptionsFieldOptions): Promise<boolean> {",
+            generatedSource);
+        Assert.Contains("const options = optionsBag?.options;", generatedSource);
+        Assert.DoesNotContain("const options = options?.options;", generatedSource);
 
         static void AssertParameter(
             TypeScriptApiParameter parameter,
@@ -2209,6 +2255,115 @@ public partial class AtsTypeScriptCodeGeneratorTests
         Assert.True(checkedDeclarations > 0, "The canonical export produced no method declarations to compare.");
     }
 
+    [Fact]
+    public void ApiExportUsesPromiseWrappersFromReferencedHandleCapabilities()
+    {
+        var fullContext = CreateReferencedHandleContext();
+        var exportContext = AtsContextFilter.FilterForApiExport(
+            fullContext,
+            [TestPackageName]);
+
+        var projector = new TypeScriptApiProjector(exportContext);
+        var model = projector.BuildApiModel(
+            new TypeScriptApiPackageIdentity(TestPackageName, TestPackageVersion),
+            [TestPackageName]);
+
+        var ownedContext = Assert.Single(
+            model.Modules.SelectMany(module => module.Items),
+            item => item.Name == "OwnedContext");
+        var exportedMethod = Assert.Single(
+            ownedContext.Members,
+            member => member.Name == "getForeign");
+
+        var generatedSource = new AtsTypeScriptCodeGenerator()
+            .GenerateDistributedApplication(fullContext)["aspire.mts"];
+        var generatedInterfaceMembers = ParsePublicInterfaceMembers(generatedSource);
+
+        Assert.Contains(exportedMethod.Declaration, generatedInterfaceMembers["OwnedContext"]);
+    }
+
+    [Fact]
+    public void ApiExportUsesResourceWrappersReferencedOnlyBySupportingCapabilities()
+    {
+        var fullContext = CreateReferencedHandleContext();
+        var exportContext = AtsContextFilter.FilterForApiExport(
+            fullContext,
+            [TestPackageName]);
+
+        var projector = new TypeScriptApiProjector(exportContext);
+        var model = projector.BuildApiModel(
+            new TypeScriptApiPackageIdentity(TestPackageName, TestPackageVersion),
+            [TestPackageName]);
+
+        var ownedContext = Assert.Single(
+            model.Modules.SelectMany(module => module.Items),
+            item => item.Name == "OwnedContext");
+        var exportedMethod = Assert.Single(
+            ownedContext.Members,
+            member => member.Name == "waitFor");
+
+        var generatedSource = new AtsTypeScriptCodeGenerator()
+            .GenerateDistributedApplication(fullContext)["aspire.mts"];
+        var generatedInterfaceMembers = ParsePublicInterfaceMembers(generatedSource);
+
+        Assert.Contains(exportedMethod.Declaration, generatedInterfaceMembers["OwnedContext"]);
+    }
+
+    [Fact]
+    public void ApiExportRetainsExpandedTargetsFromSupportingCapabilities()
+    {
+        var fullContext = CreateReferencedHandleContext();
+        var exportContext = AtsContextFilter.FilterForApiExport(
+            fullContext,
+            [TestPackageName]);
+
+        var projector = new TypeScriptApiProjector(exportContext);
+        var model = projector.BuildApiModel(
+            new TypeScriptApiPackageIdentity(TestPackageName, TestPackageVersion),
+            [TestPackageName]);
+
+        var ownedContext = Assert.Single(
+            model.Modules.SelectMany(module => module.Items),
+            item => item.Name == "OwnedContext");
+        var exportedMethod = Assert.Single(
+            ownedContext.Members,
+            member => member.Name == "waitForForeign");
+
+        var generatedSource = new AtsTypeScriptCodeGenerator()
+            .GenerateDistributedApplication(fullContext)["aspire.mts"];
+        var generatedInterfaceMembers = ParsePublicInterfaceMembers(generatedSource);
+
+        Assert.Contains(exportedMethod.Declaration, generatedInterfaceMembers["OwnedContext"]);
+        Assert.Equal(
+            exportContext.Capabilities.Count,
+            exportContext.Capabilities.Select(capability => capability.CapabilityId).Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void ApiExportRetainsAssemblyOwnedMembersOnExternalTypes()
+    {
+        var fullContext = CreateContextFromBothAssemblies();
+        var exportContext = AtsContextFilter.FilterForApiExport(
+            fullContext,
+            ["Aspire.Hosting"]);
+
+        var projector = new TypeScriptApiProjector(exportContext);
+        var model = projector.BuildApiModel(
+            new TypeScriptApiPackageIdentity("Aspire.Hosting", TestPackageVersion),
+            ["Aspire.Hosting"]);
+        var items = model.Modules.SelectMany(module => module.Items).ToList();
+
+        var configurationSection = Assert.Single(items, item => item.Name == "ConfigurationSection");
+        Assert.Contains(configurationSection.Members, member => member.Name == "key");
+        Assert.Contains(configurationSection.Members, member => member.Name == "path");
+        Assert.Contains(configurationSection.Members, member => member.Name == "value");
+
+        var hostEnvironment = Assert.Single(items, item => item.Name == "HostEnvironment");
+        Assert.Contains(hostEnvironment.Members, member => member.Name == "applicationName");
+        Assert.Contains(hostEnvironment.Members, member => member.Name == "environmentName");
+        Assert.Contains(hostEnvironment.Members, member => member.Name == "contentRootPath");
+    }
+
     /// <summary>
     /// DTO interfaces carry properties that have no C# counterpart, such as the client-only
     /// <c>throwOnPendingRejections</c> on <c>CreateBuilderOptions</c>. Those used to be appended by the
@@ -2362,9 +2517,229 @@ public partial class AtsTypeScriptCodeGeneratorTests
     /// </summary>
     private static AtsContext CreateOwnershipFilteredContext()
     {
-        return AtsContextFilter.FilterByExportingAssembliesWithReferences(
+        return AtsContextFilter.FilterForApiExport(
             CreateContextFromBothAssemblies(),
             [TestPackageName]);
+    }
+
+    private static AtsContext CreateReferencedHandleContext()
+    {
+        const string ownedTypeId = TestPackageName + "/IOwnedContext";
+        const string foreignTypeId = "Foreign.Dependency/IForeignHandle";
+        const string resourceTypeId = "Aspire.Hosting/Aspire.Hosting.ApplicationModel.IResource";
+        const string foreignResourceTypeId = "Foreign.Dependency/ForeignResource";
+        const string secondForeignResourceTypeId = "Foreign.Dependency/SecondForeignResource";
+        const string parameterResourceTypeId = "Foreign.Dependency/ParameterResource";
+        const string callbackParameterResourceTypeId = "Foreign.Dependency/CallbackParameterResource";
+        const string callbackReturnResourceTypeId = "Foreign.Dependency/CallbackReturnResource";
+        const string returnResourceTypeId = "Foreign.Dependency/ReturnResource";
+
+        var ownedType = new AtsTypeRef
+        {
+            TypeId = ownedTypeId,
+            Category = AtsTypeCategory.Handle,
+            IsInterface = true
+        };
+        var foreignType = new AtsTypeRef
+        {
+            TypeId = foreignTypeId,
+            Category = AtsTypeCategory.Handle,
+            IsInterface = true
+        };
+        var resourceType = new AtsTypeRef
+        {
+            TypeId = resourceTypeId,
+            Category = AtsTypeCategory.Handle,
+            ClrType = typeof(IResource),
+            IsInterface = true
+        };
+        var foreignResourceType = new AtsTypeRef
+        {
+            TypeId = foreignResourceTypeId,
+            Category = AtsTypeCategory.Handle,
+            ClrType = typeof(TestRedisResource),
+            ImplementedInterfaces = [resourceType, foreignType]
+        };
+        var secondForeignResourceType = CreateResourceType(secondForeignResourceTypeId, resourceType, foreignType);
+        var parameterResourceType = CreateResourceType(parameterResourceTypeId, resourceType);
+        var callbackParameterResourceType = CreateResourceType(callbackParameterResourceTypeId, resourceType);
+        var callbackReturnResourceType = CreateResourceType(callbackReturnResourceTypeId, resourceType);
+        var returnResourceType = CreateResourceType(returnResourceTypeId, resourceType);
+
+        return new AtsContext
+        {
+            Capabilities =
+            [
+                new AtsCapabilityInfo
+                {
+                    CapabilityId = TestPackageName + "/getForeign",
+                    MethodName = "getForeign",
+                    OwningTypeName = "IOwnedContext",
+                    Parameters = [],
+                    ReturnType = foreignType,
+                    TargetTypeId = ownedTypeId,
+                    TargetType = ownedType,
+                    ReturnsBuilder = false,
+                    CapabilityKind = AtsCapabilityKind.InstanceMethod
+                },
+                new AtsCapabilityInfo
+                {
+                    CapabilityId = TestPackageName + "/getConcrete",
+                    MethodName = "getConcrete",
+                    OwningTypeName = "IOwnedContext",
+                    Parameters = [],
+                    ReturnType = foreignResourceType,
+                    TargetTypeId = ownedTypeId,
+                    TargetType = ownedType,
+                    ReturnsBuilder = false,
+                    CapabilityKind = AtsCapabilityKind.InstanceMethod
+                },
+                new AtsCapabilityInfo
+                {
+                    CapabilityId = TestPackageName + "/waitFor",
+                    MethodName = "waitFor",
+                    OwningTypeName = "IOwnedContext",
+                    Parameters =
+                    [
+                        new AtsParameterInfo
+                        {
+                            Name = "dependency",
+                            Type = resourceType
+                        }
+                    ],
+                    ReturnType = new AtsTypeRef
+                    {
+                        TypeId = AtsConstants.Void,
+                        Category = AtsTypeCategory.Primitive
+                    },
+                    TargetTypeId = ownedTypeId,
+                    TargetType = ownedType,
+                    ReturnsBuilder = false,
+                    CapabilityKind = AtsCapabilityKind.InstanceMethod
+                },
+                new AtsCapabilityInfo
+                {
+                    CapabilityId = TestPackageName + "/waitForForeign",
+                    MethodName = "waitForForeign",
+                    OwningTypeName = "IOwnedContext",
+                    Parameters =
+                    [
+                        new AtsParameterInfo
+                        {
+                            Name = "dependency",
+                            Type = foreignType
+                        }
+                    ],
+                    ReturnType = new AtsTypeRef
+                    {
+                        TypeId = AtsConstants.Void,
+                        Category = AtsTypeCategory.Primitive
+                    },
+                    TargetTypeId = ownedTypeId,
+                    TargetType = ownedType,
+                    ReturnsBuilder = false,
+                    CapabilityKind = AtsCapabilityKind.InstanceMethod
+                },
+                new AtsCapabilityInfo
+                {
+                    CapabilityId = "Foreign.Dependency/getName",
+                    MethodName = "getName",
+                    OwningTypeName = "IForeignHandle",
+                    Parameters =
+                    [
+                        new AtsParameterInfo
+                        {
+                            Name = "resource",
+                            Type = parameterResourceType
+                        },
+                        new AtsParameterInfo
+                        {
+                            Name = "configure",
+                            IsCallback = true,
+                            CallbackParameters =
+                            [
+                                new AtsCallbackParameterInfo
+                                {
+                                    Name = "resource",
+                                    Type = callbackParameterResourceType
+                                }
+                            ],
+                            CallbackReturnType = callbackReturnResourceType
+                        }
+                    ],
+                    ReturnType = returnResourceType,
+                    TargetTypeId = foreignTypeId,
+                    TargetType = foreignType,
+                    ExpandedTargetTypes = [foreignResourceType, secondForeignResourceType],
+                    ReturnsBuilder = false,
+                    CapabilityKind = AtsCapabilityKind.InstanceMethod
+                }
+            ],
+            HandleTypes =
+            [
+                new AtsTypeInfo
+                {
+                    AtsTypeId = ownedTypeId,
+                    IsInterface = true
+                },
+                new AtsTypeInfo
+                {
+                    AtsTypeId = foreignTypeId,
+                    IsInterface = true
+                },
+                new AtsTypeInfo
+                {
+                    AtsTypeId = foreignResourceTypeId,
+                    ClrType = typeof(TestRedisResource),
+                    ImplementedInterfaces = [resourceType, foreignType]
+                },
+                new AtsTypeInfo
+                {
+                    AtsTypeId = secondForeignResourceTypeId,
+                    ClrType = typeof(TestRedisResource),
+                    ImplementedInterfaces = [resourceType, foreignType]
+                },
+                new AtsTypeInfo
+                {
+                    AtsTypeId = parameterResourceTypeId,
+                    ClrType = typeof(TestRedisResource),
+                    ImplementedInterfaces = [resourceType]
+                },
+                new AtsTypeInfo
+                {
+                    AtsTypeId = callbackParameterResourceTypeId,
+                    ClrType = typeof(TestRedisResource),
+                    ImplementedInterfaces = [resourceType]
+                },
+                new AtsTypeInfo
+                {
+                    AtsTypeId = callbackReturnResourceTypeId,
+                    ClrType = typeof(TestRedisResource),
+                    ImplementedInterfaces = [resourceType]
+                },
+                new AtsTypeInfo
+                {
+                    AtsTypeId = returnResourceTypeId,
+                    ClrType = typeof(TestRedisResource),
+                    ImplementedInterfaces = [resourceType]
+                }
+            ],
+            DtoTypes = [],
+            EnumTypes = []
+        };
+
+        static AtsTypeRef CreateResourceType(string typeId, AtsTypeRef resourceType, AtsTypeRef? additionalInterface = null)
+        {
+            return new AtsTypeRef
+            {
+                TypeId = typeId,
+                Category = AtsTypeCategory.Handle,
+                ClrType = typeof(TestRedisResource),
+                ImplementedInterfaces = additionalInterface is null
+                    ? [resourceType]
+                    : [resourceType, additionalInterface]
+            };
+        }
     }
 
     /// <summary>

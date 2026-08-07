@@ -33,6 +33,119 @@ internal static class AtsContextFilter
         IReadOnlyCollection<string> assemblyNames)
         => FilterByExportingAssemblies(context, assemblyNames, includeReferencedTypes: true);
 
+    /// <summary>
+    /// Filters an ATS context for API export while retaining enough capability metadata to resolve
+    /// the generated wrapper shape of referenced handle types.
+    /// </summary>
+    /// <remarks>
+    /// A package can return a handle owned by another assembly. The generated SDK still exposes that
+    /// handle through its wrapper when the referenced type has chainable members, so the exporter
+    /// needs to see those member kinds even though it must not republish the members themselves.
+    /// Supporting capabilities retain their target, member kind, and referenced handle types. Their
+    /// callable shape is otherwise removed so foreign API and options interfaces cannot leak into the
+    /// package export while wrapper unions still match full source generation.
+    /// </remarks>
+    /// <param name="context">The ATS context to filter.</param>
+    /// <param name="assemblyNames">The names of the assemblies whose API is being exported.</param>
+    /// <returns>The filtered API export context.</returns>
+    internal static AtsContext FilterForApiExport(
+        AtsContext context,
+        IReadOnlyCollection<string> assemblyNames)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(assemblyNames);
+
+        var filteredContext = FilterByExportingAssemblies(context, assemblyNames, includeReferencedTypes: true);
+        var normalizedAssemblyNames = new HashSet<string>(
+            assemblyNames.Where(static name => !string.IsNullOrWhiteSpace(name)),
+            StringComparer.OrdinalIgnoreCase);
+
+        if (normalizedAssemblyNames.Count == 0)
+        {
+            return filteredContext;
+        }
+
+        var capabilityTargetTypeIds = filteredContext.Capabilities
+            .SelectMany(GetCapabilityTargetTypeIds)
+            .ToHashSet(StringComparer.Ordinal);
+        var supportingHandleTypes = filteredContext.HandleTypes
+            .Where(type =>
+                !capabilityTargetTypeIds.Contains(type.AtsTypeId) &&
+                !IsOwnedBySelectedAssembly(type.ClrType?.Assembly, type.AtsTypeId, normalizedAssemblyNames))
+            .ToDictionary(type => type.AtsTypeId, StringComparer.Ordinal);
+        if (supportingHandleTypes.Count == 0)
+        {
+            return filteredContext;
+        }
+
+        var includedCapabilityIds = filteredContext.Capabilities
+            .Select(capability => capability.CapabilityId)
+            .ToHashSet(StringComparer.Ordinal);
+        var supportingCapabilities = context.Capabilities
+            .Where(capability => !includedCapabilityIds.Contains(capability.CapabilityId))
+            .SelectMany(capability => CreateApiExportSupportCapabilities(capability, supportingHandleTypes))
+            .ToList();
+
+        if (supportingCapabilities.Count == 0)
+        {
+            return filteredContext;
+        }
+
+        var capabilities = filteredContext.Capabilities.Concat(supportingCapabilities).ToList();
+        var apiExportContext = new AtsContext
+        {
+            Capabilities = capabilities,
+            HandleTypes = filteredContext.HandleTypes,
+            DtoTypes = filteredContext.DtoTypes,
+            EnumTypes = filteredContext.EnumTypes,
+            ExportedValues = filteredContext.ExportedValues,
+            Diagnostics = filteredContext.Diagnostics,
+            CapabilityExportingAssemblyNames = capabilities
+                .Where(capability => context.CapabilityExportingAssemblyNames.ContainsKey(capability.CapabilityId))
+                .ToDictionary(
+                    capability => capability.CapabilityId,
+                    capability => context.CapabilityExportingAssemblyNames[capability.CapabilityId],
+                    StringComparer.Ordinal)
+        };
+
+        foreach (var capability in capabilities)
+        {
+            // Instance capability IDs can be namespace-qualified rather than assembly-qualified.
+            // Keep the reflection registries so the exporter attributes each retained capability to
+            // the assembly that actually declares it instead of guessing from the ID prefix.
+            if (context.Methods.TryGetValue(capability.CapabilityId, out var method))
+            {
+                apiExportContext.Methods[capability.CapabilityId] = method;
+            }
+
+            if (context.Properties.TryGetValue(capability.CapabilityId, out var property))
+            {
+                apiExportContext.Properties[capability.CapabilityId] = property;
+            }
+
+        }
+
+        return apiExportContext;
+    }
+
+    private static IEnumerable<string> GetCapabilityTargetTypeIds(AtsCapabilityInfo capability)
+    {
+        if (capability.TargetTypeId is { } targetTypeId)
+        {
+            yield return targetTypeId;
+        }
+
+        if (capability.TargetType is { } targetType)
+        {
+            yield return targetType.TypeId;
+        }
+
+        foreach (var expandedTargetType in capability.ExpandedTargetTypes)
+        {
+            yield return expandedTargetType.TypeId;
+        }
+    }
+
     private static AtsContext FilterByExportingAssemblies(
         AtsContext context,
         IReadOnlyCollection<string> assemblyNames,
@@ -138,7 +251,13 @@ internal static class AtsContextFilter
             ExportedValues = filteredExportedValues,
             Diagnostics = context.Diagnostics
                 .Where(diagnostic => IsDiagnosticOwnedBySelectedAssembly(context, diagnostic, normalizedAssemblyNames, knownAssemblyNames))
-                .ToList()
+                .ToList(),
+            CapabilityExportingAssemblyNames = filteredCapabilities
+                .Where(capability => context.CapabilityExportingAssemblyNames.ContainsKey(capability.CapabilityId))
+                .ToDictionary(
+                    capability => capability.CapabilityId,
+                    capability => context.CapabilityExportingAssemblyNames[capability.CapabilityId],
+                    StringComparer.Ordinal)
         };
 
         foreach (var capability in filteredCapabilities)
@@ -152,9 +271,113 @@ internal static class AtsContextFilter
             {
                 filteredContext.Properties[capability.CapabilityId] = property;
             }
+
         }
 
         return filteredContext;
+    }
+
+    private static IEnumerable<AtsCapabilityInfo> CreateApiExportSupportCapabilities(
+        AtsCapabilityInfo capability,
+        IReadOnlyDictionary<string, AtsTypeInfo> supportingHandleTypes)
+    {
+        if (!GetCapabilityTargetTypeIds(capability).Any(supportingHandleTypes.ContainsKey))
+        {
+            yield break;
+        }
+
+        var targetType = capability.TargetType;
+        if (targetType is null &&
+            capability.TargetTypeId is { } targetTypeId &&
+            supportingHandleTypes.TryGetValue(targetTypeId, out var handleType))
+        {
+            targetType = new AtsTypeRef
+            {
+                TypeId = targetTypeId,
+                ClrType = handleType.ClrType,
+                Category = AtsTypeCategory.Handle,
+                IsInterface = handleType.IsInterface,
+                ImplementedInterfaces = handleType.ImplementedInterfaces
+            };
+        }
+
+        yield return new AtsCapabilityInfo
+        {
+            CapabilityId = capability.CapabilityId,
+            MethodName = capability.MethodName,
+            OwningTypeName = capability.OwningTypeName,
+            // The canonical exporter needs the same handle universe as full source generation.
+            // Preserve foreign handle references as required synthetic parameters so wrapper
+            // unions stay identical without importing the foreign member's options interface.
+            Parameters = CreateApiExportSupportParameters(capability),
+            ReturnType = new AtsTypeRef
+            {
+                TypeId = AtsConstants.Void,
+                Category = AtsTypeCategory.Primitive
+            },
+            TargetTypeId = capability.TargetTypeId,
+            TargetType = targetType,
+            TargetParameterName = capability.TargetParameterName,
+            // Keep the complete expansion. Full source generation applies the member to every
+            // implementer, and those wrappers participate in interface-parameter unions even when
+            // only one implementer was directly referenced by the exporting package.
+            ExpandedTargetTypes = capability.ExpandedTargetTypes,
+            ReturnsBuilder = false,
+            CapabilityKind = capability.CapabilityKind
+        };
+    }
+
+    private static IReadOnlyList<AtsParameterInfo> CreateApiExportSupportParameters(AtsCapabilityInfo capability)
+    {
+        var referencedHandleTypes = new Dictionary<string, AtsTypeRef>(StringComparer.Ordinal);
+
+        CollectHandleTypes(capability.ReturnType);
+        foreach (var parameter in capability.Parameters)
+        {
+            CollectHandleTypes(parameter.Type);
+            if (parameter.CallbackParameters is { } callbackParameters)
+            {
+                foreach (var callbackParameter in callbackParameters)
+                {
+                    CollectHandleTypes(callbackParameter.Type);
+                }
+            }
+
+            CollectHandleTypes(parameter.CallbackReturnType);
+        }
+
+        return referencedHandleTypes
+            .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
+            .Select(static (pair, index) => new AtsParameterInfo
+            {
+                Name = $"__apiExportSupportType{index}",
+                Type = pair.Value
+            })
+            .ToList();
+
+        void CollectHandleTypes(AtsTypeRef? typeRef)
+        {
+            if (typeRef is null)
+            {
+                return;
+            }
+
+            if (typeRef.Category == AtsTypeCategory.Handle && !string.IsNullOrEmpty(typeRef.TypeId))
+            {
+                referencedHandleTypes.TryAdd(typeRef.TypeId, typeRef);
+            }
+
+            CollectHandleTypes(typeRef.ElementType);
+            CollectHandleTypes(typeRef.KeyType);
+            CollectHandleTypes(typeRef.ValueType);
+            if (typeRef.UnionTypes is { } unionTypes)
+            {
+                foreach (var unionType in unionTypes)
+                {
+                    CollectHandleTypes(unionType);
+                }
+            }
+        }
     }
 
     private static void CollectReferencedType(
@@ -251,6 +474,11 @@ internal static class AtsContextFilter
         AtsCapabilityInfo capability,
         HashSet<string> assemblyNames)
     {
+        if (context.CapabilityExportingAssemblyNames.TryGetValue(capability.CapabilityId, out var exportingAssemblyName))
+        {
+            return assemblyNames.Contains(exportingAssemblyName);
+        }
+
         if (context.Methods.TryGetValue(capability.CapabilityId, out var method))
         {
             return IsSelectedAssembly(method.DeclaringType?.Assembly, assemblyNames);

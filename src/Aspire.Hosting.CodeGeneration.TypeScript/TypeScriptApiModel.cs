@@ -228,14 +228,17 @@ internal sealed record TypeScriptApiMethodSignature
     /// <summary>Gets the generated method name.</summary>
     public required string MethodName { get; init; }
 
-    /// <summary>Gets the rendered public parameter list, without the surrounding parentheses.</summary>
-    public required string ParameterList { get; init; }
-
     /// <summary>Gets the final TypeScript return type text.</summary>
     public required string ReturnType { get; init; }
 
     /// <summary>Gets the parameters exactly as they appear in the public TypeScript signature.</summary>
     public required IReadOnlyList<TypeScriptApiParameter> Parameters { get; init; }
+
+    /// <summary>Gets the rendered public parameter list, without the surrounding parentheses.</summary>
+    public string ParameterList => string.Join(
+        ", ",
+        Parameters.Select(parameter =>
+            $"{parameter.Name}{(parameter.IsOptional ? "?" : string.Empty)}: {parameter.DeclaredType}"));
 
     /// <summary>Gets the required parameters, in declaration order.</summary>
     public required IReadOnlyList<AtsParameterInfo> RequiredParameters { get; init; }

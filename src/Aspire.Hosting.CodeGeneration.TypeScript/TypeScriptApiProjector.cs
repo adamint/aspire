@@ -295,15 +295,9 @@ internal sealed partial class TypeScriptApiProjector
             publicParameters.Add(publicCancellationToken);
         }
 
-        var parameterList = string.Join(
-            ", ",
-            publicParameters.Select(parameter =>
-                $"{parameter.Name}{(parameter.IsOptional ? "?" : string.Empty)}: {parameter.DeclaredType}"));
-
         return new TypeScriptApiMethodSignature
         {
             MethodName = isTypeClass ? ResolveTypeClassMethodName(capability) : capability.MethodName,
-            ParameterList = parameterList,
             ReturnType = isTypeClass
                 ? ResolveTypeClassReturnType(builder!, capability)
                 : ResolveBuilderReturnType(builder, capability),
@@ -597,9 +591,12 @@ internal sealed partial class TypeScriptApiProjector
             ? builderModel.BuilderClassName
             : DeriveClassName(builderModel.TypeId));
         var members = new List<TypeScriptApiMember>();
+        var exportedCapabilities = builderModel.Capabilities
+            .Where(capability => ownedAssemblyNames.Contains(GetCapabilityOwningAssemblyName(capability)))
+            .ToList();
 
-        var getters = builderModel.Capabilities.Where(c => c.CapabilityKind == AtsCapabilityKind.PropertyGetter).ToList();
-        var setters = builderModel.Capabilities.Where(c => c.CapabilityKind == AtsCapabilityKind.PropertySetter).ToList();
+        var getters = exportedCapabilities.Where(c => c.CapabilityKind == AtsCapabilityKind.PropertyGetter).ToList();
+        var setters = exportedCapabilities.Where(c => c.CapabilityKind == AtsCapabilityKind.PropertySetter).ToList();
 
         foreach (var property in GroupPropertiesByName(getters, setters))
         {
@@ -610,10 +607,10 @@ internal sealed partial class TypeScriptApiProjector
         // non-property capability. Mirroring that split keeps the export aligned with the interfaces
         // the generator actually writes.
         var methods = isResourceBuilder
-            ? builderModel.Capabilities.Where(c =>
+            ? exportedCapabilities.Where(c =>
                 c.CapabilityKind != AtsCapabilityKind.PropertyGetter &&
                 c.CapabilityKind != AtsCapabilityKind.PropertySetter)
-            : builderModel.Capabilities.Where(c =>
+            : exportedCapabilities.Where(c =>
                 c.CapabilityKind is AtsCapabilityKind.InstanceMethod or AtsCapabilityKind.Method);
 
         foreach (var capability in methods)
@@ -673,11 +670,7 @@ internal sealed partial class TypeScriptApiProjector
             });
         }
 
-        var contributedMembers = members
-            .Where(member => member.OwningAssemblyName is { } memberOwner && ownedAssemblyNames.Contains(memberOwner))
-            .ToList();
-
-        if (contributedMembers.Count == 0)
+        if (members.Count == 0)
         {
             return (null, declarations);
         }
@@ -685,7 +678,7 @@ internal sealed partial class TypeScriptApiProjector
         declarations.Add(new TypeScriptApiDeclaration
         {
             Id = $"{package.Name}:augment:{interfaceName}",
-            Content = BuildInterfaceBody(interfaceName, [], contributedMembers, includeToJson: false),
+            Content = BuildInterfaceBody(interfaceName, [], members, includeToJson: false),
             OwningAssemblyName = package.Name
         });
 
@@ -694,7 +687,7 @@ internal sealed partial class TypeScriptApiProjector
             declarations.Add(new TypeScriptApiDeclaration
             {
                 Id = $"{package.Name}:augment:{promiseInterfaceName}",
-                Content = BuildInterfaceBody(promiseInterfaceName, [], contributedMembers, includeToJson: false),
+                Content = BuildInterfaceBody(promiseInterfaceName, [], members, includeToJson: false),
                 OwningAssemblyName = package.Name
             });
         }
@@ -704,7 +697,7 @@ internal sealed partial class TypeScriptApiProjector
         // manifest and claim the type belongs to whichever package happened to extend it. The
         // contributing package is part of the ID because every integration that extends
         // DistributedApplicationBuilder produces an augmentation for the same interface name.
-        return (BuildInterfaceItem(builderModel, $"augmentation:{package.Name}:{interfaceName}", interfaceName, extends, typeOwner, documentation, contributedMembers, TypeScriptApiItemKind.Augmentation), declarations);
+        return (BuildInterfaceItem(builderModel, $"augmentation:{package.Name}:{interfaceName}", interfaceName, extends, typeOwner, documentation, members, TypeScriptApiItemKind.Augmentation), declarations);
     }
 
     private static TypeScriptApiItem BuildInterfaceItem(
@@ -1072,6 +1065,11 @@ internal sealed partial class TypeScriptApiProjector
     /// </remarks>
     private string GetCapabilityOwningAssemblyName(AtsCapabilityInfo capability)
     {
+        if (_resolved.Context.CapabilityExportingAssemblyNames.TryGetValue(capability.CapabilityId, out var exportingAssemblyName))
+        {
+            return exportingAssemblyName;
+        }
+
         if (_resolved.Context.Methods.TryGetValue(capability.CapabilityId, out var method))
         {
             return method.DeclaringType?.Assembly.GetName().Name ?? string.Empty;
@@ -1831,6 +1829,40 @@ internal sealed partial class TypeScriptApiProjector
             return "options";
         }
 
+        var (requiredParams, optionalParams) = SeparateParameters(userParams);
+        var trailingCancellationToken = GetTrailingCancellationTokenParameter(optionalParams);
+
+        bool IsPublicParameterName(string name)
+            => requiredParams.Any(p => string.Equals(p.Name, name, StringComparison.Ordinal))
+                || string.Equals(trailingCancellationToken?.Name, name, StringComparison.Ordinal);
+
+        if (!IsPublicParameterName("options"))
+        {
+            return "options";
+        }
+
+        var candidate = "optionsBag";
+        while (IsPublicParameterName(candidate))
+        {
+            candidate = $"_{candidate}";
+        }
+
+        return candidate;
+    }
+
+    internal static string GetImplementationOptionsParameterName(
+        IReadOnlyList<AtsParameterInfo> userParams,
+        bool hasOptionals,
+        bool hasDirectOptionsParameter)
+    {
+        if (!hasOptionals || hasDirectOptionsParameter)
+        {
+            return "options";
+        }
+
+        // Implementation methods destructure every optional field into a local with its source
+        // parameter name. Unlike the public interface, their options-bag parameter must therefore
+        // avoid optional names too (for example: const options = optionsBag?.options).
         if (!userParams.Any(p => string.Equals(p.Name, "options", StringComparison.Ordinal)))
         {
             return "options";

@@ -57,6 +57,11 @@ public static class AtsCapabilityScanner
         public Dictionary<string, PropertyInfo> Properties { get; init; } = new();
 
         /// <summary>
+        /// Runtime registry mapping capability IDs to the assemblies that exported them.
+        /// </summary>
+        internal Dictionary<string, string> CapabilityExportingAssemblyNames { get; init; } = new();
+
+        /// <summary>
         /// Converts the scan result to an AtsContext for code generation.
         /// </summary>
         public AtsContext ToAtsContext()
@@ -68,7 +73,8 @@ public static class AtsCapabilityScanner
                 DtoTypes = DtoTypes,
                 EnumTypes = EnumTypes,
                 ExportedValues = ExportedValues,
-                Diagnostics = Diagnostics
+                Diagnostics = Diagnostics,
+                CapabilityExportingAssemblyNames = CapabilityExportingAssemblyNames
             };
 
             // Copy runtime registries
@@ -80,7 +86,6 @@ public static class AtsCapabilityScanner
             {
                 context.Properties[id] = property;
             }
-
             return context;
         }
     }
@@ -146,6 +151,7 @@ public static class AtsCapabilityScanner
         var allDiagnostics = new List<AtsDiagnostic>();
         var allMethods = new Dictionary<string, MethodInfo>();
         var allProperties = new Dictionary<string, PropertyInfo>();
+        var allCapabilityExportingAssemblyNames = new Dictionary<string, string>();
         var seenCapabilities = new Dictionary<string, AtsCapabilityInfo>(); // Track capability ID -> first capability for duplicate detection
         var seenTypeIds = new HashSet<string>();
         var seenDtoTypeIds = new HashSet<string>();
@@ -212,6 +218,10 @@ public static class AtsCapabilityScanner
             {
                 allProperties.TryAdd(id, property);
             }
+            foreach (var (id, assemblyName) in result.CapabilityExportingAssemblyNames)
+            {
+                allCapabilityExportingAssemblyNames.TryAdd(id, assemblyName);
+            }
 
             // Merge diagnostics
             allDiagnostics.AddRange(result.Diagnostics);
@@ -243,7 +253,8 @@ public static class AtsCapabilityScanner
             ExportedValues = allExportedValues,
             Diagnostics = allDiagnostics,
             Methods = allMethods,
-            Properties = allProperties
+            Properties = allProperties,
+            CapabilityExportingAssemblyNames = allCapabilityExportingAssemblyNames
         };
     }
 
@@ -283,7 +294,8 @@ public static class AtsCapabilityScanner
             ExportedValues = exportedValues,
             Diagnostics = result.Diagnostics,
             Methods = result.Methods,
-            Properties = result.Properties
+            Properties = result.Properties,
+            CapabilityExportingAssemblyNames = result.CapabilityExportingAssemblyNames
         };
     }
 
@@ -513,7 +525,10 @@ public static class AtsCapabilityScanner
             ExportedValues = exportedValues,
             Diagnostics = diagnostics,
             Methods = methods,
-            Properties = properties
+            Properties = properties,
+            CapabilityExportingAssemblyNames = capabilities
+                .GroupBy(static capability => capability.CapabilityId, StringComparer.Ordinal)
+                .ToDictionary(static group => group.Key, _ => assemblyName, StringComparer.Ordinal)
         };
     }
 

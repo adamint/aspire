@@ -10,7 +10,7 @@ export interface CSharpAppResource {
     withStatus(status: TestResourceStatus): CSharpAppResourcePromise;
     withNestedConfig(config: TestNestedDto): CSharpAppResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): CSharpAppResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): CSharpAppResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): CSharpAppResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): CSharpAppResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): CSharpAppResourcePromise;
     withEndpoints(endpoints: string[]): CSharpAppResourcePromise;
@@ -38,7 +38,7 @@ export interface CSharpAppResourcePromise {
     withStatus(status: TestResourceStatus): CSharpAppResourcePromise;
     withNestedConfig(config: TestNestedDto): CSharpAppResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): CSharpAppResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): CSharpAppResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): CSharpAppResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): CSharpAppResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): CSharpAppResourcePromise;
     withEndpoints(endpoints: string[]): CSharpAppResourcePromise;
@@ -65,7 +65,7 @@ export interface ContainerRegistryResource {
     withStatus(status: TestResourceStatus): ContainerRegistryResourcePromise;
     withNestedConfig(config: TestNestedDto): ContainerRegistryResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ContainerRegistryResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): ContainerRegistryResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): ContainerRegistryResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): ContainerRegistryResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): ContainerRegistryResourcePromise;
     withEndpoints(endpoints: string[]): ContainerRegistryResourcePromise;
@@ -91,7 +91,7 @@ export interface ContainerRegistryResourcePromise {
     withStatus(status: TestResourceStatus): ContainerRegistryResourcePromise;
     withNestedConfig(config: TestNestedDto): ContainerRegistryResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ContainerRegistryResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): ContainerRegistryResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): ContainerRegistryResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): ContainerRegistryResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): ContainerRegistryResourcePromise;
     withEndpoints(endpoints: string[]): ContainerRegistryResourcePromise;
@@ -118,7 +118,7 @@ export interface ContainerResource {
     withStatus(status: TestResourceStatus): ContainerResourcePromise;
     withNestedConfig(config: TestNestedDto): ContainerResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ContainerResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): ContainerResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): ContainerResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): ContainerResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): ContainerResourcePromise;
     withEndpoints(endpoints: string[]): ContainerResourcePromise;
@@ -146,7 +146,7 @@ export interface ContainerResourcePromise {
     withStatus(status: TestResourceStatus): ContainerResourcePromise;
     withNestedConfig(config: TestNestedDto): ContainerResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ContainerResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): ContainerResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): ContainerResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): ContainerResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): ContainerResourcePromise;
     withEndpoints(endpoints: string[]): ContainerResourcePromise;
@@ -186,7 +186,7 @@ export interface DotnetToolResource {
     withStatus(status: TestResourceStatus): DotnetToolResourcePromise;
     withNestedConfig(config: TestNestedDto): DotnetToolResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): DotnetToolResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): DotnetToolResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): DotnetToolResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): DotnetToolResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): DotnetToolResourcePromise;
     withEndpoints(endpoints: string[]): DotnetToolResourcePromise;
@@ -214,7 +214,7 @@ export interface DotnetToolResourcePromise {
     withStatus(status: TestResourceStatus): DotnetToolResourcePromise;
     withNestedConfig(config: TestNestedDto): DotnetToolResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): DotnetToolResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): DotnetToolResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): DotnetToolResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): DotnetToolResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): DotnetToolResourcePromise;
     withEndpoints(endpoints: string[]): DotnetToolResourcePromise;
@@ -242,7 +242,7 @@ export interface ExecutableResource {
     withStatus(status: TestResourceStatus): ExecutableResourcePromise;
     withNestedConfig(config: TestNestedDto): ExecutableResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ExecutableResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): ExecutableResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): ExecutableResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): ExecutableResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): ExecutableResourcePromise;
     withEndpoints(endpoints: string[]): ExecutableResourcePromise;
@@ -270,7 +270,7 @@ export interface ExecutableResourcePromise {
     withStatus(status: TestResourceStatus): ExecutableResourcePromise;
     withNestedConfig(config: TestNestedDto): ExecutableResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ExecutableResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): ExecutableResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): ExecutableResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): ExecutableResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): ExecutableResourcePromise;
     withEndpoints(endpoints: string[]): ExecutableResourcePromise;
@@ -297,7 +297,7 @@ export interface ExternalServiceResource {
     withStatus(status: TestResourceStatus): ExternalServiceResourcePromise;
     withNestedConfig(config: TestNestedDto): ExternalServiceResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ExternalServiceResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): ExternalServiceResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): ExternalServiceResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): ExternalServiceResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): ExternalServiceResourcePromise;
     withEndpoints(endpoints: string[]): ExternalServiceResourcePromise;
@@ -323,7 +323,7 @@ export interface ExternalServiceResourcePromise {
     withStatus(status: TestResourceStatus): ExternalServiceResourcePromise;
     withNestedConfig(config: TestNestedDto): ExternalServiceResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ExternalServiceResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): ExternalServiceResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): ExternalServiceResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): ExternalServiceResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): ExternalServiceResourcePromise;
     withEndpoints(endpoints: string[]): ExternalServiceResourcePromise;
@@ -349,7 +349,7 @@ export interface ParameterResource {
     withStatus(status: TestResourceStatus): ParameterResourcePromise;
     withNestedConfig(config: TestNestedDto): ParameterResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ParameterResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): ParameterResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): ParameterResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): ParameterResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): ParameterResourcePromise;
     withEndpoints(endpoints: string[]): ParameterResourcePromise;
@@ -375,7 +375,7 @@ export interface ParameterResourcePromise {
     withStatus(status: TestResourceStatus): ParameterResourcePromise;
     withNestedConfig(config: TestNestedDto): ParameterResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ParameterResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): ParameterResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): ParameterResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): ParameterResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): ParameterResourcePromise;
     withEndpoints(endpoints: string[]): ParameterResourcePromise;
@@ -402,7 +402,7 @@ export interface ProjectResource {
     withStatus(status: TestResourceStatus): ProjectResourcePromise;
     withNestedConfig(config: TestNestedDto): ProjectResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ProjectResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): ProjectResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): ProjectResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): ProjectResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): ProjectResourcePromise;
     withEndpoints(endpoints: string[]): ProjectResourcePromise;
@@ -430,7 +430,7 @@ export interface ProjectResourcePromise {
     withStatus(status: TestResourceStatus): ProjectResourcePromise;
     withNestedConfig(config: TestNestedDto): ProjectResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ProjectResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): ProjectResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): ProjectResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): ProjectResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): ProjectResourcePromise;
     withEndpoints(endpoints: string[]): ProjectResourcePromise;
@@ -457,7 +457,7 @@ export interface Resource {
     withStatus(status: TestResourceStatus): ResourcePromise;
     withNestedConfig(config: TestNestedDto): ResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): ResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): ResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): ResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): ResourcePromise;
     withEndpoints(endpoints: string[]): ResourcePromise;
@@ -483,7 +483,7 @@ export interface ResourcePromise {
     withStatus(status: TestResourceStatus): ResourcePromise;
     withNestedConfig(config: TestNestedDto): ResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): ResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): ResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): ResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): ResourcePromise;
     withEndpoints(endpoints: string[]): ResourcePromise;
@@ -596,7 +596,7 @@ export interface TestDatabaseResource extends ResourceBuilderBase {
     withStatus(status: TestResourceStatus): TestDatabaseResourcePromise;
     withNestedConfig(config: TestNestedDto): TestDatabaseResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): TestDatabaseResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): TestDatabaseResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): TestDatabaseResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): TestDatabaseResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): TestDatabaseResourcePromise;
     withEndpoints(endpoints: string[]): TestDatabaseResourcePromise;
@@ -624,7 +624,7 @@ export interface TestDatabaseResourcePromise extends PromiseLike<TestDatabaseRes
     withStatus(status: TestResourceStatus): TestDatabaseResourcePromise;
     withNestedConfig(config: TestNestedDto): TestDatabaseResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): TestDatabaseResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): TestDatabaseResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): TestDatabaseResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): TestDatabaseResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): TestDatabaseResourcePromise;
     withEndpoints(endpoints: string[]): TestDatabaseResourcePromise;
@@ -673,7 +673,7 @@ export interface TestRedisResource extends ResourceBuilderBase {
     withStatus(status: TestResourceStatus): TestRedisResourcePromise;
     withNestedConfig(config: TestNestedDto): TestRedisResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): TestRedisResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): TestRedisResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): TestRedisResourcePromise;
     getEndpoints(): Promise<string[]>;
     withConnectionStringDirect(connectionString: string): TestRedisResourcePromise;
     withRedisSpecific(option: string): TestRedisResourcePromise;
@@ -713,7 +713,7 @@ export interface TestRedisResourcePromise extends PromiseLike<TestRedisResource>
     withStatus(status: TestResourceStatus): TestRedisResourcePromise;
     withNestedConfig(config: TestNestedDto): TestRedisResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): TestRedisResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): TestRedisResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): TestRedisResourcePromise;
     getEndpoints(): Promise<string[]>;
     withConnectionStringDirect(connectionString: string): TestRedisResourcePromise;
     withRedisSpecific(option: string): TestRedisResourcePromise;
@@ -768,7 +768,7 @@ export interface TestVaultResource extends ResourceBuilderBase {
     withStatus(status: TestResourceStatus): TestVaultResourcePromise;
     withNestedConfig(config: TestNestedDto): TestVaultResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): TestVaultResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): TestVaultResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): TestVaultResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): TestVaultResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): TestVaultResourcePromise;
     withEndpoints(endpoints: string[]): TestVaultResourcePromise;
@@ -797,7 +797,7 @@ export interface TestVaultResourcePromise extends PromiseLike<TestVaultResource>
     withStatus(status: TestResourceStatus): TestVaultResourcePromise;
     withNestedConfig(config: TestNestedDto): TestVaultResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): TestVaultResourcePromise;
-    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithConnectionString | ResourceWithEnvironment | TestDatabaseResource | TestRedisResource | TestVaultResource>): TestVaultResourcePromise;
+    testWaitFor(dependency: Awaitable<CSharpAppResource | ContainerRegistryResource | ContainerResource | DotnetToolResource | ExecutableResource | ExternalServiceResource | ParameterResource | ProjectResource | Resource | ResourceWithArgs | ResourceWithConnectionString | ResourceWithEndpoints | ResourceWithEnvironment | ResourceWithWaitSupport | TestDatabaseResource | TestRedisResource | TestVaultResource>): TestVaultResourcePromise;
     withDependency(dependency: Awaitable<ResourceWithConnectionString | TestRedisResource>): TestVaultResourcePromise;
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): TestVaultResourcePromise;
     withEndpoints(endpoints: string[]): TestVaultResourcePromise;
@@ -868,8 +868,20 @@ export interface WithPersistenceOptions {
     mode?: TestPersistenceMode;
 }
 
+// Aspire.Hosting:handle:CommandLineArgsCallbackContextHandle
+export type CommandLineArgsCallbackContextHandle = Handle<'Aspire.Hosting/Aspire.Hosting.ApplicationModel.CommandLineArgsCallbackContext'>;
+
+// Aspire.Hosting:handle:EndpointReferenceHandle
+export type EndpointReferenceHandle = Handle<'Aspire.Hosting/Aspire.Hosting.ApplicationModel.EndpointReference'>;
+
+// Aspire.Hosting:handle:EndpointUpdateContextHandle
+export type EndpointUpdateContextHandle = Handle<'Aspire.Hosting/Aspire.Hosting.ApplicationModel.EndpointUpdateContext'>;
+
 // Aspire.Hosting:handle:ReferenceExpressionHandle
 export type ReferenceExpressionHandle = Handle<'Aspire.Hosting/Aspire.Hosting.ApplicationModel.ReferenceExpression'>;
+
+// Aspire.Hosting:handle:ResourceEndpointsAllocatedEventHandle
+export type ResourceEndpointsAllocatedEventHandle = Handle<'Aspire.Hosting/Aspire.Hosting.ApplicationModel.ResourceEndpointsAllocatedEvent'>;
 
 // Aspire.Hosting:opaque:CSharpAppResource
 export interface CSharpAppResource extends ResourceBuilderBase {}
@@ -931,17 +943,35 @@ export interface Resource extends ResourceBuilderBase {}
 // Aspire.Hosting:opaque:ResourcePromise
 export interface ResourcePromise extends PromiseLike<Resource> {}
 
+// Aspire.Hosting:opaque:ResourceWithArgs
+export interface ResourceWithArgs extends ResourceBuilderBase {}
+
+// Aspire.Hosting:opaque:ResourceWithArgsPromise
+export interface ResourceWithArgsPromise extends PromiseLike<ResourceWithArgs> {}
+
 // Aspire.Hosting:opaque:ResourceWithConnectionString
 export interface ResourceWithConnectionString extends ResourceBuilderBase {}
 
 // Aspire.Hosting:opaque:ResourceWithConnectionStringPromise
 export interface ResourceWithConnectionStringPromise extends PromiseLike<ResourceWithConnectionString> {}
 
+// Aspire.Hosting:opaque:ResourceWithEndpoints
+export interface ResourceWithEndpoints extends ResourceBuilderBase {}
+
+// Aspire.Hosting:opaque:ResourceWithEndpointsPromise
+export interface ResourceWithEndpointsPromise extends PromiseLike<ResourceWithEndpoints> {}
+
 // Aspire.Hosting:opaque:ResourceWithEnvironment
 export interface ResourceWithEnvironment extends ResourceBuilderBase {}
 
 // Aspire.Hosting:opaque:ResourceWithEnvironmentPromise
 export interface ResourceWithEnvironmentPromise extends PromiseLike<ResourceWithEnvironment> {}
+
+// Aspire.Hosting:opaque:ResourceWithWaitSupport
+export interface ResourceWithWaitSupport extends ResourceBuilderBase {}
+
+// Aspire.Hosting:opaque:ResourceWithWaitSupportPromise
+export interface ResourceWithWaitSupportPromise extends PromiseLike<ResourceWithWaitSupport> {}
 
 // aspire:runtime:base
 export type Awaitable<T> = T | PromiseLike<T>;

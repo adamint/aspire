@@ -248,6 +248,9 @@ internal sealed class CodeGenerationService
             var context = _atsContextFactory.GetContext();
             if (!string.IsNullOrWhiteSpace(assemblyName))
             {
+                // Scoped source generation must not use the API-export filter: its synthetic
+                // supporting capabilities are projection-only metadata and would otherwise become
+                // executable members in the generated SDK.
                 context = AtsContextFilter.FilterByExportingAssembliesWithReferences(context, [assemblyName]);
             }
 
@@ -305,10 +308,10 @@ internal sealed class CodeGenerationService
                     $"Supported languages for API export: {BuildApiExportLanguageList()}.");
             }
 
-            // The reference closure is required for the exported declarations to be self-contained,
-            // but the exporter still needs the unexpanded set to know which symbols this package
-            // actually owns and should document.
-            var context = AtsContextFilter.FilterByExportingAssembliesWithReferences(
+            // Referenced handle capabilities determine wrapper and resource-union signatures.
+            // Keep only their projection support shape without publishing their API as part of this
+            // package.
+            var context = AtsContextFilter.FilterForApiExport(
                 _atsContextFactory.GetContext(),
                 [packageName]);
 

@@ -7,12 +7,11 @@ namespace Aspire.TypeSystem;
 /// Describes the package identity and ownership scope of an <see cref="IApiReferenceExporter"/> export.
 /// </summary>
 /// <remarks>
-/// The ATS context handed to an exporter is already filtered to the exporting assemblies plus their
-/// reference closure, because the generated code does not type-check without the referenced
-/// declarations. That closure is exactly why <see cref="ExportingAssemblyNames"/> exists: it lets the
-/// exporter tell apart symbols the package owns and should document from symbols it merely needs to
-/// emit so the output is self-contained. Without it, every package would republish its dependencies'
-/// API reference.
+/// The ATS context handed to an exporter is already filtered to the exporting assemblies, their
+/// reference closure, and the reduced member shapes needed to resolve wrappers for referenced handle
+/// types. That closure is exactly why <see cref="ExportingAssemblyNames"/> exists: it lets the exporter
+/// tell apart symbols the package owns and should document from symbols it merely needs to emit so the
+/// output is self-contained. Without it, every package would republish its dependencies' API reference.
 /// </remarks>
 public sealed class ApiReferenceExportOptions
 {

@@ -1211,7 +1211,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
         var hasOptionals = optionalParams.Count > 0;
         var hasDirectOptionsParameter = TypeScriptApiProjector.TryGetDirectOptionsParameter(optionalParams, out var directOptionsParam);
         var optionsTypeName = hasDirectOptionsParameter ? _projector.MapParameterToTypeScript(directOptionsParam!) : _projector.ResolveOptionsInterfaceName(capability);
-        var publicOptionsParamName = TypeScriptApiProjector.GetPublicOptionsParameterName(userParams, hasOptionals, hasDirectOptionsParameter);
+        var publicOptionsParamName = TypeScriptApiProjector.GetImplementationOptionsParameterName(userParams, hasOptionals, hasDirectOptionsParameter);
 
         // Build parameter list for public method
         var publicParamsString = _projector.BuildPublicParameterList(requiredParams, hasOptionals, optionsTypeName, publicOptionsParamName, TypeScriptApiProjector.GetTrailingCancellationTokenParameter(optionalParams));
@@ -2775,7 +2775,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
         var hasOptionals = optionalParams.Count > 0;
         var hasDirectOptionsParameter = TypeScriptApiProjector.TryGetDirectOptionsParameter(optionalParams, out var directOptionsParam);
         var optionsInterfaceName = hasDirectOptionsParameter ? _projector.MapParameterToTypeScript(directOptionsParam!) : _projector.ResolveOptionsInterfaceName(method);
-        var publicOptionsParamName = TypeScriptApiProjector.GetPublicOptionsParameterName(userParams, hasOptionals, hasDirectOptionsParameter);
+        var publicOptionsParamName = TypeScriptApiProjector.GetImplementationOptionsParameterName(userParams, hasOptionals, hasDirectOptionsParameter);
 
         // Build parameter list using options pattern
         var paramsString = _projector.BuildPublicParameterList(requiredParams, hasOptionals, optionsInterfaceName, publicOptionsParamName, TypeScriptApiProjector.GetTrailingCancellationTokenParameter(optionalParams));
@@ -2890,7 +2890,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
         var hasOptionals = optionalParams.Count > 0;
         var hasDirectOptionsParameter = TypeScriptApiProjector.TryGetDirectOptionsParameter(optionalParams, out var directOptionsParam);
         var optionsInterfaceName = hasDirectOptionsParameter ? _projector.MapParameterToTypeScript(directOptionsParam!) : _projector.ResolveOptionsInterfaceName(capability);
-        var publicOptionsParamName = TypeScriptApiProjector.GetPublicOptionsParameterName(userParams, hasOptionals, hasDirectOptionsParameter);
+        var publicOptionsParamName = TypeScriptApiProjector.GetImplementationOptionsParameterName(userParams, hasOptionals, hasDirectOptionsParameter);
 
         // Build parameter list using options pattern
         var paramsString = _projector.BuildPublicParameterList(requiredParams, hasOptionals, optionsInterfaceName, publicOptionsParamName, TypeScriptApiProjector.GetTrailingCancellationTokenParameter(optionalParams));
@@ -3008,7 +3008,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
         var hasOptionals = optionalParams.Count > 0;
         var hasDirectOptionsParameter = TypeScriptApiProjector.TryGetDirectOptionsParameter(optionalParams, out var directOptionsParam);
         var optionsInterfaceName = hasDirectOptionsParameter ? _projector.MapParameterToTypeScript(directOptionsParam!) : _projector.ResolveOptionsInterfaceName(capability);
-        var publicOptionsParamName = TypeScriptApiProjector.GetPublicOptionsParameterName(userParams, hasOptionals, hasDirectOptionsParameter);
+        var publicOptionsParamName = TypeScriptApiProjector.GetImplementationOptionsParameterName(userParams, hasOptionals, hasDirectOptionsParameter);
 
         // Build parameter list for public method
         var publicParamsString = _projector.BuildPublicParameterList(requiredParams, hasOptionals, optionsInterfaceName, publicOptionsParamName, TypeScriptApiProjector.GetTrailingCancellationTokenParameter(optionalParams));
