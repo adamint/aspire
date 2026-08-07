@@ -12,66 +12,19 @@ namespace Aspire.Cli.Npm;
 /// <summary>
 /// Runs npm CLI commands for package management operations.
 /// </summary>
-internal sealed class NpmRunner : INpmRunner
+internal sealed class NpmRunner(IEnvironment environment, ILogger<NpmRunner> logger, ProfilingTelemetry profilingTelemetry) : INpmRunner
 {
-    private static readonly TimeSpan s_processTerminationTimeout = TimeSpan.FromSeconds(2);
-
-    internal static TimeSpan ProcessTerminationTimeout => s_processTerminationTimeout;
-
     /// <summary>
-    /// The internal npm registry URL used by Aspire-managed npm operations. General package
-    /// operations preserve ambient npm configuration for existing consumers; callers that
-    /// require anonymous mirror semantics use the dedicated isolated resolver.
+    /// The internal npm registry URL. Commands that resolve packages from the registry
+    /// pass this explicitly via <c>--registry</c> to avoid inheriting project-level
+    /// npm configuration.
     /// </summary>
     private const string InternalRegistry = "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/";
 
-    private readonly IEnvironment _environment;
-    private readonly ILogger<NpmRunner> _logger;
-    private readonly ProfilingTelemetry _profilingTelemetry;
-    private readonly TimeProvider _timeProvider;
-    private readonly string _internalRegistry;
     private readonly Lazy<string?> _npmPath = new(() => PathLookupHelper.FindFullPathFromPath("npm"));
-
-    public NpmRunner(
-        IEnvironment environment,
-        ILogger<NpmRunner> logger,
-        ProfilingTelemetry profilingTelemetry)
-        : this(environment, logger, profilingTelemetry, TimeProvider.System, InternalRegistry)
-    {
-    }
-
-    public NpmRunner(
-        IEnvironment environment,
-        ILogger<NpmRunner> logger,
-        ProfilingTelemetry profilingTelemetry,
-        TimeProvider timeProvider)
-        : this(environment, logger, profilingTelemetry, timeProvider, InternalRegistry)
-    {
-    }
-
-    internal NpmRunner(
-        IEnvironment environment,
-        ILogger<NpmRunner> logger,
-        ProfilingTelemetry profilingTelemetry,
-        TimeProvider timeProvider,
-        string internalRegistry)
-    {
-        _environment = environment;
-        _logger = logger;
-        _profilingTelemetry = profilingTelemetry;
-        _timeProvider = timeProvider;
-        _internalRegistry = internalRegistry;
-    }
 
     /// <inheritdoc />
     public bool IsAvailable => _npmPath.Value is not null;
-
-    /// <summary>
-    /// Overrides the parent directory used for isolated npm working directories. Tests set this to
-    /// stage an ancestor directory that npm's local-prefix walk would find, without mutating the
-    /// process-wide temp environment variables that concurrently running tests also depend on.
-    /// </summary>
-    internal string? TempDirectoryRootOverride { get; init; }
 
     /// <inheritdoc />
     public async Task<NpmPackageInfo?> ResolvePackageAsync(string packageName, string versionRange, CancellationToken cancellationToken)
@@ -82,7 +35,7 @@ internal sealed class NpmRunner : INpmRunner
             return null;
         }
 
-        _logger.LogDebug("Resolving npm package {PackageSpecifier}", NpmPackageInfo.FormatPackageSpecifier(packageName, versionRange));
+        logger.LogDebug("Resolving npm package {PackageSpecifier}", NpmPackageInfo.FormatPackageSpecifier(packageName, versionRange));
 
         // Use an isolated temp subdirectory so npm doesn't pick up .npmrc or
         // other config files from the shared temp root or the user's CWD.
@@ -90,34 +43,32 @@ internal sealed class NpmRunner : INpmRunner
 
         try
         {
-            await PinNpmLocalPrefixAsync(tempDir, cancellationToken);
-
             // Resolve version: npm view <package>@<range> version
             var versionOutput = await RunNpmCommandInDirectoryAsync(
                 npmPath,
-                ["view", NpmPackageInfo.FormatPackageSpecifier(packageName, versionRange), "version", "--registry", _internalRegistry],
+                ["view", NpmPackageInfo.FormatPackageSpecifier(packageName, versionRange), "version", "--registry", InternalRegistry],
                 tempDir,
                 cancellationToken);
 
             if (versionOutput is null)
             {
-                _logger.LogDebug("Failed to resolve version for {PackageSpecifier}", NpmPackageInfo.FormatPackageSpecifier(packageName, versionRange));
+                logger.LogDebug("Failed to resolve version for {PackageSpecifier}", NpmPackageInfo.FormatPackageSpecifier(packageName, versionRange));
                 return null;
             }
 
             if (!TryExtractLastVersion(versionOutput, out var versionString))
             {
-                _logger.LogDebug("Could not extract version from npm output: {Output}", versionOutput.Trim());
+                logger.LogDebug("Could not extract version from npm output: {Output}", versionOutput.Trim());
                 return null;
             }
 
             if (!SemVersion.TryParse(versionString, SemVersionStyles.Any, out var version))
             {
-                _logger.LogDebug("Could not parse npm version from output: {Output}", versionString);
+                logger.LogDebug("Could not parse npm version from output: {Output}", versionString);
                 return null;
             }
 
-            _logger.LogDebug("Resolved {PackageSpecifier}", NpmPackageInfo.FormatPackageSpecifier(packageName, version));
+            logger.LogDebug("Resolved {PackageSpecifier}", NpmPackageInfo.FormatPackageSpecifier(packageName, version));
 
             return new NpmPackageInfo
             {
@@ -131,69 +82,6 @@ internal sealed class NpmRunner : INpmRunner
     }
 
     /// <inheritdoc />
-    public async Task<NpmPackageInfo?> ResolvePackageFromAnonymousInternalRegistryAsync(
-        string packageName,
-        string versionRange,
-        CancellationToken cancellationToken)
-    {
-        var npmPath = FindNpmPath();
-        if (npmPath is null)
-        {
-            return null;
-        }
-
-        var tempRoot = CreateIsolatedTempDirectory();
-
-        try
-        {
-            // The isolation scaffolding is created inside the try so a failure while writing the
-            // empty npmrc files still deletes the temp root instead of leaking it for the machine's
-            // temp-cleanup policy to reclaim.
-            var projectDirectory = Path.Combine(tempRoot, "project");
-            var cacheDirectory = Path.Combine(tempRoot, "cache");
-            var userConfigPath = Path.Combine(tempRoot, "user.npmrc");
-            var globalConfigPath = Path.Combine(tempRoot, "global.npmrc");
-            Directory.CreateDirectory(projectDirectory);
-            Directory.CreateDirectory(cacheDirectory);
-            await File.WriteAllTextAsync(userConfigPath, string.Empty, cancellationToken);
-            await File.WriteAllTextAsync(globalConfigPath, string.Empty, cancellationToken);
-            await PinNpmLocalPrefixAsync(projectDirectory, cancellationToken);
-
-            var packageSpecifier = NpmPackageInfo.FormatPackageSpecifier(packageName, versionRange);
-            _logger.LogDebug("Resolving npm package {PackageSpecifier} anonymously from the internal registry", packageSpecifier);
-
-            var versionOutput = await RunNpmCommandInDirectoryAsync(
-                npmPath,
-                CreateAnonymousInternalRegistryViewArguments(
-                    packageSpecifier,
-                    _internalRegistry,
-                    userConfigPath,
-                    globalConfigPath,
-                    cacheDirectory),
-                projectDirectory,
-                removeAmbientNpmConfiguration: true,
-                cancellationToken);
-
-            if (versionOutput is null ||
-                !TryExtractLastVersion(versionOutput, out var versionString) ||
-                !SemVersion.TryParse(versionString, SemVersionStyles.Any, out var version))
-            {
-                _logger.LogDebug("Failed to resolve {PackageSpecifier} anonymously from the internal npm registry", packageSpecifier);
-                return null;
-            }
-
-            return new NpmPackageInfo
-            {
-                Version = version
-            };
-        }
-        finally
-        {
-            CleanupTempDirectory(tempRoot);
-        }
-    }
-
-    /// <inheritdoc />
     public async Task<string?> PackAsync(string packageName, string version, string outputDirectory, CancellationToken cancellationToken)
     {
         var npmPath = FindNpmPath();
@@ -202,17 +90,17 @@ internal sealed class NpmRunner : INpmRunner
             return null;
         }
 
-        _logger.LogDebug("Packing npm package {PackageSpecifier} to {OutputDirectory}", NpmPackageInfo.FormatPackageSpecifier(packageName, version), outputDirectory);
+        logger.LogDebug("Packing npm package {PackageSpecifier} to {OutputDirectory}", NpmPackageInfo.FormatPackageSpecifier(packageName, version), outputDirectory);
 
         var output = await RunNpmCommandInDirectoryAsync(
             npmPath,
-            ["pack", NpmPackageInfo.FormatPackageSpecifier(packageName, version), "--pack-destination", outputDirectory, "--registry", _internalRegistry],
+            ["pack", NpmPackageInfo.FormatPackageSpecifier(packageName, version), "--pack-destination", outputDirectory, "--registry", InternalRegistry],
             outputDirectory,
             cancellationToken);
 
         if (output is null)
         {
-            _logger.LogDebug("Failed to pack {PackageSpecifier}", NpmPackageInfo.FormatPackageSpecifier(packageName, version));
+            logger.LogDebug("Failed to pack {PackageSpecifier}", NpmPackageInfo.FormatPackageSpecifier(packageName, version));
             return null;
         }
 
@@ -220,18 +108,18 @@ internal sealed class NpmRunner : INpmRunner
         var filename = output.Trim().Split(['\n', '\r'], StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
         if (string.IsNullOrWhiteSpace(filename))
         {
-            _logger.LogDebug("npm pack returned empty filename");
+            logger.LogDebug("npm pack returned empty filename");
             return null;
         }
 
         var tarballPath = Path.Combine(outputDirectory, filename);
         if (!File.Exists(tarballPath))
         {
-            _logger.LogDebug("npm pack output file not found: {Path}", tarballPath);
+            logger.LogDebug("npm pack output file not found: {Path}", tarballPath);
             return null;
         }
 
-        _logger.LogDebug("Packed {PackageSpecifier} to {TarballPath}", NpmPackageInfo.FormatPackageSpecifier(packageName, version), tarballPath);
+        logger.LogDebug("Packed {PackageSpecifier} to {TarballPath}", NpmPackageInfo.FormatPackageSpecifier(packageName, version), tarballPath);
 
         return tarballPath;
     }
@@ -245,7 +133,7 @@ internal sealed class NpmRunner : INpmRunner
             return false;
         }
 
-        _logger.LogDebug("Installing npm package globally from {TarballPath}", tarballPath);
+        logger.LogDebug("Installing npm package globally from {TarballPath}", tarballPath);
 
         // Use an isolated temp subdirectory so npm doesn't pick up .npmrc or
         // other config files from the shared temp root or the user's CWD.
@@ -253,23 +141,21 @@ internal sealed class NpmRunner : INpmRunner
 
         try
         {
-            await PinNpmLocalPrefixAsync(tempDir, cancellationToken);
-
             // The root tarball is provenance-verified, but its transitive dependencies are not.
             // Prevent dependency lifecycle scripts from executing during installation.
             var output = await RunNpmCommandInDirectoryAsync(
                 npmPath,
-                ["install", "-g", tarballPath, "--ignore-scripts", "--registry", _internalRegistry],
+                ["install", "-g", tarballPath, "--ignore-scripts", "--registry", InternalRegistry],
                 tempDir,
                 cancellationToken);
 
             if (output is null)
             {
-                _logger.LogDebug("Failed to install npm package globally from {TarballPath}", tarballPath);
+                logger.LogDebug("Failed to install npm package globally from {TarballPath}", tarballPath);
                 return false;
             }
 
-            _logger.LogDebug("Successfully installed npm package globally from {TarballPath}", tarballPath);
+            logger.LogDebug("Successfully installed npm package globally from {TarballPath}", tarballPath);
             return true;
         }
         finally
@@ -283,91 +169,15 @@ internal sealed class NpmRunner : INpmRunner
         var npmPath = _npmPath.Value;
         if (npmPath is null)
         {
-            _logger.LogDebug("npm is not installed or not found in PATH");
+            logger.LogDebug("npm is not installed or not found in PATH");
         }
 
         return npmPath;
     }
 
-    /// <summary>
-    /// Builds the <c>npm view</c> argument list that resolves a package from the internal registry
-    /// with no ambient npm configuration in effect.
-    /// </summary>
-    /// <remarks>
-    /// Every argument here is load-bearing, so this list is built in one place and asserted by
-    /// <c>NpmRunnerTests</c>:
-    /// <list type="bullet">
-    /// <item><description>
-    /// <c>--registry</c> alone is NOT enough. A user-level <c>@microsoft:registry=</c> takes
-    /// precedence over it, so <c>--userconfig</c> and <c>--globalconfig</c> point at freshly
-    /// created empty files to make <c>--registry</c> authoritative.
-    /// </description></item>
-    /// <item><description>
-    /// <c>--cache</c> uses a private directory so a previously cached answer from a different
-    /// registry cannot satisfy the request, and <c>--prefer-online</c> revalidates metadata.
-    /// </description></item>
-    /// <item><description>
-    /// <c>--json=false</c> forces deterministic text output. An inherited <c>json=true</c> makes
-    /// <c>npm view &lt;pkg&gt; version</c> print a quoted JSON string (<c>"13.4.6"</c>), which the
-    /// version parser rejects.
-    /// </description></item>
-    /// </list>
-    /// See https://docs.npmjs.com/cli/v11/using-npm/config and
-    /// https://docs.npmjs.com/cli/v11/configuring-npm/npmrc#files.
-    /// </remarks>
-    internal static string[] CreateAnonymousInternalRegistryViewArguments(
-        string packageSpecifier,
-        string registry,
-        string userConfigPath,
-        string globalConfigPath,
-        string cacheDirectory)
-        =>
-        [
-            "view",
-            packageSpecifier,
-            "version",
-            "--registry", registry,
-            "--userconfig", userConfigPath,
-            "--globalconfig", globalConfigPath,
-            "--cache", cacheDirectory,
-            "--prefer-online",
-            "--json=false"
-        ];
-
-    private string CreateIsolatedTempDirectory()
+    private static string CreateIsolatedTempDirectory()
     {
-        if (TempDirectoryRootOverride is not { } root)
-        {
-            return Directory.CreateTempSubdirectory("aspire-npm-").FullName;
-        }
-
-        // Only tests reach this branch, and they supply a directory they already created and own.
-        // Directory.CreateTempSubdirectory has no overload that accepts a parent, so the unique-name
-        // behavior is mirrored here rather than composing a path under Path.GetTempPath().
-        return Directory.CreateDirectory(Path.Combine(root, $"aspire-npm-{Path.GetRandomFileName()}")).FullName;
-    }
-
-    /// <summary>
-    /// Pins npm's "local prefix" to <paramref name="directory"/> by writing a private marker
-    /// <c>package.json</c> into it.
-    /// </summary>
-    /// <remarks>
-    /// npm resolves the local prefix by walking UP from the working directory until it finds a
-    /// directory containing <c>package.json</c> or <c>node_modules</c>, and then reads that
-    /// directory's <c>.npmrc</c> as the per-project config. Without a marker file the walk escapes
-    /// our temp directory into the shared temp root (for example the world-writable <c>/tmp</c> on
-    /// Linux), where a planted <c>.npmrc</c> can set a scoped registry such as
-    /// <c>@microsoft:registry=</c>. A scoped registry takes precedence over the <c>--registry</c>
-    /// argument, so the marker is what actually makes <c>--registry</c> authoritative here.
-    /// See https://docs.npmjs.com/cli/v11/configuring-npm/npmrc#files and
-    /// https://docs.npmjs.com/cli/v11/using-npm/config#npmrc-files.
-    /// </remarks>
-    private static async Task PinNpmLocalPrefixAsync(string directory, CancellationToken cancellationToken)
-    {
-        await File.WriteAllTextAsync(
-            Path.Combine(directory, "package.json"),
-            """{"name":"aspire-npm-isolated","version":"0.0.0","private":true}""",
-            cancellationToken);
+        return Directory.CreateTempSubdirectory("aspire-npm-").FullName;
     }
 
     private void CleanupTempDirectory(string tempDir)
@@ -381,7 +191,7 @@ internal sealed class NpmRunner : INpmRunner
         }
         catch (IOException ex)
         {
-            _logger.LogDebug(ex, "Failed to clean up temporary directory: {TempDir}", tempDir);
+            logger.LogDebug(ex, "Failed to clean up temporary directory: {TempDir}", tempDir);
         }
     }
 
@@ -463,280 +273,40 @@ internal sealed class NpmRunner : INpmRunner
     }
 
     private async Task<string?> RunNpmCommandInDirectoryAsync(string npmPath, string[] args, string workingDirectory, CancellationToken cancellationToken)
-        => await RunNpmCommandInDirectoryAsync(
-            npmPath,
-            args,
-            workingDirectory,
-            removeAmbientNpmConfiguration: false,
-            cancellationToken);
-
-    private async Task<string?> RunNpmCommandInDirectoryAsync(
-        string npmPath,
-        string[] args,
-        string workingDirectory,
-        bool removeAmbientNpmConfiguration,
-        CancellationToken cancellationToken)
     {
         var argsString = string.Join(" ", args);
-        _logger.LogDebug("Running npm {Args} in {WorkingDirectory}", argsString, workingDirectory);
+        logger.LogDebug("Running npm {Args} in {WorkingDirectory}", argsString, workingDirectory);
 
         try
         {
-            var startInfo = CreateNpmProcessStartInfo(npmPath, args, workingDirectory, _environment);
-            if (removeAmbientNpmConfiguration)
-            {
-                RemoveAmbientNpmConfiguration(startInfo);
-            }
+            var startInfo = CreateNpmProcessStartInfo(npmPath, args, workingDirectory, environment);
 
             using var process = new Process { StartInfo = startInfo };
-            using var activity = _profilingTelemetry.StartNpmCommand(npmPath, args, workingDirectory);
+            using var activity = profilingTelemetry.StartNpmCommand(npmPath, args, workingDirectory);
             process.Start();
             activity.SetProcessId(process.Id);
 
-            // Read both streams concurrently to avoid deadlock when either pipe buffer fills.
-            // The reads intentionally have no caller cancellation token: after cancellation we
-            // terminate the process, then observe both tasks within the same bounded drain budget.
-            var outputTask = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
-            var errorTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
 
-            try
-            {
-                await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                await TerminateNpmProcessAsync(process).ConfigureAwait(false);
-                await ObserveProcessStreamsAfterTerminationAsync(process, outputTask, errorTask).ConfigureAwait(false);
-                throw;
-            }
-
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
             activity.SetProcessExitCode(process.ExitCode);
-
-            // npm exiting does NOT guarantee its redirected pipes are closed. Any descendant that
-            // inherited the stdout/stderr handles (an npm lifecycle script or wrapper that
-            // backgrounds work without detaching its handles) keeps the write ends open, so these
-            // reads can outlive npm indefinitely. Caller cancellation stopped applying the moment
-            // WaitForExitAsync returned, so an unbounded Task.WhenAll here would make the caller's
-            // update-check timeout unenforceable and leave the lookup running past the notifier's
-            // dispose budget. Bound the drain by both the caller's token and the same budget used
-            // after a kill.
-            if (!await DrainProcessStreamsAfterExitAsync(process, outputTask, errorTask, cancellationToken).ConfigureAwait(false))
-            {
-                activity.SetError($"npm output streams did not close within {ProcessTerminationTimeout} after exit.");
-                return null;
-            }
-
-            var output = await outputTask.ConfigureAwait(false);
-            var errorOutput = await errorTask.ConfigureAwait(false);
 
             if (process.ExitCode != 0)
             {
                 activity.SetError($"npm exited with code {process.ExitCode}.");
-                _logger.LogDebug("npm {Args} returned non-zero exit code {ExitCode}: {Error}", argsString, process.ExitCode, errorOutput.Trim());
+                var errorOutput = await errorTask.ConfigureAwait(false);
+                logger.LogDebug("npm {Args} returned non-zero exit code {ExitCode}: {Error}", argsString, process.ExitCode, errorOutput.Trim());
                 return null;
             }
 
-            return output;
+            return await outputTask.ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
-            _logger.LogDebug(ex, "Failed to run npm {Args}", argsString);
+            logger.LogDebug(ex, "Failed to run npm {Args}", argsString);
             return null;
         }
     }
 
-    private static void RemoveAmbientNpmConfiguration(ProcessStartInfo startInfo)
-    {
-        var keysToRemove = startInfo.Environment.Keys
-            .Where(key =>
-                key.StartsWith("NPM_CONFIG_", StringComparison.OrdinalIgnoreCase) ||
-                key.Equals("NODE_AUTH_TOKEN", StringComparison.OrdinalIgnoreCase) ||
-                key.Equals("NPM_TOKEN", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-
-        foreach (var key in keysToRemove)
-        {
-            startInfo.Environment.Remove(key);
-        }
-    }
-
-    private async Task TerminateNpmProcessAsync(Process process)
-    {
-        try
-        {
-            if (process.HasExited)
-            {
-                return;
-            }
-
-            _logger.LogDebug("Terminating npm process {ProcessId} because the operation was cancelled.", process.Id);
-            process.Kill(entireProcessTree: true);
-            if (!await WaitWithinTerminationBudgetAsync(
-                process.WaitForExitAsync(CancellationToken.None),
-                _timeProvider).ConfigureAwait(false))
-            {
-                _logger.LogDebug(
-                    "npm process {ProcessId} did not exit within {Timeout} after termination.",
-                    process.Id,
-                    ProcessTerminationTimeout);
-            }
-        }
-        catch (Exception ex) when (IsExpectedProcessTerminationException(ex))
-        {
-            _logger.LogDebug(ex, "Unable to terminate npm process after cancellation.");
-        }
-    }
-
-    private async Task ObserveProcessStreamsAfterTerminationAsync(Process process, Task outputTask, Task errorTask)
-    {
-        var streamsTask = Task.WhenAll(outputTask, errorTask);
-
-        try
-        {
-            if (!await WaitWithinTerminationBudgetAsync(streamsTask, _timeProvider).ConfigureAwait(false))
-            {
-                _logger.LogDebug(
-                    "npm output streams did not close within {Timeout} after process termination.",
-                    ProcessTerminationTimeout);
-                AbandonProcessStreams(process, streamsTask);
-            }
-        }
-        catch (Exception ex) when (IsExpectedProcessStreamTerminationException(ex))
-        {
-            _logger.LogDebug(ex, "npm output streams failed while draining after process termination.");
-        }
-    }
-
-    /// <summary>
-    /// Drains the redirected stdout/stderr reads after npm exited on its own, bounded by both
-    /// <paramref name="cancellationToken"/> and <see cref="ProcessTerminationTimeout"/>.
-    /// </summary>
-    /// <returns><see langword="true"/> when both streams reached EOF and their output is usable.</returns>
-    /// <remarks>
-    /// <para>
-    /// A normal npm run reaches EOF the instant the process exits, and anything still buffered is
-    /// bounded by the OS pipe buffer, so this budget only ever expires when something other than
-    /// npm is holding a write end open.
-    /// </para>
-    /// <para>
-    /// When it does expire the partially read output is discarded rather than parsed: the reads are
-    /// still mid-stream, and a truncated last line would let the update check report a bogus
-    /// available version, which is worse than reporting nothing.
-    /// </para>
-    /// </remarks>
-    private async Task<bool> DrainProcessStreamsAfterExitAsync(
-        Process process,
-        Task outputTask,
-        Task errorTask,
-        CancellationToken cancellationToken)
-    {
-        var streamsTask = Task.WhenAll(outputTask, errorTask);
-
-        try
-        {
-            await streamsTask.WaitAsync(ProcessTerminationTimeout, _timeProvider, cancellationToken).ConfigureAwait(false);
-            return true;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            _logger.LogDebug("npm output streams were abandoned because the operation was cancelled after npm exited.");
-            AbandonProcessStreams(process, streamsTask);
-            throw;
-        }
-        catch (TimeoutException)
-        {
-            _logger.LogDebug(
-                "npm output streams did not close within {Timeout} after npm exited; a descendant process still holds them.",
-                ProcessTerminationTimeout);
-            AbandonProcessStreams(process, streamsTask);
-            return false;
-        }
-        catch (Exception ex) when (IsExpectedProcessStreamTerminationException(ex))
-        {
-            _logger.LogDebug(ex, "npm output streams failed while draining after npm exited.");
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Gives up on an unfinished stream drain without leaving anything running on our side.
-    /// </summary>
-    /// <remarks>
-    /// Closing the read ends is the part that matters: it releases the CLI's half of the pipes so
-    /// the abandoned reads fault immediately instead of lingering for the life of the process, and
-    /// it stops the surviving descendant from writing into a handle we still own. The descendant
-    /// itself cannot be killed from here — npm has already exited, so
-    /// <see cref="Process.Kill(bool)"/> with <c>entireProcessTree</c> throws, and the descendant has
-    /// been reparented away from any tree we can enumerate. Cancellation *before* npm exits is the
-    /// path that kills the tree, and that is handled by <see cref="TerminateNpmProcessAsync"/>.
-    /// </remarks>
-    private void AbandonProcessStreams(Process process, Task streamsTask)
-    {
-        try
-        {
-            process.StandardOutput.Close();
-            process.StandardError.Close();
-        }
-        catch (Exception ex) when (IsExpectedProcessStreamTerminationException(ex) || ex is InvalidOperationException)
-        {
-            _logger.LogDebug(ex, "Failed to close npm output streams while abandoning the drain.");
-        }
-
-        // WaitWithinTerminationBudgetAsync already observes its own abandoned wait, but the drain
-        // reached here can also be abandoned by cancellation, so observe unconditionally.
-        _ = streamsTask.ContinueWith(
-            static task => _ = task.Exception,
-            CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-    }
-
-    /// <summary>
-    /// Waits up to <see cref="ProcessTerminationTimeout"/> for <paramref name="task"/> and reports
-    /// whether it completed within that budget.
-    /// </summary>
-    /// <remarks>
-    /// Both post-kill waits go through this helper because killing a process guarantees neither
-    /// that it is reaped nor that its redirected pipes close: an orphaned grandchild that inherited
-    /// the stdout/stderr handles keeps them open. Awaiting either without a budget would let a stuck
-    /// npm process tree hang CLI exit indefinitely. On timeout the wait is abandoned with a fault
-    /// observer attached so the abandoned task cannot resurface as an unobserved task exception.
-    /// </remarks>
-    internal static async Task<bool> WaitWithinTerminationBudgetAsync(
-        Task task,
-        TimeProvider timeProvider)
-    {
-        try
-        {
-            await task.WaitAsync(ProcessTerminationTimeout, timeProvider).ConfigureAwait(false);
-            return true;
-        }
-        catch (TimeoutException)
-        {
-            _ = task.ContinueWith(
-                static continuedTask => _ = continuedTask.Exception,
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-            return false;
-        }
-    }
-
-    private static bool IsExpectedProcessStreamTerminationException(Exception exception)
-        => exception switch
-        {
-            IOException or ObjectDisposedException => true,
-            AggregateException { InnerExceptions.Count: > 0 } aggregateException =>
-                aggregateException.InnerExceptions.All(IsExpectedProcessStreamTerminationException),
-            _ => false
-        };
-
-    internal static bool IsExpectedProcessTerminationException(Exception exception)
-        => exception switch
-        {
-            InvalidOperationException or System.ComponentModel.Win32Exception => true,
-            AggregateException { InnerExceptions.Count: > 0 } aggregateException =>
-                aggregateException.InnerExceptions.All(IsExpectedProcessTerminationException),
-            _ => false
-        };
 }

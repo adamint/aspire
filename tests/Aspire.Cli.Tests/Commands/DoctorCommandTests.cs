@@ -12,7 +12,7 @@ using Aspire.Cli.Utils.EnvironmentChecker;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.AspNetCore.InternalTesting;
-using Microsoft.Extensions.Time.Testing;
+using Semver;
 using Spectre.Console;
 
 namespace Aspire.Cli.Tests.Commands;
@@ -624,77 +624,56 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task DoctorCommand_Json_NpmUpdateTimeoutReturnsPromptWarning()
+    public async Task DoctorCommand_Json_NpmUpdateFailureReturnsPromptWarning()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(
-            new Dictionary<string, string?>
-            {
-                [NpmInstallDetection.PackageEnvironmentVariableName] = NpmInstallDetection.ExpectedPackageName,
-                [NpmInstallDetection.PackageVersionEnvironmentVariableName] = "13.0.0",
-                [NpmInstallDetection.PackageRidEnvironmentVariableName] = "linux-x64"
-            });
-        var timeProvider = new FakeTimeProvider();
-        var resolutionStarted = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
 
-        var doctorTask = RunDoctorJsonAsync(workspace, options =>
+        using var doc = await RunDoctorJsonAsync(workspace, options =>
         {
-            options.TimeProvider = timeProvider;
-            options.NpmRunnerFactory = _ => new FakeNpmRunner
+            options.NpmRegistryClientFactory = _ => new FakeNpmRegistryClient
             {
-                ResolvePackageAsyncCallback = async (_, _, cancellationToken) =>
-                {
-                    resolutionStarted.TrySetResult();
-                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-                    return null;
-                }
+                Failure = new TimeoutException("Timed out after 10 seconds while resolving @microsoft/aspire-cli@latest from the npm registry.")
             };
         });
-
-        await resolutionStarted.Task.DefaultTimeout();
-        timeProvider.Advance(CliUpdateNotifier.NpmResolutionTimeout);
-        using var doc = await doctorTask.DefaultTimeout();
 
         var cliVersionCheck = GetCheckByName(doc, AspireVersionCheck.CliVersionCheckName);
         Assert.Equal("warning", cliVersionCheck.GetProperty("status").GetString());
         Assert.Contains(
-            "Timed out after 10 seconds while resolving @microsoft/aspire-cli@latest from the internal npm registry.",
+            "Timed out after 10 seconds while resolving @microsoft/aspire-cli@latest from the npm registry.",
             cliVersionCheck.GetProperty("details").GetString());
     }
 
     [Fact]
-    public async Task DoctorCommand_Json_MissingNpmReturnsSpecificWarningWithoutLookup()
+    public async Task DoctorCommand_Json_NpmUpdateCheckDoesNotRequireNpmOnPath()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(
-            new Dictionary<string, string?>
-            {
-                [NpmInstallDetection.PackageEnvironmentVariableName] = NpmInstallDetection.ExpectedPackageName,
-                [NpmInstallDetection.PackageVersionEnvironmentVariableName] = "13.0.0",
-                [NpmInstallDetection.PackageRidEnvironmentVariableName] = "linux-x64"
-            });
-        var resolveCallCount = 0;
+        using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
 
         using var doc = await RunDoctorJsonAsync(workspace, options =>
         {
-            options.NpmRunnerFactory = _ => new FakeNpmRunner
+            // The update check reads registry metadata over HTTP, so a machine without the Node
+            // toolchain must still get a real answer instead of an npm-not-found warning.
+            options.NpmRunnerFactory = _ => new FakeNpmRunner { IsAvailable = false };
+            options.NpmRegistryClientFactory = _ => new FakeNpmRegistryClient
             {
-                IsAvailable = false,
-                ResolvePackageAsyncCallback = (_, _, _) =>
-                {
-                    Interlocked.Increment(ref resolveCallCount);
-                    return Task.FromResult<Aspire.Cli.Npm.NpmPackageInfo?>(null);
-                }
+                LatestVersion = SemVersion.Parse("99.0.0", SemVersionStyles.Strict)
             };
         });
 
         var cliVersionCheck = GetCheckByName(doc, AspireVersionCheck.CliVersionCheckName);
-        Assert.Equal(0, Volatile.Read(ref resolveCallCount));
-        Assert.Equal("warning", cliVersionCheck.GetProperty("status").GetString());
-        Assert.Contains(
-            "Unable to check for Aspire CLI updates because npm was not found on PATH.",
-            cliVersionCheck.GetProperty("details").GetString());
+        Assert.Contains("99.0.0", cliVersionCheck.GetProperty("message").GetString());
+        Assert.Equal("stable", cliVersionCheck.GetProperty("metadata").GetProperty("latestVersionChannel").GetString());
+    }
+
+    private static IReadOnlyDictionary<string, string?> CreateNpmInstallEnvironment()
+    {
+        return new Dictionary<string, string?>
+        {
+            [NpmInstallDetection.PackageEnvironmentVariableName] = NpmInstallDetection.ExpectedPackageName,
+            [NpmInstallDetection.PackageVersionEnvironmentVariableName] = "13.0.0",
+            [NpmInstallDetection.PackageRidEnvironmentVariableName] = "linux-x64"
+        };
     }
 
     [Fact]

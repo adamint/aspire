@@ -46,18 +46,6 @@ internal interface INpmRunner
     Task<NpmPackageInfo?> ResolvePackageAsync(string packageName, string versionRange, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Resolves a package version anonymously from the internal npm registry without inheriting ambient npm configuration.
-    /// </summary>
-    /// <param name="packageName">The npm package name (e.g., "@microsoft/aspire-cli").</param>
-    /// <param name="versionRange">The version range to resolve (e.g., "latest").</param>
-    /// <param name="cancellationToken">A token to cancel the operation.</param>
-    /// <returns>The resolved package info, or null if the package was not found or npm is not installed.</returns>
-    Task<NpmPackageInfo?> ResolvePackageFromAnonymousInternalRegistryAsync(
-        string packageName,
-        string versionRange,
-        CancellationToken cancellationToken);
-
-    /// <summary>
     /// Downloads a package tarball to a temporary directory using npm pack.
     /// </summary>
     /// <param name="packageName">The npm package name (e.g., "@playwright/cli").</param>

@@ -154,6 +154,7 @@ internal static class CliTestHelper
         services.AddSingleton(options.AgentEnvironmentDetectorFactory);
         services.AddSingleton(options.GitRepositoryFactory);
         services.AddSingleton(options.NpmRunnerFactory);
+        services.AddSingleton(options.NpmRegistryClientFactory);
         services.AddSingleton(options.NpmProvenanceCheckerFactory);
         services.AddSingleton(options.AspireSkillsInstallerFactory);
         services.AddSingleton(options.PlaywrightCliRunnerFactory);
@@ -398,12 +399,11 @@ internal sealed class CliServiceCollectionTestOptions
     {
         var logger = NullLoggerFactory.Instance.CreateLogger<CliUpdateNotifier>();
         var nuGetPackageCache = serviceProvider.GetRequiredService<INuGetPackageCache>();
-        var npmRunner = serviceProvider.GetRequiredService<INpmRunner>();
+        var npmRegistryClient = serviceProvider.GetRequiredService<INpmRegistryClient>();
         var interactionService = serviceProvider.GetRequiredService<IInteractionService>();
         var processPathProvider = serviceProvider.GetRequiredService<IProcessPathProvider>();
         var executionContext = serviceProvider.GetRequiredService<CliExecutionContext>();
-        var timeProvider = serviceProvider.GetRequiredService<TimeProvider>();
-        return new CliUpdateNotifier(logger, nuGetPackageCache, npmRunner, interactionService, processPathProvider, executionContext, timeProvider);
+        return new CliUpdateNotifier(logger, nuGetPackageCache, npmRegistryClient, interactionService, processPathProvider, executionContext);
     };
 
     public Func<IServiceProvider, IAddCommandPrompter> AddCommandPrompterFactory { get; set; } = (IServiceProvider serviceProvider) =>
@@ -660,6 +660,8 @@ internal sealed class CliServiceCollectionTestOptions
     };
 
     public Func<IServiceProvider, INpmRunner> NpmRunnerFactory { get; set; } = _ => new FakeNpmRunner();
+
+    public Func<IServiceProvider, INpmRegistryClient> NpmRegistryClientFactory { get; set; } = _ => new FakeNpmRegistryClient();
 
     public Func<IServiceProvider, INpmProvenanceChecker> NpmProvenanceCheckerFactory { get; set; } = _ => new FakeNpmProvenanceChecker();
 

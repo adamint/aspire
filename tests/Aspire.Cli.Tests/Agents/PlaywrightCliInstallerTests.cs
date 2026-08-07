@@ -1016,9 +1016,6 @@ public class PlaywrightCliInstallerTests
             return Task.FromResult(ResolveResult);
         }
 
-        public Task<NpmPackageInfo?> ResolvePackageFromAnonymousInternalRegistryAsync(string packageName, string versionRange, CancellationToken cancellationToken)
-            => ResolvePackageAsync(packageName, versionRange, cancellationToken);
-
         public Task<string?> PackAsync(string packageName, string version, string outputDirectory, CancellationToken cancellationToken)
         {
             PackCalled = true;

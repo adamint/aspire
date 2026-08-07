@@ -28,12 +28,16 @@ internal sealed record CliVersionStatus(
     string? LatestVersionChannel = null);
 
 /// <summary>
-/// Coarse-grained labels for the channel a recommended CLI update is pulled
-/// from. NuGet discovery selects between stable and prerelease candidates,
-/// while npm's <c>latest</c> dist-tag already identifies one concrete version.
-/// Both paths classify the selected version by its prerelease flag. We
-/// deliberately don't try to distinguish staging from daily here because the
-/// version string alone cannot reliably identify the feed.
+/// Coarse-grained labels for the channel a recommended CLI update is being
+/// pulled from. <see cref="PackageUpdateHelpers.GetNewerVersion"/> picks
+/// between <c>newestStable</c> and <c>newestPrerelease</c> when computing
+/// the recommendation, so labelling by stable vs prerelease is faithful to
+/// the underlying decision rule. The npm path resolves the single version
+/// behind the <c>latest</c> dist-tag and classifies it by the same rule.
+/// We deliberately don't try to distinguish staging from daily here — the
+/// version string alone can't reliably do so, and the user-visible doctor
+/// message only needs to convey "where to look", not the specific feed
+/// identity.
 /// </summary>
 internal static class PackageUpdateRecommendationChannels
 {
@@ -44,44 +48,34 @@ internal static class PackageUpdateRecommendationChannels
 internal class CliUpdateNotifier(
     ILogger<CliUpdateNotifier> logger,
     INuGetPackageCache nuGetPackageCache,
-    INpmRunner npmRunner,
+    INpmRegistryClient npmRegistryClient,
     IInteractionService interactionService,
     IProcessPathProvider processPathProvider,
-    CliExecutionContext executionContext,
-    TimeProvider timeProvider) : ICliUpdateNotifier, IDisposable
+    CliExecutionContext executionContext) : ICliUpdateNotifier
 {
-    private const string LatestNpmVersionRange = "latest";
-    private static readonly TimeSpan s_npmResolutionTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan s_npmResolutionDisposeTimeout = TimeSpan.FromSeconds(2);
-
-    private readonly object _npmResolutionLock = new();
-    private readonly CancellationTokenSource _npmResolutionCancellationSource = new();
     private IEnumerable<Shared.NuGetPackageCli>? _availablePackages;
-    private NpmPackageInfo? _availableNpmPackage;
-    private Task<NpmPackageInfo>? _npmResolutionTask;
-    private bool _disposed;
-
-    internal static TimeSpan NpmResolutionTimeout => s_npmResolutionTimeout;
-    internal static TimeSpan NpmResolutionDisposeTimeout => s_npmResolutionDisposeTimeout;
+    private SemVersion? _availableNpmVersion;
 
     public async Task CheckForCliUpdatesAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
     {
-        ThrowIfDisposed();
-
+        // An npm-installed CLI updates with "npm install -g @microsoft/aspire-cli@latest", so the
+        // recommendation has to come from the same dist-tag that command resolves. Querying NuGet
+        // here would advertise a version npm cannot install.
         if (NpmInstallDetection.IsRunningFromNpm())
         {
             _availablePackages = null;
-            _availableNpmPackage = await GetLatestNpmPackageAsync(cancellationToken);
+            _availableNpmVersion = await npmRegistryClient.GetLatestVersionAsync(
+                NpmInstallDetection.ExpectedPackageName,
+                cancellationToken);
             return;
         }
 
-        _availableNpmPackage = null;
+        _availableNpmVersion = null;
         _availablePackages = await GetCliPackagesAsync(workingDirectory, cancellationToken);
     }
 
     public void NotifyIfUpdateAvailable()
     {
-        ThrowIfDisposed();
         ValidateCliPackageMetadataPrefetching();
         var status = GetCachedVersionStatus();
         if (status.LatestVersion is not null)
@@ -92,8 +86,6 @@ internal class CliUpdateNotifier(
 
     public async Task<CliVersionStatus> GetVersionStatusAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
     {
-        ThrowIfDisposed();
-
         try
         {
             // Callers that need a synchronous answer cannot rely on the background
@@ -117,7 +109,6 @@ internal class CliUpdateNotifier(
 
     public bool IsUpdateAvailable()
     {
-        ThrowIfDisposed();
         ValidateCliPackageMetadataPrefetching();
         return GetCachedVersionStatus().LatestVersion is not null;
     }
@@ -140,77 +131,6 @@ internal class CliUpdateNotifier(
         return PackageUpdateHelpers.GetCurrentPackageVersion();
     }
 
-    private async Task<NpmPackageInfo> GetLatestNpmPackageAsync(
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        Task<NpmPackageInfo> resolutionTask;
-
-        lock (_npmResolutionLock)
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-
-            resolutionTask = _npmResolutionTask ??= ResolveLatestNpmPackageAsync();
-        }
-
-        try
-        {
-            // The npm lookup is shared for the process lifetime, so one caller cannot own its
-            // cancellation. Apply cancellation only while each caller waits for the shared result.
-            return await resolutionTask.WaitAsync(cancellationToken);
-        }
-        catch when (resolutionTask.IsFaulted || resolutionTask.IsCanceled)
-        {
-            // Background notification checks may fail before an explicit doctor check.
-            // Clear only this failed or cancelled task so doctor can make a fresh attempt.
-            lock (_npmResolutionLock)
-            {
-                if (ReferenceEquals(_npmResolutionTask, resolutionTask))
-                {
-                    _npmResolutionTask = null;
-                }
-            }
-
-            throw;
-        }
-    }
-
-    private async Task<NpmPackageInfo> ResolveLatestNpmPackageAsync()
-    {
-        var packageSpecifier = NpmPackageInfo.FormatPackageSpecifier(
-            NpmInstallDetection.ExpectedPackageName,
-            LatestNpmVersionRange);
-
-        if (!npmRunner.IsAvailable)
-        {
-            throw new InvalidOperationException(
-                "Unable to check for Aspire CLI updates because npm was not found on PATH.");
-        }
-
-        using var timeoutSource = new CancellationTokenSource(NpmResolutionTimeout, timeProvider);
-        using var resolutionSource = CancellationTokenSource.CreateLinkedTokenSource(
-            _npmResolutionCancellationSource.Token,
-            timeoutSource.Token);
-
-        try
-        {
-            return await npmRunner.ResolvePackageFromAnonymousInternalRegistryAsync(
-                NpmInstallDetection.ExpectedPackageName,
-                LatestNpmVersionRange,
-                resolutionSource.Token)
-                ?? throw new InvalidOperationException(
-                    $"Unable to resolve {packageSpecifier} from the internal npm registry.");
-        }
-        catch (OperationCanceledException) when (
-            timeoutSource.IsCancellationRequested &&
-            !_npmResolutionCancellationSource.IsCancellationRequested)
-        {
-            throw new TimeoutException(
-                $"Timed out after {NpmResolutionTimeout.TotalSeconds:g} seconds while resolving {packageSpecifier} from the internal npm registry.");
-        }
-    }
-
     private CliVersionStatus GetCachedVersionStatus(string? updateCheckError = null)
     {
         // Keep all version comparison and update-command selection in one place so
@@ -223,7 +143,7 @@ internal class CliUpdateNotifier(
             return new CliVersionStatus(currentVersionString, null, null, updateCheckError);
         }
 
-        if (_availablePackages is null && _availableNpmPackage is null)
+        if (_availablePackages is null && _availableNpmVersion is null)
         {
             return new CliVersionStatus(currentVersionString, null, null);
         }
@@ -234,48 +154,40 @@ internal class CliUpdateNotifier(
             return new CliVersionStatus(currentVersionString, null, null);
         }
 
-        var newerVersion = _availableNpmPackage is { } npmPackage
-            ? GetNewerNpmVersion(currentVersion, npmPackage.Version)
+        var newerVersion = _availableNpmVersion is { } latestNpmVersion
+            ? GetNewerNpmVersion(currentVersion, latestNpmVersion)
             : PackageUpdateHelpers.GetNewerVersion(logger, currentVersion, _availablePackages!);
         var updateCommand = newerVersion is null
             ? null
             : DotNetToolDetection.GetDotNetToolUpdateCommand(processPathProvider.ProcessPath)
-            ?? NpmInstallDetection.GetNpmUpdateCommand()
-            ?? "aspire update";
+                ?? NpmInstallDetection.GetNpmUpdateCommand()
+                ?? "aspire update";
+        // Derive the lane the recommendation comes from so doctor can show
+        // 'Latest version is X (channel: stable)' vs '(channel: prerelease)'.
+        // GetNewerVersion picks between newestStable and newestPrerelease
+        // by exactly this rule, so re-classifying from the returned
+        // version's prerelease flag is faithful to the decision the
+        // package helper made.
         var latestChannel = newerVersion is null
             ? null
-            : (newerVersion.IsPrerelease
-                ? PackageUpdateRecommendationChannels.Prerelease
-                : PackageUpdateRecommendationChannels.Stable);
-
-        return new CliVersionStatus(
-            currentVersionString,
-            newerVersion?.ToString(),
-            updateCommand,
-            UpdateCheckError: null,
-            LatestVersionChannel: latestChannel);
+            : (newerVersion.IsPrerelease ? PackageUpdateRecommendationChannels.Prerelease : PackageUpdateRecommendationChannels.Stable);
+        return new CliVersionStatus(currentVersionString, newerVersion?.ToString(), updateCommand, UpdateCheckError: null, LatestVersionChannel: latestChannel);
     }
 
-    private SemVersion? GetNewerNpmVersion(
-        SemVersion currentVersion,
-        SemVersion latestVersion)
+    private SemVersion? GetNewerNpmVersion(SemVersion currentVersion, SemVersion latestVersion)
     {
-        logger.LogDebug(
-            "Current CLI version: {CurrentVersion}. Latest npm version: {LatestVersion}.",
-            currentVersion,
-            latestVersion);
-
-        if (SemVersion.PrecedenceComparer.Compare(currentVersion, latestVersion) < 0)
+        // npm's "latest" dist-tag names one concrete version rather than a candidate set, so there
+        // is no stable/prerelease selection to make here — only a precedence comparison. Precedence
+        // ordering means a prerelease of the running version (9.4.0-preview.1 against 9.4.0) sorts
+        // lower and is correctly not offered as an update.
+        if (SemVersion.PrecedenceComparer.Compare(currentVersion, latestVersion) >= 0)
         {
-            logger.LogDebug(
-                "Newer CLI version available from npm: {CurrentVersion} -> {LatestVersion}",
-                currentVersion,
-                latestVersion);
-            return latestVersion;
+            logger.LogDebug("No newer CLI version is available from npm. Current: {CurrentVersion}, latest: {LatestVersion}.", currentVersion, latestVersion);
+            return null;
         }
 
-        logger.LogDebug("No newer CLI version is available from npm.");
-        return null;
+        logger.LogDebug("Newer CLI version available from npm: {CurrentVersion} -> {LatestVersion}.", currentVersion, latestVersion);
+        return latestVersion;
     }
 
     private async Task<IEnumerable<Shared.NuGetPackageCli>> GetCliPackagesAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
@@ -285,75 +197,5 @@ internal class CliUpdateNotifier(
             prerelease: true,
             nugetConfigFile: null,
             cancellationToken: cancellationToken);
-    }
-
-    public void Dispose()
-    {
-        Task<NpmPackageInfo>? resolutionTask;
-        Task cancellationTask;
-
-        lock (_npmResolutionLock)
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            Volatile.Write(ref _disposed, true);
-            resolutionTask = _npmResolutionTask;
-            cancellationTask = _npmResolutionCancellationSource.CancelAsync();
-        }
-
-        var shutdownTask = resolutionTask is null
-            ? cancellationTask
-            : Task.WhenAll(cancellationTask, resolutionTask);
-
-        try
-        {
-            // The host disposes services synchronously after stopping hosted services. Give the
-            // shared lookup a short drain budget, but never let a stuck npm process hold shutdown.
-            shutdownTask
-                .WaitAsync(NpmResolutionDisposeTimeout, timeProvider)
-                .GetAwaiter()
-                .GetResult();
-        }
-        catch (TimeoutException)
-        {
-            logger.LogDebug(
-                "npm update resolution did not stop within {Timeout} during disposal.",
-                NpmResolutionDisposeTimeout);
-        }
-        catch (OperationCanceledException) when (_npmResolutionCancellationSource.IsCancellationRequested)
-        {
-        }
-        catch (Exception ex)
-        {
-            logger.LogDebug(ex, "Failed while waiting for npm update resolution to stop.");
-        }
-        finally
-        {
-            if (shutdownTask.IsCompleted)
-            {
-                _npmResolutionCancellationSource.Dispose();
-            }
-            else
-            {
-                _ = shutdownTask.ContinueWith(
-                    static (task, state) =>
-                    {
-                        _ = task.Exception;
-                        ((CancellationTokenSource)state!).Dispose();
-                    },
-                    _npmResolutionCancellationSource,
-                    CancellationToken.None,
-                    TaskContinuationOptions.ExecuteSynchronously,
-                    TaskScheduler.Default);
-            }
-        }
-    }
-
-    private void ThrowIfDisposed()
-    {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed), this);
     }
 }
