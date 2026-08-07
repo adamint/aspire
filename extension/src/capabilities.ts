@@ -71,7 +71,9 @@ export function getSupportedCapabilities(): Capabilities {
     // with the build-ownership token that shares that line. Resolving a conflict there by keeping
     // both sides is what would restore the unversioned 'build-dotnet-using-cli' and with it
     // https://github.com/microsoft/aspire/issues/15850, so the line is left to the change that
-    // owns it.
+    // owns it. Capability tokens here are versioned per feature; an unversioned token silently
+    // fails to match the other side rather than erroring. test/appHostLogOutputCapability.test.ts
+    // enforces that for this token.
     capabilities.push('apphost-log-output.v1');
 
     if (isCsDevKitInstalled()) {
