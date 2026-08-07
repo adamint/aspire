@@ -404,8 +404,12 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
             .Where(r => r.GetResourcePropertyValue(KnownProperties.Resource.ParentName) is { Length: > 0 })
             .ToLookup(r => r.GetResourcePropertyValue(KnownProperties.Resource.ParentName)!, StringComparers.ResourceName);
 
-        // The dictionary isn't mutated while this loop runs: this method is only ever called with
-        // updateSource: false below, so it's safe to enumerate .Values directly without a defensive copy.
+        // Enumerating a ConcurrentDictionary is always safe, which matters because this doesn't run under a
+        // single synchronization context: the resource subscription loop mutates these dictionaries from a
+        // background task, while OnParametersSetAsync reaches this method on the renderer's context. The
+        // enumeration may therefore observe a concurrently added or removed resource, which is fine -- the
+        // next batch recomputes derivation anyway. What this method must not do is write to
+        // _sourceResourceByName while walking it, so every update below passes updateSource: false.
         foreach (var parent in _sourceResourceByName.Values)
         {
             var stateSource = GetReplicaStateSource(parent, childrenByParentName);
@@ -418,7 +422,10 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
                 displayedParent.StartTimeStamp == updatedParent.StartTimeStamp &&
                 displayedParent.StopTimeStamp == updatedParent.StopTimeStamp &&
                 displayedParent.HealthStatus == updatedParent.HealthStatus &&
-                displayedParent.HealthReports.SequenceEqual(updatedParent.HealthReports)))
+                displayedParent.HealthReports.SequenceEqual(updatedParent.HealthReports) &&
+                // State-owned properties travel with the derived state, so a replica change that only
+                // moves one of them (an exit code, for example) still has to refresh the parent row.
+                displayedParent.GetStateOwnedPropertyValues().SequenceEqual(updatedParent.GetStateOwnedPropertyValues())))
             {
                 continue;
             }
@@ -453,9 +460,9 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
                 continue;
             }
 
-            // Lower tier number wins outright; within the same tier the worst health, then the lowest
-            // replica index, then name order wins. This single pass replaces four separate Where/OrderBy
-            // scans but must preserve their exact priority and deterministic tie-break semantics.
+            // Lower tier number wins outright; within the same tier the worst health, then the resource
+            // name, wins. This single pass replaces four separate Where/OrderBy scans but must preserve
+            // their exact priority and deterministic tie-break semantics.
             if (tier < bestTier || (tier == bestTier && CompareReplicaRelevance(child, best!) < 0))
             {
                 best = child;
@@ -485,10 +492,13 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
                 return healthComparison;
             }
 
-            var replicaIndexComparison = a.ReplicaIndex.CompareTo(b.ReplicaIndex);
-            return replicaIndexComparison != 0
-                ? replicaIndexComparison
-                : StringComparers.ResourceName.Compare(a.Name, b.Name);
+            // Break the remaining tie on the resource name because it is immutable for the lifetime of the
+            // resource. ReplicaIndex must not be used here: DashboardClient.CalculateReplicaIndex assigns
+            // "number of resources sharing this display name + 1" on every upsert, so an existing replica
+            // is handed a brand new index each time it changes and the relative order of replica indexes
+            // flips based purely on which replica the app host pushed last. Tie-breaking on it would make
+            // the parent's displayed state flap between equally-ranked replicas.
+            return StringComparers.ResourceName.Compare(a.Name, b.Name);
         }
     }
 
@@ -712,10 +722,17 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
         await _loadingTcs.Task;
 
         // If filters were saved in page state, resource filters now need to be recomputed since the URL has changed.
-        foreach (var resourceViewModel in _resourceByName)
+        // Visibility has to be evaluated against the raw snapshot rather than the rows currently on screen:
+        // a parent row may be displaying a replica's state, and recomputing from that derived row would
+        // never re-evaluate the parent's own state. The hidden-state selection would then be silently
+        // ignored once the last replica goes away and the parent falls back to its own state.
+        foreach (var resourceViewModel in _sourceResourceByName)
         {
             UpdateFromResource(resourceViewModel.Value, updateSource: false);
         }
+
+        // The loop above wrote raw parent rows over the derived ones, so re-derive before rendering.
+        UpdateParentReplicaStates();
 
         if (ResourceName is not null)
         {

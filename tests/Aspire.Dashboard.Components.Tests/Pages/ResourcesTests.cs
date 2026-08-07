@@ -364,8 +364,15 @@ public partial class ResourcesTests : DashboardTestContext
                 CreateChild(parent, "worker-sidecar", "Starting", displayName: "worker-sidecar"))
         ]);
 
+        // Asserting only on the parent would pass before the channel update is consumed, because the
+        // parent already has the expected state. Asserting the child reached "Starting" in the same
+        // WaitForAssertion proves the batch was actually processed and still left the parent alone.
         cut.WaitForAssertion(() =>
         {
+            var updatedChild = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == child.Name);
+            Assert.Equal("Starting", updatedChild.State);
+            Assert.Equal(KnownResourceState.Starting, updatedChild.KnownState);
+
             var updatedParent = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
             Assert.Equal("Scaled to zero", updatedParent.State);
             Assert.Null(updatedParent.KnownState);
@@ -427,17 +434,18 @@ public partial class ResourcesTests : DashboardTestContext
     }
 
     [Fact]
-    public void UpdateResources_RunningReplicasWithEqualHealth_TieBrokenByLowestReplicaIndex()
+    public void UpdateResources_RunningReplicasWithEqualHealth_TieBrokenByNameNotReplicaIndex()
     {
         var viewport = new ViewportInformation(IsDesktop: true, IsUltraLowHeight: false, IsUltraLowWidth: false);
         var parent = CreateResource("syndule-api", "Azure Container App", "Scaled to zero", null);
-        // Both replicas have no health reports, so both default to Healthy: the tie must be broken by
-        // replica index, not by insertion or dictionary iteration order.
-        var higherIndexChild = CreateReplicaChild(parent, "syndule-api--0000002", "Running", replicaIndex: 1, stateStyle: "from-replica-1");
-        var lowerIndexChild = CreateReplicaChild(parent, "syndule-api--0000001", "Running", replicaIndex: 0, stateStyle: "from-replica-0");
+        // Both replicas have no health reports, so both default to Healthy. Name order and replica index
+        // order deliberately disagree: the tie must be broken by the immutable resource name, because
+        // ReplicaIndex is recomputed on every upsert and cannot be relied on for a stable choice.
+        var lowerIndexChild = CreateReplicaChild(parent, "syndule-api--0000002", "Running", replicaIndex: 0, stateStyle: "from-replica-higher-name");
+        var lowerNameChild = CreateReplicaChild(parent, "syndule-api--0000001", "Running", replicaIndex: 1, stateStyle: "from-replica-lower-name");
 
         var channel = Channel.CreateUnbounded<IReadOnlyList<ResourceViewModelChange>>();
-        var dashboardClient = new TestDashboardClient(isEnabled: true, initialResources: [parent, higherIndexChild, lowerIndexChild], resourceChannelProvider: () => channel);
+        var dashboardClient = new TestDashboardClient(isEnabled: true, initialResources: [parent, lowerIndexChild, lowerNameChild], resourceChannelProvider: () => channel);
         ResourceSetupHelpers.SetupResourcesPage(this, viewport, dashboardClient);
 
         var cut = RenderComponent<Components.Pages.Resources>(builder =>
@@ -448,7 +456,58 @@ public partial class ResourcesTests : DashboardTestContext
         cut.WaitForAssertion(() =>
         {
             var updatedParent = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
-            Assert.Equal("from-replica-0", updatedParent.StateStyle);
+            Assert.Equal("from-replica-lower-name", updatedParent.StateStyle);
+        });
+    }
+
+    [Fact]
+    public void UpdateResources_ReplicaIndexReorder_DoesNotChangeSelectedReplicaForParentState()
+    {
+        var viewport = new ViewportInformation(IsDesktop: true, IsUltraLowHeight: false, IsUltraLowWidth: false);
+        var parent = CreateResource("syndule-api", "Azure Container App", "Scaled to zero", null);
+
+        // ReplicaIndex is not stable. DashboardClient.CalculateReplicaIndex assigns
+        // "count of resources with this display name + 1" on every upsert, so an existing replica gets a
+        // brand new index each time it is updated and the relative order of indexes flips purely based
+        // on which replica the app host happened to push last. Here the name order and the index order
+        // deliberately disagree so a tie-break on ReplicaIndex would pick "--0000002".
+        var childA = CreateReplicaChild(parent, "syndule-api--0000001", "Running", replicaIndex: 5, stateStyle: "from-replica-a");
+        var childB = CreateReplicaChild(parent, "syndule-api--0000002", "Running", replicaIndex: 1, stateStyle: "from-replica-b");
+
+        var channel = Channel.CreateUnbounded<IReadOnlyList<ResourceViewModelChange>>();
+        var dashboardClient = new TestDashboardClient(isEnabled: true, initialResources: [parent, childA, childB], resourceChannelProvider: () => channel);
+        ResourceSetupHelpers.SetupResourcesPage(this, viewport, dashboardClient);
+
+        var cut = RenderComponent<Components.Pages.Resources>(builder =>
+        {
+            builder.AddCascadingValue(viewport);
+        });
+
+        cut.WaitForAssertion(() =>
+        {
+            var updatedParent = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+            Assert.Equal("from-replica-a", updatedParent.StateStyle);
+        });
+
+        // Re-push both replicas with their indexes recalculated (and swapped) the way the client does on
+        // upsert. Nothing about either replica's state changed, so the parent's displayed state must not
+        // flap just because the recomputed indexes reordered.
+        channel.Writer.TryWrite([
+            new ResourceViewModelChange(
+                ResourceViewModelChangeType.Upsert,
+                CreateReplicaChild(parent, "syndule-api--0000001", "Running", replicaIndex: 3, stateStyle: "from-replica-a")),
+            new ResourceViewModelChange(
+                ResourceViewModelChangeType.Upsert,
+                CreateReplicaChild(parent, "syndule-api--0000002", "Running", replicaIndex: 0, stateStyle: "from-replica-b")),
+        ]);
+
+        cut.WaitForAssertion(() =>
+        {
+            var updatedChildB = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == childB.Name);
+            Assert.Equal(0, updatedChildB.ReplicaIndex);
+
+            var updatedParent = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+            Assert.Equal("from-replica-a", updatedParent.StateStyle);
         });
     }
 
@@ -517,9 +576,263 @@ public partial class ResourcesTests : DashboardTestContext
     }
 
     [Fact]
+    public void UpdateResources_DerivedParentState_UsesReplicaStateOwnedProperties()
+    {
+        var viewport = new ViewportInformation(IsDesktop: true, IsUltraLowHeight: false, IsUltraLowWidth: false);
+        // The parent carries state-owned properties from its own previous lifetime: a non-zero exit code
+        // and a pending waitingFor list. Once the parent displays a replica's state, keeping those stale
+        // parent values produces a wrong exit-code icon and a bogus "waiting for" tooltip.
+        var parent = CreateResource(
+            "syndule-api",
+            "Azure Container App",
+            "Exited",
+            null,
+            properties: new Dictionary<string, ResourcePropertyViewModel>
+            {
+                [KnownProperties.Resource.ExitCode] = CreateProperty(KnownProperties.Resource.ExitCode, ProtobufValue.ForNumber(137)),
+                [KnownProperties.Resource.WaitingFor] = CreateProperty(KnownProperties.Resource.WaitingFor, ProtobufValue.ForList(ProtobufValue.ForString("db"))),
+                [KnownProperties.Resource.Source] = CreateProperty(KnownProperties.Resource.Source, ProtobufValue.ForString("parent-source"))
+            }.ToImmutableDictionary());
+
+        var child = CreateReplicaChild(
+            parent,
+            "syndule-api--0000007",
+            "Exited",
+            properties: new Dictionary<string, ResourcePropertyViewModel>
+            {
+                [KnownProperties.Resource.ParentName] = CreateParentNameProperty(parent.Name),
+                [KnownProperties.Resource.ExitCode] = CreateProperty(KnownProperties.Resource.ExitCode, ProtobufValue.ForNumber(0))
+            }.ToImmutableDictionary());
+
+        var channel = Channel.CreateUnbounded<IReadOnlyList<ResourceViewModelChange>>();
+        var dashboardClient = new TestDashboardClient(isEnabled: true, initialResources: [parent, child], resourceChannelProvider: () => channel);
+        ResourceSetupHelpers.SetupResourcesPage(this, viewport, dashboardClient);
+
+        var cut = RenderComponent<Components.Pages.Resources>(builder =>
+        {
+            builder.AddCascadingValue(viewport);
+        });
+
+        cut.WaitForAssertion(() =>
+        {
+            var updatedParent = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+            Assert.Equal("Exited", updatedParent.State);
+
+            // The exit code shown alongside the derived state must be the replica's, not the parent's.
+            Assert.True(updatedParent.TryGetExitCode(out var exitCode));
+            Assert.Equal(0, exitCode);
+
+            // The replica isn't waiting on anything, so the parent's stale waitingFor must not survive.
+            Assert.False(updatedParent.TryGetWaitingForDependencies(out _));
+
+            // Identity/configuration properties still belong to the parent.
+            Assert.Equal("parent-source", updatedParent.GetResourcePropertyValue(KnownProperties.Resource.Source));
+        });
+    }
+
+    [Fact]
+    public void UpdateResources_DerivedParentState_ReactsToReplicaStateOwnedPropertyChange()
+    {
+        var viewport = new ViewportInformation(IsDesktop: true, IsUltraLowHeight: false, IsUltraLowWidth: false);
+        var parent = CreateResource("syndule-api", "Azure Container App", "Exited", null);
+        var child = CreateReplicaChild(
+            parent,
+            "syndule-api--0000007",
+            "Exited",
+            properties: new Dictionary<string, ResourcePropertyViewModel>
+            {
+                [KnownProperties.Resource.ParentName] = CreateParentNameProperty(parent.Name),
+                [KnownProperties.Resource.ExitCode] = CreateProperty(KnownProperties.Resource.ExitCode, ProtobufValue.ForNumber(0))
+            }.ToImmutableDictionary());
+
+        var channel = Channel.CreateUnbounded<IReadOnlyList<ResourceViewModelChange>>();
+        var dashboardClient = new TestDashboardClient(isEnabled: true, initialResources: [parent, child], resourceChannelProvider: () => channel);
+        ResourceSetupHelpers.SetupResourcesPage(this, viewport, dashboardClient);
+
+        var cut = RenderComponent<Components.Pages.Resources>(builder =>
+        {
+            builder.AddCascadingValue(viewport);
+        });
+
+        cut.WaitForAssertion(() =>
+        {
+            var updatedParent = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+            Assert.True(updatedParent.TryGetExitCode(out var exitCode));
+            Assert.Equal(0, exitCode);
+        });
+
+        // Only the replica's exit code changes: the state string itself is unchanged. The parent row has
+        // to be refreshed anyway, so copied state-owned properties must take part in the change check.
+        channel.Writer.TryWrite([
+            new ResourceViewModelChange(
+                ResourceViewModelChangeType.Upsert,
+                CreateReplicaChild(
+                    parent,
+                    "syndule-api--0000007",
+                    "Exited",
+                    properties: new Dictionary<string, ResourcePropertyViewModel>
+                    {
+                        [KnownProperties.Resource.ParentName] = CreateParentNameProperty(parent.Name),
+                        [KnownProperties.Resource.ExitCode] = CreateProperty(KnownProperties.Resource.ExitCode, ProtobufValue.ForNumber(137))
+                    }.ToImmutableDictionary()))
+        ]);
+
+        cut.WaitForAssertion(() =>
+        {
+            var updatedParent = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+            Assert.True(updatedParent.TryGetExitCode(out var exitCode));
+            Assert.Equal(137, exitCode);
+        });
+    }
+
+    [Fact]
+    public void UpdateResources_FilterRefresh_AppliesHiddenStateToRawParentStateAfterLastReplicaDeleted()
+    {
+        var viewport = new ViewportInformation(IsDesktop: true, IsUltraLowHeight: false, IsUltraLowWidth: false);
+        var parent = CreateResource("identityserver", "Azure Container App", "Finished", null);
+        var child = CreateReplicaChild(parent, "identityserver--0000003", "Running");
+
+        var channel = Channel.CreateUnbounded<IReadOnlyList<ResourceViewModelChange>>();
+        var dashboardClient = new TestDashboardClient(isEnabled: true, initialResources: [parent, child], resourceChannelProvider: () => channel);
+        ResourceSetupHelpers.SetupResourcesPage(this, viewport, dashboardClient);
+
+        var cut = RenderComponent<Components.Pages.Resources>(builder =>
+        {
+            builder.AddCascadingValue(viewport);
+        });
+
+        cut.WaitForAssertion(() =>
+        {
+            var updatedParent = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+            Assert.Equal("Running", updatedParent.State);
+        });
+
+        // The user hides the "Finished" state via the URL. The parent's own raw state is Finished even
+        // though the grid currently displays the replica-derived "Running", so the filter refresh has to
+        // evaluate visibility against the raw snapshot rather than the derived rows.
+        var navigationManager = Services.GetRequiredService<NavigationManager>();
+        navigationManager.NavigateTo(navigationManager.GetUriWithQueryParameter("HiddenStates", "Finished"));
+        cut.Render();
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.False(cut.Instance.PageViewModel.ResourceStatesToVisibility["Finished"]);
+
+            // The derived state is still Running, so the parent stays visible while a replica exists.
+            var updatedParent = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+            Assert.Equal("Running", updatedParent.State);
+        });
+
+        channel.Writer.TryWrite([
+            new ResourceViewModelChange(ResourceViewModelChangeType.Delete, child)
+        ]);
+
+        // Once the last replica is gone the parent falls back to its raw "Finished" state, which the user
+        // has hidden, so it must drop out of the filtered list.
+        cut.WaitForAssertion(() =>
+        {
+            Assert.DoesNotContain(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+        });
+    }
+
+    [Fact]
+    public void UpdateResources_SelectedParent_ReplicaStateChangeUpdatesSelectedResource()
+    {
+        var viewport = new ViewportInformation(IsDesktop: true, IsUltraLowHeight: false, IsUltraLowWidth: false);
+        var parent = CreateResource("syndule-api", "Azure Container App", "Scaled to zero", null);
+        var child = CreateReplicaChild(parent, "syndule-api--0000007", "Starting");
+
+        var channel = Channel.CreateUnbounded<IReadOnlyList<ResourceViewModelChange>>();
+        var dashboardClient = new TestDashboardClient(isEnabled: true, initialResources: [parent, child], resourceChannelProvider: () => channel);
+        ResourceSetupHelpers.SetupResourcesPage(this, viewport, dashboardClient);
+
+        var cut = RenderComponent<Components.Pages.Resources>(builder =>
+        {
+            builder.AddCascadingValue(viewport);
+        });
+
+        cut.WaitForAssertion(() =>
+        {
+            var updatedParent = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+            Assert.Equal("Starting", updatedParent.State);
+        });
+
+        cut.InvokeAsync(() => cut.Instance.PageViewModel.SelectedResource = cut.Instance.GetFilteredResources().Single(r => r.Name == parent.Name));
+
+        channel.Writer.TryWrite([
+            new ResourceViewModelChange(
+                ResourceViewModelChangeType.Upsert,
+                CreateReplicaChild(parent, "syndule-api--0000007", "Running"))
+        ]);
+
+        // The details pane binds to SelectedResource, so a replica-driven parent state change has to
+        // replace the selected instance too, not just the grid row.
+        cut.WaitForAssertion(() =>
+        {
+            var selected = cut.Instance.PageViewModel.SelectedResource;
+            Assert.NotNull(selected);
+            Assert.Equal(parent.Name, selected.Name);
+            Assert.Equal("Running", selected.State);
+            Assert.Equal(KnownResourceState.Running, selected.KnownState);
+        });
+    }
+
+    [Fact]
+    public void UpdateResources_SelectedParentDeleted_LeavesOrphanedReplicaChildren()
+    {
+        var viewport = new ViewportInformation(IsDesktop: true, IsUltraLowHeight: false, IsUltraLowWidth: false);
+        var parent = CreateResource("syndule-api", "Azure Container App", "Scaled to zero", null);
+        var child = CreateReplicaChild(parent, "syndule-api--0000007", "Running");
+
+        var channel = Channel.CreateUnbounded<IReadOnlyList<ResourceViewModelChange>>();
+        var dashboardClient = new TestDashboardClient(isEnabled: true, initialResources: [parent, child], resourceChannelProvider: () => channel);
+        ResourceSetupHelpers.SetupResourcesPage(this, viewport, dashboardClient);
+
+        var cut = RenderComponent<Components.Pages.Resources>(builder =>
+        {
+            builder.AddCascadingValue(viewport);
+        });
+
+        cut.WaitForAssertion(() =>
+        {
+            var updatedParent = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+            Assert.Equal("Running", updatedParent.State);
+        });
+
+        cut.InvokeAsync(() => cut.Instance.PageViewModel.SelectedResource = cut.Instance.GetFilteredResources().Single(r => r.Name == parent.Name));
+
+        // Deleting the parent leaves children whose parentName points at a resource that no longer
+        // exists. Derivation must simply skip them instead of resurrecting or faulting on the parent.
+        channel.Writer.TryWrite([
+            new ResourceViewModelChange(ResourceViewModelChangeType.Delete, parent)
+        ]);
+
+        cut.WaitForAssertion(() =>
+        {
+            Assert.DoesNotContain(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+
+            var orphanedChild = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == child.Name);
+            Assert.Equal("Running", orphanedChild.State);
+        });
+
+        // A later replica update must still be processed cleanly with no parent present.
+        channel.Writer.TryWrite([
+            new ResourceViewModelChange(
+                ResourceViewModelChangeType.Upsert,
+                CreateReplicaChild(parent, "syndule-api--0000007", "Exited"))
+        ]);
+
+        cut.WaitForAssertion(() =>
+        {
+            var orphanedChild = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == child.Name);
+            Assert.Equal("Exited", orphanedChild.State);
+            Assert.DoesNotContain(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+        });
+    }
+
+    [Fact]
     public void FilterResources()
     {
-        // Arrange
         var viewport = new ViewportInformation(IsDesktop: true, IsUltraLowHeight: false, IsUltraLowWidth: false);
         var initialResources = new List<ResourceViewModel>
         {
@@ -975,12 +1288,12 @@ public partial class ResourcesTests : DashboardTestContext
         Assert.Equal(0, addContext.FailureCount);
     }
 
-    private static ResourceViewModel CreateReplicaChild(ResourceViewModel parent, string childName, string? state, ImmutableArray<HealthReportViewModel>? healthReports = null, int? replicaIndex = null, string? stateStyle = null)
+    private static ResourceViewModel CreateReplicaChild(ResourceViewModel parent, string childName, string? state, ImmutableArray<HealthReportViewModel>? healthReports = null, int? replicaIndex = null, string? stateStyle = null, ImmutableDictionary<string, ResourcePropertyViewModel>? properties = null)
     {
-        return CreateChild(parent, childName, state, parent.DisplayName, healthReports, replicaIndex, stateStyle);
+        return CreateChild(parent, childName, state, parent.DisplayName, healthReports, replicaIndex, stateStyle, properties);
     }
 
-    private static ResourceViewModel CreateChild(ResourceViewModel parent, string childName, string? state, string displayName, ImmutableArray<HealthReportViewModel>? healthReports = null, int? replicaIndex = null, string? stateStyle = null)
+    private static ResourceViewModel CreateChild(ResourceViewModel parent, string childName, string? state, string displayName, ImmutableArray<HealthReportViewModel>? healthReports = null, int? replicaIndex = null, string? stateStyle = null, ImmutableDictionary<string, ResourcePropertyViewModel>? properties = null)
     {
         return CreateResource(
             childName,
@@ -990,10 +1303,22 @@ public partial class ResourcesTests : DashboardTestContext
             stateStyle: stateStyle,
             replicaIndex: replicaIndex,
             displayName: displayName,
-            properties: new Dictionary<string, ResourcePropertyViewModel>
+            properties: properties ?? new Dictionary<string, ResourcePropertyViewModel>
             {
                 [KnownProperties.Resource.ParentName] = CreateParentNameProperty(parent.Name)
             }.ToImmutableDictionary());
+    }
+
+    private static ResourcePropertyViewModel CreateProperty(string name, ProtobufValue value)
+    {
+        return new ResourcePropertyViewModel(
+            name,
+            value,
+            isValueSensitive: false,
+            knownProperty: null,
+            sortOrder: 0,
+            displayName: null,
+            isHighlighted: false);
     }
 
     private static ResourcePropertyViewModel CreateParentNameProperty(string parentName)
