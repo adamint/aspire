@@ -293,7 +293,8 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
             rpcClient,
             appHostServerProject,
             identityVersion: "13.5.0",
-            identityOverridden: true);
+            identityOverridden: true,
+            identityVersionForged: true);
         appHostServerProject.AddLocalProjectSubstitution("Aspire.Hosting.Redis", "13.5.0");
 
         var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0");
@@ -301,6 +302,41 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
         Assert.Null(rpcClient.LastExportRequest);
         Assert.Empty(interactionService.DisplayedRawText);
+    }
+
+    /// <summary>
+    /// A normally installed CLI can export the core package, which is the command's advertised
+    /// default invocation.
+    /// </summary>
+    /// <remarks>
+    /// The guard used to test <c>IdentityOverridden</c>, an aggregate that is
+    /// <see langword="true"/> whenever any identity field came from an environment variable
+    /// <em>or the install sidecar</em>. Every install route writes a sidecar carrying channel and
+    /// version, so the aggregate is set on ordinary installs and the guard rejected precisely the
+    /// CLIs its own error message told callers to use. Only a version this run invented can make
+    /// the label unverifiable, so that is what the guard tests.
+    /// </remarks>
+    [Fact]
+    public async Task SdkExportOfTheCorePackageAcceptsASidecarSuppliedIdentity()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(
+            interactionService,
+            workspace,
+            rpcClient,
+            appHostServerProject,
+            identityVersion: "13.5.0",
+            identityOverridden: true,
+            identityVersionForged: false);
+
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript");
+
+        Assert.Equal(0, exitCode);
+        var request = Assert.NotNull(rpcClient.LastExportRequest);
+        Assert.Equal("Aspire.Hosting", request.PackageName);
     }
 
     /// <summary>
@@ -346,7 +382,8 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
             rpcClient,
             appHostServerProject,
             identityVersion: "99.0.0",
-            identityOverridden: true);
+            identityOverridden: true,
+            identityVersionForged: true);
 
         // No --package at all, so this is the default invocation: Aspire.Hosting at the identity
         // version. Without the guard this publishes the current core surface as 99.0.0.
@@ -605,17 +642,19 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         IAppHostRpcClient rpcClient,
         IAppHostServerProject appHostServerProject,
         string? identityVersion = null,
-        bool identityOverridden = false)
+        bool identityOverridden = false,
+        bool identityVersionForged = false)
     {
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
         {
             options.InteractionServiceFactory = _ => interactionService;
-            if (identityVersion is not null || identityOverridden)
+            if (identityVersion is not null || identityOverridden || identityVersionForged)
             {
                 options.CliExecutionContextFactory = _ => TestExecutionContextHelper.CreateExecutionContext(
                     workspace.WorkspaceRoot,
                     identityVersion: identityVersion,
-                    identityOverridden: identityOverridden);
+                    identityOverridden: identityOverridden,
+                    identityVersionForged: identityVersionForged);
             }
         });
 

@@ -1,12 +1,12 @@
 ﻿// Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:CSharpAppResource
 export interface CSharpAppResource {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): CSharpAppResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): CSharpAppResourcePromise;
     withConfig(config: TestConfigDto): CSharpAppResourcePromise;
     testWithEnvironmentCallback(callback: (arg: TestEnvironmentContext) => Promise<void>): CSharpAppResourcePromise;
     withCreatedAt(createdAt: string): CSharpAppResourcePromise;
     withModifiedAt(modifiedAt: string): CSharpAppResourcePromise;
     withCorrelationId(correlationId: string): CSharpAppResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): CSharpAppResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): CSharpAppResourcePromise;
     withStatus(status: TestResourceStatus): CSharpAppResourcePromise;
     withNestedConfig(config: TestNestedDto): CSharpAppResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): CSharpAppResourcePromise;
@@ -20,21 +20,21 @@ export interface CSharpAppResource {
     withMergeLabelCategorized(label: string, category: string): CSharpAppResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): CSharpAppResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): CSharpAppResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): CSharpAppResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): CSharpAppResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): CSharpAppResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): CSharpAppResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): CSharpAppResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): CSharpAppResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:CSharpAppResourcePromise
 export interface CSharpAppResourcePromise {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): CSharpAppResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): CSharpAppResourcePromise;
     withConfig(config: TestConfigDto): CSharpAppResourcePromise;
     testWithEnvironmentCallback(callback: (arg: TestEnvironmentContext) => Promise<void>): CSharpAppResourcePromise;
     withCreatedAt(createdAt: string): CSharpAppResourcePromise;
     withModifiedAt(modifiedAt: string): CSharpAppResourcePromise;
     withCorrelationId(correlationId: string): CSharpAppResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): CSharpAppResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): CSharpAppResourcePromise;
     withStatus(status: TestResourceStatus): CSharpAppResourcePromise;
     withNestedConfig(config: TestNestedDto): CSharpAppResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): CSharpAppResourcePromise;
@@ -48,20 +48,20 @@ export interface CSharpAppResourcePromise {
     withMergeLabelCategorized(label: string, category: string): CSharpAppResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): CSharpAppResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): CSharpAppResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): CSharpAppResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): CSharpAppResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): CSharpAppResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): CSharpAppResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): CSharpAppResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): CSharpAppResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:ContainerRegistryResource
 export interface ContainerRegistryResource {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): ContainerRegistryResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): ContainerRegistryResourcePromise;
     withConfig(config: TestConfigDto): ContainerRegistryResourcePromise;
     withCreatedAt(createdAt: string): ContainerRegistryResourcePromise;
     withModifiedAt(modifiedAt: string): ContainerRegistryResourcePromise;
     withCorrelationId(correlationId: string): ContainerRegistryResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): ContainerRegistryResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): ContainerRegistryResourcePromise;
     withStatus(status: TestResourceStatus): ContainerRegistryResourcePromise;
     withNestedConfig(config: TestNestedDto): ContainerRegistryResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ContainerRegistryResourcePromise;
@@ -74,20 +74,20 @@ export interface ContainerRegistryResource {
     withMergeLabelCategorized(label: string, category: string): ContainerRegistryResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): ContainerRegistryResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): ContainerRegistryResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): ContainerRegistryResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): ContainerRegistryResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): ContainerRegistryResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): ContainerRegistryResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): ContainerRegistryResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): ContainerRegistryResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:ContainerRegistryResourcePromise
 export interface ContainerRegistryResourcePromise {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): ContainerRegistryResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): ContainerRegistryResourcePromise;
     withConfig(config: TestConfigDto): ContainerRegistryResourcePromise;
     withCreatedAt(createdAt: string): ContainerRegistryResourcePromise;
     withModifiedAt(modifiedAt: string): ContainerRegistryResourcePromise;
     withCorrelationId(correlationId: string): ContainerRegistryResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): ContainerRegistryResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): ContainerRegistryResourcePromise;
     withStatus(status: TestResourceStatus): ContainerRegistryResourcePromise;
     withNestedConfig(config: TestNestedDto): ContainerRegistryResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ContainerRegistryResourcePromise;
@@ -100,21 +100,21 @@ export interface ContainerRegistryResourcePromise {
     withMergeLabelCategorized(label: string, category: string): ContainerRegistryResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): ContainerRegistryResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): ContainerRegistryResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): ContainerRegistryResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): ContainerRegistryResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): ContainerRegistryResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): ContainerRegistryResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): ContainerRegistryResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): ContainerRegistryResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:ContainerResource
 export interface ContainerResource {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): ContainerResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): ContainerResourcePromise;
     withConfig(config: TestConfigDto): ContainerResourcePromise;
     testWithEnvironmentCallback(callback: (arg: TestEnvironmentContext) => Promise<void>): ContainerResourcePromise;
     withCreatedAt(createdAt: string): ContainerResourcePromise;
     withModifiedAt(modifiedAt: string): ContainerResourcePromise;
     withCorrelationId(correlationId: string): ContainerResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): ContainerResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): ContainerResourcePromise;
     withStatus(status: TestResourceStatus): ContainerResourcePromise;
     withNestedConfig(config: TestNestedDto): ContainerResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ContainerResourcePromise;
@@ -128,21 +128,21 @@ export interface ContainerResource {
     withMergeLabelCategorized(label: string, category: string): ContainerResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): ContainerResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): ContainerResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): ContainerResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): ContainerResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): ContainerResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): ContainerResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): ContainerResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): ContainerResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:ContainerResourcePromise
 export interface ContainerResourcePromise {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): ContainerResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): ContainerResourcePromise;
     withConfig(config: TestConfigDto): ContainerResourcePromise;
     testWithEnvironmentCallback(callback: (arg: TestEnvironmentContext) => Promise<void>): ContainerResourcePromise;
     withCreatedAt(createdAt: string): ContainerResourcePromise;
     withModifiedAt(modifiedAt: string): ContainerResourcePromise;
     withCorrelationId(correlationId: string): ContainerResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): ContainerResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): ContainerResourcePromise;
     withStatus(status: TestResourceStatus): ContainerResourcePromise;
     withNestedConfig(config: TestNestedDto): ContainerResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ContainerResourcePromise;
@@ -156,33 +156,33 @@ export interface ContainerResourcePromise {
     withMergeLabelCategorized(label: string, category: string): ContainerResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): ContainerResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): ContainerResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): ContainerResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): ContainerResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): ContainerResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): ContainerResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): ContainerResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): ContainerResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:DistributedApplicationBuilder
 export interface DistributedApplicationBuilder {
-    addTestRedis(name: string, options?: CodeGenerationTypeScriptTestsAddTestRedisOptions): TestRedisResourcePromise;
+    addTestRedis(name: string, options?: CodeGeneration_TypeScript_TestsAddTestRedisOptions): TestRedisResourcePromise;
     addTestVault(name: string): TestVaultResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:DistributedApplicationBuilderPromise
 export interface DistributedApplicationBuilderPromise {
-    addTestRedis(name: string, options?: CodeGenerationTypeScriptTestsAddTestRedisOptions): TestRedisResourcePromise;
+    addTestRedis(name: string, options?: CodeGeneration_TypeScript_TestsAddTestRedisOptions): TestRedisResourcePromise;
     addTestVault(name: string): TestVaultResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:DotnetToolResource
 export interface DotnetToolResource {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): DotnetToolResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): DotnetToolResourcePromise;
     withConfig(config: TestConfigDto): DotnetToolResourcePromise;
     testWithEnvironmentCallback(callback: (arg: TestEnvironmentContext) => Promise<void>): DotnetToolResourcePromise;
     withCreatedAt(createdAt: string): DotnetToolResourcePromise;
     withModifiedAt(modifiedAt: string): DotnetToolResourcePromise;
     withCorrelationId(correlationId: string): DotnetToolResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): DotnetToolResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): DotnetToolResourcePromise;
     withStatus(status: TestResourceStatus): DotnetToolResourcePromise;
     withNestedConfig(config: TestNestedDto): DotnetToolResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): DotnetToolResourcePromise;
@@ -196,21 +196,21 @@ export interface DotnetToolResource {
     withMergeLabelCategorized(label: string, category: string): DotnetToolResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): DotnetToolResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): DotnetToolResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): DotnetToolResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): DotnetToolResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): DotnetToolResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): DotnetToolResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): DotnetToolResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): DotnetToolResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:DotnetToolResourcePromise
 export interface DotnetToolResourcePromise {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): DotnetToolResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): DotnetToolResourcePromise;
     withConfig(config: TestConfigDto): DotnetToolResourcePromise;
     testWithEnvironmentCallback(callback: (arg: TestEnvironmentContext) => Promise<void>): DotnetToolResourcePromise;
     withCreatedAt(createdAt: string): DotnetToolResourcePromise;
     withModifiedAt(modifiedAt: string): DotnetToolResourcePromise;
     withCorrelationId(correlationId: string): DotnetToolResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): DotnetToolResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): DotnetToolResourcePromise;
     withStatus(status: TestResourceStatus): DotnetToolResourcePromise;
     withNestedConfig(config: TestNestedDto): DotnetToolResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): DotnetToolResourcePromise;
@@ -224,21 +224,21 @@ export interface DotnetToolResourcePromise {
     withMergeLabelCategorized(label: string, category: string): DotnetToolResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): DotnetToolResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): DotnetToolResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): DotnetToolResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): DotnetToolResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): DotnetToolResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): DotnetToolResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): DotnetToolResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): DotnetToolResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:ExecutableResource
 export interface ExecutableResource {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): ExecutableResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): ExecutableResourcePromise;
     withConfig(config: TestConfigDto): ExecutableResourcePromise;
     testWithEnvironmentCallback(callback: (arg: TestEnvironmentContext) => Promise<void>): ExecutableResourcePromise;
     withCreatedAt(createdAt: string): ExecutableResourcePromise;
     withModifiedAt(modifiedAt: string): ExecutableResourcePromise;
     withCorrelationId(correlationId: string): ExecutableResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): ExecutableResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): ExecutableResourcePromise;
     withStatus(status: TestResourceStatus): ExecutableResourcePromise;
     withNestedConfig(config: TestNestedDto): ExecutableResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ExecutableResourcePromise;
@@ -252,21 +252,21 @@ export interface ExecutableResource {
     withMergeLabelCategorized(label: string, category: string): ExecutableResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): ExecutableResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): ExecutableResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): ExecutableResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): ExecutableResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): ExecutableResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): ExecutableResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): ExecutableResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): ExecutableResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:ExecutableResourcePromise
 export interface ExecutableResourcePromise {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): ExecutableResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): ExecutableResourcePromise;
     withConfig(config: TestConfigDto): ExecutableResourcePromise;
     testWithEnvironmentCallback(callback: (arg: TestEnvironmentContext) => Promise<void>): ExecutableResourcePromise;
     withCreatedAt(createdAt: string): ExecutableResourcePromise;
     withModifiedAt(modifiedAt: string): ExecutableResourcePromise;
     withCorrelationId(correlationId: string): ExecutableResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): ExecutableResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): ExecutableResourcePromise;
     withStatus(status: TestResourceStatus): ExecutableResourcePromise;
     withNestedConfig(config: TestNestedDto): ExecutableResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ExecutableResourcePromise;
@@ -280,20 +280,20 @@ export interface ExecutableResourcePromise {
     withMergeLabelCategorized(label: string, category: string): ExecutableResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): ExecutableResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): ExecutableResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): ExecutableResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): ExecutableResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): ExecutableResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): ExecutableResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): ExecutableResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): ExecutableResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:ExternalServiceResource
 export interface ExternalServiceResource {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): ExternalServiceResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): ExternalServiceResourcePromise;
     withConfig(config: TestConfigDto): ExternalServiceResourcePromise;
     withCreatedAt(createdAt: string): ExternalServiceResourcePromise;
     withModifiedAt(modifiedAt: string): ExternalServiceResourcePromise;
     withCorrelationId(correlationId: string): ExternalServiceResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): ExternalServiceResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): ExternalServiceResourcePromise;
     withStatus(status: TestResourceStatus): ExternalServiceResourcePromise;
     withNestedConfig(config: TestNestedDto): ExternalServiceResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ExternalServiceResourcePromise;
@@ -306,20 +306,20 @@ export interface ExternalServiceResource {
     withMergeLabelCategorized(label: string, category: string): ExternalServiceResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): ExternalServiceResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): ExternalServiceResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): ExternalServiceResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): ExternalServiceResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): ExternalServiceResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): ExternalServiceResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): ExternalServiceResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): ExternalServiceResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:ExternalServiceResourcePromise
 export interface ExternalServiceResourcePromise {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): ExternalServiceResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): ExternalServiceResourcePromise;
     withConfig(config: TestConfigDto): ExternalServiceResourcePromise;
     withCreatedAt(createdAt: string): ExternalServiceResourcePromise;
     withModifiedAt(modifiedAt: string): ExternalServiceResourcePromise;
     withCorrelationId(correlationId: string): ExternalServiceResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): ExternalServiceResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): ExternalServiceResourcePromise;
     withStatus(status: TestResourceStatus): ExternalServiceResourcePromise;
     withNestedConfig(config: TestNestedDto): ExternalServiceResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ExternalServiceResourcePromise;
@@ -332,20 +332,20 @@ export interface ExternalServiceResourcePromise {
     withMergeLabelCategorized(label: string, category: string): ExternalServiceResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): ExternalServiceResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): ExternalServiceResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): ExternalServiceResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): ExternalServiceResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): ExternalServiceResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): ExternalServiceResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): ExternalServiceResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): ExternalServiceResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:ParameterResource
 export interface ParameterResource {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): ParameterResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): ParameterResourcePromise;
     withConfig(config: TestConfigDto): ParameterResourcePromise;
     withCreatedAt(createdAt: string): ParameterResourcePromise;
     withModifiedAt(modifiedAt: string): ParameterResourcePromise;
     withCorrelationId(correlationId: string): ParameterResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): ParameterResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): ParameterResourcePromise;
     withStatus(status: TestResourceStatus): ParameterResourcePromise;
     withNestedConfig(config: TestNestedDto): ParameterResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ParameterResourcePromise;
@@ -358,20 +358,20 @@ export interface ParameterResource {
     withMergeLabelCategorized(label: string, category: string): ParameterResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): ParameterResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): ParameterResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): ParameterResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): ParameterResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): ParameterResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): ParameterResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): ParameterResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): ParameterResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:ParameterResourcePromise
 export interface ParameterResourcePromise {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): ParameterResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): ParameterResourcePromise;
     withConfig(config: TestConfigDto): ParameterResourcePromise;
     withCreatedAt(createdAt: string): ParameterResourcePromise;
     withModifiedAt(modifiedAt: string): ParameterResourcePromise;
     withCorrelationId(correlationId: string): ParameterResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): ParameterResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): ParameterResourcePromise;
     withStatus(status: TestResourceStatus): ParameterResourcePromise;
     withNestedConfig(config: TestNestedDto): ParameterResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ParameterResourcePromise;
@@ -384,21 +384,21 @@ export interface ParameterResourcePromise {
     withMergeLabelCategorized(label: string, category: string): ParameterResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): ParameterResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): ParameterResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): ParameterResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): ParameterResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): ParameterResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): ParameterResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): ParameterResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): ParameterResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:ProjectResource
 export interface ProjectResource {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): ProjectResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): ProjectResourcePromise;
     withConfig(config: TestConfigDto): ProjectResourcePromise;
     testWithEnvironmentCallback(callback: (arg: TestEnvironmentContext) => Promise<void>): ProjectResourcePromise;
     withCreatedAt(createdAt: string): ProjectResourcePromise;
     withModifiedAt(modifiedAt: string): ProjectResourcePromise;
     withCorrelationId(correlationId: string): ProjectResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): ProjectResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): ProjectResourcePromise;
     withStatus(status: TestResourceStatus): ProjectResourcePromise;
     withNestedConfig(config: TestNestedDto): ProjectResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ProjectResourcePromise;
@@ -412,21 +412,21 @@ export interface ProjectResource {
     withMergeLabelCategorized(label: string, category: string): ProjectResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): ProjectResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): ProjectResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): ProjectResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): ProjectResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): ProjectResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): ProjectResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): ProjectResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): ProjectResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:ProjectResourcePromise
 export interface ProjectResourcePromise {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): ProjectResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): ProjectResourcePromise;
     withConfig(config: TestConfigDto): ProjectResourcePromise;
     testWithEnvironmentCallback(callback: (arg: TestEnvironmentContext) => Promise<void>): ProjectResourcePromise;
     withCreatedAt(createdAt: string): ProjectResourcePromise;
     withModifiedAt(modifiedAt: string): ProjectResourcePromise;
     withCorrelationId(correlationId: string): ProjectResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): ProjectResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): ProjectResourcePromise;
     withStatus(status: TestResourceStatus): ProjectResourcePromise;
     withNestedConfig(config: TestNestedDto): ProjectResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ProjectResourcePromise;
@@ -440,20 +440,20 @@ export interface ProjectResourcePromise {
     withMergeLabelCategorized(label: string, category: string): ProjectResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): ProjectResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): ProjectResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): ProjectResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): ProjectResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): ProjectResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): ProjectResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): ProjectResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): ProjectResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:Resource
 export interface Resource {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): ResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): ResourcePromise;
     withConfig(config: TestConfigDto): ResourcePromise;
     withCreatedAt(createdAt: string): ResourcePromise;
     withModifiedAt(modifiedAt: string): ResourcePromise;
     withCorrelationId(correlationId: string): ResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): ResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): ResourcePromise;
     withStatus(status: TestResourceStatus): ResourcePromise;
     withNestedConfig(config: TestNestedDto): ResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ResourcePromise;
@@ -466,20 +466,20 @@ export interface Resource {
     withMergeLabelCategorized(label: string, category: string): ResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): ResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): ResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): ResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): ResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): ResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): ResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): ResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): ResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:augment:ResourcePromise
 export interface ResourcePromise {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): ResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): ResourcePromise;
     withConfig(config: TestConfigDto): ResourcePromise;
     withCreatedAt(createdAt: string): ResourcePromise;
     withModifiedAt(modifiedAt: string): ResourcePromise;
     withCorrelationId(correlationId: string): ResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): ResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): ResourcePromise;
     withStatus(status: TestResourceStatus): ResourcePromise;
     withNestedConfig(config: TestNestedDto): ResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): ResourcePromise;
@@ -492,8 +492,8 @@ export interface ResourcePromise {
     withMergeLabelCategorized(label: string, category: string): ResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): ResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): ResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): ResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): ResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): ResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): ResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): ResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): ResourcePromise;
 }
@@ -586,13 +586,13 @@ export interface TestCollectionContextPromise extends PromiseLike<TestCollection
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:interface:TestDatabaseResource
 export interface TestDatabaseResource extends ResourceBuilderBase {
     toJSON(): MarshalledHandle;
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): TestDatabaseResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): TestDatabaseResourcePromise;
     withConfig(config: TestConfigDto): TestDatabaseResourcePromise;
     testWithEnvironmentCallback(callback: (arg: TestEnvironmentContext) => Promise<void>): TestDatabaseResourcePromise;
     withCreatedAt(createdAt: string): TestDatabaseResourcePromise;
     withModifiedAt(modifiedAt: string): TestDatabaseResourcePromise;
     withCorrelationId(correlationId: string): TestDatabaseResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): TestDatabaseResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): TestDatabaseResourcePromise;
     withStatus(status: TestResourceStatus): TestDatabaseResourcePromise;
     withNestedConfig(config: TestNestedDto): TestDatabaseResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): TestDatabaseResourcePromise;
@@ -606,21 +606,21 @@ export interface TestDatabaseResource extends ResourceBuilderBase {
     withMergeLabelCategorized(label: string, category: string): TestDatabaseResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): TestDatabaseResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): TestDatabaseResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): TestDatabaseResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): TestDatabaseResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): TestDatabaseResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): TestDatabaseResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): TestDatabaseResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): TestDatabaseResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:interface:TestDatabaseResourcePromise
 export interface TestDatabaseResourcePromise extends PromiseLike<TestDatabaseResource> {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): TestDatabaseResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): TestDatabaseResourcePromise;
     withConfig(config: TestConfigDto): TestDatabaseResourcePromise;
     testWithEnvironmentCallback(callback: (arg: TestEnvironmentContext) => Promise<void>): TestDatabaseResourcePromise;
     withCreatedAt(createdAt: string): TestDatabaseResourcePromise;
     withModifiedAt(modifiedAt: string): TestDatabaseResourcePromise;
     withCorrelationId(correlationId: string): TestDatabaseResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): TestDatabaseResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): TestDatabaseResourcePromise;
     withStatus(status: TestResourceStatus): TestDatabaseResourcePromise;
     withNestedConfig(config: TestNestedDto): TestDatabaseResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): TestDatabaseResourcePromise;
@@ -634,8 +634,8 @@ export interface TestDatabaseResourcePromise extends PromiseLike<TestDatabaseRes
     withMergeLabelCategorized(label: string, category: string): TestDatabaseResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): TestDatabaseResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): TestDatabaseResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): TestDatabaseResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): TestDatabaseResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): TestDatabaseResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): TestDatabaseResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): TestDatabaseResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): TestDatabaseResourcePromise;
 }
@@ -658,9 +658,9 @@ export interface TestMutableCollectionContext {
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:interface:TestRedisResource
 export interface TestRedisResource extends ResourceBuilderBase {
     toJSON(): MarshalledHandle;
-    addTestChildDatabase(name: string, options?: CodeGenerationTypeScriptTestsAddTestChildDatabaseOptions): TestDatabaseResourcePromise;
-    withPersistence(options?: CodeGenerationTypeScriptTestsWithPersistenceOptions): TestRedisResourcePromise;
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): TestRedisResourcePromise;
+    addTestChildDatabase(name: string, options?: CodeGeneration_TypeScript_TestsAddTestChildDatabaseOptions): TestDatabaseResourcePromise;
+    withPersistence(options?: CodeGeneration_TypeScript_TestsWithPersistenceOptions): TestRedisResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): TestRedisResourcePromise;
     withConfig(config: TestConfigDto): TestRedisResourcePromise;
     getTags(): Promise<AspireList<string>>;
     getMetadata(): Promise<AspireDict<string, string>>;
@@ -669,7 +669,7 @@ export interface TestRedisResource extends ResourceBuilderBase {
     withCreatedAt(createdAt: string): TestRedisResourcePromise;
     withModifiedAt(modifiedAt: string): TestRedisResourcePromise;
     withCorrelationId(correlationId: string): TestRedisResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): TestRedisResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): TestRedisResourcePromise;
     withStatus(status: TestResourceStatus): TestRedisResourcePromise;
     withNestedConfig(config: TestNestedDto): TestRedisResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): TestRedisResourcePromise;
@@ -681,26 +681,26 @@ export interface TestRedisResource extends ResourceBuilderBase {
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): TestRedisResourcePromise;
     withEndpoints(endpoints: string[]): TestRedisResourcePromise;
     withEnvironmentVariables(variables: Record<string, string>): TestRedisResourcePromise;
-    getStatusAsync(options?: CodeGenerationTypeScriptTestsGetStatusAsyncOptions): Promise<string>;
+    getStatusAsync(options?: CodeGeneration_TypeScript_TestsGetStatusAsyncOptions): Promise<string>;
     withCancellableOperation(operation: (arg: CancellationToken) => Promise<void>): TestRedisResourcePromise;
-    waitForReadyAsync(timeout: number, options?: CodeGenerationTypeScriptTestsWaitForReadyAsyncOptions): Promise<boolean>;
+    waitForReadyAsync(timeout: number, options?: CodeGeneration_TypeScript_TestsWaitForReadyAsyncOptions): Promise<boolean>;
     withMultiParamHandleCallback(callback: (arg1: TestCallbackContext, arg2: TestEnvironmentContext) => Promise<void>): TestRedisResourcePromise;
-    withDataVolume(options?: CodeGenerationTypeScriptTestsWithDataVolumeOptions): TestRedisResourcePromise;
+    withDataVolume(options?: CodeGeneration_TypeScript_TestsWithDataVolumeOptions): TestRedisResourcePromise;
     withMergeLabel(label: string): TestRedisResourcePromise;
     withMergeLabelCategorized(label: string, category: string): TestRedisResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): TestRedisResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): TestRedisResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): TestRedisResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): TestRedisResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): TestRedisResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): TestRedisResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): TestRedisResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): TestRedisResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:interface:TestRedisResourcePromise
 export interface TestRedisResourcePromise extends PromiseLike<TestRedisResource> {
-    addTestChildDatabase(name: string, options?: CodeGenerationTypeScriptTestsAddTestChildDatabaseOptions): TestDatabaseResourcePromise;
-    withPersistence(options?: CodeGenerationTypeScriptTestsWithPersistenceOptions): TestRedisResourcePromise;
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): TestRedisResourcePromise;
+    addTestChildDatabase(name: string, options?: CodeGeneration_TypeScript_TestsAddTestChildDatabaseOptions): TestDatabaseResourcePromise;
+    withPersistence(options?: CodeGeneration_TypeScript_TestsWithPersistenceOptions): TestRedisResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): TestRedisResourcePromise;
     withConfig(config: TestConfigDto): TestRedisResourcePromise;
     getTags(): Promise<AspireList<string>>;
     getMetadata(): Promise<AspireDict<string, string>>;
@@ -709,7 +709,7 @@ export interface TestRedisResourcePromise extends PromiseLike<TestRedisResource>
     withCreatedAt(createdAt: string): TestRedisResourcePromise;
     withModifiedAt(modifiedAt: string): TestRedisResourcePromise;
     withCorrelationId(correlationId: string): TestRedisResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): TestRedisResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): TestRedisResourcePromise;
     withStatus(status: TestResourceStatus): TestRedisResourcePromise;
     withNestedConfig(config: TestNestedDto): TestRedisResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): TestRedisResourcePromise;
@@ -721,17 +721,17 @@ export interface TestRedisResourcePromise extends PromiseLike<TestRedisResource>
     withUnionDependency(dependency: string | ResourceWithConnectionString | TestRedisResource | Awaitable<ResourceWithConnectionString | TestRedisResource>): TestRedisResourcePromise;
     withEndpoints(endpoints: string[]): TestRedisResourcePromise;
     withEnvironmentVariables(variables: Record<string, string>): TestRedisResourcePromise;
-    getStatusAsync(options?: CodeGenerationTypeScriptTestsGetStatusAsyncOptions): Promise<string>;
+    getStatusAsync(options?: CodeGeneration_TypeScript_TestsGetStatusAsyncOptions): Promise<string>;
     withCancellableOperation(operation: (arg: CancellationToken) => Promise<void>): TestRedisResourcePromise;
-    waitForReadyAsync(timeout: number, options?: CodeGenerationTypeScriptTestsWaitForReadyAsyncOptions): Promise<boolean>;
+    waitForReadyAsync(timeout: number, options?: CodeGeneration_TypeScript_TestsWaitForReadyAsyncOptions): Promise<boolean>;
     withMultiParamHandleCallback(callback: (arg1: TestCallbackContext, arg2: TestEnvironmentContext) => Promise<void>): TestRedisResourcePromise;
-    withDataVolume(options?: CodeGenerationTypeScriptTestsWithDataVolumeOptions): TestRedisResourcePromise;
+    withDataVolume(options?: CodeGeneration_TypeScript_TestsWithDataVolumeOptions): TestRedisResourcePromise;
     withMergeLabel(label: string): TestRedisResourcePromise;
     withMergeLabelCategorized(label: string, category: string): TestRedisResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): TestRedisResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): TestRedisResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): TestRedisResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): TestRedisResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): TestRedisResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): TestRedisResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): TestRedisResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): TestRedisResourcePromise;
 }
@@ -758,13 +758,13 @@ export interface TestResourceContextPromise extends PromiseLike<TestResourceCont
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:interface:TestVaultResource
 export interface TestVaultResource extends ResourceBuilderBase {
     toJSON(): MarshalledHandle;
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): TestVaultResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): TestVaultResourcePromise;
     withConfig(config: TestConfigDto): TestVaultResourcePromise;
     testWithEnvironmentCallback(callback: (arg: TestEnvironmentContext) => Promise<void>): TestVaultResourcePromise;
     withCreatedAt(createdAt: string): TestVaultResourcePromise;
     withModifiedAt(modifiedAt: string): TestVaultResourcePromise;
     withCorrelationId(correlationId: string): TestVaultResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): TestVaultResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): TestVaultResourcePromise;
     withStatus(status: TestResourceStatus): TestVaultResourcePromise;
     withNestedConfig(config: TestNestedDto): TestVaultResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): TestVaultResourcePromise;
@@ -779,21 +779,21 @@ export interface TestVaultResource extends ResourceBuilderBase {
     withMergeLabelCategorized(label: string, category: string): TestVaultResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): TestVaultResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): TestVaultResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): TestVaultResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): TestVaultResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): TestVaultResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): TestVaultResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): TestVaultResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): TestVaultResourcePromise;
 }
 
 // Aspire.Hosting.CodeGeneration.TypeScript.Tests:interface:TestVaultResourcePromise
 export interface TestVaultResourcePromise extends PromiseLike<TestVaultResource> {
-    withOptionalString(options?: CodeGenerationTypeScriptTestsWithOptionalStringOptions): TestVaultResourcePromise;
+    withOptionalString(options?: CodeGeneration_TypeScript_TestsWithOptionalStringOptions): TestVaultResourcePromise;
     withConfig(config: TestConfigDto): TestVaultResourcePromise;
     testWithEnvironmentCallback(callback: (arg: TestEnvironmentContext) => Promise<void>): TestVaultResourcePromise;
     withCreatedAt(createdAt: string): TestVaultResourcePromise;
     withModifiedAt(modifiedAt: string): TestVaultResourcePromise;
     withCorrelationId(correlationId: string): TestVaultResourcePromise;
-    withOptionalCallback(options?: CodeGenerationTypeScriptTestsWithOptionalCallbackOptions): TestVaultResourcePromise;
+    withOptionalCallback(options?: CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions): TestVaultResourcePromise;
     withStatus(status: TestResourceStatus): TestVaultResourcePromise;
     withNestedConfig(config: TestNestedDto): TestVaultResourcePromise;
     withValidator(validator: (arg: TestResourceContext) => Promise<boolean>): TestVaultResourcePromise;
@@ -808,63 +808,63 @@ export interface TestVaultResourcePromise extends PromiseLike<TestVaultResource>
     withMergeLabelCategorized(label: string, category: string): TestVaultResourcePromise;
     withMergeEndpoint(endpointName: string, port: number): TestVaultResourcePromise;
     withMergeEndpointScheme(endpointName: string, port: number, scheme: string): TestVaultResourcePromise;
-    withMergeLogging(logLevel: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingOptions): TestVaultResourcePromise;
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions): TestVaultResourcePromise;
+    withMergeLogging(logLevel: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingOptions): TestVaultResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions): TestVaultResourcePromise;
     withMergeRoute(path: string, method: string, handler: string, priority: number): TestVaultResourcePromise;
     withMergeRouteMiddleware(path: string, method: string, handler: string, priority: number, middleware: string): TestVaultResourcePromise;
 }
 
-// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGenerationTypeScriptTestsAddTestChildDatabaseOptions
-export interface CodeGenerationTypeScriptTestsAddTestChildDatabaseOptions {
+// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGeneration_TypeScript_TestsAddTestChildDatabaseOptions
+export interface CodeGeneration_TypeScript_TestsAddTestChildDatabaseOptions {
     databaseName?: string;
 }
 
-// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGenerationTypeScriptTestsAddTestRedisOptions
-export interface CodeGenerationTypeScriptTestsAddTestRedisOptions {
+// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGeneration_TypeScript_TestsAddTestRedisOptions
+export interface CodeGeneration_TypeScript_TestsAddTestRedisOptions {
     port?: number;
 }
 
-// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGenerationTypeScriptTestsGetStatusAsyncOptions
-export interface CodeGenerationTypeScriptTestsGetStatusAsyncOptions {
+// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGeneration_TypeScript_TestsGetStatusAsyncOptions
+export interface CodeGeneration_TypeScript_TestsGetStatusAsyncOptions {
     cancellationToken?: AbortSignal | CancellationToken;
 }
 
-// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGenerationTypeScriptTestsWaitForReadyAsyncOptions
-export interface CodeGenerationTypeScriptTestsWaitForReadyAsyncOptions {
+// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGeneration_TypeScript_TestsWaitForReadyAsyncOptions
+export interface CodeGeneration_TypeScript_TestsWaitForReadyAsyncOptions {
     cancellationToken?: AbortSignal | CancellationToken;
 }
 
-// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGenerationTypeScriptTestsWithDataVolumeOptions
-export interface CodeGenerationTypeScriptTestsWithDataVolumeOptions {
+// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGeneration_TypeScript_TestsWithDataVolumeOptions
+export interface CodeGeneration_TypeScript_TestsWithDataVolumeOptions {
     name?: string;
     isReadOnly?: boolean;
 }
 
-// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGenerationTypeScriptTestsWithMergeLoggingOptions
-export interface CodeGenerationTypeScriptTestsWithMergeLoggingOptions {
+// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGeneration_TypeScript_TestsWithMergeLoggingOptions
+export interface CodeGeneration_TypeScript_TestsWithMergeLoggingOptions {
     enableConsole?: boolean;
     maxFiles?: number;
 }
 
-// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions
-export interface CodeGenerationTypeScriptTestsWithMergeLoggingPathOptions {
+// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions
+export interface CodeGeneration_TypeScript_TestsWithMergeLoggingPathOptions {
     enableConsole?: boolean;
     maxFiles?: number;
 }
 
-// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGenerationTypeScriptTestsWithOptionalCallbackOptions
-export interface CodeGenerationTypeScriptTestsWithOptionalCallbackOptions {
+// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions
+export interface CodeGeneration_TypeScript_TestsWithOptionalCallbackOptions {
     callback?: (arg: TestCallbackContext) => Promise<void>;
 }
 
-// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGenerationTypeScriptTestsWithOptionalStringOptions
-export interface CodeGenerationTypeScriptTestsWithOptionalStringOptions {
+// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGeneration_TypeScript_TestsWithOptionalStringOptions
+export interface CodeGeneration_TypeScript_TestsWithOptionalStringOptions {
     value?: string;
     enabled?: boolean;
 }
 
-// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGenerationTypeScriptTestsWithPersistenceOptions
-export interface CodeGenerationTypeScriptTestsWithPersistenceOptions {
+// Aspire.Hosting.CodeGeneration.TypeScript.Tests:options:CodeGeneration_TypeScript_TestsWithPersistenceOptions
+export interface CodeGeneration_TypeScript_TestsWithPersistenceOptions {
     mode?: TestPersistenceMode;
 }
 

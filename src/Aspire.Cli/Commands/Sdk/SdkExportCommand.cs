@@ -244,8 +244,10 @@ internal sealed class SdkExportCommand : BaseCommand
     /// version. The comparison that enforces that runs before any project is created, but it
     /// compares the request against the identity while the default request <em>is</em> the identity,
     /// so on its own it only catches an explicitly wrong <c>--package</c>. Two cases get past it.
-    /// An identity override makes the identity itself caller-controlled, and the prebuilt scanner
-    /// has no second signal to check it against, so an override is refused outright. Repository mode
+    /// An <c>ASPIRE_CLI_VERSION</c> override makes the identity itself caller-controlled, and the
+    /// prebuilt scanner has no second signal to check it against, so that override is refused
+    /// outright. It has to be that specific signal rather than the <c>IdentityOverridden</c>
+    /// aggregate, which every installed CLI trips through its install sidecar. Repository mode
     /// is entered through <c>ASPIRE_REPO_ROOT</c>, which is not an identity field at all, so an
     /// installed CLI can be pointed at a checkout on a different version line with no override in
     /// effect; the core package therefore falls through to the same checkout comparison every other
@@ -261,13 +263,18 @@ internal sealed class SdkExportCommand : BaseCommand
     {
         var isCorePackage = string.Equals(packageName, CorePackageName, StringComparison.OrdinalIgnoreCase);
 
-        if (isCorePackage && ExecutionContext.IdentityOverridden)
+        if (isCorePackage && ExecutionContext.IdentityVersionForged)
         {
             // The prebuilt scanner has no second signal: the core assemblies come from the bundle
-            // this CLI shipped with, so an override leaves nothing to check the label against.
+            // this CLI shipped with, so a forged version leaves nothing to check the label against.
             // Repository mode does have one, and falls through to it below.
+            //
+            // This tests IdentityVersionForged rather than the IdentityOverridden aggregate on
+            // purpose. Every install route writes a sidecar carrying channel and version, so the
+            // aggregate is true for an ordinary installed CLI and gating on it rejected the
+            // advertised default export on exactly the installs the error told callers to use.
             return $"The scanner loads the {CorePackageName} assemblies this CLI ships with, so an export of it describes this CLI. " +
-                   $"This run emulates a different build through an ASPIRE_CLI_* override, so the export cannot be attributed to a real build of {packageVersion}. " +
+                   $"This run claims a different version through ASPIRE_CLI_VERSION, so the export cannot be attributed to a real build of {packageVersion}. " +
                    $"Re-run without the override, or export {CorePackageName} from an installed CLI.";
         }
 
@@ -283,12 +290,13 @@ internal sealed class SdkExportCommand : BaseCommand
         var preamble = $"This CLI runs from an Aspire repository checkout, so {packageName} is built from {substitution.ProjectPath} " +
                        $"instead of being restored from a package feed.";
 
-        if (ExecutionContext.IdentityOverridden)
+        if (ExecutionContext.IdentityVersionForged)
         {
-            // An ASPIRE_CLI_* override makes this run an emulation of a build the checkout is not,
-            // which is exactly the combination that cannot be checked: both the source and the label
-            // are caller-controlled. The overrides stay available for every non-substituted path.
-            return $"{preamble} This run also has an ASPIRE_CLI_* identity override in effect, so nothing can confirm the " +
+            // A forged version makes this run an emulation of a build the checkout is not, which is
+            // exactly the combination that cannot be checked: both the source and the label are
+            // caller-controlled. Every other ASPIRE_CLI_* override stays available here, and a
+            // sidecar version does not qualify because the installer wrote it.
+            return $"{preamble} This run also claims a version through ASPIRE_CLI_VERSION, so nothing can confirm the " +
                    $"checkout really is {packageVersion}. Re-run without the override, or export {packageName} from an installed CLI.";
         }
 

@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using Aspire.Shared.CodeGeneration;
@@ -69,6 +70,12 @@ internal sealed partial class TypeScriptApiProjector
 
     // Prefixes stripped from an assembly name before it qualifies an options interface, longest
     // first so that "Aspire.Hosting.Redis" yields "Redis" rather than "HostingRedis".
+    /// <summary>The client parameter every entry-point function takes first.</summary>
+    private const string EntryPointClientParameterName = "client";
+
+    /// <summary>The declared type of <see cref="EntryPointClientParameterName"/>.</summary>
+    private const string EntryPointClientParameterType = "AspireClientRpc";
+
     private static readonly string[] s_optionsInterfaceQualifierPrefixes =
     [
         $"{AtsConstants.AspireHostingAssembly}.",
@@ -852,7 +859,8 @@ internal sealed partial class TypeScriptApiProjector
 
     private TypeScriptApiItem ProjectEntryPoint(TypeScriptApiPackageIdentity package, AtsCapabilityInfo capability)
     {
-        var member = ProjectMethod(package.Name, builderModel: null, capability);
+        _ = package;
+        var signature = ResolveEntryPointSignature(capability);
 
         return new TypeScriptApiItem
         {
@@ -860,12 +868,76 @@ internal sealed partial class TypeScriptApiProjector
             TypeId = capability.CapabilityId,
             Kind = TypeScriptApiItemKind.Method,
             Name = capability.MethodName,
-            Declaration = member.Declaration,
+            Declaration = $"function {signature.Declaration}",
             OwningAssemblyName = GetCapabilityOwningAssemblyName(capability),
-            Summary = member.Summary,
-            Remarks = member.Remarks,
+            Summary = capability.Documentation?.Summary,
+            Remarks = capability.Documentation?.Remarks,
             Members = []
         };
+    }
+
+    /// <summary>
+    /// Resolves the signature of an entry-point capability -- one that hangs off the client rather
+    /// than a builder type -- for both the emitted function and the exported declaration.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Entry points are shaped unlike every other capability, which is why they cannot share
+    /// <see cref="ResolveMethodSignature"/>. They are free functions rather than members, so the
+    /// client has to be passed explicitly as the first parameter, and their optional arguments stay
+    /// positional instead of collapsing into an options bag.
+    /// </para>
+    /// <para>
+    /// Routing <see cref="ProjectEntryPoint"/> through <see cref="ResolveMethodSignature"/> gave the
+    /// export the member shape -- no <c>client</c>, optionals folded into an options interface --
+    /// while <c>GenerateEntryPointFunction</c> emitted the free-function shape. Consumers type-check
+    /// the exported declarations against the generated SDK, so the two disagreeing produced
+    /// declarations that did not describe any callable function.
+    /// </para>
+    /// </remarks>
+    internal TypeScriptApiMethodSignature ResolveEntryPointSignature(AtsCapabilityInfo capability)
+    {
+        ArgumentNullException.ThrowIfNull(capability);
+
+        var (requiredParameters, _) = SeparateParameters(capability.Parameters);
+
+        var parameters = new List<TypeScriptApiParameter>
+        {
+            new() { Name = EntryPointClientParameterName, DeclaredType = EntryPointClientParameterType, IsOptional = false }
+        };
+
+        foreach (var parameter in capability.Parameters)
+        {
+            parameters.Add(new TypeScriptApiParameter
+            {
+                Name = parameter.Name,
+                DeclaredType = MapParameterToTypeScript(parameter),
+                IsOptional = parameter.IsOptional || parameter.IsNullable,
+                Summary = parameter.Documentation?.Summary
+            });
+        }
+
+        return new TypeScriptApiMethodSignature
+        {
+            MethodName = capability.MethodName,
+            ReturnType = ResolveEntryPointReturnType(capability),
+            Parameters = parameters,
+            RequiredParameters = requiredParameters
+        };
+    }
+
+    private string ResolveEntryPointReturnType(AtsCapabilityInfo capability)
+    {
+        var returnTypeId = capability.ReturnType?.TypeId;
+
+        // A capability that returns a wrapped handle is emitted as a fluent function returning the
+        // promise wrapper directly, so it is already thenable and is not wrapped again.
+        if (GetPromiseWrapperForReturnType(capability.ReturnType) is { } promiseWrapper && !string.IsNullOrEmpty(returnTypeId))
+        {
+            return promiseWrapper;
+        }
+
+        return $"Promise<{(string.IsNullOrEmpty(returnTypeId) ? "void" : MapTypeRefToTypeScript(capability.ReturnType))}>";
     }
 
     private static (TypeScriptApiItem Item, TypeScriptApiDeclaration Declaration) ProjectEnum(AtsEnumTypeInfo enumType)
@@ -1608,15 +1680,10 @@ internal sealed partial class TypeScriptApiProjector
     /// The core hosting package keeps unqualified names. It is present in every scan, so its names
     /// were never the ones at risk, and leaving them alone confines the rename to the packages that
     /// actually needed it. The qualifier drops a leading <c>Aspire.Hosting.</c> (or <c>Aspire.</c>)
-    /// and the dots, so <c>Aspire.Hosting.Azure.EventHubs</c> yields
-    /// <c>AzureEventHubsRunAsEmulatorOptions</c> and <c>Aspire.Hosting.Redis</c> yields
-    /// <c>RedisWithDataVolumeOptions</c>.
-    /// </para>
-    /// <para>
-    /// Two assemblies whose names differ only by where the dots fall (<c>Aspire.Hosting.Foo.Bar</c>
-    /// and <c>Aspire.Hosting.FooBar</c>) would collapse to one qualifier. That pair does not exist,
-    /// and the suffix loop in <see cref="RegisterOptionsInterface"/> still keeps the output
-    /// well-formed if it ever does, so it is not worth a longer name for every package to prevent.
+    /// and encodes the remaining separators, so <c>Aspire.Hosting.Azure.EventHubs</c> yields
+    /// <c>Azure_EventHubsRunAsEmulatorOptions</c> and <c>Aspire.Hosting.Redis</c> yields
+    /// <c>RedisWithDataVolumeOptions</c>. See <see cref="GetOptionsInterfaceQualifier"/> for why the
+    /// encoding has to be reversible rather than simply stripping the punctuation.
     /// </para>
     /// </remarks>
     internal static string GetOptionsInterfaceName(string methodName, string owningAssemblyName)
@@ -1633,6 +1700,23 @@ internal sealed partial class TypeScriptApiProjector
     /// Derives the name-space prefix an assembly's options interfaces carry, or an empty string for
     /// the core hosting package and for symbols whose owner could not be resolved.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The encoding has to be injective. A per-package export sees only its own assemblies, so it
+    /// cannot detect that some other package would produce the same qualifier and disambiguate the
+    /// way full generation could. Two assemblies that collide here would emit conflicting options
+    /// interfaces that fail to compile once both package exports are concatenated, which is the
+    /// failure this qualifier exists to prevent. Simply dropping separators is not injective:
+    /// <c>Contoso.Foo.Bar</c> and <c>Contoso.FooBar</c> would both yield <c>ContosoFooBar</c>.
+    /// </para>
+    /// <para>
+    /// So separators are encoded rather than removed. <c>'.'</c> becomes <c>'_'</c>, a literal
+    /// <c>'_'</c> is doubled, and any other character becomes <c>_x</c> followed by its hex code
+    /// point. Every rule is reversible, so distinct assembly names cannot share a qualifier.
+    /// Assembly and package identity is case-insensitive, so casing alone never distinguishes two
+    /// assemblies and normalizing the first character is safe.
+    /// </para>
+    /// </remarks>
     private static string GetOptionsInterfaceQualifier(string owningAssemblyName)
     {
         if (string.IsNullOrEmpty(owningAssemblyName) ||
@@ -1651,18 +1735,47 @@ internal sealed partial class TypeScriptApiProjector
             }
         }
 
-        // Assembly names are dotted identifiers, so dropping the separators is enough to reach a
-        // legal TypeScript identifier; anything else is defensive against a name that is not.
         var qualifier = new StringBuilder(remainder.Length);
         foreach (var character in remainder)
         {
-            if (char.IsLetterOrDigit(character))
+            switch (character)
             {
-                qualifier.Append(character);
+                case '.':
+                    qualifier.Append('_');
+                    break;
+                case '_':
+                    qualifier.Append("__");
+                    break;
+                default:
+                    if (char.IsAsciiLetterOrDigit(character))
+                    {
+                        qualifier.Append(character);
+                    }
+                    else
+                    {
+                        qualifier.Append("_x").Append(((int)character).ToString("X2", CultureInfo.InvariantCulture));
+                    }
+
+                    break;
             }
         }
 
-        return qualifier.Length == 0 ? string.Empty : ToPascalCase(qualifier.ToString());
+        if (qualifier.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        // A TypeScript identifier cannot start with a digit, and an assembly name legitimately can
+        // (for example "3rdParty.Aspire"). Prefixing keeps the result parseable, and cannot alias a
+        // name that already begins with '_' because that character encodes to a doubled '_'.
+        if (char.IsAsciiDigit(qualifier[0]))
+        {
+            qualifier.Insert(0, '_');
+
+            return qualifier.ToString();
+        }
+
+        return ToPascalCase(qualifier.ToString());
     }
 
     /// <summary>

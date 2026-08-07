@@ -1925,7 +1925,7 @@ public partial class AtsTypeScriptCodeGeneratorTests
     /// alongside every other package. Only <c>Aspire.Hosting</c> keeps unqualified names, so the
     /// fixture's own interfaces carry this prefix.
     /// </remarks>
-    private const string TestOptionsPrefix = "CodeGenerationTypeScriptTests";
+    private const string TestOptionsPrefix = "CodeGeneration_TypeScript_Tests";
 
     [Fact]
     public async Task ApiExportUsesTheSameResolvedSignaturesAsGeneratedSource()
@@ -2547,8 +2547,8 @@ public partial class AtsTypeScriptCodeGeneratorTests
             => projector.ResolveOptionsInterfaceName(
                 projector.Resolved.Context.Capabilities.Single(c => c.CapabilityId == $"{packageName}/runAsEmulator"));
 
-        Assert.Equal("AzureEventHubsRunAsEmulatorOptions", EmulatorInterfaceName(hubsAlone, CollisionPackageA));
-        Assert.Equal("AzureServiceBusRunAsEmulatorOptions", EmulatorInterfaceName(busAlone, CollisionPackageB));
+        Assert.Equal("Azure_EventHubsRunAsEmulatorOptions", EmulatorInterfaceName(hubsAlone, CollisionPackageA));
+        Assert.Equal("Azure_ServiceBusRunAsEmulatorOptions", EmulatorInterfaceName(busAlone, CollisionPackageB));
 
         Assert.Equal(
             EmulatorInterfaceName(hubsAlone, CollisionPackageA),
@@ -2556,6 +2556,88 @@ public partial class AtsTypeScriptCodeGeneratorTests
         Assert.Equal(
             EmulatorInterfaceName(busAlone, CollisionPackageB),
             EmulatorInterfaceName(scannedTogether, CollisionPackageB));
+    }
+
+    /// <summary>
+    /// An entry point's exported declaration describes the function the generator actually emits.
+    /// </summary>
+    /// <remarks>
+    /// Entry points are free functions, so the generator emits them taking the client explicitly and
+    /// keeping optional arguments positional. The exporter used to route them through the member
+    /// signature resolver instead, which dropped <c>client</c> and folded the optionals into an
+    /// options bag, so the published declaration described a call that does not exist. Consumers
+    /// type-check against these declarations, so the disagreement surfaces as a compile error in
+    /// their code rather than anywhere near this repository.
+    /// </remarks>
+    [Fact]
+    public void ApiExportDeclaresEntryPointsWithTheSignatureTheGeneratorEmits()
+    {
+        var context = CreateEntryPointContext();
+
+        var projector = new TypeScriptApiProjector(context);
+        var model = projector.BuildApiModel(
+            new TypeScriptApiPackageIdentity(EntryPointPackage, TestPackageVersion),
+            [EntryPointPackage]);
+
+        var exported = Assert.Single(
+            model.Modules.SelectMany(module => module.Items),
+            item => item.Name == "startThing");
+
+        Assert.Equal(
+            "function startThing(client: AspireClientRpc, name: string, retries?: number): Promise<void>",
+            exported.Declaration);
+
+        var generatedSource = new AtsTypeScriptCodeGenerator()
+            .GenerateDistributedApplication(context)["aspire.mts"];
+
+        Assert.Contains(
+            $"export async {exported.Declaration} {{",
+            generatedSource,
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Two assemblies whose names differ only in where their separators fall must not collapse to
+    /// the same options-interface qualifier.
+    /// </summary>
+    /// <remarks>
+    /// The qualifier used to keep only letters and digits, so <c>Contoso.Foo.Bar</c> and
+    /// <c>Contoso.FooBar</c> both produced <c>ContosoFooBar</c>. A per-package export cannot see
+    /// that some other package would land on the same qualifier, so it has no opportunity to
+    /// disambiguate the way full generation could; the two packages would each emit a
+    /// <c>ContosoFooBarRunAsEmulatorOptions</c> with different members and aspire.dev would
+    /// concatenate them into a duplicate declaration that does not compile. Encoding the separator
+    /// instead of dropping it makes the qualifier injective, which is what removes the possibility.
+    /// </remarks>
+    [Fact]
+    public void OptionsInterfaceQualifiersDistinguishAssembliesThatDifferOnlyBySeparatorPlacement()
+    {
+        var dotted = TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "Contoso.Foo.Bar");
+        var joined = TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "Contoso.FooBar");
+
+        Assert.NotEqual(dotted, joined);
+        Assert.Equal("Contoso_Foo_BarRunAsEmulatorOptions", dotted);
+        Assert.Equal("Contoso_FooBarRunAsEmulatorOptions", joined);
+    }
+
+    /// <summary>
+    /// An assembly name that starts with a digit still yields a parseable TypeScript identifier.
+    /// </summary>
+    /// <remarks>
+    /// Assembly names may begin with a digit -- <c>3rdParty.Aspire</c> is legal -- but TypeScript
+    /// identifiers may not, so the unguarded qualifier emitted
+    /// <c>interface 3rdPartyAspireRunAsEmulatorOptions</c>, which is a syntax error rather than a
+    /// naming inconvenience. The escape cannot alias a name that already begins with an underscore
+    /// because a literal underscore encodes as a doubled one.
+    /// </remarks>
+    [Fact]
+    public void OptionsInterfaceQualifiersEscapeAssemblyNamesThatStartWithADigit()
+    {
+        var name = TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "3rdParty.Aspire");
+
+        Assert.Equal("_3rdParty_AspireRunAsEmulatorOptions", name);
+        Assert.True(name[0] is '_' or '$' || char.IsLetter(name[0]), $"'{name}' is not a valid TypeScript identifier.");
+        Assert.NotEqual(name, TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "_3rdParty.Aspire"));
     }
 
     /// <summary>
@@ -2586,15 +2668,15 @@ public partial class AtsTypeScriptCodeGeneratorTests
             documentedOptions,
             item =>
             {
-                Assert.Equal("AzureEventHubsRunAsEmulatorOptions", item.Name);
+                Assert.Equal("Azure_EventHubsRunAsEmulatorOptions", item.Name);
                 Assert.Equal(CollisionPackageA, item.OwningAssemblyName);
             });
 
         var serviceBusDeclaration = Assert.Single(
             model.Declarations,
-            declaration => declaration.Content.Contains("AzureServiceBusRunAsEmulatorOptions", StringComparison.Ordinal));
+            declaration => declaration.Content.Contains("Azure_ServiceBusRunAsEmulatorOptions", StringComparison.Ordinal));
 
-        Assert.Equal($"{CollisionPackageB}:options:AzureServiceBusRunAsEmulatorOptions", serviceBusDeclaration.Id);
+        Assert.Equal($"{CollisionPackageB}:options:Azure_ServiceBusRunAsEmulatorOptions", serviceBusDeclaration.Id);
         Assert.Equal(CollisionPackageB, serviceBusDeclaration.OwningAssemblyName);
     }
 
@@ -2612,7 +2694,7 @@ public partial class AtsTypeScriptCodeGeneratorTests
     /// Both directions fail under the old scheme, but at different assertions, and that asymmetry
     /// is why the body comparison is here. Event Hubs was scanned first and kept the unsuffixed
     /// base name, so it fails only on the name: it produced <c>RunAsEmulatorOptions</c> rather than
-    /// <c>AzureEventHubsRunAsEmulatorOptions</c>. Service Bus lost that draw during full generation
+    /// <c>Azure_EventHubsRunAsEmulatorOptions</c>. Service Bus lost that draw during full generation
     /// and was suffixed there while its own single-package export was not, so it disagreed about
     /// the interface itself. Checking only that the exported name appears among the generated names
     /// would have missed it, because the name did appear -- it just belonged to Event Hubs. The old
@@ -2623,8 +2705,8 @@ public partial class AtsTypeScriptCodeGeneratorTests
     /// </para>
     /// </remarks>
     [Theory]
-    [InlineData(CollisionPackageA, "AzureEventHubsRunAsEmulatorOptions")]
-    [InlineData(CollisionPackageB, "AzureServiceBusRunAsEmulatorOptions")]
+    [InlineData(CollisionPackageA, "Azure_EventHubsRunAsEmulatorOptions")]
+    [InlineData(CollisionPackageB, "Azure_ServiceBusRunAsEmulatorOptions")]
     public void ApiExportNamesACollidingOptionsInterfaceTheWayGenerationDoes(string packageName, string expectedInterfaceName)
     {
         var fullContext = CreateEmulatorCollisionContext();
@@ -2665,6 +2747,52 @@ public partial class AtsTypeScriptCodeGeneratorTests
     /// <c>Action&lt;IResourceBuilder&lt;T&gt;&gt;</c> for different <c>T</c>, so their options
     /// interfaces cannot be merged. The capabilities here are synthetic; only the shape matters.
     /// </remarks>
+    private const string EntryPointPackage = "Aspire.Hosting.Contoso.EntryPoints";
+
+    /// <summary>
+    /// Builds a context holding a single entry-point capability: one with no target type, so it is
+    /// emitted as a free function rather than as a member of a builder interface.
+    /// </summary>
+    private static AtsContext CreateEntryPointContext()
+    {
+        var capability = new AtsCapabilityInfo
+        {
+            CapabilityId = $"{EntryPointPackage}/startThing",
+            MethodName = "startThing",
+            Parameters =
+            [
+                new AtsParameterInfo
+                {
+                    Name = "name",
+                    Type = new AtsTypeRef { TypeId = AtsConstants.String, Category = AtsTypeCategory.Primitive }
+                },
+                new AtsParameterInfo
+                {
+                    Name = "retries",
+                    Type = new AtsTypeRef { TypeId = AtsConstants.Number, Category = AtsTypeCategory.Primitive },
+                    IsOptional = true
+                }
+            ],
+            ReturnType = new AtsTypeRef { TypeId = AtsConstants.Void, Category = AtsTypeCategory.Primitive },
+            ExpandedTargetTypes = [],
+            CapabilityKind = AtsCapabilityKind.Method
+        };
+
+        return new AtsContext
+        {
+            Capabilities = [capability],
+            HandleTypes = [],
+            DtoTypes = [],
+            EnumTypes = [],
+            ExportedValues = [],
+            Diagnostics = [],
+            CapabilityExportingAssemblyNames = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [capability.CapabilityId] = EntryPointPackage
+            }
+        };
+    }
+
     private static AtsContext CreateEmulatorCollisionContext(bool includeEventHubs = true, bool includeServiceBus = true)
     {
         static AtsTypeInfo Resource(string packageName, string typeName) => new()

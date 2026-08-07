@@ -1864,16 +1864,10 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
     {
         var methodName = capability.MethodName;
 
-        // Build parameter list
-        var paramDefs = new List<string> { "client: AspireClientRpc" };
-        foreach (var param in capability.Parameters)
-        {
-            var tsType = _projector.MapParameterToTypeScript(param);
-            var optional = param.IsOptional || param.IsNullable ? "?" : "";
-            paramDefs.Add($"{param.Name}{optional}: {tsType}");
-        }
-
-        var paramsString = string.Join(", ", paramDefs);
+        // Resolved once and shared with the canonical exporter so the emitted function and the
+        // declaration that documents it cannot describe different parameter lists.
+        var signature = _projector.ResolveEntryPointSignature(capability);
+        var paramsString = signature.ParameterList;
         var (requiredParams, optionalParams) = TypeScriptApiProjector.SeparateParameters(capability.Parameters);
 
         // Determine return type - check if return type has a Promise wrapper
@@ -1895,7 +1889,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
 
             Write($"export function {methodName}(");
             Write(paramsString);
-            WriteLine($"): {returnPromiseWrapper} {{");
+            WriteLine($"): {signature.ReturnType} {{");
             // Use async IIFE to resolve promise-like handle params before RPC
             WriteLine($"    const promise = (async () => {{");
             // Resolve promise-like handle params
@@ -1933,7 +1927,7 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
 
             Write($"export async function {methodName}(");
             Write(paramsString);
-            WriteLine($"): Promise<{returnType}> {{");
+            WriteLine($"): {signature.ReturnType} {{");
             // Resolve promise-like handle params
             foreach (var param in capability.Parameters)
             {
