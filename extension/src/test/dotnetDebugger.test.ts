@@ -5,6 +5,7 @@ import * as nodePath from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { createProjectDebuggerExtension, projectDebuggerExtension, quoteCommandLineArgument } from '../debugger/languages/dotnet';
+import { extensionLogOutputChannel } from '../utils/logging';
 import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, ProjectLaunchConfiguration } from '../dcp/types';
 import * as io from '../utils/io';
 import { ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
@@ -63,7 +64,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         // module-scoped "already prompted" flag for every later suite. Neutralize both here so no
         // individual test can leak that state.
         sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
-        initializeHotReloadPromptState(createTestMemento());
+        initializeHotReloadPromptState({ globalState: createTestMemento() });
     });
 
     teardown(() => {
@@ -368,6 +369,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         stubCsDevKitExtension({ isLimitedActivation: false });
         sinon.stub(vscode.workspace, 'getConfiguration').returns({
             get: () => false,
+            inspect: () => ({ key: 'hotReload', defaultValue: false }),
             update: async () => undefined
         } as unknown as vscode.WorkspaceConfiguration);
 
@@ -383,13 +385,29 @@ suite('Dotnet Debugger Extension Tests', () => {
         resolveNotification?.(undefined);
     });
 
-    test('project launch succeeds when C# Dev Kit throws while its Hot Reload state is read', async () => {
-        // Dev Kit is a third-party optional dependency. Nothing it does may turn a working .NET
-        // debug session into a failed one, so a throw from its exports has to degrade to "no Hot
-        // Reload" rather than propagating out of the launch path.
-        stubCsDevKitExtension({
-            get isLimitedActivation(): boolean { throw new Error('dev kit exploded'); }
-        });
+    test('project launch succeeds when reading Hot Reload state throws', async () => {
+        // Hot Reload state is read from optional third-party extensions and from VS Code settings,
+        // neither of which this extension controls. Nothing there may turn a working .NET debug
+        // session into a failed one, so a throw has to degrade to "no Hot Reload" rather than
+        // propagating out of the launch path.
+        //
+        // Throws from the extension lookup itself, which is the first thing the launch path reads.
+        // An earlier version of this test threw from a Dev Kit export that the code stopped reading,
+        // so it passed without ever entering the catch it was written to cover.
+        sinon.stub(vscode.extensions, 'getExtension').throws(new Error('extension host is unavailable'));
+        const warn = sinon.stub(extensionLogOutputChannel, 'warn');
+
+        const debugConfig = await createProjectDebugConfiguration();
+
+        assert.strictEqual(debugConfig.program, 'C:\\temp\\bin\\Debug\\net7.0\\TestProject.dll');
+        assert.strictEqual(warn.called, true, 'the failure must be reported to the log rather than swallowed silently');
+    });
+
+    test('project launch succeeds when the Hot Reload settings cannot be read', async () => {
+        // The other half of the same guarantee: settings resolution is the second thing the launch
+        // path reads, and a corrupt or unavailable configuration must not fail the session either.
+        stubCsDevKitExtension({});
+        sinon.stub(vscode.workspace, 'getConfiguration').throws(new Error('settings are unavailable'));
 
         const debugConfig = await createProjectDebugConfiguration();
 
@@ -424,7 +442,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(notification.called, false, 'a user without Dev Kit must never be prompted');
     });
 
-    async function createProjectDebugConfiguration(options: { debug?: boolean } = {}): Promise<AspireResourceExtendedDebugConfiguration> {
+    async function createProjectDebugConfiguration(options: { debug?: boolean; runId?: string; debugSessionId?: string } = {}): Promise<AspireResourceExtendedDebugConfiguration> {
         const outputPath = 'C:\\temp\\bin\\Debug\\net7.0\\TestProject.dll';
         const { extension, doesFileExistStub } = createDebuggerExtension(outputPath, null, true, true);
 
@@ -435,8 +453,8 @@ suite('Dotnet Debugger Extension Tests', () => {
 
         const debug = options.debug ?? true;
         const debugConfig: AspireResourceExtendedDebugConfiguration = {
-            runId: '1',
-            debugSessionId: '1',
+            runId: options.runId ?? '1',
+            debugSessionId: options.debugSessionId ?? '1',
             type: 'coreclr',
             name: 'Test Debug Config',
             request: 'launch',
@@ -447,7 +465,7 @@ suite('Dotnet Debugger Extension Tests', () => {
             launchConfig,
             [],
             [],
-            { debug, runId: '1', debugSessionId: '1', isApphost: false, debugSession: sinon.createStubInstance(AspireDebugSession) },
+            { debug, runId: debugConfig.runId, debugSessionId: options.debugSessionId ?? '1', isApphost: false, debugSession: sinon.createStubInstance(AspireDebugSession) },
             debugConfig);
 
         // Restored so a caller can build a second configuration in the same test; sinon refuses to
@@ -456,6 +474,42 @@ suite('Dotnet Debugger Extension Tests', () => {
 
         return debugConfig;
     }
+
+    test('scopes the Hot Reload messages to the Aspire launch, not to each resource', async () => {
+        // DCP generates a fresh runId for every `PUT /run_session`, so sibling resources of one
+        // Aspire launch carry different runIds but share a debugSessionId. The enable prompt and the
+        // "Hot Reload is active" notice describe mutually exclusive states, so keying the exclusion
+        // on runId would let the prompt speak for the first project and the notice for the second -
+        // telling the user to restart debugging and that Hot Reload is already on, in one launch.
+        initializeHotReloadPromptState({ globalState: createTestMemento() });
+        stubCsDevKitExtension({});
+        // Already stubbed in setup; sinon refuses to wrap it twice, so reprogram the existing stub.
+        const notification = vscode.window.showInformationMessage as sinon.SinonStub;
+        notification.resolves('Enable Hot Reload' as unknown as vscode.MessageItem);
+
+        // The first resource sees the setting off and is offered it; accepting flips it on, which is
+        // what the second resource then reads.
+        let settingEnabled = false;
+        sinon.stub(vscode.workspace, 'getConfiguration').returns({
+            get: (name: string) => name === 'hotReload' ? settingEnabled : true,
+            inspect: () => ({ key: 'hotReload', defaultValue: false }),
+            update: sinon.stub().callsFake(async () => { settingEnabled = true; })
+        } as unknown as vscode.WorkspaceConfiguration);
+
+        await createProjectDebugConfiguration({ runId: 'resource-1', debugSessionId: 'launch-1' });
+        // The prompt is fire-and-forget and its accept path shows a second, confirming message, so
+        // let that chain settle before taking the baseline or it lands during the next resource.
+        await new Promise(resolve => setTimeout(resolve, 5));
+        const callsAfterFirstResource = notification.callCount;
+
+        await createProjectDebugConfiguration({ runId: 'resource-2', debugSessionId: 'launch-1' });
+        await new Promise(resolve => setTimeout(resolve, 5));
+
+        assert.strictEqual(
+            notification.callCount,
+            callsAfterFirstResource,
+            'a sibling resource of the same launch must not contradict the message the launch already showed');
+    });
 
     test('advertises the coreclr project debugger and extracts project_path for .csproj and file-based .cs', () => {
         // A DotnetProjectResource (AddDotnetProject) advertises the same "project" launch capability as
@@ -1829,6 +1883,7 @@ suite('Dotnet Debugger Extension Tests', () => {
             });
             sinon.stub(vscode.workspace, 'getConfiguration').returns({
                 get: () => false,
+                inspect: () => ({ key: 'hotReload', defaultValue: false }),
                 update: async () => undefined
             } as unknown as vscode.WorkspaceConfiguration);
 

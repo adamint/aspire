@@ -619,8 +619,13 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
             // that reads a third-party optional extension, and Hot Reload is an enhancement:
             // nothing it does may turn a working .NET debug session into a failed one.
             try {
+                // Hot Reload is applied by the debugger, so `noDebug` decides whether any of this
+                // applies at all. Gated on the configuration's own `noDebug`, not
+                // `launchOptions.debug`: the `dotnet run` and file-based-executable fallbacks above
+                // force `noDebug = true` while `launchOptions.debug` stays true.
+                const isDebugSession = debugConfiguration.noDebug !== true;
                 const hotReloadDiagnostics = getHotReloadDiagnostics();
-                logHotReloadDiagnostics(path.basename(projectPath), hotReloadDiagnostics);
+                logHotReloadDiagnostics(path.basename(projectPath), hotReloadDiagnostics, isDebugSession);
 
                 // Dev Kit ships Hot Reload behind an opt-in that older builds default to off, so a
                 // user with Dev Kit installed can debug an Aspire app forever without the feature
@@ -629,18 +634,21 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 // Deliberately NOT awaited. A VS Code notification carrying buttons stays up until
                 // the user interacts with it, and this callback runs before the debug session is
                 // created, so awaiting it would stall the resource behind an advisory message.
-                // Gated on the configuration's own `noDebug`, not `launchOptions.debug`. The
-                // `dotnet run` and file-based-executable fallbacks above force `noDebug = true`
-                // while `launchOptions.debug` stays true, and Hot Reload is applied by the debugger.
-                // Offering it there would burn the single one-time prompt on a resource that just
-                // told the user its debugger was disabled.
-                void promptToEnableHotReloadIfNeeded(hotReloadDiagnostics, debugConfiguration.noDebug !== true)
+                //
+                // `launchOptions.debugSessionId` identifies the Aspire launch this resource belongs to, and every
+                // sibling resource of the same app run carries the same one. Both messages take it so
+                // that only one of them can speak for a launch, without suppressing the other for the
+                // rest of the window: after the user enables the setting here and restarts debugging
+                // as instructed, that next launch is when the notice should explain what Hot Reload
+                // now covers. Not `runId` — DCP generates that per `PUT /run_session`, so it differs
+                // between sibling resources of a single launch.
+                void promptToEnableHotReloadIfNeeded(hotReloadDiagnostics, isDebugSession, launchOptions.debugSessionId)
                     .catch(err => extensionLogOutputChannel.warn(`Hot Reload prompt failed: ${err instanceof Error ? err.message : String(err)}`));
 
                 // Complements the prompt above rather than duplicating it. The prompt only fires when
                 // Hot Reload is off; this fires when it is already on, which is the case where the
                 // user gets no signal at all that the feature exists or what it covers.
-                announceHotReloadForSessionIfNeeded(hotReloadDiagnostics, debugConfiguration.noDebug !== true);
+                announceHotReloadForSessionIfNeeded(hotReloadDiagnostics, isDebugSession, launchOptions.debugSessionId);
             }
             catch (err) {
                 extensionLogOutputChannel.warn(`Could not determine C# Dev Kit Hot Reload availability; continuing without it: ${err instanceof Error ? err.message : String(err)}`);

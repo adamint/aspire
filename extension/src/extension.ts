@@ -367,8 +367,8 @@ export async function activate(context: vscode.ExtensionContext) {
   aspireExtensionContext.initialize(rpcServer, context, debugConfigProvider, dcpServer, terminalProvider, editorCommandProvider);
 
   // The .NET resource launch path decides whether to offer Hot Reload, but it has no access to the
-  // extension context, so hand it the storage used to remember a dismissal.
-  initializeHotReloadPromptState(context.globalState);
+  // extension context, so hand it the context used to remember a dismissal.
+  initializeHotReloadPromptState(context);
 
   // Register Aspire MCP server definition provider so the Aspire MCP server
   // appears automatically in VS Code's MCP tools list for Aspire workspaces.

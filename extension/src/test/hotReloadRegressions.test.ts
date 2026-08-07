@@ -17,11 +17,16 @@ import { extensionLogOutputChannel } from '../utils/logging';
  * .NET resources at all, and users who have the C# extension but not Dev Kit. "No trace" means no
  * notification, no output-channel logging, and no change to any launch configuration.
  *
- * Every suite here arms the feature as strongly as it can be armed - Dev Kit installed, active,
- * fully activated, and the Hot Reload setting turned OFF, which is precisely the state that makes a
- * .NET project resource raise the enable prompt - and then asserts that nothing happens anyway. An
- * "armed harness" control test in each suite proves the setup would fire if it were eligible, so
- * these cannot silently degrade into tests that pass because nothing was wired up.
+ * The polyglot suite arms the feature as strongly as it can be armed - Dev Kit installed and the Hot
+ * Reload setting turned OFF, which is precisely the state that makes an eligible .NET project
+ * resource raise the enable prompt - and then asserts that nothing happens anyway. Its "armed
+ * harness" control test proves the setup would fire for an eligible resource, so that suite cannot
+ * silently degrade into tests that pass because nothing was wired up.
+ *
+ * The other two suites cannot be armed that way, because the thing being tested is the absence of
+ * Dev Kit itself. They instead assert the population directly: with the C# extension alone the
+ * project debugger stays registered but Hot Reload is inert, and with neither extension the project
+ * debugger is not registered at all.
  */
 suite('Hot Reload Regression Tests', () => {
     let notification: sinon.SinonStub;
@@ -32,7 +37,7 @@ suite('Hot Reload Regression Tests', () => {
         notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
         logInfo = sinon.stub(extensionLogOutputChannel, 'info');
         logWarn = sinon.stub(extensionLogOutputChannel, 'warn');
-        initializeHotReloadPromptState(createTestMemento());
+        initializeHotReloadPromptState({ globalState: createTestMemento() });
     });
 
     teardown(() => {
@@ -61,6 +66,7 @@ suite('Hot Reload Regression Tests', () => {
     function stubHotReloadSettingOff(): void {
         sinon.stub(vscode.workspace, 'getConfiguration').returns({
             get: () => false,
+            inspect: () => ({ key: 'hotReload', defaultValue: false }),
             update: async () => undefined
         } as unknown as vscode.WorkspaceConfiguration);
     }
@@ -135,7 +141,7 @@ suite('Hot Reload Regression Tests', () => {
             // Asserted on the notification rather than the return value: the function reports
             // whether the user ENABLED Hot Reload, and the stubbed notification dismisses without
             // choosing. What matters here is that the offer was made at all.
-            await promptToEnableHotReloadIfNeeded(getHotReloadDiagnostics(), true);
+            await promptToEnableHotReloadIfNeeded(getHotReloadDiagnostics(), true, 'run-1');
 
             assert.strictEqual(notification.called, true, 'an eligible .NET resource must be offered Hot Reload in this configuration');
             assert.strictEqual(notification.firstCall.args[0], hotReloadAvailablePrompt);
@@ -178,28 +184,35 @@ suite('Hot Reload Regression Tests', () => {
         });
 
         test('reports Hot Reload as unavailable rather than merely disabled', () => {
+            // Availability is decided by Dev Kit being installed, not by the setting. A C#-only user
+            // must never be told the setting is what is standing between them and Hot Reload,
+            // because turning it on would change nothing for them.
             const diagnostics = getHotReloadDiagnostics();
 
             assert.strictEqual(diagnostics.devKitInstalled, false);
+
+            logHotReloadDiagnostics('api', diagnostics, true);
+
+            assertNoHotReloadTrace('a C# extension user without Dev Kit');
         });
 
         test('never offers to enable Hot Reload, because enabling it would not help', async () => {
             // The setting belongs to Dev Kit. Turning it on for a user who does not have Dev Kit
             // would change nothing and would advertise a feature they cannot use.
-            const prompted = await promptToEnableHotReloadIfNeeded(getHotReloadDiagnostics(), true);
+            const prompted = await promptToEnableHotReloadIfNeeded(getHotReloadDiagnostics(), true, 'run-1');
 
             assert.strictEqual(prompted, false);
             assert.strictEqual(notification.called, false);
         });
 
         test('never announces an active Hot Reload session', () => {
-            announceHotReloadForSessionIfNeeded(getHotReloadDiagnostics(), true);
+            announceHotReloadForSessionIfNeeded(getHotReloadDiagnostics(), true, 'run-1');
 
             assert.strictEqual(notification.called, false);
         });
 
         test('logs nothing at all, because running .NET without Dev Kit is fully supported', () => {
-            logHotReloadDiagnostics('api', getHotReloadDiagnostics());
+            logHotReloadDiagnostics('api', getHotReloadDiagnostics(), true);
 
             assert.deepStrictEqual(hotReloadLogLines(), []);
         });

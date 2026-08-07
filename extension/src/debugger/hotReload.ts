@@ -50,6 +50,25 @@ export function isHotReloadSettingEnabled(): boolean {
 }
 
 /**
+ * Returns whether the Hot Reload gate is a setting that some installed extension actually
+ * contributes.
+ *
+ * `get()` cannot answer this: an unknown configuration key reads back as `undefined`, which is
+ * indistinguishable from a contributed setting the user has not set. `inspect()` reports a
+ * `defaultValue` only for a key that some installed extension declares, so this separates "Dev Kit
+ * ships this gate and it is off" from "no installed extension has ever heard of this key".
+ *
+ * The distinction matters because the gate is explicitly `experimental`, and experimental settings
+ * get renamed. Without this check, a rename would make Aspire offer to enable Hot Reload, write a
+ * key nothing reads into the user's settings, and report success — a promise it cannot keep.
+ */
+function isHotReloadSettingContributed(): boolean {
+    return vscode.workspace
+        .getConfiguration(hotReloadConfigurationSection)
+        .inspect<boolean>(hotReloadConfigurationName)?.defaultValue !== undefined;
+}
+
+/**
  * Returns whether Dev Kit applies Hot Reload edits on save. Defaults to true in Dev Kit.
  */
 export function isHotReloadOnSaveEnabled(): boolean {
@@ -90,7 +109,7 @@ function isHotReloadExpected(diagnostics: HotReloadDiagnostics): boolean {
 /**
  * Writes the resolved Hot Reload state to the Aspire log.
  */
-export function logHotReloadDiagnostics(resourceName: string, diagnostics: HotReloadDiagnostics): void {
+export function logHotReloadDiagnostics(resourceName: string, diagnostics: HotReloadDiagnostics, isDebugSession: boolean): void {
     if (!diagnostics.devKitInstalled) {
         // Nothing actionable to report: Hot Reload requires C# Dev Kit, and running .NET resources
         // without it is a fully supported configuration.
@@ -114,6 +133,15 @@ export function logHotReloadDiagnostics(resourceName: string, diagnostics: HotRe
     }
 
     if (!isHotReloadExpected(diagnostics)) {
+        return;
+    }
+
+    if (!isDebugSession) {
+        // Hot Reload is applied by the debugger, so a resource started without one is never covered
+        // however the settings are configured. Saying "Hot Reload covers <resource>" here would send
+        // the user looking for a reload that cannot happen.
+        extensionLogOutputChannel.info(
+            `${resourceName} is running without a debugger, so Hot Reload does not apply to it.`);
         return;
     }
 
@@ -146,18 +174,37 @@ let hotReloadPromptState: vscode.Memento | undefined;
 let hotReloadPromptShownThisWindow = false;
 
 /**
- * Supplies the storage used to suppress the Hot Reload prompt once the user dismisses it.
- */
-export function initializeHotReloadPromptState(memento: vscode.Memento | undefined): void {
-    hotReloadPromptState = memento;
-    hotReloadPromptShownThisWindow = false;
-    hotReloadNoticeShownThisWindow = false;
-}
-
-/**
  * True once the "Hot Reload is active" notice has been raised in this window.
  */
 let hotReloadNoticeShownThisWindow = false;
+
+/**
+ * The Aspire launch that already produced a Hot Reload message, if any.
+ *
+ * The prompt and the notice describe mutually exclusive states, so at most one of them may speak for
+ * a given launch. Keyed on the Aspire debug session, which every resource of one app run shares —
+ * not on `runId`, which DCP generates per `PUT /run_session` and is therefore different for each
+ * sibling resource. Keying on `runId` would let the prompt speak for one project and the notice for
+ * the next, telling the user in the same breath to restart debugging and that Hot Reload is already
+ * on. Not window-wide either: after the user enables the setting and starts debugging again, that
+ * next launch is exactly when the notice should explain what Hot Reload now covers.
+ */
+let hotReloadMessageShownForLaunchId: string | undefined;
+
+/**
+ * Supplies the extension context whose storage suppresses the Hot Reload prompt once dismissed.
+ *
+ * Takes the context rather than a memento so that the global-versus-workspace choice lives here,
+ * where it is covered by tests. It has to be global: the setting being offered is machine-scoped, so
+ * a workspace-scoped dismissal would re-offer a setting the user already declined every time they
+ * opened another Aspire repo.
+ */
+export function initializeHotReloadPromptState(context: { globalState: vscode.Memento } | undefined): void {
+    hotReloadPromptState = context?.globalState;
+    hotReloadPromptShownThisWindow = false;
+    hotReloadNoticeShownThisWindow = false;
+    hotReloadMessageShownForLaunchId = undefined;
+}
 
 
 /**
@@ -195,7 +242,7 @@ async function suppressHotReloadPrompt(): Promise<void> {
  * - The session must be debugging. Hot Reload is applied by the debugger, so a "run" session can
  *   never use it.
  */
-export async function promptToEnableHotReloadIfNeeded(diagnostics: HotReloadDiagnostics, isDebugSession: boolean): Promise<boolean> {
+export async function promptToEnableHotReloadIfNeeded(diagnostics: HotReloadDiagnostics, isDebugSession: boolean, launchId: string): Promise<boolean> {
     if (!isDebugSession || diagnostics.settingEnabled) {
         return false;
     }
@@ -208,18 +255,40 @@ export async function promptToEnableHotReloadIfNeeded(diagnostics: HotReloadDiag
         return false;
     }
 
+    // The notice already spoke for this launch. Offering to turn on a setting the user was just told
+    // is on would contradict it, which can happen when the value changes mid-launch via Settings Sync
+    // or a profile switch while an Aspire app is still starting its resources.
+    if (hotReloadMessageShownForLaunchId === launchId) {
+        return false;
+    }
+
+    if (!isHotReloadSettingContributed()) {
+        // Dev Kit no longer declares the gate this offer would write, so accepting it would put a
+        // dead key in the user's settings and report success.
+        extensionLogOutputChannel.info(
+            `'${hotReloadConfigurationSection}.${hotReloadConfigurationName}' is not contributed by any installed extension, so Hot Reload cannot be offered.`);
+        return false;
+    }
+
     if (hotReloadPromptState === undefined) {
         // Not fatal — the prompt still works — but "Don't show again" cannot be honored across
         // windows, so say so rather than letting the user re-dismiss it forever with no explanation.
         extensionLogOutputChannel.warn('Hot Reload prompt state was never initialized; a dismissal will not persist across windows.');
     }
 
+    // Both flags are set before the first await. Aspire launches resources as independent requests
+    // spread over seconds, so a five-project app would otherwise raise five identical prompts.
     hotReloadPromptShownThisWindow = true;
+    hotReloadMessageShownForLaunchId = launchId;
 
     const selection = await vscode.window.showInformationMessage(hotReloadAvailablePrompt, enableHotReloadLabel, dontShowAgainLabel);
 
     if (selection === dontShowAgainLabel) {
         await suppressHotReloadPrompt();
+        // Named so the log is a genuine escape hatch. The dismissal is global and there is no reset
+        // command, so without this a user who clicked it by accident has nothing to search for.
+        extensionLogOutputChannel.info(
+            `Hot Reload will not be offered again. To turn it on later, set '${hotReloadConfigurationSection}.${hotReloadConfigurationName}' to true in user settings.`);
         return false;
     }
 
@@ -240,7 +309,10 @@ export async function promptToEnableHotReloadIfNeeded(diagnostics: HotReloadDiag
     catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         extensionLogOutputChannel.error(`Failed to enable '${hotReloadConfigurationSection}.${hotReloadConfigurationName}': ${message}`);
-        vscode.window.showErrorMessage(hotReloadEnableFailed(message));
+        // Not awaited: the caller is on the resource launch path and this notification stays up until
+        // the user dismisses it. Rejections are swallowed rather than left floating, because an
+        // unhandled rejection from an advisory message would surface as an extension error.
+        void Promise.resolve(vscode.window.showErrorMessage(hotReloadEnableFailed(message))).catch(() => { });
         return false;
     }
 
@@ -249,8 +321,8 @@ export async function promptToEnableHotReloadIfNeeded(diagnostics: HotReloadDiag
 
     // Dev Kit reads the gate when it starts a hot reload session, so the resource that is already
     // launching will not pick it up. Say so rather than letting the user hunt for a button that is
-    // not there yet.
-    vscode.window.showInformationMessage(hotReloadEnabled);
+    // not there yet. Not awaited, for the same reason as the error message above.
+    void Promise.resolve(vscode.window.showInformationMessage(hotReloadEnabled)).catch(() => { });
 
     return true;
 }
@@ -288,16 +360,19 @@ const showHotReloadPanelCommand = 'csdevkit.debug.showHotReloadPanel';
  *    and the '.NET Hot Reload' output channel, with detail controlled by
  *    `csharp.debug.hotReloadVerbosity`.
  */
-export function announceHotReloadForSessionIfNeeded(diagnostics: HotReloadDiagnostics, isDebugSession: boolean): void {
+export function announceHotReloadForSessionIfNeeded(diagnostics: HotReloadDiagnostics, isDebugSession: boolean, launchId: string): void {
     if (!isDebugSession || !isHotReloadExpected(diagnostics)) {
         return;
     }
 
-    // The enable prompt and this notice describe mutually exclusive states. A user who was just
-    // offered the setting must not then be told Hot Reload is already on: resources launch over
-    // several seconds, so a resource arriving after the user accepted the prompt would otherwise
-    // read the new value and contradict the "start debugging again to use it" confirmation.
-    if (hotReloadPromptShownThisWindow) {
+    // The enable prompt and this notice describe mutually exclusive states, so at most one of them
+    // may speak for a launch. A resource that arrives after the user accepted the prompt reads the new
+    // setting value, and without this it would announce that Hot Reload is on immediately after the
+    // prompt said to start debugging again for it to take effect.
+    //
+    // Scoped to the launch, not the window: the next launch is precisely when the user, having just
+    // enabled the setting and restarted debugging as they were told to, should learn what it covers.
+    if (hotReloadMessageShownForLaunchId === launchId) {
         return;
     }
 
@@ -308,6 +383,7 @@ export function announceHotReloadForSessionIfNeeded(diagnostics: HotReloadDiagno
     // Set before the first await so that concurrently launching resources cannot each raise a
     // notice, exactly as the enable prompt does.
     hotReloadNoticeShownThisWindow = true;
+    hotReloadMessageShownForLaunchId = launchId;
 
     // Deliberately carries no resource count or list. Resources launch as independent requests
     // spread over seconds, so anything counted at notice time reports whichever subset had arrived
@@ -316,28 +392,38 @@ export function announceHotReloadForSessionIfNeeded(diagnostics: HotReloadDiagno
     // per-resource lines written by `logHotReloadDiagnostics` name each project as it starts.
     const notice = diagnostics.reloadOnSaveEnabled ? hotReloadActiveNotice : hotReloadActiveNoticeSaveDisabled;
 
-    // The whole body is guarded rather than just the individual awaits: this is fire-and-forget, so
-    // any rejection that escaped would surface as an unhandled promise rejection.
+    // The whole body is inside the try, not just the awaits that are expected to fail: this is
+    // fire-and-forget, so any rejection reaching the IIFE boundary would surface as an unhandled
+    // promise rejection with no owner to report it.
     void (async () => {
         try {
-            await hotReloadPromptState?.update(hotReloadSessionNoticeShownKey, true);
-        }
-        catch (err) {
-            extensionLogOutputChannel.warn(`Failed to persist the Hot Reload notice state: ${err instanceof Error ? err.message : String(err)}`);
-        }
+            const selection = await vscode.window.showInformationMessage(notice, showHotReloadOutputLabel);
 
-        const selection = await vscode.window.showInformationMessage(notice, showHotReloadOutputLabel);
-        if (selection !== showHotReloadOutputLabel) {
-            return;
-        }
+            // Recorded only once the notification has actually been through the user, so a notice
+            // that was never delivered — Do Not Disturb, a window closed mid-launch — does not burn
+            // the one time this is ever shown. `hotReloadNoticeShownThisWindow` above already stops
+            // concurrently launching resources from stacking notices while this is pending.
+            //
+            // Caught separately from the action below: this is bookkeeping, and a storage failure
+            // must not swallow the button the user actually pressed.
+            try {
+                await hotReloadPromptState?.update(hotReloadSessionNoticeShownKey, true);
+            }
+            catch (err) {
+                extensionLogOutputChannel.warn(`Hot Reload notice could not be recorded as shown: ${err instanceof Error ? err.message : String(err)}`);
+            }
 
-        try {
+            if (selection !== showHotReloadOutputLabel) {
+                return;
+            }
+
             await vscode.commands.executeCommand(showHotReloadPanelCommand);
         }
         catch (err) {
-            // The command is contributed by Dev Kit and is not part of any contract with this
-            // extension, so treat it as advisory rather than surfacing a failure to the user.
-            extensionLogOutputChannel.warn(`Could not run '${showHotReloadPanelCommand}': ${err instanceof Error ? err.message : String(err)}`);
+            // Everything in here is advisory: the memento write is bookkeeping, and the output-panel
+            // command is contributed by Dev Kit and is not part of any contract with this extension.
+            // None of it is worth surfacing to a user who is trying to debug their app.
+            extensionLogOutputChannel.warn(`Hot Reload notice failed: ${err instanceof Error ? err.message : String(err)}`);
         }
     })();
 }
