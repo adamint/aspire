@@ -378,7 +378,7 @@ export default class AspireDcpServer {
                         launchConfig,
                         payload.args,
                         payload.env ?? [],
-                        { debug: launchConfig.mode === "Debug", runId, debugSessionId, isApphost: false, debugSession: aspireDebugSession },
+                        { debug: launchConfig.mode === "Debug", runId, debugSessionId: dcpId, isApphost: false, debugSession: aspireDebugSession },
                         foundDebuggerExtension
                     );
 

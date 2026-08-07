@@ -624,7 +624,8 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 // `launchOptions.debug`: the `dotnet run` and file-based-executable fallbacks above
                 // force `noDebug = true` while `launchOptions.debug` stays true.
                 const isDebugSession = debugConfiguration.noDebug !== true;
-                const hotReloadDiagnostics = getHotReloadDiagnosticsForLaunch(launchOptions.debugSessionId);
+                const parentDebugSessionId = launchOptions.debugSession.debugSessionId;
+                const hotReloadDiagnostics = getHotReloadDiagnosticsForLaunch(parentDebugSessionId);
                 logHotReloadDiagnostics(path.basename(projectPath), hotReloadDiagnostics, isDebugSession);
 
                 // Dev Kit ships Hot Reload behind an opt-in that older builds default to off, so a
@@ -635,20 +636,16 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 // the user interacts with it, and this callback runs before the debug session is
                 // created, so awaiting it would stall the resource behind an advisory message.
                 //
-                // `AspireDcpServer` parses the parent Aspire debug-session id from each resource's
-                // DCP instance id and passes it as `launchOptions.debugSessionId`, so sibling
-                // resources of one app run share this value. Both messages take it so only one can
-                // speak for a launch without suppressing the other for the rest of the window:
-                // after the user enables the setting and restarts debugging, that next launch is
-                // when the notice should explain what Hot Reload now covers. Not `runId` — DCP
-                // generates that per `PUT /run_session`, so it differs between sibling resources.
-                void promptToEnableHotReloadIfNeeded(hotReloadDiagnostics, isDebugSession, launchOptions.debugSessionId)
+                // `launchOptions.debugSessionId` is the raw resource DCP id used to route adapter
+                // notifications. The owning AspireDebugSession carries the shared parent identity,
+                // so use that to group sibling resources without overloading the routing field.
+                void promptToEnableHotReloadIfNeeded(hotReloadDiagnostics, isDebugSession, parentDebugSessionId)
                     .catch(err => extensionLogOutputChannel.warn(`Hot Reload prompt failed: ${err instanceof Error ? err.message : String(err)}`));
 
                 // Complements the prompt above rather than duplicating it. The prompt only fires when
                 // Hot Reload is off; this fires when it is already on, which is the case where the
                 // user gets no signal at all that the feature exists or what it covers.
-                announceHotReloadForSessionIfNeeded(hotReloadDiagnostics, isDebugSession, launchOptions.debugSessionId);
+                announceHotReloadForSessionIfNeeded(hotReloadDiagnostics, isDebugSession, parentDebugSessionId);
             }
             catch (err) {
                 extensionLogOutputChannel.warn(`Could not determine C# Dev Kit Hot Reload availability; continuing without it: ${err instanceof Error ? err.message : String(err)}`);

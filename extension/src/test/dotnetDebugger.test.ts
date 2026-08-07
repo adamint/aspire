@@ -443,7 +443,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(notification.called, false, 'a user without Dev Kit must never be prompted');
     });
 
-    async function createProjectDebugConfiguration(options: { debug?: boolean; runId?: string; debugSessionId?: string } = {}): Promise<AspireResourceExtendedDebugConfiguration> {
+    async function createProjectDebugConfiguration(options: { debug?: boolean; runId?: string; debugSessionId?: string; debugSession?: AspireDebugSession } = {}): Promise<AspireResourceExtendedDebugConfiguration> {
         const outputPath = 'C:\\temp\\bin\\Debug\\net7.0\\TestProject.dll';
         const { extension, doesFileExistStub } = createDebuggerExtension(outputPath, null, true, true);
 
@@ -466,7 +466,7 @@ suite('Dotnet Debugger Extension Tests', () => {
             launchConfig,
             [],
             [],
-            { debug, runId: debugConfig.runId, debugSessionId: options.debugSessionId ?? '1', isApphost: false, debugSession: sinon.createStubInstance(AspireDebugSession) },
+            { debug, runId: debugConfig.runId, debugSessionId: options.debugSessionId ?? '1', isApphost: false, debugSession: options.debugSession ?? sinon.createStubInstance(AspireDebugSession) },
             debugConfig);
 
         // Restored so a caller can build a second configuration in the same test; sinon refuses to
@@ -477,11 +477,8 @@ suite('Dotnet Debugger Extension Tests', () => {
     }
 
     test('scopes the Hot Reload messages to the Aspire launch, not to each resource', async () => {
-        // DCP generates a fresh runId for every `PUT /run_session`, so sibling resources of one
-        // Aspire launch carry different runIds but share a debugSessionId. The enable prompt and the
-        // "Hot Reload is active" notice describe mutually exclusive states, so keying the exclusion
-        // on runId would let the prompt speak for the first project and the notice for the second -
-        // telling the user to restart debugging and that Hot Reload is already on, in one launch.
+        // DCP gives every resource a distinct raw instance id for adapter notification routing. The
+        // owning AspireDebugSession carries the shared parent identity Hot Reload needs instead.
         initializeHotReloadPromptState({ globalState: createTestMemento() });
         stubCsDevKitExtension({});
         // Already stubbed in setup; sinon refuses to wrap it twice, so reprogram the existing stub.
@@ -497,13 +494,24 @@ suite('Dotnet Debugger Extension Tests', () => {
             update: sinon.stub().callsFake(async () => { settingEnabled = true; })
         } as unknown as vscode.WorkspaceConfiguration);
 
-        await createProjectDebugConfiguration({ runId: 'resource-1', debugSessionId: 'launch-1' });
+        const parentDebugSession = sinon.createStubInstance(AspireDebugSession);
+        Object.defineProperty(parentDebugSession, 'debugSessionId', { value: 'launch-1' });
+
+        await createProjectDebugConfiguration({
+            runId: 'resource-1',
+            debugSessionId: 'launch-1-resource-a',
+            debugSession: parentDebugSession
+        });
         // The prompt is fire-and-forget and its accept path shows a second, confirming message, so
         // let that chain settle before taking the baseline or it lands during the next resource.
         await new Promise(resolve => setTimeout(resolve, 5));
         const callsAfterFirstResource = notification.callCount;
 
-        await createProjectDebugConfiguration({ runId: 'resource-2', debugSessionId: 'launch-1' });
+        await createProjectDebugConfiguration({
+            runId: 'resource-2',
+            debugSessionId: 'launch-1-resource-b',
+            debugSession: parentDebugSession
+        });
         await new Promise(resolve => setTimeout(resolve, 5));
 
         assert.strictEqual(
