@@ -86,40 +86,38 @@ suite('loc/strings tests', () => {
 
 		assert.deepStrictEqual(
 			{
-				debuggerInstallNotificationSingleResource: packageNls['aspire-vscode.strings.debuggerInstallNotificationSingleResource'],
-				debuggerInstallNotificationMultipleResources: packageNls['aspire-vscode.strings.debuggerInstallNotificationMultipleResources'],
+				debuggerInstallNotification: packageNls['aspire-vscode.strings.debuggerInstallNotification'],
 				debuggerInstallLensTooltip: packageNls['aspire-vscode.strings.debuggerInstallLensTooltip'],
 				debuggerInstalledRestartAppHost: packageNls['aspire-vscode.strings.debuggerInstalledRestartAppHost'],
 				debuggerInstallFailed: packageNls['aspire-vscode.strings.debuggerInstallFailed'],
 				debuggerInstallAction: packageNls['aspire-vscode.strings.debuggerInstallAction'],
-				debuggerInstallDontShowAgain: packageNls['aspire-vscode.strings.debuggerInstallDontShowAgain'],
+				csharpDebuggerName: packageNls['aspire-vscode.strings.csharpDebuggerName'],
+				mauiDebuggerName: packageNls['aspire-vscode.strings.mauiDebuggerName'],
 				codeLensInstallDebugger: packageNls['aspire-vscode.strings.codeLensInstallDebugger'],
 			},
 			{
-				debuggerInstallNotificationSingleResource: 'Debug {0} Aspire resource by installing the {1} debugger extension.',
-				debuggerInstallNotificationMultipleResources: 'Debug {0} Aspire resources by installing the {1} debugger extension.',
+				debuggerInstallNotification: 'Install the {0} debugger extension to debug resources in this app.',
 				debuggerInstallLensTooltip: 'Install the {0} debugger extension to debug this Aspire resource.',
 				debuggerInstalledRestartAppHost: 'The {0} debugger extension is installed. Restart the AppHost to debug {0} resources.',
 				debuggerInstallFailed: 'The {0} debugger extension could not be installed: {1}',
 				debuggerInstallAction: 'Install',
-				debuggerInstallDontShowAgain: "Don't show again",
+				csharpDebuggerName: 'C#',
+				mauiDebuggerName: '.NET MAUI',
 				codeLensInstallDebugger: '$(warning)\u200A Install {0} debugger',
 			});
 
 		assert.deepStrictEqual(
 			[
-				debuggerInstallNotification('Python', 1),
-				debuggerInstallNotification('Python', 2),
-				debuggerInstallNotification('Go', 11),
+				debuggerInstallNotification('Python'),
+				debuggerInstallNotification('C#'),
 				debuggerInstallLensTooltip('Python'),
 				debuggerInstalledRestartAppHost('Go'),
 				debuggerInstallFailed('Bun', 'offline'),
 				codeLensInstallDebugger('Python'),
 			],
 			[
-				'Debug 1 Aspire resource by installing the Python debugger extension.',
-				'Debug 2 Aspire resources by installing the Python debugger extension.',
-				'Debug 11 Aspire resources by installing the Go debugger extension.',
+				'Install the Python debugger extension to debug resources in this app.',
+				'Install the C# debugger extension to debug resources in this app.',
 				'Install the Python debugger extension to debug this Aspire resource.',
 				'The Go debugger extension is installed. Restart the AppHost to debug Go resources.',
 				'The Bun debugger extension could not be installed: offline',

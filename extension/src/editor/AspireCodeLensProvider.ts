@@ -137,7 +137,9 @@ export class AspireCodeLensProvider implements vscode.CodeLensProvider {
                         ?? findWorkspace(resource.name);
                     if (match) {
                         this._addStateLenses(lenses, lineRange, match.resource, match.appHost);
-                        const debuggerInstallHint = this._debuggerInstallHintService.getMissingDebugger(resource.methodName);
+                        // The live snapshot carries the launch configuration type, so the lens does not need
+                        // to infer the language from the Add* method name it just parsed.
+                        const debuggerInstallHint = this._debuggerInstallHintService.getMissingDebugger(match.resource);
                         if (match.resource.state === ResourceState.Running && debuggerInstallHint) {
                             this._addDebuggerInstallHintLens(lenses, lineRange, debuggerInstallHint);
                         }
@@ -167,7 +169,7 @@ export class AspireCodeLensProvider implements vscode.CodeLensProvider {
             title: codeLensInstallDebugger(hint.debuggerName),
             command: 'aspire-vscode.installDebuggerExtension',
             tooltip: debuggerInstallLensTooltip(hint.debuggerName),
-            arguments: [hint.extensionId],
+            arguments: [hint],
         }));
     }
 

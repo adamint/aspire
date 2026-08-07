@@ -58,11 +58,11 @@ builder.Build().Run();`)}`);
         await waitForResourceState('pythonapp', ['Running'], 180000);
 
         const notification = await waitForNotificationMessage(
-            'Install the Python debugger extension to debug this Aspire resource.',
+            'Install the Python debugger extension to debug resources in this app.',
             60000);
         assert.deepStrictEqual(
             await getNotificationActionTitles(notification),
-            ['Install', "Don't show again"]);
+            ['Install', "Don't Show Again"]);
 
         await notification.dismiss();
         await waitForWorkbenchText('Install Python debugger', 60000);
