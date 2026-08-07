@@ -3,10 +3,12 @@
 
 #pragma warning disable ASPIREINTERACTION001
 
+using System.Runtime.CompilerServices;
 using Aspire.Hosting.Dashboard;
 using Aspire.Hosting.Dcp;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Xunit;
 using TestingResources = Aspire.Hosting.Testing.Properties.Resources;
@@ -353,20 +355,93 @@ public class DashboardTestingBuilderTests
     }
 
     [Fact]
-    public async Task DashboardTestingIsRejectedInPublishModeWhenEnabledThroughConfigureBuilder()
+    public async Task DashboardEnabledThroughConfigureBuilderKeepsCallerConfiguration()
     {
-        // DistributedApplicationOptions.DisableDashboard = false is the older spelling of "run the dashboard", and
-        // it has to reach the same rejection as the EnableDashboard option rather than silently skipping it.
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        // DistributedApplicationOptions.DisableDashboard = false is the older spelling of "run the dashboard" and it
+        // predates DistributedApplicationTestingBuilderOptions. It is not the hardened dashboard testing mode, so
+        // configuration the caller supplied at creation has to survive rather than being rewritten underneath them.
+        await using var builder = await DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
+            [$"--{DashboardUnsecuredAllowAnonymous}=true", $"--{AspNetCoreUrls}=http://127.0.0.1:12345"],
+            (options, _) => options.DisableDashboard = false);
+
+        Assert.Equal("true", builder.Configuration[DashboardUnsecuredAllowAnonymous]);
+        Assert.Equal("http://127.0.0.1:12345", builder.Configuration[AspNetCoreUrls]);
+    }
+
+    [Fact]
+    public async Task DashboardEnabledThroughConfigureBuilderIsNotRejectedInPublishMode()
+    {
+        // Publish mode never adds a dashboard resource, so the older spelling has always been ignored there.
+        // Rejecting it would break existing callers that publish with DisableDashboard = false, and dropping their
+        // arguments while resolving dashboard settings would silently turn a publish run into a run-mode run.
+        await using var builder = await DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
+            ["--publisher", "manifest"],
+            (options, _) => options.DisableDashboard = false);
+
+        Assert.True(builder.ExecutionContext.IsPublishMode);
+    }
+
+    [Fact]
+    public async Task ConcurrentDisposeAsyncRunsTeardownOnce()
+    {
+        // DistributedApplicationFactory.DisposeAsync claims disposal with an interlocked exchange. A guard that only
+        // reads the disposal cancellation token lets concurrent disposers all pass, because that token is cancelled
+        // after the guard, and each of them then stops and disposes the same application. Racing several disposers
+        // is the only way to exercise the claim; a sequential second call is filtered by either implementation.
+        var hostStopCount = new StrongBox<int>();
+        var builder = await DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>();
+        CountHostStops(builder, hostStopCount);
+
+        await builder.BuildAsync().DefaultTimeout();
+
+        // The window between reading the guard and cancelling the disposal token is only a few instructions wide,
+        // so the disposers run on dedicated threads released by a barrier. Thread pool continuations arrive too far
+        // apart to land in that window reliably.
+        const int DisposerCount = 8;
+        var disposals = new Task[DisposerCount];
+        var threads = new Thread[DisposerCount];
+        using var start = new Barrier(DisposerCount);
+        for (var i = 0; i < DisposerCount; i++)
         {
-            var builder = DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(
-                ["--publisher", "manifest"],
-                (options, _) => options.DisableDashboard = false);
+            var index = i;
+            threads[index] = new Thread(() =>
+            {
+                start.SignalAndWait();
 
-            await using var created = await builder;
-        });
+                // DisposeAsync runs synchronously on this thread up to its first suspension point, which is past
+                // the guard, so the returned task is only awaited once every disposer has been through it.
+                disposals[index] = builder.DisposeAsync().AsTask();
+            })
+            {
+                IsBackground = true,
+                Name = $"Disposer-{index}"
+            };
+            threads[index].Start();
+        }
 
-        Assert.Equal(TestingResources.DashboardTestingPublishModeExceptionMessage, exception.Message);
+        foreach (var thread in threads)
+        {
+            Assert.True(thread.Join(TimeSpan.FromSeconds(60)));
+        }
+
+        // A disposer that ran teardown against an application another disposer had already disposed surfaces its
+        // exception here. Disposal waits for the released AppHost entry point to exit under the host's shutdown
+        // timeout, so this needs a budget larger than DefaultTimeout's 5s.
+        await Task.WhenAll(disposals).WaitAsync(TimeSpan.FromSeconds(60));
+
+        Assert.Equal(1, hostStopCount.Value);
+    }
+
+    private static void CountHostStops(IDistributedApplicationTestingBuilder builder, StrongBox<int> stopCount)
+    {
+        // The testing factory registers the IHost that HostApplicationBuilder.Build() resolves and that
+        // DistributedApplication.StopAsync() delegates to. Wrapping the last registration counts every teardown pass
+        // through DistributedApplicationFactory.DisposeAsync, including passes an unclaimed guard would allow.
+        var hostDescriptor = builder.Services.Last(
+            descriptor => descriptor.ServiceType == typeof(IHost) && descriptor.ServiceKey is null);
+        builder.Services.Remove(hostDescriptor);
+        builder.Services.AddSingleton<IHost>(
+            sp => new StopCountingHost((IHost)hostDescriptor.ImplementationFactory!(sp), stopCount));
     }
 
     private static DistributedApplicationTestingBuilderOptions CreateDashboardOptions()
@@ -433,5 +508,31 @@ public class DashboardTestingBuilderTests
         Generic,
         Type,
         AdHoc
+    }
+
+    private sealed class StopCountingHost(IHost innerHost, StrongBox<int> stopCount) : IHost, IAsyncDisposable
+    {
+        public IServiceProvider Services => innerHost.Services;
+
+        public void Dispose() => innerHost.Dispose();
+
+        public async ValueTask DisposeAsync()
+        {
+            if (innerHost is IAsyncDisposable asyncDisposable)
+            {
+                await asyncDisposable.DisposeAsync();
+                return;
+            }
+
+            innerHost.Dispose();
+        }
+
+        public Task StartAsync(CancellationToken cancellationToken = default) => innerHost.StartAsync(cancellationToken);
+
+        public Task StopAsync(CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref stopCount.Value);
+            return innerHost.StopAsync(cancellationToken);
+        }
     }
 }

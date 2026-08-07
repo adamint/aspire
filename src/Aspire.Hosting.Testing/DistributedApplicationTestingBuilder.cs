@@ -279,14 +279,16 @@ public static class DistributedApplicationTestingBuilder
         Assembly appHostAssembly)
         => CreateCore(args, testingOptions: null, configureBuilder, appHostAssembly);
 
-    private static bool IsDashboardTestingEnabled(
-        DistributedApplicationOptions applicationOptions,
-        DistributedApplicationTestingBuilderOptions? testingOptions)
+    private static bool IsDashboardTestingEnabled(DistributedApplicationTestingBuilderOptions? testingOptions)
     {
-        // Setting DistributedApplicationOptions.DisableDashboard = false through the configureBuilder callback was
-        // already the supported way to run a dashboard from a test, so treat it as equivalent to the option. Both
-        // spellings must converge here or only one of them gets the hardened testing defaults below.
-        return testingOptions?.EnableDashboard == true || !applicationOptions.DisableDashboard;
+        // Only the explicit option turns on the hardened testing defaults below. Setting
+        // DistributedApplicationOptions.DisableDashboard = false through the configureBuilder callback is the older,
+        // already-shipped spelling of "run a dashboard", and it has to keep the behavior it shipped with: callers use
+        // it to exercise dashboard behavior against configuration they chose themselves (fixed URLs, anonymous
+        // access, an ambient browser token), and in publish mode it is simply ignored because no dashboard resource
+        // is ever added. Treating it as equivalent to the option silently rewrote that configuration and turned
+        // publish-mode callers into an InvalidOperationException.
+        return testingOptions?.EnableDashboard == true;
     }
 
     private static void ConfigureDashboardTesting(
@@ -295,7 +297,7 @@ public static class DistributedApplicationTestingBuilder
         DistributedApplicationTestingBuilderOptions? testingOptions,
         out DashboardTestingState dashboardTestingState)
     {
-        if (!IsDashboardTestingEnabled(applicationOptions, testingOptions))
+        if (!IsDashboardTestingEnabled(testingOptions))
         {
             dashboardTestingState = default;
             return;
@@ -317,9 +319,17 @@ public static class DistributedApplicationTestingBuilder
         // exactly one value. And turning off anonymous access only closes the door if a credential actually exists:
         // without this, an ambient ASPIRE_DASHBOARD_FRONTEND_BROWSERTOKEN on a CI agent would share a single known
         // token across every test application running there.
+        //
+        // DistributedApplicationFactory assigns the same array instance to both properties before the AppHost
+        // callback runs, and that callback is free to replace either one. Read whichever instance it left in place,
+        // and both when they diverged, so caller arguments are appended to rather than silently dropped.
+        string[] existingArgs = ReferenceEquals(hostBuilderOptions.Args, applicationOptions.Args)
+            ? [.. hostBuilderOptions.Args ?? []]
+            : [.. hostBuilderOptions.Args ?? [], .. applicationOptions.Args ?? []];
+
         hostBuilderOptions.Args =
         [
-            .. (hostBuilderOptions.Args ?? applicationOptions.Args ?? []),
+            .. existingArgs,
             $"{KnownConfigNames.DashboardUnsecuredAllowAnonymous}=false",
             $"{KnownConfigNames.DashboardFrontendBrowserToken}={TokenGenerator.GenerateToken()}"
         ];
@@ -421,9 +431,8 @@ public static class DistributedApplicationTestingBuilder
 
         private int _buildingContinuationState;
 
-        // Resolved while the builder is being constructed, from the effective DistributedApplicationOptions rather
-        // than the caller's options alone, so an AppHost that enables the dashboard through configureBuilder gets the
-        // same hardened testing defaults.
+        // Resolved while the builder is being constructed, because dashboard services and dashboard authentication
+        // are selected during construction and the post-construction half of the configuration has to agree with it.
         private DashboardTestingState _dashboardTestingState;
 
         public async Task<IDistributedApplicationTestingBuilder> CreateBuilderAsync(CancellationToken cancellationToken)
