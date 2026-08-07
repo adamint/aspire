@@ -135,6 +135,7 @@ check_scoped_registries() {
 
 verify_registry_configuration() {
     local failed=0
+    local yarn_version
 
     echo "Package registry configuration:"
 
@@ -152,8 +153,18 @@ verify_registry_configuration() {
         # still exiting 0. It also ignores npm_config_registry, so there is no way to point it at the
         # approved feed from the environment. A Classic binary on PATH would still be used to install
         # a Berry AppHost, so surface it here instead of letting it reach the public registry.
-        if [[ "$(yarn --version 2>/dev/null)" == 1.* ]]; then
-            echo "  ❌ yarn on PATH is Yarn Classic ($(yarn --version 2>/dev/null)), which cannot be pointed at the approved feed. Install Yarn 4 or later."
+        #
+        # The version query has to run in the same neutral directory as the config query, because
+        # which yarn answers depends on the working directory: the launcher honours the nearest
+        # package.json "packageManager" field, so from a fixture pinned to yarn@4.14.1 `yarn
+        # --version` reports 4.14.1 while the same command one directory up reports the globally
+        # installed 1.22.22. Asking in two different directories lets a Classic binary pass the
+        # version gate and then answer "undefined" to the config query, which reports a registry
+        # mismatch when the real problem is the yarn version.
+        yarn_version="$(config_in_neutral_directory yarn --version)"
+
+        if [[ "$yarn_version" == 1.* ]]; then
+            echo "  ❌ yarn is Yarn Classic ($yarn_version), which cannot be pointed at the approved feed. Install Yarn 4 or later."
             failed=1
         else
             check_manager_registry "yarn" "$(config_in_neutral_directory yarn config get npmRegistryServer)" || failed=1
