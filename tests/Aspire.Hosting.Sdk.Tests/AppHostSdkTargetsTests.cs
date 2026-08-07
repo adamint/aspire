@@ -328,6 +328,29 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ProjectMetadataResolvesAssemblyNameWhenProbeFailuresAreFatal()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        // The probe passes ContinueOnError="!$(BuildingProject)", so a real build makes a failed
+        // reference probe fatal while a design-time build stays tolerant. Every other test here runs
+        // a bare -t: invocation, which never executes BuildOnlySettings and therefore leaves
+        // BuildingProject at its default of false. Forcing it to true covers the strict path.
+        var generatedSource = await GenerateProjectMetadataSourceAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                    <AssemblyName>My Attach Service</AssemblyName>
+                  </PropertyGroup>
+                """,
+            extraArguments: ["-p:BuildingProject=true"]);
+
+        Assert.Equal("""    public string? AssemblyName => @"My Attach Service";""", GetGeneratedAssemblyNameMember(generatedSource));
+    }
+
+    [Fact]
     public async Task ComputeRunArgumentsUsesAspireCliWhenCliBundleIsEnabled()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
