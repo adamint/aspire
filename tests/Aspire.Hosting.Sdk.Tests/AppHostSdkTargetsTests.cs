@@ -996,9 +996,13 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
 
         // Terminate MSBuild's upward Directory.Build.props/targets probe at the workspace root so the
         // generated metadata only reflects what this test authored, not whatever happens to sit above
-        // the temp directory on the machine running the test.
+        // the temp directory on the machine running the test. Directory.Packages.props is discovered
+        // independently of that probe, so central package management has to be switched off explicitly.
         await File.WriteAllTextAsync(Path.Combine(workspace.Path, "Directory.Build.props"), "<Project />");
         await File.WriteAllTextAsync(Path.Combine(workspace.Path, "Directory.Build.targets"), "<Project />");
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace.Path, "Directory.Packages.props"),
+            "<Project><PropertyGroup><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally></PropertyGroup></Project>");
 
         var workerDirectory = Directory.CreateDirectory(Path.Combine(workspace.Path, "Worker")).FullName;
         var workerProjectFile = Path.Combine(workerDirectory, "Worker.csproj");

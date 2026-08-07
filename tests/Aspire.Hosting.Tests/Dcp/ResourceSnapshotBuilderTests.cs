@@ -131,7 +131,20 @@ public class ResourceSnapshotBuilderTests
             [project.Name] = project
         }).ToSnapshot(executable, CreatePreviousSnapshot());
 
-        Assert.Empty(snapshot.Properties.Where(p => p.Name == KnownProperties.Project.AssemblyName));
+        // Assert the complete property set rather than the absence of one name, so that a future property added
+        // to the project branch has to be acknowledged here instead of silently slipping through.
+        Assert.Equal(
+            [
+                KnownProperties.Executable.Args,
+                KnownProperties.Executable.Path,
+                KnownProperties.Executable.Pid,
+                KnownProperties.Executable.WorkDir,
+                KnownProperties.Project.LaunchProfile,
+                KnownProperties.Project.Path,
+                KnownProperties.Resource.AppArgs,
+                KnownProperties.Resource.AppArgsSensitivity,
+            ],
+            snapshot.Properties.Select(p => p.Name).Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -147,7 +160,18 @@ public class ResourceSnapshotBuilderTests
 
         var snapshot = CreateSnapshotBuilder().ToSnapshot(executable, CreatePreviousSnapshot());
 
-        Assert.Empty(snapshot.Properties.Where(p => p.Name == KnownProperties.Project.AssemblyName));
+        // An executable that is not a project resource never takes the project branch, so it gets the executable
+        // property set plus the shared resource properties, and no project properties at all.
+        Assert.Equal(
+            [
+                KnownProperties.Executable.Args,
+                KnownProperties.Executable.Path,
+                KnownProperties.Executable.Pid,
+                KnownProperties.Executable.WorkDir,
+                KnownProperties.Resource.AppArgs,
+                KnownProperties.Resource.AppArgsSensitivity,
+            ],
+            snapshot.Properties.Select(p => p.Name).Order(StringComparer.Ordinal));
     }
 
     [Fact]

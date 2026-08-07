@@ -230,7 +230,7 @@ namespace Aspire.Hosting.Resources {
                 return ResourceManager.GetString("ResourcePropertyProjectAssemblyNameDisplayName", resourceCulture);
             }
         }
-        
+
         /// <summary>
         ///   Looks up a localized string similar to Launch profile.
         /// </summary>
