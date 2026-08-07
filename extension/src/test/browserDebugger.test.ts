@@ -45,8 +45,24 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(debugConfig.webRoot, '/workspace/frontend/src');
     });
 
-    test('omits an empty web root instead of forwarding it to js-debug', async () => {
-        const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173', web_root: '' });
+    // js-debug resolves source maps against any non-empty webRoot, so a whitespace-only value is
+    // just as invalid a source-map root as an empty one - it is only truthy.
+    for (const blankWebRoot of ['', '   ', '\t', '\n', ' \t\r\n ']) {
+        test(`omits a blank web root ${JSON.stringify(blankWebRoot)} instead of forwarding it to js-debug`, async () => {
+            const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173', web_root: blankWebRoot });
+
+            assert.strictEqual('webRoot' in debugConfig, false);
+        });
+    }
+
+    test('forwards the trimmed web root so the validated value is the one js-debug receives', async () => {
+        const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173', web_root: '  /workspace/frontend/src\t' });
+
+        assert.strictEqual(debugConfig.webRoot, '/workspace/frontend/src');
+    });
+
+    test('omits the web root when the AppHost does not send one', async () => {
+        const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173' });
 
         assert.strictEqual('webRoot' in debugConfig, false);
     });
