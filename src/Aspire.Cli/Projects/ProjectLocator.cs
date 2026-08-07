@@ -11,7 +11,9 @@ using Aspire.Cli.Interaction;
 using Aspire.Cli.Resources;
 using Aspire.Cli.Telemetry;
 using Aspire.Cli.Utils;
+using Aspire.Hosting;
 using Aspire.Hosting.Utils;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
 
@@ -140,10 +142,18 @@ internal sealed class ProjectLocator(
     ILanguageDiscovery languageDiscovery,
     IDotNetSdkInstaller sdkInstaller,
     IAppHostCandidateFinder appHostCandidateFinder,
-    AspireCliTelemetry telemetry) : IProjectLocator
+    AspireCliTelemetry telemetry,
+    IConfiguration configuration) : IProjectLocator
 {
     private const string AspireConfigAppHostPathKey = "appHost.path";
     private const string LegacySettingsAppHostPathKey = "appHostPath";
+
+    /// <summary>
+    /// Identifies a CLI invocation whose AppHost target came from an editor launch configuration
+    /// (for example a VS Code <c>launch.json</c> entry with an explicit <c>program</c>). Such a target
+    /// is owned by the individual debug session, so it must never become the workspace default.
+    /// </summary>
+    private const string ExplicitLaunchConfigurationSelectionOrigin = "explicit-launch-configuration";
 
     /// <summary>
     /// Finds all candidate AppHost projects in the specified search directory with language metadata.
@@ -1060,6 +1070,22 @@ internal sealed class ProjectLocator(
 
     private async Task CreateSettingsFileAsync(FileInfo projectFile, CancellationToken cancellationToken)
     {
+        // Enforced here rather than at each call site so every command that resolves an AppHost
+        // (run, publish, deploy, do, add, update) honors it. A VS Code launch configuration can
+        // name any of those commands, and each one previously rewrote aspire.config.json to the
+        // launched AppHost, so switching between per-AppHost launch configurations kept clobbering
+        // the workspace default. See https://github.com/microsoft/aspire/issues/19080.
+        if (string.Equals(
+            configuration[KnownConfigNames.CliAppHostSelectionOrigin],
+            ExplicitLaunchConfigurationSelectionOrigin,
+            StringComparison.OrdinalIgnoreCase))
+        {
+            logger.LogDebug(
+                "Not persisting AppHost {AppHost} because it was selected by an explicit launch configuration.",
+                projectFile.FullName);
+            return;
+        }
+
         FileInfo? settingsFile = null;
         DirectoryInfo? appHostDirForScopedConfig = null;
 

@@ -75,7 +75,6 @@ internal sealed class RunCommand : BaseCommand
     private readonly TimeProvider _timeProvider;
     private bool _isDetachMode;
     private const int MaxDisplayedAppHostStartupOutputLines = 80;
-    private const string ExplicitLaunchConfigurationAppHostSelectionOrigin = "explicit-launch-configuration";
 
     private static readonly TimeSpan s_appHostStartupCancellationTimeout = TimeSpan.FromSeconds(5);
 
@@ -241,16 +240,10 @@ internal sealed class RunCommand : BaseCommand
             AppHostProjectSearchResult searchResult;
             using (var findAppHostActivity = _profilingTelemetry.StartRunAppHostFindAppHost(passedAppHostProjectFile))
             {
-                // A launch.json program owns only this debug session. All other origins retain the
-                // existing CLI behavior where a user/default selection becomes the workspace default.
-                var persistAppHostSelection = !string.Equals(
-                    _configuration[KnownConfigNames.CliAppHostSelectionOrigin],
-                    ExplicitLaunchConfigurationAppHostSelectionOrigin,
-                    StringComparison.OrdinalIgnoreCase);
                 searchResult = await _projectLocator.UseOrFindAppHostProjectFileAsync(
                     passedAppHostProjectFile,
                     multipleAppHostBehavior,
-                    createSettingsFile: persistAppHostSelection,
+                    createSettingsFile: true,
                     cancellationToken);
             }
             var effectiveAppHostFile = searchResult.SelectedProjectFile;

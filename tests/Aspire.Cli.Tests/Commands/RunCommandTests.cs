@@ -551,13 +551,9 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
-    [InlineData("run", null, true)]
-    [InlineData("run --apphost ./AppHost.csproj", null, true)]
-    [InlineData("run", "default-discovery", true)]
-    [InlineData("run --apphost ./AppHost.csproj", "user-selection", true)]
-    [InlineData("run", "explicit-launch-configuration", false)]
-    [InlineData("run --apphost ./AppHost.csproj", "explicit-launch-configuration", false)]
-    public async Task RunCommand_PersistsAppHostSelectionBasedOnOrigin(string commandLine, string? selectionOrigin, bool expectedCreateSettingsFile)
+    [InlineData("run")]
+    [InlineData("run --apphost ./AppHost.csproj")]
+    public async Task RunCommand_AlwaysRequestsAppHostSelectionPersistence(string commandLine)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         bool? createSettingsFile = null;
@@ -572,10 +568,6 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, options =>
         {
             options.ProjectLocatorFactory = _ => projectLocator;
-            if (selectionOrigin is not null)
-            {
-                options.ConfigurationCallback = config => config[KnownConfigNames.CliAppHostSelectionOrigin] = selectionOrigin;
-            }
         });
         using var provider = services.BuildServiceProvider();
 
@@ -585,7 +577,9 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await result.InvokeAsync().DefaultTimeout();
 
         Assert.Equal(CliExitCodes.FailedToFindProject, exitCode);
-        Assert.Equal(expectedCreateSettingsFile, createSettingsFile);
+        // Session-scoped selection is suppressed centrally in ProjectLocator so every command
+        // behaves consistently; commands themselves always opt in to persistence.
+        Assert.True(createSettingsFile);
     }
 
     [Fact]
