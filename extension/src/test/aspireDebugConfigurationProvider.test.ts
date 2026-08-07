@@ -145,15 +145,19 @@ suite('AspireDebugConfigurationProvider', () => {
         fs.writeFileSync(projectPath, '<Project Sdk="Aspire.AppHost.Sdk" />');
 
         const folder: vscode.WorkspaceFolder = { uri: vscode.Uri.file(workspaceRoot), name: 'workspace', index: 0 };
+        // `Uri.file` lowercases the drive letter on Windows, so the folder path has to come
+        // from the folder itself for the configuration to look like the `${workspaceFolder}`
+        // one VS Code substitutes.
+        const folderPath = folder.uri.fsPath;
         const provider = new AspireDebugConfigurationProvider(createAppHostDiscoveryService(projectPath), launchReservation);
         const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(folder, {
             name: 'Debug AppHost',
             type: 'aspire',
             request: 'launch',
-            program: workspaceRoot
+            program: folderPath
         });
 
-        assert.strictEqual(config?.program, workspaceRoot);
+        assert.strictEqual(config?.program, folderPath);
         assert.deepStrictEqual(launchReservation.reserved, [projectPath]);
     });
 
