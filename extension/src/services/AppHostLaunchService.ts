@@ -2,7 +2,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration, AspireOperationKind } from '../dcp/types';
-import { startDebuggingDeclined } from '../loc/strings';
+import { appHostLifecycleBusy, startDebuggingDeclined } from '../loc/strings';
 import { classifyAppHostDirectory, classifyAppHostPath } from '../utils/appHostLanguage';
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';
 import { bucketAspireCommand } from '../utils/telemetryBuckets';
@@ -55,7 +55,10 @@ export const appHostLifecycleLockWaitTimeoutMs = 10_000;
 
 export class AppHostLifecycleLockTimeoutError extends Error {
     constructor() {
-        super('Timed out waiting for another AppHost lifecycle operation to finish.');
+        // `AppHostLaunchService.launch` is the editor's own run/debug path, so this
+        // message can reach a notification via showErrorMessage. It must therefore be
+        // localized, unlike the tool path where the timeout only maps to a `busy` outcome.
+        super(appHostLifecycleBusy);
         this.name = 'AppHostLifecycleLockTimeoutError';
     }
 }

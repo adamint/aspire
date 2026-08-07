@@ -33,6 +33,7 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
     editorSessions: FakeEditorSession[] = [];
     runningAppHosts: AppHostLifecycleRunningAppHost[] = [];
     runningAppHostRequests = 0;
+    runningAppHostError: Error | undefined;
     launchDelay: Promise<void> | undefined;
     launchError: Error | undefined;
     markLaunchingOnLaunch = true;
@@ -57,6 +58,10 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
         this.runningAppHostRequests++;
         if (token.isCancellationRequested) {
             throw new vscode.CancellationError();
+        }
+
+        if (this.runningAppHostError) {
+            throw this.runningAppHostError;
         }
 
         return this.runningAppHosts;
@@ -264,12 +269,14 @@ suite('AppHost lifecycle language model tools', () => {
                     stopTitle: packageNls['aspire-vscode.strings.appHostLifecycleStopConfirmationTitle'],
                     startMessage: packageNls['aspire-vscode.strings.appHostLifecycleStartConfirmationMessage'],
                     stopMessage: packageNls['aspire-vscode.strings.appHostLifecycleStopConfirmationMessage'],
+                    busy: packageNls['aspire-vscode.strings.appHostLifecycleBusy'],
                 },
                 {
                     startTitle: 'Start Aspire AppHost',
                     stopTitle: 'Stop Aspire AppHost',
                     startMessage: 'Start the Aspire AppHost {0} in {1} mode?',
                     stopMessage: 'Stop the Aspire AppHost {0}?',
+                    busy: 'Another start or stop operation for this Aspire AppHost is still in progress. Wait for it to finish and try again.',
                 });
         });
     });
@@ -679,6 +686,22 @@ suite('AppHost lifecycle language model tools', () => {
 
             assert.strictEqual(result.outcome, 'busy');
             assert.strictEqual(launchService.launchCalls.length, 0);
+        });
+
+        test('refuses to launch when external ownership cannot be determined', async () => {
+            // `aspire ps` backs the external-ownership probe. When it cannot answer, the
+            // tool must not launch: starting anyway could put a second AppHost on the same
+            // ports as one the user already has running from a terminal. The agent gets a
+            // failure it can fall back to the CLI from, which is the documented contract.
+            launchService.runningAppHostError = new Error('aspire ps failed: /Users/private/AppHost.csproj is unreadable');
+
+            const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(
+                { outcome: result.outcome, ownership: result.ownership, appHostPath: result.appHostPath, requestedMode: result.requestedMode },
+                { outcome: 'failed', ownership: 'editor', appHostPath: 'AppHost/AppHost.csproj', requestedMode: 'run' });
+            assert.strictEqual(launchService.launchCalls.length, 0);
+            assert.strictEqual(JSON.stringify(result).includes('/Users/private'), false);
         });
     });
 

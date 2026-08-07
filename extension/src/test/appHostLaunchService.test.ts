@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { AspireExtendedDebugConfiguration } from '../dcp/types';
+import { appHostLifecycleBusy } from '../loc/strings';
 import { AppHostLaunchService, AppHostLifecycleLockTimeoutError, appHostLifecycleLockWaitTimeoutMs } from '../services/AppHostLaunchService';
 import * as cliPathModule from '../utils/cliPath';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
@@ -238,6 +239,35 @@ suite('AppHostLaunchService', () => {
                 new vscode.CancellationTokenSource().token,
                 async () => 'queued');
             const rejection = assert.rejects(queued, AppHostLifecycleLockTimeoutError);
+
+            await clock.tickAsync(appHostLifecycleLockWaitTimeoutMs);
+            await rejection;
+
+            releaseActive?.();
+            await active;
+        }
+        finally {
+            releaseActive?.();
+            clock.restore();
+        }
+    });
+
+    test('surfaces a localized message when the editor launch path times out on the lifecycle lock', async () => {
+        const clock = sinon.useFakeTimers();
+        let releaseActive: (() => void) | undefined;
+        try {
+            const active = service.runWithAppHostLifecycleLock(
+                '/repo/AppHost/AppHost.csproj',
+                new vscode.CancellationTokenSource().token,
+                () => new Promise<void>(resolve => { releaseActive = resolve; }));
+            await Promise.resolve();
+
+            const blockedLaunch = service.launch('/repo/AppHost/AppHost.csproj', 'run', true);
+            const rejection = assert.rejects(blockedLaunch, (error: unknown) => {
+                assert.ok(error instanceof AppHostLifecycleLockTimeoutError);
+                assert.strictEqual(error.message, appHostLifecycleBusy);
+                return true;
+            });
 
             await clock.tickAsync(appHostLifecycleLockWaitTimeoutMs);
             await rejection;
