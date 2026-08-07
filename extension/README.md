@@ -108,6 +108,8 @@ The dashboard gives you a live view of your running app — all your resources a
 
 The extension contributes two Language Model tools so chat agents start and stop your apphost through the same editor-owned session you would start yourself, instead of spawning a CLI process the editor cannot see or shut down cleanly:
 
+When VS Code is active, agents should prefer these editor operations over running Aspire AppHost lifecycle commands in a terminal.
+
 | Tool | Reference in chat | What it does |
 |------|-------------------|--------------|
 | `aspire_apphost_start` | `#aspireStartAppHost` | Starts an apphost already in your workspace, in `run` (no debugger) or `debug` (debugger attached) mode |

@@ -222,16 +222,15 @@ export function isSupportedAppHostFileExtension(filePath: string): boolean {
  * Content-only AppHost detection for callers that hold a file path but no loaded
  * `vscode.TextDocument`.
  *
- * The editor parsers in `src/editor/parsers` are the precise implementation, but they
- * require a `TextDocument` and, for C#, a tree-sitter grammar load — too heavy for a
- * synchronous validation gate. This mirrors the same markers with regexes:
+ * The editor parsers in `src/editor/parsers` require a `TextDocument` and, for C#,
+ * a tree-sitter grammar load, which is too heavy for a synchronous validation gate.
+ * This gate instead requires the complete runnable shape:
  *   `#:sdk Aspire.AppHost.Sdk@13.0.0`      (single-file C# AppHost directive)
  *   `DistributedApplication.CreateBuilder` (C# AppHost entry point)
  *   `import { ... } from '@aspire/hosting'`/`require('aspire')` (JS/TS AppHost)
- *   `aspire.createBuilder(...)`            (JS/TS AppHost entry point)
- * Unlike the parsers this cannot tell an occurrence inside a comment or inactive
- * `#if` region from a real one, so treat it as a permissive gate that keeps obvious
- * non-AppHost files out — not as an authority on AppHost-ness.
+ *   `createBuilder(...)` and `builder.build().run()` (JS/TS execution)
+ * Comments and string literals are excluded from executable marker matching so a
+ * model cannot turn documentation or sample text into an executable path.
  */
 export function isRunnableAppHostFileContents(filePath: string, contents: string): boolean {
     const extension = extname(filePath).toLowerCase();
@@ -240,13 +239,125 @@ export function isRunnableAppHostFileContents(filePath: string, contents: string
     }
 
     if (appHostCSharpSourceExtensions.includes(extension)) {
-        return /^[ \t]*#:sdk[ \t]+Aspire\.AppHost\.Sdk\b/m.test(contents)
-            || /\bDistributedApplication\s*\.\s*CreateBuilder\s*\(/.test(contents);
+        const uncommentedContents = stripSourceComments(contents);
+        const executableContents = stripStringLiterals(uncommentedContents);
+        return /^[ \t]*#:sdk[ \t]+Aspire\.AppHost\.Sdk\b/m.test(uncommentedContents)
+            && /\bDistributedApplication\s*\.\s*CreateBuilder\s*\(/.test(executableContents)
+            && /\.\s*Build\s*\(\s*\)\s*\.\s*Run\s*\(/.test(executableContents);
     }
 
     if (appHostJsTsSourceExtensions.includes(extension)) {
-        return /\b(?:from|require\s*\()\s*['"][^'"]*aspire[^'"]*['"]/i.test(contents)
-            || /\bcreateBuilder\s*\(/.test(contents);
+        const uncommentedContents = stripSourceComments(contents);
+        const executableContents = stripStringLiterals(uncommentedContents);
+        return referencesAspireModule(uncommentedContents)
+            && /\bcreateBuilder\s*\(/.test(executableContents)
+            && /\.\s*build\s*\(\s*\)\s*\.\s*run\s*\(/.test(executableContents);
+    }
+
+    function referencesAspireModule(contents: string): boolean {
+        const moduleSpecifiers = [
+            ...contents.matchAll(/\bfrom\s*(["'])(?<specifier>[^"']+)\1/g),
+            ...contents.matchAll(/\brequire\s*\(\s*(["'])(?<specifier>[^"']+)\1\s*\)/g),
+        ];
+
+        return moduleSpecifiers.some(match => {
+            const specifier = match.groups?.specifier?.toLowerCase();
+            return specifier === 'aspire'
+                || specifier?.startsWith('@aspire/') === true
+                || /(?:^|\/)\.aspire\/modules\/aspire(?:\.[^/]*)?$/.test(specifier ?? '')
+                || /(?:^|\/)\.modules\/aspire(?:\.[^/]*)?$/.test(specifier ?? '');
+        });
+    }
+
+    function stripSourceComments(contents: string): string {
+        let result = '';
+        let index = 0;
+        let quote: '"' | "'" | '`' | undefined;
+
+        while (index < contents.length) {
+            const current = contents[index];
+            const next = contents[index + 1];
+
+            if (quote) {
+                result += current;
+                if (current === '\\') {
+                    result += next ?? '';
+                    index += 2;
+                    continue;
+                }
+                if (current === quote) {
+                    quote = undefined;
+                }
+                index++;
+                continue;
+            }
+
+            if (current === '"' || current === "'" || current === '`') {
+                quote = current;
+                result += current;
+                index++;
+                continue;
+            }
+
+            if (current === '/' && next === '/') {
+                while (index < contents.length && contents[index] !== '\n') {
+                    result += ' ';
+                    index++;
+                }
+                continue;
+            }
+
+            if (current === '/' && next === '*') {
+                result += '  ';
+                index += 2;
+                while (index < contents.length && !(contents[index] === '*' && contents[index + 1] === '/')) {
+                    result += contents[index] === '\n' ? '\n' : ' ';
+                    index++;
+                }
+                if (index < contents.length) {
+                    result += '  ';
+                    index += 2;
+                }
+                continue;
+            }
+
+            result += current;
+            index++;
+        }
+
+        return result;
+    }
+
+    function stripStringLiterals(contents: string): string {
+        let result = '';
+        let index = 0;
+
+        while (index < contents.length) {
+            const quote = contents[index];
+            if (quote !== '"' && quote !== "'" && quote !== '`') {
+                result += quote;
+                index++;
+                continue;
+            }
+
+            result += ' ';
+            index++;
+            while (index < contents.length) {
+                const current = contents[index];
+                result += current === '\n' ? '\n' : ' ';
+                index++;
+                if (current === '\\' && index < contents.length) {
+                    result += contents[index] === '\n' ? '\n' : ' ';
+                    index++;
+                    continue;
+                }
+                if (current === quote) {
+                    break;
+                }
+            }
+        }
+
+        return result;
     }
 
     return false;

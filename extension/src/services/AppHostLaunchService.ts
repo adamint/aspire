@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import * as vscode from 'vscode';
-import { AspireCommandType, AspireExtendedDebugConfiguration } from '../dcp/types';
+import { AspireCommandType, AspireExtendedDebugConfiguration, AspireOperationKind } from '../dcp/types';
 import { startDebuggingDeclined } from '../loc/strings';
 import { classifyAppHostDirectory, classifyAppHostPath } from '../utils/appHostLanguage';
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';
@@ -39,6 +39,27 @@ export interface AppHostDebugSessionTerminatedEvent {
     shouldRequestStopRefresh: boolean;
 }
 
+export interface AppHostLaunchSession {
+    readonly appHostPath: string | undefined;
+    readonly operationKind: AspireOperationKind;
+    readonly startupCompleted: boolean;
+    readonly configuration: { readonly noDebug?: boolean;[key: string]: unknown };
+    stopDebugging(): Promise<void>;
+}
+
+export interface RunningAppHost {
+    readonly appHostPath: string;
+}
+
+export const appHostLifecycleLockWaitTimeoutMs = 10_000;
+
+export class AppHostLifecycleLockTimeoutError extends Error {
+    constructor() {
+        super('Timed out waiting for another AppHost lifecycle operation to finish.');
+        this.name = 'AppHostLifecycleLockTimeoutError';
+    }
+}
+
 /**
  * Centralizes all Aspire AppHost launch operations that require a resolved
  * AppHost path. Both the editor command provider (which discovers the path)
@@ -50,6 +71,11 @@ export interface AppHostDebugSessionTerminatedEvent {
  */
 export class AppHostLaunchService implements vscode.Disposable {
     private readonly _launchingPaths = new Set<string>();
+    private readonly _lifecycleLocks = new Map<string, Promise<unknown>>();
+    private readonly _lifecycleCancellationSource = new vscode.CancellationTokenSource();
+    private _getEditorSessions: () => readonly AppHostLaunchSession[] = () => [];
+    private _getRunningAppHosts: (token: vscode.CancellationToken) => Promise<readonly RunningAppHost[]> = async () => [];
+    private _disposed = false;
 
     private readonly _onDidChangeLaunchingState = new vscode.EventEmitter<void>();
     readonly onDidChangeLaunchingState = this._onDidChangeLaunchingState.event;
@@ -83,7 +109,11 @@ export class AppHostLaunchService implements vscode.Disposable {
     }
 
     dispose(): void {
+        this._disposed = true;
+        this._lifecycleCancellationSource.cancel();
+        this._lifecycleCancellationSource.dispose();
         this._debugSessionSubscription.dispose();
+        this._lifecycleLocks.clear();
         this._onDidChangeLaunchingState.dispose();
         this._onDidTerminateAppHostDebugSession.dispose();
         this._onDidRequestLaunch.dispose();
@@ -94,6 +124,85 @@ export class AppHostLaunchService implements vscode.Disposable {
      */
     get launchingPaths(): readonly string[] {
         return Array.from(this._launchingPaths);
+    }
+
+    get pendingLifecycleOperationCount(): number {
+        return this._lifecycleLocks.size;
+    }
+
+    setEditorSessionProvider(provider: () => readonly AppHostLaunchSession[]): void {
+        this._getEditorSessions = provider;
+    }
+
+    setRunningAppHostProvider(provider: (token: vscode.CancellationToken) => Promise<readonly RunningAppHost[]>): void {
+        this._getRunningAppHosts = provider;
+    }
+
+    getEditorOwnedRunSessions(appHostPath: string): readonly AppHostLaunchSession[] {
+        return this._getEditorSessions().filter(session =>
+            session.operationKind === 'run' &&
+            this.isSameAppHostIdentity(session.appHostPath, appHostPath));
+    }
+
+    async getRunningAppHosts(token: vscode.CancellationToken): Promise<readonly RunningAppHost[]> {
+        throwIfCancelled(token);
+        const appHosts = await this._getRunningAppHosts(token);
+        throwIfCancelled(token);
+        return appHosts;
+    }
+
+    isSameAppHostIdentity(left: string | undefined, right: string | undefined): boolean {
+        if (!left || !right) {
+            return false;
+        }
+
+        return isMatchingAppHostPath(path.resolve(left), path.resolve(right));
+    }
+
+    async runWithAppHostLifecycleLock<T>(appHostPath: string, token: vscode.CancellationToken, action: () => Promise<T>): Promise<T> {
+        throwIfCancelled(token);
+        const key = this.getLifecycleLockKey(appHostPath);
+        const previous = this._lifecycleLocks.get(key) ?? Promise.resolve();
+        let release!: () => void;
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        // The queue tail follows the prior owner and this operation's gate. A cancelled
+        // waiter releases its gate only after the prior owner settles, so later callers
+        // cannot overtake a still-running editor launch.
+        const tail = previous.then(() => gate, () => gate);
+        this._lifecycleLocks.set(key, tail);
+        void tail.then(() => {
+            if (this._lifecycleLocks.get(key) === tail) {
+                this._lifecycleLocks.delete(key);
+            }
+        });
+
+        let acquired = false;
+        try {
+            await waitForPromise(previous, token, appHostLifecycleLockWaitTimeoutMs);
+            acquired = true;
+            throwIfCancelled(token);
+            return await action();
+        }
+        finally {
+            if (acquired) {
+                release();
+            }
+            else {
+                // Preserve queue ordering even though this caller no longer waits.
+                void previous.then(release, release);
+            }
+        }
+    }
+
+    private getLifecycleLockKey(appHostPath: string): string {
+        const resolvedPath = path.resolve(appHostPath);
+        for (const existingKey of this._lifecycleLocks.keys()) {
+            if (isMatchingAppHostPath(existingKey, resolvedPath)) {
+                return existingKey;
+            }
+        }
+
+        return getComparisonKey(path.normalize(resolvedPath));
     }
 
     isLaunching(appHostPath: string): boolean {
@@ -138,9 +247,35 @@ export class AppHostLaunchService implements vscode.Disposable {
      * @param doStep Optional step name for the 'do' command.
      */
     async launch(appHostPath: string, command: AspireCommandType, noDebug: boolean, doStep?: string): Promise<void> {
+        return await this.runWithAppHostLifecycleLock(appHostPath, this._lifecycleCancellationSource.token, async () => {
+            if (this._disposed) {
+                throw new vscode.CancellationError();
+            }
+
+            await this.launchCore(appHostPath, command, noDebug, doStep, this._lifecycleCancellationSource.token);
+        });
+    }
+
+    async launchFromLifecycleOwner(appHostPath: string, command: 'run', noDebug: boolean, token: vscode.CancellationToken): Promise<void> {
+        if (this._disposed) {
+            throw new vscode.CancellationError();
+        }
+
+        await this.launchCore(appHostPath, command, noDebug, undefined, token);
+    }
+
+    private async launchCore(
+        appHostPath: string,
+        command: AspireCommandType,
+        noDebug: boolean,
+        doStep: string | undefined,
+        token: vscode.CancellationToken,
+    ): Promise<void> {
+        throwIfCancelled(token);
         const startTime = Date.now();
         const executionSuppressed = isE2eDebugLaunchSuppressed();
         const telemetryProperties = await getLaunchTelemetryProperties(appHostPath, command, noDebug, executionSuppressed);
+        throwIfCancelled(token);
 
         const config: AspireExtendedDebugConfiguration = {
             type: 'aspire',
@@ -162,6 +297,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             doStep,
             executionSuppressed,
         });
+        throwIfCancelled(token);
         if (executionSuppressed) {
             this.clearLaunching(appHostPath);
             sendTelemetryEvent('aspire/vscode/apphost/launch/result', {
@@ -185,6 +321,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             if (!cliAvailability.available) {
                 throw new vscode.CancellationError();
             }
+            throwIfCancelled(token);
             config.skipCliAvailabilityCheck = true;
 
             const started = await vscode.debug.startDebugging(undefined, config);
@@ -220,6 +357,51 @@ export class AppHostLaunchService implements vscode.Disposable {
             throw err;
         }
     }
+
+}
+
+function throwIfCancelled(token: vscode.CancellationToken): void {
+    if (token.isCancellationRequested) {
+        throw new vscode.CancellationError();
+    }
+}
+
+function waitForPromise(promise: Promise<unknown>, token: vscode.CancellationToken, timeoutMs: number): Promise<void> {
+    if (token.isCancellationRequested) {
+        return Promise.reject(new vscode.CancellationError());
+    }
+
+    return new Promise<void>((resolve, reject) => {
+        let cancellation: vscode.Disposable | undefined;
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        let settled = false;
+        const finish = (action: () => void) => {
+            if (settled) {
+                return;
+            }
+
+            settled = true;
+            if (timeout) {
+                clearTimeout(timeout);
+            }
+            cancellation?.dispose();
+            action();
+        };
+        timeout = setTimeout(() => {
+            finish(() => reject(new AppHostLifecycleLockTimeoutError()));
+        }, timeoutMs);
+        (timeout as { unref?: () => void }).unref?.();
+        cancellation = token.onCancellationRequested(() => {
+            finish(() => reject(new vscode.CancellationError()));
+        });
+        promise.then(
+            () => {
+                finish(resolve);
+            },
+            () => {
+                finish(resolve);
+            });
+    });
 }
 
 async function getLaunchTelemetryProperties(appHostPath: string, command: AspireCommandType, noDebug: boolean, executionSuppressed: boolean) {

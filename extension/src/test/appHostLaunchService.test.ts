@@ -1,8 +1,9 @@
 import * as assert from 'assert';
+import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { AspireExtendedDebugConfiguration } from '../dcp/types';
-import { AppHostLaunchService } from '../services/AppHostLaunchService';
+import { AppHostLaunchService, AppHostLifecycleLockTimeoutError, appHostLifecycleLockWaitTimeoutMs } from '../services/AppHostLaunchService';
 import * as cliPathModule from '../utils/cliPath';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
 
@@ -174,6 +175,120 @@ suite('AppHostLaunchService', () => {
 
         assert.strictEqual(service.isLaunching('/repo/AppHost1.csproj'), false);
         assert.strictEqual(service.isLaunching('/repo/AppHost2.csproj'), true);
+    });
+
+    test('serializes editor and tool launch work for the same AppHost identity', async () => {
+        let releaseFirst: (() => void) | undefined;
+        let signalFirstStarted: (() => void) | undefined;
+        let firstActionStarted = false;
+        let secondActionStarted = false;
+        const firstAction = new Promise<void>(resolve => { releaseFirst = resolve; });
+        const firstStarted = new Promise<void>(resolve => { signalFirstStarted = resolve; });
+
+        const editorLaunch = service.runWithAppHostLifecycleLock('/repo/AppHost/AppHost.csproj', new vscode.CancellationTokenSource().token, async () => {
+            firstActionStarted = true;
+            signalFirstStarted?.();
+            await firstAction;
+            return 'editor';
+        });
+        const toolLaunch = service.runWithAppHostLifecycleLock('/repo/AppHost/Program.cs', new vscode.CancellationTokenSource().token, async () => {
+            secondActionStarted = true;
+            return 'tool';
+        });
+        await firstStarted;
+
+        assert.strictEqual(firstActionStarted, true);
+        assert.strictEqual(secondActionStarted, false);
+
+        releaseFirst?.();
+        assert.deepStrictEqual(await Promise.all([editorLaunch, toolLaunch]), ['editor', 'tool']);
+        assert.strictEqual(secondActionStarted, true);
+    });
+
+    test('cancels a queued lifecycle operation without waiting for the active operation', async () => {
+        const activeOperation = new Promise<void>(() => { });
+        const active = service.runWithAppHostLifecycleLock('/repo/AppHost/AppHost.csproj', new vscode.CancellationTokenSource().token, () => activeOperation);
+        const tokenSource = new vscode.CancellationTokenSource();
+        const queued = service.runWithAppHostLifecycleLock('/repo/AppHost/AppHost.csproj', tokenSource.token, async () => 'queued');
+        tokenSource.cancel();
+
+        await assert.rejects(queued, vscode.CancellationError);
+        assert.strictEqual(service.pendingLifecycleOperationCount, 1);
+        void active;
+    });
+
+    test('bounds lifecycle lock waits when the active operation does not settle', async () => {
+        const clock = sinon.useFakeTimers();
+        let releaseActive: (() => void) | undefined;
+        try {
+            const active = service.runWithAppHostLifecycleLock(
+                '/repo/AppHost/AppHost.csproj',
+                new vscode.CancellationTokenSource().token,
+                () => new Promise<void>(resolve => { releaseActive = resolve; }));
+            await Promise.resolve();
+
+            const queued = service.runWithAppHostLifecycleLock(
+                '/repo/AppHost/Program.cs',
+                new vscode.CancellationTokenSource().token,
+                async () => 'queued');
+            const rejection = assert.rejects(queued, AppHostLifecycleLockTimeoutError);
+
+            await clock.tickAsync(appHostLifecycleLockWaitTimeoutMs);
+            await rejection;
+
+            releaseActive?.();
+            await active;
+        }
+        finally {
+            releaseActive?.();
+            clock.restore();
+        }
+    });
+
+    test('matches project and AppHost source identities without matching sibling projects', () => {
+        assert.strictEqual(service.isSameAppHostIdentity('/repo/AppHost/AppHost.csproj', '/repo/AppHost/Program.cs'), true);
+        assert.strictEqual(service.isSameAppHostIdentity('/repo/AppHost/AppHost.csproj', '/repo/AppHost/apphost.cs'), true);
+        assert.strictEqual(service.isSameAppHostIdentity('/repo/AppHost/First.csproj', '/repo/AppHost/Second.csproj'), false);
+        assert.strictEqual(service.isSameAppHostIdentity('/repo/AppHost/apphost.ts', '/repo/AppHost/apphost.mts'), false);
+    });
+
+    test('returns only editor-owned run sessions for the requested AppHost identity', () => {
+        const runSession = {
+            appHostPath: '/repo/AppHost/Program.cs',
+            operationKind: 'run' as const,
+            startupCompleted: true,
+            configuration: { noDebug: false },
+            stopDebugging: async () => { },
+        };
+        const publishSession = {
+            appHostPath: '/repo/AppHost/AppHost.csproj',
+            operationKind: 'publish' as const,
+            startupCompleted: true,
+            configuration: { noDebug: true },
+            stopDebugging: async () => { },
+        };
+        const testSession = {
+            appHostPath: '/repo/AppHost/AppHost.csproj',
+            operationKind: 'test' as const,
+            startupCompleted: true,
+            configuration: { noDebug: true },
+            stopDebugging: async () => { },
+        };
+        service.setEditorSessionProvider(() => [runSession, publishSession, testSession]);
+
+        assert.deepStrictEqual(service.getEditorOwnedRunSessions('/repo/AppHost/AppHost.csproj'), [runSession]);
+    });
+
+    test('reads an authoritative running snapshot independent of tree visibility', async () => {
+        const expected = [{ appHostPath: path.resolve('/repo/AppHost/AppHost.csproj') }];
+        service.setRunningAppHostProvider(async (token: vscode.CancellationToken) => {
+            assert.strictEqual(token.isCancellationRequested, false);
+            return expected;
+        });
+
+        const actual = await service.getRunningAppHosts(new vscode.CancellationTokenSource().token);
+
+        assert.deepStrictEqual(actual, expected);
     });
 
     test('launch clears launching state and throws when startDebugging returns false', async () => {

@@ -177,6 +177,11 @@ export async function activate(context: vscode.ExtensionContext) {
 
   // Aspire panel - running app hosts tree view
   const dataRepository = new AppHostDataRepository(terminalProvider, appHostDiscoveryService, configInfoProvider);
+  appHostLaunchService.setEditorSessionProvider(() => aspireExtensionContext.aspireDebugSessions);
+  appHostLaunchService.setRunningAppHostProvider(async token => {
+    const appHosts = await dataRepository.fetchAppHostsOnce(token, false);
+    return appHosts.map(appHost => ({ appHostPath: appHost.appHostPath }));
+  });
   const appHostTreeProvider = new AspireAppHostTreeProvider(dataRepository, terminalProvider, appHostLaunchService, context.globalState);
   const appHostTreeView = vscode.window.createTreeView('aspire-vscode.appHosts', {
     treeDataProvider: appHostTreeProvider,
@@ -380,8 +385,6 @@ export async function activate(context: vscode.ExtensionContext) {
   // process the editor cannot observe or shut down cleanly.
   const appHostLifecycleToolService = new AppHostLifecycleToolService({
     launchService: appHostLaunchService,
-    getEditorOwnedSessions: () => aspireExtensionContext.aspireDebugSessions,
-    getRunningAppHostPaths: () => dataRepository.allKnownAppHosts.map(appHost => appHost.appHostPath),
   });
   context.subscriptions.push(appHostLifecycleToolService);
   const appHostLifecycleToolRegistration = registerAppHostLifecycleTools(appHostLifecycleToolService);
