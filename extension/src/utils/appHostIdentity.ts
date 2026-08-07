@@ -198,6 +198,10 @@ function containsPath(paths: readonly string[], candidate: string): boolean {
  * caller is still validating input, so the miss is not an error here. Returning the
  * lexical path in that case keeps the key stable and deterministic.
  */
+export function canonicalizeAppHostPath(resolvedPath: string): string {
+    return canonicalize(resolvedPath);
+}
+
 function canonicalize(resolvedPath: string): string {
     try {
         return fs.realpathSync(resolvedPath);

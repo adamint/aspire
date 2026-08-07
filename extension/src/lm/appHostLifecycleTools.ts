@@ -12,7 +12,7 @@ import {
     appHostLifecycleUnspecifiedMode,
 } from '../loc/strings';
 import { type CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
-import { type AppHostIdentityRelation } from '../utils/appHostIdentity';
+import { canonicalizeAppHostPath, type AppHostIdentityRelation } from '../utils/appHostIdentity';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { isCommandCancellation } from '../utils/telemetry';
 import { AppHostLifecycleLockTimeoutError } from '../services/AppHostLaunchService';
@@ -543,9 +543,20 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
 
         const targets = new Map<string, ResolvedAppHostTarget>();
         for (const { folder, candidates } of candidatesByFolder) {
+            // Containment is decided on the real paths, because a link inside the workspace
+            // can point at a file outside it. The confirmation would show the in-workspace
+            // link while `startDebugging` executed the external target, so a lexical check
+            // alone would let the workspace boundary be crossed under an in-workspace name.
+            const canonicalFolderPath = canonicalizeAppHostPath(folder.uri.fsPath);
             for (const candidate of candidates) {
                 const relativePath = toContainedPosixRelativePath(folder.uri.fsPath, candidate.path);
                 if (relativePath === undefined) {
+                    continue;
+                }
+
+                // The lexical relative path is still what gets displayed: it is the name the
+                // caller sees in the explorer, and it is the one they can pass back.
+                if (toContainedPosixRelativePath(canonicalFolderPath, canonicalizeAppHostPath(candidate.path)) === undefined) {
                     continue;
                 }
 

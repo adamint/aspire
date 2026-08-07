@@ -127,6 +127,15 @@ export class AppHostLaunchService implements vscode.Disposable {
      * `launch.json`/F5 launch that the AppHost is already spoken for.
      */
     private readonly _lifecycleLaunchClaims = new Set<string>();
+    /**
+     * The pending self-expiry timer for each externally reserved key.
+     *
+     * Kept per key so an older timer can never delete a newer reservation. Repeated
+     * external reservations are allowed, and the same key can also be re-reserved by an
+     * internal launch, so an unconditional delete scheduled by the first reservation would
+     * clear a launch that is still in flight and reopen the duplicate-launch window.
+     */
+    private readonly _externalReservationExpiries = new Map<string, NodeJS.Timeout>();
     private readonly _lifecycleLocks = new Map<string, Promise<unknown>>();
     private readonly _lifecycleCancellationSource = new vscode.CancellationTokenSource();
     private _getEditorSessions: () => readonly AppHostLaunchSession[] = () => [];
@@ -152,6 +161,7 @@ export class AppHostLaunchService implements vscode.Disposable {
             if (appHostPath && session.configuration?.type === 'aspire') {
                 const key = getAppHostPathComparisonKey(appHostPath);
                 this._lifecycleLaunchClaims.delete(key);
+                this.cancelExternalReservationExpiry(key);
                 if (this._launchingPaths.delete(key)) {
                     this._onDidChangeLaunchingState.fire();
                 }
@@ -171,6 +181,10 @@ export class AppHostLaunchService implements vscode.Disposable {
         this._lifecycleCancellationSource.dispose();
         this._debugSessionSubscription.dispose();
         this._lifecycleLocks.clear();
+        for (const expiry of this._externalReservationExpiries.values()) {
+            clearTimeout(expiry);
+        }
+        this._externalReservationExpiries.clear();
         this._onDidChangeLaunchingState.dispose();
         this._onDidTerminateAppHostDebugSession.dispose();
         this._onDidRequestLaunch.dispose();
@@ -373,6 +387,8 @@ export class AppHostLaunchService implements vscode.Disposable {
      */
     reserveLaunch(appHostPath: string): void {
         const key = getAppHostPathComparisonKey(appHostPath);
+        // Any pending expiry belongs to a reservation this one supersedes.
+        this.cancelExternalReservationExpiry(key);
         if (this._launchingPaths.has(key)) {
             return;
         }
@@ -405,13 +421,30 @@ export class AppHostLaunchService implements vscode.Disposable {
         const key = getAppHostPathComparisonKey(appHostPath);
         this.reserveLaunch(appHostPath);
         const expiry = setTimeout(() => {
+            // Only expire while this timer is still the registered one for the key. Another
+            // reservation arriving in the meantime cancels this timer, so reaching here means
+            // nothing has superseded it.
+            if (this._externalReservationExpiries.get(key) !== expiry) {
+                return;
+            }
+
+            this._externalReservationExpiries.delete(key);
             if (this._launchingPaths.delete(key)) {
                 this._onDidChangeLaunchingState.fire();
             }
         }, externalLaunchReservationTimeoutMs);
         // A reservation must never be a reason for the host process to stay alive.
         expiry.unref?.();
+        this._externalReservationExpiries.set(key, expiry);
         return true;
+    }
+
+    private cancelExternalReservationExpiry(key: string): void {
+        const expiry = this._externalReservationExpiries.get(key);
+        if (expiry) {
+            clearTimeout(expiry);
+            this._externalReservationExpiries.delete(key);
+        }
     }
 
     /**
@@ -421,6 +454,7 @@ export class AppHostLaunchService implements vscode.Disposable {
     clearLaunching(appHostPath: string): void {
         const key = getAppHostPathComparisonKey(appHostPath);
         this._lifecycleLaunchClaims.delete(key);
+        this.cancelExternalReservationExpiry(key);
         if (this._launchingPaths.delete(key)) {
             this._onDidChangeLaunchingState.fire();
         }
@@ -429,6 +463,7 @@ export class AppHostLaunchService implements vscode.Disposable {
     clearMatchingLaunching(appHostPath: string): void {
         const exactKey = getAppHostPathComparisonKey(appHostPath);
         this._lifecycleLaunchClaims.delete(exactKey);
+        this.cancelExternalReservationExpiry(exactKey);
         if (this._launchingPaths.delete(exactKey)) {
             this._onDidChangeLaunchingState.fire();
             return;
@@ -444,6 +479,7 @@ export class AppHostLaunchService implements vscode.Disposable {
 
         this._launchingPaths.delete(matchingPaths[0]);
         this._lifecycleLaunchClaims.delete(matchingPaths[0]);
+        this.cancelExternalReservationExpiry(matchingPaths[0]);
         this._onDidChangeLaunchingState.fire();
     }
 
@@ -522,7 +558,8 @@ export class AppHostLaunchService implements vscode.Disposable {
             request: 'launch',
             program: appHostPath,
             command,
-            noDebug
+            noDebug,
+            launchedByExtension: true
         };
 
         if (doStep) {

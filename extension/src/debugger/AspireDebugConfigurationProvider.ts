@@ -81,7 +81,12 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
 
     async resolveDebugConfigurationWithSubstitutedVariables(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration, token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration | null | undefined> {
         const aspireConfig = config as AspireExtendedDebugConfiguration;
+        // Read before the markers are stripped: an `AppHostLaunchService` launch reaches
+        // this resolver through `startDebugging` and has already reserved its own slot, so
+        // claiming it here as an external launch would make it refuse itself.
+        const launchedByExtension = aspireConfig.launchedByExtension === true;
         delete aspireConfig.skipCliAvailabilityCheck;
+        delete aspireConfig.launchedByExtension;
 
         if (typeof config.program === 'string') {
             const program = config.program;
@@ -105,7 +110,7 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
             // default `${workspaceFolder}` configuration deliberately leaves `program` as
             // the directory, and a directory is not the same identity as the AppHost inside
             // it, so claiming the directory would leave the tool free to start a duplicate.
-            if (getAspireDebugConfigurationCommand(aspireConfig) === 'run') {
+            if (!launchedByExtension && getAspireDebugConfigurationCommand(aspireConfig) === 'run') {
                 const claimedPath = telemetryTarget?.path ?? (typeof config.program === 'string' ? config.program : undefined);
                 if (claimedPath && !this._launchReservation.tryReserveExternalLaunch(claimedPath)) {
                     // A lifecycle-owned launch already claimed this AppHost and cannot be

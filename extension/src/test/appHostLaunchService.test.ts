@@ -6,7 +6,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { AspireExtendedDebugConfiguration } from '../dcp/types';
 import { appHostLifecycleBusy } from '../loc/strings';
-import { AppHostLaunchService, AppHostLifecycleLockTimeoutError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs } from '../services/AppHostLaunchService';
+import { AppHostLaunchService, AppHostLifecycleLockTimeoutError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, externalLaunchReservationTimeoutMs } from '../services/AppHostLaunchService';
 import { getAppHostIdentityKey } from '../utils/appHostIdentity';
 import * as cliPathModule from '../utils/cliPath';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
@@ -267,6 +267,78 @@ suite('AppHostLaunchService', () => {
 
         assert.strictEqual(service.isLaunching('/repo/AppHost1.csproj'), false);
         assert.strictEqual(service.isLaunching('/repo/AppHost2.csproj'), true);
+    });
+
+    test('an expiring external reservation does not clear a newer launch of the same AppHost', async () => {
+        // Repeated reservations are allowed and an internal launch can reuse the same key,
+        // so an unconditional delete scheduled by the first reservation would clear a launch
+        // that is still in flight and reopen the duplicate-launch window.
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        try {
+            const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+            const projectPath = path.join(directory, 'AppHost.csproj');
+
+            assert.strictEqual(service.tryReserveExternalLaunch(projectPath), true);
+            clock.tick(externalLaunchReservationTimeoutMs - 1);
+            assert.strictEqual(service.tryReserveExternalLaunch(projectPath), true);
+
+            clock.tick(2);
+
+            assert.strictEqual(service.isLaunching(projectPath), true);
+        }
+        finally {
+            clock.restore();
+        }
+    });
+
+    test('an expiring external reservation does not clear a lifecycle claim taken afterwards', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        try {
+            const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+            const projectPath = path.join(directory, 'AppHost.csproj');
+
+            assert.strictEqual(service.tryReserveExternalLaunch(projectPath), true);
+            service.clearLaunching(projectPath);
+            assert.strictEqual(service.tryReserveLaunch(projectPath), true);
+
+            clock.tick(externalLaunchReservationTimeoutMs + 1);
+
+            assert.strictEqual(service.isLaunching(projectPath), true);
+            assert.strictEqual(service.hasLifecycleLaunchClaim(projectPath), true);
+        }
+        finally {
+            clock.restore();
+        }
+    });
+
+    test('an external reservation still expires on its own when nothing supersedes it', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        try {
+            const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+            const projectPath = path.join(directory, 'AppHost.csproj');
+
+            assert.strictEqual(service.tryReserveExternalLaunch(projectPath), true);
+
+            clock.tick(externalLaunchReservationTimeoutMs + 1);
+
+            assert.strictEqual(service.isLaunching(projectPath), false);
+        }
+        finally {
+            clock.restore();
+        }
+    });
+
+    test('marks its own debug configurations so the shared resolver does not claim them as external', async () => {
+        // `launchCore` reserves before `startDebugging`, and the configuration provider is
+        // the same hook a `launch.json`/F5 launch goes through. Without the marker the
+        // provider would refuse the launch against the caller's own claim.
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const projectPath = path.join(directory, 'AppHost.csproj');
+
+        await service.launch(projectPath, 'run', true);
+
+        const config = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
+        assert.strictEqual(config.launchedByExtension, true);
     });
 
     test('serializes editor and tool launch work for the same AppHost identity', async () => {

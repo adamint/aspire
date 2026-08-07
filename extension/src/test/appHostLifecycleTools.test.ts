@@ -638,6 +638,30 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(launchService.launchCalls.length, 0);
         });
 
+        test('drops a registry entry whose real target escapes the workspace', async function () {
+            // The candidate is named inside the workspace but the link resolves outside it.
+            // Accepting it would confirm the in-workspace name while `startDebugging`
+            // executed the external file.
+            const outsideProject = path.join(outsideRoot, 'External.csproj');
+            fs.writeFileSync(outsideProject, appHostProjectContents);
+            const linkedProject = path.join(workspaceRoot, 'AppHost', 'Linked.csproj');
+            try {
+                fs.symlinkSync(outsideProject, linkedProject);
+            }
+            catch {
+                // Creating a symlink needs elevation or developer mode on Windows.
+                this.skip();
+                return;
+            }
+
+            discoveryService.registeredPaths.push(linkedProject);
+            const result = await service.start({ appHostPath: 'AppHost/Linked.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'unknownAppHost');
+            assert.strictEqual(launchService.launchCalls.length, 0);
+            assert.deepStrictEqual(result.knownAppHosts, ['AppHost/AppHost.csproj']);
+        });
+
         test('rejects every tool call while the workspace is untrusted', async () => {
             isTrustedStub.value(false);
 

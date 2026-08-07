@@ -182,6 +182,29 @@ suite('AspireDebugConfigurationProvider', () => {
         assert.strictEqual(message.calledOnce, true);
     });
 
+    test('does not claim an AppHostLaunchService launch as an external one', async () => {
+        // `launchCore` reserves its own slot and then calls `startDebugging`, which reaches
+        // this resolver. Treating it as external would make the launch refuse itself against
+        // the claim it just took.
+        const appHostPath = path.join(tempDir, 'AppHost.csproj');
+        fs.writeFileSync(appHostPath, '<Project Sdk="Aspire.AppHost.Sdk" />');
+        launchReservation.claimedByLifecycle = true;
+
+        const provider = new AspireDebugConfigurationProvider(createAppHostDiscoveryService(appHostPath), launchReservation);
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: appHostPath,
+            launchedByExtension: true
+        });
+
+        assert.strictEqual(config?.program, appHostPath);
+        assert.deepStrictEqual(launchReservation.reserved, []);
+        // The marker is internal and must not reach the debug adapter.
+        assert.strictEqual('launchedByExtension' in (config ?? {}), false);
+    });
+
     test('leaves launch config non-AppHost C# source file unchanged', async () => {
         const appDirectory = path.join(tempDir, 'App');
         fs.mkdirSync(appDirectory);
