@@ -47,7 +47,7 @@ const projectAssemblyNamePropertyName = 'project.assemblyName';
 const resourceParentNamePropertyName = 'resource.parentName';
 const dotNetProjectFileExtensions = new Set(['.csproj', '.fsproj', '.vbproj']);
 
-class DotNetService implements IDotNetService {
+export class DotNetService implements IDotNetService {
     private _debugSession: AspireDebugSession | undefined;
 
     constructor(debugSession: AspireDebugSession | undefined) {

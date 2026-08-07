@@ -1,6 +1,6 @@
 import path from "path";
 import * as vscode from "vscode";
-import { ExecutableLaunchConfiguration, EnvVar, LaunchOptions, AspireResourceExtendedDebugConfiguration, AspireExtendedDebugConfiguration } from "../dcp/types";
+import { ExecutableLaunchConfiguration, EnvVar, LaunchOptions, AspireResourceExtendedDebugConfiguration, AspireExtendedDebugConfiguration, AspireResourceDebugSession } from "../dcp/types";
 import { debugProject, runProject } from "../loc/strings";
 import { getEnvironmentWithoutE2EBridgeVariables, mergeEnvs } from "../utils/environment";
 import { extensionLogOutputChannel } from "../utils/logging";
@@ -41,12 +41,26 @@ export interface ResourceDebuggerExtension {
     getDisplayName: (launchConfig: ExecutableLaunchConfiguration) => string;
     getProjectFile: (launchConfig: ExecutableLaunchConfiguration) => string;
     getSupportedFileTypes: () => string[];
-    createDebugSessionConfigurationCallback?: (launchConfig: ExecutableLaunchConfiguration, args: string[] | undefined, env: EnvVar[], launchOptions: LaunchOptions, debugConfiguration: AspireResourceExtendedDebugConfiguration) => Promise<void>;
+    createDebugSessionConfigurationCallback?: (launchConfig: ExecutableLaunchConfiguration, args: string[] | undefined, env: EnvVar[], launchOptions: LaunchOptions, debugConfiguration: AspireResourceExtendedDebugConfiguration) => Promise<AlreadyStartedResourceDebugSession | void>;
     canAttachToResource?: (resource: DebuggableResourceSnapshot) => boolean;
     createAttachDebugSessionConfigurationCallback?: (resource: DebuggableResourceSnapshot) => Promise<vscode.DebugConfiguration>;
 }
 
+export interface AlreadyStartedResourceDebugSession extends AspireResourceDebugSession {
+    processId: number;
+    termination: Promise<number>;
+}
+
+export interface PreparedDebugSession {
+    debugConfiguration: AspireResourceExtendedDebugConfiguration;
+    alreadyStartedSession?: AlreadyStartedResourceDebugSession;
+}
+
 export async function createDebugSessionConfiguration(debugSessionConfig: AspireExtendedDebugConfiguration, launchConfig: ExecutableLaunchConfiguration, args: string[] | undefined, env: EnvVar[], launchOptions: LaunchOptions, debuggerExtension: ResourceDebuggerExtension): Promise<AspireResourceExtendedDebugConfiguration> {
+    return (await prepareDebugSession(debugSessionConfig, launchConfig, args, env, launchOptions, debuggerExtension)).debugConfiguration;
+}
+
+export async function prepareDebugSession(debugSessionConfig: AspireExtendedDebugConfiguration, launchConfig: ExecutableLaunchConfiguration, args: string[] | undefined, env: EnvVar[], launchOptions: LaunchOptions, debuggerExtension: ResourceDebuggerExtension): Promise<PreparedDebugSession> {
     if (debuggerExtension === null) {
         extensionLogOutputChannel.warn(`Unknown type: ${launchConfig.type}.`);
     }
@@ -84,11 +98,15 @@ export async function createDebugSessionConfiguration(debugSessionConfig: Aspire
     }
 
 
+    let alreadyStartedSession: AlreadyStartedResourceDebugSession | undefined;
     if (debuggerExtension.createDebugSessionConfigurationCallback) {
-        await debuggerExtension.createDebugSessionConfigurationCallback(launchConfig, args, env, launchOptions, configuration);
+        alreadyStartedSession = await debuggerExtension.createDebugSessionConfigurationCallback(launchConfig, args, env, launchOptions, configuration) ?? undefined;
     }
 
-    return configuration;
+    return {
+        debugConfiguration: configuration,
+        alreadyStartedSession
+    };
 }
 
 export async function createAttachDebugSessionConfiguration(resource: DebuggableResourceSnapshot, debuggerExtension: ResourceDebuggerExtension): Promise<vscode.DebugConfiguration> {

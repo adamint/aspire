@@ -330,7 +330,9 @@ internal class ResourceSnapshotBuilder
                             endpointUrl.IsInternal)
                         {
                             IsInactive = isInactive,
+#pragma warning disable CS0618 // DisplayOrder is obsolete but must still be flowed for compatibility.
                             DisplayProperties = new(endpointUrl.DisplayText ?? "", endpointUrl.DisplayOrder ?? 0)
+#pragma warning restore CS0618
                         });
                     processedEndpointUrls.Add(endpointUrl);
                 }
@@ -356,7 +358,9 @@ internal class ResourceSnapshotBuilder
                     new(Name: endpointName, Url: endpointUrl.Url, IsInternal: endpointUrl.IsInternal)
                     {
                         IsInactive = !isActive,
+#pragma warning disable CS0618 // DisplayOrder is obsolete but must still be flowed for compatibility.
                         DisplayProperties = new(endpointUrl.DisplayText ?? "", endpointUrl.DisplayOrder ?? 0)
+#pragma warning restore CS0618
                     });
             }
 
@@ -367,7 +371,9 @@ internal class ResourceSnapshotBuilder
                     new(Name: null, Url: url.Url, IsInternal: url.IsInternal)
                     {
                         IsInactive = !resourceRunning,
+#pragma warning disable CS0618 // DisplayOrder is obsolete but must still be flowed for compatibility.
                         DisplayProperties = new(url.DisplayText ?? "", url.DisplayOrder ?? 0)
+#pragma warning restore CS0618
                     });
             }
         }
