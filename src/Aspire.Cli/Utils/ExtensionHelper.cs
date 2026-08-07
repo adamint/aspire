@@ -44,8 +44,12 @@ internal static class KnownCapabilities
     //     because an older extension host still builds for itself and a second build would
     //     duplicate work and race the extension's diagnostics/launch pipeline.
     //
-    // Either way the AppHost is built exactly once, and neither side has to know the other's
-    // version -- only whether it speaks this contract.
+    // The guarantee is narrower than "exactly one build": it is that neither side ever skips the
+    // build believing the other side did it, so no launch runs stale output. A redundant build is
+    // still possible and is deliberately tolerated -- a project-based AppHost with an `Executable`
+    // launch profile always builds in the extension's debugger/languages/dotnet.ts, even when
+    // forceBuild is false, because that build compiles the profile's dependencies rather than the
+    // AppHost output. A wasted incremental build there is acceptable; a skipped one is not.
     //
     // The unversioned predecessor ("build-dotnet-using-cli", CLI 13.2.0-13.2.4) could not carry the
     // CLI-side promise: those versions advertised the token unconditionally but derived watch mode
