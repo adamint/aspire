@@ -172,25 +172,36 @@ public sealed class ResourceViewModel
     ];
 
     /// <summary>
-    /// Returns the state-owned property values in <see cref="s_stateOwnedPropertyNames"/> order, using
-    /// <see langword="null"/> for properties the resource doesn't have. Callers compare these alongside
-    /// <see cref="State"/> and friends so a replica change that only moves a state-owned property (an exit
-    /// code, for instance) still counts as a change to the derived parent row.
+    /// Determines whether this resource and <paramref name="other"/> agree on every property in
+    /// <see cref="s_stateOwnedPropertyNames"/>, treating a property either side is missing as absent.
+    /// Callers compare this alongside <see cref="State"/> and friends so a replica change that only moves
+    /// a state-owned property (an exit code, for instance) still counts as a change to a derived parent
+    /// row. Runs allocation free because it is on the steady-state path of every resource update batch.
     /// </summary>
     /// <remarks>
-    /// This returns the protobuf values rather than the <see cref="ResourcePropertyViewModel"/> wrappers
+    /// This compares the protobuf values rather than the <see cref="ResourcePropertyViewModel"/> wrappers
     /// because the wrapper is a plain class with reference equality. Every snapshot allocates new wrappers,
     /// so comparing wrappers would report a change on every batch. <see cref="Value"/> compares structurally.
     /// </remarks>
-    internal ImmutableArray<Value?> GetStateOwnedPropertyValues()
+    internal bool HasSameStateOwnedProperties(ResourceViewModel other)
     {
-        var builder = ImmutableArray.CreateBuilder<Value?>(s_stateOwnedPropertyNames.Length);
         foreach (var name in s_stateOwnedPropertyNames)
         {
-            builder.Add(Properties.TryGetValue(name, out var property) ? property.Value : null);
+            var hasValue = Properties.TryGetValue(name, out var property);
+            var otherHasValue = other.Properties.TryGetValue(name, out var otherProperty);
+
+            if (hasValue != otherHasValue)
+            {
+                return false;
+            }
+
+            if (hasValue && !Equals(property!.Value, otherProperty!.Value))
+            {
+                return false;
+            }
         }
 
-        return builder.MoveToImmutable();
+        return true;
     }
 
     internal ResourceViewModel WithStateFrom(ResourceViewModel stateSource)

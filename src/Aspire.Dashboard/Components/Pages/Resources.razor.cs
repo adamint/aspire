@@ -275,52 +275,68 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
             {
                 await foreach (var changes in subscription.WithCancellation(_cts.Token).ConfigureAwait(false))
                 {
-                    var selectedResourceHasChanged = false;
-                    var resourcesMayAffectParentReplicaState = false;
-
-                    bool IsResourceTypeVisible(string type) => !PageViewModel.ResourceTypesToVisibility.TryGetValue(type, out var value) || value;
-                    bool IsStateVisible(string state) => !PageViewModel.ResourceStatesToVisibility.TryGetValue(state, out var value) || value;
-                    bool IsHealthStatusVisible(string healthStatus) => !PageViewModel.ResourceHealthStatusesToVisibility.TryGetValue(healthStatus, out var value) || value;
-
-                    foreach (var (changeType, resource) in changes)
-                    {
-                        if (changeType == ResourceViewModelChangeType.Upsert)
-                        {
-                            UpdateFromResource(
-                                resource,
-                                // The new type/state/health status should be visible if it's either
-                                // 1) new, or
-                                // 2) previously visible
-                                IsResourceTypeVisible,
-                                IsStateVisible,
-                                IsHealthStatusVisible);
-
-                            if (string.Equals(PageViewModel.SelectedResource?.Name, resource.Name, StringComparisons.ResourceName))
-                            {
-                                PageViewModel.SelectedResource = resource;
-                                selectedResourceHasChanged = true;
-                            }
-
-                            resourcesMayAffectParentReplicaState = true;
-                        }
-                        else if (changeType == ResourceViewModelChangeType.Delete)
-                        {
-                            var removed = _resourceByName.TryRemove(resource.Name, out _);
-                            _sourceResourceByName.TryRemove(resource.Name, out _);
-                            Debug.Assert(removed, "Cannot remove unknown resource.");
-                            resourcesMayAffectParentReplicaState = true;
-                        }
-                    }
-
-                    if (resourcesMayAffectParentReplicaState)
-                    {
-                        selectedResourceHasChanged |= UpdateParentReplicaStates(IsResourceTypeVisible, IsStateVisible, IsHealthStatusVisible);
-                    }
-
-                    UpdateMaxHighlightedCount();
-                    await UpdateResourceGraphResourcesAsync();
+                    // Process the whole batch on the renderer's dispatcher. The resource caches are also
+                    // walked and written by OnParametersSetAsync, which always runs on that dispatcher, so
+                    // giving the caches a single owner is what keeps the two in step. Mutating them from
+                    // this background task instead lets a delete land in the middle of the filter refresh
+                    // loop: the refresh has already read the resource from _sourceResourceByName, so it
+                    // re-adds it to _resourceByName after the delete removed it, and the following
+                    // derivation pass can't undo that because the resource is gone from the source cache.
+                    // The deleted row then stays in the grid until some unrelated batch arrives.
                     await InvokeAsync(async () =>
                     {
+                        var selectedResourceHasChanged = false;
+                        var resourcesMayAffectParentReplicaState = false;
+
+                        bool IsResourceTypeVisible(string type) => !PageViewModel.ResourceTypesToVisibility.TryGetValue(type, out var value) || value;
+                        bool IsStateVisible(string state) => !PageViewModel.ResourceStatesToVisibility.TryGetValue(state, out var value) || value;
+                        bool IsHealthStatusVisible(string healthStatus) => !PageViewModel.ResourceHealthStatusesToVisibility.TryGetValue(healthStatus, out var value) || value;
+
+                        foreach (var (changeType, resource) in changes)
+                        {
+                            if (changeType == ResourceViewModelChangeType.Upsert)
+                            {
+                                UpdateFromResource(
+                                    resource,
+                                    // The new type/state/health status should be visible if it's either
+                                    // 1) new, or
+                                    // 2) previously visible
+                                    IsResourceTypeVisible,
+                                    IsStateVisible,
+                                    IsHealthStatusVisible);
+
+                                if (string.Equals(PageViewModel.SelectedResource?.Name, resource.Name, StringComparisons.ResourceName))
+                                {
+                                    PageViewModel.SelectedResource = resource;
+                                    selectedResourceHasChanged = true;
+                                }
+
+                                resourcesMayAffectParentReplicaState = true;
+                            }
+                            else if (changeType == ResourceViewModelChangeType.Delete)
+                            {
+                                var removed = _resourceByName.TryRemove(resource.Name, out _);
+                                _sourceResourceByName.TryRemove(resource.Name, out _);
+                                Debug.Assert(removed, "Cannot remove unknown resource.");
+
+                                if (string.Equals(PageViewModel.SelectedResource?.Name, resource.Name, StringComparisons.ResourceName))
+                                {
+                                    // The details view can't keep showing a resource that no longer exists.
+                                    PageViewModel.SelectedResource = null;
+                                    selectedResourceHasChanged = true;
+                                }
+
+                                resourcesMayAffectParentReplicaState = true;
+                            }
+                        }
+
+                        if (resourcesMayAffectParentReplicaState)
+                        {
+                            selectedResourceHasChanged |= UpdateParentReplicaStates(IsResourceTypeVisible, IsStateVisible, IsHealthStatusVisible);
+                        }
+
+                        UpdateMaxHighlightedCount();
+                        await UpdateResourceGraphResourcesAsync();
                         await _dataGrid.SafeRefreshDataAsync();
                         if (selectedResourceHasChanged)
                         {
@@ -404,31 +420,36 @@ public partial class Resources : ComponentBase, IComponentWithTelemetry, IAsyncD
             .Where(r => r.GetResourcePropertyValue(KnownProperties.Resource.ParentName) is { Length: > 0 })
             .ToLookup(r => r.GetResourcePropertyValue(KnownProperties.Resource.ParentName)!, StringComparers.ResourceName);
 
-        // Enumerating a ConcurrentDictionary is always safe, which matters because this doesn't run under a
-        // single synchronization context: the resource subscription loop mutates these dictionaries from a
-        // background task, while OnParametersSetAsync reaches this method on the renderer's context. The
-        // enumeration may therefore observe a concurrently added or removed resource, which is fine -- the
-        // next batch recomputes derivation anyway. What this method must not do is write to
-        // _sourceResourceByName while walking it, so every update below passes updateSource: false.
+        // Enumerating a ConcurrentDictionary is always safe. Both this method and the resource
+        // subscription loop run on the renderer's dispatcher, so no batch can mutate these dictionaries
+        // part way through the walk below. What this method must not do is write to _sourceResourceByName
+        // while walking it, so every update below passes updateSource: false.
         foreach (var parent in _sourceResourceByName.Values)
         {
             var stateSource = GetReplicaStateSource(parent, childrenByParentName);
-            var updatedParent = stateSource is not null ? parent.WithStateFrom(stateSource) : parent;
+
+            // Compare against the state source directly rather than against a projected parent. Steady
+            // state is "nothing changed", and building the projection allocates a resource plus a copy of
+            // its property dictionary for every parent in every batch. WithStateFrom copies exactly these
+            // values across, so comparing them here is equivalent to comparing the projection.
+            var stateOwner = stateSource ?? parent;
 
             if (!_resourceByName.TryGetValue(parent.Name, out var displayedParent) ||
-                (string.Equals(displayedParent.State, updatedParent.State, StringComparison.Ordinal) &&
-                displayedParent.KnownState == updatedParent.KnownState &&
-                string.Equals(displayedParent.StateStyle, updatedParent.StateStyle, StringComparison.Ordinal) &&
-                displayedParent.StartTimeStamp == updatedParent.StartTimeStamp &&
-                displayedParent.StopTimeStamp == updatedParent.StopTimeStamp &&
-                displayedParent.HealthStatus == updatedParent.HealthStatus &&
-                displayedParent.HealthReports.SequenceEqual(updatedParent.HealthReports) &&
+                (string.Equals(displayedParent.State, stateOwner.State, StringComparison.Ordinal) &&
+                displayedParent.KnownState == stateOwner.KnownState &&
+                string.Equals(displayedParent.StateStyle, stateOwner.StateStyle, StringComparison.Ordinal) &&
+                displayedParent.StartTimeStamp == stateOwner.StartTimeStamp &&
+                displayedParent.StopTimeStamp == stateOwner.StopTimeStamp &&
+                displayedParent.HealthStatus == stateOwner.HealthStatus &&
+                displayedParent.HealthReports.SequenceEqual(stateOwner.HealthReports) &&
                 // State-owned properties travel with the derived state, so a replica change that only
                 // moves one of them (an exit code, for example) still has to refresh the parent row.
-                displayedParent.GetStateOwnedPropertyValues().SequenceEqual(updatedParent.GetStateOwnedPropertyValues())))
+                displayedParent.HasSameStateOwnedProperties(stateOwner)))
             {
                 continue;
             }
+
+            var updatedParent = stateSource is not null ? parent.WithStateFrom(stateSource) : parent;
 
             UpdateFromResource(updatedParent, resourceTypeVisible, stateVisible, healthStatusVisible, updateSource: false);
 

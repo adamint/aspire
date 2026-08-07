@@ -631,6 +631,127 @@ public partial class ResourcesTests : DashboardTestContext
     }
 
     [Fact]
+    public void UpdateResources_DerivedParentState_ProjectsEveryStateOwnedProperty()
+    {
+        var viewport = new ViewportInformation(IsDesktop: true, IsUltraLowHeight: false, IsUltraLowWidth: false);
+
+        // The parent carries a full set of state-owned properties from its own previous run plus
+        // identity/configuration properties that belong to it permanently.
+        var parent = CreateResource(
+            "syndule-api",
+            "Azure Container App",
+            "Exited",
+            null,
+            properties: new Dictionary<string, ResourcePropertyViewModel>
+            {
+                [KnownProperties.Resource.State] = CreateProperty(KnownProperties.Resource.State, ProtobufValue.ForString("Exited")),
+                [KnownProperties.Resource.ExitCode] = CreateProperty(KnownProperties.Resource.ExitCode, ProtobufValue.ForNumber(137)),
+                [KnownProperties.Resource.StartTime] = CreateProperty(KnownProperties.Resource.StartTime, ProtobufValue.ForString("2024-01-01T00:00:00Z")),
+                [KnownProperties.Resource.StopTime] = CreateProperty(KnownProperties.Resource.StopTime, ProtobufValue.ForString("2024-01-02T00:00:00Z")),
+                [KnownProperties.Resource.HealthState] = CreateProperty(KnownProperties.Resource.HealthState, ProtobufValue.ForString("Unhealthy")),
+                [KnownProperties.Resource.WaitingFor] = CreateProperty(KnownProperties.Resource.WaitingFor, ProtobufValue.ForList(ProtobufValue.ForString("db"))),
+                [KnownProperties.Resource.Source] = CreateProperty(KnownProperties.Resource.Source, ProtobufValue.ForString("parent-source")),
+                [KnownProperties.Resource.ConnectionString] = CreateProperty(KnownProperties.Resource.ConnectionString, ProtobufValue.ForString("parent-connection-string"))
+            }.ToImmutableDictionary());
+
+        // The replica supplies four of the six state-owned properties. The two it omits (stopTime and
+        // waitingFor) describe a run the parent is no longer displaying, so they have to be dropped
+        // rather than inherited from the parent.
+        var child = CreateReplicaChild(
+            parent,
+            "syndule-api--0000007",
+            "Running",
+            properties: new Dictionary<string, ResourcePropertyViewModel>
+            {
+                [KnownProperties.Resource.ParentName] = CreateParentNameProperty(parent.Name),
+                [KnownProperties.Resource.State] = CreateProperty(KnownProperties.Resource.State, ProtobufValue.ForString("Running")),
+                [KnownProperties.Resource.ExitCode] = CreateProperty(KnownProperties.Resource.ExitCode, ProtobufValue.ForNumber(0)),
+                [KnownProperties.Resource.StartTime] = CreateProperty(KnownProperties.Resource.StartTime, ProtobufValue.ForString("2026-01-01T00:00:00Z")),
+                [KnownProperties.Resource.HealthState] = CreateProperty(KnownProperties.Resource.HealthState, ProtobufValue.ForString("Healthy"))
+            }.ToImmutableDictionary());
+
+        var channel = Channel.CreateUnbounded<IReadOnlyList<ResourceViewModelChange>>();
+        var dashboardClient = new TestDashboardClient(isEnabled: true, initialResources: [parent, child], resourceChannelProvider: () => channel);
+        ResourceSetupHelpers.SetupResourcesPage(this, viewport, dashboardClient);
+
+        var cut = RenderComponent<Components.Pages.Resources>(builder =>
+        {
+            builder.AddCascadingValue(viewport);
+        });
+
+        cut.WaitForAssertion(() =>
+        {
+            var updatedParent = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+            Assert.Equal("Running", updatedParent.State);
+
+            // Replaced: every state-owned property the replica supplies.
+            Assert.Equal("Running", updatedParent.GetResourcePropertyValue(KnownProperties.Resource.State));
+            Assert.True(updatedParent.TryGetExitCode(out var exitCode));
+            Assert.Equal(0, exitCode);
+            Assert.Equal("2026-01-01T00:00:00Z", updatedParent.GetResourcePropertyValue(KnownProperties.Resource.StartTime));
+            Assert.Equal("Healthy", updatedParent.GetResourcePropertyValue(KnownProperties.Resource.HealthState));
+
+            // Removed: every state-owned property the replica doesn't have.
+            Assert.False(updatedParent.Properties.ContainsKey(KnownProperties.Resource.StopTime));
+            Assert.False(updatedParent.Properties.ContainsKey(KnownProperties.Resource.WaitingFor));
+
+            // Preserved: properties describing the parent's identity and configuration.
+            Assert.Equal("parent-source", updatedParent.GetResourcePropertyValue(KnownProperties.Resource.Source));
+            Assert.Equal("parent-connection-string", updatedParent.GetResourcePropertyValue(KnownProperties.Resource.ConnectionString));
+        });
+    }
+
+    [Fact]
+    public async Task UpdateResources_SubscriptionBatch_IsProcessedOnRendererDispatcher()
+    {
+        var viewport = new ViewportInformation(IsDesktop: true, IsUltraLowHeight: false, IsUltraLowWidth: false);
+        var parent = CreateResource("syndule-api", "Azure Container App", "Running", null);
+        var child = CreateReplicaChild(parent, "syndule-api--0000007", "Running");
+
+        var channel = Channel.CreateUnbounded<IReadOnlyList<ResourceViewModelChange>>();
+        var dashboardClient = new TestDashboardClient(isEnabled: true, initialResources: [parent, child], resourceChannelProvider: () => channel);
+        ResourceSetupHelpers.SetupResourcesPage(this, viewport, dashboardClient);
+
+        var cut = RenderComponent<Components.Pages.Resources>(builder =>
+        {
+            builder.AddCascadingValue(viewport);
+        });
+
+        cut.WaitForAssertion(() =>
+        {
+            var updatedParent = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+            Assert.Equal("Running", updatedParent.State);
+        });
+
+        // A subscription batch mutates the resource caches, re-derives parent replica state, updates the
+        // graph and updates the selection. OnParametersSetAsync walks the same caches on the renderer's
+        // dispatcher when the URL filters change. Unless the batch runs on that dispatcher too, a filter
+        // refresh can interleave with a delete and re-add the deleted row to the displayed cache, leaving
+        // a resurrected row until some later batch happens to arrive.
+        //
+        // Rather than trying to hit that window by timing, record which context actually enumerates the
+        // batch. This is a deterministic invariant: processing must be single-owner on the dispatcher.
+        var batch = new DispatcherRecordingChanges(
+            Renderer.Dispatcher,
+            new ResourceViewModelChange(
+                ResourceViewModelChangeType.Upsert,
+                CreateReplicaChild(parent, child.Name, "Exited")));
+
+        channel.Writer.TryWrite(batch);
+
+        cut.WaitForAssertion(() =>
+        {
+            var updatedParent = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+            Assert.Equal("Exited", updatedParent.State);
+        });
+
+        Assert.True(
+            await batch.EnumeratedOnRendererDispatcher,
+            "The resource subscription batch must be processed on the renderer's dispatcher so that cache " +
+            "mutation, derivation and the filter refresh in OnParametersSetAsync cannot interleave.");
+    }
+
+    [Fact]
     public void UpdateResources_DerivedParentState_ReactsToReplicaStateOwnedPropertyChange()
     {
         var viewport = new ViewportInformation(IsDesktop: true, IsUltraLowHeight: false, IsUltraLowWidth: false);
@@ -810,6 +931,9 @@ public partial class ResourcesTests : DashboardTestContext
         cut.WaitForAssertion(() =>
         {
             Assert.DoesNotContain(cut.Instance.GetFilteredResources(), r => r.Name == parent.Name);
+
+            // The details view must not keep showing a resource that no longer exists.
+            Assert.Null(cut.Instance.PageViewModel.SelectedResource);
 
             var orphanedChild = Assert.Single(cut.Instance.GetFilteredResources(), r => r.Name == child.Name);
             Assert.Equal("Running", orphanedChild.State);
@@ -1743,5 +1867,38 @@ public partial class ResourcesTests : DashboardTestContext
         Assert.NotEqual(default, collapsedResourceNamesCall);
         Assert.True(collapsedResourceNamesCall.ConnectionCompleted,
             "CollapsedResourceNames was fetched before the dashboard client was connected");
+    }
+
+    /// <summary>
+    /// A resource change batch that records whether the resource subscription loop enumerated it on the
+    /// renderer's dispatcher. The subscription loop enumerates the batch it receives before doing any
+    /// work with it, so this observes the synchronization context that owns cache mutation and derivation
+    /// without needing a hook in the component or any timing-sensitive interleaving.
+    /// </summary>
+    private sealed class DispatcherRecordingChanges : IReadOnlyList<ResourceViewModelChange>
+    {
+        private readonly Dispatcher _dispatcher;
+        private readonly ResourceViewModelChange[] _changes;
+        private readonly TaskCompletionSource<bool> _enumeratedOnRendererDispatcher = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public DispatcherRecordingChanges(Dispatcher dispatcher, params ResourceViewModelChange[] changes)
+        {
+            _dispatcher = dispatcher;
+            _changes = changes;
+        }
+
+        public Task<bool> EnumeratedOnRendererDispatcher => _enumeratedOnRendererDispatcher.Task;
+
+        public ResourceViewModelChange this[int index] => _changes[index];
+
+        public int Count => _changes.Length;
+
+        public IEnumerator<ResourceViewModelChange> GetEnumerator()
+        {
+            _enumeratedOnRendererDispatcher.TrySetResult(_dispatcher.CheckAccess());
+            return ((IEnumerable<ResourceViewModelChange>)_changes).GetEnumerator();
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }
