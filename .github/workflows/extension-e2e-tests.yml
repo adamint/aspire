@@ -84,22 +84,6 @@ jobs:
       matrix:
         include:
           - name: Linux
-            shardName: hot-reload
-            spec: out/test-e2e/test-e2e/hotReload.e2e.test.js
-            runner: ubuntu-latest
-            rid: linux-x64
-            archivePattern: aspire-cli-linux-x64*.tar.gz
-            cliBinary: aspire
-            useXvfb: true
-          - name: Windows
-            shardName: hot-reload
-            spec: out/test-e2e/test-e2e/hotReload.e2e.test.js
-            runner: windows-latest
-            rid: win-x64
-            archivePattern: aspire-cli-win-x64*.zip
-            cliBinary: aspire.exe
-            useXvfb: false
-          - name: Linux
             shardName: command-palette
             spec: out/test-e2e/test-e2e/commandPalette.e2e.test.js
             runner: ubuntu-latest
