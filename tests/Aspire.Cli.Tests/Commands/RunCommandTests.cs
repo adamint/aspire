@@ -3506,6 +3506,147 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task CaptureAppHostLogsAsync_UsesLegacyDebugMessagesForOlderAppHost()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var errorWriter = new TestStartupErrorWriter();
+        using var fileLoggerProvider = new FileLoggerProvider(logFilePath, errorWriter);
+        var forwardedMessages = new List<string>();
+        var forwardedEntries = new List<ExtensionAppHostLogEntry>();
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (capability, _) => Task.FromResult(capability == KnownCapabilities.AppHostLogOutput),
+            WriteAppHostLogEntryAsyncCallback = entry =>
+            {
+                forwardedEntries.Add(entry);
+                return Task.CompletedTask;
+            },
+            WriteDebugSessionMessageAsyncCallback = (message, _, _) =>
+            {
+                forwardedMessages.Add(message);
+                return Task.CompletedTask;
+            }
+        };
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+        var consoleInteractionService = new ConsoleInteractionService(
+            provider.GetRequiredService<ConsoleEnvironment>(),
+            workspace.CreateExecutionContext(logFilePath: logFilePath),
+            TestHelpers.CreateInteractiveHostEnvironment(),
+            new EnvironmentProcessPathProvider(),
+            NullLoggerFactory.Instance,
+            new ConsoleLogBufferContext());
+        using var extensionInteractionService = new ExtensionInteractionService(
+            consoleInteractionService,
+            extensionBackchannel,
+            extensionPromptEnabled: false,
+            logger: NullLogger<ExtensionInteractionService>.Instance);
+        var backchannel = new TestAppHostBackchannel
+        {
+            // An AppHost that predates log-entries.v2 still deserializes into the current
+            // entry type, so SequenceNumber arrives as 0 and Exception as null. Those values
+            // are indistinguishable from a genuine entry without an exception, so only the
+            // capability can tell the two apart.
+            GetCapabilitiesAsyncCallback = _ => Task.FromResult<string[]>(["baseline.v2", "pipeline-steps.v1"]),
+            GetAppHostLogEntriesAsyncCallback = YieldEntries
+        };
+
+        await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, extensionInteractionService, CancellationToken.None);
+        await extensionInteractionService.FlushAsync();
+
+        Assert.Empty(forwardedEntries);
+        Assert.Equal(["Information message", "Error message"], forwardedMessages);
+
+        static async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return new BackchannelLogEntry
+            {
+                Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 0, TimeSpan.Zero),
+                LogLevel = LogLevel.Information,
+                Message = "Information message",
+                EventId = new EventId(),
+                CategoryName = "Example.Category",
+            };
+
+            yield return new BackchannelLogEntry
+            {
+                Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 1, TimeSpan.Zero),
+                LogLevel = LogLevel.Error,
+                Message = "Error message",
+                EventId = new EventId(),
+                CategoryName = "Example.Category",
+            };
+
+            await Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task CaptureAppHostLogsAsync_FallsBackToLegacyMessagesWhenAppHostCapabilityProbeFails()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var errorWriter = new TestStartupErrorWriter();
+        using var fileLoggerProvider = new FileLoggerProvider(logFilePath, errorWriter);
+        var forwardedMessages = new List<string>();
+        var forwardedEntries = new List<ExtensionAppHostLogEntry>();
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (capability, _) => Task.FromResult(capability == KnownCapabilities.AppHostLogOutput),
+            WriteAppHostLogEntryAsyncCallback = entry =>
+            {
+                forwardedEntries.Add(entry);
+                return Task.CompletedTask;
+            },
+            WriteDebugSessionMessageAsyncCallback = (message, _, _) =>
+            {
+                forwardedMessages.Add(message);
+                return Task.CompletedTask;
+            }
+        };
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+        var consoleInteractionService = new ConsoleInteractionService(
+            provider.GetRequiredService<ConsoleEnvironment>(),
+            workspace.CreateExecutionContext(logFilePath: logFilePath),
+            TestHelpers.CreateInteractiveHostEnvironment(),
+            new EnvironmentProcessPathProvider(),
+            NullLoggerFactory.Instance,
+            new ConsoleLogBufferContext());
+        using var extensionInteractionService = new ExtensionInteractionService(
+            consoleInteractionService,
+            extensionBackchannel,
+            extensionPromptEnabled: false,
+            logger: NullLogger<ExtensionInteractionService>.Instance);
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetCapabilitiesAsyncCallback = _ => throw new InvalidOperationException("apphost rpc faulted"),
+            GetAppHostLogEntriesAsyncCallback = YieldEntries
+        };
+
+        await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, extensionInteractionService, CancellationToken.None);
+        await extensionInteractionService.FlushAsync();
+
+        Assert.Empty(forwardedEntries);
+        Assert.Equal(["Information message"], forwardedMessages);
+
+        static async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return new BackchannelLogEntry
+            {
+                Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 0, TimeSpan.Zero),
+                LogLevel = LogLevel.Information,
+                Message = "Information message",
+                EventId = new EventId(),
+                CategoryName = "Example.Category",
+            };
+
+            await Task.CompletedTask;
+        }
+    }
+
+    [Fact]
     public async Task CaptureAppHostLogsAsync_FallsBackToLegacyMessagesWhenCapabilityProbeFails()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

@@ -361,6 +361,56 @@ suite('AppHost log output coordinator tests', () => {
             renderConsole(coordinator, 'Downloading... ', 'stdout'),
             [{ output: 'Downloading... ', category: 'stdout' }]);
     });
+
+    test('assembles a record split across many debug adapter events without leaking raw text', () => {
+        // DAP output events carry stream chunks, not whole records, so a record can arrive in
+        // any number of pieces split at any offset. Every split must produce the same single
+        // rendered record and nothing else, or the remainder leaks into the console as raw text
+        // and the truncated record no longer matches its backchannel twin.
+        const record = 'fail: Example.Category[7]\n      Boom happened.\n      System.InvalidOperationException: boom\n         at Connect()\n';
+        const expected: AppHostParentOutput = {
+            output: 'Example.Category: Error: Boom happened.\nSystem.InvalidOperationException: boom\n   at Connect()\n',
+            category: 'stderr'
+        };
+
+        for (const chunkSize of [1, 3, 17, 40, 64]) {
+            const coordinator = new AppHostLogOutputCoordinator();
+            const rendered: AppHostParentOutput[] = [];
+            for (let index = 0; index < record.length; index += chunkSize) {
+                rendered.push(...coordinator.handleDebugAdapterOutput(record.slice(index, index + chunkSize), 'stderr'));
+            }
+            rendered.push(...coordinator.flush());
+
+            assert.deepStrictEqual(rendered, [expected], `chunk size ${chunkSize} changed the rendering`);
+        }
+    });
+
+    test('renders a record split mid-line across three events exactly once', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('warn: Example.Cate', 'stdout'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('gory[7]\n      Port is alrea', 'stdout'),
+            []);
+        // A trailing newline does not end a record: the next line may still continue it. The
+        // console copy is therefore held, which lets the backchannel twin arrive first.
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('dy allocated.\n', 'stdout'),
+            []);
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ logLevel: 'Warning', message: 'Port is already allocated.' })),
+            {
+                output: '\x1b[33mExample.Category: Warning: Port is already allocated.\x1b[0m\n',
+                category: 'stdout'
+            });
+
+        // The identity built from the reassembled text has to match the backchannel entry, or
+        // releasing the held copy renders the same line a second time.
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
 });
 
 
