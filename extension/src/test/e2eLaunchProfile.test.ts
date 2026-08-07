@@ -626,7 +626,7 @@ suite('E2E launch profile', () => {
         assert.ok(stopAppHost.includes('const runningAppHostBeforeStop = getRunningAppHostFromState(appHostPath);'));
         assert.ok(waitForCapturedPidCalls.length >= 3);
         assert.ok(stopAppHost.includes('const runningAppHost = await getRunningAppHostAccordingToCli(appHostPath);'));
-        assert.ok(stopAppHost.includes('await waitForProcessExit(runningAppHost.appHostPid, 30000);'));
+        assert.ok(stopAppHost.includes('await waitForProcessExit(runningAppHost.appHostPid, `AppHost ${appHostPath}`, 30000);'));
         assert.ok(stopAppHost.includes('if (!await getRunningAppHostAccordingToCli(appHostPath))'));
         assert.ok(stopAppHost.includes('if (isProcessRunning(runningAppHost.appHostPid))'));
         assert.ok(stopAppHost.includes('await stopProcess(runningAppHost.appHostPid, 30000);'));
@@ -651,7 +651,7 @@ suite('E2E launch profile', () => {
         assert.ok(!fixtures.includes('terminateProcessTree(runningAppHost.appHostPid'));
         assert.ok(fixtures.includes("await waitForNoRunningAppHostPathOrStopKnownProcess(appHostPath, 30000, runningAppHostBeforeStop?.appHostPid, 'after stopping')"));
         assert.ok(fixtures.includes("await waitForNoRunningAppHostPathOrStopKnownProcess(getGeneratedAppHostPath(projectName), 30000, knownAppHostPid, 'before deleting')"));
-        assert.ok(fixtures.includes('async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void>'));
+        assert.ok(fixtures.includes('export async function waitForProcessExit(pid: number, description: string, timeoutMs: number): Promise<void>'));
         assert.ok(fixtures.includes('process.kill(pid, 0);'));
         assert.ok(fixtures.includes("process.kill(pid, 'SIGTERM');"));
         assert.ok(fixtures.includes('async function waitForNoRunningAppHostPathOrStopKnownProcess(appHostPath: string, timeoutMs: number, knownAppHostPid: number | undefined, actionDescription: string): Promise<void>'));

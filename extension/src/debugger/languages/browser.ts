@@ -1,7 +1,21 @@
 import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, isBrowserLaunchConfiguration } from "../../dcp/types";
-import { browserDisplayName, browserLabel, invalidLaunchConfiguration } from "../../loc/strings";
+import { browserDisplayName, browserLabel, invalidLaunchConfiguration, unsupportedBrowserDebugTarget } from "../../loc/strings";
 import { extensionLogOutputChannel } from "../../utils/logging";
 import { ResourceDebuggerExtension } from "../debuggerExtensions";
+
+/**
+ * Browsers VS Code's built-in js-debug can debug, mapped to the debug type it registers.
+ *
+ * `WithBrowserDebugger(browser)` on the hosting side accepts an arbitrary string, so an unmapped
+ * value would otherwise be forwarded as `pwa-<value>` and fail inside VS Code with an opaque
+ * "Configured debug type is not supported" once the session is already starting. js-debug only
+ * contributes `pwa-chrome` and `pwa-msedge` for browsers:
+ * https://github.com/microsoft/vscode-js-debug/blob/main/package.json
+ */
+const browserDebugTypesByName: Readonly<Record<string, string>> = Object.freeze({
+    msedge: 'pwa-msedge',
+    chrome: 'pwa-chrome',
+});
 
 export const browserDebuggerExtension: ResourceDebuggerExtension = {
     resourceType: 'browser',
@@ -23,10 +37,22 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
 
         // Map browser name to VS Code js-debug adapter type (pwa- prefix required)
         const browser = launchConfig.browser || 'msedge';
-        debugConfiguration.type = `pwa-${browser}`;
+        const debugType = browserDebugTypesByName[browser];
+        if (!debugType) {
+            extensionLogOutputChannel.warn(`No built-in js-debug adapter is registered for browser '${browser}'.`);
+            throw new Error(unsupportedBrowserDebugTarget(browser, Object.keys(browserDebugTypesByName).join(', ')));
+        }
+
+        debugConfiguration.type = debugType;
         debugConfiguration.request = 'launch';
         debugConfiguration.url = launchConfig.url;
-        debugConfiguration.webRoot = launchConfig.web_root;
+        // The hosting side defaults web_root to an empty string when the resource has no web root.
+        // js-debug treats an empty webRoot as a real path and resolves source maps against it, so
+        // only forward a value the AppHost actually configured.
+        if (launchConfig.web_root) {
+            debugConfiguration.webRoot = launchConfig.web_root;
+        }
+
         debugConfiguration.sourceMaps = true;
         debugConfiguration.resolveSourceMapLocations = ['**', '!**/node_modules/**'];
         // Use an auto-managed temp user data directory so multiple browser debuggers

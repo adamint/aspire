@@ -4,8 +4,9 @@ import { spawnSync } from 'child_process';
 import type { AspireExtensionE2EControlCommand, AspireExtensionE2EControlStatus } from '../../types/extensionApi';
 import { lsJsonStreamCapability, type ConfigInfo } from '../../types/configInfo';
 import { applyE2eControl, isSamePath, readStateFile, sleepSynchronously, waitForExtensionState } from './assertions';
-import { getCliPath, getPrimaryAppHostProjectPath, getRepoRoot, getRunRoot, getWorkspaceRoot } from './paths';
+import { getCliPath, getNodeAppScriptPath, getPrimaryAppHostProjectPath, getRepoRoot, getRunRoot, getWorkspaceRoot } from './paths';
 import { ProcessError, runProcess } from './process';
+import { formatProcessSnapshot, parsePosixProcessSnapshot, type ProcessSnapshot } from '../../testing/processDiagnostics';
 
 const csharpFileHeader = `// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
@@ -184,6 +185,30 @@ export async function setSourceBreakpoint(filePath: string, line: number): Promi
 
 export async function clearBreakpoints(): Promise<void> {
     await executeE2eControlCommand({ name: 'clearBreakpoints' });
+}
+
+/** The marker comment the Node E2E fixture puts on the line the resource debugger must stop on. */
+const nodeAppBreakpointMarker = 'aspire-e2e-breakpoint';
+
+/**
+ * The zero-based line of the Node fixture statement the resource debugger must stop on.
+ *
+ * The line is located from a marker comment rather than hardcoded so editing the fixture script
+ * cannot silently move the breakpoint onto an unrelated statement and still "pass".
+ */
+export function getNodeAppBreakpointLine(): number {
+    const scriptPath = getNodeAppScriptPath();
+    const lines = fs.readFileSync(scriptPath, 'utf8').split(/\r?\n/);
+    const line = lines.findIndex(text => text.includes(nodeAppBreakpointMarker));
+    if (line < 0) {
+        throw new Error(`The Node E2E fixture ${scriptPath} has no line marked with '${nodeAppBreakpointMarker}'.`);
+    }
+
+    return line;
+}
+
+export function isProcessAlive(pid: number): boolean {
+    return isProcessRunning(pid);
 }
 
 export async function removeGeneratedProject(projectName: string, knownAppHostPid?: number): Promise<void> {
@@ -449,7 +474,7 @@ export async function stopAppHostIfRunning(appHostPath: string): Promise<void> {
         }
 
         try {
-            await waitForProcessExit(runningAppHost.appHostPid, 30000);
+            await waitForProcessExit(runningAppHost.appHostPid, `AppHost ${appHostPath}`, 30000);
         }
         catch {
             if (isProcessRunning(runningAppHost.appHostPid)) {
@@ -656,7 +681,7 @@ function getRunningAppHostFromState(appHostPath: string) {
         : state.appHosts.find(candidate => isSamePath(candidate.appHostPath, appHostPath));
 }
 
-async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {
+export async function waitForProcessExit(pid: number, description: string, timeoutMs: number): Promise<void> {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
         if (!isProcessRunning(pid)) {
@@ -666,7 +691,50 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void>
         await delay(250);
     }
 
-    throw new Error(`Timed out after ${timeoutMs}ms waiting for process ${pid} to exit.`);
+    throw new Error(`Timed out after ${timeoutMs}ms waiting for ${description} (pid ${pid}) to exit. Last observed process: ${formatProcessSnapshot(getProcessSnapshot(pid), pid)}.`);
+}
+
+function getProcessSnapshot(pid: number): ProcessSnapshot | undefined {
+    if (!Number.isInteger(pid) || pid <= 0) {
+        return undefined;
+    }
+
+    if (process.platform === 'win32') {
+        const result = spawnSync('powershell.exe', [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            `$process = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"; if ($process) { $process | Select-Object ProcessId, ParentProcessId, CommandLine | ConvertTo-Json -Compress }`,
+        ], { encoding: 'utf8', timeout: 5000 });
+        if (result.error) {
+            throw new Error(`Unable to inspect process ${pid}: ${result.error.message}`);
+        }
+        if (result.status !== 0) {
+            throw new Error(`Unable to inspect process ${pid}: ${result.stderr.trim() || `PowerShell exited with code ${result.status}`}`);
+        }
+        if (!result.stdout.trim()) {
+            return undefined;
+        }
+
+        const snapshot = JSON.parse(result.stdout) as { ProcessId?: unknown; ParentProcessId?: unknown; CommandLine?: unknown };
+        return typeof snapshot.ProcessId === 'number' && typeof snapshot.ParentProcessId === 'number'
+            ? {
+                pid: snapshot.ProcessId,
+                parentPid: snapshot.ParentProcessId,
+                commandLine: typeof snapshot.CommandLine === 'string' ? snapshot.CommandLine : undefined,
+            }
+            : undefined;
+    }
+
+    const result = spawnSync('ps', ['-p', String(pid), '-o', 'pid=,ppid=,stat=,command='], { encoding: 'utf8', timeout: 5000 });
+    if (result.error) {
+        throw new Error(`Unable to inspect process ${pid}: ${result.error.message}`);
+    }
+    if (result.status !== 0) {
+        return undefined;
+    }
+
+    return parsePosixProcessSnapshot(result.stdout, pid);
 }
 
 async function stopProcess(pid: number, timeoutMs: number): Promise<void> {
@@ -681,7 +749,7 @@ async function stopProcess(pid: number, timeoutMs: number): Promise<void> {
         throw error;
     }
 
-    await waitForProcessExit(pid, timeoutMs);
+    await waitForProcessExit(pid, `process ${pid}`, timeoutMs);
 }
 
 function isProcessRunning(pid: number): boolean {
