@@ -494,7 +494,6 @@ export class AspireDebugSession implements vscode.DebugAdapter {
             this._appHostRestartRequested = true;
             return true; // suppress VS Code's child restart
           },
-          onProcessStarted: () => this._appHostLogOutput.reset(),
           onOutput: isCSharpAppHost
             ? (output, category) => this.sendAppHostMessage(output, category)
             : (output, category) => this.sendMessage(output, false, category === 'stderr' ? 'stderr' : 'stdout')
@@ -544,6 +543,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
       const disposable = vscode.debug.onDidTerminateDebugSession(async session => {
         if (this._appHostDebugSession && session.id === this._appHostDebugSession.id) {
+          // Emit whatever was still being assembled before the banner, so a record the
+          // AppHost logged on its way out is not lost and still reads in order.
+          this.flushAppHostLogOutput();
+
           if (!this._appHostRestartRequested) {
             this.sendMessageWithEmoji("ℹ️", applyTextStyle(appHostSessionTerminated, AnsiColors.Yellow));
           }
@@ -843,7 +846,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // Windows' SIGTERM → 143 exit code which is not normalized to 0) would
     // be missed and the summary would under-report failures.
     this._disposables.forEach(disposable => disposable.dispose());
-    this._appHostLogOutput.reset();
+    this.flushAppHostLogOutput();
     this._trackedDebugAdapters = [];
     void this.stopParentDebugSessionOnce();
     this._onDidSendDebugConsoleOutput.dispose();
@@ -931,6 +934,12 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
   private sendAppHostMessage(message: string, category: string | undefined) {
     for (const output of this._appHostLogOutput.handleDebugAdapterOutput(message, category)) {
+      this.sendMessage(output.output, false, output.category);
+    }
+  }
+
+  private flushAppHostLogOutput() {
+    for (const output of this._appHostLogOutput.flush()) {
       this.sendMessage(output.output, false, output.category);
     }
   }

@@ -33,8 +33,9 @@ interface CorrelatedRecord {
     sources: Set<AppHostLogSource>;
 }
 
-interface PendingConsoleHeader {
-    output: string;
+interface PendingConsoleRecord {
+    header: string;
+    body: string;
     category: string;
 }
 
@@ -43,10 +44,12 @@ export class AppHostLogOutputCoordinator {
     // The queue only needs to bridge provider/RPC interleaving and is owned by one
     // Aspire debug session; older records are never used for broad message suppression.
     private static readonly _maxCorrelatedRecords = 1024;
+    private static readonly _allSources: readonly AppHostLogSource[] = ['backchannel', 'consoleLogger', 'debugLogger'];
     private readonly _correlatedRecords: CorrelatedRecord[] = [];
     private readonly _fallbackFilter = new AppHostParentOutputFilter();
+    private readonly _partialLines = new Map<string, string>();
     private _highestBackchannelSequence = 0;
-    private _pendingConsoleHeader: PendingConsoleHeader | undefined;
+    private _pendingRecord: PendingConsoleRecord | undefined;
 
     handleBackchannelEntry(entry: AppHostLogEntry): AppHostParentOutput | undefined {
         if (entry.sequenceNumber > 0) {
@@ -74,55 +77,60 @@ export class AppHostLogOutputCoordinator {
         const normalizedCategory = category ?? 'console';
         const outputs: AppHostParentOutput[] = [];
 
-        if (this._pendingConsoleHeader) {
-            const pending = this._pendingConsoleHeader;
-            this._pendingConsoleHeader = undefined;
+        const buffered = `${this._partialLines.get(normalizedCategory) ?? ''}${output}`;
+        const lastBreak = Math.max(buffered.lastIndexOf('\n'), buffered.lastIndexOf('\r'));
+        const completeLines = buffered.slice(0, lastBreak + 1);
+        let partial = buffered.slice(lastBreak + 1);
 
-            if (pending.category === normalizedCategory && isConsoleLoggerContinuation(output)) {
-                const record = parseConsoleLoggerRecord(`${pending.output}${output}`);
-                if (record) {
-                    const correlated = this.correlate(record, 'consoleLogger');
-                    return correlated ? [correlated] : [];
-                }
+        if (completeLines.length > 0) {
+            this.consumeLines(completeLines, normalizedCategory, outputs);
+        }
+
+        // Decide about the trailing partial line only after the complete lines have been
+        // consumed, because whether a record is being assembled is exactly what makes an
+        // unterminated line worth waiting for.
+        if (partial.length > 0 && !this.shouldHoldPartialLine(partial, normalizedCategory)) {
+            this.consumeLines(partial, normalizedCategory, outputs);
+            partial = '';
+        }
+
+        if (partial.length > 0) {
+            this._partialLines.set(normalizedCategory, partial);
+        } else {
+            this._partialLines.delete(normalizedCategory);
+
+            // A record is only known to be finished once a non-continuation line arrives,
+            // but holding it until the next output event would render the console one
+            // record behind. Wait only in the two cases where more of the record is
+            // almost certainly still in flight: a buffered partial line, or a header
+            // whose body has not arrived at all (SimpleConsoleFormatter always writes at
+            // least one indented body line).
+            if (this._pendingRecord && this._pendingRecord.body.length > 0) {
+                this.flushPendingRecord(outputs);
             }
-
-            const pendingOutput = this._fallbackFilter.filter(pending.output, pending.category);
-            if (pendingOutput) {
-                outputs.push(pendingOutput);
-            }
         }
 
-        const consoleRecord = parseConsoleLoggerRecord(output);
-        if (consoleRecord) {
-            const correlated = this.correlate(consoleRecord, 'consoleLogger');
-            if (correlated) {
-                outputs.push(correlated);
-            }
-            return outputs;
+        return outputs;
+    }
+
+    /**
+     * Emits anything still being assembled and clears all state.
+     *
+     * Records are assembled across output events, so an AppHost that exits immediately
+     * after logging would otherwise take the final record with it — exactly the
+     * `fail:`/`crit:` line the user needs to see.
+     */
+    flush(): AppHostParentOutput[] {
+        const outputs: AppHostParentOutput[] = [];
+        const partials = [...this._partialLines.entries()];
+        this._partialLines.clear();
+
+        for (const [category, partial] of partials) {
+            this.consumeLines(partial, category, outputs);
         }
 
-        if (isConsoleLoggerHeader(output)) {
-            this._pendingConsoleHeader = { output, category: normalizedCategory };
-            return outputs;
-        }
-
-        // System.Diagnostics.Debug output is delivered as DAP `console` output,
-        // while Console.WriteLine uses stdout/stderr. Restrict the DebugLogger
-        // grammar to that provenance so user stdout shaped like
-        // "Status: Error: connection refused" is never reclassified.
-        const debugRecord = normalizedCategory === 'console' ? parseDebugLoggerRecord(output) : undefined;
-        if (debugRecord) {
-            const correlated = this.correlate(debugRecord, 'debugLogger');
-            if (correlated) {
-                outputs.push(correlated);
-            }
-            return outputs;
-        }
-
-        const filtered = this._fallbackFilter.filter(output, normalizedCategory);
-        if (filtered) {
-            outputs.push(filtered);
-        }
+        this.flushPendingRecord(outputs);
+        this.reset();
 
         return outputs;
     }
@@ -130,16 +138,138 @@ export class AppHostLogOutputCoordinator {
     reset(): void {
         this._correlatedRecords.length = 0;
         this._highestBackchannelSequence = 0;
-        this._pendingConsoleHeader = undefined;
+        this._pendingRecord = undefined;
+        this._partialLines.clear();
         this._fallbackFilter.reset();
     }
 
+    /**
+     * Decides whether an unterminated trailing line is worth waiting on.
+     *
+     * Debug adapter output is not aligned to record boundaries: a redirected
+     * `Console.Out` flushes every 256 characters, so a long record reaches the adapter in
+     * several writes and parsing a chunk that stops mid-line would render a truncated
+     * record and leak the remainder as raw text. Holding text also delays it until the
+     * next write, so only hold when it plausibly belongs to a logger record —
+     * unstructured writes such as a progress indicator printed without a newline still
+     * reach the console immediately.
+     */
+    private shouldHoldPartialLine(partial: string, category: string): boolean {
+        // `console` carries DebugLogger and adapter output only, never interactive
+        // writes, so nothing observable is delayed by buffering it.
+        if (category === 'console') {
+            return true;
+        }
+
+        if (this._pendingRecord?.category === category) {
+            return true;
+        }
+
+        return couldStartConsoleLoggerHeader(partial);
+    }
+
+    private consumeLines(text: string, category: string, outputs: AppHostParentOutput[]): void {
+        const lines = text.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+/g) ?? [];
+        let passthrough = '';
+
+        const flushPassthrough = () => {
+            if (passthrough.length === 0) {
+                return;
+            }
+
+            const block = passthrough;
+            passthrough = '';
+
+            // System.Diagnostics.Debug output is delivered as DAP `console` output,
+            // while Console.WriteLine uses stdout/stderr. Restrict the DebugLogger
+            // grammar to that provenance so user stdout shaped like
+            // "Status: Error: connection refused" is never reclassified.
+            const record = category === 'console' ? parseDebugLoggerRecord(block) : undefined;
+            if (record) {
+                this.emitRecord(record, 'debugLogger', block, category, outputs);
+                return;
+            }
+
+            const filtered = this._fallbackFilter.filter(block, category);
+            if (filtered) {
+                outputs.push(filtered);
+            }
+        };
+
+        for (const line of lines) {
+            if (this._pendingRecord?.category === category && isConsoleLoggerContinuation(line)) {
+                this._pendingRecord.body += line;
+                continue;
+            }
+
+            this.flushPendingRecord(outputs);
+
+            if (isConsoleLoggerHeader(line)) {
+                flushPassthrough();
+                this._pendingRecord = { header: line, body: '', category };
+                continue;
+            }
+
+            passthrough += line;
+        }
+
+        flushPassthrough();
+    }
+
+    private flushPendingRecord(outputs: AppHostParentOutput[]): void {
+        const pending = this._pendingRecord;
+        if (!pending) {
+            return;
+        }
+
+        this._pendingRecord = undefined;
+        const text = `${pending.header}${pending.body}`;
+
+        const record = parseConsoleLoggerRecord(text);
+        if (record) {
+            this.emitRecord(record, 'consoleLogger', text, pending.category, outputs);
+            return;
+        }
+
+        const filtered = this._fallbackFilter.filter(text, pending.category);
+        if (filtered) {
+            outputs.push(filtered);
+        }
+    }
+
+    private emitRecord(
+        record: AppHostLoggerRecord,
+        source: AppHostLogSource,
+        rawText: string,
+        category: string,
+        outputs: AppHostParentOutput[]): void {
+        // Advance the fallback filter even though its output is discarded. It tracks
+        // whether the previous line opened a suppressed trace/debug record or an error
+        // block, so skipping consumed records leaves that state stale and the next
+        // unstructured line is classified against the wrong record.
+        this._fallbackFilter.filter(rawText, category);
+
+        const correlated = this.correlate(record, source);
+        if (correlated) {
+            outputs.push(correlated);
+        }
+    }
+
     private correlate(record: AppHostLoggerRecord, source: AppHostLogSource): AppHostParentOutput | undefined {
-        const existing = this._correlatedRecords.find(candidate =>
+        const existingIndex = this._correlatedRecords.findIndex(candidate =>
             !candidate.sources.has(source) && areEquivalentRecords(candidate.record, record));
 
-        if (existing) {
+        if (existingIndex >= 0) {
+            const existing = this._correlatedRecords[existingIndex];
             existing.sources.add(source);
+
+            // Once every provenance has been seen the record can never match again, so
+            // drop it immediately. Otherwise the window fills with dead entries and
+            // evicts records that are still waiting for their twin.
+            if (existing.sources.size === AppHostLogOutputCoordinator._allSources.length) {
+                this._correlatedRecords.splice(existingIndex, 1);
+            }
+
             return undefined;
         }
 
@@ -277,14 +407,20 @@ function parseConsoleLoggerRecord(output: string): AppHostLoggerRecord | undefin
     return {
         categoryName: match[2],
         logLevel: getFullLoggerLevel(match[1]),
-        message,
+        message: normalizeRecordText(message),
         eventId: Number(match[3]),
-        exception
+        exception: normalizeOptionalRecordText(exception)
     };
 }
 
 function isConsoleLoggerHeader(output: string): boolean {
-    return /^(trce|dbug|info|warn|fail|crit): .+\[-?\d+\](?:\r\n|\r|\n)$/.test(output);
+    return /^(trce|dbug|info|warn|fail|crit): .+\[-?\d+\](?:\r\n|\r|\n)?$/.test(output);
+}
+
+const consoleLoggerLevelTokens = ['trce', 'dbug', 'info', 'warn', 'fail', 'crit'];
+
+function couldStartConsoleLoggerHeader(text: string): boolean {
+    return consoleLoggerLevelTokens.some(token => token.startsWith(text) || text.startsWith(`${token}: `));
 }
 
 function isConsoleLoggerContinuation(output: string): boolean {
@@ -311,15 +447,21 @@ function parseDebugLoggerRecord(output: string): AppHostLoggerRecord | undefined
     return {
         categoryName: match[1],
         logLevel: match[2] as AppHostLogLevel,
-        message,
-        exception
+        message: normalizeRecordText(message),
+        exception: normalizeOptionalRecordText(exception)
     };
 }
 
 function splitMessageAndException(value: string): { message: string; exception?: string } {
+    // Exception.ToString() starts with the type name followed by ": " and the message,
+    // except for the Win32Exception family, which inserts the native error code:
+    //   System.InvalidOperationException: boom
+    //   System.Net.Sockets.SocketException (111): Connection refused
+    //   System.ComponentModel.Win32Exception (2): No such file or directory
+    // https://learn.microsoft.com/dotnet/api/system.componentmodel.win32exception.tostring
     const lines = normalizeLineEndings(value).split('\n');
     const exceptionIndex = lines.findIndex(line =>
-        /^(?:[A-Za-z_][\w`]*(?:\.[A-Za-z_][\w`]*)*(?:Exception|Error):|Unhandled exception\.)/.test(line));
+        /^(?:[A-Za-z_][\w`]*(?:\.[A-Za-z_][\w`]*)*(?:Exception|Error)(?: \([^)]*\))?:|Unhandled exception\.)/.test(line));
 
     if (exceptionIndex < 0) {
         return { message: value };
@@ -337,20 +479,51 @@ function splitMessageAndException(value: string): { message: string; exception?:
 }
 
 function areEquivalentRecords(left: AppHostLoggerRecord, right: AppHostLoggerRecord): boolean {
-    return left.categoryName === right.categoryName
-        && left.logLevel === right.logLevel
-        && left.message === right.message
-        && left.exception === right.exception
-        && (left.eventId === undefined || right.eventId === undefined || left.eventId === right.eventId);
+    if (left.categoryName !== right.categoryName || left.logLevel !== right.logLevel) {
+        return false;
+    }
+
+    // DebugLogger omits the event id entirely, so an absent value on either side is a
+    // wildcard rather than a mismatch.
+    if (left.eventId !== undefined && right.eventId !== undefined && left.eventId !== right.eventId) {
+        return false;
+    }
+
+    if (left.exception !== undefined && right.exception !== undefined) {
+        return left.message === right.message && left.exception === right.exception;
+    }
+
+    // Only one side separated an exception from the message, which happens in two ways:
+    //
+    //   1. The AppHost predates BackchannelLogEntry.Exception. Its structured message is
+    //      `formatter(state, exception)`, which drops the exception, while the console
+    //      copy still prints it. The formatted messages match.
+    //   2. A multi-line message whose continuation happens to look like an exception,
+    //      e.g. "Retry failed.\nSystem.TimeoutException: timed out" passed as a single
+    //      message. The console copy splits it; the structured copy does not. The
+    //      recombined bodies match.
+    //
+    // Accepting either keeps both cases correlated instead of rendering them twice.
+    return left.message === right.message || getRecordBody(left) === getRecordBody(right);
 }
+
+function getRecordBody(record: AppHostLoggerRecord): string {
+    return record.exception ? `${record.message}\n${record.exception}` : record.message;
+}
+
+// Mirrors AnsiColors in utils/AspireTerminalProvider, which cannot be imported here:
+// that module pulls in `vscode`, and this one is deliberately host-free so the
+// correlation logic can be exercised directly under Node.
+const ansiYellow = '\x1b[33m';
+const ansiDim = '\x1b[2m';
 
 function formatLoggerRecord(record: AppHostLoggerRecord): AppHostParentOutput {
     const body = `${record.categoryName}: ${record.logLevel}: ${record.message}${record.exception ? `\n${record.exception}` : ''}`;
     const category = record.logLevel === 'Error' || record.logLevel === 'Critical' ? 'stderr' : 'stdout';
     const style = record.logLevel === 'Trace' || record.logLevel === 'Debug'
-        ? '\x1b[2m'
+        ? ansiDim
         : record.logLevel === 'Warning'
-            ? '\x1b[33m'
+            ? ansiYellow
             : undefined;
 
     return {
@@ -367,7 +540,12 @@ function normalizeOptionalRecordText(value: string | null | undefined): string |
 }
 
 function normalizeRecordText(value: string): string {
-    return removeSingleTrailingNewline(normalizeLineEndings(value));
+    // Trailing padding differs per source. SimpleConsoleFormatter indents every
+    // continuation line, so `logger.LogInformation("text\n")` arrives on the console as
+    // an extra padded line while the backchannel copy keeps a bare newline. Trimming
+    // trailing whitespace makes the two comparable and does not change how a record
+    // reads.
+    return normalizeLineEndings(value).replace(/[ \t\n]+$/, '');
 }
 
 function normalizeLineEndings(value: string): string {

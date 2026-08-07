@@ -3506,6 +3506,101 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task CaptureAppHostLogsAsync_FallsBackToLegacyMessagesWhenCapabilityProbeFails()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var errorWriter = new TestStartupErrorWriter();
+        using var fileLoggerProvider = new FileLoggerProvider(logFilePath, errorWriter);
+        var forwardedMessages = new List<string>();
+        var extensionBackchannel = new TestExtensionBackchannel
+        {
+            HasCapabilityAsyncCallback = (_, _) => throw new InvalidOperationException("extension rpc faulted"),
+            WriteDebugSessionMessageAsyncCallback = (message, _, _) =>
+            {
+                forwardedMessages.Add(message);
+                return Task.CompletedTask;
+            }
+        };
+        var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper);
+        using var provider = services.BuildServiceProvider();
+        var consoleInteractionService = new ConsoleInteractionService(
+            provider.GetRequiredService<ConsoleEnvironment>(),
+            workspace.CreateExecutionContext(logFilePath: logFilePath),
+            TestHelpers.CreateInteractiveHostEnvironment(),
+            new EnvironmentProcessPathProvider(),
+            NullLoggerFactory.Instance,
+            new ConsoleLogBufferContext());
+        using var extensionInteractionService = new ExtensionInteractionService(
+            consoleInteractionService,
+            extensionBackchannel,
+            extensionPromptEnabled: false,
+            logger: NullLogger<ExtensionInteractionService>.Instance);
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetAppHostLogEntriesAsyncCallback = YieldEntries
+        };
+
+        // A faulted capability probe must not abort log capture: the CLI log file is the
+        // artifact used to diagnose that very failure.
+        await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, extensionInteractionService, CancellationToken.None);
+        await extensionInteractionService.FlushAsync();
+
+        Assert.Equal(["Information message"], forwardedMessages);
+
+        static async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return new BackchannelLogEntry
+            {
+                Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 0, TimeSpan.Zero),
+                LogLevel = LogLevel.Information,
+                Message = "Information message",
+                EventId = new EventId(),
+                CategoryName = "Example.Category",
+            };
+
+            await Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task CaptureAppHostLogsAsync_WritesExceptionTextToLogFile()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
+        var errorWriter = new TestStartupErrorWriter();
+        var backchannel = new TestAppHostBackchannel
+        {
+            GetAppHostLogEntriesAsyncCallback = YieldEntries
+        };
+        var interactionService = new TestInteractionService();
+
+        using (var fileLoggerProvider = new FileLoggerProvider(logFilePath, errorWriter))
+        {
+            await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, interactionService, CancellationToken.None);
+        }
+
+        var logContent = await File.ReadAllTextAsync(logFilePath);
+        Assert.Contains("Health check failed.", logContent);
+        Assert.Contains("System.InvalidOperationException: boom", logContent);
+
+        static async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            yield return new BackchannelLogEntry
+            {
+                Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 0, TimeSpan.Zero),
+                LogLevel = LogLevel.Error,
+                Message = "Health check failed.",
+                Exception = "System.InvalidOperationException: boom",
+                EventId = new EventId(),
+                CategoryName = "Example.Category",
+            };
+
+            await Task.CompletedTask;
+        }
+    }
+
+    [Fact]
     public async Task CaptureAppHostLogsAsync_ConnectionLostException_TreatedAsNormalCompletion()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

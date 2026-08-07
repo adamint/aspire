@@ -26,7 +26,6 @@ export interface AppHostTrackerOptions {
     // registered this tracker so concurrent AppHosts cannot consume each other's output.
     debugSessionId: string;
     onRestartRequested?: AppHostRestartHandler;
-    onProcessStarted?: () => void;
     onOutput?: AppHostOutputHandler;
 }
 
@@ -90,10 +89,6 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
 
                     // Listen for process event with isRestart (if supported by adapter)
                     if (message.type === 'event' && message.event === 'process') {
-                        if (isOwnedAppHostSession) {
-                            appHostTracker.onProcessStarted?.();
-                        }
-
                         // A new debuggee process invalidates any exit code captured from a prior run.
                         // Reset before the PID guard: `systemProcessId` is optional in DAP, so a
                         // restart reported without it must still clear the stale exit code.

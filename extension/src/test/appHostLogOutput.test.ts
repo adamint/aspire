@@ -240,6 +240,127 @@ suite('AppHost log output coordinator tests', () => {
             coordinator.handleDebugAdapterOutput(loggerShapedOutput, 'stdout'),
             [{ output: loggerShapedOutput, category: 'stdout' }]);
     });
+    test('correlates a record whose exception the AppHost could not send separately', () => {
+        // BackchannelDataTypes is source-shared and the CLI runs against older AppHosts by
+        // design. An AppHost predating BackchannelLogEntry.Exception sends only the
+        // formatted message, which drops the exception, while the console copy still
+        // prints it. Without a wildcard the record would render twice.
+        const coordinator = new AppHostLogOutputCoordinator();
+        const entry = createEntry({ logLevel: 'Error', message: 'Health check failed.', exception: null });
+
+        assert.deepStrictEqual(coordinator.handleBackchannelEntry(entry), {
+            output: 'Example.Category: Error: Health check failed.\n',
+            category: 'stderr'
+        });
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                "fail: Example.Category[7]\n      Health check failed.\n      System.InvalidOperationException: boom\n         at Probe()\n",
+                'stderr'),
+            []);
+    });
+
+    test('correlates an exception whose type name carries a native error code', () => {
+        // Win32Exception and everything derived from it render as
+        // "System.Net.Sockets.SocketException (111): Connection refused", so the exception
+        // boundary has to tolerate the code between the type name and the colon.
+        const coordinator = new AppHostLogOutputCoordinator();
+        const entry = createEntry({
+            logLevel: 'Error',
+            message: 'Health check failed.',
+            exception: 'System.Net.Sockets.SocketException (111): Connection refused\n   at Connect()'
+        });
+
+        assert.ok(coordinator.handleBackchannelEntry(entry));
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                "fail: Example.Category[7]\n      Health check failed.\n      System.Net.Sockets.SocketException (111): Connection refused\n         at Connect()\n",
+                'stderr'),
+            []);
+    });
+
+    test('assembles a record split mid-line across debug adapter events', () => {
+        // A redirected Console.Out flushes every 256 characters, so a split lands at an
+        // arbitrary offset rather than a line boundary.
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                "fail: Example.Category[7]\n      Boom happened.\n      System.InvalidOperationException: bo",
+                'stderr'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput("om\n         at Connect()\n", 'stderr'),
+            [{
+                output: 'Example.Category: Error: Boom happened.\nSystem.InvalidOperationException: boom\n   at Connect()\n',
+                category: 'stderr'
+            }]);
+    });
+
+    test('renders each record once when several arrive in a single debug adapter event', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput(
+                "info: Example.Category[7]\n      First message.\ninfo: Other.Category[7]\n      Second message.\n",
+                'stdout'),
+            [
+                { output: 'Example.Category: Information: First message.\n', category: 'stdout' },
+                { output: 'Other.Category: Information: Second message.\n', category: 'stdout' }
+            ]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 1, message: 'First message.' })),
+            undefined);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 2, categoryName: 'Other.Category', message: 'Second message.' })),
+            undefined);
+    });
+
+    test('keeps suppressing trace body lines after a record is consumed as a record', () => {
+        // The fallback filter decides whether an indented line continues a suppressed
+        // trace/debug record. Records handled by the correlation path never reach it, so
+        // its state has to be advanced explicitly or the leftover body line leaks.
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput("dbug: Example.Category[7]\n      Verbose line one.\n", 'stdout'),
+            [{ output: '\x1b[2mExample.Category: Debug: Verbose line one.\x1b[0m\n', category: 'stdout' }]);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput("      Verbose line two.\n", 'stdout'),
+            []);
+    });
+
+    test('flush emits a record the AppHost was still writing when it exited', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput("crit: Example.Category[7]\n      Fatal: could not", 'stderr'),
+            []);
+        assert.deepStrictEqual(coordinator.flush(), [{
+            output: 'Example.Category: Critical: Fatal: could not\n',
+            category: 'stderr'
+        }]);
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('correlates a message that ends with a newline', () => {
+        // SimpleConsoleFormatter indents every continuation, so a trailing newline in the
+        // message reaches the console as an extra padded line that the structured copy
+        // does not have.
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.ok(coordinator.handleBackchannelEntry(createEntry({ message: 'Line one.\n' })));
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput("info: Example.Category[7]\n      Line one.\n      \n", 'stdout'),
+            []);
+    });
+
+    test('passes an unterminated line straight through when no record is being assembled', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('Downloading... ', 'stdout'),
+            [{ output: 'Downloading... ', category: 'stdout' }]);
+    });
 });
 
 function createEntry(overrides: Partial<AppHostLogEntry> = {}): AppHostLogEntry {

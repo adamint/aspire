@@ -1086,7 +1086,18 @@ internal sealed class RunCommand : BaseCommand
             var supportsStructuredAppHostLogs = false;
             if (ExtensionHelper.IsExtensionHost(interactionService, out var extensionInteractionService, out var extensionBackchannel))
             {
-                supportsStructuredAppHostLogs = await extensionBackchannel.HasCapabilityAsync(KnownCapabilities.AppHostLogOutput, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    supportsStructuredAppHostLogs = await extensionBackchannel.HasCapabilityAsync(KnownCapabilities.AppHostLogOutput, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // The probe connects to the extension and makes a round trip before the log
+                    // stream is subscribed. A faulted extension RPC must not stop the AppHost logs
+                    // from reaching the CLI log file, which is the artifact used to diagnose that
+                    // very failure, so fall back to the legacy path instead of propagating.
+                    supportsStructuredAppHostLogs = false;
+                }
             }
 
             var logEntries = backchannel.GetAppHostLogEntriesAsync(cancellationToken);
@@ -1116,9 +1127,14 @@ internal sealed class RunCommand : BaseCommand
                     }
                 }
 
-                // Write to the unified log file via FileLoggerProvider
+                // Write to the unified log file via FileLoggerProvider. The AppHost sends the
+                // exception separately because the default log formatter drops it, so append it
+                // here or the CLI log file keeps losing stack traces.
                 var shortCategory = FileLoggerProvider.GetShortCategoryName(entry.CategoryName);
-                fileLoggerProvider.WriteLog(entry.Timestamp, entry.LogLevel, $"AppHost/{shortCategory}", entry.Message);
+                var message = entry.Exception is { Length: > 0 } exceptionText
+                    ? $"{entry.Message}{Environment.NewLine}{exceptionText}"
+                    : entry.Message;
+                fileLoggerProvider.WriteLog(entry.Timestamp, entry.LogLevel, $"AppHost/{shortCategory}", message);
             }
         }
         catch (OperationCanceledException)

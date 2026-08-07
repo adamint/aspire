@@ -640,49 +640,6 @@ suite('Debug Adapter Tracker Tests', () => {
         unrelatedDisposable.dispose();
     });
 
-    test('apphost process events reset output state only for the owning tracker', async () => {
-        const owningProcessStartedCallback = sinon.stub();
-        const unrelatedProcessStartedCallback = sinon.stub();
-
-        const owningDisposable = createDebugAdapterTracker(dcpServer as any, 'coreclr', {
-            debugSessionId: 'debug-456',
-            onProcessStarted: owningProcessStartedCallback
-        });
-        const owningFactory = registerFactoryStub.lastCall.args[1];
-
-        const unrelatedDisposable = createDebugAdapterTracker(dcpServer as any, 'coreclr', {
-            debugSessionId: 'debug-other',
-            onProcessStarted: unrelatedProcessStartedCallback
-        });
-        const unrelatedFactory = registerFactoryStub.lastCall.args[1];
-
-        const appHostDebugSession = {
-            ...debugSession,
-            configuration: {
-                ...debugSession.configuration,
-                isApphost: true
-            }
-        };
-        const owningTracker = owningFactory.createDebugAdapterTracker(appHostDebugSession);
-        const unrelatedTracker = unrelatedFactory.createDebugAdapterTracker(appHostDebugSession);
-        const processEvent = {
-            type: 'event',
-            event: 'process',
-            body: {
-                systemProcessId: 1234
-            }
-        };
-
-        owningTracker.onDidSendMessage(processEvent);
-        unrelatedTracker.onDidSendMessage(processEvent);
-
-        assert.strictEqual(owningProcessStartedCallback.calledOnce, true);
-        assert.strictEqual(unrelatedProcessStartedCallback.called, false);
-
-        owningDisposable.dispose();
-        unrelatedDisposable.dispose();
-    });
-
     test('resource output events are not mirrored to output callback', async () => {
         const outputCallback = sinon.stub();
         const disposable = createDebugAdapterTracker(dcpServer as any, 'pwa-node', {
