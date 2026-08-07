@@ -55,6 +55,9 @@
     Resolves the MSBuild-evaluated assembly name for every Aspire project resource so it can be baked into the
     generated IProjectMetadata at AppHost build time. Nothing here runs at application run time.
 
+    Set SkipAspireProjectResourceAssemblyName=true to opt out. The generated metadata then omits the AssemblyName
+    member and falls back to the IProjectMetadata.AssemblyName default interface member, which returns null.
+
     PrepareProjectReferences first applies the SDK's canonical solution configuration, platform negotiation,
     explicit target framework, and global-property removal metadata. The assembly name evaluation starts from
     those prepared items so it uses the same reference contract as the project build.
@@ -73,6 +76,12 @@
     result from its project cache instead of evaluating the reference a second time. For those references
     TargetFramework is also undefined so a multi-targeted AppHost's inner build cannot force its own TFM onto a
     reference that does not build for it.
+
+    Measured cost on a single-reference AppHost build: this adds one GetTargetFrameworks evaluation per reference and
+    no extra GetTargetPath evaluation, because ResolveProjectReferences already asks for GetTargetPath with the same
+    effective global properties and MSBuild serves the second request from its result cache. A reference whose TFM
+    differs from the AppHost's is a genuine second evaluation, which is the price of reading the name it actually
+    builds under.
   -->
   <Target Name="_GetAspireProjectResourceAssemblyNames"
           DependsOnTargets="_CreateAspireProjectResources;PrepareProjectReferences"
@@ -86,7 +95,7 @@
              Targets="GetTargetFrameworks"
              BuildInParallel="$(BuildInParallel)"
              Properties="%(_AspirePreparedProjectResource.SetConfiguration); %(_AspirePreparedProjectResource.SetPlatform)"
-             ContinueOnError="true"
+             ContinueOnError="!$(BuildingProject)"
              RemoveProperties="%(_AspirePreparedProjectResource.GlobalPropertiesToRemove);TargetFramework;RuntimeIdentifier;SelfContained;$(_GlobalPropertiesToRemoveFromProjectReferences)"
              SkipNonexistentProjects="true"
              SkipNonexistentTargets="true">
@@ -99,8 +108,11 @@
       reference's TargetFrameworks metadata paired with its own project.
 
       %(TargetFrameworks) is a single semicolon-joined value such as "net8.0;net9.0"; the first entry is used because
-      it is the one a cross-targeting reference reports first and there is no better signal about which inner build
-      the AppHost will end up launching.
+      it is the one a cross-targeting reference reports first and Aspire never negotiates a TFM for these references,
+      so there is no better signal about which inner build the AppHost will end up launching. Guessing is worth it
+      here: a name resolved from the wrong inner build leaves a consumer exactly where omitting the property would
+      have - falling back to its own guess - while the common case, where every TFM produces the same assembly name,
+      resolves correctly.
     -->
     <ItemGroup>
       <_AspireProjectResourceTargetFrameworkInfo Update="@(_AspireProjectResourceTargetFrameworkInfo)">
@@ -123,7 +135,7 @@
              Targets="GetTargetPath"
              BuildInParallel="$(BuildInParallel)"
              Properties="%(_AspireProjectResourceTargetFrameworkInfo.SetConfiguration); %(_AspireProjectResourceTargetFrameworkInfo.SetPlatform); %(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)"
-             ContinueOnError="true"
+             ContinueOnError="!$(BuildingProject)"
              RemoveProperties="%(_AspireProjectResourceTargetFrameworkInfo.EffectiveGlobalPropertiesToRemove);%(_AspireProjectResourceTargetFrameworkInfo.RemoveGlobalProperties);$(_GlobalPropertiesToRemoveFromProjectReferences)"
              SkipNonexistentProjects="true"
              SkipNonexistentTargets="true">
@@ -138,6 +150,11 @@
     This target is batched on the source project rather than using an ItemGroup, because MSBuild cannot join two item
     lists inside a single ItemGroup: the resolved target paths and the metadata sources are separate lists that have
     to be correlated by project path.
+
+    GetTargetPath returns a single primary output for an SDK project, so each batch holds one target path. If a
+    reference ever returns more than one, the last wins - acceptable because the result is only ever a hint and the
+    property is dropped entirely when nothing resolves. Note the path comparison is MSBuild's, which is case
+    insensitive, so two references differing only in path casing would collide on a case-sensitive file system.
   -->
   <Target Name="_SetAspireProjectMetadataAssemblyNames"
           DependsOnTargets="CreateAspireProjectMetadataSources;_GetAspireProjectResourceAssemblyNames"
