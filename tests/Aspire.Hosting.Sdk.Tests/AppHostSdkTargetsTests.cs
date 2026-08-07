@@ -117,6 +117,72 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ProjectMetadataUsesProjectFileNameWhenAssemblyNameIsNotSet()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        // The overwhelmingly common case: no AssemblyName anywhere, so the evaluated name falls back to the project
+        // file name. Consumers rely on the property being present and correct here, not just in the exotic cases.
+        var generatedSource = await GenerateProjectMetadataSourceAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                  </PropertyGroup>
+                """);
+
+        Assert.Equal("""    public string? AssemblyName => @"Worker";""", GetGeneratedAssemblyNameMember(generatedSource));
+    }
+
+    [Fact]
+    public async Task ProjectMetadataUsesAssemblyNameInheritedFromAnAncestorDirectoryBuildProps()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        // The AssemblyName is several directory levels above the project, which is where a repo-wide convention
+        // usually lives. Only an MSBuild evaluation can see it.
+        var generatedSource = await GenerateProjectMetadataSourceAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                  </PropertyGroup>
+                """,
+            referencedProjectDirectoryName: "src/services/Worker",
+            ancestorDirectoryBuildPropsXml: """
+                  <PropertyGroup>
+                    <AssemblyName>Inherited Attach Service</AssemblyName>
+                  </PropertyGroup>
+                """);
+
+        Assert.Equal("""    public string? AssemblyName => @"Inherited Attach Service";""", GetGeneratedAssemblyNameMember(generatedSource));
+    }
+
+    [Fact]
+    public async Task ProjectMetadataUsesTargetNameWhenItDivergesFromAssemblyName()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        // TargetName is what the built output is actually named, and an SDK is free to set it to something other
+        // than AssemblyName. The debugger attaches to the built assembly, so TargetName is the value that has to
+        // win; asserting the divergence keeps a future refactor from quietly switching to AssemblyName.
+        var generatedSource = await GenerateProjectMetadataSourceAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                    <AssemblyName>Declared Name</AssemblyName>
+                    <TargetName>Rewritten By Sdk</TargetName>
+                  </PropertyGroup>
+                """);
+
+        Assert.Equal("""    public string? AssemblyName => @"Rewritten By Sdk";""", GetGeneratedAssemblyNameMember(generatedSource));
+    }
+
+    [Fact]
     public async Task ProjectMetadataUsesConfigurationConditionedAssemblyName()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
@@ -1038,7 +1104,8 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         string configuration = "Debug",
         string? projectReferenceMetadataXml = null,
         string? solutionProjectConfiguration = null,
-        string referencedProjectDirectoryName = "Worker")
+        string referencedProjectDirectoryName = "Worker",
+        string? ancestorDirectoryBuildPropsXml = null)
     {
         var repoRoot = GetRepoRoot();
 
@@ -1073,6 +1140,22 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
                 <Project>
 
                 {referencedDirectoryBuildPropsXml}
+
+                </Project>
+                """);
+        }
+
+        if (ancestorDirectoryBuildPropsXml is not null)
+        {
+            // Written to the top-most segment of the referenced project's path rather than next to the project, so
+            // the value is only visible after MSBuild's upward Directory.Build.props probe has climbed several
+            // levels. A consumer that reads the project XML cannot see it at all.
+            var ancestorDirectory = Path.Combine(workspace.Path, referencedProjectDirectoryName.Split('/')[0]);
+            await File.WriteAllTextAsync(Path.Combine(ancestorDirectory, "Directory.Build.props"),
+                $"""
+                <Project>
+
+                {ancestorDirectoryBuildPropsXml}
 
                 </Project>
                 """);
