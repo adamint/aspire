@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { extname, join } from 'node:path';
+import * as ts from 'typescript';
 import { CandidateAppHostDisplayInfo } from './appHostDiscovery';
 
 /**
@@ -222,15 +223,19 @@ export function isSupportedAppHostFileExtension(filePath: string): boolean {
  * Content-only AppHost detection for callers that hold a file path but no loaded
  * `vscode.TextDocument`.
  *
- * The editor parsers in `src/editor/parsers` require a `TextDocument` and, for C#,
- * a tree-sitter grammar load, which is too heavy for a synchronous validation gate.
- * This gate instead requires the complete runnable shape:
+ * The editor parsers in `src/editor/parsers` require a `TextDocument`, and the C# one
+ * additionally needs a tree-sitter grammar load, which is too heavy for a synchronous
+ * validation gate. This gate instead requires the complete runnable shape:
  *   `#:sdk Aspire.AppHost.Sdk@13.0.0`      (single-file C# AppHost directive)
  *   `DistributedApplication.CreateBuilder` (C# AppHost entry point)
  *   `import { ... } from '@aspire/hosting'`/`require('aspire')` (JS/TS AppHost)
  *   `createBuilder(...)` and `builder.build().run()` (JS/TS execution)
- * Comments and string literals are excluded from executable marker matching so a
- * model cannot turn documentation or sample text into an executable path.
+ *
+ * JS/TS is analyzed with the TypeScript parser, so only real import/require syntax and
+ * real call expressions count. C# is analyzed with the scanner below, which blanks
+ * comments and string literals so documentation or sample text cannot satisfy the gate.
+ * Both directions matter: this result is what authorizes the extension to execute the
+ * file, so a marker that only exists inside data must never count.
  */
 export function isRunnableAppHostFileContents(filePath: string, contents: string): boolean {
     const extension = extname(filePath).toLowerCase();
@@ -239,7 +244,7 @@ export function isRunnableAppHostFileContents(filePath: string, contents: string
     }
 
     if (appHostCSharpSourceExtensions.includes(extension)) {
-        const { executable } = stripCommentsAndStringLiterals(contents, 'csharp');
+        const executable = stripCSharpCommentsAndStringLiterals(contents);
         // The directive is matched against the executable view, not the raw contents, so a
         // raw string literal containing a `#:sdk` line cannot satisfy the gate.
         return /^[ \t]*#:sdk[ \t]+Aspire\.AppHost\.Sdk\b/m.test(executable)
@@ -248,47 +253,132 @@ export function isRunnableAppHostFileContents(filePath: string, contents: string
     }
 
     if (appHostJsTsSourceExtensions.includes(extension)) {
-        const stripped = stripCommentsAndStringLiterals(contents, 'jsts');
-        return referencesAspireModule(stripped)
-            && /\bcreateBuilder\s*\(/.test(stripped.executable)
-            && /\.\s*build\s*\(\s*\)\s*\.\s*run\s*\(/.test(stripped.executable);
-    }
-
-    /**
-     * True only when an Aspire module specifier appears in genuine import/require
-     * position.
-     *
-     * Matching the specifier text anywhere in the source would accept it inside data -
-     * `const doc = "require('aspire')"` - and a file that only mentions Aspire in a
-     * string while defining its own `createBuilder().build().run()` is arbitrary JS/TS
-     * that this gate would then authorize the extension to execute. So the check starts
-     * from the scanner's literal spans and requires the code immediately before each one
-     * to be import syntax.
-     */
-    function referencesAspireModule(source: StrippedAppHostSource): boolean {
-        return source.literals.some(literal => {
-            if (literal.value === undefined) {
-                return false;
-            }
-
-            // `executable` has every literal and comment blanked to spaces of the same
-            // length, so offsets still line up with the original text and the preceding
-            // code cannot itself be literal or comment text.
-            //   `import x from ` | `export { x } from ` | `require ( ` | `import ( ` | `import `
-            const precedingCode = source.executable.slice(0, literal.start);
-            if (!/(?:\bfrom|\brequire\s*\(|\bimport\s*\()\s*$|\bimport\s+$/.test(precedingCode)) {
-                return false;
-            }
-
-            const specifier = literal.value.toLowerCase();
-            return specifier === 'aspire'
-                || specifier.startsWith('@aspire/')
-                || /(?:^|\/)\.aspire\/modules\/aspire(?:\.[^/]*)?$/.test(specifier)
-                || /(?:^|\/)\.modules\/aspire(?:\.[^/]*)?$/.test(specifier);
-        });
+        return isRunnableJsTsAppHost(filePath, contents);
     }
 
     return false;
+}
+
+/**
+ * True only when the file both imports an Aspire module and runs an AppHost it built.
+ *
+ * This walks the real TypeScript AST rather than scanning text. A lexical scanner cannot
+ * decide this safely: automatic semicolon insertion makes `o.from` followed by a string
+ * on the next line two statements whose text still reads as an import, and a regex
+ * literal after `class C {}` is indistinguishable from division without knowing that a
+ * class declaration is not an expression. Either mistake lets `createBuilder().build()
+ * .run()` inside data satisfy the gate, and the gate is what authorizes the extension to
+ * execute the file. The parser is already bundled for `editor/parsers/jsTsAppHostParser`,
+ * so this costs no new dependency.
+ */
+function isRunnableJsTsAppHost(filePath: string, contents: string): boolean {
+    const sourceFile = ts.createSourceFile(
+        filePath,
+        contents,
+        ts.ScriptTarget.Latest,
+        /* setParentNodes */ false,
+        isJavaScriptAppHostPath(filePath) ? ts.ScriptKind.JS : ts.ScriptKind.TS);
+
+    let referencesAspireModule = false;
+    let createsBuilder = false;
+    let runsBuiltApplication = false;
+
+    const visit = (node: ts.Node): void => {
+        if (!referencesAspireModule && isAspireModuleReference(node)) {
+            referencesAspireModule = true;
+        }
+
+        if (!createsBuilder && ts.isCallExpression(node) && isCreateBuilderCall(node)) {
+            createsBuilder = true;
+        }
+
+        if (!runsBuiltApplication && ts.isCallExpression(node) && isBuildThenRunCall(node)) {
+            runsBuiltApplication = true;
+        }
+
+        if (referencesAspireModule && createsBuilder && runsBuiltApplication) {
+            return;
+        }
+
+        ts.forEachChild(node, visit);
+    };
+
+    visit(sourceFile);
+
+    return referencesAspireModule && createsBuilder && runsBuiltApplication;
+}
+
+/**
+ * True for a node that names an Aspire module in genuine module-specifier position:
+ * `import ... from 'aspire'`, a bare `import 'aspire'`, `export ... from 'aspire'`,
+ * `import x = require('aspire')`, `import('aspire')`, and `require('aspire')`.
+ *
+ * A specifier that only appears as data — `const doc = "require('aspire')"` — is not a
+ * module reference and does not reach any of these node shapes.
+ */
+function isAspireModuleReference(node: ts.Node): boolean {
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+        return node.moduleSpecifier !== undefined
+            && ts.isStringLiteralLike(node.moduleSpecifier)
+            && isAspireModuleSpecifier(node.moduleSpecifier.text);
+    }
+
+    if (ts.isImportEqualsDeclaration(node)) {
+        return ts.isExternalModuleReference(node.moduleReference)
+            && ts.isStringLiteralLike(node.moduleReference.expression)
+            && isAspireModuleSpecifier(node.moduleReference.expression.text);
+    }
+
+    if (!ts.isCallExpression(node)) {
+        return false;
+    }
+
+    // `import('aspire')` parses as a call whose expression is the `import` keyword.
+    const isModuleLoadingCall = node.expression.kind === ts.SyntaxKind.ImportKeyword
+        || (ts.isIdentifier(node.expression) && node.expression.text === 'require');
+
+    return isModuleLoadingCall
+        && node.arguments.length > 0
+        && ts.isStringLiteralLike(node.arguments[0])
+        && isAspireModuleSpecifier(node.arguments[0].text);
+}
+
+/**
+ * Module specifiers that resolve to the Aspire hosting package, including the generated
+ * local module the polyglot AppHost templates emit.
+ */
+function isAspireModuleSpecifier(specifier: string): boolean {
+    const normalized = specifier.toLowerCase();
+    return normalized === 'aspire'
+        || normalized.startsWith('@aspire/')
+        || /(?:^|\/)\.aspire\/modules\/aspire(?:\.[^/]*)?$/.test(normalized)
+        || /(?:^|\/)\.modules\/aspire(?:\.[^/]*)?$/.test(normalized);
+}
+
+/** `createBuilder(...)` or `<something>.createBuilder(...)`. */
+function isCreateBuilderCall(node: ts.CallExpression): boolean {
+    if (ts.isIdentifier(node.expression)) {
+        return node.expression.text === 'createBuilder';
+    }
+
+    return ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'createBuilder';
+}
+
+/** `<something>.build().run(...)`, the shape that actually starts the AppHost. */
+function isBuildThenRunCall(node: ts.CallExpression): boolean {
+    if (!ts.isPropertyAccessExpression(node.expression) || node.expression.name.text !== 'run') {
+        return false;
+    }
+
+    const buildCall = node.expression.expression;
+    return ts.isCallExpression(buildCall)
+        && buildCall.arguments.length === 0
+        && ts.isPropertyAccessExpression(buildCall.expression)
+        && buildCall.expression.name.text === 'build';
+}
+
+function isJavaScriptAppHostPath(filePath: string): boolean {
+    return ['.js', '.mjs', '.cjs'].includes(extname(filePath).toLowerCase());
 }
 
 function projectSdkReferencesAspireAppHost(contents: string): boolean {
@@ -307,28 +397,6 @@ function isTypescriptAppHostMarker(entry: string): boolean {
         lower === 'apphost.js' || lower === 'apphost.mjs' || lower === 'apphost.cjs';
 }
 
-type AppHostSourceLanguage = 'csharp' | 'jsts';
-
-interface AppHostSourceLiteral {
-    /** Offset of the opening quote in the original contents. */
-    readonly start: number;
-    /**
-     * Decoded literal text, or `undefined` when the literal is not a plain, fully
-     * terminated JS/TS `'`/`"` string. Escapes, template literals, regex literals, and
-     * every C# literal form are left undecoded on purpose: a module specifier never
-     * needs them, so refusing to interpret them keeps the gate closed rather than
-     * guessing at a value that decides whether a file may be executed.
-     */
-    readonly value: string | undefined;
-}
-
-interface StrippedAppHostSource {
-    /** Comments and string literal contents both blanked out. */
-    readonly executable: string;
-    /** Every literal span the scanner recognized, in source order. */
-    readonly literals: readonly AppHostSourceLiteral[];
-}
-
 /**
  * Blanks a span while preserving line structure, so offsets and line-anchored
  * regexes (like the `#:sdk` directive match) still line up with the original text.
@@ -338,80 +406,28 @@ function blankOutSpan(span: string): string {
 }
 
 /**
- * Single-pass scanner that produces both views the AppHost content gate needs.
+ * Returns C# source with comments and string literal contents blanked out, so the
+ * AppHost markers can only be matched against code the compiler would execute.
  *
- * Accuracy matters in one direction here: every construct this scanner mis-reads
+ * JS/TS is handled by the TypeScript parser instead. This scanner exists because there
+ * is no equivalent C# parser available synchronously here: the editor's C# parser needs
+ * a `TextDocument` and a tree-sitter grammar load, which is too heavy for a validation
+ * gate on the tool call path.
+ *
+ * Accuracy matters in one direction: every construct this scanner mis-reads
  * desynchronizes it, and the rest of the file gets blanked out, so a perfectly valid
- * AppHost is reported as `notAnAppHost`. That is why the language-specific literal
- * forms below are handled explicitly instead of treating every quote the same way:
+ * AppHost is reported as `notAnAppHost`. That is why the C# literal forms are handled
+ * explicitly instead of treating every quote the same way:
  *
- *   C#   `@"C:\bind\"`        verbatim - backslash is literal, `""` is the escape
- *        `"""raw "quoted" """` raw - closes only on a quote run at least as long
- *        `'\''`                char literal
- *   JS/TS `/["']/`             regex literal - quotes inside are not string starts
- *         `` `a ${b} c` ``     template literal
+ *   `@"C:\bind\"`          verbatim - backslash is literal, `""` is the escape
+ *   `"""raw "quoted" """`  raw - closes only on a quote run at least as long
+ *   `'\''`                 char literal
  *
- * See https://learn.microsoft.com/dotnet/csharp/language-reference/tokens/raw-string
- * and https://tc39.es/ecma262/#sec-literals-regular-expression-literals.
+ * See https://learn.microsoft.com/dotnet/csharp/language-reference/tokens/raw-string.
  */
-function stripCommentsAndStringLiterals(contents: string, language: AppHostSourceLanguage): StrippedAppHostSource {
+function stripCSharpCommentsAndStringLiterals(contents: string): string {
     let executable = '';
-    const literals: AppHostSourceLiteral[] = [];
     let index = 0;
-    // Tracks the last significant code character and word so a `/` in JS/TS can be
-    // classified as a regex literal or a division operator.
-    let lastCodeChar = '';
-    let lastWord = '';
-    let wordBuffer = '';
-    // A `)` or `}` can precede either a regex literal or a division operator depending on
-    // what the bracket closed: `if (x) /re/.test(s)` is a regex, `f(x) / 2` is division.
-    // Remembering what each open bracket started is what tells the two apart, and getting
-    // it wrong leaves a regex body in the executable view where its contents can satisfy
-    // the AppHost marker checks.
-    const bracketStack: BracketKind[] = [];
-    let lastClosedBracketKind: BracketKind | undefined;
-
-    const emitCode = (span: string): void => {
-        executable += span;
-        for (const character of span) {
-            if (character === '(' || character === '[' || character === '{') {
-                // Classified before the word bookkeeping below runs, because that clears
-                // the very word (`if`, `while`, ...) this needs to read.
-                bracketStack.push(classifyOpenBracket(character, wordBuffer.length > 0 ? wordBuffer : lastWord, lastCodeChar));
-            }
-            else if (character === ')' || character === ']' || character === '}') {
-                lastClosedBracketKind = bracketStack.pop();
-            }
-
-            if (/[A-Za-z0-9_$]/.test(character)) {
-                wordBuffer += character;
-            }
-            else {
-                if (wordBuffer.length > 0) {
-                    lastWord = wordBuffer;
-                    wordBuffer = '';
-                }
-                else if (!/\s/.test(character)) {
-                    lastWord = '';
-                }
-            }
-            if (!/\s/.test(character)) {
-                lastCodeChar = character;
-            }
-        }
-    };
-
-    const emitComment = (span: string): void => {
-        executable += blankOutSpan(span);
-    };
-
-    const emitLiteral = (span: string, start: number): void => {
-        executable += blankOutSpan(span);
-        literals.push({ start, value: language === 'jsts' ? readPlainJsTsLiteralValue(span) : undefined });
-        wordBuffer = '';
-        lastWord = '';
-        lastCodeChar = span[span.length - 1] ?? lastCodeChar;
-    };
 
     while (index < contents.length) {
         const current = contents[index];
@@ -420,7 +436,7 @@ function stripCommentsAndStringLiterals(contents: string, language: AppHostSourc
         if (current === '/' && next === '/') {
             const end = contents.indexOf('\n', index);
             const stop = end === -1 ? contents.length : end;
-            emitComment(contents.slice(index, stop));
+            executable += blankOutSpan(contents.slice(index, stop));
             index = stop;
             continue;
         }
@@ -428,44 +444,23 @@ function stripCommentsAndStringLiterals(contents: string, language: AppHostSourc
         if (current === '/' && next === '*') {
             const end = contents.indexOf('*/', index + 2);
             const stop = end === -1 ? contents.length : end + 2;
-            emitComment(contents.slice(index, stop));
+            executable += blankOutSpan(contents.slice(index, stop));
             index = stop;
             continue;
         }
 
-        const literalEnd = language === 'csharp'
-            ? readCSharpLiteral(contents, index)
-            : readJsTsLiteral(contents, index, lastCodeChar, wordBuffer.length > 0 ? wordBuffer : lastWord, lastClosedBracketKind);
+        const literalEnd = readCSharpLiteral(contents, index);
         if (literalEnd !== undefined) {
-            emitLiteral(contents.slice(index, literalEnd), index);
+            executable += blankOutSpan(contents.slice(index, literalEnd));
             index = literalEnd;
             continue;
         }
 
-        emitCode(current);
+        executable += current;
         index++;
     }
 
-    return { executable, literals };
-}
-
-/**
- * Decodes a JS/TS string literal span, or returns `undefined` when the span is anything
- * this gate refuses to interpret.
- *
- * Only plain, fully terminated `'`/`"` literals with no backslash at all are decoded.
- * A specifier such as `'aspire'` never needs an escape, so refusing every escaped or
- * unterminated form avoids re-implementing JS escape semantics on the path that decides
- * whether a file may be launched as code.
- */
-function readPlainJsTsLiteralValue(span: string): string | undefined {
-    const quote = span[0];
-    if ((quote !== '"' && quote !== '\'') || span.length < 2 || span[span.length - 1] !== quote) {
-        return undefined;
-    }
-
-    const inner = span.slice(1, -1);
-    return inner.includes('\\') || inner.includes(quote) || inner.includes('\n') ? undefined : inner;
+    return executable;
 }
 
 /**
@@ -537,32 +532,6 @@ function readCSharpLiteral(contents: string, start: number): number | undefined 
     return readDelimitedLiteral(contents, index, '"');
 }
 
-/**
- * Returns the end offset of the JS/TS literal starting at `start`, or `undefined` when no
- * literal starts there.
- */
-function readJsTsLiteral(
-    contents: string,
-    start: number,
-    lastCodeChar: string,
-    lastWord: string,
-    lastClosedBracketKind: BracketKind | undefined): number | undefined {
-    const current = contents[start];
-    if (current === '"' || current === "'") {
-        return readDelimitedLiteral(contents, start, current);
-    }
-
-    if (current === '`') {
-        return readTemplateLiteral(contents, start);
-    }
-
-    if (current === '/' && canStartRegexLiteral(lastCodeChar, lastWord, lastClosedBracketKind)) {
-        return readRegexLiteral(contents, start);
-    }
-
-    return undefined;
-}
-
 /** Reads a `\`-escaped literal that a raw newline terminates, so a stray quote cannot swallow the file. */
 function readDelimitedLiteral(contents: string, start: number, quote: string): number {
     let index = start + 1;
@@ -583,119 +552,3 @@ function readDelimitedLiteral(contents: string, start: number, quote: string): n
 
     return contents.length;
 }
-
-function readTemplateLiteral(contents: string, start: number): number {
-    let index = start + 1;
-    while (index < contents.length) {
-        const current = contents[index];
-        if (current === '\\') {
-            index += 2;
-            continue;
-        }
-        if (current === '`') {
-            return index + 1;
-        }
-        index++;
-    }
-
-    return contents.length;
-}
-
-function readRegexLiteral(contents: string, start: number): number | undefined {
-    let index = start + 1;
-    let inCharacterClass = false;
-    while (index < contents.length) {
-        const current = contents[index];
-        if (current === '\\') {
-            index += 2;
-            continue;
-        }
-        // An unescaped newline means this was a division operator, not a regex literal.
-        if (current === '\n') {
-            return undefined;
-        }
-        if (inCharacterClass) {
-            inCharacterClass = current !== ']';
-        }
-        else if (current === '[') {
-            inCharacterClass = true;
-        }
-        else if (current === '/') {
-            index++;
-            while (index < contents.length && /[a-z]/i.test(contents[index])) {
-                index++;
-            }
-
-            return index;
-        }
-        index++;
-    }
-
-    return undefined;
-}
-
-/**
- * A `/` begins a regex literal only where an expression may begin. Everywhere else it is
- * division. This is the usual lexical heuristic: look at the previous significant token.
- *
- * `)` and `}` are the two tokens the previous-character rule alone cannot decide, so they
- * are resolved from what the matching open bracket started. `if (x) /re/` and
- * `function f() {} /re/` both begin regexes, while `f(x) / 2` and `{a: 1} / 2` are
- * division. Leaving a regex unrecognized is the dangerous direction here: its body stays
- * in the executable view, where `/createBuilder().build().run()/` would satisfy the
- * AppHost marker checks from inside data.
- */
-function canStartRegexLiteral(lastCodeChar: string, lastWord: string, lastClosedBracketKind: BracketKind | undefined): boolean {
-    if (lastCodeChar === '') {
-        return true;
-    }
-
-    if (regexPrecedingKeywords.has(lastWord)) {
-        return true;
-    }
-
-    if (lastCodeChar === ')') {
-        return lastClosedBracketKind === 'control';
-    }
-
-    if (lastCodeChar === '}') {
-        return lastClosedBracketKind === 'block';
-    }
-
-    return !/[A-Za-z0-9_$\]"'`]/.test(lastCodeChar);
-}
-
-/**
- * What an open bracket started, which decides whether a regex literal may follow the
- * matching close bracket.
- */
-type BracketKind = 'control' | 'block' | 'expression';
-
-function classifyOpenBracket(bracket: string, precedingWord: string, lastCodeChar: string): BracketKind {
-    if (bracket === '(') {
-        return controlStatementKeywords.has(precedingWord) ? 'control' : 'expression';
-    }
-
-    if (bracket === '[') {
-        return 'expression';
-    }
-
-    // A `{` opens a block when nothing that can end an expression precedes it. After `=`,
-    // `(`, `,`, `:` or `=>` it is an object literal or a function body in expression
-    // position, and a `/` after the matching `}` is then division.
-    return blockPrecedingKeywords.has(precedingWord) || lastCodeChar === '' || /[);{}]/.test(lastCodeChar)
-        ? 'block'
-        : 'expression';
-}
-
-/** Keywords whose parenthesized head is a statement clause rather than a call or grouping. */
-const controlStatementKeywords = new Set(['if', 'for', 'while', 'switch', 'catch', 'with']);
-
-/** Keywords that introduce a block with no parenthesized head. */
-const blockPrecedingKeywords = new Set(['else', 'do', 'try', 'finally']);
-
-const regexPrecedingKeywords = new Set([
-    'return', 'typeof', 'instanceof', 'in', 'of', 'new', 'delete', 'void',
-    'throw', 'case', 'do', 'else', 'yield', 'await',
-]);
-

@@ -309,10 +309,9 @@ suite('appHostLanguage.isRunnableAppHostFileContents', () => {
     });
 
     test('rejects a TypeScript file whose only Aspire module reference sits inside data', () => {
-        // The scanner preserves string literals, so matching the specifier anywhere in the
-        // source accepts a file that merely quotes an import. Combined with a locally
-        // defined `createBuilder().build().run()` that is arbitrary JS/TS the extension
-        // would then be authorized to execute.
+        // A text search finds the specifier inside this string literal. Combined with a
+        // locally defined `createBuilder().build().run()` that is arbitrary JS/TS the
+        // extension would then be authorized to execute.
         const contents = [
             `const doc = "require('aspire')";`,
             'function createBuilder() { return { build: () => ({ run: () => {} }) }; }',
@@ -335,20 +334,36 @@ suite('appHostLanguage.isRunnableAppHostFileContents', () => {
         assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', contents), false);
     });
 
+    test('rejects a module specifier that only follows `from` across an inserted semicolon', () => {
+        // Automatic semicolon insertion ends the statement after `o.from`, so `'aspire'`
+        // is its own expression statement rather than a module specifier -- even though the
+        // executable text still reads `... from\n'aspire';`. Only a parser can tell the two
+        // apart, and getting it wrong authorizes the local `createBuilder().build().run()`.
+        const contents = [
+            'const o = { from: 1 };',
+            'o.from',
+            "'aspire';",
+            'function createBuilder() { return { build: () => ({ run: () => {} }) }; }',
+            'const builder = createBuilder();',
+            'builder.build().run();',
+            '',
+        ].join('\n');
+        assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', contents), false);
+    });
+
     test('accepts every genuine import form that names an Aspire module', () => {
         const sideEffectImport = "import 'aspire';\nfunction createBuilder() { return { build: () => ({ run: () => {} }) }; }\nconst builder = createBuilder();\nbuilder.build().run();\n";
         const dynamicImport = "const m = await import('@aspire/hosting');\nconst createBuilder = m.createBuilder;\nconst builder = createBuilder();\nbuilder.build().run();\n";
         const reExport = "export { createBuilder } from '@aspire/hosting';\nconst builder = createBuilder();\nbuilder.build().run();\n";
+        const importEquals = "import aspire = require('aspire');\nconst builder = aspire.createBuilder();\nbuilder.build().run();\n";
         assert.deepStrictEqual(
-            [sideEffectImport, dynamicImport, reExport].map(contents => isRunnableAppHostFileContents('/w/apphost.ts', contents)),
-            [true, true, true]);
+            [sideEffectImport, dynamicImport, reExport, importEquals].map(contents => isRunnableAppHostFileContents('/w/apphost.ts', contents)),
+            [true, true, true, true]);
     });
 
-
     test('rejects AppHost markers that only appear inside a regex after a control-statement head', () => {
-        // `if (x) /re/` starts a regex, but the previous-character rule alone sees `)` and
-        // calls it division, which would leave the regex body in the executable view where
-        // its contents satisfy the builder markers.
+        // `if (x) /re/` starts a regex. Reading that `)` as the end of an expression makes
+        // the `/` division and leaves the regex body looking like executable calls.
         const contents = [
             "import '@aspire/hosting';",
             'const s = process.argv[1];',
@@ -370,10 +385,30 @@ suite('appHostLanguage.isRunnableAppHostFileContents', () => {
         assert.strictEqual(isRunnableAppHostFileContents('/w/apphost.ts', contents), false);
     });
 
+    test('rejects AppHost markers inside a regex that follows a declaration body', () => {
+        // The `{` of each declaration below is preceded by an identifier, which in
+        // expression position would make the matching `}` the end of an object literal and
+        // the following `/` division. Deciding declaration versus expression needs the
+        // grammar, not the preceding token.
+        const declarations = [
+            'class C {}',
+            'function f() {}',
+            'namespace N {}',
+            'enum E {}',
+        ];
+        const results = declarations.map(declaration => isRunnableAppHostFileContents('/w/apphost.ts', [
+            "import '@aspire/hosting';",
+            declaration,
+            "/createBuilder().build().run()/.test('');",
+            '',
+        ].join('\n')));
+        assert.deepStrictEqual(results, [false, false, false, false]);
+    });
+
     test('still reads division after a call or an object literal as code', () => {
-        // The counterpart of the two refusals above: `)` and `}` in expression position
-        // are division, and treating them as regex starts would blank real code and
-        // reject a genuine AppHost.
+        // The counterpart of the refusals above: `)` and `}` in expression position are
+        // division, and treating them as regex starts would hide real code and reject a
+        // genuine AppHost.
         const contents = [
             "import { createBuilder } from '@aspire/hosting';",
             'const size = Number(process.env.SIZE);',
