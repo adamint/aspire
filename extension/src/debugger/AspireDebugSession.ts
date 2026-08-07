@@ -455,9 +455,20 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       return partial;
     };
 
+    const cliPath = await this._terminalProvider.getAspireCliExecutablePath();
+    if (this._disposed) {
+      // Resolving the CLI path is asynchronous, so extension deactivation can complete between the
+      // launch request and this point. Spawning now would produce an `aspire run` that no teardown
+      // path is left to stop — and because it is spawned detached as a process-group leader, it
+      // would not even die with the extension host.
+      extensionLogOutputChannel.info(`Skipping Aspire CLI launch for disposed debug session ${this.debugSessionId}.`);
+      disposable.dispose();
+      return;
+    }
+
     this._cliProcess = spawnCliProcess(
       this._terminalProvider,
-      await this._terminalProvider.getAspireCliExecutablePath(),
+      cliPath,
       args,
       {
         stdoutCallback: (data) => {

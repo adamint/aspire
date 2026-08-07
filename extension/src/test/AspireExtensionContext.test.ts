@@ -257,6 +257,37 @@ suite('AspireExtensionContext', () => {
             warnStub.restore();
         }
     });
+
+    test('a debug session registered after teardown is refused and disposed rather than tracked forever', async () => {
+        const order: string[] = [];
+        const context = createContext(order);
+        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
+
+        try {
+            await deactivateContext(context);
+
+            // The drain loop above re-scans only until teardown starts. `_disposeCore` has since
+            // taken and emptied its snapshot, and it never runs again, so a session accepted here
+            // would keep its CLI alive with nothing left alive to stop it.
+            addSession(context, 'late', () => {
+                order.push('stop late');
+                return Promise.resolve();
+            }, () => order.push('dispose late'));
+
+            assert.deepStrictEqual(context.aspireDebugSessions, []);
+            assert.deepStrictEqual(order, [
+                'rpc server',
+                'dcp server',
+                'terminal provider',
+                'editor command provider',
+                'dispose late',
+            ]);
+            sinon.assert.calledWithMatch(warnStub, 'Refusing Aspire debug session late because the extension has already been torn down');
+        }
+        finally {
+            warnStub.restore();
+        }
+    });
 });
 
 function createContext(order: string[]): AspireExtensionContext {
@@ -283,13 +314,7 @@ function addSession(context: AspireExtensionContext, debugSessionId: string, sto
 }
 
 function deactivateContext(context: AspireExtensionContext): Promise<void> {
-    const deactivate = (context as AspireExtensionContext & { deactivate?: () => Promise<void> }).deactivate;
-    if (deactivate) {
-        return deactivate.call(context);
-    }
-
-    context.dispose();
-    return Promise.resolve();
+    return context.deactivate();
 }
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {

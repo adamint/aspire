@@ -74,6 +74,17 @@ export class AspireExtensionContext implements vscode.Disposable {
     }
 
     addAspireDebugSession(debugSession: AspireDebugSession) {
+        if (this._isDisposed) {
+            // `_disposeCore` disposes exactly the sessions present when it takes its snapshot, and
+            // it never runs twice. Tracking a session that arrives afterwards would therefore mean
+            // never disposing it at all: its CLI would keep running with nothing left alive to stop
+            // it. Sessions arriving *before* teardown are still accepted — `_waitForCliStopRequests`
+            // re-scans for them, and `_disposeCore` then disposes them on the normal path.
+            extensionLogOutputChannel.warn(`Refusing Aspire debug session ${debugSession.debugSessionId} because the extension has already been torn down; disposing it immediately.`);
+            debugSession.dispose();
+            return;
+        }
+
         if (this._aspireDebugSessions.find(session => session.debugSessionId === debugSession.debugSessionId)) {
             throw new Error(debugSessionAlreadyExists(debugSession.debugSessionId));
         }
