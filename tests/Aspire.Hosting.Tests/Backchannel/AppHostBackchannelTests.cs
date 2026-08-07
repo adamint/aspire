@@ -6,7 +6,6 @@
 using System.Net.Sockets;
 using Aspire.Hosting.Tests.Utils;
 using Aspire.Hosting.Utils;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.VisualStudio.Threading;
 using StreamJsonRpc;
 
@@ -15,21 +14,6 @@ namespace Aspire.Hosting.Backchannel;
 [Trait("Partition", "4")]
 public class AppHostBackchannelTests(ITestOutputHelper outputHelper)
 {
-    [Fact]
-    public async Task AdvertisesStructuredLogEntryCapability()
-    {
-        using var builder = TestDistributedApplicationBuilder.Create(outputHelper);
-        using var app = builder.Build();
-
-        var target = app.Services.GetRequiredService<AppHostRpcTarget>();
-        var capabilities = await target.GetCapabilitiesAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(60));
-
-        // The CLI gates the structured debug-console log path on this capability. SequenceNumber
-        // and Exception are optional on the wire, so an older AppHost sends 0/null and looks like
-        // a capable one; only the advertised capability distinguishes them.
-        Assert.Contains(KnownAppHostCapabilities.LogEntries_V2, capabilities);
-    }
-
     [Fact]
     public async Task CanConnectToBackchannel()
     {

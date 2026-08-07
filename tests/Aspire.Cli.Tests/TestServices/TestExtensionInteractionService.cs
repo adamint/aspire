@@ -141,8 +141,9 @@ internal sealed class TestExtensionInteractionService(IServiceProvider servicePr
     {
     }
 
-    public void WriteAppHostLogEntry(ExtensionAppHostLogEntry entry)
+    public Task WriteAppHostLogEntryAsync(ExtensionAppHostLogEntry entry, CancellationToken cancellationToken)
     {
+        return Task.CompletedTask;
     }
 
     public void DisplayLines(IEnumerable<(OutputLineStream Stream, string Line)> lines)

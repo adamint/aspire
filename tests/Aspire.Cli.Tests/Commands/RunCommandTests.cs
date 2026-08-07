@@ -3544,11 +3544,9 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
             logger: NullLogger<ExtensionInteractionService>.Instance);
         var backchannel = new TestAppHostBackchannel
         {
-            // An AppHost that predates log-entries.v2 still deserializes into the current
-            // entry type, so SequenceNumber arrives as 0 and Exception as null. Those values
-            // are indistinguishable from a genuine entry without an exception, so only the
-            // capability can tell the two apart.
-            GetCapabilitiesAsyncCallback = _ => Task.FromResult<string[]>(["baseline.v2", "pipeline-steps.v1"]),
+            // An AppHost that predates the identity-bearing entry shape still deserializes into
+            // the current type, so SequenceNumber arrives as 0. That sentinel is what the CLI
+            // reads: BackchannelLoggerProvider numbers from 1, so 0 can only come off the wire.
             GetAppHostLogEntriesAsyncCallback = YieldEntries
         };
 
@@ -3583,7 +3581,7 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task CaptureAppHostLogsAsync_FallsBackToLegacyMessagesWhenAppHostCapabilityProbeFails()
+    public async Task CaptureAppHostLogsAsync_RoutesEachEntryByItsOwnSequenceNumber()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
@@ -3621,15 +3619,18 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
             logger: NullLogger<ExtensionInteractionService>.Instance);
         var backchannel = new TestAppHostBackchannel
         {
-            GetCapabilitiesAsyncCallback = _ => throw new InvalidOperationException("apphost rpc faulted"),
             GetAppHostLogEntriesAsyncCallback = YieldEntries
         };
 
         await RunCommand.CaptureAppHostLogsAsync(fileLoggerProvider, backchannel, extensionInteractionService, CancellationToken.None);
         await extensionInteractionService.FlushAsync();
 
-        Assert.Empty(forwardedEntries);
-        Assert.Equal(["Information message"], forwardedMessages);
+        // The sentinel travels with the data rather than being negotiated once, so a single
+        // stream can mix shapes. That is not hypothetical: the auxiliary backchannel re-exports
+        // GetAppHostLogEntriesAsync to consumers negotiating through a different capability
+        // vocabulary, which a connection-level token would not have covered.
+        Assert.Equal(["Identified message"], forwardedEntries.Select(entry => entry.Message));
+        Assert.Equal(["Unidentified message"], forwardedMessages);
 
         static async IAsyncEnumerable<BackchannelLogEntry> YieldEntries([EnumeratorCancellation] CancellationToken cancellationToken)
         {
@@ -3637,7 +3638,17 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
             {
                 Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 0, TimeSpan.Zero),
                 LogLevel = LogLevel.Information,
-                Message = "Information message",
+                Message = "Unidentified message",
+                EventId = new EventId(),
+                CategoryName = "Example.Category",
+            };
+
+            yield return new BackchannelLogEntry
+            {
+                SequenceNumber = 1,
+                Timestamp = new DateTimeOffset(2026, 3, 16, 12, 0, 1, TimeSpan.Zero),
+                LogLevel = LogLevel.Information,
+                Message = "Identified message",
                 EventId = new EventId(),
                 CategoryName = "Example.Category",
             };

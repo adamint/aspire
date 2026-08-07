@@ -23,7 +23,7 @@ internal interface IExtensionInteractionService : IInteractionService
     void DisplayConsolePlainText(string message);
     Task StartDebugSessionAsync(string workingDirectory, string? projectFile, bool debug, DebugSessionOptions? options = null);
     void WriteDebugSessionMessage(string message, bool stdout, string? textStyle);
-    void WriteAppHostLogEntry(ExtensionAppHostLogEntry entry);
+    Task WriteAppHostLogEntryAsync(ExtensionAppHostLogEntry entry, CancellationToken cancellationToken);
     void ConsoleDisplaySubtleMessage(string message, bool allowMarkup = false);
 }
 
@@ -34,7 +34,15 @@ internal class ExtensionInteractionService : IExtensionInteractionService, IDisp
     private readonly CancellationTokenSource _cts = new();
     private readonly CancellationToken _cancellationToken;
     private readonly Channel<Func<Task>> _extensionTaskChannel;
+    private readonly SemaphoreSlim _pendingAppHostLogEntries = new(MaxPendingAppHostLogEntries, MaxPendingAppHostLogEntries);
     private readonly ILogger<ExtensionInteractionService> _logger;
+
+    /// <summary>
+    /// How many AppHost log entries may sit on the shared extension task channel before the
+    /// producer waits. Large enough that a normal startup burst never blocks, small enough
+    /// that a wedged extension cannot grow CLI memory without bound.
+    /// </summary>
+    private const int MaxPendingAppHostLogEntries = 1024;
 
     /// <summary>
     /// The background pump task that processes queued extension operations.
@@ -557,10 +565,40 @@ internal class ExtensionInteractionService : IExtensionInteractionService, IDisp
         Debug.Assert(result);
     }
 
-    public void WriteAppHostLogEntry(ExtensionAppHostLogEntry entry)
+    /// <summary>
+    /// Queues an AppHost log entry, waiting when too many are already pending.
+    /// </summary>
+    /// <remarks>
+    /// Unlike every other producer on this channel, the AppHost log stream is unbounded in
+    /// both volume and rate, and the structured path forwards Trace and Debug too. The channel
+    /// is unbounded and the pump awaits one RPC at a time, so a chatty logger or a slow
+    /// extension lets the producer outrun the reader and grow CLI memory without limit.
+    /// Waiting on a gate here propagates backpressure into the <c>await foreach</c> over the
+    /// AppHost stream while preserving order, because the caller is the only producer of these
+    /// entries and the channel is FIFO.
+    /// </remarks>
+    public async Task WriteAppHostLogEntryAsync(ExtensionAppHostLogEntry entry, CancellationToken cancellationToken)
     {
-        var result = _extensionTaskChannel.Writer.TryWrite(() => Backchannel.WriteAppHostLogEntryAsync(entry, _cancellationToken));
-        Debug.Assert(result);
+        await _pendingAppHostLogEntries.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        var result = _extensionTaskChannel.Writer.TryWrite(async () =>
+        {
+            try
+            {
+                await Backchannel.WriteAppHostLogEntryAsync(entry, _cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _pendingAppHostLogEntries.Release();
+            }
+        });
+
+        if (!result)
+        {
+            // The channel was completed by Dispose between the wait and the write, so nothing
+            // will ever run the release above.
+            _pendingAppHostLogEntries.Release();
+        }
     }
 
     private async Task ProcessExtensionTaskChannelAsync()
@@ -606,5 +644,8 @@ internal class ExtensionInteractionService : IExtensionInteractionService, IDisp
         _extensionTaskChannel.Writer.TryComplete();
         _cts.Cancel();
         _cts.Dispose();
+        // _pendingAppHostLogEntries is deliberately not disposed: a queued write may still be
+        // in flight and would throw from its Release, and SemaphoreSlim only requires disposal
+        // when AvailableWaitHandle has been used.
     }
 }

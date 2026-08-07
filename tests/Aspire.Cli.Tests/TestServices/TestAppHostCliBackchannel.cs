@@ -235,7 +235,7 @@ internal sealed class TestAppHostBackchannel : IAppHostCliBackchannel
         }
         else
         {
-            return ["baseline.v2", "pipeline-steps.v1", KnownAppHostCapabilities.LogEntries_V2];
+            return ["baseline.v2", "pipeline-steps.v1"];
         }
     }
 

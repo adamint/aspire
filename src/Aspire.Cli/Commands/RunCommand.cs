@@ -1081,12 +1081,13 @@ internal sealed class RunCommand : BaseCommand
         {
             await Task.Yield();
 
-            // The capabilities are negotiated once instead of per record: they are properties of
-            // the connected extension host and AppHost, and the log stream can be high volume.
-            var supportsStructuredAppHostLogs = false;
+            // The extension capability is negotiated once because it is a property of the
+            // connected extension host and the log stream can be high volume. The AppHost side
+            // needs no probe: every entry carries its own proof (see below).
+            var extensionSupportsStructuredLogs = false;
             if (ExtensionHelper.IsExtensionHost(interactionService, out var extensionInteractionService, out var extensionBackchannel))
             {
-                supportsStructuredAppHostLogs = await SupportsStructuredAppHostLogsAsync(backchannel, extensionBackchannel, cancellationToken).ConfigureAwait(false);
+                extensionSupportsStructuredLogs = await SupportsStructuredAppHostLogsAsync(extensionBackchannel, cancellationToken).ConfigureAwait(false);
             }
 
             var logEntries = backchannel.GetAppHostLogEntriesAsync(cancellationToken);
@@ -1095,9 +1096,18 @@ internal sealed class RunCommand : BaseCommand
             {
                 if (extensionInteractionService is not null)
                 {
-                    if (supportsStructuredAppHostLogs)
+                    // BackchannelLoggerProvider.WriteEntry stamps a sequence number starting at 1
+                    // under its lock and is the only producer of BackchannelLogEntry, so a non-zero
+                    // value proves the AppHost understands the identity-bearing shape. An AppHost
+                    // that predates it deserializes into the current type as 0, which the structured
+                    // path cannot use: the extension needs the sequence number to recognize replayed
+                    // entries after a reconnect and to correlate an entry with the console copy of
+                    // the same record. Testing the sentinel per entry also covers the auxiliary
+                    // backchannel, which re-exports this stream under a different capability
+                    // vocabulary that a negotiated token would not reach.
+                    if (extensionSupportsStructuredLogs && entry.SequenceNumber > 0)
                     {
-                        extensionInteractionService.WriteAppHostLogEntry(new ExtensionAppHostLogEntry
+                        await extensionInteractionService.WriteAppHostLogEntryAsync(new ExtensionAppHostLogEntry
                         {
                             SequenceNumber = entry.SequenceNumber,
                             Timestamp = entry.Timestamp,
@@ -1107,7 +1117,7 @@ internal sealed class RunCommand : BaseCommand
                             EventId = entry.EventId.Id,
                             EventName = entry.EventId.Name,
                             Exception = entry.Exception,
-                        });
+                        }, cancellationToken).ConfigureAwait(false);
                     }
                     else if (entry.LogLevel is not LogLevel.Trace and not LogLevel.Debug)
                     {
@@ -1142,33 +1152,22 @@ internal sealed class RunCommand : BaseCommand
     }
 
     /// <summary>
-    /// Determines whether the structured AppHost log path can be used, which requires both the
-    /// producing AppHost and the consuming extension to understand the identity-bearing log
-    /// entry shape.
+    /// Determines whether the connected extension host understands the identity-bearing log
+    /// entry shape written by <c>writeAppHostLogEntry</c>.
     /// </summary>
     /// <remarks>
-    /// The extension capability alone is not enough. <see cref="BackchannelLogEntry.SequenceNumber" />
-    /// and <see cref="BackchannelLogEntry.Exception" /> are optional on the wire, so an AppHost
-    /// that predates them deserializes as <c>0</c> and <c>null</c>. Forwarding those to a capable
-    /// extension silently breaks the two things the shape exists for: replayed entries can no
-    /// longer be recognized after a backchannel reconnect, and an exception-bearing record no
-    /// longer matches the console copy the debug adapter delivers, so it renders twice.
+    /// Unlike the AppHost side, this cannot be inferred from the data: an extension with no
+    /// handler for the RPC faults the call rather than reporting anything about itself.
     /// </remarks>
-    private static async Task<bool> SupportsStructuredAppHostLogsAsync(IAppHostCliBackchannel backchannel, IExtensionBackchannel extensionBackchannel, CancellationToken cancellationToken)
+    private static async Task<bool> SupportsStructuredAppHostLogsAsync(IExtensionBackchannel extensionBackchannel, CancellationToken cancellationToken)
     {
         try
         {
-            var appHostCapabilities = await backchannel.GetCapabilitiesAsync(cancellationToken).ConfigureAwait(false);
-            if (!appHostCapabilities.Contains(KnownAppHostCapabilities.LogEntries_V2))
-            {
-                return false;
-            }
-
             return await extensionBackchannel.HasCapabilityAsync(KnownCapabilities.AppHostLogOutput, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
         {
-            // Both probes make a round trip before the log stream is subscribed. A faulted RPC
+            // The probe makes a round trip before the log stream is subscribed. A faulted RPC
             // must not stop the AppHost logs from reaching the CLI log file, which is the
             // artifact used to diagnose that very failure, so fall back to the legacy path
             // instead of propagating.
