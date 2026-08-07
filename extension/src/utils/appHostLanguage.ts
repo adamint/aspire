@@ -1,5 +1,5 @@
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
 import { CandidateAppHostDisplayInfo } from './appHostDiscovery';
 
 /**
@@ -200,6 +200,56 @@ export function projectContentsReferencesRunnableAspireAppHost(contents: string)
         || /<Sdk\b(?=[^>]*\bName\s*=\s*(["'])Aspire\.AppHost\.Sdk\1)[^>]*>/is.test(uncommentedContents)
         || /<(?:PackageReference|AspireProjectOrPackageReference)\b(?=[^>]*\bInclude\s*=\s*["']Aspire\.Hosting\.AppHost["'])[^>]*>/is.test(uncommentedContents)
         || /<IsAspireHost>\s*true\s*<\/IsAspireHost>/i.test(uncommentedContents);
+}
+
+/** File extensions that can address an AppHost directly: project files plus parser-backed source files. */
+const appHostProjectFileExtensions = ['.csproj', '.fsproj', '.vbproj'];
+const appHostCSharpSourceExtensions = ['.cs'];
+const appHostJsTsSourceExtensions = ['.ts', '.mts', '.cts', '.js', '.mjs', '.cjs'];
+
+/**
+ * Whether a path has an extension that can name an AppHost. Callers still need
+ * {@link isRunnableAppHostFileContents} to confirm the file really is one.
+ */
+export function isSupportedAppHostFileExtension(filePath: string): boolean {
+    const extension = extname(filePath).toLowerCase();
+    return appHostProjectFileExtensions.includes(extension)
+        || appHostCSharpSourceExtensions.includes(extension)
+        || appHostJsTsSourceExtensions.includes(extension);
+}
+
+/**
+ * Content-only AppHost detection for callers that hold a file path but no loaded
+ * `vscode.TextDocument`.
+ *
+ * The editor parsers in `src/editor/parsers` are the precise implementation, but they
+ * require a `TextDocument` and, for C#, a tree-sitter grammar load — too heavy for a
+ * synchronous validation gate. This mirrors the same markers with regexes:
+ *   `#:sdk Aspire.AppHost.Sdk@13.0.0`      (single-file C# AppHost directive)
+ *   `DistributedApplication.CreateBuilder` (C# AppHost entry point)
+ *   `import { ... } from '@aspire/hosting'`/`require('aspire')` (JS/TS AppHost)
+ *   `aspire.createBuilder(...)`            (JS/TS AppHost entry point)
+ * Unlike the parsers this cannot tell an occurrence inside a comment or inactive
+ * `#if` region from a real one, so treat it as a permissive gate that keeps obvious
+ * non-AppHost files out — not as an authority on AppHost-ness.
+ */
+export function isRunnableAppHostFileContents(filePath: string, contents: string): boolean {
+    const extension = extname(filePath).toLowerCase();
+    if (appHostProjectFileExtensions.includes(extension)) {
+        return projectContentsReferencesRunnableAspireAppHost(contents);
+    }
+
+    if (appHostCSharpSourceExtensions.includes(extension)) {
+        return /^[ \t]*#:sdk[ \t]+Aspire\.AppHost\.Sdk\b/m.test(contents)
+            || /\bDistributedApplication\s*\.\s*CreateBuilder\s*\(/.test(contents);
+    }
+
+    if (appHostJsTsSourceExtensions.includes(extension)) {
+        return /\b(?:from|require\s*\()\s*['"][^'"]*aspire[^'"]*['"]/i.test(contents)
+            || /\bcreateBuilder\s*\(/.test(contents);
+    }
+
+    return false;
 }
 
 function projectSdkReferencesAspireAppHost(contents: string): boolean {

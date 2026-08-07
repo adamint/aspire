@@ -333,6 +333,15 @@ export class AppHostDataRepository {
         return this._appHosts;
     }
 
+    /**
+     * Every AppHost `aspire ps` reports, ignoring the tree view's workspace/all filter.
+     * Ownership checks must not depend on which view the user happens to have selected:
+     * an AppHost that is running but filtered out of the tree is still running.
+     */
+    get allKnownAppHosts(): readonly AppHostDisplayInfo[] {
+        return this._appHosts;
+    }
+
     get workspaceAppHost(): AppHostDisplayInfo | undefined {
         return this._getWorkspaceAppHost();
     }

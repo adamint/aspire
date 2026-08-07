@@ -49,6 +49,7 @@ import { createE2eStateFileBridge, isE2eBridgeEnabled } from './testing/e2eState
 import type { AspireAppHostState, AspireExtensionApi, AspireExtensionStateSnapshot, WaitForStateOptions } from './types/extensionApi';
 import { AppHostsViewTelemetry } from './views/AppHostsViewTelemetry';
 import { initializeCliPathEnvironmentSync } from './utils/cliPathEnvironment';
+import { AppHostLifecycleToolService, registerAppHostLifecycleTools } from './lm/appHostLifecycleTools';
 
 let aspireExtensionContext = new AspireExtensionContext();
 
@@ -374,6 +375,18 @@ export async function activate(context: vscode.ExtensionContext) {
     mcpProvider.refresh();
   }
 
+  // Language model tools that let an agent start and stop an AppHost through the same
+  // editor-owned debug lifecycle the user drives, instead of spawning a detached CLI
+  // process the editor cannot observe or shut down cleanly.
+  const appHostLifecycleToolService = new AppHostLifecycleToolService({
+    launchService: appHostLaunchService,
+    getEditorOwnedSessions: () => aspireExtensionContext.aspireDebugSessions,
+    getRunningAppHostPaths: () => dataRepository.allKnownAppHosts.map(appHost => appHost.appHostPath),
+  });
+  context.subscriptions.push(appHostLifecycleToolService);
+  const appHostLifecycleToolRegistration = registerAppHostLifecycleTools(appHostLifecycleToolService);
+  context.subscriptions.push(appHostLifecycleToolRegistration);
+
   const getEnableSettingsFileCreationPromptOnStartup = () => vscode.workspace.getConfiguration('aspire').get<boolean>('enableSettingsFileCreationPromptOnStartup', true);
   const setEnableSettingsFileCreationPromptOnStartup = async (value: boolean) => await vscode.workspace.getConfiguration('aspire').update('enableSettingsFileCreationPromptOnStartup', value, vscode.ConfigurationTarget.Workspace);
   const appHostDisposablePromise = checkForExistingAppHostPathInWorkspace(
@@ -414,7 +427,7 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(appHostLaunchService.onDidChangeLaunchingState(fireStateChanged));
   context.subscriptions.push(appHostTreeProvider.onDidChangeStoppingState(fireStateChanged));
   context.subscriptions.push(aspireExtensionContext.onDidChangeDebugSessions(fireStateChanged));
-  const e2eStateFileBridge = createE2eStateFileBridge(context, aspireExtensionContext, dataRepository, appHostLaunchService, appHostTreeProvider, terminalProvider, onDidChangeStateEmitter.event);
+  const e2eStateFileBridge = createE2eStateFileBridge(context, aspireExtensionContext, dataRepository, appHostLaunchService, appHostTreeProvider, terminalProvider, onDidChangeStateEmitter.event, appHostLifecycleToolRegistration.tools);
   context.subscriptions.push(e2eStateFileBridge);
 
   await cliPathEnvironmentInitialization;

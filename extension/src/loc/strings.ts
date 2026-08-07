@@ -229,3 +229,14 @@ export const codeLensViewLogs = vscode.l10n.t('$(output)\u200A Logs');
 export const codeLensCommand = (name: string) => vscode.l10n.t('$(terminal)\u200A {0}', name);
 export const codeLensOpenDashboard = vscode.l10n.t('$(dashboard)\u200A Open Dashboard');
 export const codeLensViewAppHostLogs = vscode.l10n.t('$(output)\u200A View Logs');
+
+// AppHost lifecycle language model tools (aspire_apphost_start / aspire_apphost_stop).
+// The mode placeholder carries the literal tool input value ('run' / 'debug') so the
+// confirmation the user approves is verifiably the request the model made.
+export const appHostLifecycleStartConfirmationTitle = vscode.l10n.t('Start Aspire AppHost');
+export const appHostLifecycleStopConfirmationTitle = vscode.l10n.t('Stop Aspire AppHost');
+export const appHostLifecycleStartConfirmationMessage = (appHostPath: string, mode: string) => vscode.l10n.t('Start the Aspire AppHost {0} in {1} mode?', appHostPath, mode);
+export const appHostLifecycleStopConfirmationMessage = (appHostPath: string) => vscode.l10n.t('Stop the Aspire AppHost {0}?', appHostPath);
+export const appHostLifecycleStartInvocationMessage = (appHostPath: string) => vscode.l10n.t('Starting Aspire AppHost {0}...', appHostPath);
+export const appHostLifecycleStopInvocationMessage = (appHostPath: string) => vscode.l10n.t('Stopping Aspire AppHost {0}...', appHostPath);
+export const appHostLifecycleUnspecifiedMode = vscode.l10n.t('unspecified');
