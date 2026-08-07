@@ -55,7 +55,11 @@
     Resolves the MSBuild-evaluated assembly name for every Aspire project resource so it can be baked into the
     generated IProjectMetadata at AppHost build time. Nothing here runs at application run time.
 
-    Two phases are required:
+    PrepareProjectReferences first applies the SDK's canonical solution configuration, platform negotiation,
+    explicit target framework, and global-property removal metadata. The assembly name evaluation starts from
+    those prepared items so it uses the same reference contract as the project build.
+
+    Two evaluation phases are then required:
       1. GetTargetFrameworks reports whether a reference cross-targets and, when it does, which target frameworks
          it declares. GetTargetPath is only defined by the inner build (Microsoft.Common.CurrentVersion.targets);
          Microsoft.Common.CrossTargeting.targets does not define it, so a cross-targeting reference has to be asked
@@ -71,15 +75,19 @@
     reference that does not build for it.
   -->
   <Target Name="_GetAspireProjectResourceAssemblyNames"
-          DependsOnTargets="_CreateAspireProjectResources"
+          DependsOnTargets="_CreateAspireProjectResources;PrepareProjectReferences"
           Condition="'$(SkipAspireProjectResourceAssemblyName)' != 'true'">
 
-    <MSBuild Projects="@(_AspireProjectResource)"
+    <ItemGroup>
+      <_AspirePreparedProjectResource Include="@(_MSBuildProjectReferenceExistent->WithMetadataValue('IsAspireProjectResource', 'true'))" />
+    </ItemGroup>
+
+    <MSBuild Projects="@(_AspirePreparedProjectResource)"
              Targets="GetTargetFrameworks"
              BuildInParallel="$(BuildInParallel)"
-             Properties="%(_AspireProjectResource.SetConfiguration); %(_AspireProjectResource.SetPlatform)"
+             Properties="%(_AspirePreparedProjectResource.SetConfiguration); %(_AspirePreparedProjectResource.SetPlatform)"
              ContinueOnError="true"
-             RemoveProperties="%(_AspireProjectResource.GlobalPropertiesToRemove);TargetFramework;RuntimeIdentifier;SelfContained;$(_GlobalPropertiesToRemoveFromProjectReferences)"
+             RemoveProperties="%(_AspirePreparedProjectResource.GlobalPropertiesToRemove);TargetFramework;RuntimeIdentifier;SelfContained;$(_GlobalPropertiesToRemoveFromProjectReferences)"
              SkipNonexistentProjects="true"
              SkipNonexistentTargets="true">
       <Output TaskParameter="TargetOutputs" ItemName="_AspireProjectResourceTargetFrameworkInfo" />
@@ -97,12 +105,15 @@
     <ItemGroup>
       <_AspireProjectResourceTargetFrameworkInfo Update="@(_AspireProjectResourceTargetFrameworkInfo)">
         <SetTargetFramework Condition="'%(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)' == '' and '%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' != 'true' and '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' != ''">TargetFramework=$([System.Text.RegularExpressions.Regex]::Match('%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)', '^[^;]*'))</SetTargetFramework>
+        <EffectiveGlobalPropertiesToRemove>%(_AspireProjectResourceTargetFrameworkInfo.GlobalPropertiesToRemove)</EffectiveGlobalPropertiesToRemove>
         <!--
-          RemoveProperties wins over Properties in the MSBuild task, so TargetFramework is only undefined when the
-          ProjectReference did not specify one and the reference does not need an inner build. Undefining it matters
-          for a multi-targeted AppHost, whose inner build would otherwise push its own TFM onto a single-targeted
-          reference.
+          RemoveProperties wins over Properties in the MSBuild task. Once a specific target framework is selected,
+          remove TargetFramework from the prepared reference's removal list while preserving every other property.
         -->
+        <EffectiveGlobalPropertiesToRemove Condition="'%(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)' != ''">$([System.Text.RegularExpressions.Regex]::Replace('%(_AspireProjectResourceTargetFrameworkInfo.GlobalPropertiesToRemove)', '(?i)(^|;)\s*TargetFramework\s*(?=;|$)', '$1'))</EffectiveGlobalPropertiesToRemove>
+        <!-- TargetFramework is only undefined when the reference does not need an inner build. Undefining it matters
+             for a multi-targeted AppHost, whose inner build would otherwise push its own TFM onto a single-targeted
+             reference. -->
         <RemoveGlobalProperties Condition="'%(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)' != '' or ('%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' != 'true' and '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' != '')">RuntimeIdentifier;SelfContained</RemoveGlobalProperties>
         <RemoveGlobalProperties Condition="'%(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)' == '' and ('%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' == 'true' or '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' == '')">TargetFramework;RuntimeIdentifier;SelfContained</RemoveGlobalProperties>
       </_AspireProjectResourceTargetFrameworkInfo>
@@ -113,7 +124,7 @@
              BuildInParallel="$(BuildInParallel)"
              Properties="%(_AspireProjectResourceTargetFrameworkInfo.SetConfiguration); %(_AspireProjectResourceTargetFrameworkInfo.SetPlatform); %(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)"
              ContinueOnError="true"
-             RemoveProperties="%(_AspireProjectResourceTargetFrameworkInfo.GlobalPropertiesToRemove);%(_AspireProjectResourceTargetFrameworkInfo.RemoveGlobalProperties);$(_GlobalPropertiesToRemoveFromProjectReferences)"
+             RemoveProperties="%(_AspireProjectResourceTargetFrameworkInfo.EffectiveGlobalPropertiesToRemove);%(_AspireProjectResourceTargetFrameworkInfo.RemoveGlobalProperties);$(_GlobalPropertiesToRemoveFromProjectReferences)"
              SkipNonexistentProjects="true"
              SkipNonexistentTargets="true">
       <Output TaskParameter="TargetOutputs" ItemName="_AspireProjectResourceTargetPath" />

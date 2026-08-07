@@ -182,6 +182,25 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ProjectMetadataUsesSolutionPreparedProjectReferenceConfigurationAndPlatform()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var generatedSource = await GenerateProjectMetadataSourceAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                    <AssemblyName>Worker_$(Configuration)_$(Platform)_$(TargetFramework)</AssemblyName>
+                  </PropertyGroup>
+                """,
+            solutionProjectConfiguration: "Release|x64");
+
+        Assert.Equal("""    public string? AssemblyName => @"Worker_Release_x64_net8.0";""", GetGeneratedAssemblyNameMember(generatedSource));
+    }
+
+    [Fact]
     public async Task ProjectMetadataRemovesProjectReferenceGlobalProperties()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
@@ -246,7 +265,7 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task ProjectMetadataRespectsProjectReferenceTargetFrameworkForSingleTargetedReference()
+    public async Task ProjectMetadataPreservesExplicitTargetFrameworkWhenItIsAlsoRemoved()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
 
@@ -255,15 +274,20 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
             referencedProjectXml: """
                   <PropertyGroup>
                     <OutputType>Exe</OutputType>
-                    <TargetFramework>net8.0</TargetFramework>
-                    <AssemblyName Condition="'$(TargetFramework)' == 'net8.0'">Eight Service</AssemblyName>
+                    <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
+                    <AssemblyName Condition="'$(TargetFramework)' == 'net8.0' and '$(Flavor)' == ''">Eight Clean Service</AssemblyName>
+                    <AssemblyName Condition="'$(TargetFramework)' == 'net8.0' and '$(Flavor)' != ''">Eight Flavored Service</AssemblyName>
+                    <AssemblyName Condition="'$(TargetFramework)' == 'net9.0' and '$(Flavor)' == ''">Nine Clean Service</AssemblyName>
+                    <AssemblyName Condition="'$(TargetFramework)' == 'net9.0' and '$(Flavor)' != ''">Nine Flavored Service</AssemblyName>
                   </PropertyGroup>
                 """,
             projectReferenceMetadataXml: """
-                  <SetTargetFramework>TargetFramework=net8.0</SetTargetFramework>
-                """);
+                  <SetTargetFramework>TargetFramework=net9.0</SetTargetFramework>
+                  <GlobalPropertiesToRemove>Flavor;TargetFramework</GlobalPropertiesToRemove>
+                """,
+            extraArguments: ["-p:Flavor=Chocolate"]);
 
-        Assert.Equal("""    public string? AssemblyName => @"Eight Service";""", GetGeneratedAssemblyNameMember(generatedSource));
+        Assert.Equal("""    public string? AssemblyName => @"Nine Clean Service";""", GetGeneratedAssemblyNameMember(generatedSource));
     }
 
     [Fact]
@@ -965,7 +989,8 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         string[]? extraArguments = null,
         string targetFramework = "net8.0",
         string configuration = "Debug",
-        string? projectReferenceMetadataXml = null)
+        string? projectReferenceMetadataXml = null,
+        string? solutionProjectConfiguration = null)
     {
         var repoRoot = GetRepoRoot();
 
@@ -976,7 +1001,8 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         await File.WriteAllTextAsync(Path.Combine(workspace.Path, "Directory.Build.targets"), "<Project />");
 
         var workerDirectory = Directory.CreateDirectory(Path.Combine(workspace.Path, "Worker")).FullName;
-        await File.WriteAllTextAsync(Path.Combine(workerDirectory, "Worker.csproj"),
+        var workerProjectFile = Path.Combine(workerDirectory, "Worker.csproj");
+        await File.WriteAllTextAsync(workerProjectFile,
             $"""
             <Project Sdk="Microsoft.NET.Sdk">
 
@@ -1003,6 +1029,13 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         var appHostDirectory = Directory.CreateDirectory(Path.Combine(workspace.Path, "AppHost")).FullName;
         var appHostTargetsPath = SecurityElement.Escape(Path.Combine(repoRoot, "src", "Aspire.Hosting.AppHost", "build", "Aspire.Hosting.AppHost.in.targets"));
         var appHostProjectFile = Path.Combine(appHostDirectory, "AppHost.csproj");
+        var solutionConfigurationXml = solutionProjectConfiguration is null
+            ? null
+            : $$"""
+              <PropertyGroup>
+                <CurrentSolutionConfigurationContents>&lt;SolutionConfiguration&gt;&lt;ProjectConfiguration Project=&quot;{C42D47BF-C684-40EB-B438-FC98C4DC6F5D}&quot; AbsolutePath=&quot;{{SecurityElement.Escape(workerProjectFile)}}&quot; BuildProjectInSolution=&quot;True&quot;&gt;{{solutionProjectConfiguration}}&lt;/ProjectConfiguration&gt;&lt;/SolutionConfiguration&gt;</CurrentSolutionConfigurationContents>
+              </PropertyGroup>
+            """;
 
         // The SDK props/targets are imported explicitly so the Aspire AppHost targets land *after*
         // Sdk.targets, which is where a NuGet package's build/*.targets normally gets imported. The
@@ -1026,15 +1059,18 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
               </PropertyGroup>
 
               <ItemGroup>
-                <ProjectReference Include="..\Worker\Worker.csproj"
+                <ProjectReference Include="../Worker/Worker.csproj"
                                   IsAspireProjectResource="true"
                                   ReferenceOutputAssembly="false"
                                   SkipGetTargetFrameworkProperties="true"
                                   ExcludeAssets="all"
                                   Private="false">
+                  <Project>{C42D47BF-C684-40EB-B438-FC98C4DC6F5D}</Project>
             {{projectReferenceMetadataXml}}
                 </ProjectReference>
               </ItemGroup>
+
+            {{solutionConfigurationXml}}
 
               <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
 
