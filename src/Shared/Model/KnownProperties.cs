@@ -57,11 +57,11 @@ internal static class KnownProperties
         public const string LaunchProfile = "project.launchProfile";
 
         /// <summary>
-        /// The MSBuild-evaluated assembly name of the project, baked into the generated project metadata at
+        /// The MSBuild-evaluated target name of the project, baked into the generated project metadata at
         /// AppHost build time. Only present for project resources added through a ProjectReference; the absence
         /// of the property is the signal that the producer could not determine the name.
         /// </summary>
-        public const string AssemblyName = "project.assemblyName";
+        public const string TargetName = "project.targetName";
     }
 
     public static class Terminal

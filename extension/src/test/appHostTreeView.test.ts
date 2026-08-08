@@ -47,7 +47,7 @@ function makeAttachableProjectProperties(overrides: Record<string, string | null
         'executable.path': 'dotnet',
         'executable.args': null,
         'project.path': '/repo/api/api.csproj',
-        'project.assemblyName': 'api',
+        'project.targetName': 'api',
         ...overrides,
     };
 }
@@ -2692,7 +2692,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
                     properties: makeAttachableProjectProperties({
                         'executable.pid': '5252',
                         'project.path': '/repo/api-v2/api-v2.csproj',
-                        'project.assemblyName': 'api-v2',
+                        'project.targetName': 'api-v2',
                     }),
                 }),
             ];
@@ -2746,7 +2746,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
                         properties: makeAttachableProjectProperties({
                             'executable.pid': '5252',
                             'project.path': '/repo/api-next/api-next.csproj',
-                            'project.assemblyName': 'api-next',
+                            'project.targetName': 'api-next',
                         }),
                     }),
                 ],
@@ -2791,7 +2791,7 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
                         properties: makeAttachableProjectProperties({
                             'executable.pid': '6262',
                             'project.path': '/repo/second-api/second-api.csproj',
-                            'project.assemblyName': 'second-api',
+                            'project.targetName': 'second-api',
                         }),
                     }),
                 ],

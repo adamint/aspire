@@ -171,8 +171,8 @@
   <data name="ResourcePropertyParameterValueDisplayName" xml:space="preserve">
     <value>Value</value>
   </data>
-  <data name="ResourcePropertyProjectAssemblyNameDisplayName" xml:space="preserve">
-    <value>Assembly name</value>
+  <data name="ResourcePropertyProjectTargetNameDisplayName" xml:space="preserve">
+    <value>Target name</value>
   </data>
   <data name="ResourcePropertyProjectLaunchProfileDisplayName" xml:space="preserve">
     <value>Launch profile</value>

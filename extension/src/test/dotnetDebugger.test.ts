@@ -61,7 +61,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         return { dotNetService: fakeDotNetService, extension: createProjectDebuggerExtension(() => fakeDotNetService), doesFileExistStub: sinon.stub(io, 'doesFileExist').resolves(doesOutputFileExist) };
     }
 
-    test('attach configuration uses reported assembly name without evaluating TargetPath', async () => {
+    test('attach configuration uses reported target name without evaluating TargetPath', async () => {
         const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
 
         const configuration = await extension.createAttachDebugSessionConfigurationCallback!({
@@ -73,7 +73,7 @@ suite('Dotnet Debugger Extension Tests', () => {
                 'executable.pid': '1234',
                 'executable.path': 'dotnet',
                 'project.path': '/repo/api/Api.csproj',
-                'project.assemblyName': 'FromReportedProperty',
+                'project.targetName': 'FromReportedProperty',
             },
         });
 
@@ -84,7 +84,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
     });
 
-    test('attach configuration derives process name from evaluated TargetPath when assembly name is not reported', async () => {
+    test('attach configuration derives process name from evaluated TargetPath when target name is not reported', async () => {
         const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/My Attach Service.dll', null, true, true);
 
         const configuration = await extension.createAttachDebugSessionConfigurationCallback!({
@@ -103,7 +103,7 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.ok(dotNetService.getDotNetTargetPathStub.calledOnceWith('/repo/worker/AttachDemo.Worker.csproj'));
     });
 
-    test('attach configuration treats blank reported assembly name as absent', async () => {
+    test('attach configuration treats blank reported target name as absent', async () => {
         const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/FromTargetPath.dll', null, true, true);
 
         const configuration = await extension.createAttachDebugSessionConfigurationCallback!({
@@ -115,7 +115,7 @@ suite('Dotnet Debugger Extension Tests', () => {
                 'executable.pid': '1234',
                 'executable.path': 'dotnet',
                 'project.path': '/repo/api/Api.csproj',
-                'project.assemblyName': '   ',
+                'project.targetName': '   ',
             },
         });
 
@@ -157,7 +157,7 @@ suite('Dotnet Debugger Extension Tests', () => {
                     'executable.pid': '1234',
                     'executable.path': 'dotnet',
                     'project.path': '/repo/api/Api.cs',
-                    'project.assemblyName': 'Api',
+                    'project.targetName': 'Api',
                 },
             }),
             (error: unknown) => error instanceof Error
@@ -908,7 +908,7 @@ suite('Dotnet Debugger Extension Tests', () => {
     });
 
     test('file-based dotnet.cs apphost named dotnet is not mistaken for the launcher', async () => {
-        // A file-based app whose entry file is `dotnet.cs` builds an apphost whose AssemblyName — and therefore
+        // A file-based app whose entry file is `dotnet.cs` builds an apphost whose TargetName — and therefore
         // executable file name — is `dotnet`/`dotnet.exe`, the same name as the launcher but at a full build-output
         // path. run-api returns that full path as ExecutablePath and echoes the SDK default profile's arguments
         // in CommandLineArguments. Because the program is an apphost (a rooted path), not the launcher (a bare

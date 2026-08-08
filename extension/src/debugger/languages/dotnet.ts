@@ -35,15 +35,15 @@ interface IDotNetService {
 interface DotNetAttachDebuggerResourceInfo {
     projectPath: string;
     resourceLabel: string;
-    reportedAssemblyName: string | undefined;
+    reportedTargetName: string | undefined;
 }
 
 const executablePidPropertyName = 'executable.pid';
 const executablePathPropertyName = 'executable.path';
 const projectPathPropertyName = 'project.path';
-// Well-known snapshot property added by the AppHost SDK assembly-name contract (microsoft/aspire#19136).
-// It carries the MSBuild-evaluated `AssemblyName`, which is the process name the C# debugger attaches to.
-const projectAssemblyNamePropertyName = 'project.assemblyName';
+// Well-known snapshot property added by the AppHost SDK target-name contract.
+// It carries the MSBuild-evaluated `TargetName`, which is the process name the C# debugger attaches to.
+const projectTargetNamePropertyName = 'project.targetName';
 const resourceParentNamePropertyName = 'resource.parentName';
 const dotNetProjectFileExtensions = new Set(['.csproj', '.fsproj', '.vbproj']);
 
@@ -431,7 +431,7 @@ function getDotNetAttachDebuggerResourceInfo(resource: DebuggableResourceSnapsho
     return {
         projectPath,
         resourceLabel: resource.displayName ?? resource.name,
-        reportedAssemblyName: getReportedAssemblyName(resource),
+        reportedTargetName: getReportedTargetName(resource),
     };
 }
 
@@ -440,14 +440,14 @@ function getResourceParentName(resource: DebuggableResourceSnapshot): string | n
     return typeof value === 'string' ? value : null;
 }
 
-function getReportedAssemblyName(resource: DebuggableResourceSnapshot): string | undefined {
-    const value: unknown = resource.properties?.[projectAssemblyNamePropertyName];
+function getReportedTargetName(resource: DebuggableResourceSnapshot): string | undefined {
+    const value: unknown = resource.properties?.[projectTargetNamePropertyName];
     if (typeof value !== 'string') {
         return undefined;
     }
 
-    const assemblyName = value.trim();
-    return assemblyName.length > 0 ? assemblyName : undefined;
+    const targetName = value.trim();
+    return targetName.length > 0 ? targetName : undefined;
 }
 
 function getAttachDebuggerProcessId(resource: DebuggableResourceSnapshot): number | undefined {
@@ -484,7 +484,7 @@ async function createDotNetAttachDebugSessionConfiguration(resource: DebuggableR
         throw new AttachDebuggerConfigurationError('ResourceNotAttachable', invalidLaunchConfiguration(JSON.stringify(resource)));
     }
 
-    let processName = attachInfo.reportedAssemblyName;
+    let processName = attachInfo.reportedTargetName;
     if (processName === undefined) {
         processName = await getProcessNameFromTargetPath(attachInfo.projectPath, attachInfo.resourceLabel, dotNetService);
     }

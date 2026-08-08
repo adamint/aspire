@@ -122,11 +122,6 @@
         <target state="new">Value</target>
         <note />
       </trans-unit>
-      <trans-unit id="ResourcePropertyProjectAssemblyNameDisplayName">
-        <source>Assembly name</source>
-        <target state="new">Assembly name</target>
-        <note />
-      </trans-unit>
       <trans-unit id="ResourcePropertyProjectLaunchProfileDisplayName">
         <source>Launch profile</source>
         <target state="new">Launch profile</target>
@@ -135,6 +130,11 @@
       <trans-unit id="ResourcePropertyProjectPathDisplayName">
         <source>Project path</source>
         <target state="new">Project path</target>
+        <note />
+      </trans-unit>
+      <trans-unit id="ResourcePropertyProjectTargetNameDisplayName">
+        <source>Target name</source>
+        <target state="new">Target name</target>
         <note />
       </trans-unit>
       <trans-unit id="ResourcePropertyToolPackageDisplayName">

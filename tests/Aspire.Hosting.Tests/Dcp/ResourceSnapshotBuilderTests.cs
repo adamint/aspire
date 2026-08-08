@@ -86,10 +86,10 @@ public class ResourceSnapshotBuilderTests
     }
 
     [Fact]
-    public void ProjectSnapshotAddsAssemblyNameWhenProjectMetadataSuppliesIt()
+    public void ProjectSnapshotAddsTargetNameWhenProjectMetadataSuppliesIt()
     {
         var project = new ProjectResource("project");
-        project.Annotations.Add(new TestProjectMetadata { AssemblyName = "My Attach Service" });
+        project.Annotations.Add(new TestProjectMetadata { TargetName = "My Attach Service" });
         project.Annotations.Add(new LaunchProfileAnnotation("https"));
 
         var executable = Executable.Create("project", "dotnet");
@@ -105,18 +105,18 @@ public class ResourceSnapshotBuilderTests
             [project.Name] = project
         }).ToSnapshot(executable, CreatePreviousSnapshot());
 
-        AssertHighlightedProperty(snapshot, KnownProperties.Project.AssemblyName, "Assembly name", isSensitive: false, sortOrder: 3);
-        Assert.Equal("My Attach Service", GetProperty(snapshot, KnownProperties.Project.AssemblyName).Value);
+        AssertHighlightedProperty(snapshot, KnownProperties.Project.TargetName, "Target name", isSensitive: false, sortOrder: 3);
+        Assert.Equal("My Attach Service", GetProperty(snapshot, KnownProperties.Project.TargetName).Value);
     }
 
     [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void ProjectSnapshotOmitsAssemblyNameWhenProjectMetadataDoesNotSupplyIt(string? assemblyName)
+    public void ProjectSnapshotOmitsTargetNameWhenProjectMetadataDoesNotSupplyIt(string? targetName)
     {
         var project = new ProjectResource("project");
-        project.Annotations.Add(new TestProjectMetadata { AssemblyName = assemblyName });
+        project.Annotations.Add(new TestProjectMetadata { TargetName = targetName });
         project.Annotations.Add(new LaunchProfileAnnotation("https"));
 
         var executable = Executable.Create("project", "dotnet");
@@ -152,10 +152,10 @@ public class ResourceSnapshotBuilderTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void ProjectSnapshotRemovesStaleAssemblyNameWhenProjectMetadataNoLongerSuppliesIt(string? assemblyName)
+    public void ProjectSnapshotRemovesStaleTargetNameWhenProjectMetadataNoLongerSuppliesIt(string? targetName)
     {
         var project = new ProjectResource("project");
-        project.Annotations.Add(new TestProjectMetadata { AssemblyName = assemblyName });
+        project.Annotations.Add(new TestProjectMetadata { TargetName = targetName });
         project.Annotations.Add(new LaunchProfileAnnotation("https"));
 
         var executable = Executable.Create("project", "dotnet");
@@ -166,10 +166,10 @@ public class ResourceSnapshotBuilderTests
             ProcessId = 1234
         };
 
-        // Snapshots are merged into the previously published one, so a carried-forward assembly name has to be
+        // Snapshots are merged into the previously published one, so a carried-forward target name has to be
         // removed rather than just omitted. Absence is the capability signal, and a surviving stale value would
-        // tell consumers the evaluated assembly name is still available.
-        var previous = CreatePreviousSnapshot(properties: [new(KnownProperties.Project.AssemblyName, "Stale.Assembly.Name")]);
+        // tell consumers the evaluated target name is still available.
+        var previous = CreatePreviousSnapshot(properties: [new(KnownProperties.Project.TargetName, "Stale.Target.Name")]);
 
         var snapshot = CreateSnapshotBuilder(new Dictionary<string, IResource>
         {
@@ -191,10 +191,10 @@ public class ResourceSnapshotBuilderTests
     }
 
     [Fact]
-    public void ProjectSnapshotReplacesStaleAssemblyNameWhenProjectMetadataStillSuppliesIt()
+    public void ProjectSnapshotReplacesStaleTargetNameWhenProjectMetadataStillSuppliesIt()
     {
         var project = new ProjectResource("project");
-        project.Annotations.Add(new TestProjectMetadata { AssemblyName = "My Attach Service" });
+        project.Annotations.Add(new TestProjectMetadata { TargetName = "My Attach Service" });
         project.Annotations.Add(new LaunchProfileAnnotation("https"));
 
         var executable = Executable.Create("project", "dotnet");
@@ -205,18 +205,18 @@ public class ResourceSnapshotBuilderTests
             ProcessId = 1234
         };
 
-        var previous = CreatePreviousSnapshot(properties: [new(KnownProperties.Project.AssemblyName, "Stale.Assembly.Name")]);
+        var previous = CreatePreviousSnapshot(properties: [new(KnownProperties.Project.TargetName, "Stale.Target.Name")]);
 
         var snapshot = CreateSnapshotBuilder(new Dictionary<string, IResource>
         {
             [project.Name] = project
         }).ToSnapshot(executable, previous);
 
-        Assert.Equal("My Attach Service", GetProperty(snapshot, KnownProperties.Project.AssemblyName).Value);
+        Assert.Equal("My Attach Service", GetProperty(snapshot, KnownProperties.Project.TargetName).Value);
     }
 
     [Fact]
-    public void ExecutableSnapshotWithoutProjectMetadataOmitsAssemblyName()
+    public void ExecutableSnapshotWithoutProjectMetadataOmitsTargetName()
     {
         var executable = Executable.Create("exe", "dotnet");
         executable.Spec.WorkingDirectory = "/app";
@@ -452,7 +452,7 @@ public class ResourceSnapshotBuilderTests
     {
         public string ProjectPath => "/app/project.csproj";
 
-        public string? AssemblyName { get; init; }
+        public string? TargetName { get; init; }
 
         public LaunchSettings LaunchSettings { get; } = new()
         {

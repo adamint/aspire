@@ -43,14 +43,14 @@ public class App : global::Aspire.Hosting.IProjectMetadata
     public string ProjectPath => """{AspirePath}/App/App.csproj""";
 
     /// <summary>
-    /// The assembly name that the App project builds to.
+    /// The target name that the App project builds to.
     /// </summary>
     /// <remarks>
-    /// Evaluated by MSBuild when this AppHost was built, so it reflects any AssemblyName set by the project or
+    /// Evaluated by MSBuild when this AppHost was built, so it reflects any TargetName set by the project or
     /// imported into it rather than the project file name.
     /// </remarks>
 #nullable enable
-    public string? AssemblyName => @"App";
+    public string? TargetName => @"App";
 #nullable restore
 
     /// <summary>

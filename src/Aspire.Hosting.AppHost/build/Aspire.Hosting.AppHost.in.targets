@@ -51,7 +51,7 @@
       back as a literal string. That produced a ProjectPath of "$([System.IO.Path]::GetFullPath(../O'Brien/Worker.csproj))"
       and a source file named after the unparsed ClassName expression, so the AppHost failed to compile.
       $(...) is expanded only after the arguments have been parsed, which is why the indirection fixes it. The same
-      hazard is called out on the assembly name in _SetAspireProjectMetadataAssemblyNames below.
+      hazard is called out on the target name in _SetAspireProjectMetadataTargetNames below.
     -->
     <PropertyGroup>
       <_AspireProjectResourceIdentity>%(_AspireProjectResource.Identity)</_AspireProjectResourceIdentity>
@@ -69,14 +69,14 @@
   </Target>
 
   <!--
-    Resolves the MSBuild-evaluated assembly name for every Aspire project resource so it can be baked into the
+    Resolves the MSBuild-evaluated target name for every Aspire project resource so it can be baked into the
     generated IProjectMetadata at AppHost build time. Nothing here runs at application run time.
 
-    Set SkipAspireProjectResourceAssemblyName=true to opt out. The generated metadata then omits the AssemblyName
-    member and falls back to the IProjectMetadata.AssemblyName default interface member, which returns null.
+    Set SkipAspireProjectResourceTargetName=true to opt out. The generated metadata then omits the TargetName
+    member and falls back to the IProjectMetadata.TargetName default interface member, which returns null.
 
     PrepareProjectReferences first applies the SDK's canonical solution configuration, platform negotiation,
-    explicit target framework, and global-property removal metadata. The assembly name evaluation starts from
+    explicit target framework, and global-property removal metadata. The target name evaluation starts from
     those prepared items so it uses the same reference contract as the project build.
 
     Two evaluation phases are then required:
@@ -85,7 +85,7 @@
          Microsoft.Common.CrossTargeting.targets does not define it, so a cross-targeting reference has to be asked
          for one specific TargetFramework.
       2. GetTargetPath returns @(TargetPathWithTargetPlatformMoniker) whose item spec is $(TargetPath). Its file name
-         is $(TargetName), which defaults to $(AssemblyName), so %(Filename) is the evaluated assembly name including
+         is $(TargetName), which defaults to $(AssemblyName), so %(Filename) is the evaluated target name including
          anything contributed by an imported Directory.Build.props or conditioned on Configuration/TargetFramework.
 
     When a single-targeted reference does not specify SetTargetFramework, it is deliberately asked without an explicit
@@ -100,12 +100,21 @@
     differs from the AppHost's is a genuine second evaluation, which is the price of reading the name it actually
     builds under.
   -->
-  <Target Name="_GetAspireProjectResourceAssemblyNames"
+  <Target Name="_GetAspireProjectResourceTargetNames"
           DependsOnTargets="_CreateAspireProjectResources;PrepareProjectReferences"
-          Condition="'$(SkipAspireProjectResourceAssemblyName)' != 'true'">
+          Condition="'$(SkipAspireProjectResourceTargetName)' != 'true'">
 
     <ItemGroup>
-      <_AspirePreparedProjectResource Include="@(_MSBuildProjectReferenceExistent->WithMetadataValue('IsAspireProjectResource', 'true'))" />
+      <!--
+        BuildReference is false when the active solution configuration excludes the project from the build, and
+        ResolveProjectReferences skips those references entirely (see the BuildReference conditions on its MSBuild
+        task invocations in Microsoft.Common.CurrentVersion.targets). The probe has to skip them for the same reason:
+        nothing has cached a GetTargetPath result for a reference the build never touches, so probing it is both a
+        fresh evaluation of a project the solution disabled and a chance to fail the AppHost build on a project that
+        was never meant to participate in it. AssignProjectConfiguration, which PrepareProjectReferences runs,
+        defaults the metadata to true, so it is always populated by the time this target executes.
+      -->
+      <_AspirePreparedProjectResource Include="@(_MSBuildProjectReferenceExistent->WithMetadataValue('IsAspireProjectResource', 'true')->WithMetadataValue('BuildReference', 'true'))" />
     </ItemGroup>
 
     <MSBuild Projects="@(_AspirePreparedProjectResource)"
@@ -128,7 +137,7 @@
       it is the one a cross-targeting reference reports first and Aspire never negotiates a TFM for these references,
       so there is no better signal about which inner build the AppHost will end up launching. Guessing is worth it
       here: a name resolved from the wrong inner build leaves a consumer exactly where omitting the property would
-      have - falling back to its own guess - while the common case, where every TFM produces the same assembly name,
+      have - falling back to its own guess - while the common case, where every TFM produces the same target name,
       resolves correctly.
     -->
     <ItemGroup>
@@ -162,7 +171,7 @@
   </Target>
 
   <!--
-    Copies each resolved assembly name onto the matching AspireProjectMetadataSource item.
+    Copies each resolved target name onto the matching AspireProjectMetadataSource item.
 
     This target is batched on the source project rather than using an ItemGroup, because MSBuild cannot join two item
     lists inside a single ItemGroup: the resolved target paths and the metadata sources are separate lists that have
@@ -173,60 +182,60 @@
     property is dropped entirely when nothing resolves. Note the path comparison is MSBuild's, which is case
     insensitive, so two references differing only in path casing would collide on a case-sensitive file system.
   -->
-  <Target Name="_SetAspireProjectMetadataAssemblyNames"
-          DependsOnTargets="CreateAspireProjectMetadataSources;_GetAspireProjectResourceAssemblyNames"
+  <Target Name="_SetAspireProjectMetadataTargetNames"
+          DependsOnTargets="CreateAspireProjectMetadataSources;_GetAspireProjectResourceTargetNames"
           Outputs="%(_AspireProjectResourceTargetPath.MSBuildSourceProjectFile)">
 
     <PropertyGroup>
       <_AspireResolvedProjectFile>%(_AspireProjectResourceTargetPath.MSBuildSourceProjectFile)</_AspireResolvedProjectFile>
       <_AspireResolvedProjectFile Condition="'$(_AspireResolvedProjectFile)' != ''">$([System.IO.Path]::GetFullPath('$(_AspireResolvedProjectFile)'))</_AspireResolvedProjectFile>
-      <_AspireResolvedAssemblyName>%(_AspireProjectResourceTargetPath.Filename)</_AspireResolvedAssemblyName>
+      <_AspireResolvedTargetName>%(_AspireProjectResourceTargetPath.Filename)</_AspireResolvedTargetName>
       <!--
-        The escaping is done against a property rather than inline against %(Filename) because an assembly name may
+        The escaping is done against a property rather than inline against %(Filename) because a target name may
         contain an apostrophe, which would terminate the property function's quoted argument list.
       -->
-      <_AspireResolvedAssemblyNameLiteral>$(_AspireResolvedAssemblyName.Replace('"', '""'))</_AspireResolvedAssemblyNameLiteral>
+      <_AspireResolvedTargetNameLiteral>$(_AspireResolvedTargetName.Replace('"', '""'))</_AspireResolvedTargetNameLiteral>
     </PropertyGroup>
 
     <ItemGroup>
       <AspireProjectMetadataSource Update="@(AspireProjectMetadataSource)"
-                                   Condition="'$(_AspireResolvedAssemblyName)' != '' and '%(AspireProjectMetadataSource.ProjectPath)' == '$(_AspireResolvedProjectFile)'">
-        <ProjectAssemblyName>$(_AspireResolvedAssemblyName)</ProjectAssemblyName>
-        <ProjectAssemblyNameLiteral>$(_AspireResolvedAssemblyNameLiteral)</ProjectAssemblyNameLiteral>
+                                   Condition="'$(_AspireResolvedTargetName)' != '' and '%(AspireProjectMetadataSource.ProjectPath)' == '$(_AspireResolvedProjectFile)'">
+        <ProjectTargetName>$(_AspireResolvedTargetName)</ProjectTargetName>
+        <ProjectTargetNameLiteral>$(_AspireResolvedTargetNameLiteral)</ProjectTargetNameLiteral>
       </AspireProjectMetadataSource>
     </ItemGroup>
 
   </Target>
 
-  <Target Name="_CSharpWriteProjectMetadataSources" DependsOnTargets="CreateAspireProjectMetadataSources;_SetAspireProjectMetadataAssemblyNames" Condition="'$(Language)' == 'C#'">
+  <Target Name="_CSharpWriteProjectMetadataSources" DependsOnTargets="CreateAspireProjectMetadataSources;_SetAspireProjectMetadataTargetNames" Condition="'$(Language)' == 'C#'">
     <ItemGroup>
       <AspireProjectMetadataSource Update="@(AspireProjectMetadataSource)">
         <!--
-          The member is emitted only when the assembly name resolved, so implementations that could not be evaluated
-          fall back to the IProjectMetadata.AssemblyName default interface member, which returns null.
+          The member is emitted only when the target name resolved, so implementations that could not be evaluated
+          fall back to the IProjectMetadata.TargetName default interface member, which returns null.
 
           A verbatim string literal is used instead of the raw string literal used for ProjectPath because a raw string
-          literal cannot end with a quote character and an assembly name is allowed to contain quotes.
+          literal cannot end with a quote character and a target name is allowed to contain quotes.
 
           The nullable directives are required because an AppHost may compile with nullable annotations disabled, and
           CS8669 rejects a nullable annotation in auto-generated code without an explicit annotations context.
         -->
-        <AssemblyNameMember Condition="'%(AspireProjectMetadataSource.ProjectAssemblyName)' != ''"><![CDATA[
+        <TargetNameMember Condition="'%(AspireProjectMetadataSource.ProjectTargetName)' != ''"><![CDATA[
     /// <summary>
-    /// The assembly name that the ]]>%(ClassName)<![CDATA[ project builds to.
+    /// The target name that the ]]>%(ClassName)<![CDATA[ project builds to.
     /// </summary>
     /// <remarks>
-    /// Evaluated by MSBuild when this AppHost was built, so it reflects any AssemblyName set by the project or
+    /// Evaluated by MSBuild when this AppHost was built, so it reflects any TargetName set by the project or
     /// imported into it rather than the project file name.
     /// </remarks>
 #nullable enable
-    public string? AssemblyName => @"]]>%(AspireProjectMetadataSource.ProjectAssemblyNameLiteral)<![CDATA["%3B
+    public string? TargetName => @"]]>%(AspireProjectMetadataSource.ProjectTargetNameLiteral)<![CDATA["%3B
 #nullable restore
-]]></AssemblyNameMember>
+]]></TargetNameMember>
       </AspireProjectMetadataSource>
     </ItemGroup>
 
-    <!-- The source is composed in a second pass so it observes the AssemblyNameMember written above. -->
+    <!-- The source is composed in a second pass so it observes the TargetNameMember written above. -->
     <ItemGroup>
       <AspireProjectMetadataSource Update="@(AspireProjectMetadataSource)">
         <Source>
@@ -248,7 +257,7 @@ namespace Projects%3B
     /// The path to the ]]>%(ClassName)<![CDATA[ project.
     /// </summary>
     public string ProjectPath => """]]>%(ProjectPath)<![CDATA["""%3B
-]]>%(AspireProjectMetadataSource.AssemblyNameMember)<![CDATA[
+]]>%(AspireProjectMetadataSource.TargetNameMember)<![CDATA[
     /// <summary>
     /// Gets a value indicating whether building the project before running it should be suppressed.
     /// </summary>
