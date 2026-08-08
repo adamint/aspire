@@ -174,6 +174,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       return;
     }
 
+    // A force sweep can run after the CLI leader has exited. Never aim another signal at that
+    // recorded PID afterward: on Windows the PID may already have been recycled, and `taskkill /t`
+    // would then target an unrelated process tree.
     if (this._cliProcessTreeTerminationAttempted) {
       return;
     }
@@ -511,9 +514,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
           // The leader came down on its own, so the escalation timer has nothing left to signal —
           // but a detached leader's descendants (the AppHost and every resource process beneath it)
           // can outlive it, and this is the last moment they can be collected safely: once the
-          // leader's PID is released the operating system may recycle it as another group's id, and
-          // a later negative-PID signal would land on something unrelated.
-          this.terminateCliProcessTree();
+          // leader's PID is released the operating system may recycle it, and a later process-tree
+          // signal could land on something unrelated.
+          this.terminateCliProcessTree({ force: true });
           this._dcpServer.recordAppHostProcessExit(this.debugSessionId, code);
           // Flush any partial line left in either buffer so trailing output isn't lost.
           if (stdoutBuffer.length > 0) {

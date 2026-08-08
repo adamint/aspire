@@ -169,8 +169,30 @@ suite('AspireDebugSession tests', () => {
         // The CLI is gone but the AppHost and resource processes in its detached group need not be,
         // and once the leader's PID is released the group id can be recycled — so the collection has
         // to happen here rather than on a later timer.
-        sinon.assert.calledOnce(terminateStub);
-        assert.strictEqual(terminateStub.firstCall.args[0], cliProcess);
+        sinon.assert.calledOnceWithExactly(
+            terminateStub,
+            cliProcess,
+            `Aspire CLI for debug session ${aspireDebugSession.debugSessionId}`,
+            { force: true });
+    });
+
+    test('a forced CLI process tree termination is not repeated by the exit callback', async () => {
+        const cliProcess = createFakeCliProcess(4326, 0);
+        const spawnStub = sinon.stub(cliModule, 'spawnCliProcess').returns(cliProcess);
+        const terminateStub = sinon.stub(cliModule, 'terminateCliProcess');
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = createSessionForSpawn();
+
+        await aspireDebugSession.spawnAspireCommand(['run'], '/workspace', false, 'aspire run');
+
+        aspireDebugSession.terminateCliProcessTree({ force: true });
+        spawnStub.firstCall.args[3]?.exitCallback?.(0);
+
+        sinon.assert.calledOnceWithExactly(
+            terminateStub,
+            cliProcess,
+            `Aspire CLI for debug session ${aspireDebugSession.debugSessionId}`,
+            { force: true });
     });
 
     test('a launch that resolves the CLI path after disposal does not spawn an orphan CLI', async () => {
