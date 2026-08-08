@@ -525,6 +525,10 @@ export class AppHostLaunchService implements vscode.Disposable {
                 throw new vscode.CancellationError();
             }
 
+            if (!this.tryReserveLaunch(appHostPath)) {
+                throw new vscode.CancellationError();
+            }
+
             await this.launchCore(appHostPath, command, noDebug, doStep, lockToken);
         });
     }

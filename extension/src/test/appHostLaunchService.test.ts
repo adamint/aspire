@@ -440,6 +440,30 @@ suite('AppHostLaunchService', () => {
         }
     });
 
+    test('launch aborts after waiting when another launch claimed the AppHost', async () => {
+        let releaseActive: (() => void) | undefined;
+        try {
+            const active = service.runWithAppHostLifecycleLock(
+                '/repo/AppHost/AppHost.csproj',
+                new vscode.CancellationTokenSource().token,
+                () => new Promise<void>(resolve => { releaseActive = resolve; }));
+            await Promise.resolve();
+
+            const blockedLaunch = service.launch('/repo/AppHost/AppHost.csproj', 'run', true);
+            await Promise.resolve();
+            assert.strictEqual(service.tryReserveExternalLaunch('/repo/AppHost/AppHost.csproj'), true);
+
+            releaseActive?.();
+            await assert.rejects(blockedLaunch, vscode.CancellationError);
+            await active;
+
+            assert.strictEqual(startDebuggingStub.called, false);
+        }
+        finally {
+            releaseActive?.();
+        }
+    });
+
     test('serializes lifecycle work across every path shape that names one AppHost', async () => {
         // The lock key must be a pure function of the path, so it is derived from the
         // directory listing rather than by scanning the keys already in flight. Scanning

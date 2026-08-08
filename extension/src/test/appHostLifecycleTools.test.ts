@@ -538,6 +538,27 @@ suite('AppHost lifecycle language model tools', () => {
             }
         });
 
+        test('rejects a bare selector in a multi-root workspace even when only one root currently matches', async () => {
+            const secondRoot = createFixtureDirectory('second-workspace');
+            try {
+                const secondAppHost = path.join(secondRoot, 'Other', 'AppHost.csproj');
+                discoveryService.registeredPaths.push(secondAppHost);
+                workspaceFoldersStub.value([
+                    { uri: vscode.Uri.file(workspaceRoot), name: 'workspace', index: 0 },
+                    { uri: vscode.Uri.file(secondRoot), name: 'second', index: 1 },
+                ]);
+
+                const result = await service.start({ appHostPath: 'Other/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+                assert.strictEqual(result.outcome, 'ambiguousAppHost');
+                assert.deepStrictEqual(result.knownAppHosts, ['second/Other/AppHost.csproj']);
+                assert.strictEqual(launchService.launchCalls.length, 0);
+            }
+            finally {
+                fs.rmSync(secondRoot, { recursive: true, force: true });
+            }
+        });
+
         test('resolves the workspace-folder-qualified selector in a multi-root workspace', async () => {
             const secondRoot = createFixtureDirectory('second-workspace');
             try {
@@ -1240,9 +1261,9 @@ suite('AppHost lifecycle language model tools', () => {
         });
 
         test('confirms the workspace-folder-qualified target that invocation will launch', async () => {
-            // In a multi-root workspace a bare relative path does not say which root was
-            // selected. Preparation runs the same registry resolution `invoke` runs, so
-            // the prompt names the root and the launch uses that same entry.
+            // In a multi-root workspace the selector must name the workspace folder. Preparation
+            // runs the same registry resolution `invoke` runs, so the prompt names the root and
+            // the launch uses that same entry.
             const secondRoot = createFixtureDirectory('second-workspace');
             try {
                 const secondAppHost = path.join(secondRoot, 'Other', 'AppHost.csproj');
@@ -1254,9 +1275,9 @@ suite('AppHost lifecycle language model tools', () => {
                 const tool = new AppHostStartLanguageModelTool(service);
 
                 const prepared = await tool.prepareInvocation(
-                    { input: { appHostPath: 'Other/AppHost.csproj', mode: 'debug' } },
+                    { input: { appHostPath: 'second/Other/AppHost.csproj', mode: 'debug' } },
                     new vscode.CancellationTokenSource().token);
-                const result = await service.start({ appHostPath: 'Other/AppHost.csproj', mode: 'debug' }, new vscode.CancellationTokenSource().token);
+                const result = await service.start({ appHostPath: 'second/Other/AppHost.csproj', mode: 'debug' }, new vscode.CancellationTokenSource().token);
 
                 assert.strictEqual(
                     prepared?.confirmationMessages?.message,

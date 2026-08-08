@@ -510,6 +510,28 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         }
 
         const requestedKey = toSelectorKey(selector);
+        const displayMatches = knownAppHosts.filter(candidate => toSelectorKey(candidate.displayPath) === requestedKey);
+        if ((vscode.workspace.workspaceFolders?.length ?? 0) > 1) {
+            // A bare relative selector is not stable in a multi-root workspace: a confirmation
+            // could name the only current match under root A, then a later invocation could
+            // re-resolve the same text under root B. Require the same folder-qualified identity
+            // the confirmation displays so each invocation is independently bound to one root.
+            if (displayMatches.length === 1) {
+                return { resolved: true, target: displayMatches[0] };
+            }
+
+            if (displayMatches.length > 1) {
+                return { resolved: false, outcome: 'ambiguousAppHost', knownAppHosts: describeKnownAppHosts(displayMatches) };
+            }
+
+            const relativeMatches = knownAppHosts.filter(candidate => toSelectorKey(candidate.relativePath) === requestedKey);
+            if (relativeMatches.length > 0) {
+                return { resolved: false, outcome: 'ambiguousAppHost', knownAppHosts: describeKnownAppHosts(relativeMatches) };
+            }
+
+            return { resolved: false, outcome: 'unknownAppHost', knownAppHosts: describeKnownAppHosts(knownAppHosts) };
+        }
+
         const matches = knownAppHosts.filter(candidate =>
             toSelectorKey(candidate.relativePath) === requestedKey ||
             toSelectorKey(candidate.displayPath) === requestedKey);
