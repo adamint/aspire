@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { X509Certificate } from 'crypto';
-import { createSelfSignedCertAsync, generateToken } from '../utils/security';
+import { createSelfSignedCertAsync, generateCertificateSerialNumber, generateToken } from '../utils/security';
 
 suite('Security utilities', () => {
     test('createSelfSignedCertAsync generates a valid certificate', async () => {
@@ -33,6 +33,19 @@ suite('Security utilities', () => {
             const serialHex = x509.serialNumber.replace(/:/g, '');
             assert.ok(/^[0-9a-fA-F]+$/.test(serialHex), `Iteration ${i}: Serial number should be valid hex`);
         }
+    });
+
+    test('generateCertificateSerialNumber does not emit a DER-invalid leading zero', () => {
+        const serial = generateCertificateSerialNumber(Buffer.from([
+            0x80, 0x01, 0x23, 0x45,
+            0x67, 0x89, 0xab, 0xcd,
+            0xef, 0x01, 0x23, 0x45,
+            0x67, 0x89, 0xab, 0xcd,
+        ]));
+
+        assert.strictEqual(serial.length, 32);
+        assert.ok(!serial.startsWith('00'));
+        assert.ok(Number.parseInt(serial.slice(0, 2), 16) < 0x80);
     });
 
     test('generateToken returns a base64 string', () => {
