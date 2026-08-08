@@ -46,9 +46,9 @@ public sealed class TypeScriptLanguageSupportTests(ITestOutputHelper outputHelpe
         Assert.Equal("npm run aspire:build", scripts["build"]?.GetValue<string>());
         Assert.Equal("npm run aspire:dev", scripts["watch"]?.GetValue<string>());
         Assert.Equal("^4.22.3", devDependencies["tsx"]?.GetValue<string>());
-        Assert.Equal("^6.0.3", devDependencies["typescript"]?.GetValue<string>());
+        Assert.Equal("6.0.3", devDependencies["typescript"]?.GetValue<string>());
         Assert.Equal("^10.0.3", devDependencies["eslint"]?.GetValue<string>());
-        Assert.Equal("^8.58.0", devDependencies["typescript-eslint"]?.GetValue<string>());
+        Assert.Equal("8.58.0", devDependencies["typescript-eslint"]?.GetValue<string>());
 
         var engines = packageJson["engines"]!.AsObject();
         Assert.Equal("^20.19.0 || ^22.13.0 || >=24", engines["node"]?.GetValue<string>());
@@ -121,7 +121,7 @@ public sealed class TypeScriptLanguageSupportTests(ITestOutputHelper outputHelpe
         Assert.Equal("^4.22.3", devDependencies["tsx"]?.GetValue<string>());
         Assert.Equal("^22.0.0", devDependencies["@types/node"]?.GetValue<string>());
         Assert.Equal("^3.1.14", devDependencies["nodemon"]?.GetValue<string>());
-        Assert.Equal("^6.0.3", devDependencies["typescript"]?.GetValue<string>());
+        Assert.Equal("6.0.3", devDependencies["typescript"]?.GetValue<string>());
         Assert.False(devDependencies.ContainsKey("vite"));
 
         // engines.node is always set
@@ -185,7 +185,7 @@ public sealed class TypeScriptLanguageSupportTests(ITestOutputHelper outputHelpe
         Assert.Equal("^22.0.0", devDependencies["@types/node"]?.GetValue<string>());
         Assert.Equal("^3.1.14", devDependencies["nodemon"]?.GetValue<string>());
         Assert.Equal("^4.22.3", devDependencies["tsx"]?.GetValue<string>());
-        Assert.Equal("^6.0.3", devDependencies["typescript"]?.GetValue<string>());
+        Assert.Equal("6.0.3", devDependencies["typescript"]?.GetValue<string>());
     }
 
     [Fact]
@@ -320,7 +320,7 @@ public sealed class TypeScriptLanguageSupportTests(ITestOutputHelper outputHelpe
         // is the exact compiler that the `@typescript/typescript6` TS7 compatibility package
         // re-exports. See "Running Side-by-Side with TypeScript 6.0" in
         // https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/.
-        Assert.Equal("^6.0.3", typeScriptRange);
+        Assert.Equal("6.0.3", typeScriptRange);
         Assert.True(
             NpmVersionHelper.TryParseNpmVersion(typeScriptRange!, out var typeScriptVersion),
             $"Expected '{typeScriptRange}' to be a parseable npm version range.");

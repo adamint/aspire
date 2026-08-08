@@ -1537,7 +1537,7 @@ public class PackageJsonMergerTests
 
         var result = MergeJson(existing, ScaffoldWithLintToolchain);
 
-        Assert.Equal("^8.58.0", GetDep(result, "devDependencies", "typescript-eslint"));
+        Assert.Equal("8.58.0", GetDep(result, "devDependencies", "typescript-eslint"));
         Assert.Equal("eslint apphost.mts", GetScript(result, "aspire:lint"));
     }
 
@@ -1572,8 +1572,8 @@ public class PackageJsonMergerTests
           },
           "dependencies": { "vscode-jsonrpc": "^8.2.0" },
           "devDependencies": {
-            "typescript": "^6.0.3",
-            "typescript-eslint": "^8.58.0",
+            "typescript": "6.0.3",
+            "typescript-eslint": "8.58.0",
             "eslint": "^10.0.3"
           }
         }

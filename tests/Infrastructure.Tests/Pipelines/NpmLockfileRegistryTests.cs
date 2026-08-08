@@ -1031,7 +1031,7 @@ public class NpmLockfileRegistryTests
         // Yarn Berry lockfiles are YAML. Every top-level key is a descriptor and each entry carries a
         // `resolution` locator:
         //
-        //   "typescript@npm:^6.0.3":
+        //   "typescript@npm:6.0.3":
         //     version: 6.0.3
         //     resolution: "typescript@npm:6.0.3"
         //

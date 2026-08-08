@@ -170,13 +170,13 @@ internal sealed class TypeScriptLanguageSupport : ILanguageSupport
         // `@typescript/typescript6` TS7 compatibility package re-exports, so this is the supported
         // bridge rather than a version left behind. See "Running Side-by-Side with TypeScript 6.0" in
         // https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/.
-        EnsureDependency(packageJson, "devDependencies", "typescript", "^6.0.3");
+        EnsureDependency(packageJson, "devDependencies", "typescript", "6.0.3");
 
         // typescript-eslint 8.58.0 is the first release whose `typescript` peer range admits 6.x:
         // 8.57.1 peers `>=4.8.4 <6.0.0`, 8.58.0 peers `>=4.8.4 <6.1.0`. A `^8.57.1` floor is
         // satisfiable by 8.57.1 itself, so pairing it with the TypeScript 6 above would let a
         // resolver produce a scaffold that fails to install on the peer conflict.
-        EnsureDependency(packageJson, "devDependencies", "typescript-eslint", "^8.58.0");
+        EnsureDependency(packageJson, "devDependencies", "typescript-eslint", "8.58.0");
 
         return packageJson.ToJsonString(s_jsonSerializerOptions);
     }
