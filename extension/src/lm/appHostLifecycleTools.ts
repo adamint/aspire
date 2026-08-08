@@ -262,14 +262,20 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
      * Renders the identity the confirmation dialog must show for a requested selector.
      *
      * This runs the *same* registry resolution `invoke` runs and displays its result, so
-     * the target the user approves is the target that gets executed. It performs discovery
-     * to do so, which `prepareInvocation` allows: the API requires it to be free of side
-     * effects, not free of work. Input that does not resolve is described with a fixed
-     * placeholder rather than echoed, because such a call is always rejected anyway and
-     * echoing it would hand the model free-form prose inside the trusted prompt that gates
-     * "Always allow".
+     * the target the user approves is the target that gets executed. Input that does not
+     * resolve is described with a fixed placeholder rather than echoed, because such a
+     * call is always rejected anyway and echoing it would hand the model free-form prose
+     * inside the trusted prompt that gates "Always allow".
      */
     async describeTarget(rawAppHost: unknown, token: vscode.CancellationToken): Promise<string> {
+        // VS Code can keep the implementation reachable in Restricted Mode and call
+        // `prepareInvocation` before `invoke` gets a chance to reject the tool call. Do
+        // not run AppHost discovery there: it shells out to `aspire ls`, which crosses
+        // the same trust boundary as the eventual start/stop operation.
+        if (!vscode.workspace.isTrusted) {
+            return appHostLifecycleUnresolvedPath;
+        }
+
         const resolution = await this.resolveTarget(rawAppHost, token);
         return resolution.resolved ? resolution.target.displayPath : appHostLifecycleUnresolvedPath;
     }
