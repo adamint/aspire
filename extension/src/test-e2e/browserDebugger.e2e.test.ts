@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import { BrowserLaunchConfiguration } from '../dcp/types';
 import { executeE2eControlCommand, runE2eTeardown } from './helpers/fixtures';
+import { openAspireView } from './helpers/vscode';
 
 // E2E coverage for the browser resource debugger.
 //
@@ -31,6 +32,10 @@ interface RegisteredDebuggerExtension {
 
 suite('Aspire browser debugger E2E', function () {
     this.timeout(120000);
+
+    suiteSetup(async () => {
+        await openAspireView();
+    });
 
     teardown(async () => {
         await runE2eTeardown([
