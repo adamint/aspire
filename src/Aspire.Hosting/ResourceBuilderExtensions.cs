@@ -4770,7 +4770,11 @@ public static class ResourceBuilderExtensions
     /// A callback that receives the launch mode and produces the complete launch configuration handed to the IDE.
     /// </param>
     /// <param name="launchConfigurationType">The type tag of the launch configuration sent to the IDE.</param>
-    /// <param name="argsCallback">Optional callback to add or modify command-line arguments while this debug support annotation is active.</param>
+    /// <param name="argsCallback">
+    /// Optional callback to add or modify command-line arguments while this debug support annotation is active.
+    /// When a <see cref="ProjectLaunchArgsOverrideAnnotation"/> keeps a project executable in process mode,
+    /// Aspire suppresses this rewrite for the process command line so the override remains runnable.
+    /// </param>
     /// <returns>The <see cref="IResourceBuilder{T}"/>.</returns>
     /// <remarks>
     /// Registering debug support is synchronous. Aspire invokes <paramref name="launchConfigurationProducer"/>
@@ -4780,7 +4784,8 @@ public static class ResourceBuilderExtensions
     /// A <see cref="ProjectLaunchArgsOverrideAnnotation"/> that already supplies a
     /// <see cref="KnownLaunchConfigurationTypes.Project"/> launch configuration skips the producer for that
     /// specific <paramref name="launchConfigurationType"/>. Producers for other launch configuration types still
-    /// run when their annotation is active.
+    /// run when their annotation is active, but their <paramref name="argsCallback"/> does not rewrite the
+    /// process command line owned by the launch-args override.
     /// </para>
     /// </remarks>
     [Obsolete("Use the overload that accepts LaunchConfigurationCallbackContext and returns a Task.")]
@@ -4829,7 +4834,9 @@ public static class ResourceBuilderExtensions
     /// <param name="argsCallback">
     /// Optional callback to add or modify command-line arguments while this debug support annotation is active.
     /// The callback rewrites only the executable configuration; <see cref="LaunchConfigurationCallbackContext.OriginalExecutionConfiguration"/>
-    /// preserves the resolved arguments before this callback runs.
+    /// preserves the resolved arguments before this callback runs. When a
+    /// <see cref="ProjectLaunchArgsOverrideAnnotation"/> keeps a project executable in process mode, Aspire
+    /// suppresses this rewrite for the process command line so the override remains runnable.
     /// </param>
     /// <returns>The <see cref="IResourceBuilder{T}"/>.</returns>
     /// <remarks>
@@ -4841,7 +4848,8 @@ public static class ResourceBuilderExtensions
     /// A <see cref="ProjectLaunchArgsOverrideAnnotation"/> that already supplies a
     /// <see cref="KnownLaunchConfigurationTypes.Project"/> launch configuration skips the producer for that
     /// specific <paramref name="launchConfigurationType"/>. Producers for other launch configuration types still
-    /// run when their annotation is active.
+    /// run when their annotation is active, but their <paramref name="argsCallback"/> does not rewrite the
+    /// process command line owned by the launch-args override.
     /// </para>
     /// </remarks>
     [Experimental("ASPIREEXTENSION001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]

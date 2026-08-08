@@ -18,8 +18,10 @@ namespace Aspire.Hosting.ApplicationModel;
 /// launch configuration.
 /// <see cref="OriginalExecutionConfiguration"/> contains the resolved resource configuration before an active
 /// debug-support argument rewrite runs. <see cref="ExecutableExecutionConfiguration"/> contains the copy used to
-/// populate the underlying executable after that rewrite. Only the launch configuration returned by the producer
-/// is serialized for the IDE. Processed environment values can contain secrets.
+/// populate the underlying executable after that rewrite. When a <see cref="ProjectLaunchArgsOverrideAnnotation"/>
+/// pins a project executable to process execution, the debug argument rewrite is suppressed so the process command
+/// line remains runnable. Only the launch configuration returned by the producer is serialized for the IDE.
+/// Processed environment values can contain secrets.
 /// </remarks>
 [Experimental("ASPIREEXTENSION001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
 public sealed class LaunchConfigurationCallbackContext
@@ -72,7 +74,8 @@ public sealed class LaunchConfigurationCallbackContext
     /// </summary>
     /// <remarks>
     /// This is a copy of <see cref="OriginalExecutionConfiguration"/> with the active <c>argsCallback</c> applied.
-    /// When debug support does not rewrite arguments, this is the same instance as <see cref="OriginalExecutionConfiguration"/>.
+    /// When debug support does not rewrite arguments, or a project launch-args override keeps the executable in
+    /// process mode, this is the same instance as <see cref="OriginalExecutionConfiguration"/>.
     /// </remarks>
     public IExecutionConfigurationResult ExecutableExecutionConfiguration { get; }
 

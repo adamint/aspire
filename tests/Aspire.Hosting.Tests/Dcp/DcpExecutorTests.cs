@@ -5308,7 +5308,6 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
             ProtocolsSupported = ["coreclr"],
             SupportedLaunchConfigurations = ["maui"]
         };
-
         var configDict = new Dictionary<string, string?>
         {
             [DcpExecutor.DebugSessionPortVar] = "12345",
@@ -5439,6 +5438,99 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
         Assert.Equal("android", launchConfig.Platform);
         Assert.Equal("emulator", launchConfig.TargetKind);
         Assert.Equal("-e", launchConfig.MsBuildProperties!["AdbTarget"]);
+    }
+
+    [Fact]
+    public async Task ProjectWithLaunchArgsOverrideAndRewritingNonProjectDebugSupport_DoesNotRewriteProcessArgs()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+
+        var projectBuilder = builder.AddProject<TestProject>("proj", launchProfileName: null);
+        var annotationToRemove = projectBuilder.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().FirstOrDefault();
+        if (annotationToRemove is not null)
+        {
+            projectBuilder.Resource.Annotations.Remove(annotationToRemove);
+        }
+
+#pragma warning disable ASPIREPROJECTS001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+        projectBuilder.Resource.Annotations.Add(new ProjectLaunchArgsOverrideAnnotation(["build", "--no-restore", "/t:Run", "-p:NoBuild=true"], leadingResourceArgumentToRemove: "run"));
+#pragma warning restore ASPIREPROJECTS001
+
+        var runSessionInfo = new RunSessionInfo
+        {
+            ProtocolsSupported = ["coreclr"],
+            SupportedLaunchConfigurations = ["maui"]
+        };
+        var debugSessionInfoJson = JsonSerializer.Serialize(runSessionInfo);
+        builder.Configuration[DcpExecutor.DebugSessionPortVar] = "12345";
+        builder.Configuration[KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson;
+        builder.Configuration[KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234";
+        builder.Configuration[KnownConfigNames.DebugSessionRunMode] = "Debug";
+
+        IExecutionConfigurationResult? originalConfiguration = null;
+        IExecutionConfigurationResult? executableConfiguration = null;
+        projectBuilder
+            .WithArgs("run", "-f", "net10.0-android")
+            .WithDebugSupport(
+                context =>
+                {
+                    originalConfiguration = context.OriginalExecutionConfiguration;
+                    executableConfiguration = context.ExecutableExecutionConfiguration;
+                    return Task.FromResult(new TestMauiLaunchConfiguration
+                    {
+                        Mode = context.Mode,
+                        ProjectPath = "/mauiapp/MauiApp.csproj",
+                        TargetFramework = "net10.0-android",
+                        Platform = "android",
+                        TargetKind = "emulator"
+                    });
+                },
+                "maui",
+                argsCallback: static context => context.Args.Clear());
+
+        var configDict = new Dictionary<string, string?>
+        {
+            [DcpExecutor.DebugSessionPortVar] = "12345",
+            [KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson,
+            [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234",
+            [KnownConfigNames.DebugSessionRunMode] = "Debug"
+        };
+
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+
+        Assert.True(projectBuilder.Resource.SupportsDebugging(configuration, out var supportsDebuggingAnnotation));
+        Assert.NotNull(supportsDebuggingAnnotation.DebugCommandLineArgsCallbackAnnotation);
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var distributedApplicationOptions = new DistributedApplicationOptions { AssemblyName = typeof(DcpExecutorTests).Assembly.FullName };
+        var expectedConfiguration = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyConfigurationAttribute>(typeof(DcpExecutorTests).Assembly)?.Configuration;
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration, distributedApplicationOptions: distributedApplicationOptions);
+
+        await appExecutor.RunApplicationAsync();
+
+        var exe = GetCreatedExecutableForResource(kubernetesService, "proj");
+
+        Assert.Equal(ExecutionType.Process, exe.Spec.ExecutionType);
+        Assert.NotNull(originalConfiguration);
+        Assert.NotNull(executableConfiguration);
+        Assert.Equal(["run", "-f", "net10.0-android"], originalConfiguration.Arguments.Select(argument => argument.Value));
+        Assert.Equal(["run", "-f", "net10.0-android"], executableConfiguration.Arguments.Select(argument => argument.Value));
+        Assert.Same(originalConfiguration, executableConfiguration);
+
+        var expectedArgs = new List<string> { "build", "--no-restore", "/t:Run", "-p:NoBuild=true", "TestProject" };
+        if (!string.IsNullOrEmpty(expectedConfiguration))
+        {
+            expectedArgs.AddRange(["--configuration", expectedConfiguration]);
+        }
+        expectedArgs.AddRange(["-f", "net10.0-android"]);
+        Assert.Equal(expectedArgs, exe.Spec.Args);
+
+        Assert.True(exe.TryGetAnnotationAsObjectList<TestMauiLaunchConfiguration>(Executable.LaunchConfigurationsAnnotation, out var launchConfigs));
+        var launchConfig = Assert.Single(launchConfigs);
+        Assert.Equal("maui", launchConfig.Type);
+        Assert.Equal(ExecutableLaunchMode.Debug, launchConfig.Mode);
     }
 
     [Fact]

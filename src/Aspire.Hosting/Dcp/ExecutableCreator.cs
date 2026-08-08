@@ -115,7 +115,17 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             }
         }
 
-        var (originalConfiguration, configuration, pemCertificates) = await BuildExecutableConfiguration(er, resourceLogger, supportsDebuggingAnnotation, cancellationToken).ConfigureAwait(false);
+        // A launch-args override pins the executable to Process mode, so the process command line must stay
+        // runnable even when a custom launch configuration producer also has an IDE-only args callback.
+        // The producer still runs below for non-"project" launch types, but its debug argument rewrite is
+        // suppressed for the executable snapshot.
+        var (originalConfiguration, configuration, pemCertificates) = await BuildExecutableConfiguration(
+                er,
+                resourceLogger,
+                supportsDebuggingAnnotation,
+                applyDebugArgumentRewrite: !preparedFromLaunchArgsOverride,
+                cancellationToken)
+            .ConfigureAwait(false);
 
         spec.PemCertificates = pemCertificates;
 
@@ -512,6 +522,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         RenderedModelResource<Executable> er,
         ILogger resourceLogger,
         SupportsDebuggingAnnotation? supportsDebuggingAnnotation,
+        bool applyDebugArgumentRewrite,
         CancellationToken cancellationToken)
     {
         var exe = (Executable)er.DcpResource;
@@ -523,6 +534,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         var baseServerAuthOutputPath = Path.Join(certificatesRootDir, "private");
 
         var activeDebugArgsAnnotation = supportsDebuggingAnnotation?.DebugCommandLineArgsCallbackAnnotation;
+        var shouldBuildDebugArguments = activeDebugArgsAnnotation is not null && applyDebugArgumentRewrite;
         var configurationBuilder = ExecutionConfigurationBuilder.Create(er.ModelResource);
         if (activeDebugArgsAnnotation is null)
         {
@@ -572,14 +584,14 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             .BuildAsync(_executionContext, resourceLogger, cancellationToken)
             .ConfigureAwait(false);
 
-        var executableConfiguration = activeDebugArgsAnnotation is null
-            ? originalConfiguration
-            : await BuildExecutableConfigurationWithDebugArgumentsAsync(
+        var executableConfiguration = shouldBuildDebugArguments
+            ? await BuildExecutableConfigurationWithDebugArgumentsAsync(
                     originalConfiguration,
                     er.ModelResource,
                     resourceLogger,
                     cancellationToken)
-                .ConfigureAwait(false);
+                .ConfigureAwait(false)
+            : originalConfiguration;
 
         // Add the certificates to the executable spec so they'll be placed in the DCP config
         ExecutablePemCertificates? pemCertificates = null;
