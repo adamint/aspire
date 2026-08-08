@@ -140,6 +140,25 @@ public class RepoRootTests : IDisposable
     }
 
     [Fact]
+    public void IsCaseSensitiveDirectory_UsesDirectoryLookupRulesBeforeFinalSegmentProbe()
+    {
+        var probed = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "CaseSensitiveParent")).FullName;
+        var queriedPaths = new List<string>();
+
+        var result = Program.IsCaseSensitiveDirectory(
+            probed,
+            path =>
+            {
+                queriedPaths.Add(path);
+                return true;
+            },
+            _ => false);
+
+        Assert.True(result);
+        Assert.Equal([Path.TrimEndingDirectorySeparator(Path.GetFullPath(probed))], queriedPaths);
+    }
+
+    [Fact]
     public void IsSameOrAncestorDirectory_UsesEachParentsCasingRules_WhenTheFinalSegmentProbeIsAmbiguous()
     {
         var parent = Path.Combine(_scratch.FullName, "case-sensitive-parent");

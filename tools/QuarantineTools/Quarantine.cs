@@ -4,9 +4,11 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.Win32.SafeHandles;
 using System.CommandLine;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -780,17 +782,71 @@ public class Program
     }
 
     /// <summary>
-    /// Probes whether directory names alongside <paramref name="directory"/> distinguish case, by
-    /// asking whether it is reachable through a case-flipped spelling of its own final segment.
+    /// Probes whether child names inside <paramref name="directory"/> distinguish case.
     /// </summary>
     /// <remarks>
     /// The operating system is not a reliable proxy for the volume: macOS APFS can be formatted
     /// case-sensitive, Windows exposes a per-directory case-sensitivity flag that WSL sets, and Linux
-    /// can mount case-insensitive volumes. The probe is read-only - it only tests for existence.
+    /// can mount case-insensitive volumes. The probe is read-only - it only tests for metadata or
+    /// existence.
     /// </remarks>
     internal static bool IsCaseSensitiveDirectory(string directory)
+        => IsCaseSensitiveDirectory(directory, TryGetKnownDirectoryCaseSensitivity, IsCaseSensitiveDirectoryByFinalSegmentProbe);
+
+    internal static bool IsCaseSensitiveDirectory(string directory, Func<string, bool?> tryGetKnownDirectoryCaseSensitivity, Func<string, bool> fallbackProbe)
     {
         var full = TrimTrailingSeparator(Path.GetFullPath(directory));
+        if (tryGetKnownDirectoryCaseSensitivity(full) is { } knownCaseSensitivity)
+        {
+            return knownCaseSensitivity;
+        }
+
+        return fallbackProbe(full);
+    }
+
+    private static bool? TryGetKnownDirectoryCaseSensitivity(string directory)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return null;
+        }
+
+        // Windows' case-sensitivity flag belongs to the directory whose children are being looked up.
+        // Flipping this directory's own final segment would instead probe its parent, which is wrong
+        // when WSL has enabled per-directory case sensitivity. FileCaseSensitiveInfo queries the
+        // directory's child-name semantics directly.
+        // See:
+        // - https://learn.microsoft.com/windows/win32/api/minwinbase/ne-minwinbase-file_info_by_handle_class
+        // - https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_case_sensitive_information
+        using var handle = CreateFile(
+            directory,
+            FileReadAttributes,
+            FileShareRead | FileShareWrite | FileShareDelete,
+            0,
+            OpenExisting,
+            FileFlagBackupSemantics,
+            0);
+        if (handle.IsInvalid)
+        {
+            return null;
+        }
+
+        return GetFileInformationByHandleEx(
+            handle,
+            FileInfoByHandleClass.FileCaseSensitiveInfo,
+            out var caseSensitiveInformation,
+            FileCaseSensitiveInformationSize)
+            ? (caseSensitiveInformation.Flags & FileCsFlagCaseSensitiveDir) != 0
+            : null;
+    }
+
+    /// <summary>
+    /// Probes whether directory names alongside <paramref name="directory"/> distinguish case, by
+    /// asking whether it is reachable through a case-flipped spelling of its own final segment.
+    /// </summary>
+    private static bool IsCaseSensitiveDirectoryByFinalSegmentProbe(string directory)
+    {
+        var full = TrimTrailingSeparator(directory);
         var name = Path.GetFileName(full);
         var parent = Path.GetDirectoryName(full);
         var flipped = FlipCase(name);
@@ -804,7 +860,10 @@ public class Program
 
         // A case-sensitive volume that happens to hold a real sibling differing only by case is read as
         // case-insensitive here. That is acceptable: it only restores the behavior this guard had
-        // before the probe existed, and such a pair is not something a checkout layout produces.
+        // before the probe existed, and such a pair is not something a checkout layout produces. This
+        // fallback is also intentionally not used on Windows when the per-directory flag can be read:
+        // the sibling lookup observes the parent directory's rules, not this directory's child lookup
+        // rules.
         return !Directory.Exists(Path.Combine(parent, flipped));
     }
 
@@ -818,6 +877,48 @@ public class Program
             }
         });
     }
+
+    private const uint FileReadAttributes = 0x80;
+    private const uint FileShareRead = 0x1;
+    private const uint FileShareWrite = 0x2;
+    private const uint FileShareDelete = 0x4;
+    private const uint OpenExisting = 0x3;
+    private const uint FileFlagBackupSemantics = 0x02000000;
+    private const uint FileCsFlagCaseSensitiveDir = 0x1;
+    private const uint FileCaseSensitiveInformationSize = 4;
+
+    private enum FileInfoByHandleClass
+    {
+        FileCaseSensitiveInfo = 23,
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileCaseSensitiveInformation
+    {
+        public uint Flags;
+    }
+
+    // LibraryImport would need unsafe blocks for the generated marshalling stub. This tool has no
+    // other unsafe code, so use the runtime marshaller rather than relaxing the project.
+#pragma warning disable SYSLIB1054
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", SetLastError = true, CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern SafeFileHandle CreateFile(
+        string lpFileName,
+        uint dwDesiredAccess,
+        uint dwShareMode,
+        nint lpSecurityAttributes,
+        uint dwCreationDisposition,
+        uint dwFlagsAndAttributes,
+        nint hTemplateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true, ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandleEx(
+        SafeFileHandle hFile,
+        FileInfoByHandleClass fileInformationClass,
+        out FileCaseSensitiveInformation lpFileInformation,
+        uint dwBufferSize);
+#pragma warning restore SYSLIB1054
 
     private static string TrimTrailingSeparator(string path)
     {
