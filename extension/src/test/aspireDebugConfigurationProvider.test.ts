@@ -6,7 +6,8 @@ import * as os from 'os';
 import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { AspireDebugConfigurationProvider, stripAspireDebugConfigurationProviderInternalProperties, type ExternalLaunchReservation } from '../debugger/AspireDebugConfigurationProvider';
+import { AspireDebugConfigurationProvider, type ExternalLaunchReservation } from '../debugger/AspireDebugConfigurationProvider';
+import { isAspireDebugConfigurationExtensionOwned, markAspireDebugConfigurationAsExtensionOwned, stripAspireDebugConfigurationProviderInternalProperties } from '../debugger/AspireDebugConfigurationProviderInternal';
 import type { AspireExtendedDebugConfiguration } from '../dcp/types';
 import * as cliPathModule from '../utils/cliPath';
 import { AppHostDiscoveryService } from '../utils/appHostDiscovery';
@@ -182,13 +183,11 @@ suite('AspireDebugConfigurationProvider', () => {
         assert.strictEqual(message.calledOnce, true);
     });
 
-    test('does not claim an AppHostLaunchService launch as an external one', async () => {
-        // `launchCore` reserves its own slot and then calls `startDebugging`, which reaches
-        // this resolver. Treating it as external would make the launch refuse itself against
-        // the claim it just took.
+    test('does not trust a launch.json launchedByExtension property as lifecycle-owned', async () => {
         const appHostPath = path.join(tempDir, 'AppHost.csproj');
         fs.writeFileSync(appHostPath, '<Project Sdk="Aspire.AppHost.Sdk" />');
         launchReservation.claimedByLifecycle = true;
+        const message = sandbox.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
         const provider = new AspireDebugConfigurationProvider(createAppHostDiscoveryService(appHostPath), launchReservation);
         const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {
@@ -199,10 +198,35 @@ suite('AspireDebugConfigurationProvider', () => {
             launchedByExtension: true
         });
 
+        assert.strictEqual(config, undefined);
+        assert.deepStrictEqual(launchReservation.reserved, [appHostPath]);
+        assert.strictEqual(message.calledOnce, true);
+    });
+
+    test('does not claim an AppHostLaunchService launch as an external one', async () => {
+        // `launchCore` reserves its own slot and then calls `startDebugging`, which reaches
+        // this resolver. Treating it as external would make the launch refuse itself against
+        // the claim it just took.
+        const appHostPath = path.join(tempDir, 'AppHost.csproj');
+        fs.writeFileSync(appHostPath, '<Project Sdk="Aspire.AppHost.Sdk" />');
+        launchReservation.claimedByLifecycle = true;
+
+        const provider = new AspireDebugConfigurationProvider(createAppHostDiscoveryService(appHostPath), launchReservation);
+        const debugConfiguration: vscode.DebugConfiguration = {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: appHostPath,
+        };
+        markAspireDebugConfigurationAsExtensionOwned(debugConfiguration);
+
+        const config = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, debugConfiguration);
+
         assert.strictEqual(config?.program, appHostPath);
         assert.deepStrictEqual(launchReservation.reserved, []);
         // The marker is internal and must not reach the debug adapter.
         assert.strictEqual('launchedByExtension' in (config ?? {}), false);
+        assert.strictEqual(isAspireDebugConfigurationExtensionOwned(config ?? {}), true);
     });
 
     test('does not claim repeated resolver passes for an AppHostLaunchService launch as external', async () => {
@@ -215,13 +239,13 @@ suite('AspireDebugConfigurationProvider', () => {
         launchReservation.claimedByLifecycle = true;
 
         const provider = new AspireDebugConfigurationProvider(createAppHostDiscoveryService(appHostPath), launchReservation);
-        const config = {
+        const config: vscode.DebugConfiguration = {
             name: 'Debug AppHost',
             type: 'aspire',
             request: 'launch',
-            program: appHostPath,
-            launchedByExtension: true
+            program: appHostPath
         };
+        markAspireDebugConfigurationAsExtensionOwned(config);
 
         const firstPass = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, config);
         const secondPass = firstPass
@@ -231,8 +255,10 @@ suite('AspireDebugConfigurationProvider', () => {
         assert.strictEqual(secondPass?.program, appHostPath);
         assert.deepStrictEqual(launchReservation.reserved, []);
         assert.strictEqual('launchedByExtension' in (secondPass ?? {}), false);
+        assert.strictEqual(isAspireDebugConfigurationExtensionOwned(secondPass ?? {}), true);
 
         stripAspireDebugConfigurationProviderInternalProperties(secondPass ?? {});
+        assert.strictEqual(isAspireDebugConfigurationExtensionOwned(secondPass ?? {}), false);
         assert.deepStrictEqual(Object.keys(secondPass ?? {}).filter(key => key.startsWith('__aspireAppHostLaunchServiceConfiguration_')), []);
     });
 

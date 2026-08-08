@@ -3,7 +3,7 @@ import { AspireDebugSession } from './AspireDebugSession';
 import AspireDcpServer from '../dcp/AspireDcpServer';
 import AspireRpcServer from '../server/AspireRpcServer';
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
-import { stripAspireDebugConfigurationProviderInternalProperties } from './AspireDebugConfigurationProvider';
+import { stripAspireDebugConfigurationProviderInternalProperties } from './AspireDebugConfigurationProviderInternal';
 
 export class AspireDebugAdapterDescriptorFactory implements vscode.DebugAdapterDescriptorFactory {
   private readonly _rpcServer: AspireRpcServer;

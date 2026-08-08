@@ -9,6 +9,7 @@ import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventPro
 import { bucketAspireCommand } from '../utils/telemetryBuckets';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
+import { markAspireDebugConfigurationAsExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
 
 function isAspireCommandType(value: unknown): value is AspireCommandType {
     return value === 'run' || value === 'deploy' || value === 'publish' || value === 'do';
@@ -589,9 +590,9 @@ export class AppHostLaunchService implements vscode.Disposable {
             request: 'launch',
             program: appHostPath,
             command,
-            noDebug,
-            launchedByExtension: true
+            noDebug
         };
+        markAspireDebugConfigurationAsExtensionOwned(config);
 
         if (doStep) {
             config.step = doStep;

@@ -209,16 +209,8 @@ export interface AspireExtendedDebugConfiguration extends vscode.DebugConfigurat
     args?: string[];
     step?: string;
     skipCliAvailabilityCheck?: boolean;
-    /**
-     * Marks a configuration created by `AppHostLaunchService` rather than by
-     * `launch.json`/F5.
-     *
-     * The debug configuration provider is the shared hook for both, but an internal launch
-     * has already reserved its own launching slot before calling `startDebugging`. Without
-     * this marker the provider would treat the launch as external and refuse it against the
-     * caller's own claim. Stripped by the provider so it never reaches the adapter.
-     */
-    launchedByExtension?: boolean;
+    /** Internal per-activation token stamped by `AppHostLaunchService`. */
+    launchedByExtension?: string;
     env?: { [key: string]: string };
 }
 

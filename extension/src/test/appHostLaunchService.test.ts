@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { AspireExtendedDebugConfiguration } from '../dcp/types';
+import { isAspireDebugConfigurationExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
 import { appHostLifecycleBusy } from '../loc/strings';
 import { AppHostLaunchService, AppHostLifecycleLockTimeoutError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, externalLaunchReservationTimeoutMs } from '../services/AppHostLaunchService';
 import { getAppHostIdentityKey } from '../utils/appHostIdentity';
@@ -331,14 +332,16 @@ suite('AppHostLaunchService', () => {
     test('marks its own debug configurations so the shared resolver does not claim them as external', async () => {
         // `launchCore` reserves before `startDebugging`, and the configuration provider is
         // the same hook a `launch.json`/F5 launch goes through. Without the marker the
-        // provider would refuse the launch against the caller's own claim.
+        // provider would refuse the launch against the caller's own claim. The marker has
+        // to be a per-activation token rather than a forgeable launch.json boolean.
         const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
         const projectPath = path.join(directory, 'AppHost.csproj');
 
         await service.launch(projectPath, 'run', true);
 
         const config = startDebuggingStub.firstCall.args[1] as AspireExtendedDebugConfiguration;
-        assert.strictEqual(config.launchedByExtension, true);
+        assert.strictEqual(isAspireDebugConfigurationExtensionOwned(config), true);
+        assert.notStrictEqual(config.launchedByExtension, true);
     });
 
     test('serializes editor and tool launch work for the same AppHost identity', async () => {
