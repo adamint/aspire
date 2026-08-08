@@ -661,6 +661,18 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         ILogger resourceLogger,
         CancellationToken cancellationToken)
     {
+        if (resource.TryGetAnnotationsOfType<CommandLineArgsCallbackAnnotation>(out var argumentAnnotations))
+        {
+            foreach (var annotation in argumentAnnotations)
+            {
+                // The original snapshot intentionally skips the active debug annotation, but that can cache
+                // downstream WithArgs annotations against the pre-rewrite list. Clear the per-annotation
+                // caches before the executable snapshot so annotations after WithDebugSupport are evaluated
+                // against the debug-rewritten arguments.
+                annotation.AsCallbackAnnotation().ForgetCachedResult();
+            }
+        }
+
         var rewrittenArgsConfiguration = await ExecutionConfigurationBuilder.Create(resource)
             .WithArgumentsConfig()
             .BuildAsync(_executionContext, resourceLogger, cancellationToken)

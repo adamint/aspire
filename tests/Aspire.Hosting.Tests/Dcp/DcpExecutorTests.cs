@@ -6537,7 +6537,7 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
         IExecutionConfigurationResult? executableConfiguration = null;
         var debuggableExecutable = new TestExecutableResource("test-working-directory");
         builder.AddResource(debuggableExecutable)
-            .WithArgs("run", "./cmd/api", "user-arg")
+            .WithArgs("run", "./cmd/api")
             .WithDebugSupport(
                 context =>
                 {
@@ -6550,7 +6550,8 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
                 {
                     ctx.Args.RemoveAt(0);
                     ctx.Args.RemoveAt(0);
-                });
+                })
+            .WithArgs("user-arg");
 
         var configDict = new Dictionary<string, string?>
         {
