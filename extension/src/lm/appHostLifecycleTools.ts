@@ -429,6 +429,13 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                 }
 
                 if (owned.sessions.length === 0) {
+                    if (this._dependencies.launchService.isLaunching(current.absolutePath)) {
+                        // A launch can be reserved before its debug session is observable.
+                        // Report that in-flight state instead of claiming there is nothing
+                        // to stop, so an agent retry can wait for the session to materialize.
+                        return createResult(aspireAppHostStopToolName, 'alreadyStarting', current.relativePath, 'editor', undefined, undefined);
+                    }
+
                     const externalController = externalControllerBeforeLock
                         ?? await this.probeExternalControllerForStop(current.absolutePath, lockToken);
                     if (externalController === 'unknown') {

@@ -336,6 +336,9 @@ suite('AppHost lifecycle language model tools', () => {
             assert.match(
                 packageNls['languageModelTool.aspireAppHostStop.modelDescription'],
                 /prefer this tool over invoking Aspire AppHost lifecycle commands in a terminal/i);
+            assert.match(
+                packageNls['languageModelTool.aspireAppHost.appHostPath.description'],
+                /In a multi-root workspace, always prefix the path with the workspace folder name/i);
         });
 
         test('registers runtime tool strings for localization', () => {
@@ -1034,6 +1037,17 @@ suite('AppHost lifecycle language model tools', () => {
             assert.deepStrictEqual(
                 { outcome: result.outcome, controller: result.controller },
                 { outcome: 'notRunning', controller: 'none' });
+        });
+
+        test('reports alreadyStarting when asked to stop a launch that has not produced a session yet', async () => {
+            launchService.launchingPaths.add(path.resolve(appHostProjectPath));
+
+            const result = await service.stop({ appHostPath: 'AppHost/AppHost.csproj' }, new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(
+                { outcome: result.outcome, controller: result.controller },
+                { outcome: 'alreadyStarting', controller: 'editor' });
+            assert.strictEqual(launchService.runningAppHostRequests, 0);
         });
 
         test('reports failed rather than notRunning when the external controller cannot be determined', async () => {
