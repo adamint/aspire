@@ -392,6 +392,33 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task CheckAsync_ReturnsWarningWithDiagnostics_WhenMarketplaceResponseIsInvalid()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var environment = CreateVsCodeEnvironmentWithReportedVersion("1.2.3");
+        var failure = new InvalidDataException("Marketplace response did not contain the Aspire extension.");
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            GetLatestVersionsAsyncCallback = _ => Task.FromException<VsCodeExtensionMarketplaceVersions>(failure)
+        };
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionInstalledMessage, result.Message);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionLatestVersionCheckUnavailableDetails, result.Details);
+        Assert.Null(result.Fix);
+        Assert.Null(result.Link);
+        Assert.NotNull(result.Metadata);
+        Assert.Equal("1.2.3", result.Metadata["extensionVersion"]!.GetValue<string>());
+        Assert.Equal("unavailable", result.Metadata["latestVersionError"]!.GetValue<string>());
+        Assert.False(result.Metadata["latestVersionKnown"]!.GetValue<bool>());
+        Assert.Equal(1, marketplaceClient.CallCount);
+    }
+
+    [Fact]
     public async Task CheckAsync_ReturnsWarningWithDiagnostics_WhenMarketplaceOmitsTheRequestedChannel()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

@@ -197,6 +197,12 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         {
             return [CreateMarketplaceUnavailableResult(metadata, exception)];
         }
+        catch (InvalidDataException exception)
+        {
+            // The Marketplace was reachable, but the response shape or size made the version data
+            // unusable. Treat that the same as unavailable external data so doctor keeps running.
+            return [CreateMarketplaceUnavailableResult(metadata, exception)];
+        }
         catch (JsonException exception)
         {
             return [CreateMarketplaceUnavailableResult(metadata, exception)];
