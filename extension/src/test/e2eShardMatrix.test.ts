@@ -15,6 +15,10 @@ suite('E2E shard matrix', () => {
     const extensionRoot = path.resolve(__dirname, '..', '..');
     const workflowPath = path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml');
     const specDirectory = path.join(extensionRoot, 'src', 'test-e2e');
+    const disabledIssuePattern = /^https:\/\/github\.com\/microsoft\/aspire\/issues\/\d+$/;
+    // Any real disabled shard must be listed here so adding `disabledIssue` requires an
+    // intentional test change instead of silently turning coverage into a green skipped shard.
+    const expectedDisabledRows = new Map<string, string>([]);
 
     /**
      * Compiled spec paths the matrix is allowed to reference, derived from spec file names.
@@ -43,6 +47,85 @@ suite('E2E shard matrix', () => {
         return [...new Set([...workflow.matchAll(/^\s*spec:\s*(\S+)\s*$/gm)].map(match => match[1]))].sort();
     }
 
+    function matrixRows(workflow: string): MatrixRow[] {
+        const rows: MatrixRow[] = [];
+        let currentRow: MatrixRow | undefined;
+
+        // Parse matrix entries shaped like:
+        //   - name: Linux
+        //     shardName: azure-functions
+        //     spec: out/test-e2e/test-e2e/azureFunctions.e2e.test.js
+        //     disabledIssue: 'https://github.com/microsoft/aspire/issues/19151'
+        // This deliberately extracts only the fields the guard owns rather than becoming a
+        // general YAML parser for workflow syntax.
+        for (const line of workflow.split(/\r?\n/)) {
+            if (/^\s*-\s+name:\s*/.test(line)) {
+                appendCurrentRow();
+                currentRow = {};
+                continue;
+            }
+
+            if (currentRow === undefined) {
+                continue;
+            }
+
+            const field = /^\s*(shardName|spec|disabledIssue):\s*(.*?)\s*$/.exec(line);
+            if (field === null) {
+                continue;
+            }
+
+            currentRow[field[1] as keyof MatrixRow] = parseWorkflowScalar(field[2]);
+        }
+
+        appendCurrentRow();
+
+        return rows;
+
+        function appendCurrentRow(): void {
+            if (currentRow?.spec !== undefined || currentRow?.disabledIssue !== undefined) {
+                rows.push(currentRow);
+            }
+        }
+    }
+
+    function parseWorkflowScalar(value: string): string {
+        if ((value.startsWith("'") && value.endsWith("'")) ||
+            (value.startsWith('"') && value.endsWith('"'))) {
+            return value.slice(1, -1);
+        }
+
+        return value;
+    }
+
+    function disabledRowKey(row: MatrixRow): string {
+        const shardName = row.shardName;
+        const spec = row.spec;
+
+        assert.ok(shardName, 'Disabled E2E matrix rows must include shardName.');
+        assert.ok(spec, 'Disabled E2E matrix rows must include spec.');
+
+        return `${shardName}|${spec}`;
+    }
+
+    function assertDisabledRowsAreTracked(workflow: string, expectedRowsByKey: ReadonlyMap<string, string>): void {
+        const actualDisabledRows = matrixRows(workflow)
+            .filter(row => row.disabledIssue !== undefined)
+            .map(row => {
+                const disabledIssue = row.disabledIssue;
+                assert.ok(disabledIssuePattern.test(disabledIssue ?? ''), `Disabled E2E matrix row '${disabledRowKey(row)}' must use a https://github.com/microsoft/aspire/issues/<number> disabledIssue URL.`);
+
+                return [disabledRowKey(row), disabledIssue] as [string, string];
+            })
+            .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey));
+        const expectedRows = [...expectedRowsByKey.entries()]
+            .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey));
+
+        assert.deepStrictEqual(
+            actualDisabledRows,
+            expectedRows,
+            'Disabled E2E matrix rows must exactly match the explicit allowlist in e2eShardMatrix.test.ts.');
+    }
+
     function workflowWithSpecs(...specs: readonly string[]): string {
         return [
             'jobs:',
@@ -55,6 +138,21 @@ suite('E2E shard matrix', () => {
                 '            shardName: shard',
                 `            spec: ${spec}`,
             ].join('\n')),
+            '',
+        ].join('\n');
+    }
+
+    function workflowWithDisabledSpec(spec: string, disabledIssue: string): string {
+        return [
+            'jobs:',
+            '  e2e:',
+            '    strategy:',
+            '      matrix:',
+            '        include:',
+            '          - name: Linux',
+            '            shardName: azure-functions',
+            `            spec: ${spec}`,
+            `            disabledIssue: ${disabledIssue}`,
             '',
         ].join('\n');
     }
@@ -89,6 +187,7 @@ suite('E2E shard matrix', () => {
         assert.ok(matrixSpecPaths(workflow).length > 0, 'Expected spec entries in the E2E workflow matrix.');
 
         assertMatrixMatchesSpecs(workflow, specFileNames);
+        assertDisabledRowsAreTracked(workflow, expectedDisabledRows);
     });
 
     test('rejects a matrix row pointing at a real file that is not an E2E spec', () => {
@@ -127,4 +226,39 @@ suite('E2E shard matrix', () => {
         // duplicate entry and the set equality check would fail on a correct workflow.
         assertMatrixMatchesSpecs(workflow, ['edgeCases.e2e.test.ts']);
     });
+
+    test('rejects a disabled matrix row that is not explicitly tracked', () => {
+        const spec = 'out/test-e2e/test-e2e/azureFunctions.e2e.test.js';
+        const workflow = workflowWithDisabledSpec(spec, 'https://github.com/microsoft/aspire/issues/19151');
+
+        assert.throws(
+            () => assertDisabledRowsAreTracked(workflow, new Map()),
+            assert.AssertionError,
+            'A disabled matrix row must require an explicit tracking entry so coverage cannot disappear silently.');
+    });
+
+    test('accepts a disabled matrix row that is explicitly tracked', () => {
+        const spec = 'out/test-e2e/test-e2e/azureFunctions.e2e.test.js';
+        const issue = 'https://github.com/microsoft/aspire/issues/19151';
+        const workflow = workflowWithDisabledSpec(spec, issue);
+
+        assertDisabledRowsAreTracked(workflow, new Map([[`azure-functions|${spec}`, issue]]));
+    });
+
+    test('rejects a disabled matrix row with a malformed tracking issue URL', () => {
+        const spec = 'out/test-e2e/test-e2e/azureFunctions.e2e.test.js';
+        const issue = 'not-an-issue-url';
+        const workflow = workflowWithDisabledSpec(spec, issue);
+
+        assert.throws(
+            () => assertDisabledRowsAreTracked(workflow, new Map([[`azure-functions|${spec}`, issue]])),
+            assert.AssertionError,
+            'A disabled matrix row must point at a microsoft/aspire issue URL even when it is explicitly tracked.');
+    });
 });
+
+interface MatrixRow {
+    shardName?: string;
+    spec?: string;
+    disabledIssue?: string;
+}
