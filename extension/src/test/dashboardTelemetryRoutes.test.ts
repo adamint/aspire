@@ -210,6 +210,38 @@ suite('DashboardTelemetryPassthrough route-level normalization', () => {
         assert.strictEqual(parsed.v['Aspire.Dashboard.UserAgent'], '<redacted>');
     });
 
+    test('POST /telemetry/operation sanitizes UNC paths before bundling', async () => {
+        const { status } = await postJson(h.baseUrl, '/telemetry/operation', {
+            eventName: 'aspire/dashboard/component/open',
+            properties: {
+                'Aspire.Dashboard.Resource.Types': {
+                    value: [
+                        String.raw`\\private-server\customer-share\workspace\apphost.csproj`,
+                        String.raw`\\?\UNC\private-server\customer-share\workspace\apphost.csproj`,
+                        String.raw`\\private-server`,
+                        '//private-server/customer-share/workspace/apphost.csproj',
+                        'UNC-looking label private-server customer-share without leading slashes',
+                    ],
+                    propertyType: 1,
+                },
+            },
+            result: 1,
+        });
+
+        assert.strictEqual(status, 200);
+        const parsed = JSON.parse(h.fake.events[0].properties?.dashboard_properties ?? '');
+        assert.deepStrictEqual(
+            parsed.v['Aspire.Dashboard.Resource.Types'],
+            [
+                '<redacted>',
+                '<redacted>',
+                '<redacted>',
+                '<redacted>',
+                'UNC-looking label private-server customer-share without leading slashes',
+            ]
+        );
+    });
+
     test('POST /telemetry/operation sanitizes every nested string-array entry', async () => {
         const { status } = await postJson(h.baseUrl, '/telemetry/operation', {
             eventName: 'aspire/dashboard/component/open',
