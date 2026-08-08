@@ -102,7 +102,7 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
             return true;
         }
 
-        return _environment.GetEnvironmentVariable(WslDistroNameVariable) is not null;
+        return !string.IsNullOrWhiteSpace(_environment.GetEnvironmentVariable(WslDistroNameVariable));
     }
 
     /// <summary>

@@ -20,6 +20,21 @@ public class WslEnvironmentCheckTests
     private const string NewerWsl2Banner =
         "Linux version 6.6.87.2-microsoft-standard-WSL2 (root@builder) (gcc (GCC) 11.2.0) #1 SMP PREEMPT_DYNAMIC Thu Jun 5 18:30:46 UTC 2025";
 
+    private const string NativeLinuxBanner =
+        "Linux version 6.8.0-64-generic (buildd@lcy02-amd64-029) (x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0) #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:31 UTC 2025";
+
+    public static TheoryData<string?, string, string?, string?> WslDetectionCases => new()
+    {
+        { null, NativeLinuxBanner, null, null },
+        { "", NativeLinuxBanner, null, null },
+        { "   ", NativeLinuxBanner, null, null },
+        { "Ubuntu-22.04", NativeLinuxBanner, nameof(EnvironmentCheckStatus.Warning), "WSL detected but the version could not be determined" },
+        { null, Wsl2Banner, nameof(EnvironmentCheckStatus.Pass), "WSL2 environment detected" },
+        { "", Wsl2Banner, nameof(EnvironmentCheckStatus.Pass), "WSL2 environment detected" },
+        { "   ", Wsl2Banner, nameof(EnvironmentCheckStatus.Pass), "WSL2 environment detected" },
+        { "Ubuntu-22.04", Wsl2Banner, nameof(EnvironmentCheckStatus.Pass), "WSL2 environment detected" },
+    };
+
     [Fact]
     public void DetermineWslVersion_ReportsWsl1_ForRealWsl1Banner()
     {
@@ -115,9 +130,35 @@ public class WslEnvironmentCheckTests
     {
         var check = new WslEnvironmentCheck(
             TestEnvironment.CreateLinux(),
-            () => "Linux version 6.8.0-generic (buildd@lcy02) #1 SMP PREEMPT_DYNAMIC Ubuntu");
+            () => NativeLinuxBanner);
 
         Assert.Empty(await check.CheckAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [MemberData(nameof(WslDetectionCases))]
+    public async Task CheckAsync_DetectsWslOnlyFromKernelBannerOrNonBlankDistroName(
+        string? distroName,
+        string procVersion,
+        string? expectedStatus,
+        string? expectedMessage)
+    {
+        var environment = distroName is null
+            ? TestEnvironment.CreateLinux()
+            : TestEnvironment.CreateLinux(new Dictionary<string, string?> { ["WSL_DISTRO_NAME"] = distroName });
+        var check = new WslEnvironmentCheck(environment, () => procVersion);
+
+        var results = await check.CheckAsync(TestContext.Current.CancellationToken);
+
+        if (expectedStatus is null)
+        {
+            Assert.Empty(results);
+            return;
+        }
+
+        var result = Assert.Single(results);
+        Assert.Equal(expectedStatus, result.Status.ToString());
+        Assert.Equal(expectedMessage, result.Message);
     }
 
     [Fact]
