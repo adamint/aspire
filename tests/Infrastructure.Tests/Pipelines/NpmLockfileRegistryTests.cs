@@ -424,13 +424,24 @@ public class NpmLockfileRegistryTests
     {
         var script = ReadRepoFile($"{PolyglotValidationDirectory}/{scriptName}");
 
-        var sourceIndex = script.IndexOf($"/{RegistryEnvScriptName}\"", StringComparison.Ordinal);
-        Assert.True(sourceIndex > 0, $"{scriptName} does not source {RegistryEnvScriptName}, so its installs use the ambient registry.");
+        var sourceIndex = FindRegistryEnvSource(script);
+        Assert.True(sourceIndex >= 0, $"{scriptName} does not source {RegistryEnvScriptName}, so its installs use the ambient registry.");
 
         var firstAcquisitionIndex = FindFirstPackageAcquisition(script);
         Assert.True(
             sourceIndex < firstAcquisitionIndex,
             $"{scriptName} sources {RegistryEnvScriptName} at offset {sourceIndex}, after it first acquires packages at offset {firstAcquisitionIndex}.");
+    }
+
+    [Fact]
+    public void FindRegistryEnvSource_IgnoresPathAssignmentWithoutSourceCommand()
+    {
+        const string Script = """
+            NPM_REGISTRY_ENV="$(dirname "${BASH_SOURCE[0]}")/npm-registry-env.sh"
+            npm install
+            """;
+
+        Assert.Equal(-1, FindRegistryEnvSource(Script));
     }
 
     /// <summary>
@@ -591,6 +602,30 @@ public class NpmLockfileRegistryTests
     public static IEnumerable<string> PackageAcquiringScriptNames => s_packageAcquiringScriptNames;
 
     public static TheoryData<string> PackageAcquiringPolyglotScripts => ToTheoryData(s_packageAcquiringScriptNames);
+
+    private static int FindRegistryEnvSource(string script)
+    {
+        // The guarded scripts use a two-line shape:
+        //   NPM_REGISTRY_ENV="$(dirname "${BASH_SOURCE[0]}")/npm-registry-env.sh"
+        //   source "$NPM_REGISTRY_ENV"
+        // Matching the helper path alone sees the assignment, so deleting the source command would
+        // still pass. The ordering guard needs the command that actually applies the feed settings.
+        var offset = 0;
+        foreach (var line in script.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if ((trimmed is "source \"$NPM_REGISTRY_ENV\"" or "source $NPM_REGISTRY_ENV" or ". \"$NPM_REGISTRY_ENV\"" or ". $NPM_REGISTRY_ENV") ||
+                ((trimmed.StartsWith("source ", StringComparison.Ordinal) || trimmed.StartsWith(". ", StringComparison.Ordinal)) &&
+                 trimmed.Contains(RegistryEnvScriptName, StringComparison.Ordinal)))
+            {
+                return offset + line.IndexOf(line.TrimStart(), StringComparison.Ordinal);
+            }
+
+            offset += line.Length + 1;
+        }
+
+        return -1;
+    }
 
     /// <summary>
     /// Returns <see cref="int.MaxValue"/> when the script acquires nothing, so callers can compare
