@@ -38,7 +38,18 @@
 
 #   npm scopes  NPM_CONFIG_USERCONFIG / NPM_CONFIG_GLOBALCONFIG - see below.
 
-NPM_REGISTRY="${NPM_REGISTRY:-https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/}"
+APPROVED_NPM_REGISTRY="https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/"
+
+# The preflight's authority has to be independent of NPM_REGISTRY. If NPM_REGISTRY itself were
+# accepted as the expected value, a caller could set it to the public registry and every manager
+# check below would only prove the bad value propagated.
+if [ -n "${NPM_REGISTRY:-}" ] && [ "${NPM_REGISTRY%/}" != "${APPROVED_NPM_REGISTRY%/}" ]; then
+    echo "❌ NPM_REGISTRY override '${NPM_REGISTRY}' is not the approved feed '${APPROVED_NPM_REGISTRY}'."
+    echo "   Refusing to install packages that would come from an unapproved registry."
+    exit 1
+fi
+
+NPM_REGISTRY="$APPROVED_NPM_REGISTRY"
 
 export NPM_REGISTRY
 export npm_config_registry="$NPM_REGISTRY"
@@ -74,8 +85,8 @@ check_manager_registry() {
     local manager="$1"
     local reported="$2"
 
-    if [ "${reported%/}" != "${NPM_REGISTRY%/}" ]; then
-        echo "  ❌ $manager resolves packages from '${reported:-<unset>}' instead of the approved feed '$NPM_REGISTRY'"
+    if [ "${reported%/}" != "${APPROVED_NPM_REGISTRY%/}" ]; then
+        echo "  ❌ $manager resolves packages from '${reported:-<unset>}' instead of the approved feed '$APPROVED_NPM_REGISTRY'"
         return 1
     fi
 
@@ -122,8 +133,8 @@ check_scoped_registries() {
         reported="${reported%\"}"
         reported="${reported#\"}"
 
-        if [ "${reported%/}" != "${NPM_REGISTRY%/}" ]; then
-            echo "  ❌ npm resolves $scope packages from '$reported' instead of the approved feed '$NPM_REGISTRY'"
+        if [ "${reported%/}" != "${APPROVED_NPM_REGISTRY%/}" ]; then
+            echo "  ❌ npm resolves $scope packages from '$reported' instead of the approved feed '$APPROVED_NPM_REGISTRY'"
             failed=1
         else
             echo "  ✅ npm $scope -> $reported"

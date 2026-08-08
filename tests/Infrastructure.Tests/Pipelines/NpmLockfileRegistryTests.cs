@@ -39,6 +39,7 @@ public class NpmLockfileRegistryTests
     // The trailing slash matters: without it "/dnceng/public/_packaging/dotnet-public-npm-evil/"
     // would satisfy the prefix test.
     private const string ApprovedFeedPathPrefix = "/dnceng/public/_packaging/dotnet-public-npm/";
+    private const string ApprovedNpmRegistry = "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/";
 
     /// <summary>
     /// A lockfile value is treated as a remote acquisition only when it names a scheme with an
@@ -384,16 +385,33 @@ public class NpmLockfileRegistryTests
     }
 
     [Fact]
-    public void RegistryEnvScript_DefaultsToTheApprovedFeed()
+    public void RegistryEnvScript_DefinesTheApprovedFeed()
     {
         var script = ReadRepoFile(RegistryEnvScriptPath);
 
-        // NPM_REGISTRY="${NPM_REGISTRY:-https://...}" — the default is what CI runs with, because the
-        // workflow does not override it.
-        var match = Regex.Match(script, @"^NPM_REGISTRY=""\$\{NPM_REGISTRY:-(?<url>[^}""]+)\}""$", RegexOptions.Multiline);
+        var match = Regex.Match(script, @"^APPROVED_NPM_REGISTRY=""(?<url>[^""]+)""$", RegexOptions.Multiline);
 
-        Assert.True(match.Success, $"{RegistryEnvScriptPath} no longer defaults NPM_REGISTRY in the expected form.");
-        Assert.True(IsApprovedFeedUrl(match.Groups["url"].Value), $"NPM_REGISTRY defaults to {match.Groups["url"].Value}, which is not the approved feed.");
+        Assert.True(match.Success, $"{RegistryEnvScriptPath} no longer defines the approved npm registry in the expected form.");
+        Assert.Equal(ApprovedNpmRegistry, match.Groups["url"].Value);
+        Assert.True(IsApprovedFeedUrl(match.Groups["url"].Value), $"NPM_REGISTRY is set from {match.Groups["url"].Value}, which is not the approved feed.");
+    }
+
+    [Fact]
+    public void RegistryEnvScript_ComparesResolvedRegistriesAgainstTheCanonicalApprovedFeed()
+    {
+        var script = ReadRepoFile(RegistryEnvScriptPath);
+
+        Assert.Contains($"APPROVED_NPM_REGISTRY=\"{ApprovedNpmRegistry}\"", script, StringComparison.Ordinal);
+        Assert.Contains("NPM_REGISTRY=\"$APPROVED_NPM_REGISTRY\"", script, StringComparison.Ordinal);
+        Assert.DoesNotContain("NPM_REGISTRY=\"${NPM_REGISTRY:-", script, StringComparison.Ordinal);
+
+        var comparisonTargets = Regex.Matches(script, @"!= ""\$\{(?<target>[A-Za-z_][A-Za-z0-9_]*)%/\}""", RegexOptions.Multiline)
+            .Select(match => match.Groups["target"].Value)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(["APPROVED_NPM_REGISTRY"], comparisonTargets);
     }
 
     /// <summary>
@@ -598,8 +616,8 @@ public class NpmLockfileRegistryTests
     private static SortedSet<string> ExportedRegistryVariables(string script)
     {
         // Matches `export npm_config_registry="$NPM_REGISTRY"`. Only exports assigned from
-        // NPM_REGISTRY count: a hard-coded URL elsewhere would drift from the single source of truth
-        // the workflow can override.
+        // NPM_REGISTRY count: a hard-coded URL elsewhere would drift from the helper's single
+        // exported source of truth.
         var matches = Regex.Matches(script, @"^export (?<name>[A-Za-z_][A-Za-z0-9_]*)=""\$NPM_REGISTRY""$", RegexOptions.Multiline);
 
         return new SortedSet<string>(matches.Select(match => match.Groups["name"].Value), StringComparer.Ordinal);
