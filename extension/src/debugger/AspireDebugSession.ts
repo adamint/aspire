@@ -137,6 +137,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     const resourceStopFailures = resourceStopResults
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
       .map(result => result.reason);
+    const stopFailures = [...resourceStopFailures];
 
     // Global/E2E stop requests target the synthetic Aspire session. Stop the real AppHost session
     // explicitly before the parent so we do not rely on VS Code cascading termination before the
@@ -144,20 +145,28 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     try {
       await this._appHostDebugSession?.stopSession();
     }
+    catch (error) {
+      stopFailures.push(error);
+    }
     finally {
-      await this.stopParentDebugSessionOnce();
+      try {
+        await this.stopParentDebugSessionOnce();
+      }
+      catch (error) {
+        stopFailures.push(error);
+      }
     }
 
-    if (resourceStopFailures.length === 1) {
-      throw resourceStopFailures[0];
+    if (stopFailures.length === 1) {
+      throw stopFailures[0];
     }
 
-    if (resourceStopFailures.length > 1) {
+    if (stopFailures.length > 1) {
       // More than one adapter failed, so no single reason describes the shutdown. AggregateError
       // keeps every reason instead of picking one and discarding the rest. The message is a
       // diagnostic rather than UI text: stopDebugging() is reached from the E2E state-file bridge,
       // not from a user-facing command, so it is intentionally not localized.
-      throw new AggregateError(resourceStopFailures, `${resourceStopFailures.length} resource debug sessions failed to stop.`);
+      throw new AggregateError(stopFailures, `${stopFailures.length} debug sessions failed to stop.`);
     }
   }
 

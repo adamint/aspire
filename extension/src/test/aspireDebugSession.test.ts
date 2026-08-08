@@ -614,6 +614,87 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(stopDebuggingStub.secondCall.args[0], parentDebugSession);
     });
 
+    test('stopDebugging retains resource stop failures when later stop stages fail', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: {
+                type: 'coreclr',
+                request: 'launch',
+                name: 'AppHost',
+            },
+        };
+        const resourceDebugSession = {
+            id: 'resource-session',
+            type: 'pwa-node',
+            name: 'Node.js: app.js',
+            configuration: {
+                type: 'pwa-node',
+                request: 'launch',
+                name: 'Node.js: app.js',
+            },
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        const resourceStopError = new Error('Resource stop failed');
+        const appHostStopError = new Error('AppHost stop failed');
+        const parentStopError = new Error('Aspire parent stop failed');
+        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
+            if (session === resourceDebugSession) {
+                throw resourceStopError;
+            }
+            if (session === appHostDebugSession) {
+                throw appHostStopError;
+            }
+            if (session === parentDebugSession) {
+                throw parentStopError;
+            }
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
+        };
+        (aspireDebugSession as any)._resourceDebugSessions = [
+            {
+                id: resourceDebugSession.id,
+                session: resourceDebugSession as unknown as vscode.DebugSession,
+                stopSession: () => vscode.debug.stopDebugging(resourceDebugSession as unknown as vscode.DebugSession),
+            },
+        ];
+
+        await assert.rejects(
+            () => aspireDebugSession.stopDebugging(),
+            (error: unknown) => {
+                assert.ok(error instanceof AggregateError);
+                assert.deepStrictEqual(error.errors, [resourceStopError, appHostStopError, parentStopError]);
+                return true;
+            });
+
+        assert.strictEqual(stopDebuggingStub.callCount, 3);
+        assert.strictEqual(stopDebuggingStub.firstCall.args[0], resourceDebugSession);
+        assert.strictEqual(stopDebuggingStub.secondCall.args[0], appHostDebugSession);
+        assert.strictEqual(stopDebuggingStub.thirdCall.args[0], parentDebugSession);
+    });
+
     test('stopDebugging does not stop the Aspire parent session twice when AppHost stop disposes the Aspire session', async () => {
         const parentDebugSession = {
             id: 'aspire-session',

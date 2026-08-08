@@ -833,10 +833,55 @@ interface DebugAdapterStoppedEvent {
   threadId?: number;
 }
 
-interface DebugAdapterOutputEvent {
+export interface DebugAdapterOutputEvent {
   sessionId: string;
   sessionType: string;
   output: string;
+}
+
+export interface DebugAdapterOutputCapture {
+  readonly observedOutputEventCount: number;
+  recordOutputEvent(event: DebugAdapterOutputEvent): void;
+  getOutputHeadEvents(): DebugAdapterOutputEvent[];
+  getOutputSampleEvents(limit?: number): DebugAdapterOutputEvent[];
+}
+
+// Debug adapters are noisy during an AppHost proof: the synthetic Aspire parent and AppHost sessions
+// can print before the resource debugger exists. Keep the "head" buffer per session so those early
+// sessions cannot consume the slots that preserve the resource fixture's PID markers.
+export function createDebugAdapterOutputCapture(headLimit = 20, sampleLimit = 200): DebugAdapterOutputCapture {
+  const outputEvents: DebugAdapterOutputEvent[] = [];
+  const outputHeadEventsBySessionId = new Map<string, DebugAdapterOutputEvent[]>();
+  let observedOutputEventCount = 0;
+
+  return {
+    get observedOutputEventCount() {
+      return observedOutputEventCount;
+    },
+    recordOutputEvent(event: DebugAdapterOutputEvent): void {
+      let outputHeadEvents = outputHeadEventsBySessionId.get(event.sessionId);
+      if (!outputHeadEvents) {
+        outputHeadEvents = [];
+        outputHeadEventsBySessionId.set(event.sessionId, outputHeadEvents);
+      }
+
+      if (outputHeadEvents.length < headLimit) {
+        outputHeadEvents.push(event);
+      }
+
+      observedOutputEventCount++;
+      outputEvents.push(event);
+      if (outputEvents.length > sampleLimit) {
+        outputEvents.shift();
+      }
+    },
+    getOutputHeadEvents(): DebugAdapterOutputEvent[] {
+      return Array.from(outputHeadEventsBySessionId.values()).flat();
+    },
+    getOutputSampleEvents(limit?: number): DebugAdapterOutputEvent[] {
+      return limit === undefined ? [...outputEvents] : outputEvents.slice(-limit);
+    },
+  };
 }
 
 export interface DebugAdapterMessageSummary {
@@ -904,12 +949,11 @@ async function proveResourceDebugging(command: ResourceDebugProofCommand, aspire
   const launchRequests: DebugAdapterLaunchRequest[] = [];
   const debugAdapterResponses: DebugAdapterMessageSummary[] = [];
   const stoppedEvents: DebugAdapterStoppedEvent[] = [];
-  const outputEvents: DebugAdapterOutputEvent[] = [];
-  const outputHeadEvents: DebugAdapterOutputEvent[] = [];
+  const outputCapture = createDebugAdapterOutputCapture();
   const processEvents: DebugAdapterProcessEvent[] = [];
   const breakpointRequests: DebugAdapterMessageSummary[] = [];
   const breakpointResponses: DebugAdapterMessageSummary[] = [];
-  let observedOutputEventCount = 0;
+  const continueRequests: DebugAdapterMessageSummary[] = [];
   let resourceCommandResult: Awaited<ReturnType<typeof runAspireCliForE2E>> | undefined;
 
   const sessionSubscription = vscode.debug.onDidStartDebugSession(session => {
@@ -930,6 +974,16 @@ async function proveResourceDebugging(command: ResourceDebugProofCommand, aspire
           }
           if (message?.type === 'request' && (message.command === 'setBreakpoints' || message.command === 'configurationDone')) {
             breakpointRequests.push({
+              sessionId: session.id,
+              sessionType: session.type,
+              sessionName: session.name,
+              command: message.command,
+              seq: message.seq,
+              body: redactDebugAdapterArguments(message.arguments),
+            });
+          }
+          if (message?.type === 'request' && message.command === 'continue') {
+            continueRequests.push({
               sessionId: session.id,
               sessionType: session.type,
               sessionName: session.name,
@@ -980,18 +1034,10 @@ async function proveResourceDebugging(command: ResourceDebugProofCommand, aspire
             // The debuggee's own first lines identify it - the Node fixture prints its pid and its
             // child's pid there - and js-debug is the reason that matters: with `outputCapture: 'std'`
             // it pipes the debuggee's stdio over DAP instead of sending a `process` event, so the head
-            // is kept separately from the ring buffer that holds only the most recent lines.
-            if (outputHeadEvents.length < 20) {
-              outputHeadEvents.push(outputEvent);
-            }
-
-            // Counted separately because outputEvents is a bounded ring buffer: once it is full its
-            // length stops growing, so its length cannot be used to detect newly arrived output.
-            observedOutputEventCount++;
-            outputEvents.push(outputEvent);
-            if (outputEvents.length > 200) {
-              outputEvents.shift();
-            }
+            // is kept per debug session, separately from the ring buffer that holds only the most
+            // recent lines. AppHost and synthetic Aspire session chatter can start earlier, but it
+            // should not evict the resource session's own startup markers.
+            outputCapture.recordOutputEvent(outputEvent);
           }
           if (message?.type === 'event' && message.event === 'process') {
             processEvents.push({
@@ -1081,8 +1127,9 @@ ${JSON.stringify({
         breakpointResponses,
         stoppedEvents,
         processEvents,
-        outputHead: outputHeadEvents,
-        outputSample: outputEvents.slice(-40),
+        continueRequests,
+        outputHead: outputCapture.getOutputHeadEvents(),
+        outputSample: outputCapture.getOutputSampleEvents(40),
       }, undefined, 2)}`);
     }
 
@@ -1099,22 +1146,10 @@ ${JSON.stringify({
       await delay(pauseOnBreakpointMs);
     }
 
-    if (!request.stopDebuggingOnCompletion) {
-      // A caller that keeps the session alive goes on to stop debugging itself, and the Aspire stop
-      // path cannot complete while the debuggee is suspended: the resource process never observes
-      // the shutdown request, so the child session — and with it the Aspire parent — stays alive.
-      // Resuming first matches what a user does (hit the breakpoint, continue, then stop) and keeps
-      // the proof from handing back a session that can only be torn down by force.
-      await resumeDebuggeeAfterBreakpoint(
-        sessionById.get(stoppedEvent.stoppedEvent.sessionId),
-        stoppedEvent.stoppedEvent.threadId!,
-        breakpoint,
-        breakpointRequests,
-        breakpointResponses,
-        stoppedEvents,
-        () => observedOutputEventCount,
-        Math.min(request.timeoutMs, 60000));
-    }
+    // Return without continuing the resource. If the caller owns teardown, it can now stop while the
+    // resource is still suspended; otherwise the finally block below stops the suspended session.
+    // Issue #18957 is specifically about stopping the AppHost while a resource debugger is paused at
+    // a breakpoint, and resuming here would prove a different, easier shutdown path.
 
     return {
       proof: request.proof,
@@ -1144,12 +1179,13 @@ ${JSON.stringify({
       debugAdapterResponses,
       breakpointRequests,
       breakpointResponses,
+      continueRequests,
       stoppedEvents,
       processEvents,
       matchingStackFrame: stoppedEvent.matchingFrame,
       topStackFrame: stoppedEvent.stackTrace?.stackFrames?.[0],
-      outputHead: outputHeadEvents,
-      outputSample: outputEvents.slice(-40),
+      outputHead: outputCapture.getOutputHeadEvents(),
+      outputSample: outputCapture.getOutputSampleEvents(40),
     };
   } finally {
     vscode.debug.removeBreakpoints([breakpoint]);
@@ -1158,76 +1194,6 @@ ${JSON.stringify({
     if (request.stopDebuggingOnCompletion) {
       await vscode.debug.stopDebugging();
     }
-  }
-}
-
-/**
- * Clears the proof breakpoint and lets the debuggee run again.
- *
- * The breakpoint is removed before continuing, because continuing while it is still installed would
- * immediately re-suspend the debuggee the next time the marked line runs. Removal is confirmed by
- * waiting for the adapter's own successful `setBreakpoints` response, correlated by debug session and
- * request sequence number: several sessions are alive at once during a proof (the synthetic Aspire
- * parent, the AppHost session, and the resource session), all of them are tracked, and all of them
- * exchange `setBreakpoints` traffic, so accepting the next response from any of them would let this
- * continue before the resource's own adapter has dropped the breakpoint.
- *
- * The debuggee is then only considered running once new adapter output arrives, so a caller cannot
- * proceed to stop debugging while the process is still suspended. The output is deliberately not
- * filtered by session: js-debug launches the process in the parent session and pipes its stdio from
- * there under `outputCapture: 'std'`, while the stop is reported by the child session that attaches
- * to the target, so the debuggee's output does not carry the stopped session's id.
- */
-async function resumeDebuggeeAfterBreakpoint(
-  session: vscode.DebugSession | undefined,
-  threadId: number,
-  breakpoint: vscode.SourceBreakpoint,
-  breakpointRequests: readonly DebugAdapterMessageSummary[],
-  breakpointResponses: readonly DebugAdapterMessageSummary[],
-  stoppedEvents: readonly DebugAdapterStoppedEvent[],
-  getObservedOutputEventCount: () => number,
-  timeoutMs: number): Promise<void> {
-  if (!session) {
-    throw new Error('Aspire extension E2E resource debug proof could not resolve the stopped debug session to resume it.');
-  }
-
-  const breakpointSourcePath = breakpoint.location.uri.fsPath;
-  const breakpointRequestsBefore = breakpointRequests.length;
-  vscode.debug.removeBreakpoints([breakpoint]);
-
-  // VS Code re-sends the whole breakpoint list for a source whenever it changes, so the removal
-  // reaches the adapter as a `setBreakpoints` request naming that source. Only requests observed
-  // after removeBreakpoints returned are considered, and the request has to carry a sequence number
-  // because the acknowledgement below is matched against it.
-  const removalRequest = await waitForE2eValue(
-    `the ${session.type} adapter to receive the sequenced breakpoint removal for ${breakpointSourcePath}`,
-    timeoutMs,
-    () => findBreakpointRemovalRequest(breakpointRequests.slice(breakpointRequestsBefore), session.id, breakpointSourcePath));
-
-  await waitForE2eValue(
-    `the ${session.type} adapter to acknowledge breakpoint removal (request seq ${removalRequest.seq})`,
-    timeoutMs,
-    () => isBreakpointRemovalAcknowledged(breakpointResponses, session.id, removalRequest.seq!) ? true : undefined);
-
-  const stoppedEventsBefore = stoppedEvents.length;
-  const outputEventsBefore = getObservedOutputEventCount();
-  await session.customRequest('continue', { threadId });
-  const resumed = await waitForE2eValue<{ reSuspend?: DebugAdapterStoppedEvent }>(
-    'the resumed resource process to produce output',
-    timeoutMs,
-    () => {
-      // A re-suspend means the breakpoint outlived its removal, which is exactly what the correlation
-      // above is there to prevent. It is reported instead of waited out so the failure names its cause
-      // rather than surfacing as an output timeout.
-      const reSuspend = stoppedEvents.slice(stoppedEventsBefore).find(event => event.sessionId === session.id);
-      if (reSuspend) {
-        return { reSuspend };
-      }
-
-      return getObservedOutputEventCount() > outputEventsBefore ? {} : undefined;
-    });
-  if (resumed.reSuspend) {
-    throw new Error(`The ${session.type} resource debug session suspended again (reason '${resumed.reSuspend.reason ?? '<unknown>'}') after the proof breakpoint was removed and the debuggee was continued.`);
   }
 }
 

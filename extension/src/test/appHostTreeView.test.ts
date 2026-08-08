@@ -2465,6 +2465,34 @@ suite('AspireAppHostTreeProvider.findAppHostElement', () => {
         provider.dispose();
     });
 
+    test('workspace mode renders running AppHosts before slow discovery candidates', () => {
+        const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+        const repository = {
+            viewMode: 'workspace' as ViewMode,
+            appHosts: [
+                makeAppHost({ appHostPath: '/repo/apps/Store/AppHost.csproj', appHostPid: 1234 }),
+            ],
+            workspaceResources: [],
+            workspaceAppHost: undefined,
+            workspaceAppHostPath: undefined,
+            workspaceAppHostName: undefined,
+            workspaceAppHostCandidatePaths: ['/repo/samples/Slow/apphost.cs'],
+            workspaceAppHostDescription: 'Workspace view selected because aspire ls found 1 buildable AppHost.',
+            onDidChangeData,
+        } as unknown as AppHostDataRepository;
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+
+        const appHostItems = provider.getChildren();
+
+        assert.deepStrictEqual(appHostItems.map(item => item.label), [
+            'AppHost.csproj',
+            'Slow/apphost.cs',
+        ]);
+        assert.strictEqual(appHostItems[0].contextValue, 'workspaceResources:hasAppHost');
+        assert.strictEqual(appHostItems[1].contextValue, 'workspaceAppHost');
+        provider.dispose();
+    });
+
     test('workspace resource commands use the AppHost that owns the resource', async () => {
         const commands: AspireSubcommand[] = [];
         const runResourceCommandCalls: Array<[string, string | undefined, string, readonly string[]]> = [];

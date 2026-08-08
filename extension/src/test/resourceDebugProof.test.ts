@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { findBreakpointRemovalRequest, getResourceDebugProofRequest, isBreakpointRemovalAcknowledged, resourceDebugProofPhaseBudgetMs, type DebugAdapterMessageSummary } from '../testing/e2eStateFileBridge';
+import { createDebugAdapterOutputCapture, findBreakpointRemovalRequest, getResourceDebugProofRequest, isBreakpointRemovalAcknowledged, resourceDebugProofPhaseBudgetMs, type DebugAdapterMessageSummary } from '../testing/e2eStateFileBridge';
 import type { AspireExtensionE2EControlCommand } from '../types/extensionApi';
 
 suite('Resource debug proof request', () => {
@@ -143,6 +143,44 @@ suite('Resource debug proof phase budget', () => {
     test('grants nothing once the deadline has passed', () => {
         const start = 1_000_000;
         assert.strictEqual(resourceDebugProofPhaseBudgetMs(180000, start, start + 5000), 0);
+    });
+});
+
+suite('Resource debug proof output capture', () => {
+    test('keeps startup output head entries per debug session', () => {
+        const capture = createDebugAdapterOutputCapture(2, 5);
+
+        for (let i = 0; i < 20; i++) {
+            capture.recordOutputEvent({
+                sessionId: 'aspire-parent-session',
+                sessionType: 'aspire',
+                output: `aspire ${i}\n`,
+            });
+        }
+        capture.recordOutputEvent({
+            sessionId: 'node-resource-session',
+            sessionType: 'pwa-node',
+            output: 'ASPIRE_E2E_NODE_PID=12345\n',
+        });
+        capture.recordOutputEvent({
+            sessionId: 'node-resource-session',
+            sessionType: 'pwa-node',
+            output: 'ASPIRE_E2E_NODE_CHILD_PID=12346\n',
+        });
+        capture.recordOutputEvent({
+            sessionId: 'node-resource-session',
+            sessionType: 'pwa-node',
+            output: 'later node output\n',
+        });
+
+        assert.deepStrictEqual(
+            capture.getOutputHeadEvents().filter(event => event.sessionId === 'aspire-parent-session').map(event => event.output),
+            ['aspire 0\n', 'aspire 1\n']);
+        assert.deepStrictEqual(
+            capture.getOutputHeadEvents().filter(event => event.sessionId === 'node-resource-session').map(event => event.output),
+            ['ASPIRE_E2E_NODE_PID=12345\n', 'ASPIRE_E2E_NODE_CHILD_PID=12346\n']);
+        assert.strictEqual(capture.observedOutputEventCount, 23);
+        assert.strictEqual(capture.getOutputSampleEvents().length, 5);
     });
 });
 

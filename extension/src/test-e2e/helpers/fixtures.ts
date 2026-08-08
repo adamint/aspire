@@ -267,7 +267,7 @@ export function writeStreamingDiscoveryCliWrapper(delayMs = 5_000, initialDelayM
     });
 }
 
-export function writeGatedStreamingDiscoveryCliWrapper(): { cliPath: string; releasePsSnapshot: () => void; releaseLsCandidate: () => void } {
+export function writeGatedStreamingDiscoveryCliWrapper(candidatePath = getPrimaryAppHostProjectPath()): { cliPath: string; releasePsSnapshot: () => void; releaseLsCandidate: () => void } {
     const gateDirectory = path.join(getWorkspaceRoot(), '.e2e-cli-wrappers', 'gated-streaming-discovery');
     const psSnapshotReleaseFilePath = path.join(gateDirectory, 'release-ps-snapshot');
     const lsCandidateReleaseFilePath = path.join(gateDirectory, 'release-ls-candidate');
@@ -277,7 +277,7 @@ export function writeGatedStreamingDiscoveryCliWrapper(): { cliPath: string; rel
     const cliPath = writeCliWrapper('aspire-gated-streaming-discovery', {
         configInfoJson: createConfigInfo([lsJsonStreamCapability]),
         streamedLsCandidate: {
-            path: getPrimaryAppHostProjectPath(),
+            path: candidatePath,
             language: 'csharp',
             status: 'buildable',
             selected: true,

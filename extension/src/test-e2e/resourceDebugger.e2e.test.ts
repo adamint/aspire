@@ -13,6 +13,13 @@ interface ResourceDebugSessionSnapshot {
     configuration: Record<string, unknown>;
 }
 
+interface DebugAdapterMessageSummary {
+    sessionId: string;
+    sessionType: string;
+    sessionName: string;
+    command?: string;
+}
+
 interface ResourceDebugProof {
     proof: string;
     appHostPath: string;
@@ -24,6 +31,7 @@ interface ResourceDebugProof {
     matchingStackFrame?: { source?: { path?: string }; line?: number; name?: string };
     topStackFrame?: { source?: { path?: string }; line?: number; name?: string };
     processEvents: Array<{ sessionId: string; sessionType: string; systemProcessId?: number; name?: string; startMethod?: string }>;
+    continueRequests: DebugAdapterMessageSummary[];
     outputHead: Array<{ sessionId: string; sessionType: string; output: string }>;
     outputSample: Array<{ sessionId: string; sessionType: string; output: string }>;
 }
@@ -75,6 +83,12 @@ suite('Aspire resource debugger E2E', function () {
 
     test('stopping debugging tears down the Node resource process tree', async () => {
         const proof = await runResourceDebugProof({ stopDebuggingOnCompletion: false });
+
+        assert.ok(proof.resourceDebugSession, `Expected the stopped resource debug session: ${JSON.stringify(proof.debugSessions.map(toSessionSummary))}`);
+        assert.deepStrictEqual(
+            proof.continueRequests.filter(request => request.sessionId === proof.resourceDebugSession!.id),
+            [],
+            'Expected the resource debug session to remain suspended until this test starts the stop.');
 
         // The debuggee reports its own pid and the pid of the child it spawns, so the assertion covers
         // the process tree rather than only the process js-debug launched. The pids come from the
