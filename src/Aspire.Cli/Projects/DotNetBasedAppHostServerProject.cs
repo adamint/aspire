@@ -31,6 +31,9 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
     internal const string TargetFramework = "net10.0";
     public const string BuildFolder = "build";
     private const string AssemblyName = "AppHostServer";
+    private const string PackageProbeSourcesFileName = "package-probe-sources.txt";
+    private const string PackageProbeMetadataFileName = "package-probe-metadata.txt";
+    private const string PackageProbeTargetsFileName = "package-probe-targets.txt";
 
     private readonly string _projectModelPath;
     private readonly string _appPath;
@@ -43,6 +46,7 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
     private readonly IEnvironment _environment;
     private readonly ILogger _logger;
     private readonly string? _logFilePath;
+    private string? _integrationProbeManifestPath;
 
     // Boxed so "not read yet" and "read, and there is no answer" stay distinguishable without
     // re-parsing eng/Versions.props on every lookup.
@@ -285,6 +289,26 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
         // Disable Aspire SDK code generation
         doc.Root!.Add(new XElement("Target", new XAttribute("Name", "_CSharpWriteHostProjectMetadataSources")));
         doc.Root!.Add(new XElement("Target", new XAttribute("Name", "_CSharpWriteProjectMetadataSources")));
+        doc.Root!.Add(
+            new XElement("Target",
+                new XAttribute("Name", "_WriteAspirePackageProbeManifestInputs"),
+                new XAttribute("AfterTargets", "Build"),
+                new XAttribute("DependsOnTargets", "ResolveLockFileCopyLocalFiles"),
+                new XElement("WriteLinesToFile",
+                    new XAttribute("File", Path.Combine(_projectModelPath, PackageProbeSourcesFileName)),
+                    new XAttribute("Lines", "@(ReferenceCopyLocalPaths->'%(FullPath)')"),
+                    new XAttribute("Overwrite", "true"),
+                    new XAttribute("WriteOnlyWhenDifferent", "true")),
+                new XElement("WriteLinesToFile",
+                    new XAttribute("File", Path.Combine(_projectModelPath, PackageProbeMetadataFileName)),
+                    new XAttribute("Lines", "@(ReferenceCopyLocalPaths->'%(NuGetPackageId)|%(NuGetPackageVersion)|%(AssetType)')"),
+                    new XAttribute("Overwrite", "true"),
+                    new XAttribute("WriteOnlyWhenDifferent", "true")),
+                new XElement("WriteLinesToFile",
+                    new XAttribute("File", Path.Combine(_projectModelPath, PackageProbeTargetsFileName)),
+                    new XAttribute("Lines", "@(ReferenceCopyLocalPaths->'%(DestinationSubDirectory)%(Filename)%(Extension)')"),
+                    new XAttribute("Overwrite", "true"),
+                    new XAttribute("WriteOnlyWhenDifferent", "true"))));
 
         return doc;
     }
@@ -490,6 +514,8 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
                 NeedsCodeGeneration: false);
         }
 
+        await WriteIntegrationProbeManifestAsync(cancellationToken).ConfigureAwait(false);
+
         return new AppHostServerPrepareResult(
             Success: true,
             Output: buildOutput,
@@ -675,6 +701,19 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
         // for the dashboard to resolve static web assets correctly
         startInfo.Environment[KnownAspNetCoreConfigNames.Environment] = "Development";
 
+        if (_integrationProbeManifestPath is not null)
+        {
+            _logger.LogDebug(
+                "Setting {EnvironmentVariable} to {Path}",
+                KnownConfigNames.IntegrationProbeManifestPath,
+                _integrationProbeManifestPath);
+            startInfo.Environment[KnownConfigNames.IntegrationProbeManifestPath] = _integrationProbeManifestPath;
+        }
+        else
+        {
+            startInfo.Environment.Remove(KnownConfigNames.IntegrationProbeManifestPath);
+        }
+
         // Wire WithTerminal() for guest/polyglot AppHosts running from the repo. The
         // generated AppHostServer references Aspire.Hosting from the repo and DCP resolves
         // the terminal host via ASPIRE_TERMINAL_HOST_PATH or assembly metadata. No per-RID
@@ -758,6 +797,130 @@ internal sealed class DotNetBasedAppHostServerProject : IAppHostServerProject
 
         return new AppHostServerRunResult(_socketPath, outputCollector, execution);
     }
+
+    private async Task WriteIntegrationProbeManifestAsync(CancellationToken cancellationToken)
+    {
+        var sourcesPath = Path.Combine(_projectModelPath, PackageProbeSourcesFileName);
+        var metadataPath = Path.Combine(_projectModelPath, PackageProbeMetadataFileName);
+        var targetsPath = Path.Combine(_projectModelPath, PackageProbeTargetsFileName);
+
+        if (!File.Exists(sourcesPath) || !File.Exists(metadataPath) || !File.Exists(targetsPath))
+        {
+            _integrationProbeManifestPath = null;
+            return;
+        }
+
+        var sourcePaths = await File.ReadAllLinesAsync(sourcesPath, cancellationToken).ConfigureAwait(false);
+        var metadataLines = await File.ReadAllLinesAsync(metadataPath, cancellationToken).ConfigureAwait(false);
+        var targetPaths = await File.ReadAllLinesAsync(targetsPath, cancellationToken).ConfigureAwait(false);
+        if (sourcePaths.Length != metadataLines.Length || sourcePaths.Length != targetPaths.Length)
+        {
+            throw new InvalidOperationException(
+                $"Package probe manifest inputs are inconsistent. Sources: {sourcePaths.Length}, metadata: {metadataLines.Length}, targets: {targetPaths.Length}.");
+        }
+
+        var managedAssemblies = new List<IntegrationPackageManagedAssembly>();
+        var nativeLibraries = new List<IntegrationPackageNativeLibrary>();
+
+        for (var i = 0; i < sourcePaths.Length; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var metadata = ParsePackageProbeMetadata(metadataLines[i]);
+            if (string.IsNullOrWhiteSpace(metadata.PackageId) ||
+                string.IsNullOrWhiteSpace(metadata.PackageVersion))
+            {
+                continue;
+            }
+
+            var sourcePath = sourcePaths[i];
+            var targetPath = NormalizePackageProbeTargetPath(targetPaths[i], sourcePath);
+            if (string.Equals(metadata.AssetType, "native", StringComparison.OrdinalIgnoreCase))
+            {
+                nativeLibraries.Add(new IntegrationPackageNativeLibrary
+                {
+                    FileName = Path.GetFileName(targetPath),
+                    Path = sourcePath
+                });
+                continue;
+            }
+
+            if (!sourcePath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            managedAssemblies.Add(new IntegrationPackageManagedAssembly
+            {
+                Name = Path.GetFileNameWithoutExtension(targetPath),
+                Culture = TryGetSatelliteCulture(targetPath, metadata.AssetType),
+                Path = sourcePath,
+                PackageId = metadata.PackageId,
+                PackageVersion = metadata.PackageVersion
+            });
+        }
+
+        if (managedAssemblies.Count == 0 && nativeLibraries.Count == 0)
+        {
+            _integrationProbeManifestPath = null;
+            return;
+        }
+
+        _integrationProbeManifestPath = Path.Combine(_projectModelPath, IntegrationPackageProbeManifest.FileName);
+        await IntegrationPackageProbeManifest.WriteAsync(
+            _integrationProbeManifestPath,
+            IntegrationPackageProbeManifest.Create(managedAssemblies, nativeLibraries),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static PackageProbeMetadata ParsePackageProbeMetadata(string line)
+    {
+        // Written from ReferenceCopyLocalPaths as:
+        //   Contoso.Aspire.MetaPackage|1.2.3|runtime
+        // Empty fields are possible for project references; those entries are intentionally
+        // ignored because the probe manifest only preserves NuGet package ownership.
+        var parts = line.Split('|');
+        if (parts.Length != 3)
+        {
+            throw new InvalidOperationException($"Package probe manifest metadata line has an unexpected format: '{line}'.");
+        }
+
+        return new PackageProbeMetadata(
+            NormalizeOptionalValue(parts[0]),
+            NormalizeOptionalValue(parts[1]),
+            NormalizeOptionalValue(parts[2]));
+    }
+
+    private static string NormalizePackageProbeTargetPath(string targetPath, string sourcePath)
+    {
+        if (string.IsNullOrWhiteSpace(targetPath))
+        {
+            return Path.GetFileName(sourcePath);
+        }
+
+        return targetPath.Replace('\\', '/').TrimStart('/');
+    }
+
+    private static string? TryGetSatelliteCulture(string relativePath, string? assetType)
+    {
+        if (!string.Equals(assetType, "resources", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var directoryName = Path.GetDirectoryName(relativePath.Replace('/', Path.DirectorySeparatorChar));
+        if (string.IsNullOrWhiteSpace(directoryName))
+        {
+            return null;
+        }
+
+        return directoryName.Replace('\\', '/').Trim('/');
+    }
+
+    private static string? NormalizeOptionalValue(string value)
+        => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private sealed record PackageProbeMetadata(string? PackageId, string? PackageVersion, string? AssetType);
 
     private static string? FindNuGetConfig(string workingDirectory)
     {

@@ -143,7 +143,7 @@ public class AssemblyLoaderTests
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["AtsAssemblies:0"] = "Contoso.Aspire.MetaPackage"
+                ["AtsAssemblies:0"] = "contoso.aspire.metapackage"
             })
             .Build();
 

@@ -116,7 +116,7 @@ public class ApiReferenceExportTests
             ["ASPIRE_INTEGRATION_PROBE_MANIFEST_PATH"] = manifestPath
         });
 
-        var export = service.ExportApi("TypeScript", "Contoso.Aspire.MetaPackage", "1.2.3");
+        var export = service.ExportApi("TypeScript", "contoso.aspire.metapackage", "1.2.3");
 
         Assert.Equal("Contoso.Aspire.MetaPackage", export.GetProperty("package").GetProperty("name").GetString());
 

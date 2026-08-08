@@ -7,6 +7,7 @@ using Aspire.Cli.Projects;
 using Aspire.Cli.Tests.Mcp;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
+using Aspire.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aspire.Cli.Tests.Projects;
@@ -98,6 +99,82 @@ public class DotNetBasedAppHostServerPackageReferenceTests(ITestOutputHelper out
         Assert.DoesNotContain("NU1008", output, StringComparison.Ordinal);
         Assert.DoesNotContain("NU1010", output, StringComparison.Ordinal);
         Assert.Equal(0, exitCode);
+    }
+
+    [Fact]
+    public async Task PrepareWritesPackageProbeManifestForOutOfRepoIntegrations()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appPath = workspace.WorkspaceRoot.FullName;
+        var projectModelPath = Path.Combine(appPath, ".aspire_server");
+        var packageDirectory = Path.Combine(appPath, "packages");
+        Directory.CreateDirectory(packageDirectory);
+
+        var primaryAssemblyPath = Path.Combine(packageDirectory, "Contoso.Hosting.dll");
+        var secondaryAssemblyPath = Path.Combine(packageDirectory, "Contoso.Hosting.Extras.dll");
+        var satelliteAssemblyPath = Path.Combine(packageDirectory, "fr", "Contoso.Hosting.resources.dll");
+        Directory.CreateDirectory(Path.GetDirectoryName(satelliteAssemblyPath)!);
+        await File.WriteAllTextAsync(primaryAssemblyPath, string.Empty);
+        await File.WriteAllTextAsync(secondaryAssemblyPath, string.Empty);
+        await File.WriteAllTextAsync(satelliteAssemblyPath, string.Empty);
+
+        var runner = new TestDotNetCliRunner
+        {
+            BuildAsyncCallback = (_, _, _, _) =>
+            {
+                File.WriteAllLines(
+                    Path.Combine(projectModelPath, "package-probe-sources.txt"),
+                    [primaryAssemblyPath, secondaryAssemblyPath, satelliteAssemblyPath]);
+                File.WriteAllLines(
+                    Path.Combine(projectModelPath, "package-probe-metadata.txt"),
+                    [
+                        "Contoso.Aspire.MetaPackage|1.2.3|runtime",
+                        "Contoso.Aspire.MetaPackage|1.2.3|runtime",
+                        "Contoso.Aspire.MetaPackage|1.2.3|resources"
+                    ]);
+                File.WriteAllLines(
+                    Path.Combine(projectModelPath, "package-probe-targets.txt"),
+                    [
+                        "Contoso.Hosting.dll",
+                        "Contoso.Hosting.Extras.dll",
+                        "fr/Contoso.Hosting.resources.dll"
+                    ]);
+
+                return 0;
+            }
+        };
+        var processExecutionFactory = new TestProcessExecutionFactory();
+        var project = CreateProject(appPath, projectModelPath, runner, processExecutionFactory);
+
+        var result = await project.PrepareAsync(
+            "13.5.0",
+            [IntegrationReference.FromExactPackage("Contoso.Aspire.MetaPackage", "1.2.3")]);
+
+        Assert.True(result.Success);
+
+        var manifestPath = Path.Combine(projectModelPath, IntegrationPackageProbeManifest.FileName);
+        Assert.True(File.Exists(manifestPath));
+
+        var manifest = IntegrationPackageProbeManifest.Load(manifestPath);
+        Assert.True(manifest.TryGetRuntimeAssemblyNamesForPackage("contoso.aspire.metapackage", out var canonicalPackageId, out var assemblyNames));
+        Assert.Equal("Contoso.Aspire.MetaPackage", canonicalPackageId);
+        Assert.Equal(["Contoso.Hosting", "Contoso.Hosting.Extras"], assemblyNames);
+        Assert.Contains(
+            manifest.ManagedAssemblies,
+            assembly => assembly.Name == "Contoso.Hosting.resources" &&
+                assembly.Culture == "fr" &&
+                assembly.PackageId == "Contoso.Aspire.MetaPackage" &&
+                assembly.PackageVersion == "1.2.3");
+
+        var runResult = await project.RunAsync(
+            Environment.ProcessId,
+            environmentVariables: null,
+            additionalArgs: null,
+            debug: false,
+            runControl: null);
+        await using var execution = runResult.Execution;
+
+        Assert.Equal(manifestPath, processExecutionFactory.LastEnvironmentVariables?[KnownConfigNames.IntegrationProbeManifestPath]);
     }
 
     /// <summary>
@@ -354,14 +431,18 @@ public class DotNetBasedAppHostServerPackageReferenceTests(ITestOutputHelper out
         Assert.Contains("NU1102", exactOutput, StringComparison.Ordinal);
     }
 
-    private static DotNetBasedAppHostServerProject CreateProject(string appPath, string projectModelPath)
+    private static DotNetBasedAppHostServerProject CreateProject(
+        string appPath,
+        string projectModelPath,
+        TestDotNetCliRunner? runner = null,
+        TestProcessExecutionFactory? processExecutionFactory = null)
         => new(
             appPath,
             socketPath: "test.sock",
             repoRoot: appPath,
-            new TestDotNetCliRunner(),
+            runner ?? new TestDotNetCliRunner(),
             MockPackagingServiceFactory.Create(),
-            new TestProcessExecutionFactory(),
+            processExecutionFactory ?? new TestProcessExecutionFactory(),
             new TestEnvironment(),
             NullLogger<DotNetBasedAppHostServerProject>.Instance,
             projectModelPath);
