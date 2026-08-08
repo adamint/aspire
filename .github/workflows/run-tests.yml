@@ -258,10 +258,7 @@ jobs:
       - name: Install Azure Functions Core Tools
         if: runner.os == 'Linux' && (inputs.testShortName == 'Playground' || inputs.testShortName == 'Azure')
         run: |
-          # Keep this pinned instead of using @4/latest. The npm package downloads
-          # the native CLI from cdn.functions.azure.com during install, and 4.13.x
-          # currently points at missing zip assets.
-          npm i -g azure-functions-core-tools@4.12.1 --unsafe-perm true
+          npm i -g azure-functions-core-tools@4 --unsafe-perm true
 
       - name: Compute test project path
         id: compute_project_path
