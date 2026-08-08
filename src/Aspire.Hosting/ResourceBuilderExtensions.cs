@@ -4795,6 +4795,15 @@ public static class ResourceBuilderExtensions
         where T : IResource
     {
         ArgumentNullException.ThrowIfNull(launchConfigurationProducer);
+        var producerReturnType = typeof(TLaunchConfiguration);
+        if (typeof(Task).IsAssignableFrom(producerReturnType)
+            || producerReturnType == typeof(ValueTask)
+            || producerReturnType.IsGenericType && producerReturnType.GetGenericTypeDefinition() == typeof(ValueTask<>))
+        {
+            throw new InvalidOperationException(
+                $"The legacy {nameof(WithDebugSupport)} overload requires a synchronous launch configuration producer. " +
+                "Use the overload that accepts LaunchConfigurationCallbackContext for Task or ValueTask returning producers.");
+        }
 
 #pragma warning disable ASPIREEXTENSION001 // Forwarding to the replacement experimental API.
         var result = builder.WithDebugSupport(

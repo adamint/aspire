@@ -168,6 +168,28 @@ public class ExecutableResourceBuilderExtensionTests
 #pragma warning restore CS0618
 
     [Fact]
+#pragma warning disable CS0618 // Verify the shipped overload preserves its task-return validation.
+    public void WithDebugSupportLegacyModeProducerOverloadRejectsTaskReturningProducer()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
+
+        var taskException = Assert.Throws<InvalidOperationException>(() =>
+            builder.AddExecutable("task", "command", "workingdirectory")
+                .WithDebugSupport(
+                    (string mode) => Task.FromResult(new ExecutableLaunchConfiguration("go") { Mode = mode }),
+                    "go"));
+        Assert.Contains("Task", taskException.Message);
+
+        var valueTaskException = Assert.Throws<InvalidOperationException>(() =>
+            builder.AddExecutable("value-task", "command", "workingdirectory")
+                .WithDebugSupport(
+                    (string mode) => ValueTask.FromResult(new ExecutableLaunchConfiguration("go") { Mode = mode }),
+                    "go"));
+        Assert.Contains("ValueTask", valueTaskException.Message);
+    }
+#pragma warning restore CS0618
+
+    [Fact]
     public async Task WithDebugSupportArgsCallbackRunsWhenItsAnnotationIsActive()
     {
         // A single WithDebugSupport call whose annotation is active (last) must run its
