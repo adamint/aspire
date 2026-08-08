@@ -7,7 +7,10 @@ import { AspireResourceExtendedDebugConfiguration, BrowserLaunchConfiguration, S
 
 /** Stubs installed over the filesystem calls the browser profile directory setup makes. */
 export interface BrowserProfileFsStubs {
+    mkdir: sinon.SinonStub;
+    lstat: sinon.SinonStub;
     mkdtemp: sinon.SinonStub;
+    realpath: sinon.SinonStub;
 }
 
 /** Suffix the stubbed `mkdtemp` appends, standing in for Node's random six characters. */
@@ -32,14 +35,24 @@ function asStub(candidate: unknown): sinon.SinonStub | undefined {
  * under the shared temp directory, and tests that need the handle call it again to get it.
  */
 export function stubBrowserProfileFs(): BrowserProfileFsStubs {
+    const existingMkdir = asStub(fs.promises.mkdir);
+    const mkdir = existingMkdir ?? sinon.stub(fs.promises, 'mkdir').resolves(undefined);
+
+    const existingLstat = asStub(fs.promises.lstat);
+    const lstat = existingLstat ?? sinon.stub(fs.promises, 'lstat').resolves({
+        isDirectory: () => true,
+        isSymbolicLink: () => false,
+        mode: 0o700,
+        uid: typeof process.getuid === 'function' ? process.getuid() : 0,
+    } as fs.Stats);
+
     const existingMkdtemp = asStub(fs.promises.mkdtemp);
-    if (existingMkdtemp) {
-        return { mkdtemp: existingMkdtemp };
-    }
+    const mkdtemp = existingMkdtemp ?? sinon.stub(fs.promises, 'mkdtemp').callsFake(async (prefix: fs.PathLike) => `${String(prefix)}${stubbedMkdtempSuffix}`);
 
-    const mkdtemp = sinon.stub(fs.promises, 'mkdtemp').callsFake(async (prefix: fs.PathLike) => `${String(prefix)}${stubbedMkdtempSuffix}`);
+    const existingRealpath = asStub(fs.promises.realpath);
+    const realpath = existingRealpath ?? sinon.stub(fs.promises, 'realpath').callsFake(async (candidate: fs.PathLike) => String(candidate));
 
-    return { mkdtemp };
+    return { mkdir, lstat, mkdtemp, realpath };
 }
 
 export interface Deferred<T> {

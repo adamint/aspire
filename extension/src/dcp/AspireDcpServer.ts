@@ -35,6 +35,28 @@ type DebugSessionAggregateStats = {
     anyNonZeroExit: boolean;
 };
 
+export type StopRunSessionResult =
+    | { status: 'notFound' }
+    | { status: 'stopped' }
+    | { status: 'failed'; error: unknown };
+
+export async function stopRunSession(runId: string, runsBySession: Map<string, AspireResourceDebugSession[]>): Promise<StopRunSessionResult> {
+    const debugSessions = runsBySession.get(runId);
+    if (!debugSessions) {
+        return { status: 'notFound' };
+    }
+
+    const results = await Promise.allSettled(debugSessions.map(async debugSession => await debugSession.stopSession()));
+    const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+    if (failure) {
+        return { status: 'failed', error: failure.reason };
+    }
+
+    runsBySession.delete(runId);
+
+    return { status: 'stopped' };
+}
+
 export default class AspireDcpServer {
     private readonly app: express.Express;
     private server: https.Server;
@@ -460,24 +482,26 @@ export default class AspireDcpServer {
 
             app.delete('/run_session/:id', requireHeaders, async (req: Request, res: Response) => {
                 const runId = req.params.id as string;
-                if (runsBySession.has(runId)) {
-                    const baseDebugSessions = runsBySession.get(runId);
-                    for (const debugSession of baseDebugSessions || []) {
-                        // The DELETE response is not gated on the stop completing, but the stop can
-                        // now reject (AspireResourceDebugSession.stopSession surfaces VS Code stop
-                        // failures), so attach a handler to keep the rejection from going unhandled.
-                        void Promise.resolve(debugSession.stopSession()).catch(error => {
-                            extensionLogOutputChannel.warn(`Failed to stop debug session for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
-                        });
-                    }
+                const stopResult = await stopRunSession(runId, runsBySession);
+                switch (stopResult.status) {
+                    case 'stopped':
+                        res.status(200).end();
+                        return;
+                    case 'notFound':
+                        res.status(204).end();
+                        return;
+                    case 'failed': {
+                        const message = `Failed to stop debug session for run ${runId}: ${stopResult.error instanceof Error ? stopResult.error.message : String(stopResult.error)}`;
+                        extensionLogOutputChannel.warn(message);
+                        const error: ErrorDetails = {
+                            code: 'DebugSessionStopFailed',
+                            message,
+                            details: []
+                        };
 
-                    runsBySession.delete(runId);
-                    // Map cleanup happens when the corresponding sessionTerminated
-                    // notification is sent; don't pre-delete here or we'd miss the
-                    // end event.
-                    res.status(200).end();
-                } else {
-                    res.status(204).end();
+                        res.status(500).json({ error }).end();
+                        return;
+                    }
                 }
             });
 

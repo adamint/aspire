@@ -1,4 +1,5 @@
 import { promises as fs } from "node:fs";
+import type { Stats } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, isBrowserLaunchConfiguration } from "../../dcp/types";
@@ -14,8 +15,8 @@ const defaultBrowserRuntimeArgs = [
     '--disable-background-mode'
 ];
 
-/** Prefix for the isolated browser profile directory created per run under the OS temp directory. */
-const browserProfileDirectoryPrefix = 'aspire-vscode-browser-debug-';
+/** Directory under the OS temp directory that contains Aspire-owned browser profiles. */
+const browserProfileRootDirectoryName = 'aspire-vscode-browser-debug';
 
 export const browserDebuggerExtension: ResourceDebuggerExtension = {
     resourceType: 'browser',
@@ -126,33 +127,30 @@ function mergeRuntimeArgs(existingRuntimeArgs: unknown, argsToAdd: string[]): st
  * Creates the isolated browser profile directory for a run, or returns `undefined` when one could
  * not be established.
  *
- * The directory is *created*, never derived. `os.tmpdir()` is shared and world-writable on Linux,
- * so any path composed from a name chosen in advance is a name another local process can create
- * first — including as a symlink. The browser follows `userDataDir` when it writes, so a symlinked
- * directory would quietly redirect profile data (cookies and tokens for the app being debugged)
- * into a location that process controls. Validating the path string cannot detect that, because
- * which process owns the directory is decided by whoever wins the race to create it.
- *
- * `mkdtemp` closes both halves: it appends OS-generated random characters so the final name is
- * unpredictable, and it creates the directory atomically, failing outright rather than following an
- * entry that already exists. Creating directly under `os.tmpdir()` also means Aspire requires no
- * fixed directory name of its own on the shared temp directory — a required name would let any
- * local process permanently disable isolated profiles for every other user on the machine simply by
- * creating it first, which validating ownership can detect but cannot recover from.
- *
  * The run id is a readability prefix only. It is deliberately not what makes the path unique, and
  * it is not trusted: `runId` is workspace-writable, so it is reduced to a single path segment first.
+ * The post-creation realpath containment check is still load-bearing because this path is later
+ * deleted recursively. If a future change accidentally lets a `..` segment through, the profile is
+ * refused rather than aiming cleanup at the temp directory or another run.
  */
 async function createBrowserUserDataDir(runId: string): Promise<string | undefined> {
     try {
-        const created = await fs.mkdtemp(path.join(os.tmpdir(), `${browserProfileDirectoryPrefix}${sanitizeRunIdSegment(runId)}-`));
+        const profileRoot = getBrowserProfileRootDirectory();
+        await fs.mkdir(profileRoot, { recursive: true, mode: 0o700 });
 
-        // Defense in depth, not the primary defense. The prefix is sanitized to a single segment and
-        // mkdtemp suffixes it, so it cannot traverse on its own; this exists because the returned
-        // path is later deleted recursively, and that delete must never be aimed outside the temp
-        // directory even if the construction above is changed later.
-        if (!isDirectlyUnderTempDirectory(created)) {
-            extensionLogOutputChannel.warn(`Refusing to use browser debug profile directory '${created}' because it is not directly under '${os.tmpdir()}'.`);
+        const profileRootStats = await fs.lstat(profileRoot);
+        if (!isSafeBrowserProfileRoot(profileRootStats)) {
+            extensionLogOutputChannel.warn(`Refusing to use unsafe browser debug profile root '${profileRoot}'.`);
+
+            return undefined;
+        }
+
+        const created = await fs.mkdtemp(path.join(profileRoot, `${sanitizeRunIdSegment(runId)}-`));
+        const profileRootRealPath = await fs.realpath(profileRoot);
+        const createdRealPath = await fs.realpath(created);
+
+        if (!isProperDescendant(profileRootRealPath, createdRealPath)) {
+            extensionLogOutputChannel.warn(`Refusing to use browser debug profile directory '${created}' because its real path '${createdRealPath}' is outside '${profileRootRealPath}'.`);
 
             return undefined;
         }
@@ -160,10 +158,30 @@ async function createBrowserUserDataDir(runId: string): Promise<string | undefin
         return created;
     }
     catch (error) {
-        extensionLogOutputChannel.warn(`Failed to create a browser debug profile directory under '${os.tmpdir()}': ${error instanceof Error ? error.message : String(error)}`);
+        extensionLogOutputChannel.warn(`Failed to create a browser debug profile directory under '${getBrowserProfileRootDirectory()}': ${error instanceof Error ? error.message : String(error)}`);
 
         return undefined;
     }
+}
+
+function getBrowserProfileRootDirectory(): string {
+    return path.join(os.tmpdir(), browserProfileRootDirectoryName);
+}
+
+function isSafeBrowserProfileRoot(stats: Stats): boolean {
+    if (!stats.isDirectory() || stats.isSymbolicLink()) {
+        return false;
+    }
+
+    if (process.platform === 'win32') {
+        return true;
+    }
+
+    if (typeof process.getuid === 'function' && stats.uid !== process.getuid()) {
+        return false;
+    }
+
+    return (stats.mode & 0o077) === 0;
 }
 
 /**
@@ -178,24 +196,21 @@ function sanitizeRunIdSegment(runId: string): string {
 }
 
 /**
- * Returns whether `candidate` is a direct child of the OS temp directory.
+ * Returns whether `candidateRealPath` is a proper descendant of `parentRealPath`.
  *
- * `path.relative` is used rather than a string prefix test so `..` segments are resolved instead of
- * merely matched, and the temp directory itself is rejected as well as anything above it — the
- * returned path is deleted recursively, and deleting the temp directory would take every other
- * process's files with it.
+ * `path.relative` is used rather than a string prefix test, and both inputs are real paths before
+ * they get here. The parent itself is rejected as well as anything above it — the returned path is
+ * deleted recursively, and deleting the parent would take every other profile directory with it.
  *
  * The comparison is lexical and case-sensitive. On a case-insensitive filesystem a differently
  * cased path would be rejected rather than accepted, which is the safe direction; both sides come
- * from the same `os.tmpdir()` value, so this does not occur in practice. Symlinks are handled by
- * `createBrowserUserDataDir` creating the directory itself, which is stronger than resolving them
- * here would be.
+ * from `realpath`, so this does not occur in practice.
  */
-function isDirectlyUnderTempDirectory(candidate: string): boolean {
-    const relative = path.relative(path.resolve(os.tmpdir()), path.resolve(candidate));
+function isProperDescendant(parentRealPath: string, candidateRealPath: string): boolean {
+    const relative = path.relative(parentRealPath, candidateRealPath);
 
     return relative.length > 0
-        && !relative.includes(path.sep)
         && relative !== '..'
+        && !relative.startsWith(`..${path.sep}`)
         && !path.isAbsolute(relative);
 }
