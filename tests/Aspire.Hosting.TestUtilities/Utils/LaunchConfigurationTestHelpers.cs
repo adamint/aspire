@@ -20,15 +20,15 @@ public static class LaunchConfigurationTestHelpers
     {
         ArgumentNullException.ThrowIfNull(resource);
 
-        return new LaunchConfigurationCallbackContext
-        {
-            Mode = mode,
-            Resource = resource,
-            ExecutionConfiguration = executionConfiguration ?? CreateExecutionConfigurationResult(),
-            ExecutionContext = executionContext ?? new DistributedApplicationExecutionContext(DistributedApplicationOperation.Run),
-            Logger = logger ?? NullLogger.Instance,
-            CancellationToken = cancellationToken
-        };
+        executionConfiguration ??= CreateExecutionConfigurationResult();
+        return new LaunchConfigurationCallbackContext(
+            mode,
+            resource,
+            executionConfiguration,
+            executionConfiguration,
+            executionContext ?? new DistributedApplicationExecutionContext(DistributedApplicationOperation.Run),
+            logger ?? NullLogger.Instance,
+            cancellationToken);
     }
 
     public static IExecutionConfigurationResult CreateExecutionConfigurationResult(

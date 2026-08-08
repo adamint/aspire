@@ -16,7 +16,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Aspire.Hosting.Dcp;
 
-using ExecutableConfiguration = (IExecutionConfigurationResult Configuration, ExecutablePemCertificates? PemCertificates);
+using ExecutableConfiguration = (IExecutionConfigurationResult OriginalConfiguration, IExecutionConfigurationResult ExecutableConfiguration, ExecutablePemCertificates? PemCertificates);
 
 /// <summary>
 /// Handles preparation and creation of Executable DCP resources (project executables and plain executables).
@@ -115,7 +115,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             }
         }
 
-        var (configuration, pemCertificates) = await BuildExecutableConfiguration(er, resourceLogger, cancellationToken).ConfigureAwait(false);
+        var (originalConfiguration, configuration, pemCertificates) = await BuildExecutableConfiguration(er, resourceLogger, supportsDebuggingAnnotation, cancellationToken).ConfigureAwait(false);
 
         spec.PemCertificates = pemCertificates;
 
@@ -207,15 +207,14 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             var mode = isProjectLaunchConfiguration
                 ? GetProjectLaunchConfigurationMode()
                 : _configuration[KnownConfigNames.DebugSessionRunMode] ?? ExecutableLaunchMode.NoDebug;
-            var callbackContext = new LaunchConfigurationCallbackContext
-            {
-                Mode = mode,
-                Resource = er.ModelResource,
-                ExecutionConfiguration = configuration,
-                ExecutionContext = _executionContext,
-                Logger = resourceLogger,
-                CancellationToken = cancellationToken
-            };
+            var callbackContext = new LaunchConfigurationCallbackContext(
+                mode,
+                er.ModelResource,
+                originalConfiguration,
+                configuration,
+                _executionContext,
+                resourceLogger,
+                cancellationToken);
 
             try
             {
@@ -509,7 +508,11 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         }
     }
 
-    private async Task<ExecutableConfiguration> BuildExecutableConfiguration(RenderedModelResource<Executable> er, ILogger resourceLogger, CancellationToken cancellationToken)
+    private async Task<ExecutableConfiguration> BuildExecutableConfiguration(
+        RenderedModelResource<Executable> er,
+        ILogger resourceLogger,
+        SupportsDebuggingAnnotation? supportsDebuggingAnnotation,
+        CancellationToken cancellationToken)
     {
         var exe = (Executable)er.DcpResource;
 
@@ -519,8 +522,18 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         var certificatesOutputPath = Path.Join(certificatesRootDir, "certs");
         var baseServerAuthOutputPath = Path.Join(certificatesRootDir, "private");
 
-        var configuration = await ExecutionConfigurationBuilder.Create(er.ModelResource)
-            .WithArgumentsConfig()
+        var activeDebugArgsAnnotation = supportsDebuggingAnnotation?.DebugCommandLineArgsCallbackAnnotation;
+        var configurationBuilder = ExecutionConfigurationBuilder.Create(er.ModelResource);
+        if (activeDebugArgsAnnotation is null)
+        {
+            configurationBuilder.WithArgumentsConfig();
+        }
+        else
+        {
+            configurationBuilder.WithArgumentsConfig(annotation => !ReferenceEquals(annotation, activeDebugArgsAnnotation));
+        }
+
+        var originalConfiguration = await configurationBuilder
             .WithEnvironmentVariablesConfig()
             .WithCertificateTrustConfig(scope =>
             {
@@ -559,9 +572,18 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             .BuildAsync(_executionContext, resourceLogger, cancellationToken)
             .ConfigureAwait(false);
 
+        var executableConfiguration = activeDebugArgsAnnotation is null
+            ? originalConfiguration
+            : await BuildExecutableConfigurationWithDebugArgumentsAsync(
+                    originalConfiguration,
+                    er.ModelResource,
+                    resourceLogger,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
         // Add the certificates to the executable spec so they'll be placed in the DCP config
         ExecutablePemCertificates? pemCertificates = null;
-        if (configuration.TryGetAdditionalData<CertificateTrustExecutionConfigurationData>(out var certificateTrustConfiguration)
+        if (originalConfiguration.TryGetAdditionalData<CertificateTrustExecutionConfigurationData>(out var certificateTrustConfiguration)
             && certificateTrustConfiguration.Scope != CertificateTrustScope.None
             && certificateTrustConfiguration.Certificates.Count > 0)
         {
@@ -585,7 +607,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             }
         }
 
-        if (configuration.TryGetAdditionalData<HttpsCertificateExecutionConfigurationData>(out var tlsCertificateConfiguration))
+        if (originalConfiguration.TryGetAdditionalData<HttpsCertificateExecutionConfigurationData>(out var tlsCertificateConfiguration))
         {
             var thumbprint = tlsCertificateConfiguration.Certificate.Thumbprint;
             var publicCertificatePem = tlsCertificateConfiguration.Certificate.ExportCertificatePem();
@@ -630,7 +652,42 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             }
         }
 
-        return (configuration, pemCertificates);
+        return (originalConfiguration, executableConfiguration, pemCertificates);
+    }
+
+    private async Task<IExecutionConfigurationResult> BuildExecutableConfigurationWithDebugArgumentsAsync(
+        IExecutionConfigurationResult originalConfiguration,
+        IResource resource,
+        ILogger resourceLogger,
+        CancellationToken cancellationToken)
+    {
+        var rewrittenArgsConfiguration = await ExecutionConfigurationBuilder.Create(resource)
+            .WithArgumentsConfig()
+            .BuildAsync(_executionContext, resourceLogger, cancellationToken)
+            .ConfigureAwait(false);
+
+        return new ExecutionConfigurationResult
+        {
+            References = originalConfiguration.References.Concat(rewrittenArgsConfiguration.References).ToHashSet(),
+            ArgumentsWithUnprocessed = rewrittenArgsConfiguration.ArgumentsWithUnprocessed,
+            EnvironmentVariablesWithUnprocessed = originalConfiguration.EnvironmentVariablesWithUnprocessed,
+            AdditionalConfigurationData = originalConfiguration.AdditionalConfigurationData,
+            Exception = CombineExecutionConfigurationExceptions(originalConfiguration.Exception, rewrittenArgsConfiguration.Exception)
+        };
+    }
+
+    private static Exception? CombineExecutionConfigurationExceptions(Exception? originalException, Exception? rewrittenArgsException)
+    {
+        return (originalException, rewrittenArgsException) switch
+        {
+            (null, null) => null,
+            ({ } exception, null) => exception,
+            (null, { } exception) => exception,
+            ({ } original, { } rewritten) => new AggregateException(
+                "One or more errors occurred while resolving resource configuration.",
+                original,
+                rewritten)
+        };
     }
 
     private string GetCertificatesRootDirectory(RenderedModelResource<Executable> er, Executable exe)

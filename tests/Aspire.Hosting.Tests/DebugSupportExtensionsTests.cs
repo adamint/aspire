@@ -4,6 +4,7 @@
 #pragma warning disable ASPIREEXTENSION001 // Debug support APIs are experimental.
 #pragma warning disable ASPIREPERSISTENCE001 // Resource lifetime APIs are experimental.
 
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Aspire.Hosting.Dcp;
@@ -16,6 +17,29 @@ namespace Aspire.Hosting.Tests;
 [Trait("Partition", "2")]
 public class DebugSupportExtensionsTests
 {
+    [Fact]
+    public void LaunchConfigurationCallbackContextIsFrameworkOwned()
+    {
+        var contextType = typeof(LaunchConfigurationCallbackContext);
+
+        Assert.Empty(contextType.GetConstructors(BindingFlags.Public | BindingFlags.Instance));
+
+        foreach (var propertyName in new[]
+                 {
+                     nameof(LaunchConfigurationCallbackContext.Mode),
+                     nameof(LaunchConfigurationCallbackContext.Resource),
+                     nameof(LaunchConfigurationCallbackContext.OriginalExecutionConfiguration),
+                     nameof(LaunchConfigurationCallbackContext.ExecutableExecutionConfiguration),
+                     nameof(LaunchConfigurationCallbackContext.ExecutionContext),
+                     nameof(LaunchConfigurationCallbackContext.Logger),
+                     nameof(LaunchConfigurationCallbackContext.CancellationToken)
+                 })
+        {
+            var property = Assert.Single(contextType.GetProperties(), property => property.Name == propertyName);
+            Assert.Null(property.SetMethod);
+        }
+    }
+
     [Fact]
     public async Task CreateLaunchConfigurationResolvesTheLaunchProfileForProjectResources()
     {
@@ -206,7 +230,7 @@ public class DebugSupportExtensionsTests
                 return Task.FromResult(new TestGoLaunchConfiguration
                 {
                     Mode = context.Mode,
-                    Package = context.ExecutionConfiguration.EnvironmentVariables
+                    Package = context.OriginalExecutionConfiguration.EnvironmentVariables
                         .Single(pair => pair.Key == "EXPECTED")
                         .Value
                 });

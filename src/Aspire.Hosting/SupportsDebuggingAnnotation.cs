@@ -26,11 +26,13 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
         string launchConfigurationType,
         Func<Executable, LaunchConfigurationCallbackContext, Task> launchConfigurationAnnotator,
         Func<LaunchConfigurationCallbackContext, Task<object>> launchConfigurationProducer,
+        CommandLineArgsCallbackAnnotation? debugCommandLineArgsCallbackAnnotation,
         bool rewritesArgumentsForDebugging)
     {
         LaunchConfigurationType = launchConfigurationType;
         LaunchConfigurationAnnotator = launchConfigurationAnnotator;
         LaunchConfigurationProducer = launchConfigurationProducer;
+        DebugCommandLineArgsCallbackAnnotation = debugCommandLineArgsCallbackAnnotation;
         RewritesArgumentsForDebugging = rewritesArgumentsForDebugging;
     }
 
@@ -56,6 +58,8 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
     // Internal because it hands out an untyped object; DebugSupportExtensions.CreateLaunchConfigurationAsync is
     // the supported way to reach it.
     internal Func<LaunchConfigurationCallbackContext, Task<object>> LaunchConfigurationProducer { get; }
+
+    internal CommandLineArgsCallbackAnnotation? DebugCommandLineArgsCallbackAnnotation { get; }
 
     /// <summary>
     /// Indicates that the debug support rewrites the resource's command-line arguments while a debug
@@ -83,6 +87,7 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
         string resourceName,
         string launchConfigurationType,
         Func<LaunchConfigurationCallbackContext, Task<T>> launchConfigurationProducer,
+        CommandLineArgsCallbackAnnotation? debugCommandLineArgsCallbackAnnotation = null,
         bool rewritesArgumentsForDebugging = false)
     {
         // The annotator stays generic over T so the DCP annotation is serialized against the concrete
@@ -96,6 +101,7 @@ public sealed class SupportsDebuggingAnnotation : IResourceAnnotation
             // The suppression is safe because ProduceAsync throws rather than returning null; the
             // compiler cannot see that because T is unconstrained and so may be a nullable type.
             async context => (await ProduceAsync(context).ConfigureAwait(false))!,
+            debugCommandLineArgsCallbackAnnotation,
             rewritesArgumentsForDebugging);
 
         async Task<T> ProduceAsync(LaunchConfigurationCallbackContext context)

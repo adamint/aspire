@@ -88,9 +88,8 @@ public static class DebugSupportExtensions
     /// which owns the complete configuration; Aspire serializes the result as-is.
     /// </para>
     /// <para>
-    /// This method never resolves arguments or environment variables. Callers that need a real execution
-    /// configuration must build it explicitly with <see cref="ExecutionConfigurationBuilder"/> and place it
-    /// on <paramref name="context"/>.
+    /// This method never resolves arguments or environment variables. Aspire creates <paramref name="context"/>
+    /// when the active debug-support annotation is producing a launch configuration for an executable creation.
     /// </para>
     /// </remarks>
     [AspireExportIgnore(Reason = "Debug support inspection is a local .NET helper and is not part of the ATS surface.")]
@@ -109,9 +108,14 @@ public static class DebugSupportExtensions
                 nameof(context));
         }
 
-        if (context.ExecutionConfiguration.Exception is { } configurationException)
+        if (context.OriginalExecutionConfiguration.Exception is { } configurationException)
         {
             ExceptionDispatchInfo.Throw(configurationException);
+        }
+
+        if (context.ExecutableExecutionConfiguration.Exception is { } executableConfigurationException)
+        {
+            ExceptionDispatchInfo.Throw(executableConfigurationException);
         }
 
         if (!resource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebuggingAnnotation))

@@ -499,12 +499,12 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
         var contexts = launchContexts.ToArray();
         Assert.Equal(2, contexts.Length);
         Assert.NotSame(contexts[0], contexts[1]);
-        Assert.NotSame(contexts[0].ExecutionConfiguration, contexts[1].ExecutionConfiguration);
+        Assert.NotSame(contexts[0].OriginalExecutionConfiguration, contexts[1].OriginalExecutionConfiguration);
         Assert.All(contexts, context => Assert.Same(project.Resource, context.Resource));
         Assert.All(
             contexts,
             context => Assert.Contains(
-                context.ExecutionConfiguration.EnvironmentVariables,
+                context.OriginalExecutionConfiguration.EnvironmentVariables,
                 pair => pair is { Key: "REPLICA_VALUE", Value: "resolved" }));
     }
 
@@ -612,15 +612,15 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
         var contexts = launchContexts.ToArray();
         Assert.Equal(2, contexts.Length);
         Assert.NotSame(contexts[0], contexts[1]);
-        Assert.NotSame(contexts[0].ExecutionConfiguration, contexts[1].ExecutionConfiguration);
+        Assert.NotSame(contexts[0].OriginalExecutionConfiguration, contexts[1].OriginalExecutionConfiguration);
         Assert.Equal(
             "1",
-            contexts[0].ExecutionConfiguration.EnvironmentVariables
+            contexts[0].OriginalExecutionConfiguration.EnvironmentVariables
                 .Single(pair => pair.Key == "CALL_COUNT")
                 .Value);
         Assert.Equal(
             "2",
-            contexts[1].ExecutionConfiguration.EnvironmentVariables
+            contexts[1].OriginalExecutionConfiguration.EnvironmentVariables
                 .Single(pair => pair.Key == "CALL_COUNT")
                 .Value);
     }
@@ -3830,7 +3830,7 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
                 context =>
                 {
                     launchContext = context;
-                    var debugValue = context.ExecutionConfiguration.EnvironmentVariables
+                    var debugValue = context.OriginalExecutionConfiguration.EnvironmentVariables
                         .Single(pair => pair.Key == "DEBUG_VALUE")
                         .Value;
 
@@ -6521,6 +6521,61 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
         // rewritten to an IDE-only shape, so no Process fallback is advertised even though the launch type is not
         // "project".
         Assert.Null(exe.Spec.FallbackExecutionTypes);
+    }
+
+    [Fact]
+    public async Task PlainExecutable_ExtensionMode_ArgsRewritingDebugSupport_ProducerSeesOriginalArgsAndDcpUsesRewrittenArgs()
+    {
+        var builder = DistributedApplication.CreateBuilder();
+        var debugSessionInfoJson = JsonSerializer.Serialize(new RunSessionInfo { ProtocolsSupported = ["test"], SupportedLaunchConfigurations = ["test"] });
+        builder.Configuration[DcpExecutor.DebugSessionPortVar] = "12345";
+        builder.Configuration[KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson;
+        builder.Configuration[KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234";
+        builder.Configuration[KnownConfigNames.DebugSessionRunMode] = "Debug";
+
+        IExecutionConfigurationResult? originalConfiguration = null;
+        IExecutionConfigurationResult? executableConfiguration = null;
+        var debuggableExecutable = new TestExecutableResource("test-working-directory");
+        builder.AddResource(debuggableExecutable)
+            .WithArgs("run", "./cmd/api", "user-arg")
+            .WithDebugSupport(
+                context =>
+                {
+                    originalConfiguration = context.OriginalExecutionConfiguration;
+                    executableConfiguration = context.ExecutableExecutionConfiguration;
+                    return Task.FromResult(new ExecutableLaunchConfiguration("test") { Mode = context.Mode });
+                },
+                "test",
+                argsCallback: static ctx =>
+                {
+                    ctx.Args.RemoveAt(0);
+                    ctx.Args.RemoveAt(0);
+                });
+
+        var configDict = new Dictionary<string, string?>
+        {
+            [DcpExecutor.DebugSessionPortVar] = "12345",
+            [KnownConfigNames.DebugSessionInfo] = debugSessionInfoJson,
+            [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234",
+            [KnownConfigNames.DebugSessionRunMode] = "Debug"
+        };
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        Assert.NotNull(originalConfiguration);
+        Assert.NotNull(executableConfiguration);
+        Assert.NotSame(originalConfiguration, executableConfiguration);
+        Assert.Equal(["run", "./cmd/api", "user-arg"], originalConfiguration.Arguments.Select(argument => argument.Value));
+        Assert.Equal(["user-arg"], executableConfiguration.Arguments.Select(argument => argument.Value));
+
+        var exe = GetCreatedExecutableForResource(kubernetesService, "TestExecutable");
+        Assert.Equal(["user-arg"], exe.Spec.Args);
     }
 
     [Fact]

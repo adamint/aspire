@@ -138,6 +138,36 @@ public class ExecutableResourceBuilderExtensionTests
     }
 
     [Fact]
+#pragma warning disable CS0618 // Verify the shipped overload remains source-compatible while forwarding to the context overload.
+    public async Task WithDebugSupportLegacyModeProducerOverloadForwardsToContextProducer()
+    {
+        using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
+        string? observedMode = null;
+        var executable = builder.AddExecutable("legacy", "command", "workingdirectory")
+            .WithDebugSupport(
+                (string mode) =>
+                {
+                    observedMode = mode;
+                    return new ExecutableLaunchConfiguration("go")
+                    {
+                        Mode = mode
+                    };
+                },
+                "go");
+
+        var launchConfiguration = Assert.IsType<ExecutableLaunchConfiguration>(
+            await executable.Resource.CreateLaunchConfigurationAsync(
+                LaunchConfigurationTestHelpers.CreateCallbackContext(
+                    executable.Resource,
+                    ExecutableLaunchMode.Debug)));
+
+        Assert.Equal(ExecutableLaunchMode.Debug, observedMode);
+        Assert.Equal(ExecutableLaunchMode.Debug, launchConfiguration.Mode);
+        Assert.Equal("go", launchConfiguration.Type);
+    }
+#pragma warning restore CS0618
+
+    [Fact]
     public async Task WithDebugSupportArgsCallbackRunsWhenItsAnnotationIsActive()
     {
         // A single WithDebugSupport call whose annotation is active (last) must run its
