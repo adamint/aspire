@@ -199,7 +199,6 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
     else if (message.command === 'disconnect' || message.command === 'terminate') {
       this.sendMessageWithEmoji("🔌", disconnectingFromSession);
-      this.dispose();
 
       this.sendEvent({
         type: 'response',
@@ -209,6 +208,11 @@ export class AspireDebugSession implements vscode.DebugAdapter {
         command: message.command,
         body: {}
       });
+
+      // VS Code is already stopping the parent session when it sends
+      // disconnect/terminate. Re-entering stopDebugging here can invalidate the adapter
+      // before VS Code finishes processing this DAP response.
+      this.dispose(false);
     }
     else if (message.command === 'setBreakpoints') {
       const breakpoints = Array.isArray(message.arguments?.breakpoints)
@@ -833,7 +837,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
   }
 
-  dispose(): void {
+  dispose(stopParentSession = true): void {
     if (this._disposed) {
       return;
     }
@@ -863,7 +867,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // be missed and the summary would under-report failures.
     this._disposables.forEach(disposable => disposable.dispose());
     this._trackedDebugAdapters = [];
-    void this.stopParentDebugSessionOnce();
+    if (stopParentSession) {
+      void this.stopParentDebugSessionOnce();
+    }
     this._onDidSendDebugConsoleOutput.dispose();
 
     // Telemetry: emit `debug/apphost/end` after a short grace window so any

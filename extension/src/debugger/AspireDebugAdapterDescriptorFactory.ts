@@ -3,6 +3,7 @@ import { AspireDebugSession } from './AspireDebugSession';
 import AspireDcpServer from '../dcp/AspireDcpServer';
 import AspireRpcServer from '../server/AspireRpcServer';
 import { AspireTerminalProvider } from '../utils/AspireTerminalProvider';
+import { stripAspireDebugConfigurationProviderInternalProperties } from './AspireDebugConfigurationProvider';
 
 export class AspireDebugAdapterDescriptorFactory implements vscode.DebugAdapterDescriptorFactory {
   private readonly _rpcServer: AspireRpcServer;
@@ -20,6 +21,7 @@ export class AspireDebugAdapterDescriptorFactory implements vscode.DebugAdapterD
   }
 
   async createDebugAdapterDescriptor(session: vscode.DebugSession,  executable: vscode.DebugAdapterExecutable | undefined): Promise<vscode.DebugAdapterDescriptor> {
+    stripAspireDebugConfigurationProviderInternalProperties(session.configuration);
     const aspireDebugSession = new AspireDebugSession(session, this._rpcServer, this._dcpServer, this._terminalProvider, this._removeAspireDebugSession);
     this._addAspireDebugSession(aspireDebugSession);
     return new vscode.DebugAdapterInlineImplementation(aspireDebugSession);

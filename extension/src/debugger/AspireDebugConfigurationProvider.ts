@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { randomUUID } from 'crypto';
 import { appHostLifecycleLaunchAlreadyClaimed, defaultConfigurationName } from '../loc/strings';
 import type { AspireExtendedDebugConfiguration } from '../dcp/types';
 import { AppHostDiscoveryService, getDebugTargetForCandidate } from '../utils/appHostDiscovery';
@@ -15,6 +16,13 @@ import { getAspireDebugConfigurationCommand } from '../services/AppHostLaunchSer
 export interface ExternalLaunchReservation {
     /** Returns `false` when a lifecycle-owned launch already claimed this AppHost. */
     tryReserveExternalLaunch(appHostPath: string): boolean;
+}
+
+const extensionOwnedConfigurationMarker = `__aspireAppHostLaunchServiceConfiguration_${randomUUID()}`;
+
+export function stripAspireDebugConfigurationProviderInternalProperties(configuration: vscode.DebugConfiguration): void {
+    delete (configuration as Record<string, unknown>)[extensionOwnedConfigurationMarker];
+    delete (configuration as AspireExtendedDebugConfiguration).launchedByExtension;
 }
 
 export class AspireDebugConfigurationProvider implements vscode.DebugConfigurationProvider {
@@ -81,10 +89,22 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
 
     async resolveDebugConfigurationWithSubstitutedVariables(folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration, token?: vscode.CancellationToken): Promise<vscode.DebugConfiguration | null | undefined> {
         const aspireConfig = config as AspireExtendedDebugConfiguration;
+        const configRecord = config as Record<string, unknown>;
         // Read before the markers are stripped: an `AppHostLaunchService` launch reaches
         // this resolver through `startDebugging` and has already reserved its own slot, so
         // claiming it here as an external launch would make it refuse itself.
-        const launchedByExtension = aspireConfig.launchedByExtension === true;
+        //
+        // VS Code registers this provider for both initial and dynamic configurations, and
+        // it can pass cloned configuration objects through the substituted resolver before
+        // the adapter starts. The public marker has to be stripped on the first pass, so a
+        // per-activation private marker carries the same fact across those internal clones.
+        // A stable property name would be forgeable from launch.json and could bypass the
+        // external-launch reservation, so the marker key is random and scrubbed by the
+        // adapter factory before the configuration reaches the debug session.
+        const launchedByExtension = aspireConfig.launchedByExtension === true || configRecord[extensionOwnedConfigurationMarker] === true;
+        if (aspireConfig.launchedByExtension === true) {
+            configRecord[extensionOwnedConfigurationMarker] = true;
+        }
         delete aspireConfig.skipCliAvailabilityCheck;
         delete aspireConfig.launchedByExtension;
 

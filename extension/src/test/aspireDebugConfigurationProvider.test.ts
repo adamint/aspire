@@ -6,7 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
-import { AspireDebugConfigurationProvider, type ExternalLaunchReservation } from '../debugger/AspireDebugConfigurationProvider';
+import { AspireDebugConfigurationProvider, stripAspireDebugConfigurationProviderInternalProperties, type ExternalLaunchReservation } from '../debugger/AspireDebugConfigurationProvider';
 import type { AspireExtendedDebugConfiguration } from '../dcp/types';
 import * as cliPathModule from '../utils/cliPath';
 import { AppHostDiscoveryService } from '../utils/appHostDiscovery';
@@ -203,6 +203,37 @@ suite('AspireDebugConfigurationProvider', () => {
         assert.deepStrictEqual(launchReservation.reserved, []);
         // The marker is internal and must not reach the debug adapter.
         assert.strictEqual('launchedByExtension' in (config ?? {}), false);
+    });
+
+    test('does not claim repeated resolver passes for an AppHostLaunchService launch as external', async () => {
+        // VS Code can hand the same configuration object through the substituted resolver
+        // more than once before the debug adapter starts. The first pass strips the internal
+        // marker, so the provider has to remember that this object already belonged to
+        // `AppHostLaunchService` instead of treating the second pass as launch.json/F5.
+        const appHostPath = path.join(tempDir, 'AppHost.csproj');
+        fs.writeFileSync(appHostPath, '<Project Sdk="Aspire.AppHost.Sdk" />');
+        launchReservation.claimedByLifecycle = true;
+
+        const provider = new AspireDebugConfigurationProvider(createAppHostDiscoveryService(appHostPath), launchReservation);
+        const config = {
+            name: 'Debug AppHost',
+            type: 'aspire',
+            request: 'launch',
+            program: appHostPath,
+            launchedByExtension: true
+        };
+
+        const firstPass = await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, config);
+        const secondPass = firstPass
+            ? await provider.resolveDebugConfigurationWithSubstitutedVariables(undefined, firstPass)
+            : undefined;
+
+        assert.strictEqual(secondPass?.program, appHostPath);
+        assert.deepStrictEqual(launchReservation.reserved, []);
+        assert.strictEqual('launchedByExtension' in (secondPass ?? {}), false);
+
+        stripAspireDebugConfigurationProviderInternalProperties(secondPass ?? {});
+        assert.deepStrictEqual(Object.keys(secondPass ?? {}).filter(key => key.startsWith('__aspireAppHostLaunchServiceConfiguration_')), []);
     });
 
     test('leaves launch config non-AppHost C# source file unchanged', async () => {
