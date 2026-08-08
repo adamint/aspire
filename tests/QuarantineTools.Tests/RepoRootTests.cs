@@ -311,13 +311,13 @@ public class RepoRootTests : IDisposable
     }
 
     [Fact]
-    public async Task Tool_RefusesWithTheWrongTreeExitCode_AndLeavesTheOtherTreeUntouched()
+    public async Task Tool_IgnoresAmbientGitOverridesOutsideAnyRepository_AndLeavesTheOtherTreeUntouched()
     {
         Assert.SkipUnless(IsGitAvailable(), "git is not available on PATH");
 
-        // A stale GIT_DIR/GIT_WORK_TREE is the case this guard is for: git answers with a tree the
-        // caller is not standing in, so every edit would land there. It is not what fixes the reported
-        // nested-worktree bug, where the outer checkout genuinely is an ancestor of the caller.
+        // The tool strips repository-location environment variables before asking git for the current
+        // repository. A loose directory with GIT_DIR/GIT_WORK_TREE pointing somewhere else should
+        // therefore behave like a loose directory, not like the unrelated repository.
         var elsewhere = CreateRepositoryWithASampleTest("elsewhere");
         var here = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "here")).FullName;
         var sample = Path.Combine(elsewhere, "tests", "Sample", "SampleTests.cs");
@@ -329,8 +329,8 @@ public class RepoRootTests : IDisposable
             ["GIT_WORK_TREE"] = elsewhere,
         });
 
-        Assert.Equal(Program.ExitCodeWrongTree, exitCode);
-        Assert.Contains(elsewhere, standardError, StringComparison.Ordinal);
+        Assert.Equal(2, exitCode);
+        Assert.Contains(Path.Combine(here, "tests"), standardError, StringComparison.Ordinal);
         Assert.Contains(here, standardError, StringComparison.Ordinal);
 
         // The payload assertion. Everything else here checks how the refusal is reported; this checks
