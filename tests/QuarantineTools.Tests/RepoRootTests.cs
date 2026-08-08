@@ -140,6 +140,22 @@ public class RepoRootTests : IDisposable
     }
 
     [Fact]
+    public void IsSameOrAncestorDirectory_UsesEachParentsCasingRules_WhenTheFinalSegmentProbeIsAmbiguous()
+    {
+        var parent = Path.Combine(_scratch.FullName, "case-sensitive-parent");
+        var upperRepo = Path.Combine(parent, "Outer", "repo");
+        var lowerRepoTests = Path.Combine(parent, "outer", "repo", "tests");
+
+        Assert.False(Program.IsSameOrAncestorDirectory(
+            upperRepo,
+            lowerRepoTests,
+            probedDirectory => string.Equals(
+                Path.TrimEndingDirectorySeparator(probedDirectory),
+                Path.TrimEndingDirectorySeparator(parent),
+                StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public async Task FindRepoRoot_WhenTheCallerCancels_PropagatesCancellationInsteadOfFallingBack()
     {
         var (_, nested) = CreateOuterRepoWithNestedWorktree();

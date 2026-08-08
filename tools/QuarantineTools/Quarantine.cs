@@ -713,7 +713,7 @@ public class Program
     /// one of its ancestors.
     /// </summary>
     internal static bool IsSameOrAncestorDirectory(string candidateAncestor, string directory)
-        => IsSameOrAncestorDirectory(candidateAncestor, directory, IsCaseSensitiveDirectory(candidateAncestor));
+        => IsSameOrAncestorDirectory(candidateAncestor, directory, IsCaseSensitiveDirectory);
 
     /// <summary>
     /// Returns true when <paramref name="candidateAncestor"/> is <paramref name="directory"/> itself or
@@ -723,27 +723,60 @@ public class Program
     /// <param name="directory">The directory whose ancestry is walked.</param>
     /// <param name="caseSensitive">Whether directory names on the volume holding the paths distinguish case.</param>
     internal static bool IsSameOrAncestorDirectory(string candidateAncestor, string directory, bool caseSensitive)
+        => IsSameOrAncestorDirectory(candidateAncestor, directory, _ => caseSensitive);
+
+    /// <summary>
+    /// Returns true when <paramref name="candidateAncestor"/> is <paramref name="directory"/> itself or
+    /// one of its ancestors, comparing each segment with the casing rules of that segment's parent.
+    /// </summary>
+    internal static bool IsSameOrAncestorDirectory(string candidateAncestor, string directory, Func<string, bool> isCaseSensitiveDirectory)
     {
-        var ancestor = new DirectoryInfo(Path.GetFullPath(candidateAncestor));
-        var current = new DirectoryInfo(Path.GetFullPath(directory));
+        var ancestor = TrimTrailingSeparator(Path.GetFullPath(candidateAncestor));
+        var current = TrimTrailingSeparator(Path.GetFullPath(directory));
+        var ancestorRoot = Path.GetPathRoot(ancestor) ?? string.Empty;
+        var currentRoot = Path.GetPathRoot(current) ?? string.Empty;
 
-        // Comparing case-insensitively on a case-sensitive volume would let two genuinely different
-        // trees whose paths differ only by case satisfy this guard, which is the one outcome it exists
-        // to prevent. Comparing case-sensitively everywhere is not the answer either: git canonicalizes
-        // --show-toplevel to the on-disk casing, and while getcwd(3) does the same on Unix, the Windows
-        // current directory keeps whatever casing the process was given - so an ordinary Windows run
-        // could then be refused over a difference that means nothing. Follow the volume instead.
-        var comparison = caseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-
-        while (current != null)
+        if (!string.Equals(ancestorRoot, currentRoot, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
         {
-            if (string.Equals(TrimTrailingSeparator(current.FullName), TrimTrailingSeparator(ancestor.FullName), comparison))
-            {
-                return true;
-            }
-            current = current.Parent;
+            return false;
         }
-        return false;
+
+        var ancestorSegments = GetPathSegments(ancestor, ancestorRoot);
+        var currentSegments = GetPathSegments(current, currentRoot);
+        if (ancestorSegments.Length > currentSegments.Length)
+        {
+            return false;
+        }
+
+        var parent = currentRoot;
+        for (var i = 0; i < ancestorSegments.Length; i++)
+        {
+            // Comparing case-insensitively under a case-sensitive parent would let two genuinely
+            // different trees whose paths differ only by case satisfy this guard, which is the one
+            // outcome it exists to prevent. Comparing case-sensitively everywhere is not the answer
+            // either: git canonicalizes --show-toplevel to the on-disk casing, and while getcwd(3)
+            // does the same on Unix, the Windows current directory keeps whatever casing the process
+            // was given. Follow each parent instead of applying the repository root's final-segment
+            // probe to the whole absolute path.
+            var comparison = isCaseSensitiveDirectory(parent) ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+            if (!string.Equals(ancestorSegments[i], currentSegments[i], comparison))
+            {
+                return false;
+            }
+
+            parent = Path.Combine(parent, currentSegments[i]);
+        }
+
+        return true;
+    }
+
+    private static string[] GetPathSegments(string fullPath, string root)
+    {
+        var remainder = fullPath[root.Length..]
+            .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return remainder.Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries);
     }
 
     /// <summary>
