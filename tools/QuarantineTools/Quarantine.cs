@@ -560,6 +560,7 @@ public class Program
             };
             startInfo.ArgumentList.Add("rev-parse");
             startInfo.ArgumentList.Add("--show-toplevel");
+            ClearRepositoryLocationEnvironment(startInfo);
 
             using var process = Process.Start(startInfo);
             if (process is null)
@@ -608,6 +609,18 @@ public class Program
         {
             // git missing from PATH or not executable - fall back to the directory walk.
             return null;
+        }
+    }
+
+    private static void ClearRepositoryLocationEnvironment(ProcessStartInfo startInfo)
+    {
+        // `git -C <startDir> rev-parse --show-toplevel` still honors repository-location
+        // overrides inherited from the caller. A stale GIT_DIR/GIT_WORK_TREE can point at
+        // an ancestor checkout, which passes the wrong-tree guard because it really is an
+        // ancestor of startDir. Strip those overrides so git resolves from startDir itself.
+        foreach (var name in s_gitRepositoryLocationEnvironmentVariables)
+        {
+            startInfo.Environment.Remove(name);
         }
     }
 
@@ -852,10 +865,11 @@ public class Program
         var flipped = FlipCase(name);
 
         // A volume root has no segment to flip, and a segment with no cased letters cannot answer the
-        // question. Neither is a reason to refuse, so fall back to the platform's usual default.
+        // question. Fail closed as case-sensitive: a false "case-insensitive" answer can let a wrong
+        // checkout whose name differs only by case through the write guard.
         if (parent is null || name.Length == 0 || string.Equals(flipped, name, StringComparison.Ordinal))
         {
-            return !OperatingSystem.IsWindows() && !OperatingSystem.IsMacOS();
+            return true;
         }
 
         // A case-sensitive volume that happens to hold a real sibling differing only by case is read as
@@ -886,6 +900,15 @@ public class Program
     private const uint FileFlagBackupSemantics = 0x02000000;
     private const uint FileCsFlagCaseSensitiveDir = 0x1;
     private const uint FileCaseSensitiveInformationSize = 4;
+    private static readonly string[] s_gitRepositoryLocationEnvironmentVariables =
+    [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    ];
 
     private enum FileInfoByHandleClass
     {

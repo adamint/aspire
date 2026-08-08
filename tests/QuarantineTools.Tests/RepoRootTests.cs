@@ -159,6 +159,16 @@ public class RepoRootTests : IDisposable
     }
 
     [Fact]
+    public void IsCaseSensitiveDirectory_FailsClosedWhenTheFinalSegmentProbeCannotAnswer()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows uses FileCaseSensitiveInfo instead of the final-segment fallback.");
+
+        var uncased = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "123")).FullName;
+
+        Assert.True(Program.IsCaseSensitiveDirectory(uncased));
+    }
+
+    [Fact]
     public void IsSameOrAncestorDirectory_UsesEachParentsCasingRules_WhenTheFinalSegmentProbeIsAmbiguous()
     {
         var parent = Path.Combine(_scratch.FullName, "case-sensitive-parent");
@@ -326,6 +336,25 @@ public class RepoRootTests : IDisposable
         // The payload assertion. Everything else here checks how the refusal is reported; this checks
         // that the other tree was actually left alone.
         Assert.Equal(before, await File.ReadAllTextAsync(sample, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Tool_IgnoresAmbientGitOverridesThatPointAtAncestorCheckout()
+    {
+        var (outer, nested) = CreateOuterRepoWithNestedWorktree();
+        var outerSample = Path.Combine(outer, "tests", "Sample", "SampleTests.cs");
+        var nestedSample = Path.Combine(nested, "tests", "Sample", "SampleTests.cs");
+        var outerBefore = await File.ReadAllTextAsync(outerSample, TestContext.Current.CancellationToken);
+
+        var (exitCode, _) = await RunToolAsync(nested, new Dictionary<string, string>
+        {
+            ["GIT_DIR"] = Path.Combine(outer, ".git"),
+            ["GIT_WORK_TREE"] = outer,
+        });
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(outerBefore, await File.ReadAllTextAsync(outerSample, TestContext.Current.CancellationToken));
+        Assert.Contains("QuarantinedTest", await File.ReadAllTextAsync(nestedSample, TestContext.Current.CancellationToken), StringComparison.Ordinal);
     }
 
     /// <summary>
