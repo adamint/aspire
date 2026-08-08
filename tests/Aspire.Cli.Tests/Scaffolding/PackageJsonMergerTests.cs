@@ -1502,6 +1502,11 @@ public class PackageJsonMergerTests
     [InlineData("^7.0.2")]
     [InlineData("~7.1.0")]
     [InlineData("6.1.0")]
+    [InlineData("next")]
+    [InlineData("latest")]
+    [InlineData("npm:typescript@7.0.2")]
+    [InlineData("workspace:*")]
+    [InlineData("^6.0.0 || ^7.0.0")]
     public void Merge_BrownfieldOnUnsupportedTypeScript_DropsLintToolchain(string existingTypeScript)
     {
         var existing = $$"""

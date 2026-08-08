@@ -157,8 +157,9 @@ internal static class PackageJsonMerger
     }
 
     /// <summary>
-    /// Withdraws the scaffolded typescript-eslint lint toolchain when the project's TypeScript is
-    /// newer than typescript-eslint supports, so the merged manifest still installs.
+    /// Withdraws the scaffolded typescript-eslint lint toolchain when the project's TypeScript
+    /// cannot be proven compatible with the version typescript-eslint supports, so the merged
+    /// manifest still installs.
     /// </summary>
     /// <remarks>
     /// Dependency merging keeps whichever version is newer, so a project already on TypeScript 7
@@ -167,15 +168,21 @@ internal static class PackageJsonMerger
     /// with ERESOLVE — the exact failure `aspire init` is supposed to avoid.
     ///
     /// Downgrading the project's compiler is not an option: TypeScript 7 is the native compiler and
-    /// the user chose it. The AppHost only needs `tsc` to build, so the lint rules are what gets
-    /// dropped. eslint.config.mjs is still written, and starts working once typescript-eslint
-    /// supports TypeScript 7 and the dependency is added back.
+    /// the user chose it. Npm dependency specs can also be tags, aliases, workspace references, or
+    /// union ranges; unless the merger can prove the spec is inside the peer range, it must fail
+    /// closed and avoid adding a dependency pair npm may reject. The AppHost only needs `tsc` to
+    /// build, so the lint rules are what gets dropped. eslint.config.mjs is still written, and starts
+    /// working once typescript-eslint supports TypeScript 7 and the dependency is added back.
     /// </remarks>
     private static void RemoveLintToolchainWhenTypeScriptIsTooNew(JsonObject existing, ILogger logger)
     {
         var typeScriptVersion = FindDependencyVersion(existing, TypeScriptPackage);
-        if (typeScriptVersion is null ||
-            !NpmVersionHelper.TryParseNpmVersion(typeScriptVersion, out var resolvedTypeScript) ||
+        if (typeScriptVersion is null)
+        {
+            return;
+        }
+
+        if (NpmVersionHelper.TryParseNpmVersion(typeScriptVersion, out var resolvedTypeScript) &&
             SemVersion.ComparePrecedence(resolvedTypeScript, s_firstUnsupportedTypeScript) < 0)
         {
             return;
@@ -184,7 +191,7 @@ internal static class PackageJsonMerger
         if (RemoveDependency(existing, TypeScriptEslintPackage))
         {
             logger.LogWarning(
-                "Skipped adding {Package} because this project uses TypeScript {Version}, which is outside the range {Package} supports. The AppHost lint script was not added.",
+                "Skipped adding {Package} because this project uses TypeScript version spec '{Version}', which is outside or cannot be verified against the range {Package} supports. The AppHost lint script was not added.",
                 TypeScriptEslintPackage,
                 typeScriptVersion,
                 TypeScriptEslintPackage);
