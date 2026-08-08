@@ -23,9 +23,9 @@ export function generateCertificateSerialNumber(bytes: Buffer = randomBytes(16))
 
   // Keep the value positive without requiring DER to prepend a 0x00 byte.
   serialBytes[0] = serialBytes[0] & 0x7f;
-  // If masking produces a leading zero, the serialized INTEGER would either be
-  // non-minimal or shorter than the fixed 16-byte value. Force a non-zero
-  // positive first byte so node-forge emits a stable DER-valid serial.
+  // node-forge strips at most one redundant leading 0x00 when DER-encoding INTEGERs.
+  // Avoid a leading zero entirely so draws with multiple zero bytes cannot leave
+  // illegal padding after that normalization.
   if (serialBytes[0] === 0) {
     serialBytes[0] = 1;
   }
