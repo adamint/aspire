@@ -1290,6 +1290,55 @@ suite('AspireAppHostTreeProvider', () => {
         provider.dispose();
     });
 
+    test('workspace resource command item does not execute when the AppHost path changes', async () => {
+        const runResourceCommandCalls: Array<[string, string | undefined, string, readonly string[]]> = [];
+        const onDidChangeData: vscode.Event<void> = () => ({ dispose: () => { } });
+        const repository = {
+            viewMode: 'workspace' as ViewMode,
+            appHosts: [],
+            workspaceResources: [
+                makeResource({
+                    name: 'api',
+                    displayName: 'API',
+                    commands: {
+                        restart: { displayName: 'Restart', description: null },
+                    },
+                }),
+            ],
+            workspaceAppHostPath: '/repo/AppHost/AppHost.csproj',
+            workspaceAppHostCandidatePaths: [],
+            workspaceAppHostName: 'AppHost.csproj',
+            workspaceAppHostDescription: undefined,
+            onDidChangeData,
+            runResourceCommand: async (resourceName: string, appHostPath: string | undefined, commandName: string, additionalArgs: readonly string[] = []) => {
+                runResourceCommandCalls.push([resourceName, appHostPath, commandName, additionalArgs]);
+                return { stdout: '', stderr: '' };
+            },
+        } as unknown as AppHostDataRepository & { workspaceResources: ResourceJson[]; workspaceAppHostPath: string };
+        const provider = new AspireAppHostTreeProvider(repository, makeTerminalProvider(), makeLaunchService());
+        sandbox.stub(vscode.window, 'showInformationMessage');
+        const [workspaceResourcesItem] = provider.getChildren();
+        const [resourceItem] = provider.getChildren(workspaceResourcesItem);
+        const commandsGroup = provider.getChildren(resourceItem).find(item => item.contextValue === 'commandsGroup');
+        assert.ok(commandsGroup, 'Expected commands group');
+        const [commandItem] = provider.getChildren(commandsGroup);
+        repository.workspaceAppHostPath = '/repo/OtherAppHost/AppHost.csproj';
+        repository.workspaceResources = [
+            makeResource({
+                name: 'api',
+                displayName: 'Other API',
+                commands: {
+                    restart: { displayName: 'Restart', description: null },
+                },
+            }),
+        ];
+
+        await provider.executeResourceCommandItem(commandItem as any);
+
+        assert.deepStrictEqual(runResourceCommandCalls, []);
+        provider.dispose();
+    });
+
     test('resource command item returns failed execution outcome after reporting error', async () => {
         const terminalProvider = {
             getAspireCliExecutablePath: async () => 'aspire',

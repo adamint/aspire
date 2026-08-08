@@ -1569,7 +1569,12 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     }
 
     async executeResourceCommand(element: ResourceItem): Promise<ResourceCommandExecutionOutcome | void> {
-        const resource = findLatestResourceForElement(this._repository, element) ?? element.resource;
+        const resource = findLatestResourceForElement(this._repository, element);
+        if (!resource) {
+            vscode.window.showInformationMessage(noCommandsAvailable);
+            return;
+        }
+
         const commands = resource.commands;
         if (!commands || Object.keys(commands).length === 0) {
             vscode.window.showInformationMessage(noCommandsAvailable);
@@ -1612,9 +1617,12 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
     async executeResourceCommandItem(element: ResourceCommandItem): Promise<ResourceCommandExecutionOutcome | void> {
         const commandName = element.commandName;
         const latestResource = findLatestResourceForElement(this._repository, element.resourceItem);
-        const command = latestResource === undefined
-            ? element.commandJson
-            : latestResource.commands?.[commandName];
+        if (!latestResource) {
+            vscode.window.showInformationMessage(noCommandsAvailable);
+            return;
+        }
+
+        const command = latestResource.commands?.[commandName];
         const resourceItem = element.resourceItem;
 
         if (!isEnabledCommand(command)) {
@@ -1714,7 +1722,11 @@ export class AspireAppHostTreeProvider implements vscode.TreeDataProvider<TreeEl
             return;
         }
 
-        const resource = findLatestResourceForElement(this._repository, element) ?? element.resource;
+        const resource = findLatestResourceForElement(this._repository, element);
+        if (!resource) {
+            return;
+        }
+
         return await executeResourceCommandWithUi(
             this._repository,
             (resourceName, command, content, outputAppHostPath) => this.showResourceCommandOutput(resourceName, command, content, outputAppHostPath),
