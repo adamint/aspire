@@ -258,7 +258,7 @@ jobs:
       - name: Install Azure Functions Core Tools
         if: runner.os == 'Linux' && (inputs.testShortName == 'Playground' || inputs.testShortName == 'Azure')
         run: |
-          npm i -g azure-functions-core-tools@4 --unsafe-perm true
+          npm i -g azure-functions-core-tools@4.12.1 --unsafe-perm true
 
       - name: Compute test project path
         id: compute_project_path
