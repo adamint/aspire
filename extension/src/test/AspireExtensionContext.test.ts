@@ -2,11 +2,15 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 import * as assert from 'assert';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { ErrorCodes, ResponseError } from 'vscode-jsonrpc';
 import { AspireExtensionContext } from '../AspireExtensionContext';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
+import * as cliModule from '../debugger/languages/cli';
 import { extensionLogOutputChannel } from '../utils/logging';
 
 suite('AspireExtensionContext', () => {
@@ -275,6 +279,37 @@ suite('AspireExtensionContext', () => {
         assert.deepStrictEqual(terminateOptions, [{ force: true }]);
     });
 
+    test('deactivation force-drains a disposed debug session with pending CLI termination', async () => {
+        const order: string[] = [];
+        const context = createContext(order);
+        const cliProcess = createFakeCliProcess(4321);
+        const spawnStub = sinon.stub(cliModule, 'spawnCliProcess').returns(cliProcess);
+        const terminateStub = sinon.stub(cliModule, 'terminateCliProcess');
+        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = createSpawnedDebugSession(context);
+        context.addAspireDebugSession(aspireDebugSession);
+
+        try {
+            await aspireDebugSession.spawnAspireCommand(['run'], '/workspace', false, 'aspire run');
+
+            aspireDebugSession.dispose();
+            assert.deepStrictEqual(context.aspireDebugSessions, []);
+
+            await deactivateContext(context);
+
+            sinon.assert.calledOnceWithExactly(
+                terminateStub,
+                cliProcess,
+                `Aspire CLI for debug session ${aspireDebugSession.debugSessionId}`,
+                { force: true });
+        }
+        finally {
+            spawnStub.restore();
+            terminateStub.restore();
+            stopDebuggingStub.restore();
+        }
+    });
+
     test('a debug session registered after teardown is refused and disposed rather than tracked forever', async () => {
         const order: string[] = [];
         const context = createContext(order);
@@ -341,4 +376,34 @@ function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void
     });
 
     return { promise, resolve };
+}
+
+function createSpawnedDebugSession(context: AspireExtensionContext): AspireDebugSession {
+    const parentDebugSession = {
+        id: 'aspire-session',
+        configuration: {},
+    } as unknown as vscode.DebugSession;
+
+    return new AspireDebugSession(
+        parentDebugSession,
+        { onNewConnection: () => ({ dispose: () => { } }) } as any,
+        { recordAppHostProcessExit: () => { } } as any,
+        {
+            getAspireCliExecutablePath: async () => '/usr/local/bin/aspire',
+            createEnvironment: () => ({}),
+        } as any,
+        context.removeAspireDebugSession.bind(context));
+}
+
+function createFakeCliProcess(pid: number): ChildProcessWithoutNullStreams {
+    return Object.assign(new EventEmitter(), {
+        stdin: new PassThrough(),
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+        killed: false,
+        exitCode: null,
+        signalCode: null,
+        pid,
+        kill: sinon.stub().returns(true),
+    }) as unknown as ChildProcessWithoutNullStreams;
 }

@@ -110,7 +110,8 @@ export function spawnCliProcess(terminalProvider: AspireTerminalProvider, comman
 }
 
 export function terminateCliProcess(childProcess: ChildProcessWithoutNullStreams, description: string, options?: { suppressTimeoutWarning?: boolean; force?: boolean }): void {
-    const processGroupPid = process.platform !== 'win32' && managedPosixProcessGroups.has(childProcess)
+    const isWindows = process.platform === 'win32';
+    const processGroupPid = !isWindows && managedPosixProcessGroups.has(childProcess)
         ? childProcess.pid
         : undefined;
     let exited = childProcess.exitCode !== null || childProcess.signalCode !== null;
@@ -161,8 +162,12 @@ export function terminateCliProcess(childProcess: ChildProcessWithoutNullStreams
                 forceTermination();
             }
             managedPosixProcessGroups.delete(childProcess);
+            return;
         }
-        return;
+
+        if (!isWindows) {
+            return;
+        }
     }
 
     if (options?.force) {
@@ -172,6 +177,21 @@ export function terminateCliProcess(childProcess: ChildProcessWithoutNullStreams
         // that ignored SIGTERM alive along with its whole tree. Such callers have already spent
         // their own cooperative window, so the only signal left that means anything is the hard one.
         forceTermination();
+        return;
+    }
+
+    if (exited) {
+        // Windows does not tie child lifetimes to the parent process. An exited CLI leader can
+        // still have an AppHost/resource tree underneath its recorded PID, so sweep it with
+        // taskkill instead of treating the leader's exit as proof that teardown completed.
+        try {
+            const signalSent = terminateCliProcessTree(childProcess, false);
+            if (!signalSent) {
+                extensionLogOutputChannel.warn(`Failed to terminate ${description}.`);
+            }
+        } catch (error) {
+            extensionLogOutputChannel.error(`Failed to terminate ${description}: ${String(error)}`);
+        }
         return;
     }
 

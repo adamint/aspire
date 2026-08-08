@@ -66,11 +66,13 @@ export class AspireExtensionContext implements vscode.Disposable {
             return null;
         }
 
-        return this._aspireDebugSessions.find(session => session.debugSessionId === debugSessionId) || null;
+        return this._aspireDebugSessions.find(session => session.debugSessionId === debugSessionId && !session.isDisposed) || null;
     }
 
     get aspireDebugSessions(): readonly AspireDebugSession[] {
-        return [...this._aspireDebugSessions];
+        // Disposed sessions can remain tracked only as CLI process owners. They must still be
+        // visible to deactivation, but not to RPC lookups or extension-state snapshots.
+        return this._aspireDebugSessions.filter(session => !session.isDisposed);
     }
 
     addAspireDebugSession(debugSession: AspireDebugSession) {
@@ -166,7 +168,7 @@ export class AspireExtensionContext implements vscode.Disposable {
         // A cooperative stop that resolved, rejected or timed out proves only what happened to the
         // RPC request; the CLI process can still be running. Signal any that are, so deactivation
         // cannot leave an AppHost and its resource processes orphaned.
-        for (const session of this._aspireDebugSessions) {
+        for (const session of [...this._aspireDebugSessions]) {
             try {
                 // Force rather than signal-and-schedule: `terminateCliProcess` escalates to a hard
                 // kill on an `unref`'d timer, and `_deactivateCore` resolves immediately after this
@@ -187,6 +189,10 @@ export class AspireExtensionContext implements vscode.Disposable {
     private _collectStopRequests(requested: Map<string, Promise<void>>): boolean {
         let addedRequest = false;
         for (const session of this._aspireDebugSessions) {
+            if (session.isDisposed) {
+                continue;
+            }
+
             if (requested.has(session.debugSessionId)) {
                 continue;
             }
