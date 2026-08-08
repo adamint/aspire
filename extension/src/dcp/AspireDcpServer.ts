@@ -574,14 +574,10 @@ export default class AspireDcpServer {
                     return;
                 }
 
-                if (!runSessions.requestStop(runId)) {
-                    res.status(200).end();
-                    return;
-                }
-
                 // DCP's DELETE contract is the protocol acknowledgement that the run has
                 // terminated. Complete that contract before entering VS Code debugger
                 // teardown, whose implementation may wait on another extension.
+                runSessions.requestStop(runId);
                 res.status(200).end();
                 dcpServer._scheduleDebuggerTeardown(run);
             });

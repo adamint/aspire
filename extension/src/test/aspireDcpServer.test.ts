@@ -8,6 +8,7 @@ import type * as vscode from 'vscode';
 import WebSocket from 'ws';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import { nodeDebuggerExtension } from '../debugger/languages/node';
+import { cleanupRun, registerRunCleanup } from '../debugger/runCleanupRegistry';
 import AspireDcpServer, { DcpServerOptions, getSessionRoutingKey } from '../dcp/AspireDcpServer';
 import type { AspireResourceDebugSession, AspireResourceExtendedDebugConfiguration, NodeLaunchConfiguration, ProcessRestartedNotification, RunSessionNotification, RunSessionPayload, ServiceLogsNotification, SessionMessageNotification, SessionTerminatedNotification } from '../dcp/types';
 import { extensionLogOutputChannel } from '../utils/logging';
@@ -984,44 +985,61 @@ suite('Aspire DCP server', () => {
         assert.strictEqual(telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end').length, 1);
     });
 
-    test('adapter exit before DELETE keeps its actual exit code', async () => {
+    test('adapter exit before DELETE keeps its actual exit code and still tears down the debugger', async () => {
         const intruderClient = await openNotificationClient(harness, 'aspire-extension-run-foreign-intruder');
         const client = await openNotificationClient(harness);
-        const createResponse = await createRunSession(harness);
+        let runId = '';
+        let cleanupCalled = false;
+        const resourceTeardown = sinon.stub().callsFake(() => {
+            cleanupRun(runId);
+            return Promise.resolve();
+        });
+        const createResponse = await createRunSession(harness, resourceTeardown);
         const runLocation = createResponse.headers.location;
         assert.ok(runLocation);
-        const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
+        runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
+        registerRunCleanup(runId, () => {
+            cleanupCalled = true;
+        });
         const adapterNotificationHandler = harness.dcpServer.createRunSessionNotificationHandler(runId);
         assert.ok(adapterNotificationHandler);
 
-        const adapterNotification: SessionTerminatedNotification = {
-            notification_type: 'sessionTerminated',
-            session_id: runId,
-            dcp_id: 'aspire-extension-run-foreign-intruder',
-            exit_code: 23,
-        };
-        adapterNotificationHandler(adapterNotification);
-        const notification = await client.waitForNotification();
+        try {
+            const adapterNotification: SessionTerminatedNotification = {
+                notification_type: 'sessionTerminated',
+                session_id: runId,
+                dcp_id: 'aspire-extension-run-foreign-intruder',
+                exit_code: 23,
+            };
+            adapterNotificationHandler(adapterNotification);
+            const notification = await client.waitForNotification();
 
-        assert.deepStrictEqual(notification, {
-            notification_type: 'sessionTerminated',
-            session_id: runId,
-            exit_code: 23,
-        });
+            assert.deepStrictEqual(notification, {
+                notification_type: 'sessionTerminated',
+                session_id: runId,
+                exit_code: 23,
+            });
 
-        const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
-        adapterNotificationHandler(adapterNotification);
-        await Promise.all([drainNotifications(client), drainNotifications(intruderClient)]);
+            const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+            const repeatedDeleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+            adapterNotificationHandler(adapterNotification);
+            await waitFor(() => resourceTeardown.called, `debugger teardown for completed run ${runId}`);
+            await Promise.all([drainNotifications(client), drainNotifications(intruderClient)]);
 
-        assert.strictEqual(deleteResponse.statusCode, 200);
-        assert.strictEqual(harness.stopDebugging.called, false);
-        assert.deepStrictEqual(client.notifications, [notification]);
-        assert.deepStrictEqual(intruderClient.notifications, []);
-        assert.strictEqual(getInternals(harness.dcpServer)._runSessions.get(runId)?.lifecycle, 'completed');
-        const runSessionEndEvents = telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end');
-        assert.strictEqual(runSessionEndEvents.length, 1);
-        assert.strictEqual(runSessionEndEvents[0].measurements?.exit_code, 23);
-        assert.strictEqual(runSessionEndEvents[0].isError, true);
+            assert.strictEqual(deleteResponse.statusCode, 200);
+            assert.strictEqual(repeatedDeleteResponse.statusCode, 200);
+            assert.strictEqual(resourceTeardown.calledOnce, true);
+            assert.strictEqual(cleanupCalled, true);
+            assert.deepStrictEqual(client.notifications, [notification]);
+            assert.deepStrictEqual(intruderClient.notifications, []);
+            assert.strictEqual(getInternals(harness.dcpServer)._runSessions.get(runId)?.lifecycle, 'completed');
+            const runSessionEndEvents = telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end');
+            assert.strictEqual(runSessionEndEvents.length, 1);
+            assert.strictEqual(runSessionEndEvents[0].measurements?.exit_code, 23);
+            assert.strictEqual(runSessionEndEvents[0].isError, true);
+        } finally {
+            cleanupRun(runId);
+        }
     });
 
     test('terminateRunSession terminates a live run once and ignores unknown runs', async () => {
