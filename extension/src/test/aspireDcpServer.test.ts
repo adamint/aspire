@@ -4,11 +4,12 @@ import { once } from 'events';
 import type { IncomingHttpHeaders } from 'http';
 import * as https from 'https';
 import * as sinon from 'sinon';
+import type * as vscode from 'vscode';
 import WebSocket from 'ws';
-import type { AspireDebugSession } from '../debugger/AspireDebugSession';
+import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import { nodeDebuggerExtension } from '../debugger/languages/node';
 import AspireDcpServer, { DcpServerOptions, getSessionRoutingKey } from '../dcp/AspireDcpServer';
-import type { AspireResourceDebugSession, NodeLaunchConfiguration, ProcessRestartedNotification, RunSessionNotification, RunSessionPayload, ServiceLogsNotification, SessionMessageNotification, SessionTerminatedNotification } from '../dcp/types';
+import type { AspireResourceDebugSession, AspireResourceExtendedDebugConfiguration, NodeLaunchConfiguration, ProcessRestartedNotification, RunSessionNotification, RunSessionPayload, ServiceLogsNotification, SessionMessageNotification, SessionTerminatedNotification } from '../dcp/types';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { __setReporterForTests } from '../utils/telemetry';
 
@@ -923,6 +924,66 @@ suite('Aspire DCP server', () => {
         assert.strictEqual(telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end').length, 1);
     });
 
+    test('already-started resource termination after retention cannot duplicate a requested stop', async () => {
+        await stopHarness(harness);
+        harness = await startHarness({ runRetentionMs: 5_000 });
+        const clock = sinon.useFakeTimers({
+            shouldClearNativeTimers: true,
+            toFake: ['setTimeout', 'clearTimeout'],
+        });
+        const client = await openNotificationClient(harness);
+        const createResponse = await createRunSession(harness);
+        const runLocation = createResponse.headers.location;
+        assert.ok(runLocation);
+        const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
+        const resourceTermination = createDeferred<number>();
+        const aspireDebugSession = createAspireDebugSessionForRunSessionTests(harness.dcpServer);
+        const debugConfig = {
+            runId,
+            debugSessionId: harness.dcpId,
+            type: 'coreclr',
+            name: 'Already Started Resource',
+            request: 'launch',
+        } as AspireResourceExtendedDebugConfiguration;
+
+        aspireDebugSession.trackAlreadyStartedResourceSession(debugConfig, {
+            id: runId,
+            processId: 4242,
+            session: { id: 'already-started-resource' } as vscode.DebugSession,
+            stopSession: sinon.stub().resolves(),
+            termination: resourceTermination.promise,
+        });
+        const processNotification = await client.waitForNotification(notification => notification.notification_type === 'processRestarted');
+        const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        const requestedStopNotification = await client.waitForNotification(notification => notification.notification_type === 'sessionTerminated');
+        assert.strictEqual(getInternals(harness.dcpServer)._runSessions._retentionTimers.size, 1);
+
+        await clock.tickAsync(5_000);
+        await waitFor(
+            () => getInternals(harness.dcpServer)._runSessions.get(runId) === undefined,
+            `run ${runId} eviction`);
+        resourceTermination.resolve(17);
+        await resourceTermination.promise;
+        await drainNotifications(client);
+        aspireDebugSession.dispose();
+
+        assert.strictEqual(deleteResponse.statusCode, 200);
+        assert.deepStrictEqual(processNotification, {
+            notification_type: 'processRestarted',
+            session_id: runId,
+            pid: 4242,
+        });
+        assert.deepStrictEqual(requestedStopNotification, {
+            notification_type: 'sessionTerminated',
+            session_id: runId,
+        });
+        assert.deepStrictEqual(client.notifications, [
+            processNotification,
+            requestedStopNotification,
+        ]);
+        assert.strictEqual(telemetryReporter.events.filter(event => event.name === 'aspire/vscode/debug/runsession/end').length, 1);
+    });
+
     test('adapter exit before DELETE keeps its actual exit code', async () => {
         const intruderClient = await openNotificationClient(harness, 'aspire-extension-run-foreign-intruder');
         const client = await openNotificationClient(harness);
@@ -1161,6 +1222,33 @@ suite('Aspire DCP server', () => {
             runSessionEndEvents.length);
     });
 });
+
+function createAspireDebugSessionForRunSessionTests(dcpServer: AspireDcpServer): AspireDebugSession {
+    const parentDebugSession = {
+        id: 'aspire-session',
+        type: 'aspire',
+        name: 'Aspire',
+        workspaceFolder: undefined,
+        configuration: {
+            type: 'aspire',
+            request: 'launch',
+            name: 'Aspire',
+            program: '/workspace/AppHost/AppHost.csproj',
+        },
+        customRequest: sinon.stub(),
+        getDebugProtocolBreakpoint: sinon.stub(),
+    };
+    const terminalProvider = {
+        isDebugConfigEnvironmentLoggingEnabled: () => false,
+    };
+
+    return new AspireDebugSession(
+        parentDebugSession as unknown as vscode.DebugSession,
+        {} as any,
+        dcpServer,
+        terminalProvider as any,
+        () => { });
+}
 
 async function startHarness(options?: DcpServerOptions): Promise<Harness> {
     const dcpSessionId = 'aspire-extension-run-test';

@@ -716,7 +716,7 @@ export default class AspireDcpServer {
     }
 
     public sendNotification(notification: RunSessionNotification): void {
-        if (this._runSessions.get(notification.session_id)) {
+        if (notification.session_id.length > 0) {
             this._runSessions.notify(notification.session_id, notification);
             return;
         }
