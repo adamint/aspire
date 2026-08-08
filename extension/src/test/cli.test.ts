@@ -39,32 +39,6 @@ suite('CLI process termination', () => {
         sinon.assert.calledOnce(taskkillUnref);
         sinon.assert.notCalled(childProcess.kill);
     });
-
-    test('terminates the Windows process tree for an already-exited leader', () => {
-        sinon.stub(process, 'platform').value('win32');
-        const childProcess = createFakeCliProcess(4243, 0);
-        const taskkillUnref = sinon.stub();
-        const spawnStub = sinon.stub(nodeChildProcess, 'spawn').callsFake((command: string, args?: readonly string[], options?: nodeChildProcess.SpawnOptions) => {
-            return Object.assign(new EventEmitter(), {
-                command,
-                args: [...(args ?? [])],
-                options,
-                unref: taskkillUnref,
-            }) as unknown as nodeChildProcess.ChildProcess;
-        });
-
-        terminateCliProcess(childProcess, 'Aspire CLI');
-
-        sinon.assert.calledOnce(spawnStub);
-        assert.strictEqual(spawnStub.firstCall.args[0], 'taskkill.exe');
-        assert.deepStrictEqual(spawnStub.firstCall.args[1], ['/pid', '4243', '/t']);
-        assert.deepStrictEqual(spawnStub.firstCall.args[2], {
-            stdio: 'ignore',
-            windowsHide: true,
-        });
-        sinon.assert.calledOnce(taskkillUnref);
-        sinon.assert.notCalled(childProcess.kill);
-    });
 });
 
 function createFakeCliProcess(pid: number, exitCode: number | null): ChildProcessWithoutNullStreams & { kill: sinon.SinonStub } {

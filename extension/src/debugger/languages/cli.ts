@@ -168,6 +168,15 @@ export function terminateCliProcess(childProcess: ChildProcessWithoutNullStreams
         if (!isWindows) {
             return;
         }
+
+        // Windows does not tie child lifetimes to the parent process. An exited CLI leader can
+        // still have an AppHost/resource tree underneath its recorded PID, so sweep it with
+        // taskkill during forceful shutdown instead of treating the leader's exit as proof that
+        // teardown completed. Non-force callers keep the historical no-op behavior because a short
+        // helper CLI can legitimately exit before its close handler observes it.
+        if (!options?.force) {
+            return;
+        }
     }
 
     if (options?.force) {
@@ -177,21 +186,6 @@ export function terminateCliProcess(childProcess: ChildProcessWithoutNullStreams
         // that ignored SIGTERM alive along with its whole tree. Such callers have already spent
         // their own cooperative window, so the only signal left that means anything is the hard one.
         forceTermination();
-        return;
-    }
-
-    if (exited) {
-        // Windows does not tie child lifetimes to the parent process. An exited CLI leader can
-        // still have an AppHost/resource tree underneath its recorded PID, so sweep it with
-        // taskkill instead of treating the leader's exit as proof that teardown completed.
-        try {
-            const signalSent = terminateCliProcessTree(childProcess, false);
-            if (!signalSent) {
-                extensionLogOutputChannel.warn(`Failed to terminate ${description}.`);
-            }
-        } catch (error) {
-            extensionLogOutputChannel.error(`Failed to terminate ${description}: ${String(error)}`);
-        }
         return;
     }
 
