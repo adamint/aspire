@@ -1925,7 +1925,7 @@ public partial class AtsTypeScriptCodeGeneratorTests
     /// alongside every other package. Only <c>Aspire.Hosting</c> keeps unqualified names, so the
     /// fixture's own interfaces carry this prefix.
     /// </remarks>
-    private const string TestOptionsPrefix = "CodeGeneration_TypeScript_Tests";
+    private const string TestOptionsPrefix = "Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_Tests";
 
     [Fact]
     public async Task ApiExportUsesTheSameResolvedSignaturesAsGeneratedSource()
@@ -2547,8 +2547,8 @@ public partial class AtsTypeScriptCodeGeneratorTests
             => projector.ResolveOptionsInterfaceName(
                 projector.Resolved.Context.Capabilities.Single(c => c.CapabilityId == $"{packageName}/runAsEmulator"));
 
-        Assert.Equal("Azure_EventHubsRunAsEmulatorOptions", EmulatorInterfaceName(hubsAlone, CollisionPackageA));
-        Assert.Equal("Azure_ServiceBusRunAsEmulatorOptions", EmulatorInterfaceName(busAlone, CollisionPackageB));
+        Assert.Equal("Aspire_x002E_Hosting_x002E_Azure_x002E_EventHubsRunAsEmulatorOptions", EmulatorInterfaceName(hubsAlone, CollisionPackageA));
+        Assert.Equal("Aspire_x002E_Hosting_x002E_Azure_x002E_ServiceBusRunAsEmulatorOptions", EmulatorInterfaceName(busAlone, CollisionPackageB));
 
         Assert.Equal(
             EmulatorInterfaceName(hubsAlone, CollisionPackageA),
@@ -2616,8 +2616,24 @@ public partial class AtsTypeScriptCodeGeneratorTests
         var joined = TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "Contoso.FooBar");
 
         Assert.NotEqual(dotted, joined);
-        Assert.Equal("Contoso_Foo_BarRunAsEmulatorOptions", dotted);
-        Assert.Equal("Contoso_FooBarRunAsEmulatorOptions", joined);
+        Assert.Equal("Contoso_x002E_Foo_x002E_BarRunAsEmulatorOptions", dotted);
+        Assert.Equal("Contoso_x002E_FooBarRunAsEmulatorOptions", joined);
+    }
+
+    /// <summary>
+    /// Escape sequences are terminated so characters after the escaped code unit cannot become part
+    /// of the escape itself.
+    /// </summary>
+    [Fact]
+    public void OptionsInterfaceQualifiersUseTerminatedEscapes()
+    {
+        Assert.NotEqual(
+            TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "Contoso.Foo-Bar"),
+            TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "Contoso.Foo.x2DBar"));
+
+        Assert.NotEqual(
+            TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "Contoso.\u01234"),
+            TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "Contoso.\u1234"));
     }
 
     /// <summary>
@@ -2635,9 +2651,26 @@ public partial class AtsTypeScriptCodeGeneratorTests
     {
         var name = TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "3rdParty.Aspire");
 
-        Assert.Equal("_3rdParty_AspireRunAsEmulatorOptions", name);
+        Assert.Equal("_x0033_rdParty_x002E_AspireRunAsEmulatorOptions", name);
         Assert.True(name[0] is '_' or '$' || char.IsLetter(name[0]), $"'{name}' is not a valid TypeScript identifier.");
         Assert.NotEqual(name, TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "_3rdParty.Aspire"));
+    }
+
+    /// <summary>
+    /// Non-core assemblies are qualified by their complete names, not by a shortened suffix that can
+    /// overlap other assemblies.
+    /// </summary>
+    [Fact]
+    public void OptionsInterfaceQualifiersUseTheFullAssemblyName()
+    {
+        var hostingRedis = TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "Aspire.Hosting.Redis");
+        var aspireRedis = TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "Aspire.Redis");
+        var bareRedis = TypeScriptApiProjector.GetOptionsInterfaceName("runAsEmulator", "Redis");
+
+        Assert.Equal("Aspire_x002E_Hosting_x002E_RedisRunAsEmulatorOptions", hostingRedis);
+        Assert.Equal("Aspire_x002E_RedisRunAsEmulatorOptions", aspireRedis);
+        Assert.Equal("RedisRunAsEmulatorOptions", bareRedis);
+        Assert.Equal(3, new[] { hostingRedis, aspireRedis, bareRedis }.Distinct(StringComparer.Ordinal).Count());
     }
 
     /// <summary>
@@ -2668,15 +2701,15 @@ public partial class AtsTypeScriptCodeGeneratorTests
             documentedOptions,
             item =>
             {
-                Assert.Equal("Azure_EventHubsRunAsEmulatorOptions", item.Name);
+                Assert.Equal("Aspire_x002E_Hosting_x002E_Azure_x002E_EventHubsRunAsEmulatorOptions", item.Name);
                 Assert.Equal(CollisionPackageA, item.OwningAssemblyName);
             });
 
         var serviceBusDeclaration = Assert.Single(
             model.Declarations,
-            declaration => declaration.Content.Contains("Azure_ServiceBusRunAsEmulatorOptions", StringComparison.Ordinal));
+            declaration => declaration.Content.Contains("Aspire_x002E_Hosting_x002E_Azure_x002E_ServiceBusRunAsEmulatorOptions", StringComparison.Ordinal));
 
-        Assert.Equal($"{CollisionPackageB}:options:Azure_ServiceBusRunAsEmulatorOptions", serviceBusDeclaration.Id);
+        Assert.Equal($"{CollisionPackageB}:options:Aspire_x002E_Hosting_x002E_Azure_x002E_ServiceBusRunAsEmulatorOptions", serviceBusDeclaration.Id);
         Assert.Equal(CollisionPackageB, serviceBusDeclaration.OwningAssemblyName);
     }
 
@@ -2694,7 +2727,7 @@ public partial class AtsTypeScriptCodeGeneratorTests
     /// Both directions fail under the old scheme, but at different assertions, and that asymmetry
     /// is why the body comparison is here. Event Hubs was scanned first and kept the unsuffixed
     /// base name, so it fails only on the name: it produced <c>RunAsEmulatorOptions</c> rather than
-    /// <c>Azure_EventHubsRunAsEmulatorOptions</c>. Service Bus lost that draw during full generation
+    /// the Event Hubs assembly-qualified name. Service Bus lost that draw during full generation
     /// and was suffixed there while its own single-package export was not, so it disagreed about
     /// the interface itself. Checking only that the exported name appears among the generated names
     /// would have missed it, because the name did appear -- it just belonged to Event Hubs. The old
@@ -2705,8 +2738,8 @@ public partial class AtsTypeScriptCodeGeneratorTests
     /// </para>
     /// </remarks>
     [Theory]
-    [InlineData(CollisionPackageA, "Azure_EventHubsRunAsEmulatorOptions")]
-    [InlineData(CollisionPackageB, "Azure_ServiceBusRunAsEmulatorOptions")]
+    [InlineData(CollisionPackageA, "Aspire_x002E_Hosting_x002E_Azure_x002E_EventHubsRunAsEmulatorOptions")]
+    [InlineData(CollisionPackageB, "Aspire_x002E_Hosting_x002E_Azure_x002E_ServiceBusRunAsEmulatorOptions")]
     public void ApiExportNamesACollidingOptionsInterfaceTheWayGenerationDoes(string packageName, string expectedInterfaceName)
     {
         var fullContext = CreateEmulatorCollisionContext();

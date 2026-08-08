@@ -68,19 +68,11 @@ internal sealed partial class TypeScriptApiProjector
 
     private readonly TypeScriptResolvedModel _resolved;
 
-    // Prefixes stripped from an assembly name before it qualifies an options interface, longest
-    // first so that "Aspire.Hosting.Redis" yields "Redis" rather than "HostingRedis".
     /// <summary>The client parameter every entry-point function takes first.</summary>
     private const string EntryPointClientParameterName = "client";
 
     /// <summary>The declared type of <see cref="EntryPointClientParameterName"/>.</summary>
     private const string EntryPointClientParameterType = "AspireClientRpc";
-
-    private static readonly string[] s_optionsInterfaceQualifierPrefixes =
-    [
-        $"{AtsConstants.AspireHostingAssembly}.",
-        "Aspire."
-    ];
 
     public TypeScriptApiProjector(AtsContext context)
     {
@@ -1679,11 +1671,11 @@ internal sealed partial class TypeScriptApiProjector
     /// <para>
     /// The core hosting package keeps unqualified names. It is present in every scan, so its names
     /// were never the ones at risk, and leaving them alone confines the rename to the packages that
-    /// actually needed it. The qualifier drops a leading <c>Aspire.Hosting.</c> (or <c>Aspire.</c>)
-    /// and encodes the remaining separators, so <c>Aspire.Hosting.Azure.EventHubs</c> yields
-    /// <c>Azure_EventHubsRunAsEmulatorOptions</c> and <c>Aspire.Hosting.Redis</c> yields
-    /// <c>RedisWithDataVolumeOptions</c>. See <see cref="GetOptionsInterfaceQualifier"/> for why the
-    /// encoding has to be reversible rather than simply stripping the punctuation.
+    /// actually needed it. Other packages carry an encoding of their full assembly name, so
+    /// <c>Aspire.Hosting.Azure.EventHubs</c> yields
+    /// <c>Aspire_x002E_Hosting_x002E_Azure_x002E_EventHubsRunAsEmulatorOptions</c>. See
+    /// <see cref="GetOptionsInterfaceQualifier"/> for why the encoding has to be reversible rather
+    /// than simply stripping the punctuation or common prefixes.
     /// </para>
     /// </remarks>
     internal static string GetOptionsInterfaceName(string methodName, string owningAssemblyName)
@@ -1710,11 +1702,11 @@ internal sealed partial class TypeScriptApiProjector
     /// <c>Contoso.Foo.Bar</c> and <c>Contoso.FooBar</c> would both yield <c>ContosoFooBar</c>.
     /// </para>
     /// <para>
-    /// So separators are encoded rather than removed. <c>'.'</c> becomes <c>'_'</c>, a literal
-    /// <c>'_'</c> is doubled, and any other character becomes <c>_x</c> followed by its hex code
-    /// point. Every rule is reversible, so distinct assembly names cannot share a qualifier.
-    /// Assembly and package identity is case-insensitive, so casing alone never distinguishes two
-    /// assemblies and normalizing the first character is safe.
+    /// So every non-alphanumeric UTF-16 code unit is encoded rather than removed, and the full
+    /// assembly name is kept. Each escape is <c>_xNNNN_</c> with a terminator, so
+    /// <c>Contoso.Foo-Bar</c> cannot alias <c>Contoso.Foo.x2DBar</c>, and <c>U+0123</c> followed
+    /// by <c>4</c> cannot alias <c>U+1234</c>. A leading digit is escaped too because TypeScript
+    /// identifiers may not start with one.
     /// </para>
     /// </remarks>
     private static string GetOptionsInterfaceQualifier(string owningAssemblyName)
@@ -1725,39 +1717,17 @@ internal sealed partial class TypeScriptApiProjector
             return string.Empty;
         }
 
-        var remainder = owningAssemblyName;
-        foreach (var prefix in s_optionsInterfaceQualifierPrefixes)
+        var qualifier = new StringBuilder(owningAssemblyName.Length);
+        for (var i = 0; i < owningAssemblyName.Length; i++)
         {
-            if (remainder.StartsWith(prefix, StringComparison.Ordinal))
+            var character = owningAssemblyName[i];
+            if (char.IsAsciiLetter(character) || (i > 0 && char.IsAsciiDigit(character)))
             {
-                remainder = remainder[prefix.Length..];
-                break;
+                qualifier.Append(character);
+                continue;
             }
-        }
 
-        var qualifier = new StringBuilder(remainder.Length);
-        foreach (var character in remainder)
-        {
-            switch (character)
-            {
-                case '.':
-                    qualifier.Append('_');
-                    break;
-                case '_':
-                    qualifier.Append("__");
-                    break;
-                default:
-                    if (char.IsAsciiLetterOrDigit(character))
-                    {
-                        qualifier.Append(character);
-                    }
-                    else
-                    {
-                        qualifier.Append("_x").Append(((int)character).ToString("X2", CultureInfo.InvariantCulture));
-                    }
-
-                    break;
-            }
+            AppendEscapedCodeUnit(qualifier, character);
         }
 
         if (qualifier.Length == 0)
@@ -1765,17 +1735,15 @@ internal sealed partial class TypeScriptApiProjector
             return string.Empty;
         }
 
-        // A TypeScript identifier cannot start with a digit, and an assembly name legitimately can
-        // (for example "3rdParty.Aspire"). Prefixing keeps the result parseable, and cannot alias a
-        // name that already begins with '_' because that character encodes to a doubled '_'.
-        if (char.IsAsciiDigit(qualifier[0]))
+        return qualifier.ToString();
+
+        static void AppendEscapedCodeUnit(StringBuilder builder, char codeUnit)
         {
-            qualifier.Insert(0, '_');
-
-            return qualifier.ToString();
+            builder
+                .Append("_x")
+                .Append(((int)codeUnit).ToString("X4", CultureInfo.InvariantCulture))
+                .Append('_');
         }
-
-        return ToPascalCase(qualifier.ToString());
     }
 
     /// <summary>
