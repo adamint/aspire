@@ -314,7 +314,7 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task ProjectMetadataUsesTargetFrameworkConditionedTargetNameForMultiTargetedReference()
+    public async Task ProjectMetadataOmitsTargetNameForMultiTargetedReferenceWithoutSelectedTargetFramework()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
 
@@ -329,7 +329,7 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
                   </PropertyGroup>
                 """);
 
-        Assert.Equal("""    public string? TargetName => @"Eight Service";""", GetGeneratedTargetNameMember(generatedSource));
+        Assert.Null(GetGeneratedTargetNameMember(generatedSource));
     }
 
     [Fact]

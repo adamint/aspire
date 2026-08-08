@@ -90,9 +90,10 @@
 
     When a single-targeted reference does not specify SetTargetFramework, it is deliberately asked without an explicit
     TargetFramework: that matches the global properties ResolveProjectReferences already uses, so MSBuild serves the
-    result from its project cache instead of evaluating the reference a second time. For those references
-    TargetFramework is also undefined so a multi-targeted AppHost's inner build cannot force its own TFM onto a
-    reference that does not build for it.
+    result from its project cache instead of evaluating the reference a second time. A multi-targeted reference with no
+    selected TargetFramework is deliberately not asked for a target name. Publishing a guessed name would be worse than
+    omitting the metadata, because attach consumers trust every nonblank TargetName and only fall back to TargetPath
+    when the metadata is absent.
 
     Measured cost on a single-reference AppHost build: this adds one GetTargetFrameworks evaluation per reference and
     no extra GetTargetPath evaluation, because ResolveProjectReferences already asks for GetTargetPath with the same
@@ -133,16 +134,12 @@
       batch per item - the last batch's values are applied to every item - so the self-update is what keeps each
       reference's TargetFrameworks metadata paired with its own project.
 
-      %(TargetFrameworks) is a single semicolon-joined value such as "net8.0;net9.0"; the first entry is used because
-      it is the one a cross-targeting reference reports first and Aspire never negotiates a TFM for these references,
-      so there is no better signal about which inner build the AppHost will end up launching. Guessing is worth it
-      here: a name resolved from the wrong inner build leaves a consumer exactly where omitting the property would
-      have - falling back to its own guess - while the common case, where every TFM produces the same target name,
-      resolves correctly.
+      %(TargetFrameworks) is a single semicolon-joined value such as "net8.0;net9.0". If no TargetFramework is selected
+      for that reference, do not manufacture one here. A name from the wrong inner build suppresses the debugger's
+      TargetPath fallback and can make attach search for a process that never exists.
     -->
     <ItemGroup>
       <_AspireProjectResourceTargetFrameworkInfo Update="@(_AspireProjectResourceTargetFrameworkInfo)">
-        <SetTargetFramework Condition="'%(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)' == '' and '%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' != 'true' and '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' != ''">TargetFramework=$([System.Text.RegularExpressions.Regex]::Match('%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)', '^[^;]*'))</SetTargetFramework>
         <EffectiveGlobalPropertiesToRemove>%(_AspireProjectResourceTargetFrameworkInfo.GlobalPropertiesToRemove)</EffectiveGlobalPropertiesToRemove>
         <!--
           RemoveProperties wins over Properties in the MSBuild task. Once a specific target framework is selected,
@@ -155,14 +152,16 @@
         <RemoveGlobalProperties Condition="'%(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)' != '' or ('%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' != 'true' and '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' != '')">RuntimeIdentifier;SelfContained</RemoveGlobalProperties>
         <RemoveGlobalProperties Condition="'%(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)' == '' and ('%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' == 'true' or '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' == '')">TargetFramework;RuntimeIdentifier;SelfContained</RemoveGlobalProperties>
       </_AspireProjectResourceTargetFrameworkInfo>
+      <_AspireProjectResourceTargetPathProbe Include="@(_AspireProjectResourceTargetFrameworkInfo)"
+                                             Condition="'%(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)' != '' or '%(_AspireProjectResourceTargetFrameworkInfo.HasSingleTargetFramework)' == 'true' or '%(_AspireProjectResourceTargetFrameworkInfo.TargetFrameworks)' == ''" />
     </ItemGroup>
 
-    <MSBuild Projects="@(_AspireProjectResourceTargetFrameworkInfo)"
+    <MSBuild Projects="@(_AspireProjectResourceTargetPathProbe)"
              Targets="GetTargetPath"
              BuildInParallel="$(BuildInParallel)"
-             Properties="%(_AspireProjectResourceTargetFrameworkInfo.SetConfiguration); %(_AspireProjectResourceTargetFrameworkInfo.SetPlatform); %(_AspireProjectResourceTargetFrameworkInfo.SetTargetFramework)"
+             Properties="%(_AspireProjectResourceTargetPathProbe.SetConfiguration); %(_AspireProjectResourceTargetPathProbe.SetPlatform); %(_AspireProjectResourceTargetPathProbe.SetTargetFramework)"
              ContinueOnError="!$(BuildingProject)"
-             RemoveProperties="%(_AspireProjectResourceTargetFrameworkInfo.EffectiveGlobalPropertiesToRemove);%(_AspireProjectResourceTargetFrameworkInfo.RemoveGlobalProperties);$(_GlobalPropertiesToRemoveFromProjectReferences)"
+             RemoveProperties="%(_AspireProjectResourceTargetPathProbe.EffectiveGlobalPropertiesToRemove);%(_AspireProjectResourceTargetPathProbe.RemoveGlobalProperties);$(_GlobalPropertiesToRemoveFromProjectReferences)"
              SkipNonexistentProjects="true"
              SkipNonexistentTargets="true">
       <Output TaskParameter="TargetOutputs" ItemName="_AspireProjectResourceTargetPath" />
