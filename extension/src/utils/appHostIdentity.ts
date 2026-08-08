@@ -12,6 +12,11 @@ import * as path from 'path';
  */
 export type AppHostIdentityRelation = 'same' | 'different' | 'ambiguous';
 
+export interface AppHostIdentityKeyInfo {
+    readonly key: string;
+    readonly pathKeys: readonly string[];
+}
+
 /**
  * Project files that can own an AppHost source file. Only C# projects are listed because
  * the source names below (`apphost.cs`, `Program.cs`) are C#: an `.fsproj` sitting in the
@@ -119,12 +124,17 @@ export function compareAppHostIdentity(left: string | undefined, right: string |
  * the failure mode this replaced.
  */
 export function getAppHostIdentityKey(appHostPath: string): string {
+    return getAppHostIdentityKeyInfo(appHostPath).key;
+}
+
+export function getAppHostIdentityKeyInfo(appHostPath: string): AppHostIdentityKeyInfo {
     // Canonicalize before deriving the directory and the file shape. Identity belongs to
     // the real file, so a symlinked project must land in the same equivalence class as
     // its target rather than aliasing against whatever sits beside the link.
     const resolvedPath = canonicalize(path.normalize(path.resolve(appHostPath)));
     if (!isAppHostProjectFile(resolvedPath) && !isAppHostSourceFile(resolvedPath)) {
-        return getAppHostPathComparisonKey(resolvedPath);
+        const key = getAppHostPathComparisonKey(resolvedPath);
+        return { key, pathKeys: [key] };
     }
 
     const directory = path.dirname(resolvedPath);
@@ -134,9 +144,18 @@ export function getAppHostIdentityKey(appHostPath: string): string {
         shapes.sourceFiles.length === 1 &&
         (containsPath(shapes.projectFiles, resolvedPath) || containsPath(shapes.sourceFiles, resolvedPath));
 
-    return isAliasedPair
-        ? `${getAppHostPathComparisonKey(directory)}${appHostAliasKeySuffix}`
-        : getAppHostPathComparisonKey(resolvedPath);
+    if (isAliasedPair) {
+        return {
+            key: `${getAppHostPathComparisonKey(directory)}${appHostAliasKeySuffix}`,
+            pathKeys: [
+                getAppHostPathComparisonKey(shapes.projectFiles[0]),
+                getAppHostPathComparisonKey(shapes.sourceFiles[0]),
+            ],
+        };
+    }
+
+    const key = getAppHostPathComparisonKey(resolvedPath);
+    return { key, pathKeys: [key] };
 }
 
 export function isAppHostProjectFile(value: string): boolean {

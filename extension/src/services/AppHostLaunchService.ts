@@ -4,7 +4,7 @@ import * as vscode from 'vscode';
 import { AspireCommandType, AspireExtendedDebugConfiguration, AspireOperationKind } from '../dcp/types';
 import { appHostLifecycleBusy, startDebuggingDeclined } from '../loc/strings';
 import { classifyAppHostDirectory, classifyAppHostPath } from '../utils/appHostLanguage';
-import { compareAppHostIdentity, getAppHostIdentityKey, getAppHostPathComparisonKey, type AppHostIdentityRelation } from '../utils/appHostIdentity';
+import { compareAppHostIdentity, getAppHostIdentityKeyInfo, getAppHostPathComparisonKey, type AppHostIdentityKeyInfo, type AppHostIdentityRelation } from '../utils/appHostIdentity';
 import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventProperties } from '../utils/telemetry';
 import { bucketAspireCommand } from '../utils/telemetryBuckets';
 import { extensionLogOutputChannel } from '../utils/logging';
@@ -137,6 +137,7 @@ export class AppHostLaunchService implements vscode.Disposable {
      */
     private readonly _externalReservationExpiries = new Map<string, NodeJS.Timeout>();
     private readonly _lifecycleLocks = new Map<string, Promise<unknown>>();
+    private readonly _lifecycleLockPathKeys = new Map<string, Set<string>>();
     private readonly _lifecycleCancellationSource = new vscode.CancellationTokenSource();
     private _getEditorSessions: () => readonly AppHostLaunchSession[] = () => [];
     private _getRunningAppHosts: (token: vscode.CancellationToken) => Promise<readonly RunningAppHost[]> = async () => [];
@@ -181,6 +182,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         this._lifecycleCancellationSource.dispose();
         this._debugSessionSubscription.dispose();
         this._lifecycleLocks.clear();
+        this._lifecycleLockPathKeys.clear();
         for (const expiry of this._externalReservationExpiries.values()) {
             clearTimeout(expiry);
         }
@@ -263,7 +265,9 @@ export class AppHostLaunchService implements vscode.Disposable {
      */
     async runWithAppHostLifecycleLock<T>(appHostPath: string, token: vscode.CancellationToken, action: (token: vscode.CancellationToken) => Promise<T>): Promise<T> {
         throwIfCancelled(token);
-        const key = this.getLifecycleLockKey(appHostPath);
+        const identity = getAppHostIdentityKeyInfo(appHostPath);
+        const key = this.getLifecycleLockKey(identity);
+        this.trackLifecycleLockPathKeys(key, identity);
         const previous = this._lifecycleLocks.get(key) ?? Promise.resolve();
         let release!: () => void;
         const gate = new Promise<void>(resolve => { release = resolve; });
@@ -275,6 +279,7 @@ export class AppHostLaunchService implements vscode.Disposable {
         void tail.then(() => {
             if (this._lifecycleLocks.get(key) === tail) {
                 this._lifecycleLocks.delete(key);
+                this._lifecycleLockPathKeys.delete(key);
             }
         });
 
@@ -320,13 +325,35 @@ export class AppHostLaunchService implements vscode.Disposable {
      * Maps every path that {@link compareAppHostIdentity} reports as the same AppHost onto
      * one lifecycle lock key.
      *
-     * The key must be a pure function of the path, which is why it is derived from the
-     * directory listing rather than by scanning the existing keys for a match. Scanning
-     * would make the key depend on insertion order, and the aliasing relation only becomes
-     * transitive once the directory forces a single project/source pairing.
+     * New lock owners use the identity model from {@link getAppHostIdentityKeyInfo}, but
+     * active owners keep the exact project/source paths that were proven equivalent when
+     * they entered. That snapshot is necessary because the directory can change while the
+     * operation is still running: adding a second project should not let the original
+     * project bypass the lock it already shares with `Program.cs`, and removing that
+     * second project should not move a queued `Program.cs` caller onto a fresh key.
      */
-    private getLifecycleLockKey(appHostPath: string): string {
-        return getAppHostIdentityKey(appHostPath);
+    private getLifecycleLockKey(identity: AppHostIdentityKeyInfo): string {
+        for (const pathKey of identity.pathKeys) {
+            for (const [activeKey, activePathKeys] of this._lifecycleLockPathKeys) {
+                if (activePathKeys.has(pathKey)) {
+                    return activeKey;
+                }
+            }
+        }
+
+        return identity.key;
+    }
+
+    private trackLifecycleLockPathKeys(key: string, identity: AppHostIdentityKeyInfo): void {
+        let pathKeys = this._lifecycleLockPathKeys.get(key);
+        if (!pathKeys) {
+            pathKeys = new Set<string>();
+            this._lifecycleLockPathKeys.set(key, pathKeys);
+        }
+
+        for (const pathKey of identity.pathKeys) {
+            pathKeys.add(pathKey);
+        }
     }
 
     isLaunching(appHostPath: string): boolean {

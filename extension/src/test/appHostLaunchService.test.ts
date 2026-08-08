@@ -506,6 +506,61 @@ suite('AppHostLaunchService', () => {
         void active;
     });
 
+    test('keeps lifecycle lock ownership stable when sibling files are added or removed', async () => {
+        async function assertMutationKeepsSecondOperationQueued(
+            initialEntries: readonly string[],
+            firstPath: string,
+            secondPath: string,
+            mutateDirectory: (directory: string) => void,
+        ): Promise<void> {
+            const directory = createAppHostDirectory(...initialEntries);
+            const started: string[] = [];
+            let releaseFirst: (() => void) | undefined;
+            let signalFirstStarted: (() => void) | undefined;
+            const firstStarted = new Promise<void>(resolve => { signalFirstStarted = resolve; });
+            const first = service.runWithAppHostLifecycleLock(
+                path.join(directory, firstPath),
+                new vscode.CancellationTokenSource().token,
+                async () => {
+                    started.push('first');
+                    signalFirstStarted?.();
+                    await new Promise<void>(resolve => { releaseFirst = resolve; });
+                    return 'first';
+                });
+            await firstStarted;
+
+            mutateDirectory(directory);
+
+            const second = service.runWithAppHostLifecycleLock(
+                path.join(directory, secondPath),
+                new vscode.CancellationTokenSource().token,
+                async () => {
+                    started.push('second');
+                    return 'second';
+                });
+
+            await Promise.resolve();
+            await Promise.resolve();
+            assert.deepStrictEqual(started, ['first']);
+
+            releaseFirst?.();
+            assert.deepStrictEqual(await Promise.all([first, second]), ['first', 'second']);
+            assert.deepStrictEqual(started, ['first', 'second']);
+        }
+
+        await assertMutationKeepsSecondOperationQueued(
+            ['AppHost.csproj', 'Program.cs'],
+            'Program.cs',
+            'AppHost.csproj',
+            directory => fs.writeFileSync(path.join(directory, 'Second.csproj'), ''));
+
+        await assertMutationKeepsSecondOperationQueued(
+            ['AppHost.csproj', 'Second.csproj', 'Program.cs'],
+            'AppHost.csproj',
+            'Program.cs',
+            directory => fs.rmSync(path.join(directory, 'Second.csproj')));
+    });
+
     test('cancels a lifecycle operation that outruns its budget instead of releasing the lock beside it', async () => {
         const clock = sinon.useFakeTimers();
         try {
