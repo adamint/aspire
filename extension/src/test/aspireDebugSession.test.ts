@@ -127,9 +127,10 @@ suite('AspireDebugSession tests', () => {
         assert.strictEqual(terminateStub.firstCall.args[0], running);
 
         const exited = createFakeCliProcess(4323, 0);
-        (aspireDebugSession as any)._cliProcess = exited;
+        const exitedAspireDebugSession = createSessionForSpawn();
+        (exitedAspireDebugSession as any)._cliProcess = exited;
 
-        aspireDebugSession.terminateCliProcessTree();
+        exitedAspireDebugSession.terminateCliProcessTree();
 
         // An exited leader is still forwarded: `terminateCliProcess` reaps the surviving members of
         // its managed process group, which is the only path that collects an AppHost and resource
@@ -138,10 +139,24 @@ suite('AspireDebugSession tests', () => {
         assert.strictEqual(terminateStub.secondCall.args[0], exited);
     });
 
+    test('terminateCliProcessTree is idempotent after signalling a CLI process', () => {
+        const terminateStub = sinon.stub(cliModule, 'terminateCliProcess');
+        const cliProcess = createFakeCliProcess(4324);
+        const aspireDebugSession = createSessionForSpawn();
+        (aspireDebugSession as any)._cliProcess = cliProcess;
+
+        aspireDebugSession.terminateCliProcessTree({ force: true });
+        aspireDebugSession.terminateCliProcessTree();
+
+        sinon.assert.calledOnce(terminateStub);
+        assert.strictEqual(terminateStub.firstCall.args[0], cliProcess);
+        assert.deepStrictEqual(terminateStub.firstCall.args[2], { force: true });
+    });
+
     test('a CLI process that exits on its own still has its process group collected', async () => {
         // Already exited: the leader is gone by the time the exit callback runs, which is exactly
         // the state the old early return skipped on.
-        const cliProcess = createFakeCliProcess(4324, 0);
+        const cliProcess = createFakeCliProcess(4325, 0);
         const spawnStub = sinon.stub(cliModule, 'spawnCliProcess').returns(cliProcess);
         const terminateStub = sinon.stub(cliModule, 'terminateCliProcess');
         sinon.stub(vscode.debug, 'stopDebugging').resolves();

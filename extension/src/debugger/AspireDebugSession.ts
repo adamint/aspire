@@ -174,6 +174,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       return;
     }
 
+    if (this._cliProcessTreeTerminationAttempted) {
+      return;
+    }
+
     // Deliberately not skipped once the leader has exited. `terminateCliProcess` reaps the surviving
     // members of a managed process group in that case, and that is the only path that collects
     // AppHost and resource processes which outlived the CLI that owned them.
