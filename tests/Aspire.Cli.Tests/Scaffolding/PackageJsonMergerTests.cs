@@ -1507,6 +1507,7 @@ public class PackageJsonMergerTests
     [InlineData("npm:typescript@7.0.2")]
     [InlineData("workspace:*")]
     [InlineData("^6.0.0 || ^7.0.0")]
+    [InlineData(">=6.0.3")]
     public void Merge_BrownfieldOnUnsupportedTypeScript_DropsLintToolchain(string existingTypeScript)
     {
         var existing = $$"""
@@ -1567,6 +1568,29 @@ public class PackageJsonMergerTests
 
         Assert.Equal("^8.58.0", GetDep(result, "devDependencies", "typescript-eslint"));
         Assert.Equal("^7.0.2", GetDep(result, "devDependencies", "typescript"));
+    }
+
+    [Fact]
+    public void Merge_BrownfieldUnsupportedTypeScript_PreservesExistingLintScriptsItDidNotAdd()
+    {
+        const string Existing = """
+            {
+              "name": "brownfield",
+              "scripts": {
+                "aspire:lint": "eslint src",
+                "check": "npm run aspire:lint && npm test"
+              },
+              "devDependencies": { "typescript": "^7.0.2" }
+            }
+            """;
+
+        var result = MergeJson(Existing, ScaffoldWithLintToolchain);
+        var scripts = GetScripts(result);
+
+        Assert.Equal("eslint src", scripts["aspire:lint"]?.GetValue<string>());
+        Assert.Equal("npm run aspire:lint && npm test", scripts["check"]?.GetValue<string>());
+        Assert.Null(scripts["lint"]);
+        Assert.Null(GetDep(result, "devDependencies", "typescript-eslint"));
     }
 
     private const string ScaffoldWithLintToolchain = """

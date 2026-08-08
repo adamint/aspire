@@ -108,6 +108,9 @@ internal static class PackageJsonMerger
         // already depends on typescript-eslint owns that choice, and removing it would be a
         // destructive edit to a dependency `aspire init` did not introduce.
         var projectAlreadyLinted = FindDependencyVersion(existing, TypeScriptEslintPackage) is not null;
+        var originalScriptNames = existing[ScriptsKey] is JsonObject originalScripts
+            ? originalScripts.Select(script => script.Key).ToHashSet(StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
 
         // Handle scripts separately with conflict-aware logic
         var scaffoldScripts = scaffold[ScriptsKey]?.AsObject();
@@ -152,7 +155,7 @@ internal static class PackageJsonMerger
 
         if (!projectAlreadyLinted)
         {
-            RemoveLintToolchainWhenTypeScriptIsTooNew(existing, logger);
+            RemoveLintToolchainWhenTypeScriptIsTooNew(existing, logger, originalScriptNames);
         }
     }
 
@@ -169,12 +172,12 @@ internal static class PackageJsonMerger
     ///
     /// Downgrading the project's compiler is not an option: TypeScript 7 is the native compiler and
     /// the user chose it. Npm dependency specs can also be tags, aliases, workspace references, or
-    /// union ranges; unless the merger can prove the spec is inside the peer range, it must fail
-    /// closed and avoid adding a dependency pair npm may reject. The AppHost only needs `tsc` to
-    /// build, so the lint rules are what gets dropped. eslint.config.mjs is still written, and starts
-    /// working once typescript-eslint supports TypeScript 7 and the dependency is added back.
+    /// open-ended ranges; unless the merger can prove the spec is inside the peer range, it must
+    /// fail closed and avoid adding a dependency pair npm may reject. The AppHost only needs `tsc`
+    /// to build, so the lint rules are what gets dropped. eslint.config.mjs is still written, and
+    /// starts working once typescript-eslint supports TypeScript 7 and the dependency is added back.
     /// </remarks>
-    private static void RemoveLintToolchainWhenTypeScriptIsTooNew(JsonObject existing, ILogger logger)
+    private static void RemoveLintToolchainWhenTypeScriptIsTooNew(JsonObject existing, ILogger logger, HashSet<string> originalScriptNames)
     {
         var typeScriptVersion = FindDependencyVersion(existing, TypeScriptPackage);
         if (typeScriptVersion is null)
@@ -182,8 +185,7 @@ internal static class PackageJsonMerger
             return;
         }
 
-        if (NpmVersionHelper.TryParseNpmVersion(typeScriptVersion, out var resolvedTypeScript) &&
-            SemVersion.ComparePrecedence(resolvedTypeScript, s_firstUnsupportedTypeScript) < 0)
+        if (IsTypeScriptVersionKnownSupported(typeScriptVersion))
         {
             return;
         }
@@ -198,21 +200,37 @@ internal static class PackageJsonMerger
         }
 
         // The scaffolded eslint.config.mjs enables @typescript-eslint/no-floating-promises, so
-        // without the dependency the script would fail on every run. Remove it and any alias the
-        // script merge generated for it rather than leaving a command that cannot succeed.
+        // without the dependency the script would fail on every run. Remove only scripts this merge
+        // introduced; a brownfield project's own aspire:lint script may not use typescript-eslint,
+        // and the merge contract is to preserve existing scripts even when their values mention the
+        // scaffold lint script name.
         if (existing[ScriptsKey] is not JsonObject scripts)
         {
             return;
         }
 
         foreach (var scriptName in scripts
-            .Where(script => script.Key == AspireLintScriptName ||
-                GetStringValue(script.Value)?.Contains(AspireLintScriptName, StringComparison.Ordinal) == true)
+            .Where(script => !originalScriptNames.Contains(script.Key) &&
+                (script.Key == AspireLintScriptName ||
+                GetStringValue(script.Value)?.Contains(AspireLintScriptName, StringComparison.Ordinal) == true))
             .Select(script => script.Key)
             .ToArray())
         {
             scripts.Remove(scriptName);
         }
+    }
+
+    private static bool IsTypeScriptVersionKnownSupported(string typeScriptVersion)
+    {
+        var trimmed = typeScriptVersion.Trim();
+        if (trimmed.StartsWith(">=", StringComparison.Ordinal) ||
+            trimmed.StartsWith(">", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return NpmVersionHelper.TryParseNpmVersion(trimmed, out var resolvedTypeScript) &&
+            SemVersion.ComparePrecedence(resolvedTypeScript, s_firstUnsupportedTypeScript) < 0;
     }
 
     private static string? FindDependencyVersion(JsonObject packageJson, string packageName)
