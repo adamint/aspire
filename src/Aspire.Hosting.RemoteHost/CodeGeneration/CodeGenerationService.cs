@@ -316,29 +316,13 @@ internal sealed class CodeGenerationService
             // package.
             var fullContext = _atsContextFactory.GetContext();
 
-            // A NuGet package id is case-insensitive
-            // (https://learn.microsoft.com/nuget/consume-packages/finding-and-choosing-packages#package-identifiers)
-            // but the exported document records this string verbatim as the identity consumers key
-            // on, so `aspire.hosting.redis` would publish a document naming a package nobody looks
-            // up. The loaded assembly settles the spelling: every filter here treats the package id
-            // as an assembly name, so a package whose API is exportable at all is named in the
-            // context. One that is not has nothing to export under that id, and saying so beats
-            // publishing an empty document that claims to describe it.
-            if (!AtsContextFilter.TryResolveCanonicalAssemblyName(fullContext, packageName, out var canonicalPackageName))
-            {
-                throw new InvalidOperationException(
-                    $"'{packageName}' restored, but the scanned API surface contains nothing under that name, so there is no API to export under it. " +
-                    "An API export is scoped by assembly name, so this is what a package whose assembly is named something other than " +
-                    "its package id looks like from here.");
-            }
-
-            packageName = canonicalPackageName;
+            var exportingAssemblyNames = ResolvePackageExportingAssemblyNames(fullContext, packageName, out var canonicalPackageName);
 
             var context = AtsContextFilter.FilterForApiExport(
                 fullContext,
-                [packageName]);
+                exportingAssemblyNames);
 
-            var export = exporter.ExportApi(context, new ApiReferenceExportOptions(packageName, packageVersion, [packageName]));
+            var export = exporter.ExportApi(context, new ApiReferenceExportOptions(canonicalPackageName, packageVersion, exportingAssemblyNames));
 
             _logger.LogDebug("<< exportApi({Language}, {PackageName}) completed in {ElapsedMs}ms", language, packageName, sw.ElapsedMilliseconds);
 
@@ -357,6 +341,50 @@ internal sealed class CodeGenerationService
             }
             throw;
         }
+    }
+
+    private IReadOnlyList<string> ResolvePackageExportingAssemblyNames(
+        AtsContext fullContext,
+        string packageName,
+        out string canonicalPackageName)
+    {
+        if (_assemblyLoader.TryGetRuntimeAssemblyNamesForPackage(packageName, out var manifestPackageName, out var manifestAssemblyNames))
+        {
+            var exportingAssemblyNames = new List<string>(manifestAssemblyNames.Count);
+            foreach (var assemblyName in manifestAssemblyNames)
+            {
+                if (AtsContextFilter.TryResolveCanonicalAssemblyName(fullContext, assemblyName, out var canonicalAssemblyName))
+                {
+                    exportingAssemblyNames.Add(canonicalAssemblyName);
+                }
+            }
+
+            if (exportingAssemblyNames.Count == 0)
+            {
+                throw new InvalidOperationException(
+                    $"'{packageName}' restored, but none of its runtime assemblies reached the scanned API surface, so there is no API to export under it.");
+            }
+
+            canonicalPackageName = manifestPackageName;
+            return exportingAssemblyNames;
+        }
+
+        // A NuGet package id is case-insensitive
+        // (https://learn.microsoft.com/nuget/consume-packages/finding-and-choosing-packages#package-identifiers)
+        // but the exported document records this string verbatim as the identity consumers key
+        // on, so `aspire.hosting.redis` would publish a document naming a package nobody looks
+        // up. For local project references and older probe manifests we do not have package-to-
+        // assembly metadata, so the loaded assembly settles the spelling as before.
+        if (!AtsContextFilter.TryResolveCanonicalAssemblyName(fullContext, packageName, out var canonicalAssemblyNameFromContext))
+        {
+            throw new InvalidOperationException(
+                $"'{packageName}' restored, but the scanned API surface contains nothing under that name, so there is no API to export under it. " +
+                "An API export is scoped by assembly name, so this is what a package whose assembly is named something other than " +
+                "its package id looks like from here.");
+        }
+
+        canonicalPackageName = canonicalAssemblyNameFromContext;
+        return [canonicalAssemblyNameFromContext];
     }
 
     private string BuildApiExportLanguageList()

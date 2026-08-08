@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text.Json;
 using Aspire.Hosting.RemoteHost.CodeGeneration;
 using Aspire.Hosting.RemoteHost.Diagnostics;
 using Aspire.TypeSystem;
@@ -86,6 +87,50 @@ public class ApiReferenceExportTests
     }
 
     [Fact]
+    public void ExportApi_UsesPackageProbeManifestAssembliesForRequestedPackage()
+    {
+        using var manifestDirectory = new TemporaryDirectory();
+        var manifestPath = Path.Combine(manifestDirectory.Path, "integration-package-probe-manifest.json");
+        WriteProbeManifest(
+            manifestPath,
+            managedAssemblies:
+            [
+                new
+                {
+                    Name = "Aspire.Hosting",
+                    Path = typeof(IDistributedApplicationBuilder).Assembly.Location,
+                    PackageId = "Contoso.Aspire.MetaPackage",
+                    PackageVersion = "1.2.3"
+                },
+                new
+                {
+                    Name = "Aspire.Hosting.Yarp",
+                    Path = typeof(Yarp.YarpResource).Assembly.Location,
+                    PackageId = "Contoso.Aspire.MetaPackage",
+                    PackageVersion = "1.2.3"
+                }
+            ]);
+        var service = CreateCodeGenerationService(new Dictionary<string, string?>
+        {
+            ["AtsAssemblies:0"] = "Contoso.Aspire.MetaPackage",
+            ["ASPIRE_INTEGRATION_PROBE_MANIFEST_PATH"] = manifestPath
+        });
+
+        var export = service.ExportApi("TypeScript", "Contoso.Aspire.MetaPackage", "1.2.3");
+
+        Assert.Equal("Contoso.Aspire.MetaPackage", export.GetProperty("package").GetProperty("name").GetString());
+
+        var ownedItemOwners = export.GetProperty("modules").EnumerateArray()
+            .SelectMany(module => module.GetProperty("items").EnumerateArray())
+            .Where(item => item.GetProperty("kind").GetString() != "augmentation")
+            .Select(item => item.GetProperty("owningAssembly").GetString())
+            .ToHashSet(StringComparer.Ordinal);
+
+        Assert.Contains("Aspire.Hosting", ownedItemOwners);
+        Assert.Contains("Aspire.Hosting.Yarp", ownedItemOwners);
+    }
+
+    [Fact]
     public void ExportApi_UnknownLanguage_ListsAvailableLanguages()
     {
         var service = CreateCodeGenerationService();
@@ -140,14 +185,26 @@ public class ApiReferenceExportTests
         Assert.ThrowsAny<Exception>(() => service.ExportApi("TypeScript", "Aspire.Hosting", "13.5.0"));
     }
 
-    private static CodeGenerationService CreateCodeGenerationService(bool authenticated = true)
+    private static CodeGenerationService CreateCodeGenerationService(
+        IReadOnlyDictionary<string, string?>? additionalConfiguration = null,
+        bool authenticated = true)
     {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
+        var configurationValues = new Dictionary<string, string?>
+        {
+            ["AtsAssemblies:0"] = "Aspire.Hosting.CodeGeneration.Go",
+            ["AtsAssemblies:1"] = "Aspire.Hosting.CodeGeneration.TypeScript",
+        };
+
+        if (additionalConfiguration is not null)
+        {
+            foreach (var (key, value) in additionalConfiguration)
             {
-                ["AtsAssemblies:0"] = "Aspire.Hosting.CodeGeneration.Go",
-                ["AtsAssemblies:1"] = "Aspire.Hosting.CodeGeneration.TypeScript",
-            })
+                configurationValues[key] = value;
+            }
+        }
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(configurationValues)
             .Build();
 
         var telemetry = new RemoteHostProfilingTelemetry(new ConfigurationBuilder().Build());
@@ -175,4 +232,41 @@ public class ApiReferenceExportTests
             : new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?> { ["ASPIRE_REMOTE_APPHOST_TOKEN"] = "test-token" })
                 .Build());
+
+    private static void WriteProbeManifest(string manifestPath, IEnumerable<object>? managedAssemblies = null, IEnumerable<object>? nativeLibraries = null)
+    {
+        File.WriteAllText(
+            manifestPath,
+            JsonSerializer.Serialize(
+                new
+                {
+                    ManagedAssemblies = managedAssemblies ?? [],
+                    NativeLibraries = nativeLibraries ?? []
+                },
+                new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    WriteIndented = true
+                }));
+    }
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        private readonly DirectoryInfo _directory;
+
+        public TemporaryDirectory()
+        {
+            _directory = Directory.CreateTempSubdirectory("aspire-remotehost-");
+        }
+
+        public string Path => _directory.FullName;
+
+        public void Dispose()
+        {
+            if (Directory.Exists(Path))
+            {
+                Directory.Delete(Path, recursive: true);
+            }
+        }
+    }
 }
