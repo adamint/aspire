@@ -246,6 +246,15 @@ jobs:
             cliBinary: aspire.exe
             useXvfb: false
           - name: Linux
+            shardName: azure-functions
+            spec: out/test-e2e/test-e2e/azureFunctions.e2e.test.js
+            runner: ubuntu-latest
+            rid: linux-x64
+            archivePattern: aspire-cli-linux-x64*.tar.gz
+            cliBinary: aspire
+            useXvfb: true
+            installAzureFunctions: true
+          - name: Linux
             shardName: apphost-lifecycle-tools
             spec: out/test-e2e/test-e2e/appHostLifecycleTools.e2e.test.js
             runner: ubuntu-latest
@@ -261,15 +270,6 @@ jobs:
             archivePattern: aspire-cli-win-x64*.zip
             cliBinary: aspire.exe
             useXvfb: false
-          - name: Linux
-            shardName: azure-functions
-            spec: out/test-e2e/test-e2e/azureFunctions.e2e.test.js
-            runner: ubuntu-latest
-            rid: linux-x64
-            archivePattern: aspire-cli-linux-x64*.tar.gz
-            cliBinary: aspire
-            useXvfb: true
-            installAzureFunctions: true
     defaults:
       run:
         shell: pwsh
