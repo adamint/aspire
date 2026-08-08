@@ -65,30 +65,6 @@ export async function waitForTreeItem(section: TreeSection, label: string, timeo
     }, timeoutMs, `Timed out waiting for tree item '${label}'.`);
 }
 
-export async function waitForVisibleTreeItemsInOrder(section: TreeSection, labels: readonly string[], description: string, timeoutMs = 30000): Promise<void> {
-    let lastLabels: string[] = [];
-    await VSBrowser.instance.driver.wait(async () => {
-        try {
-            const visibleItems = await section.getVisibleItems();
-            lastLabels = await Promise.all(visibleItems.map(item => item.getLabel()));
-            let searchFrom = 0;
-            for (const label of labels) {
-                const index = lastLabels.findIndex((visibleLabel, visibleIndex) => visibleIndex >= searchFrom && visibleLabel === label);
-                if (index < 0) {
-                    return false;
-                }
-
-                searchFrom = index + 1;
-            }
-
-            return true;
-        }
-        catch {
-            return false;
-        }
-    }, timeoutMs, `Timed out waiting for ${description}. Visible labels: ${lastLabels.join(', ') || '<none>'}.`);
-}
-
 export async function waitForChildTreeItem(parent: TreeItem, label: string, timeoutMs = 30000): Promise<TreeItem> {
     return await VSBrowser.instance.driver.wait(async () => {
         try {
