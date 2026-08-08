@@ -180,22 +180,6 @@ jobs:
             cliBinary: aspire.exe
             useXvfb: false
           - name: Linux
-            shardName: browser-debugger
-            spec: out/test-e2e/test-e2e/browserDebugger.e2e.test.js
-            runner: ubuntu-latest
-            rid: linux-x64
-            archivePattern: aspire-cli-linux-x64*.tar.gz
-            cliBinary: aspire
-            useXvfb: true
-          - name: Windows
-            shardName: browser-debugger
-            spec: out/test-e2e/test-e2e/browserDebugger.e2e.test.js
-            runner: windows-latest
-            rid: win-x64
-            archivePattern: aspire-cli-win-x64*.zip
-            cliBinary: aspire.exe
-            useXvfb: false
-          - name: Linux
             shardName: debug-startup-timeout
             spec: out/test-e2e/test-e2e/debugStartupTimeout.e2e.test.js
             runner: ubuntu-latest
@@ -270,6 +254,22 @@ jobs:
             cliBinary: aspire
             useXvfb: true
             installAzureFunctions: true
+          - name: Linux
+            shardName: browser-debugger
+            spec: out/test-e2e/test-e2e/browserDebugger.e2e.test.js
+            runner: ubuntu-latest
+            rid: linux-x64
+            archivePattern: aspire-cli-linux-x64*.tar.gz
+            cliBinary: aspire
+            useXvfb: true
+          - name: Windows
+            shardName: browser-debugger
+            spec: out/test-e2e/test-e2e/browserDebugger.e2e.test.js
+            runner: windows-latest
+            rid: win-x64
+            archivePattern: aspire-cli-win-x64*.zip
+            cliBinary: aspire.exe
+            useXvfb: false
     defaults:
       run:
         shell: pwsh
