@@ -854,7 +854,7 @@ function getSessionMode(session: AppHostLifecycleEditorSession): AppHostLifecycl
  * See https://spec.commonmark.org/0.31.2/#backslash-escapes
  */
 function escapeMarkdown(value: string): string {
-    return value.replace(/[\\`*_[\]()<>#+~|!]/g, character => `\\${character}`);
+    return value.replace(/[\\`*_[\]()<>#+~|!&]/g, character => `\\${character}`);
 }
 
 /**

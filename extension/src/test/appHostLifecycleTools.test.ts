@@ -1225,6 +1225,20 @@ suite('AppHost lifecycle language model tools', () => {
                 `Start the Aspire AppHost ${expectedDisplay}/AppHost.csproj in debug mode?`);
         });
 
+        test('escapes Markdown entities so the confirmed path does not render decoded text', async () => {
+            const directoryName = 'literal&copy;';
+            discoveryService.registeredPaths.push(path.join(workspaceRoot, directoryName, 'AppHost.csproj'));
+            const tool = new AppHostStartLanguageModelTool(service);
+
+            const prepared = await tool.prepareInvocation(
+                { input: { appHostPath: `${directoryName}/AppHost.csproj`, mode: 'debug' } },
+                new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(
+                prepared?.confirmationMessages?.message,
+                'Start the Aspire AppHost literal\\&copy;/AppHost.csproj in debug mode?');
+        });
+
         test('confirms the workspace-folder-qualified target that invocation will launch', async () => {
             // In a multi-root workspace a bare relative path does not say which root was
             // selected. Preparation runs the same registry resolution `invoke` runs, so
@@ -1328,4 +1342,3 @@ suite('AppHost lifecycle language model tools', () => {
         });
     });
 });
-
