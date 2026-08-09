@@ -220,6 +220,52 @@ suite('E2E launch profile', () => {
         }
     });
 
+    // The four bypass shapes below all defeated the previous `.includes(internalFeed)`
+    // substring check: it tested against the raw line, not a parsed URL's origin, so
+    // any of these could smuggle a hostile host past the guard. Each case pins one
+    // shape so a regression to substring matching fails a specifically-named test.
+    for (const bypass of [
+        {
+            name: 'a hostile host with the feed string smuggled into its path',
+            resolvedLine: 'resolved "https://evil.example/pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/pkg.tgz"',
+        },
+        {
+            name: 'a hostname-suffix spoof of the internal feed host',
+            resolvedLine: 'resolved "https://pkgs.dev.azure.com.evil.example/dnceng/public/_packaging/dotnet-public-npm/pkg.tgz"',
+        },
+        {
+            name: 'a plaintext http:// downgrade of the internal feed',
+            resolvedLine: 'resolved "http://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/pkg.tgz"',
+        },
+        {
+            name: 'the feed string appearing only in the URL fragment',
+            resolvedLine: 'resolved "https://evil.example/x.tgz#pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm"',
+        },
+    ]) {
+        test(`rejects a resolved entry using ${bypass.name}`, () => {
+            const result = runLockfileRegistryGuard(bypass.resolvedLine);
+
+            assert.notStrictEqual(result.status, 0, `Expected validate-lockfile-registry.cjs to reject ${bypass.name} (resolved line: ${bypass.resolvedLine}). stdout: ${result.stdout}; stderr: ${result.stderr}`);
+        });
+    }
+
+    for (const legit of [
+        {
+            name: 'a plain internal-feed package with a sha512 integrity fragment',
+            resolvedLine: 'resolved "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/pkg/-/pkg-1.2.3.tgz#sha512-abcDEF123=="',
+        },
+        {
+            name: 'a scoped internal-feed package path (@types/node)',
+            resolvedLine: 'resolved "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/@types/node/-/node-20.0.0.tgz#9e6074ce28f0b1bab7bfdacd1a7760b2ba73688d"',
+        },
+    ]) {
+        test(`accepts a genuine internal-feed resolved entry: ${legit.name}`, () => {
+            const result = runLockfileRegistryGuard(legit.resolvedLine);
+
+            assert.strictEqual(result.status, 0, `Expected validate-lockfile-registry.cjs to accept ${legit.name} (resolved line: ${legit.resolvedLine}). stdout: ${result.stdout}; stderr: ${result.stderr}`);
+        });
+    }
+
     test('runs every E2E spec from the workflow matrix', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
@@ -996,6 +1042,33 @@ function assertTextOrder(source: string, before: string, after: string): void {
 
 function getLockfileResolvedLines(lockfile: string): string[] {
     return lockfile.split(/\r?\n/).filter(l => /^\s*resolved\s+"/.test(l));
+}
+
+/**
+ * Spawns validate-lockfile-registry.cjs against a scratch yarn.lock containing a single package
+ * with the given `resolved "..."` line, mirroring the harness already used by the
+ * "rejects lockfiles without resolved registry entries" test above.
+ */
+function runLockfileRegistryGuard(resolvedLine: string): ReturnType<typeof spawnSync> {
+    const extensionRoot = path.resolve(__dirname, '..', '..');
+    const scratchRoot = fs.mkdtempSync(path.join(extensionRoot, '.lockfile-registry-guard-'));
+    try {
+        fs.writeFileSync(path.join(scratchRoot, 'yarn.lock'), [
+            'pkg@1.0.0:',
+            '  version "1.0.0"',
+            `  ${resolvedLine}`,
+            '',
+        ].join('\n'));
+
+        return spawnSync(process.execPath, [path.join(extensionRoot, 'scripts', 'validate-lockfile-registry.cjs')], {
+            cwd: scratchRoot,
+            encoding: 'utf8',
+            timeout: 120000,
+        });
+    }
+    finally {
+        fs.rmSync(scratchRoot, { recursive: true, force: true });
+    }
 }
 
 interface E2eMatrixEntry {
