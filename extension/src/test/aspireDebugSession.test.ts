@@ -534,6 +534,77 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         ]);
     });
 
+    test('dispose continues CLI and parent shutdown when a resource stop never settles', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: { type: 'coreclr', request: 'launch', name: 'AppHost' },
+        };
+        const resourceDebugSession = {
+            id: 'resource-session',
+            type: 'pwa-node',
+            name: 'Node.js: app.js',
+            configuration: { type: 'pwa-node', request: 'launch', name: 'Node.js: app.js' },
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        const stopOrder: string[] = [];
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
+            stopOrder.push((session as unknown as { id: string }).id);
+            if (session === (resourceDebugSession as unknown as vscode.DebugSession)) {
+                return new Promise<void>(() => { });
+            }
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
+        };
+        (aspireDebugSession as any)._resourceDebugSessions = [
+            (aspireDebugSession as any)._appHostDebugSession,
+            {
+                id: resourceDebugSession.id,
+                session: resourceDebugSession as unknown as vscode.DebugSession,
+                stopSession: () => vscode.debug.stopDebugging(resourceDebugSession as unknown as vscode.DebugSession),
+            },
+        ];
+        (aspireDebugSession as any)._disposables.push({ dispose: () => stopOrder.push('cli stop') });
+
+        aspireDebugSession.dispose();
+
+        assert.deepStrictEqual(stopOrder, [resourceDebugSession.id]);
+
+        await clock.tickAsync(10_000);
+        await Promise.resolve();
+
+        assert.deepStrictEqual(stopOrder, [
+            resourceDebugSession.id,
+            'cli stop',
+            parentDebugSession.id,
+        ]);
+
+        clock.restore();
+    });
+
     test('stopDebugging waits for every resource stop to settle before stopping the AppHost', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
@@ -634,6 +705,80 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             'aspire-session',
         ]);
         assert.strictEqual(stopDebuggingStub.callCount, 4);
+    });
+
+    test('stopDebugging continues AppHost shutdown when a resource stop never settles', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: { type: 'coreclr', request: 'launch', name: 'AppHost' },
+        };
+        const resourceDebugSession = {
+            id: 'resource-session',
+            type: 'pwa-node',
+            name: 'Node.js: app.js',
+            configuration: { type: 'pwa-node', request: 'launch', name: 'Node.js: app.js' },
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        const stopOrder: string[] = [];
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
+            stopOrder.push((session as unknown as { id: string }).id);
+            if (session === (resourceDebugSession as unknown as vscode.DebugSession)) {
+                return new Promise<void>(() => { });
+            }
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
+        };
+        (aspireDebugSession as any)._resourceDebugSessions = [
+            {
+                id: resourceDebugSession.id,
+                session: resourceDebugSession as unknown as vscode.DebugSession,
+                stopSession: () => vscode.debug.stopDebugging(resourceDebugSession as unknown as vscode.DebugSession),
+            },
+        ];
+
+        const stopPromise = aspireDebugSession.stopDebugging().then(
+            () => undefined,
+            error => error as unknown);
+        await Promise.resolve();
+
+        assert.deepStrictEqual(stopOrder, [resourceDebugSession.id]);
+
+        await clock.tickAsync(10_000);
+        const stopError = await stopPromise;
+
+        assert.ok(stopError instanceof Error);
+        assert.match(stopError.message, /Timed out after 10000ms waiting for resource debug sessions to stop/);
+        assert.deepStrictEqual(stopOrder, [
+            resourceDebugSession.id,
+            appHostDebugSession.id,
+            parentDebugSession.id,
+        ]);
+
+        clock.restore();
     });
 
     test('stopDebugging continues stopping resources after a synchronous resource stop failure', async () => {

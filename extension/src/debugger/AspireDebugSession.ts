@@ -29,6 +29,7 @@ import { appHostTelemetryTargetPathConfigKey } from "./AspireDebugConfigurationM
 
 export type DashboardLaunchBehavior = 'none' | 'notification' | DashboardBrowserType;
 export type DashboardBrowserType = 'openExternalBrowser' | 'integratedBrowser' | 'debugChrome' | 'debugEdge' | 'debugFirefox';
+const resourceDebugSessionStopTimeoutMs = 10_000;
 
 export function getLoggableDebugConfiguration(debugConfig: AspireResourceExtendedDebugConfiguration, includeEnvironment: boolean): vscode.DebugConfiguration {
   if (includeEnvironment && debugConfig.type !== 'maui') {
@@ -128,11 +129,11 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // session exits. Stop those sessions before the AppHost to avoid waiting on a process whose
     // debugger would otherwise only be stopped later by dispose().
     const resourceDebugSessions = this._resourceDebugSessions.filter(session => session.id !== this._appHostDebugSession?.id);
-    // Deliberately allSettled rather than Promise.all. Promise.all settles on the first rejection,
-    // which would start the AppHost stop while the remaining resource stops were still in flight
-    // and reintroduce the orphaned-resource behavior this ordering exists to prevent - on exactly
-    // the path where a resource is most likely to be left behind. The rejection is kept and
-    // rethrown after the AppHost and the synthetic Aspire parent have been stopped.
+    // Deliberately wait for all resource stops rather than stopping on the first rejection. Starting
+    // the AppHost stop while another resource stop is still in flight reintroduces the orphaned
+    // resource behavior this ordering exists to prevent - on exactly the path where a resource is
+    // most likely to be left behind. The rejections are kept and rethrown after the AppHost and the
+    // synthetic Aspire parent have been stopped.
     const resourceStopPromises: Promise<void>[] = [];
     const stopFailures: unknown[] = [];
     for (const session of resourceDebugSessions) {
@@ -144,11 +145,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       }
     }
 
-    const resourceStopResults = await Promise.allSettled(resourceStopPromises);
-    const resourceStopFailures = resourceStopResults
-      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-      .map(result => result.reason);
-    stopFailures.push(...resourceStopFailures);
+    stopFailures.push(...await this.waitForResourceDebugSessionStops(resourceStopPromises));
 
     // Global/E2E stop requests target the synthetic Aspire session. Stop the real AppHost session
     // explicitly before the parent so we do not rely on VS Code cascading termination before the
@@ -198,6 +195,39 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
 
     return stopPromises;
+  }
+
+  private async waitForResourceDebugSessionStops(stopPromises: Promise<void>[]): Promise<unknown[]> {
+    if (stopPromises.length === 0) {
+      return [];
+    }
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<'timeout'>(resolve => {
+      timeout = setTimeout(() => {
+        timeout = undefined;
+        resolve('timeout');
+      }, resourceDebugSessionStopTimeoutMs);
+    });
+
+    const results = await Promise.race([
+      Promise.allSettled(stopPromises),
+      timeoutPromise,
+    ]);
+
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+
+    if (results === 'timeout') {
+      const error = new Error(`Timed out after ${resourceDebugSessionStopTimeoutMs}ms waiting for resource debug sessions to stop.`);
+      extensionLogOutputChannel.warn(error.message);
+      return [error];
+    }
+
+    return results
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map(result => result.reason);
   }
 
   private trackResourceDebugSession(resourceDebugSession: AspireResourceDebugSession): AspireResourceDebugSession {
@@ -922,7 +952,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // ordering on its own.
     const resourceStopPromises = this.stopResourceDebugSessions();
     if (resourceStopPromises.length > 0) {
-      void Promise.allSettled(resourceStopPromises).then(finishDispose);
+      void this.waitForResourceDebugSessionStops(resourceStopPromises).then(finishDispose);
     }
     else {
       finishDispose();
