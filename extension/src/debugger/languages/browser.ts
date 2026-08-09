@@ -147,11 +147,12 @@ function mergeRuntimeArgs(existingRuntimeArgs: unknown, argsToAdd: string[]): st
  * Creates the isolated browser profile directory for a run, or returns `undefined` when one could
  * not be established.
  *
- * The run id is a readability prefix only. It is deliberately not what makes the path unique, and
- * it is not trusted: `runId` is workspace-writable, so it is reduced to a single path segment first.
- * The post-creation realpath containment check is still load-bearing because this path is later
- * deleted recursively. If a future change accidentally lets a `..` segment through, the profile is
- * refused rather than aiming cleanup at the temp directory or another run.
+ * The run id is a readability prefix only. It is deliberately not what makes the path unique.
+ * Today `runId` is generated in-process by `generateRunId` and `prepareDebugSession` refuses a
+ * workspace-supplied value, so reducing it to a single path segment is defense in depth rather
+ * than a boundary check. The post-creation realpath containment check is load-bearing for the same
+ * reason: this path is later deleted recursively, so if a future change ever lets a `..` segment
+ * through, the profile is refused rather than aiming cleanup at the temp directory or another run.
  */
 async function createBrowserUserDataDir(runId: string): Promise<string | undefined> {
     try {
