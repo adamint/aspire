@@ -197,6 +197,15 @@ internal sealed class SdkExportCommand : BaseCommand
     /// </summary>
     private async Task<LanguageInfo?> GetLanguageInfoAsync(string language, CancellationToken cancellationToken)
     {
+        // --language is required, but System.CommandLine considers `--language ""` supplied, and
+        // every language id starts with the empty string. Without this guard the prefix match would
+        // hand back whichever language happened to be discovered first and export it as though the
+        // user had asked for it.
+        if (string.IsNullOrWhiteSpace(language))
+        {
+            return null;
+        }
+
         try
         {
             var languages = await _languageDiscovery.GetAvailableLanguagesAsync(cancellationToken);

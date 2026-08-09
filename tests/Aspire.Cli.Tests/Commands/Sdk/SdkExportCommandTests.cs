@@ -197,6 +197,32 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Theory]
+    [InlineData("\"\"")]
+    [InlineData("\" \"")]
+    public async Task SdkExportDoesNotResolveABlankLanguageToTheFirstDiscoveredOne(string language)
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new CapturingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(interactionService, workspace, rpcClient, appHostServerProject);
+
+        var exitCode = await InvokeAsync(provider, $"sdk export --language {language}");
+
+        // Every language id starts with the empty string, so the prefix match resolved `--language ""`
+        // to whichever language was discovered first and then tried to restore a generator package for
+        // it, which threw ArgumentException and surfaced as "An unexpected error occurred". A blank
+        // value has to stay unresolved and travel verbatim so the server produces the authoritative
+        // unsupported-language error instead.
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Empty(interactionService.DisplayedErrors);
+        Assert.DoesNotContain(
+            appHostServerProject.Integrations,
+            integration => integration.Name.Contains("CodeGeneration", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("", rpcClient.LastExportRequest?.Language?.Trim());
+    }
+
+    [Theory]
     [InlineData("Aspire.Hosting")]
     [InlineData("Aspire.Hosting@")]
     [InlineData("@13.5.0")]
