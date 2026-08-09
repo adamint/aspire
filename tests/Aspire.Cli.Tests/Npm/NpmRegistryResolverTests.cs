@@ -139,7 +139,6 @@ public class NpmRegistryResolverTests : IDisposable
     [InlineData("registry = \"https://npm.contoso.example/quoted/\"", "https://npm.contoso.example/quoted/")]
     [InlineData("registry='https://npm.contoso.example/quoted/'", "https://npm.contoso.example/quoted/")]
     [InlineData("  registry\t=\thttps://npm.contoso.example/spaced/  ", "https://npm.contoso.example/spaced/")]
-    [InlineData("REGISTRY=https://npm.contoso.example/upper/", "https://npm.contoso.example/upper/")]
     public void Resolve_ParsesNpmrcValueForms(string line, string expected)
     {
         WriteHomeNpmrc(line);
@@ -187,6 +186,67 @@ public class NpmRegistryResolverTests : IDisposable
         Assert.Equal(
             "https://npm.contoso.example/feed/#mirror",
             CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Theory]
+    [InlineData("REGISTRY=https://npm.contoso.example/upper/")]
+    [InlineData("Registry=https://npm.contoso.example/mixed/")]
+    [InlineData("@Microsoft:registry=https://npm.contoso.example/scoped/")]
+    public void Resolve_IgnoresNpmrcKeysThatOnlyMatchWhenCaseFolded(string line)
+    {
+        // npm lowercases only the keys it derives from npm_config_* environment variables; keys
+        // read out of a .npmrc keep their casing, so these entries are dead for npm and accepting
+        // them here would point the update check at a registry the install command never uses.
+        WriteHomeNpmrc(line);
+
+        Assert.Equal(PublicRegistry, CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_ExpandsEnvironmentReferencesInNpmrcKeys()
+    {
+        // npm substitutes ${VAR} in config keys as well as values, so the scope this entry applies
+        // to is only known after expansion.
+        WriteHomeNpmrc("@${NPM_SCOPE}:registry=https://npm.contoso.example/scoped/");
+
+        var resolution = CreateResolver(
+            environment: new Dictionary<string, string>
+            {
+                ["NPM_SCOPE"] = "microsoft"
+            }).Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/scoped/", resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_ExpandsEnvironmentReferencesInEnvironmentValues()
+    {
+        // npm runs every layer through parseField, so an npm_config_* value carries ${VAR} exactly
+        // as a .npmrc value does.
+        var resolution = CreateResolver(
+            environment: new Dictionary<string, string>
+            {
+                ["npm_config_registry"] = "  https://${NPM_HOST}/feed/  ",
+                ["NPM_HOST"] = "npm.contoso.example"
+            }).Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/feed/", resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_ExpandsAHomeRelativeUserConfigPath()
+    {
+        // userconfig is path-typed, so parseField expands a leading "~/" against the home
+        // directory before npm opens the file.
+        WriteHomeNpmrc("registry=https://npm.contoso.example/home/");
+
+        var resolution = CreateResolver(
+            environment: new Dictionary<string, string>
+            {
+                ["npm_config_userconfig"] = "~/.npmrc"
+            }).Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/home/", resolution.RegistryUri.AbsoluteUri);
     }
 
     [Fact]

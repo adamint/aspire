@@ -217,7 +217,18 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
                 continue;
             }
 
-            AddIfAbsent(configuration, key, value, $"the {name} environment variable");
+            // npm hands every layer's values to parseField, which trims them and substitutes
+            // ${VAR}, so an environment layer is no more literal than a file layer. Path-typed
+            // options such as userconfig are expanded where they are consumed.
+            string? expandedValue = null;
+
+            if (value is not null && !TryExpandEnvironmentReferences(value.Trim(), out expandedValue))
+            {
+                _logger.LogDebug("Ignoring the {Name} environment variable because it references an undefined environment variable.", name);
+                continue;
+            }
+
+            AddIfAbsent(configuration, key, expandedValue, $"the {name} environment variable");
         }
     }
 
@@ -309,7 +320,11 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
 
             // The key is allow-listed before the value is parsed out of the line, so a
             // "//registry.example.com/:_authToken=..." entry never becomes a token-bearing string.
-            if (!TryParseNpmrcKey(line, out var key, out var rawValue) || !IsInterestingKey(key))
+            // npm substitutes ${VAR} in keys as well as values, so "@${NPM_SCOPE}:registry" has to
+            // be expanded before the allow-list decides whether the entry is interesting at all.
+            if (!TryParseNpmrcKey(line, out var key, out var rawValue) ||
+                !TryExpandEnvironmentReferences(key, out key) ||
+                !IsInterestingKey(key))
             {
                 continue;
             }
@@ -408,7 +423,7 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             return false;
         }
 
-        key = NormalizeKey(parsedKey.ToString());
+        key = parsedKey.ToString();
         rawValue = trimmed[(separatorIndex + 1)..].Trim();
 
         return true;
@@ -580,10 +595,40 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         if (configuration.TryGetValue(UserConfigKey, out var userConfig) &&
             !string.IsNullOrWhiteSpace(userConfig.Value))
         {
-            return userConfig.Value;
+            return ResolveConfiguredPath(userConfig.Value);
         }
 
         return Path.Combine(_homeDirectory.FullName, NpmrcFileName);
+    }
+
+    /// <summary>
+    /// Applies the normalization npm's <c>parseField</c> gives a path-typed option such as
+    /// <c>userconfig</c>.
+    /// </summary>
+    /// <remarks>
+    /// npm expands a leading <c>~/</c> (also <c>~\</c> on Windows) against the home directory and
+    /// otherwise resolves the value against the working directory, so <c>userconfig=~/.npmrc</c>
+    /// and <c>userconfig=.npmrc</c> both name a real file rather than a literal that never exists.
+    /// See https://github.com/npm/cli/blob/latest/workspaces/config/lib/parse-field.js.
+    /// </remarks>
+    private string ResolveConfiguredPath(string value)
+    {
+        var isHomeReference = value.StartsWith("~/", StringComparison.Ordinal) ||
+            (OperatingSystem.IsWindows() && value.StartsWith(@"~\", StringComparison.Ordinal));
+
+        try
+        {
+            return isHomeReference
+                ? Path.GetFullPath(Path.Combine(_homeDirectory.FullName, value[2..]))
+                : Path.GetFullPath(value);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            // npm would hand the unusable path to its own file read and get nothing back, so
+            // keeping the raw value reaches the same outcome through the File.Exists check.
+            _logger.LogDebug("Could not resolve the npm userconfig path {Path}.", value);
+            return value;
+        }
     }
 
     private static void AddIfAbsent(
@@ -635,11 +680,26 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         return key is RegistryKey or UserConfigKey || key.EndsWith(ScopedRegistryKeySuffix, StringComparison.Ordinal);
     }
 
-    private static string NormalizeKey(string key)
+    private static string NormalizeEnvironmentKey(string key)
     {
-        // npm package scopes are lowercase, and npm treats config keys case-insensitively, so
-        // lowercasing makes "@Microsoft:registry" and "NPM_CONFIG_REGISTRY" resolve alike.
-        return key.Trim().ToLowerInvariant();
+        // Only the environment layer is normalized, and only the way npm's loadEnv normalizes it:
+        // underscores after the first character become dashes and the result is lowercased, unless
+        // the key is nerf-darted ("//registry.example.com/:_authToken"), which is left alone.
+        // Keys read from a .npmrc keep their casing, so "REGISTRY=" and "@Microsoft:registry" are
+        // dead entries for npm and have to stay dead here too.
+        // https://github.com/npm/cli/blob/latest/workspaces/config/lib/index.js
+        if (key.StartsWith("//", StringComparison.Ordinal))
+        {
+            return key;
+        }
+
+        return string.Create(key.Length, key, static (destination, source) =>
+        {
+            for (var i = 0; i < source.Length; i++)
+            {
+                destination[i] = i > 0 && source[i] is '_' ? '-' : char.ToLowerInvariant(source[i]);
+            }
+        });
     }
 
     private static bool TryGetScope(string packageName, [NotNullWhen(true)] out string? scope)
@@ -755,7 +815,7 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             return false;
         }
 
-        var candidate = NormalizeKey(name[EnvironmentVariablePrefix.Length..]);
+        var candidate = NormalizeEnvironmentKey(name[EnvironmentVariablePrefix.Length..].Trim());
 
         if (!IsInterestingKey(candidate))
         {
