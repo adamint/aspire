@@ -15,11 +15,12 @@ const webpack = require('webpack');
  *
  * Production is the mode `vscode:prepublish` builds in (`yarn package`), and therefore the mode
  * every shipped VSIX is built in, so swapping in a no-op module there keeps the bridge out of the
- * artifact entirely. Development and E2E bundles build with `mode: 'none'` and keep the real
- * implementation, which is what the E2E runner drives.
+ * artifact entirely. The E2E workflow also packages through `vscode:prepublish`, so it must opt into
+ * bundling the real bridge explicitly with `ASPIRE_EXTENSION_E2E_INCLUDE_BRIDGE=true`.
  */
 const e2eBridgeRequestPattern = /[\\/]testing[\\/]e2eStateFileBridge$/;
 const e2eBridgeProductionStub = path.resolve(__dirname, 'src', 'testing', 'e2eStateFileBridge.production.ts');
+const e2eBridgeIncludeEnvironmentVariable = 'ASPIRE_EXTENSION_E2E_INCLUDE_BRIDGE';
 
 //@ts-check
 /** @typedef {import('webpack').Configuration} WebpackConfig **/
@@ -72,7 +73,8 @@ const extensionConfig = {
  */
 module.exports = (_env, argv) => {
   // A fresh array per call so repeated invocations cannot accumulate plugins on the shared config.
-  const plugins = argv && argv.mode === 'production'
+  const shouldStubE2eBridge = argv && argv.mode === 'production' && process.env[e2eBridgeIncludeEnvironmentVariable] !== 'true';
+  const plugins = shouldStubE2eBridge
     ? [new webpack.NormalModuleReplacementPlugin(e2eBridgeRequestPattern, e2eBridgeProductionStub)]
     : [];
 
@@ -81,3 +83,4 @@ module.exports = (_env, argv) => {
 
 module.exports.e2eBridgeRequestPattern = e2eBridgeRequestPattern;
 module.exports.e2eBridgeProductionStub = e2eBridgeProductionStub;
+module.exports.e2eBridgeIncludeEnvironmentVariable = e2eBridgeIncludeEnvironmentVariable;

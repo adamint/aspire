@@ -5,10 +5,29 @@ import * as path from 'path';
 type WebpackConfigFactory = ((env: unknown, argv: { mode?: string }) => Array<{ plugins: unknown[] }>) & {
     e2eBridgeRequestPattern: RegExp;
     e2eBridgeProductionStub: string;
+    e2eBridgeIncludeEnvironmentVariable: string;
 };
 
 const extensionRoot = path.resolve(__dirname, '..', '..');
 const loadWebpackConfig = (): WebpackConfigFactory => require(path.join(extensionRoot, 'webpack.config.js')) as WebpackConfigFactory;
+const withEnvironmentVariable = (name: string, value: string | undefined, action: () => void): void => {
+    const originalValue = process.env[name];
+
+    try {
+        if (value === undefined) {
+            delete process.env[name];
+        } else {
+            process.env[name] = value;
+        }
+        action();
+    } finally {
+        if (originalValue === undefined) {
+            delete process.env[name];
+        } else {
+            process.env[name] = originalValue;
+        }
+    }
+};
 
 /**
  * `e2eStateFileBridge.ts` is a test control channel that registers a wildcard debug adapter tracker
@@ -20,27 +39,52 @@ suite('E2E bridge production gate', () => {
     test('replaces the E2E bridge in production builds', () => {
         const configure = loadWebpackConfig();
 
-        const [productionConfig] = configure({}, { mode: 'production' });
+        withEnvironmentVariable(configure.e2eBridgeIncludeEnvironmentVariable, undefined, () => {
+            const [productionConfig] = configure({}, { mode: 'production' });
 
-        assert.strictEqual(productionConfig.plugins.length, 1);
-        assert.strictEqual((productionConfig.plugins[0] as object).constructor.name, 'NormalModuleReplacementPlugin');
+            assert.strictEqual(productionConfig.plugins.length, 1);
+            assert.strictEqual((productionConfig.plugins[0] as object).constructor.name, 'NormalModuleReplacementPlugin');
+        });
     });
 
-    test('keeps the E2E bridge in development and E2E builds', () => {
+    test('keeps the E2E bridge in development builds', () => {
         const configure = loadWebpackConfig();
 
-        // `yarn compile` passes no mode, which is what the E2E runner builds with and what has to
-        // keep driving the real bridge.
+        // `yarn compile` passes no mode, so local development bundles keep driving the real bridge.
         assert.deepStrictEqual(configure({}, {}).map(config => config.plugins), [[]]);
         assert.deepStrictEqual(configure({}, { mode: 'none' }).map(config => config.plugins), [[]]);
+    });
+
+    test('keeps the E2E bridge in production mode when the E2E VSIX build opts in', () => {
+        const configure = loadWebpackConfig();
+
+        withEnvironmentVariable(configure.e2eBridgeIncludeEnvironmentVariable, 'true', () => {
+            assert.deepStrictEqual(
+                configure({}, { mode: 'production' }).map(config => config.plugins),
+                [[]],
+                'The E2E VSIX build packages through vscode:prepublish, so its explicit bridge opt-in must override the production stub replacement.');
+        });
+    });
+
+    test('packages the E2E VSIX with the bridge opt-in and asserts the emitted bundle', () => {
+        const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'tests.yml'), 'utf8');
+
+        assert.ok(
+            workflow.includes('ASPIRE_EXTENSION_E2E_INCLUDE_BRIDGE: "true"'),
+            'The E2E VSIX package step must opt into bundling the real bridge.');
+        assert.ok(
+            workflow.includes('assert-extension-e2e-bridge-vsix.ps1 -VsixPath out/aspire-extension.vsix -Expected Present'),
+            'The E2E VSIX package step must assert the emitted VSIX still contains the real bridge.');
     });
 
     test('does not accumulate plugins across repeated configuration calls', () => {
         const configure = loadWebpackConfig();
 
-        configure({}, { mode: 'production' });
+        withEnvironmentVariable(configure.e2eBridgeIncludeEnvironmentVariable, undefined, () => {
+            configure({}, { mode: 'production' });
 
-        assert.strictEqual(configure({}, { mode: 'production' })[0].plugins.length, 1);
+            assert.strictEqual(configure({}, { mode: 'production' })[0].plugins.length, 1);
+        });
     });
 
     test('matches the bridge import that extension.ts issues', () => {

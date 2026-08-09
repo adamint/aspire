@@ -643,7 +643,11 @@ jobs:
         if: ${{ inputs.extensionVersionOverride != '' }}
         run: corepack yarn version --new-version "${{ inputs.extensionVersionOverride }}" --no-git-tag-version
       - name: Package VSIX
+        env:
+          ASPIRE_EXTENSION_E2E_INCLUDE_BRIDGE: "true"
         run: corepack yarn run vsce package --pre-release -o out/aspire-extension.vsix
+      - name: Assert E2E VSIX contains bridge
+        run: ../.github/scripts/assert-extension-e2e-bridge-vsix.ps1 -VsixPath out/aspire-extension.vsix -Expected Present
       - name: Upload VSIX
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
