@@ -74,11 +74,8 @@ export function getSupportedCapabilities(): Capabilities {
     // extension side is negotiated - the CLI decides whether the AppHost can produce structured
     // entries from the sequence number on each entry, not from an AppHost capability.
     //
-    // It is pushed rather than added to the literal above because a separate in-flight change
-    // rewrites that line to version the build-ownership token
-    // ('build-dotnet-using-cli' -> 'build-dotnet-using-cli.v2'). Keeping this feature off the line
-    // lets the two merge without a conflict whose instinctive both-sides resolution would leave
-    // the unversioned token in place and bring back
+    // The token is versioned because an unversioned one cannot be retired once shipped: an older
+    // extension advertising it would keep claiming a contract it no longer implements, which is
     // https://github.com/microsoft/aspire/issues/15850.
     capabilities.push('apphost-log-output.v1');
 

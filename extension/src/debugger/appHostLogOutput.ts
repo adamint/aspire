@@ -348,21 +348,36 @@ export class AppHostLogOutputCoordinator {
         const pending = this._pendingRecords.get(category);
         const hasPendingConsoleRecord = pending !== undefined && pending.body.length > 0;
         const hasPendingDebugRecord = this._pendingDebugRecords.has(category);
-        if (!this._onIdleFlush || this._partialLines.has(category) || (!hasPendingConsoleRecord && !hasPendingDebugRecord)) {
+        const hasHeldPartialLine = this._partialLines.has(category);
+        const isAssemblingRecord = this._pendingRecords.has(category) || this._pendingDebugRecords.has(category);
+
+        if (!this._onIdleFlush) {
+            return;
+        }
+
+        if (hasHeldPartialLine) {
+            // A record being assembled keeps everything buffered, because the partial line is most
+            // likely its next body line and emitting now would split the record.
+            if (isAssemblingRecord) {
+                return;
+            }
+        } else if (!hasPendingConsoleRecord && !hasPendingDebugRecord) {
             return;
         }
 
         // Trace/Debug records do not have a structured backchannel twin, and final
         // ConsoleLogger/DebugLogger records have no explicit terminator. Flush after a
         // short idle window so adapter-only records become visible without waiting for
-        // AppHost shutdown. A trailing partial line keeps the record buffered because
-        // its suffix may still arrive in a later DAP event.
+        // AppHost shutdown. The same window bounds a held partial line: Console.Write("info: ...")
+        // with no newline looks like the start of a logger header, and without a release it would
+        // stay invisible until the next write or process exit.
         const timer = setTimeout(() => {
             this._idleFlushTimers.delete(category);
 
             const outputs: AppHostParentOutput[] = [];
             this.flushPendingRecord(category, outputs);
             this.flushPendingDebugRecord(category, outputs);
+            this.releaseHeldPartialLine(category, outputs);
 
             for (const output of outputs) {
                 this._onIdleFlush?.(output);
@@ -370,6 +385,20 @@ export class AppHostLogOutputCoordinator {
         }, this._idleFlushDelayMs);
 
         this._idleFlushTimers.set(category, timer);
+    }
+
+    private releaseHeldPartialLine(category: string, outputs: AppHostParentOutput[]): void {
+        const partial = this._partialLines.get(category);
+
+        // Only an unterminated line that never became part of a record is released here. Once the
+        // idle window has passed, waiting longer for a suffix costs more than emitting the prefix
+        // twice would, because the alternative is showing nothing at all.
+        if (partial === undefined || this._pendingRecords.has(category) || this._pendingDebugRecords.has(category)) {
+            return;
+        }
+
+        this._partialLines.delete(category);
+        this.consumeLines(partial, category, outputs);
     }
 
     private clearIdleFlushTimer(category: string): void {
@@ -633,22 +662,29 @@ function startsUnrelatedDebuggerOutput(line: string): boolean {
     // record otherwise absorbs every following `console` line. The debugger itself
     // writes on that same category, and those lines are never part of a record:
     //   'TestShop.AppHost' (CoreCLR: clrhost): Loaded '/dotnet/System.Private.CoreLib.dll'. Skipped loading symbols.
-    //   Loaded '/dotnet/System.Net.Http.dll'. No se puede encontrar o abrir el archivo PDB.
+    //   TestShop.AppHost.dll (29067): Loaded '/dotnet/System.Net.Http.dll'. No se puede encontrar o abrir el archivo PDB.
+    //   Loaded '/dotnet/System.Net.Http.dll'. Skipped loading symbols.
     //   Exception thrown: 'System.InvalidOperationException' in TestShop.AppHost.dll
+    //   -------------------------------------------------------------------------------
     //   Unhandled exception. System.InvalidOperationException: boom
     // Absorbing them rewrites the record text, which changes the identity used for
     // deduplication, and hides a fatal line behind the pending record's log level
     // instead of routing it to stderr.
     //
-    // The check is deliberately narrower than isSevereRuntimeOutputLine: a record's own
-    // exception body starts with "System.InvalidOperationException: boom" and must stay
-    // part of the record, whereas the runtime's top-level handler is the only writer of
-    // the "Unhandled exception." prefix.
+    // Every pattern is anchored, and the module-load prefix is required to be either absent or a
+    // parenthesised module/pid tag, so ordinary content such as "Plugin Loaded 'foo'." is not
+    // mistaken for debugger output. The list stays conservative on purpose. It cannot be
+    // exhaustive, because the debugger localizes most of what it writes (the launch-settings and
+    // licence lines in dotnetDebugger.test.ts are Spanish and English copies of the same
+    // messages), and a wrong break is the more expensive error: a Trace or Debug record has no
+    // backchannel twin, so its continuation would be dropped by the console fallback and lost,
+    // whereas a wrong absorb only spoils one record's identity.
     const trimmedLine = line.trim();
 
     return /^Unhandled exception\./.test(trimmedLine)
-        || /(?:^|\s)Loaded '[^']*'\./.test(trimmedLine)
-        || /^Exception thrown: '/.test(trimmedLine);
+        || /^(?:'[^']*' \([^)]*\): |\S+ \(\d+\): )?Loaded '[^']*'\./.test(trimmedLine)
+        || /^Exception thrown: '/.test(trimmedLine)
+        || /^-{5,}$/.test(trimmedLine);
 }
 
 function splitMessageAndException(value: string): { message: string; exception?: string } {

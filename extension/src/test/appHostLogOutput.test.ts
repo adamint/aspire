@@ -646,6 +646,63 @@ suite('AppHost log output coordinator tests', () => {
             undefined);
     });
 
+    test('idle flush releases an unterminated line that only looks like a logger header', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const emitted: AppHostParentOutput[] = [];
+        const coordinator = new (AppHostLogOutputCoordinator as new (onIdleFlush: (output: AppHostParentOutput) => void) => AppHostLogOutputCoordinator)(
+            output => emitted.push(output));
+
+        try {
+            // Console.Write("info: waiting...") with no newline cannot be told apart from the start
+            // of a ConsoleLogger header, so it is held. Without a release it stays invisible until
+            // the next write or process exit.
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput('info: waiting...', 'stdout'),
+                []);
+            assert.deepStrictEqual(emitted, []);
+
+            await clock.tickAsync(1000);
+
+            assert.deepStrictEqual(emitted, [{
+                output: 'info: waiting...',
+                category: 'stdout'
+            }]);
+            assert.deepStrictEqual(coordinator.flush(), []);
+        }
+        finally {
+            coordinator.reset();
+            clock.restore();
+        }
+    });
+
+    test('keeps a log line that merely mentions a loaded module inside its record', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                "Example.Category: Warning: Startup report.\nPlugin Loaded 'foo'.\n",
+                'console'),
+            [{
+                output: "\x1b[33mExample.Category: Warning: Startup report.\nPlugin Loaded 'foo'.\x1b[0m\n",
+                category: 'stdout'
+            }]);
+    });
+
+    test('breaks a pending DebugLogger record on the debugger separator line', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Warning: First line.\n-------------------------------------------------------------------------------\n',
+                'console'),
+            [{
+                output: '\x1b[33mExample.Category: Warning: First line.\x1b[0m\n',
+                category: 'stdout'
+            }]);
+    });
+
     test('keeps an exception body attached to its DebugLogger record', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 

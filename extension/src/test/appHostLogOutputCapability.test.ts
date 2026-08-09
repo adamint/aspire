@@ -9,9 +9,8 @@ import { ICliRpcClient } from '../server/rpcClient';
 // pairing needs a test instead of a compiler to hold it together.
 const appHostLogOutputCapability = 'apphost-log-output.v1';
 
-// This file lives apart from the other capability tests on purpose. It has to keep working
-// across merges that rewrite neighbouring capability tokens, so it is scoped to the
-// apphost-log-output family and touches no line another change is likely to own.
+// The suite is scoped to the apphost-log-output family so a failure names the contract that
+// broke rather than capability negotiation in general.
 suite('AppHost log output capability', () => {
     test('advertises the versioned token and never an unversioned variant', () => {
         const advertised = getSupportedCapabilities() as string[];
