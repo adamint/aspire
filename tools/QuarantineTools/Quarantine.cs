@@ -600,11 +600,15 @@ public class Program
                 return null;
             }
 
-            // git prints a single absolute path followed by a line ending, using forward slashes on every
-            // platform, including Windows (for example `C:/src/aspire\r\n`). Trim only the line ending:
-            // POSIX allows a checkout directory name to end in spaces, and those spaces are part of the path.
+            // git prints a single absolute path followed by one line ending, using forward slashes on
+            // every platform, including Windows (for example `C:/src/aspire\r\n`). Trim exactly that one
+            // terminator: POSIX allows a checkout directory name to end in spaces *or* a newline, and
+            // TrimEnd('\r', '\n') silently truncated such a root, which the wrong-tree guard then
+            // rejected as a different repository.
             // See https://git-scm.com/docs/git-rev-parse#Documentation/git-rev-parse.txt---show-toplevel.
-            var trimmed = standardOutputTask.Result.TrimEnd('\r', '\n');
+            var output = standardOutputTask.Result;
+            var trimmed = TrimSingleLineTerminator(output);
+
             return trimmed.Length == 0 ? null : Path.GetFullPath(trimmed);
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
@@ -806,7 +810,7 @@ public class Program
     /// existence.
     /// </remarks>
     internal static bool IsCaseSensitiveDirectory(string directory)
-        => IsCaseSensitiveDirectory(directory, TryGetKnownDirectoryCaseSensitivity, IsCaseSensitiveDirectoryByFinalSegmentProbe);
+        => IsCaseSensitiveDirectory(directory, TryGetKnownDirectoryCaseSensitivity, IsCaseSensitiveDirectoryByChildProbe);
 
     internal static bool IsCaseSensitiveDirectory(string directory, Func<string, bool?> tryGetKnownDirectoryCaseSensitivity, Func<string, bool> fallbackProbe)
         => IsCaseSensitiveDirectory(directory, tryGetKnownDirectoryCaseSensitivity, fallbackProbe, OperatingSystem.IsWindows());
@@ -868,31 +872,66 @@ public class Program
     }
 
     /// <summary>
-    /// Probes whether directory names alongside <paramref name="directory"/> distinguish case, by
-    /// asking whether it is reachable through a case-flipped spelling of its own final segment.
+    /// Probes whether child names looked up inside <paramref name="directory"/> distinguish case, by
+    /// asking whether one of its existing children is reachable through a case-flipped spelling.
     /// </summary>
-    private static bool IsCaseSensitiveDirectoryByFinalSegmentProbe(string directory)
+    /// <remarks>
+    /// The question the ancestry loop asks is about lookups <em>inside</em> this directory, and case
+    /// sensitivity is a per-directory property on the filesystems that expose one — Linux ext4/F2FS
+    /// casefolding is set per directory with the <c>+F</c> attribute, and Windows exposes a
+    /// per-directory flag that WSL sets. Flipping this directory's own final segment and looking it up
+    /// in its parent answers the parent's question instead, so a case-sensitive directory under a
+    /// casefolded parent was reported case-insensitive and a case-distinct wrong tree could pass the
+    /// write guard. Probing a real child keeps the answer on the directory being asked about, and needs
+    /// no platform-specific metadata call.
+    /// See https://docs.kernel.org/filesystems/ext4/overview.html#casefolding.
+    /// </remarks>
+    private static bool IsCaseSensitiveDirectoryByChildProbe(string directory)
     {
         var full = TrimTrailingSeparator(directory);
-        var name = Path.GetFileName(full);
-        var parent = Path.GetDirectoryName(full);
-        var flipped = FlipCase(name);
 
-        // A volume root has no segment to flip, and a segment with no cased letters cannot answer the
-        // question. Fail closed as case-sensitive: a false "case-insensitive" answer can let a wrong
-        // checkout whose name differs only by case through the write guard.
-        if (parent is null || name.Length == 0 || string.Equals(flipped, name, StringComparison.Ordinal))
+        try
         {
+            foreach (var entry in Directory.EnumerateFileSystemEntries(full))
+            {
+                var name = Path.GetFileName(entry);
+                var flipped = FlipCase(name);
+
+                // A name with no cased letters cannot answer the question; keep looking.
+                if (string.Equals(flipped, name, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                // A case-sensitive directory that happens to hold two children differing only by case
+                // is read as case-insensitive here. That only restores the behavior this guard had
+                // before the probe existed, and a checkout layout does not produce such a pair.
+                var flippedPath = Path.Combine(full, flipped);
+                return !Directory.Exists(flippedPath) && !File.Exists(flippedPath);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // An unreadable or concurrently removed directory leaves the semantics unknown.
             return true;
         }
 
-        // A case-sensitive volume that happens to hold a real sibling differing only by case is read as
-        // case-insensitive here. That is acceptable: it only restores the behavior this guard had
-        // before the probe existed, and such a pair is not something a checkout layout produces. This
-        // fallback is also intentionally not used on Windows when the per-directory flag can be read:
-        // the sibling lookup observes the parent directory's rules, not this directory's child lookup
-        // rules.
-        return !Directory.Exists(Path.Combine(parent, flipped));
+        // An empty directory, or one whose every child name is caseless, says nothing about its own
+        // lookup rules. Fail closed as case-sensitive: a false "case-insensitive" answer is what lets a
+        // wrong checkout differing only by case through the write guard.
+        return true;
+    }
+
+    /// <summary>
+    /// Removes exactly one trailing line terminator, leaving every other character intact.
+    /// </summary>
+    internal static string TrimSingleLineTerminator(string value)
+    {
+        return value.EndsWith("\r\n", StringComparison.Ordinal)
+            ? value[..^2]
+            : value.Length > 0 && value[^1] is '\n' or '\r'
+                ? value[..^1]
+                : value;
     }
 
     private static string FlipCase(string value)

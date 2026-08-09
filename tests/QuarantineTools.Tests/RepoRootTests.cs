@@ -146,14 +146,17 @@ public class RepoRootTests : IDisposable
     public void IsCaseSensitiveDirectory_AgreesWithTheFilesystemItProbes()
     {
         // Self-validating on any host: whatever this volume actually does, the probe must report it.
+        // The child is what makes the question answerable - the probe asks about name lookups *inside*
+        // this directory, which is the rule the ancestry walk depends on.
         var probed = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "CaseProbe")).FullName;
-        var reachableThroughAnotherCasing = Directory.Exists(Path.Combine(_scratch.FullName, "caseprobe"));
+        File.WriteAllText(Path.Combine(probed, "Marker.txt"), "");
+        var reachableThroughAnotherCasing = File.Exists(Path.Combine(probed, "marker.txt"));
 
         Assert.Equal(!reachableThroughAnotherCasing, Program.IsCaseSensitiveDirectory(probed));
     }
 
     [Fact]
-    public void IsCaseSensitiveDirectory_UsesDirectoryLookupRulesBeforeFinalSegmentProbe()
+    public void IsCaseSensitiveDirectory_UsesDirectoryLookupRulesBeforeTheChildProbe()
     {
         var probed = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "CaseSensitiveParent")).FullName;
         var queriedPaths = new List<string>();
@@ -192,17 +195,40 @@ public class RepoRootTests : IDisposable
     }
 
     [Fact]
-    public void IsCaseSensitiveDirectory_FailsClosedWhenTheFinalSegmentProbeCannotAnswer()
+    public void IsCaseSensitiveDirectory_IgnoresTheParentsCasingRules_AndFailsClosedWithNoChildToProbe()
     {
-        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows uses FileCaseSensitiveInfo instead of the final-segment fallback.");
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows reads the per-directory flag instead of probing.");
 
-        var uncased = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "123")).FullName;
+        // Both spellings of the sibling are created, so the case-flipped name resolves on a
+        // case-insensitive volume (where they are one directory) and on a case-sensitive one (where
+        // they are two). Asking the parent therefore answers "case-insensitive" everywhere - and that
+        // is the answer this must not give: `Probed` is empty, so nothing is known about lookups inside
+        // it, and a write guard that accepts a case-only difference on a hunch can delete from the
+        // wrong checkout.
+        var probed = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "Probed")).FullName;
+        Directory.CreateDirectory(Path.Combine(_scratch.FullName, "probed"));
 
-        Assert.True(Program.IsCaseSensitiveDirectory(uncased));
+        Assert.True(Directory.Exists(Path.Combine(_scratch.FullName, "probed")));
+        Assert.True(Program.IsCaseSensitiveDirectory(probed));
+    }
+
+    [Theory]
+    [InlineData("/src/repo\n", "/src/repo")]
+    [InlineData("C:/src/repo\r\n", "C:/src/repo")]
+    [InlineData("/src/repo\n\n", "/src/repo\n")]
+    [InlineData("/src/repo ", "/src/repo ")]
+    [InlineData("/src/repo", "/src/repo")]
+    [InlineData("", "")]
+    public void TrimSingleLineTerminator_RemovesOneTerminatorAndNothingElse(string output, string expected)
+    {
+        // git terminates `rev-parse --show-toplevel` with exactly one line ending, and POSIX allows a
+        // path component to end in a newline or a space, so anything before that terminator is part of
+        // the path.
+        Assert.Equal(expected, Program.TrimSingleLineTerminator(output));
     }
 
     [Fact]
-    public void IsSameOrAncestorDirectory_UsesEachParentsCasingRules_WhenTheFinalSegmentProbeIsAmbiguous()
+    public void IsSameOrAncestorDirectory_UsesEachParentsCasingRules_WhenTheChildProbeIsAmbiguous()
     {
         var parent = Path.Combine(_scratch.FullName, "case-sensitive-parent");
         var upperRepo = Path.Combine(parent, "Outer", "repo");
