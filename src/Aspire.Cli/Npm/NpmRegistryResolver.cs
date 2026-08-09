@@ -4,6 +4,7 @@
 using System.Buffers;
 using System.Collections;
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using Microsoft.Extensions.Logging;
 
 namespace Aspire.Cli.Npm;
@@ -227,7 +228,7 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             return;
         }
 
-        string[] lines;
+        byte[] contents;
 
         try
         {
@@ -239,7 +240,7 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
                 return;
             }
 
-            lines = File.ReadAllLines(path);
+            contents = File.ReadAllBytes(path);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException)
         {
@@ -249,10 +250,53 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             return;
         }
 
+        // The file is decoded into a pooled buffer and scanned as spans rather than read into
+        // strings. Reading lines would put every "//registry.example.com/:_authToken=..." entry on
+        // the managed heap as a string that lives until a collection runs; here only allow-listed
+        // keys and their values are ever materialized, and both buffers are cleared on the way out.
+        // The size cap above is what makes a single-shot read safe.
+        var buffer = ArrayPool<char>.Shared.Rent(Encoding.UTF8.GetMaxCharCount(contents.Length));
+
+        try
+        {
+            var characterCount = Encoding.UTF8.GetChars(RemoveByteOrderMark(contents), buffer);
+
+            MergeNpmrcLines(configuration, buffer.AsSpan(0, characterCount), path);
+        }
+        finally
+        {
+            Array.Clear(buffer);
+            ArrayPool<char>.Shared.Return(buffer);
+            Array.Clear(contents);
+        }
+    }
+
+    private void MergeNpmrcLines(Dictionary<string, ConfigurationValue> configuration, ReadOnlySpan<char> contents, string path)
+    {
         var fileConfiguration = new Dictionary<string, ConfigurationValue>(StringComparer.Ordinal);
 
-        foreach (var line in lines)
+        while (!contents.IsEmpty)
         {
+            // Split exactly like File.ReadAllLines: "\r\n" is one terminator, and a lone "\r" or
+            // "\n" also ends a line. Unicode separators such as U+2028 stay inside the value,
+            // which is what npm's ini parser does.
+            var terminatorIndex = contents.IndexOfAny('\r', '\n');
+            ReadOnlySpan<char> line;
+
+            if (terminatorIndex < 0)
+            {
+                line = contents;
+                contents = default;
+            }
+            else
+            {
+                line = contents[..terminatorIndex];
+                var skip = contents[terminatorIndex] == '\r' && terminatorIndex + 1 < contents.Length && contents[terminatorIndex + 1] == '\n'
+                    ? 2
+                    : 1;
+                contents = contents[(terminatorIndex + skip)..];
+            }
+
             // The key is allow-listed before the value is parsed out of the line, so a
             // "//registry.example.com/:_authToken=..." entry never becomes a token-bearing string.
             if (!TryParseNpmrcKey(line, out var key, out var rawValue) || !IsInterestingKey(key))
@@ -298,6 +342,14 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     /// <see cref="ParseNpmrcValue"/> ever materializes it.
     /// See https://github.com/npm/ini/blob/main/lib/ini.js.
     /// </remarks>
+    private static ReadOnlySpan<byte> RemoveByteOrderMark(ReadOnlySpan<byte> contents)
+    {
+        // Decoding by hand means the UTF-8 BOM is no longer stripped for us. An editor that writes
+        // one would otherwise turn the first key into "\uFEFFregistry", which silently drops the
+        // most important entry in the file.
+        return contents.StartsWith("\uFEFF"u8) ? contents[3..] : contents;
+    }
+
     private static bool TryParseNpmrcKey(ReadOnlySpan<char> line, out string key, out ReadOnlySpan<char> rawValue)
     {
         key = string.Empty;

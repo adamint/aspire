@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Collections;
+using System.Text;
 using Aspire.Cli.Npm;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -325,6 +326,32 @@ public class NpmRegistryResolverTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_ReadsTheFirstKeyOfAFileThatStartsWithAByteOrderMark()
+    {
+        // The file is decoded by hand so a credential line never becomes a string, which means the
+        // UTF-8 BOM an editor may write is no longer stripped for us.
+        WriteHomeNpmrcBytes([.. Encoding.UTF8.GetPreamble(), .. "registry=https://npm.contoso.example/feed/\n"u8]);
+
+        var resolution = CreateResolver().Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/feed/", resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Theory]
+    [InlineData("\n")]
+    [InlineData("\r\n")]
+    [InlineData("\r")]
+    public void Resolve_ReadsEveryLineTerminatorNpmAccepts(string terminator)
+    {
+        WriteHomeNpmrcBytes(Encoding.UTF8.GetBytes(
+            $"//npm.contoso.example/feed/:_authToken=super-secret-token{terminator}registry=https://npm.contoso.example/feed/{terminator}"));
+
+        var resolution = CreateResolver().Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/feed/", resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
     public void Resolve_RedactsCredentialsEmbeddedInTheRegistryValue()
     {
         WriteHomeNpmrc("registry=https://user:super-secret-token@npm.contoso.example/feed/");
@@ -395,6 +422,12 @@ public class NpmRegistryResolverTests : IDisposable
     {
         var home = Directory.CreateDirectory(Path.Combine(_root.FullName, "home"));
         File.WriteAllLines(Path.Combine(home.FullName, ".npmrc"), lines);
+    }
+
+    private void WriteHomeNpmrcBytes(byte[] contents)
+    {
+        var home = Directory.CreateDirectory(Path.Combine(_root.FullName, "home"));
+        File.WriteAllBytes(Path.Combine(home.FullName, ".npmrc"), contents);
     }
 
     public void Dispose()
