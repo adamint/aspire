@@ -440,11 +440,11 @@ suite('cliPathEnvironment.syncAspireExtensionVersionEnvironment tests', () => {
                 isPreReleaseVersion: false,
                 publisherId: 'publisher-id',
             },
-        }), 'unknown');
+        }, 'vscode'), 'unknown');
     });
 
     test('reports unknown source when VS Code marketplace metadata is absent', () => {
-        assert.strictEqual(getAspireExtensionSource({ version: '1.17.0' }), 'unknown');
+        assert.strictEqual(getAspireExtensionSource({ version: '1.17.0' }, 'vscode'), 'unknown');
     });
 
     test('reports unknown source for a side-loaded VSIX that carries a matched publisherId', () => {
@@ -458,7 +458,7 @@ suite('cliPathEnvironment.syncAspireExtensionVersionEnvironment tests', () => {
                 publisherId: 'publisher-id',
                 source: 'vsix',
             },
-        }), 'unknown');
+        }, 'vscode'), 'unknown');
     });
 
     test('reports marketplace source when VS Code records a gallery install', () => {
@@ -467,7 +467,18 @@ suite('cliPathEnvironment.syncAspireExtensionVersionEnvironment tests', () => {
                 isPreReleaseVersion: false,
                 source: 'gallery',
             },
-        }), 'marketplace');
+        }, 'vscode'), 'marketplace');
+    });
+
+    test('reports unknown source for a gallery install on a build with a different gallery', () => {
+        // VSCodium installs from Open VSX and sets urlProtocol to 'vscodium', so its 'gallery'
+        // installs must not be compared against the VS Code Marketplace.
+        assert.strictEqual(getAspireExtensionSource({
+            __metadata: {
+                isPreReleaseVersion: false,
+                source: 'gallery',
+            },
+        }, 'vscodium'), 'unknown');
     });
 
     test('reads the pre-release channel from the extension description', () => {

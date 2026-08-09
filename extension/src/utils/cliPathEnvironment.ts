@@ -339,7 +339,10 @@ export function getAspireExtensionChannel(packageJSON: AspireVsCodePackageJson |
     return packageJSON?.__metadata?.isPreReleaseVersion === true ? 'pre-release' : 'stable';
 }
 
-export function getAspireExtensionSource(packageJSON: AspireVsCodePackageJson | undefined): AspireVsCodeExtensionSource {
+export function getAspireExtensionSource(
+    packageJSON: AspireVsCodePackageJson | undefined,
+    uriScheme: string,
+): AspireVsCodeExtensionSource {
     // `__metadata.source` is the only signal that proves how the extension was installed: 'gallery'
     // for a Marketplace install and 'vsix' for a side-load. `publisherId` is deliberately not used as
     // a substitute, because VS Code looks a side-loaded VSIX up in the gallery on install and stores
@@ -353,11 +356,17 @@ export function getAspireExtensionSource(packageJSON: AspireVsCodePackageJson | 
     // See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/common/extensionsScannerService.ts
     // (`delete manifest.__metadata` in `scanExtension`).
     const source = packageJSON?.__metadata?.source;
-    if (typeof source === 'string' && source.trim().length > 0) {
-        return source.trim().toLowerCase() === 'gallery' ? 'marketplace' : 'unknown';
+    if (typeof source !== 'string' || source.trim().toLowerCase() !== 'gallery') {
+        return 'unknown';
     }
 
-    return 'unknown';
+    // 'gallery' names whichever gallery the host product is configured against, not the VS Code
+    // Marketplace specifically. VSCodium builds set `extensionsGallery` to Open VSX and `urlProtocol`
+    // to 'vscodium', so reporting 'marketplace' there would have the CLI compare the install against
+    // a feed it was never published to. `env.uriScheme` is `product.json`'s `urlProtocol`, which is
+    // the only product identity the extension host exposes that the Marketplace builds set.
+    // See https://github.com/VSCodium/vscodium/blob/master/prepare_vscode.sh.
+    return uriScheme === 'vscode' || uriScheme === 'vscode-insiders' ? 'marketplace' : 'unknown';
 }
 
 /**

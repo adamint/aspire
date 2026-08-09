@@ -1003,7 +1003,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
             extensions,
             "1.2.3",
             """
-            { "publisherId": "microsoft-aspire", "isPreReleaseVersion": "true" }
+            { "source": "gallery", "publisherId": "microsoft-aspire", "isPreReleaseVersion": "true" }
             """);
         var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
         var marketplaceClient = CreateUnusedMarketplaceClient();
@@ -1030,7 +1030,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
             extensions,
             "1.2.3",
             """
-            { "publisherId": "microsoft-aspire" }
+            { "source": "gallery", "publisherId": "microsoft-aspire" }
             """);
         var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
         var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
@@ -1234,6 +1234,9 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     [InlineData(".vscode-server")]
     [InlineData(".vscode-server-insiders")]
     [InlineData(".vscode-server-oss")]
+    [InlineData(".vscodium-insiders")]
+    [InlineData(".vscodium-server")]
+    [InlineData(".vscodium-server-insiders")]
     public void Detect_FindsExtension_ViaEachDefaultExtensionsRoot(string rootFolder)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -1394,6 +1397,126 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
 
     // Points the extension root at a temporary directory so the scan never reads the real
     // ~/.vscode/extensions of the machine running the tests.
+    [Fact]
+    public async Task CheckAsync_OmitsTheMarketplaceLink_WhenTheVersionIsUnknownAndTheInstallIsNotFromTheMarketplace()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        // The unknown-version warning is raised before the install-source guard, so it is the one
+        // place a side-load or an Open VSX install can still be handed a Marketplace link for a feed
+        // it did not come from.
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = extensions.FullName,
+            [ReportedVersionVariable] = "not-a-version"
+        });
+        var marketplaceClient = CreateUnusedMarketplaceClient();
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.False(result.Metadata!["extensionVersionKnown"]!.GetValue<bool>());
+        Assert.Null(result.Link);
+    }
+
+    [Fact]
+    public async Task CheckAsync_DoesNotCheckMarketplace_WhenOnlyAPublisherIdIsRecorded()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        // VS Code looks a side-loaded VSIX up in the gallery on install and stamps the matched
+        // publisherId onto it, so a publisherId with no recorded source does not establish that the
+        // install came from the Marketplace, and guessing that it did makes the outbound request the
+        // source check exists to avoid.
+        CreateInstalledExtensionWithMetadata(
+            extensions,
+            "1.2.3",
+            """
+            { "publisherId": "microsoft-aspire", "isPreReleaseVersion": false }
+            """);
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = CreateUnusedMarketplaceClient();
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("unknown", result.Metadata!["extensionInstallSource"]!.GetValue<string>());
+        Assert.Equal(0, marketplaceClient.CallCount);
+    }
+
+    [Fact]
+    public async Task CheckAsync_ReportsTheVersionTheProfileIndexLists_WhenAHigherVersionedFolderRemainsOnDisk()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        // An interrupted update or a hand-copied directory leaves a higher-numbered folder behind that
+        // the profile never loads. The index names the folder VS Code actually runs, so reporting the
+        // highest folder on disk would describe an extension the user does not have loaded.
+        CreateInstalledExtension(extensions, "1.2.3");
+        CreateInstalledExtension(extensions, "9.9.9");
+        CreateProfileExtensionIndex(
+            extensions,
+            """
+            [{
+              "identifier": { "id": "microsoft-aspire.aspire-vscode" },
+              "version": "1.2.3",
+              "relativeLocation": "microsoft-aspire.aspire-vscode-1.2.3",
+              "metadata": { "source": "gallery", "isPreReleaseVersion": false }
+            }]
+            """);
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            StableVersionCallback = _ => Task.FromResult(SemVersion.Parse("1.2.3", SemVersionStyles.Strict))
+        };
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("1.2.3", result.Metadata!["extensionVersion"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task CheckAsync_DoesNotCheckMarketplace_WhenTheInstallCameFromAnOpenVsxBuild()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        // VSCodium points extensionsGallery at Open VSX, so "gallery" in one of its roots means Open
+        // VSX. Comparing that install against the VS Code Marketplace would report an update from a
+        // feed the extension was never published to.
+        var extensions = Directory.CreateDirectory(Path.Combine(home.FullName, ".vscode-oss", "extensions"));
+        CreateInstalledExtension(extensions, "1.2.3");
+        CreateProfileExtensionIndex(
+            extensions,
+            """
+            [{
+              "identifier": { "id": "microsoft-aspire.aspire-vscode" },
+              "version": "1.2.3",
+              "relativeLocation": "microsoft-aspire.aspire-vscode-1.2.3",
+              "metadata": { "source": "gallery", "isPreReleaseVersion": false }
+            }]
+            """);
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode"
+        });
+        var marketplaceClient = CreateUnusedMarketplaceClient();
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("unknown", result.Metadata!["extensionInstallSource"]!.GetValue<string>());
+        Assert.Equal(0, marketplaceClient.CallCount);
+    }
+
     private static TestEnvironment CreateVsCodeEnvironmentWithoutReportedVersion(DirectoryInfo extensions)
         => new(new Dictionary<string, string?>
         {
@@ -1431,6 +1554,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
                   ,"__metadata":{
                     "id":"microsoft-aspire.aspire-vscode",
                     "publisherId":"microsoft-aspire",
+                    "source":"gallery",
                     "isPreReleaseVersion":false
                   }
                   """

@@ -16,10 +16,24 @@ namespace Aspire.Cli.Utils;
 /// <param name="ServerDataFolderName">
 /// The <c>serverDataFolderName</c> value that names the home-relative remote/server folder.
 /// </param>
+/// <param name="UsesMicrosoftGallery">
+/// Whether the build's <c>extensionsGallery</c> points at the Visual Studio Marketplace.
+/// </param>
 internal sealed record VsCodeVariant(
     string UserDataFolderName,
     string DesktopDataFolderName,
-    string ServerDataFolderName);
+    string ServerDataFolderName,
+    bool UsesMicrosoftGallery);
+
+/// <summary>
+/// An extension root and whether the build that owns it installs from Microsoft's Marketplace.
+/// </summary>
+/// <remarks>
+/// The gallery is a per-build setting, not a property of the extension: VSCodium points
+/// <c>extensionsGallery</c> at Open VSX, so an extension it records as coming from "gallery" did not
+/// come from the VS Code Marketplace and must not be compared against or linked to it.
+/// </remarks>
+internal sealed record VsCodeExtensionRoot(string Path, bool UsesMicrosoftGallery);
 
 /// <summary>
 /// The single model of where a VS Code build keeps its per-user state on disk.
@@ -42,9 +56,19 @@ internal static class VsCodeInstallLayout
 {
     private static readonly IReadOnlyList<VsCodeVariant> s_knownVariants =
     [
-        new VsCodeVariant("Code", ".vscode", ".vscode-server"),
-        new VsCodeVariant("Code - Insiders", ".vscode-insiders", ".vscode-server-insiders"),
-        new VsCodeVariant("VSCodium", ".vscode-oss", ".vscode-server-oss")
+        new VsCodeVariant("Code", ".vscode", ".vscode-server", UsesMicrosoftGallery: true),
+        new VsCodeVariant("Code - Insiders", ".vscode-insiders", ".vscode-server-insiders", UsesMicrosoftGallery: true),
+
+        // Neither of the OSS-derived builds installs from the Visual Studio Marketplace: a plain
+        // code-oss build ships no gallery at all and VSCodium points extensionsGallery at Open VSX.
+        new VsCodeVariant("Code - OSS", ".vscode-oss", ".vscode-server-oss", UsesMicrosoftGallery: false),
+
+        // VSCodium leaves dataFolderName at the code-oss default but overrides serverDataFolderName,
+        // and its Insiders build overrides both, so the OSS names alone never find a remote VSCodium
+        // install. See the setpath calls in
+        // https://github.com/VSCodium/vscodium/blob/master/prepare_vscode.sh.
+        new VsCodeVariant("VSCodium", ".vscode-oss", ".vscodium-server", UsesMicrosoftGallery: false),
+        new VsCodeVariant("VSCodium - Insiders", ".vscodium-insiders", ".vscodium-server-insiders", UsesMicrosoftGallery: false)
     ];
 
     /// <summary>
@@ -59,7 +83,7 @@ internal static class VsCodeInstallLayout
     /// several installations is the active one — callers that need the active install read the
     /// version the extension itself reports instead.
     /// </remarks>
-    internal static IEnumerable<string> GetExtensionRootPaths(IEnvironment environment, DirectoryInfo homeDirectory)
+    internal static IEnumerable<VsCodeExtensionRoot> GetExtensionRootPaths(IEnvironment environment, DirectoryInfo homeDirectory)
     {
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentNullException.ThrowIfNull(homeDirectory);
@@ -67,19 +91,35 @@ internal static class VsCodeInstallLayout
         var overrideDirectory = environment.GetEnvironmentVariable("VSCODE_EXTENSIONS");
         if (!string.IsNullOrWhiteSpace(overrideDirectory))
         {
-            yield return overrideDirectory;
+            // An overridden root says nothing about which build points at it, and the VS Code
+            // Marketplace is the overwhelmingly common case, so it is treated as one rather than
+            // withholding the comparison from every user of VSCODE_EXTENSIONS.
+            yield return new VsCodeExtensionRoot(overrideDirectory, UsesMicrosoftGallery: true);
             yield break;
         }
 
         var home = homeDirectory.FullName;
+
+        // code-oss and VSCodium share a dataFolderName, so the same desktop root would otherwise be
+        // scanned (and reported as searched) twice.
+        var visitedRoots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var variant in s_knownVariants)
         {
-            yield return Path.Combine(home, variant.DesktopDataFolderName, "extensions");
+            var path = Path.Combine(home, variant.DesktopDataFolderName, "extensions");
+            if (visitedRoots.Add(path))
+            {
+                yield return new VsCodeExtensionRoot(path, variant.UsesMicrosoftGallery);
+            }
         }
 
         foreach (var variant in s_knownVariants)
         {
-            yield return Path.Combine(home, variant.ServerDataFolderName, "extensions");
+            var path = Path.Combine(home, variant.ServerDataFolderName, "extensions");
+            if (visitedRoots.Add(path))
+            {
+                yield return new VsCodeExtensionRoot(path, variant.UsesMicrosoftGallery);
+            }
         }
     }
 

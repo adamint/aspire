@@ -185,7 +185,11 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
                     Message = DoctorCommandStrings.VsCodeExtensionVersionUnknownMessage,
                     Details = FormatSearchedRoots(detection.SearchedRoots),
                     Fix = DoctorCommandStrings.VsCodeExtensionVersionUnknownFix,
-                    Link = MarketplaceUrl,
+
+                    // Only a confirmed Marketplace install gets the Marketplace link. A side-load or
+                    // an Open VSX install did not come from there, so pointing the user at it would
+                    // hand them a page that does not describe what they have installed.
+                    Link = detection.InstallSource is VsCodeExtensionInstallSource.Marketplace ? MarketplaceUrl : null,
                     Metadata = metadata
                 }
             ];
@@ -406,10 +410,10 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         var searchedRoots = new List<string>();
         var rootsWithExtension = new List<VsCodeExtensionRootDetection>();
 
-        foreach (var extensionsDirectory in VsCodeInstallLayout.GetExtensionRootPaths(environment, homeDirectory))
+        foreach (var extensionRoot in VsCodeInstallLayout.GetExtensionRootPaths(environment, homeDirectory))
         {
-            searchedRoots.Add(extensionsDirectory);
-            var rootDetection = ResolveExtensionFromRoot(extensionsDirectory);
+            searchedRoots.Add(extensionRoot.Path);
+            var rootDetection = ResolveExtensionFromRoot(extensionRoot);
 
             if (rootDetection.Installed)
             {
@@ -430,42 +434,69 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         };
     }
 
-    private static VsCodeExtensionRootDetection ResolveExtensionFromRoot(string extensionsDirectory)
+    private static VsCodeExtensionRootDetection ResolveExtensionFromRoot(VsCodeExtensionRoot extensionRoot)
     {
+        var extensionsDirectory = extensionRoot.Path;
         SemVersion? highestVersion = null;
         var releaseChannel = VsCodeExtensionReleaseChannel.Unknown;
         var installSource = VsCodeExtensionInstallSource.Unknown;
         var installed = false;
         var profileMetadata = ReadProfileExtensionMetadata(extensionsDirectory);
 
+        var listedInIndex = false;
+
         foreach (var extensionDirectory in EnumerateExtensionDirectories(extensionsDirectory))
         {
             installed = true;
 
-            if (TryResolveExtensionVersion(
+            if (!TryResolveExtensionVersion(
                     extensionDirectory,
                     out var version,
                     out var candidateReleaseChannel,
-                    out var candidateInstallSource) &&
-                (highestVersion is null || SemVersion.ComparePrecedence(version, highestVersion) > 0))
+                    out var candidateInstallSource))
             {
-                highestVersion = version;
+                continue;
+            }
 
-                // The profile index is the authoritative record of how an extension got here, so it
-                // overrides whatever the extracted manifest happened to retain. Current VS Code
-                // writes only { targetPlatform, installedTimestamp, size } into the manifest's
-                // __metadata and keeps source/isPreReleaseVersion here, so without this read a
-                // Marketplace install is classified from publisherId alone -- which a side-loaded
-                // VSIX can also carry once the gallery matches it.
-                var recorded = profileMetadata.TryGetValue(Path.GetFileName(extensionDirectory), out var entry)
-                    ? entry
-                    : default;
+            // The profile index is the authoritative record of how an extension got here, so it
+            // overrides whatever the extracted manifest happened to retain. Current VS Code writes
+            // only { targetPlatform, installedTimestamp, size } into the manifest's __metadata and
+            // keeps source/isPreReleaseVersion here, so without this read the origin of a Marketplace
+            // install cannot be told apart from a side-load at all.
+            var indexed = profileMetadata.TryGetValue(Path.GetFileName(extensionDirectory), out var recorded);
 
-                // A null here means the index carried no signal, which is different from the index
-                // saying the install is not from the gallery: the latter has to override the
-                // manifest's weaker publisherId inference rather than fall back to it.
-                releaseChannel = recorded.ReleaseChannel ?? candidateReleaseChannel;
-                installSource = recorded.InstallSource ?? candidateInstallSource;
+            // The index names the folder the profile actually loads, so a listed folder outranks an
+            // unlisted one even when the unlisted one carries a higher version. An interrupted update
+            // or a hand-copied directory leaves a higher-numbered folder on disk that VS Code never
+            // loads, and reporting its version would describe an extension the user is not running.
+            if (listedInIndex && !indexed)
+            {
+                continue;
+            }
+
+            var supersedesUnlistedCandidate = indexed && !listedInIndex;
+            if (!supersedesUnlistedCandidate &&
+                highestVersion is not null &&
+                SemVersion.ComparePrecedence(version, highestVersion) <= 0)
+            {
+                continue;
+            }
+
+            listedInIndex |= indexed;
+            highestVersion = version;
+
+            // A null here means the index carried no signal, which is different from the index saying
+            // the install is not from the gallery: the latter has to override whatever the manifest
+            // claims rather than fall back to it.
+            releaseChannel = recorded.ReleaseChannel ?? candidateReleaseChannel;
+            installSource = recorded.InstallSource ?? candidateInstallSource;
+
+            // "gallery" names whichever gallery the build is configured against. VSCodium's is Open
+            // VSX, so treating its installs as Marketplace ones would query and link a feed the
+            // extension did not come from.
+            if (!extensionRoot.UsesMicrosoftGallery)
+            {
+                installSource = VsCodeExtensionInstallSource.Unknown;
             }
         }
 
@@ -808,32 +839,28 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
 
     private static VsCodeExtensionInstallSource? GetMetadataInstallSourceOrDefault(JsonElement metadata)
     {
-        // source is the authoritative install origin VS Code records ("gallery" for a Marketplace
-        // install, "vsix" for a side-load), so it wins whenever it is present:
+        // source is the only recorded install origin ("gallery" for a gallery install, "vsix" for a
+        // side-load):
         //   "metadata": { "id": "...", "publisherId": "...", "source": "gallery" }
-        // The profile index carries it for every entry; an extracted package.json usually does not,
-        // because current VS Code persists only { targetPlatform, installedTimestamp, size } there.
-        // ReadProfileExtensionMetadata is therefore consulted first and this fallback only decides a
-        // manifest the index does not list: publisherId is scanner-owned, so a development or plain
-        // VSIX install normally lacks it, though a gallery-matched VSIX can carry it. That residual
-        // ambiguity is why the index takes precedence rather than this being the only signal.
+        // publisherId is deliberately not accepted as a substitute: VS Code looks a side-loaded VSIX
+        // up in the gallery on install and stamps the matched publisherId onto it, so inferring a
+        // gallery install from it sends the outbound request this signal exists to gate. The profile
+        // index carries source for every entry it lists, which is where the answer comes from; an
+        // extracted package.json usually does not, because current VS Code persists only
+        // { targetPlatform, installedTimestamp, size } there, and an unrecorded origin is reported as
+        // unknown rather than guessed at.
         // See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/common/extensionsScannerService.ts.
-        if (metadata.TryGetProperty("source", out var source))
+        if (!metadata.TryGetProperty("source", out var source))
         {
-            // Any present source ends the decision, including one that is not a string at all
-            // ({ "source": 7 }). Falling through to publisherId there would let a weaker inference
-            // override metadata VS Code did write, which is the opposite of the intended precedence.
-            return source.ValueKind == JsonValueKind.String &&
-                string.Equals(source.GetString()?.Trim(), "gallery", StringComparison.OrdinalIgnoreCase)
-                    ? VsCodeExtensionInstallSource.Marketplace
-                    : VsCodeExtensionInstallSource.Unknown;
+            return null;
         }
 
-        return metadata.TryGetProperty("publisherId", out var publisherId) &&
-            publisherId.ValueKind == JsonValueKind.String &&
-            !string.IsNullOrWhiteSpace(publisherId.GetString())
+        // A source VS Code did write settles the question, including one that is not a string at all
+        // ({ "source": 7 }): metadata that is present but untrustworthy is not a gallery install.
+        return source.ValueKind == JsonValueKind.String &&
+            string.Equals(source.GetString()?.Trim(), "gallery", StringComparison.OrdinalIgnoreCase)
                 ? VsCodeExtensionInstallSource.Marketplace
-                : null;
+                : VsCodeExtensionInstallSource.Unknown;
     }
 
     private static bool TryGetManifestMetadata(JsonElement manifest, out JsonElement metadata)

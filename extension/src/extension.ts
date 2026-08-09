@@ -85,7 +85,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.environmentVariableCollection,
     context.extension.packageJSON?.version,
     getAspireExtensionChannel(context.extension.packageJSON),
-    getAspireExtensionSource(context.extension.packageJSON));
+    getAspireExtensionSource(context.extension.packageJSON, vscode.env.uriScheme));
 
   const rpcServer = await AspireRpcServer.create(
     (rpcServerConnectionInfo: RpcServerConnectionInfo, connection: MessageConnection, token: string, debugSessionId: string | null) => {
