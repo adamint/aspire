@@ -517,12 +517,13 @@ export class AspireDebugSession implements vscode.DebugAdapter {
           vscode.window.showErrorMessage(processExceptionOccurred(error.message, commandLabel));
         },
         exitCallback: (code) => {
-          // The leader came down on its own, so the escalation timer has nothing left to signal —
-          // but a detached leader's descendants (the AppHost and every resource process beneath it)
-          // can outlive it, and this is the last moment they can be collected safely: once the
-          // leader's PID is released the operating system may recycle it, and a later process-tree
-          // signal could land on something unrelated.
-          this.terminateCliProcessTree({ force: true });
+          // A detached POSIX leader's descendants can keep the process group alive after the
+          // leader exits, and the group id can be reused later, so collect that group immediately.
+          // Windows taskkill needs the target PID to still identify a live process tree; after the
+          // close event the CLI PID may already be reusable, so do not taskkill from this path.
+          if (process.platform !== 'win32') {
+            this.terminateCliProcessTree({ force: true });
+          }
           this._dcpServer.recordAppHostProcessExit(this.debugSessionId, code);
           // Flush any partial line left in either buffer so trailing output isn't lost.
           if (stdoutBuffer.length > 0) {

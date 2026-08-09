@@ -153,7 +153,7 @@ suite('AspireDebugSession tests', () => {
         assert.deepStrictEqual(terminateStub.firstCall.args[2], { force: true });
     });
 
-    test('a CLI process that exits on its own still has its process group collected', async () => {
+    test('a POSIX CLI process that exits on its own still has its process group collected', async () => {
         // Already exited: the leader is gone by the time the exit callback runs, which is exactly
         // the state the old early return skipped on.
         const cliProcess = createFakeCliProcess(4325, 0);
@@ -174,6 +174,29 @@ suite('AspireDebugSession tests', () => {
             cliProcess,
             `Aspire CLI for debug session ${aspireDebugSession.debugSessionId}`,
             { force: true });
+    });
+
+    test('a Windows CLI process that exits on its own is not swept by stale PID', async () => {
+        const platformStub = sinon.stub(process, 'platform').value('win32');
+        const cliProcess = createFakeCliProcess(4327, 0);
+        const spawnStub = sinon.stub(cliModule, 'spawnCliProcess').returns(cliProcess);
+        const terminateStub = sinon.stub(cliModule, 'terminateCliProcess');
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = createSessionForSpawn();
+
+        try {
+            await aspireDebugSession.spawnAspireCommand(['run'], '/workspace', false, 'aspire run');
+
+            spawnStub.firstCall.args[3]?.exitCallback?.(0);
+
+            // On Windows, taskkill can only walk the tree while the target PID still names a live
+            // process. The close callback runs after that PID can be recycled, so a force sweep here
+            // is both unreliable for descendants and unsafe for an unrelated process that reused it.
+            sinon.assert.notCalled(terminateStub);
+        }
+        finally {
+            platformStub.restore();
+        }
     });
 
     test('a forced CLI process tree termination is not repeated by the exit callback', async () => {
