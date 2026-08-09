@@ -605,6 +605,60 @@ suite('AppHost log output coordinator tests', () => {
             coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 2, categoryName: 'Other.Category', logLevel: 'Error', message: 'Second failure.' })),
             undefined);
     });
+
+    test('routes a fatal runtime line after a DebugLogger record as its own stderr output', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Warning: First line.\nUnhandled exception. System.InvalidOperationException: boom\n',
+                'console'),
+            [
+                {
+                    output: '\x1b[33mExample.Category: Warning: First line.\x1b[0m\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'Unhandled exception. System.InvalidOperationException: boom\n',
+                    category: 'stderr'
+                }
+            ]);
+    });
+
+    test('keeps debugger module-load chatter out of a pending DebugLogger record', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                "Example.Category: Warning: First line.\n'TestShop.AppHost' (CoreCLR: clrhost): Loaded '/dotnet/System.Net.Http.dll'. Skipped loading symbols.\n",
+                'console'),
+            [{
+                output: '\x1b[33mExample.Category: Warning: First line.\x1b[0m\n',
+                category: 'stdout'
+            }]);
+
+        // The record identity has to survive the chatter, otherwise the backchannel copy
+        // fails to correlate and the same record renders a second time.
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 1, logLevel: 'Warning', message: 'First line.' })),
+            undefined);
+    });
+
+    test('keeps an exception body attached to its DebugLogger record', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Warning: Deployment failed.\nSystem.InvalidOperationException: boom\n',
+                'console'),
+            [{
+                output: '\x1b[33mExample.Category: Warning: Deployment failed.\nSystem.InvalidOperationException: boom\x1b[0m\n',
+                category: 'stdout'
+            }]);
+    });
 });
 
 

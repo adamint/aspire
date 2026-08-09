@@ -244,8 +244,13 @@ export class AppHostLogOutputCoordinator {
 
                 const pendingDebugRecord = this._pendingDebugRecords.get(category);
                 if (pendingDebugRecord) {
-                    pendingDebugRecord.text += line;
-                    continue;
+                    if (startsUnrelatedDebuggerOutput(line)) {
+                        flushPassthrough();
+                        this.flushPendingDebugRecord(category, outputs);
+                    } else {
+                        pendingDebugRecord.text += line;
+                        continue;
+                    }
                 }
             }
 
@@ -621,6 +626,29 @@ function parseDebugLoggerRecord(output: string): AppHostLoggerRecord | undefined
 
 function isDebugLoggerHeader(output: string): boolean {
     return /^[^\r\n]+: (Trace|Debug|Information|Warning|Error|Critical): .*(?:\r\n|\r|\n)?$/.test(output);
+}
+
+function startsUnrelatedDebuggerOutput(line: string): boolean {
+    // A DebugLogger record's continuation lines are arbitrary user text, so a pending
+    // record otherwise absorbs every following `console` line. The debugger itself
+    // writes on that same category, and those lines are never part of a record:
+    //   'TestShop.AppHost' (CoreCLR: clrhost): Loaded '/dotnet/System.Private.CoreLib.dll'. Skipped loading symbols.
+    //   Loaded '/dotnet/System.Net.Http.dll'. No se puede encontrar o abrir el archivo PDB.
+    //   Exception thrown: 'System.InvalidOperationException' in TestShop.AppHost.dll
+    //   Unhandled exception. System.InvalidOperationException: boom
+    // Absorbing them rewrites the record text, which changes the identity used for
+    // deduplication, and hides a fatal line behind the pending record's log level
+    // instead of routing it to stderr.
+    //
+    // The check is deliberately narrower than isSevereRuntimeOutputLine: a record's own
+    // exception body starts with "System.InvalidOperationException: boom" and must stay
+    // part of the record, whereas the runtime's top-level handler is the only writer of
+    // the "Unhandled exception." prefix.
+    const trimmedLine = line.trim();
+
+    return /^Unhandled exception\./.test(trimmedLine)
+        || /(?:^|\s)Loaded '[^']*'\./.test(trimmedLine)
+        || /^Exception thrown: '/.test(trimmedLine);
 }
 
 function splitMessageAndException(value: string): { message: string; exception?: string } {
