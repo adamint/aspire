@@ -36,13 +36,16 @@ internal static class KnownProperties
         /// The launch configuration type identifier a resource would be launched with under a debug session,
         /// for example <c>python</c>, <c>go</c> or <c>project</c>. Taken from the resource's
         /// <c>SupportsDebuggingAnnotation</c>, so it is present for every resource that opted into debugging
-        /// through <c>WithDebugSupport</c> regardless of whether a debug session is currently active; the
-        /// absence of the property is the signal that the resource has no debug support at all.
+        /// through <c>WithDebugSupport</c> and can still be launched by an IDE, regardless of whether a debug
+        /// session is currently active; the absence of the property is the signal that the resource has no
+        /// debug support at all.
         /// </summary>
         /// <remarks>
         /// IDEs use this to decide which debug adapter a resource needs without re-deriving the language from
         /// AppHost source, which is why the value is published even when the resource ends up running as a
-        /// plain process because the IDE could not honor the launch configuration type.
+        /// plain process because the IDE could not honor the launch configuration type. It is not published for
+        /// resources that can never be launched by an IDE, such as those forced to process execution or with a
+        /// persistent lifetime.
         /// </remarks>
         public const string LaunchConfigurationType = "resource.launchConfigurationType";
     }

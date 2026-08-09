@@ -98,29 +98,6 @@ export async function prepareDebugSession(debugSessionConfig: AspireExtendedDebu
     };
 }
 
-/**
- * Every debugger extension Aspire knows how to launch a resource with, keyed by launch configuration
- * type, regardless of whether its prerequisites are installed.
- *
- * {@link getResourceDebuggerExtensions} narrows this to the debuggers that can actually launch
- * something right now. Install hints need the unfiltered set, because they exist precisely to report
- * the debug adapters that are *not* installed yet.
- */
-const allResourceDebuggerExtensions: readonly ResourceDebuggerExtension[] = [
-    projectDebuggerExtension,
-    azureFunctionsDebuggerExtension,
-    pythonDebuggerExtension,
-    goDebuggerExtension,
-    nodeDebuggerExtension,
-    browserDebuggerExtension,
-    bunDebuggerExtension,
-    mauiDebuggerExtension,
-];
-
-export function getAllResourceDebuggerExtensions(): readonly ResourceDebuggerExtension[] {
-    return allResourceDebuggerExtensions;
-}
-
 export function getResourceDebuggerExtensions(): ResourceDebuggerExtension[] {
     const extensions = [];
     if (isCsharpInstalled()) {

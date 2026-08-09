@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 #pragma warning disable ASPIREEXTENSION001 // Debug support annotations are experimental.
+#pragma warning disable ASPIREPERSISTENCE001 // Persistence annotations are experimental.
 
 using System.Collections.Immutable;
 using Aspire.Dashboard.Model;
@@ -193,6 +194,77 @@ public class ResourceSnapshotBuilderTests
         {
             [executableResource.Name] = executableResource
         }).ToSnapshot(executable, previous);
+
+        Assert.Equal(
+            [
+                KnownProperties.Executable.Args,
+                KnownProperties.Executable.Path,
+                KnownProperties.Executable.Pid,
+                KnownProperties.Executable.WorkDir,
+                KnownProperties.Resource.AppArgs,
+                KnownProperties.Resource.AppArgsSensitivity,
+            ],
+            snapshot.Properties.Select(p => p.Name).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void ExecutableSnapshotOmitsLaunchConfigurationTypeWhenResourceIsForcedToProcessExecution()
+    {
+        // WithTerminal adds ForceProcessExecutionAnnotation, which makes SupportsDebugging return false no
+        // matter which extensions are installed. Publishing the type here would tell an IDE to offer a debug
+        // adapter that can never launch this resource.
+        var pythonResource = new TestDotnetProjectResource("pythonapp");
+        pythonResource.Annotations.Add(CreateSupportsDebuggingAnnotation(pythonResource.Name, "python"));
+        pythonResource.Annotations.Add(new ForceProcessExecutionAnnotation());
+
+        var executable = Executable.Create("pythonapp", "python3");
+        executable.Annotate(DcpCustomResource.ResourceNameAnnotation, pythonResource.Name);
+        executable.Spec.WorkingDirectory = "/app";
+        executable.Status = new ExecutableStatus
+        {
+            EffectiveArgs = ["app.py"],
+            ProcessId = 1234
+        };
+
+        var snapshot = CreateSnapshotBuilder(new Dictionary<string, IResource>
+        {
+            [pythonResource.Name] = pythonResource
+        }).ToSnapshot(executable, CreatePreviousSnapshot());
+
+        Assert.Equal(
+            [
+                KnownProperties.Executable.Args,
+                KnownProperties.Executable.Path,
+                KnownProperties.Executable.Pid,
+                KnownProperties.Executable.WorkDir,
+                KnownProperties.Resource.AppArgs,
+                KnownProperties.Resource.AppArgsSensitivity,
+            ],
+            snapshot.Properties.Select(p => p.Name).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void ExecutableSnapshotOmitsLaunchConfigurationTypeWhenResourceHasPersistentLifetime()
+    {
+        // A persistent resource outlives the debug session, so SupportsDebugging rejects it regardless of the
+        // installed adapters.
+        var pythonResource = new TestDotnetProjectResource("pythonapp");
+        pythonResource.Annotations.Add(CreateSupportsDebuggingAnnotation(pythonResource.Name, "python"));
+        pythonResource.Annotations.Add(new PersistenceAnnotation { Mode = PersistenceMode.Persistent });
+
+        var executable = Executable.Create("pythonapp", "python3");
+        executable.Annotate(DcpCustomResource.ResourceNameAnnotation, pythonResource.Name);
+        executable.Spec.WorkingDirectory = "/app";
+        executable.Status = new ExecutableStatus
+        {
+            EffectiveArgs = ["app.py"],
+            ProcessId = 1234
+        };
+
+        var snapshot = CreateSnapshotBuilder(new Dictionary<string, IResource>
+        {
+            [pythonResource.Name] = pythonResource
+        }).ToSnapshot(executable, CreatePreviousSnapshot());
 
         Assert.Equal(
             [

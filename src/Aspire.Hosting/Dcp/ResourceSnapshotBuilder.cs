@@ -159,13 +159,20 @@ internal class ResourceSnapshotBuilder
         }
 
         // The app model already knows which debugger a resource needs, so publish that identifier instead of
-        // making IDEs re-derive the language from AppHost source. The annotation is present whenever the
-        // resource opted into debugging through WithDebugSupport, independent of whether the active debug
-        // session can honor it - a resource the IDE had to downgrade to plain process execution (because the
-        // matching debug adapter is missing) still reports its type, which is exactly the case an IDE needs
-        // to detect in order to offer the adapter.
+        // making IDEs re-derive the language from AppHost source. The IDE capability check in
+        // DebugSupportExtensions.SupportsDebugging is deliberately not applied here: a resource the IDE had to
+        // downgrade to plain process execution because the matching debug adapter is missing still reports its
+        // type, which is exactly the case an IDE needs to detect in order to offer that adapter.
+        //
+        // The structural exclusions from that same method are applied, because they cannot be resolved by
+        // installing anything: WithTerminal adds ForceProcessExecutionAnnotation, and a persistent resource
+        // outlives the debug session. Publishing the type for either would promise that installing a debug
+        // adapter enables debugging when it never will.
         string? launchConfigurationType = null;
-        if (appModelResource is not null && appModelResource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebuggingAnnotation))
+        if (appModelResource is not null
+            && appModelResource.TryGetLastAnnotation<SupportsDebuggingAnnotation>(out var supportsDebuggingAnnotation)
+            && !appModelResource.HasAnnotationOfType<ForceProcessExecutionAnnotation>()
+            && !appModelResource.HasPersistentLifetime())
         {
             launchConfigurationType = supportsDebuggingAnnotation.LaunchConfigurationType;
         }
