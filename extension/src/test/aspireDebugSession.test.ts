@@ -776,10 +776,10 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual((aspireDebugSession as any)._disposed, true);
     });
 
-    // Copilot review finding: a resource stop registered in _disposables is invoked again by
-    // dispose(). Because stopDebugging() disposes before rethrowing, a synchronous throw from that
-    // second invocation used to escape dispose(), abort every later disposable, and discard the
-    // failures that had just been aggregated.
+    // A resource stop registered in _disposables is invoked a second time by dispose(), and
+    // stopSession() is only typed as returning a Thenable, so that second invocation can throw
+    // synchronously. stopDebugging() disposes before rethrowing, so an unguarded disposal would let
+    // that throw abort every later disposable and replace the aggregated stop failures.
     test('stopDebugging still reports aggregated failures when a registered disposable throws synchronously', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
@@ -864,8 +864,8 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             ]);
     });
 
-    // Copilot review finding: the Aspire-parent stop failure is collected by stopAllSessions() but
-    // had no coverage, alone or combined with another failure.
+    // The synthetic Aspire parent is the last session the shutdown stops, and its failure is part
+    // of the same contract as the resource and AppHost failures: reported, not swallowed.
     test('stopDebugging rethrows an Aspire parent stop failure on its own', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
@@ -985,9 +985,9 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual((aspireDebugSession as any)._disposed, true);
     });
 
-    // Copilot review finding: stopAllSessions() snapshots the resource list before its awaits, so a
-    // resource that starts mid-shutdown would be registered behind the snapshot and only stopped by
-    // dispose() - after the AppHost and Aspire parent had already been stopped.
+    // stopAllSessions() snapshots the resource list before its awaits, so a resource that starts
+    // mid-shutdown must not be registered as an ordinary session: it would miss the snapshot and be
+    // stopped only by dispose(), after the AppHost and Aspire parent had already been stopped.
     test('stopDebugging immediately stops a resource session that starts mid-shutdown', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
@@ -1010,13 +1010,20 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             name: 'AppHost',
             configuration: { type: 'coreclr', request: 'launch', name: 'AppHost' },
         };
+        const snapshotResourceDebugSession = {
+            id: 'snapshot-resource-session',
+            configuration: { type: 'pwa-node', request: 'launch', name: 'Node.js: server.js' },
+        };
         const terminalProvider = { isCliDebugLoggingEnabled: () => false };
-        let releaseAppHostStop: (() => void) | undefined;
-        const appHostStopGate = new Promise<void>(resolve => { releaseAppHostStop = resolve; });
+        const stopOrder: string[] = [];
+        let releaseSnapshotResourceStop: (() => void) | undefined;
+        const snapshotResourceStopGate = new Promise<void>(resolve => { releaseSnapshotResourceStop = resolve; });
         sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
-            if (session === appHostDebugSession) {
-                await appHostStopGate;
+            if (session === snapshotResourceDebugSession) {
+                await snapshotResourceStopGate;
             }
+
+            stopOrder.push((session as unknown as { id: string }).id);
         });
         const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
         (aspireDebugSession as any)._appHostDebugSession = {
@@ -1024,12 +1031,25 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             session: appHostDebugSession as unknown as vscode.DebugSession,
             stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
         };
+        (aspireDebugSession as any)._resourceDebugSessions = [
+            {
+                id: snapshotResourceDebugSession.id,
+                session: snapshotResourceDebugSession as unknown as vscode.DebugSession,
+                stopSession: () => vscode.debug.stopDebugging(snapshotResourceDebugSession as unknown as vscode.DebugSession),
+            },
+        ];
 
         const stopPromise = aspireDebugSession.stopDebugging();
         await Promise.resolve();
 
-        // The AppHost stop is still in flight, so the resource snapshot has already been taken.
-        const lateStopSession = sinon.stub().resolves();
+        // The snapshot resource stop is still in flight, so the snapshot has already been taken and
+        // the AppHost stop has not started.
+        let releaseLateResourceStop: (() => void) | undefined;
+        const lateResourceStopGate = new Promise<void>(resolve => { releaseLateResourceStop = resolve; });
+        const lateStopSession = sinon.stub().callsFake(async () => {
+            await lateResourceStopGate;
+            stopOrder.push('late-resource-session');
+        });
         const lateSession = {
             id: 'late-resource-session',
             processId: 4321,
@@ -1048,8 +1068,108 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             false,
             'A session started during shutdown must not be registered behind the snapshot');
 
-        releaseAppHostStop!();
+        releaseSnapshotResourceStop!();
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        // The late stop is still in flight, so the AppHost must not have been stopped yet: a late
+        // start gets the same resources-before-AppHost ordering the snapshot resources get.
+        assert.deepStrictEqual(stopOrder, ['snapshot-resource-session']);
+
+        releaseLateResourceStop!();
         await stopPromise;
+
+        assert.deepStrictEqual(stopOrder, [
+            'snapshot-resource-session',
+            'late-resource-session',
+            'apphost-session',
+            'aspire-session',
+        ]);
+    });
+
+    test('stopDebugging reports a stop failure from a resource session that starts mid-shutdown', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: { type: 'coreclr', request: 'launch', name: 'AppHost' },
+        };
+        const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+        // Two separate signals: one to observe that the AppHost stop has begun - which proves the
+        // drain that runs before it has already completed - and one to hold that stop open so the
+        // late start lands while it is still in flight.
+        let signalAppHostStopStarted: (() => void) | undefined;
+        const appHostStopStarted = new Promise<void>(resolve => { signalAppHostStopStarted = resolve; });
+        let releaseAppHostStop: (() => void) | undefined;
+        const appHostStopGate = new Promise<void>(resolve => { releaseAppHostStop = resolve; });
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
+            if (session === appHostDebugSession) {
+                signalAppHostStopStarted!();
+                await appHostStopGate;
+            }
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
+        };
+
+        const stopPromise = aspireDebugSession.stopDebugging();
+        let stopSettled = false;
+        stopPromise.catch(() => { }).finally(() => { stopSettled = true; });
+        await appHostStopStarted;
+
+        // This start finishes after the drain that precedes the AppHost stop has already run, so the
+        // resources-before-AppHost ordering can no longer be given to it. The stop still has to be
+        // awaited and its failure still has to reach the caller rather than becoming an unhandled
+        // rejection, which is what the drain after the parent stop is for.
+        const lateStopFailure = new Error('Late resource stop failed');
+        let releaseLateResourceStop: (() => void) | undefined;
+        const lateResourceStopGate = new Promise<void>(resolve => { releaseLateResourceStop = resolve; });
+        const lateSession = {
+            id: 'late-resource-session',
+            processId: 4321,
+            session: { id: 'late-resource-session' } as unknown as vscode.DebugSession,
+            stopSession: async () => {
+                await lateResourceStopGate;
+                throw lateStopFailure;
+            },
+            termination: new Promise<number>(() => { }),
+        };
+        aspireDebugSession.trackAlreadyStartedResourceSession(
+            { type: 'node', request: 'launch', name: 'late', runId: 'late-run', debugSessionId: null } as any,
+            lateSession as any);
+
+        releaseAppHostStop!();
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        // The AppHost and the Aspire parent have both been stopped by now, but the late resource stop
+        // is still in flight, so the shutdown must not have completed.
+        assert.strictEqual(stopSettled, false, 'stopDebugging must not settle while a late resource stop is still in flight');
+
+        releaseLateResourceStop!();
+
+        await assert.rejects(
+            () => stopPromise,
+            (error: unknown) => {
+                assert.strictEqual(error, lateStopFailure);
+                return true;
+            });
     });
 
     test('stopDebugging does not stop the Aspire parent session twice when AppHost stop disposes the Aspire session', async () => {

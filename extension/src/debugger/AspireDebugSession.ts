@@ -79,6 +79,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   // the Aspire parent had already been stopped, which is the orphaned-resource ordering the
   // shutdown exists to prevent.
   private _stopping = false;
+  // Stops issued for resources whose start finished after the shutdown began. stopAllSessions()
+  // drains this before stopping the AppHost so late starts keep the resources-before-AppHost
+  // ordering and their failures reach the caller instead of only the log.
+  private readonly _lateResourceStops: Promise<void>[] = [];
   private _parentStopPromise: Thenable<void> | undefined;
   // Timestamp for the `debug/apphost/end` duration measurement. Captured the first
   // time we observe a `launch` request so it covers the actual user-visible session
@@ -174,11 +178,13 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // and reintroduce the orphaned-resource behavior this ordering exists to prevent - on exactly
     // the path where a resource is most likely to be left behind. The rejection is kept and
     // rethrown after the AppHost and the synthetic Aspire parent have been stopped.
-    const resourceStopResults = await Promise.allSettled(resourceDebugSessions.map(session => startStopSession(session)));
-    const resourceStopFailures = resourceStopResults
-      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-      .map(result => result.reason);
-    const stopFailures = [...resourceStopFailures];
+    const stopFailures = await this.settleResourceStops(resourceDebugSessions.map(session => startStopSession(session)));
+
+    // A resource whose start was already in flight when the shutdown began lands in
+    // _lateResourceStops. Drain it before the AppHost stop so those stops keep the same
+    // resources-before-AppHost ordering, and so their failures are reported rather than only
+    // logged.
+    stopFailures.push(...await this.drainLateResourceStops());
 
     // Global/E2E stop requests target the synthetic Aspire session. Stop the real AppHost session
     // explicitly before the parent so we do not rely on VS Code cascading termination before the
@@ -197,7 +203,59 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       stopFailures.push(err);
     }
 
+    // A start that only finished during the AppHost or parent stop cannot be given the
+    // resources-before-AppHost ordering after the fact, but it must still be awaited and its
+    // failure reported, otherwise stopDebugging() would resolve while a resource debugger it just
+    // asked to stop was still stopping.
+    stopFailures.push(...await this.drainLateResourceStops());
+
     return stopFailures;
+  }
+
+  /**
+   * Awaits every stop issued for a resource that started after the shutdown began, repeating until
+   * no new ones arrive. Terminates because the shutdown refuses to start anything new: only starts
+   * that were already in flight can arrive, and each is awaited exactly once.
+   */
+  private async drainLateResourceStops(): Promise<unknown[]> {
+    const stopFailures: unknown[] = [];
+
+    while (this._lateResourceStops.length > 0) {
+      const draining = this._lateResourceStops.splice(0, this._lateResourceStops.length);
+      stopFailures.push(...await this.settleResourceStops(draining));
+    }
+
+    return stopFailures;
+  }
+
+  private async settleResourceStops(stops: Promise<void>[]): Promise<unknown[]> {
+    const results = await Promise.allSettled(stops);
+
+    return results
+      .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+      .map(result => result.reason);
+  }
+
+  /**
+   * Stops a resource whose start finished after the shutdown began. The promise is recorded so
+   * {@link stopAllSessions} can await it before stopping the AppHost; when the shutdown is not the
+   * caller - {@link dispose} also refuses late starts - nothing drains the list, so the failure is
+   * logged here rather than left as an unhandled rejection.
+   */
+  private stopLateResourceSession(runId: string, stop: () => Thenable<void>): void {
+    // Eager, via the same conversion the snapshot stops use: the stop has to be issued now, not on a
+    // later microtask, and a synchronous throw has to become a rejection the drain can collect.
+    const stopPromise = startStop(stop).catch(err => {
+      extensionLogOutputChannel.warn(`Failed to stop resource session for run ${runId} that started during shutdown: ${err instanceof Error ? err.message : String(err)}`);
+      throw err;
+    });
+
+    this._lateResourceStops.push(stopPromise);
+
+    // stopAllSessions() removes the promise from the list when it drains it, and rejections are
+    // reported from there. This handler exists for the disposal path, which never drains, so an
+    // already-logged failure does not surface a second time as an unhandled rejection.
+    stopPromise.catch(() => { });
   }
 
   /**
@@ -654,9 +712,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
   trackAlreadyStartedResourceSession(debugConfig: AspireResourceExtendedDebugConfiguration, resourceDebugSession: AlreadyStartedResourceDebugSession): AspireResourceDebugSession | undefined {
     if (this.isShuttingDown) {
-      startStopSession(resourceDebugSession).catch(err => {
-        extensionLogOutputChannel.warn(`Failed to stop resource session for run ${debugConfig.runId} that started during shutdown: ${err instanceof Error ? err.message : String(err)}`);
-      });
+      this.stopLateResourceSession(debugConfig.runId, () => resourceDebugSession.stopSession());
       return undefined;
     }
 
@@ -712,7 +768,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
           if (this.isShuttingDown) {
             extensionLogOutputChannel.info(`Stopping debug session that started after Aspire session disposal: ${session.name} (run id: ${session.configuration.runId})`);
-            vscode.debug.stopDebugging(session);
+            this.stopLateResourceSession(debugConfig.runId, () => vscode.debug.stopDebugging(session));
             cleanupRun(debugConfig.runId);
             resolved = true;
             resolve(undefined);
@@ -1077,8 +1133,16 @@ function delay(ms: number): Promise<void> {
  * so all resource stops are still started eagerly and run concurrently.
  */
 function startStopSession(session: AspireResourceDebugSession): Promise<void> {
+  return startStop(() => session.stopSession());
+}
+
+/**
+ * Invokes a stop callback synchronously and converts a synchronous throw into a rejected promise.
+ * Shared by the snapshot stops and the late-start stops so both get the same conversion.
+ */
+function startStop(stop: () => Thenable<void>): Promise<void> {
   try {
-    return Promise.resolve(session.stopSession());
+    return Promise.resolve(stop());
   }
   catch (err) {
     return Promise.reject(err);
