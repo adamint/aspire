@@ -444,6 +444,23 @@ public sealed class TestTriggerMapTests
     }
 
     [Fact]
+    public void ExtensionE2eShardMatrixSourceRoutesToTheJobItConfigures()
+    {
+        // extension-e2e-shards.json now supplies the matrix, so a PR that adds, removes, or retargets a
+        // shard changes what extension-e2e runs. It lives under .github/workflows/, and the generic
+        // .github/workflows/** rule routes only to Infrastructure.Tests, so without an explicit entry a
+        // shard edit would merge without ever running the job it configures.
+        const string shardsPath = ".github/workflows/extension-e2e-shards.json";
+
+        var routedTargets = s_map.PathRules
+            .Where(rule => rule.Paths.Any(glob => TestTriggerMap.GlobMatches(glob, shardsPath)))
+            .SelectMany(rule => rule.Targets)
+            .ToList();
+
+        Assert.Contains("job:extension-e2e", routedTargets);
+    }
+
+    [Fact]
     public void EveryTestTargetNamesAnExistingTestProject()
     {
         // test:<X> means the matrix project tests/<X> (run-tests.yml entry). A rename or
