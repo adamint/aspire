@@ -35,6 +35,19 @@ suite('E2E shard matrix', () => {
             .sort();
     }
 
+    function readSpecFileNamesRecursively(directory: string, relativeDirectory = ''): string[] {
+        return fs.readdirSync(directory, { withFileTypes: true })
+            .flatMap(entry => {
+                const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+                const fullPath = path.join(directory, entry.name);
+
+                return entry.isDirectory()
+                    ? readSpecFileNamesRecursively(fullPath, relativePath)
+                    : [relativePath];
+            })
+            .sort();
+    }
+
     /**
      * Matrix rows carry the compiled spec path:
      *       - name: Linux
@@ -59,9 +72,10 @@ suite('E2E shard matrix', () => {
         // This deliberately extracts only the fields the guard owns rather than becoming a
         // general YAML parser for workflow syntax.
         for (const line of workflow.split(/\r?\n/)) {
-            if (/^\s*-\s+name:\s*/.test(line)) {
+            const rowStart = /^\s*-\s+name:\s*(.*?)\s*$/.exec(line);
+            if (rowStart !== null) {
                 appendCurrentRow();
-                currentRow = {};
+                currentRow = { name: parseWorkflowScalar(rowStart[1]) };
                 continue;
             }
 
@@ -69,7 +83,7 @@ suite('E2E shard matrix', () => {
                 continue;
             }
 
-            const field = /^\s*(shardName|spec|disabledIssue):\s*(.*?)\s*$/.exec(line);
+            const field = /^\s*(name|shardName|spec|disabledIssue):\s*(.*?)\s*$/.exec(line);
             if (field === null) {
                 continue;
             }
@@ -98,13 +112,15 @@ suite('E2E shard matrix', () => {
     }
 
     function disabledRowKey(row: MatrixRow): string {
+        const name = row.name;
         const shardName = row.shardName;
         const spec = row.spec;
 
+        assert.ok(name, 'Disabled E2E matrix rows must include name.');
         assert.ok(shardName, 'Disabled E2E matrix rows must include shardName.');
         assert.ok(spec, 'Disabled E2E matrix rows must include spec.');
 
-        return `${shardName}|${spec}`;
+        return `${name}|${shardName}|${spec}`;
     }
 
     function assertDisabledRowsAreTracked(workflow: string, expectedRowsByKey: ReadonlyMap<string, string>): void {
@@ -142,14 +158,14 @@ suite('E2E shard matrix', () => {
         ].join('\n');
     }
 
-    function workflowWithDisabledSpec(spec: string, disabledIssue: string): string {
+    function workflowWithDisabledSpec(spec: string, disabledIssue: string, name = 'Linux'): string {
         return [
             'jobs:',
             '  e2e:',
             '    strategy:',
             '      matrix:',
             '        include:',
-            '          - name: Linux',
+            `          - name: ${name}`,
             '            shardName: azure-functions',
             `            spec: ${spec}`,
             `            disabledIssue: ${disabledIssue}`,
@@ -180,7 +196,7 @@ suite('E2E shard matrix', () => {
     }
 
     test('runs exactly the set of E2E specs in the CI matrix', () => {
-        const specFileNames = fs.readdirSync(specDirectory);
+        const specFileNames = readSpecFileNamesRecursively(specDirectory);
         const workflow = fs.readFileSync(workflowPath, 'utf8');
 
         assert.ok(canonicalSpecPaths(specFileNames).length > 0, `Expected E2E spec files under ${specDirectory}.`);
@@ -217,6 +233,25 @@ suite('E2E shard matrix', () => {
             'A spec with no matrix row must be rejected: it never runs and the workflow still reports success.');
     });
 
+    test('rejects a nested spec that has no matrix row', () => {
+        const fixtureRoot = fs.mkdtempSync(path.join(extensionRoot, 'out', 'e2e-shard-matrix-'));
+        try {
+            fs.mkdirSync(path.join(fixtureRoot, 'nested'), { recursive: true });
+            fs.writeFileSync(path.join(fixtureRoot, 'edgeCases.e2e.test.ts'), '');
+            fs.writeFileSync(path.join(fixtureRoot, 'nested', 'futureCoverage.e2e.test.ts'), '');
+
+            const workflow = workflowWithSpecs('out/test-e2e/test-e2e/edgeCases.e2e.test.js');
+
+            assert.throws(
+                () => assertMatrixMatchesSpecs(workflow, readSpecFileNamesRecursively(fixtureRoot)),
+                assert.AssertionError,
+                'A nested spec with no matrix row must be rejected: Mocha discovers nested specs recursively.');
+        }
+        finally {
+            fs.rmSync(fixtureRoot, { recursive: true, force: true });
+        }
+    });
+
     test('accepts one spec listed on several platform rows', () => {
         const workflow = workflowWithSpecs(
             'out/test-e2e/test-e2e/edgeCases.e2e.test.js',
@@ -242,7 +277,25 @@ suite('E2E shard matrix', () => {
         const issue = 'https://github.com/microsoft/aspire/issues/19151';
         const workflow = workflowWithDisabledSpec(spec, issue);
 
-        assertDisabledRowsAreTracked(workflow, new Map([[`azure-functions|${spec}`, issue]]));
+        assertDisabledRowsAreTracked(workflow, new Map([[`Linux|azure-functions|${spec}`, issue]]));
+    });
+
+    test('tracks disabled Linux and Windows rows for the same spec separately', () => {
+        const spec = 'out/test-e2e/test-e2e/azureFunctions.e2e.test.js';
+        const issue = 'https://github.com/microsoft/aspire/issues/19151';
+        const workflow = [
+            workflowWithDisabledSpec(spec, issue, 'Linux').trimEnd(),
+            '          - name: Windows',
+            '            shardName: azure-functions',
+            `            spec: ${spec}`,
+            `            disabledIssue: ${issue}`,
+            '',
+        ].join('\n');
+
+        assertDisabledRowsAreTracked(workflow, new Map([
+            [`Linux|azure-functions|${spec}`, issue],
+            [`Windows|azure-functions|${spec}`, issue],
+        ]));
     });
 
     test('rejects a disabled matrix row with a malformed tracking issue URL', () => {
@@ -251,13 +304,14 @@ suite('E2E shard matrix', () => {
         const workflow = workflowWithDisabledSpec(spec, issue);
 
         assert.throws(
-            () => assertDisabledRowsAreTracked(workflow, new Map([[`azure-functions|${spec}`, issue]])),
+            () => assertDisabledRowsAreTracked(workflow, new Map([[`Linux|azure-functions|${spec}`, issue]])),
             assert.AssertionError,
             'A disabled matrix row must point at a microsoft/aspire issue URL even when it is explicitly tracked.');
     });
 });
 
 interface MatrixRow {
+    name?: string;
     shardName?: string;
     spec?: string;
     disabledIssue?: string;
