@@ -21,7 +21,19 @@ internal sealed record AtsEnumType(string TypeId, IReadOnlyList<string> Values);
 
 internal sealed record AtsExportedValue(string Path, string TypeId, string Value);
 
-internal sealed record AtsCapability(string CapabilityId, IReadOnlyList<AtsParameter> Parameters, string ReturnTypeId);
+/// <param name="CapabilityId">The exported capability id, for example <c>Pkg/withRedisCommanderHostPort</c>.</param>
+/// <param name="Parameters">The exported parameters, in declaration order.</param>
+/// <param name="ReturnTypeId">The exported return type id.</param>
+/// <param name="ProjectedMethodName">
+/// The TypeScript method name the projector emits, which <c>[AspireExport(..., MethodName = "...")]</c>
+/// can make differ from the capability id. This is what the options interface is named after, so the
+/// collision guard has to use it rather than the id.
+/// </param>
+internal sealed record AtsCapability(
+    string CapabilityId,
+    IReadOnlyList<AtsParameter> Parameters,
+    string ReturnTypeId,
+    string ProjectedMethodName);
 
 internal sealed record AtsParameter(string Name, string TypeId, bool IsOptional, bool IsNullable);
 

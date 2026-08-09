@@ -425,10 +425,25 @@ internal sealed class SdkDumpCommand : BaseCommand
                 return string.Format(CultureInfo.InvariantCulture, "{0}{1}: {2}{3}", p.Name, optional, p.Type?.TypeId ?? "unknown", nullable);
             }));
             var returnStr = c.ReturnType?.TypeId ?? "void";
-            sb.AppendLine(string.Format(CultureInfo.InvariantCulture, "{0}({1}) -> {2}", c.CapabilityId, paramStr, returnStr));
+
+            // [AspireExport("withRedisCommanderHostPort", MethodName = "withHostPort")] makes the
+            // projected TypeScript name differ from the capability id, and the generated options
+            // interface is named after the projected name. The annotation is emitted only for that
+            // aliased minority so the surface stays unchanged for everything else:
+            //   Pkg/withRedisCommanderHostPort(port?: number) -> Pkg/Handle [method=withHostPort]
+            var methodSuffix = string.IsNullOrEmpty(c.MethodName) || string.Equals(c.MethodName, GetCapabilityMethodSegment(c.CapabilityId), StringComparison.Ordinal)
+                ? ""
+                : string.Format(CultureInfo.InvariantCulture, " [method={0}]", c.MethodName);
+            sb.AppendLine(string.Format(CultureInfo.InvariantCulture, "{0}({1}) -> {2}{3}", c.CapabilityId, paramStr, returnStr, methodSuffix));
         }
 
         return sb.ToString();
+    }
+
+    private static string GetCapabilityMethodSegment(string capabilityId)
+    {
+        var slashIndex = capabilityId.IndexOf('/');
+        return slashIndex < 0 ? capabilityId : capabilityId[(slashIndex + 1)..];
     }
 
     private static string FormatPretty(CapabilitiesInfo capabilities)

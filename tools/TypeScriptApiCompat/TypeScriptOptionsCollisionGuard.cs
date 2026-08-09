@@ -28,7 +28,12 @@ internal static class TypeScriptOptionsCollisionGuard
                     continue;
                 }
 
-                var interfaceName = GetUnqualifiedOptionsInterfaceName(capability.CapabilityId);
+                // The options interface is named after the projected method name, which
+                // [AspireExport(..., MethodName = "...")] can make differ from the capability id:
+                // Redis Commander exports withRedisCommanderHostPort but projects as withHostPort,
+                // so naming from the id would check WithRedisCommanderHostPortOptions while the
+                // generator emits WithHostPortOptions and the real collision goes unseen.
+                var interfaceName = GetUnqualifiedOptionsInterfaceName(capability.ProjectedMethodName);
                 if (!TypeScriptOptionsInterfaceNaming.RequiresPackageQualifier(interfaceName))
                 {
                     candidates.Add(new OptionsInterfaceCandidate(interfaceName, surface.PackageName, capability.CapabilityId));
@@ -64,13 +69,8 @@ internal static class TypeScriptOptionsCollisionGuard
             dtoTypeIds.Contains(candidates[0].TypeId);
     }
 
-    private static string GetUnqualifiedOptionsInterfaceName(string capabilityId)
-    {
-        var slashIndex = capabilityId.IndexOf('/');
-        var methodName = slashIndex < 0 ? capabilityId : capabilityId[(slashIndex + 1)..];
-
-        return TypeScriptOptionsInterfaceNaming.GetUnqualifiedOptionsInterfaceName(methodName);
-    }
+    private static string GetUnqualifiedOptionsInterfaceName(string projectedMethodName)
+        => TypeScriptOptionsInterfaceNaming.GetUnqualifiedOptionsInterfaceName(projectedMethodName);
 
     private static string CreateCollisionMessage(IReadOnlyList<OptionsInterfaceCollision> collisions)
     {

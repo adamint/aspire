@@ -363,6 +363,38 @@ public class SdkDumpCommandTests(ITestOutputHelper outputHelper)
         Assert.Contains("Pkg/withNullable(name: string?) -> void", output);
     }
 
+    [Theory]
+    [InlineData("withHostPort", "Pkg/withRedisCommanderHostPort(port: number) -> void [method=withHostPort]")]
+    [InlineData("withRedisCommanderHostPort", "Pkg/withRedisCommanderHostPort(port: number) -> void")]
+    [InlineData("", "Pkg/withRedisCommanderHostPort(port: number) -> void")]
+    public void FormatCi_NamesTheProjectedMethodOnlyWhenItDiffersFromTheCapabilityId(string methodName, string expectedLine)
+    {
+        var capabilities = new CapabilitiesInfo
+        {
+            Capabilities =
+            [
+                new CapabilityInfo
+                {
+                    CapabilityId = "Pkg/withRedisCommanderHostPort",
+                    MethodName = methodName,
+                    Parameters =
+                    [
+                        new Aspire.Cli.Commands.Sdk.ParameterInfo
+                        {
+                            Name = "port",
+                            Type = new TypeRefInfo { TypeId = "number" }
+                        }
+                    ],
+                    ReturnType = new TypeRefInfo { TypeId = "void" }
+                }
+            ]
+        };
+
+        var output = InvokeFormatter("FormatCi", capabilities);
+
+        Assert.Contains(expectedLine, output, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void FormatPretty_IncludesExportedValues()
     {

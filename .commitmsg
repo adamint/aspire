@@ -1,0 +1,15 @@
+Check the options interface the generator will actually emit
+
+The collision guard derived the options interface name from the capability
+id, but the projector names it after the projected method, which
+[AspireExport("withRedisCommanderHostPort", MethodName = "withHostPort")]
+makes differ. So the guard checked WithRedisCommanderHostPortOptions while
+the generator emits WithHostPortOptions, and a real cross-package collision
+between Redis, PostgreSQL and Yarp would go unseen.
+
+The CI surface only recorded the id, so `sdk dump --format ci` now names the
+projected method when it differs -- an annotation only the aliased minority
+carries, leaving every other surface line byte-identical. The parser splits
+it off the return type so pre-existing baselines still compare clean.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

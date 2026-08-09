@@ -451,6 +451,120 @@ public sealed class TypeScriptApiCompatTests(ITestOutputHelper outputHelper)
         Assert.Contains("'Pkg.Two'", message, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void RunnerFailsWhenAliasedCapabilitiesProjectToTheSameOptionsInterface()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var baselineRoot = Path.Combine(workspace.Path, "baseline");
+        var currentRoot = Path.Combine(workspace.Path, "current");
+
+        // Both packages alias distinct capability ids onto the same projected method, which is what
+        // [AspireExport("withRedisCommanderHostPort", MethodName = "withHostPort")] does. The ids do
+        // not collide; the generated WithHostPortOptions interfaces do.
+        foreach (var root in new[] { baselineRoot, currentRoot })
+        {
+            WriteSurface(root, "Pkg.One", """
+                # Capabilities
+                Pkg.One/withCommanderHostPort(port?: number) -> void [method=withHostPort]
+                """);
+            WriteSurface(root, "Pkg.Two", """
+                # Capabilities
+                Pkg.Two/withInsightHostPort(port?: number) -> void [method=withHostPort]
+                """);
+        }
+
+        using var error = new StringWriter();
+
+        var exitCode = TypeScriptApiCompatRunner.Run(
+            new CommandLineOptions(
+                baselineRoot,
+                currentRoot,
+                workspace.Path,
+                BaselineSuppressionsRoot: null,
+                ExcludedPackagesFile: null,
+                ReportPath: null,
+                GitHubAnnotations: false),
+            error);
+
+        Assert.Equal(2, exitCode);
+
+        var message = error.ToString();
+        Assert.Contains("WithHostPortOptions", message, StringComparison.Ordinal);
+        Assert.Contains("'Pkg.One'", message, StringComparison.Ordinal);
+        Assert.Contains("'Pkg.Two'", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunnerAllowsSharedCapabilityIdsThatProjectToDifferentMethodNames()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var baselineRoot = Path.Combine(workspace.Path, "baseline");
+        var currentRoot = Path.Combine(workspace.Path, "current");
+
+        foreach (var root in new[] { baselineRoot, currentRoot })
+        {
+            WriteSurface(root, "Pkg.One", """
+                # Capabilities
+                Pkg.One/withShared(port?: number) -> void [method=withOnePort]
+                """);
+            WriteSurface(root, "Pkg.Two", """
+                # Capabilities
+                Pkg.Two/withShared(host?: string) -> void [method=withTwoHost]
+                """);
+        }
+
+        using var error = new StringWriter();
+
+        var exitCode = TypeScriptApiCompatRunner.Run(
+            new CommandLineOptions(
+                baselineRoot,
+                currentRoot,
+                workspace.Path,
+                BaselineSuppressionsRoot: null,
+                ExcludedPackagesFile: null,
+                ReportPath: null,
+                GitHubAnnotations: false),
+            error);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("collision", error.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ComparerTreatsTheProjectedMethodAnnotationAsSurfaceMetadataRatherThanTheReturnType()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var baselineRoot = Path.Combine(workspace.Path, "baseline");
+        var currentRoot = Path.Combine(workspace.Path, "current");
+
+        // Baselines written before the annotation existed carry no [method=...] suffix, so the
+        // annotation has to be split off the return type or every aliased capability would look
+        // like its return type changed the first time a surface is regenerated.
+        WriteSurface(baselineRoot, "Pkg", """
+            # Capabilities
+            Pkg/withCommanderHostPort(port?: number) -> void
+            """);
+        WriteSurface(currentRoot, "Pkg", """
+            # Capabilities
+            Pkg/withCommanderHostPort(port?: number) -> void [method=withHostPort]
+            """);
+
+        using var error = new StringWriter();
+
+        var exitCode = TypeScriptApiCompatRunner.Run(
+            new CommandLineOptions(
+                baselineRoot,
+                currentRoot,
+                workspace.Path,
+                BaselineSuppressionsRoot: null,
+                ExcludedPackagesFile: null,
+                ReportPath: null,
+                GitHubAnnotations: false),
+            error);
+
+        Assert.Equal(0, exitCode);
+    }
+
     private static void WriteSurface(string rootPath, string packageName, string content)
     {
         var apiDirectory = Path.Combine(rootPath, "src", packageName, "api");

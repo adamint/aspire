@@ -207,7 +207,29 @@ internal static class AtsSurfaceParser
                 .Select(ParseParameter)
                 .ToArray();
 
-        return new AtsCapability(capabilityId, parameters, returnTypeId);
+        // A capability whose projected TypeScript method name differs from its id carries that name
+        // as a trailing annotation:
+        //   Pkg/withRedisCommanderHostPort(port?: number) -> Pkg/Handle [method=withHostPort]
+        // The annotation is emitted only for the aliased minority, so an unannotated line -- every
+        // line in a surface written before this existed -- projects under its own id.
+        var projectedMethodName = GetMethodNameSegment(capabilityId);
+        var annotationIndex = returnTypeId.IndexOf(MethodAnnotationPrefix, StringComparison.Ordinal);
+        if (annotationIndex >= 0 && returnTypeId.EndsWith(']'))
+        {
+            var start = annotationIndex + MethodAnnotationPrefix.Length;
+            projectedMethodName = returnTypeId[start..^1];
+            returnTypeId = returnTypeId[..annotationIndex];
+        }
+
+        return new AtsCapability(capabilityId, parameters, returnTypeId, projectedMethodName);
+    }
+
+    private const string MethodAnnotationPrefix = " [method=";
+
+    private static string GetMethodNameSegment(string capabilityId)
+    {
+        var slashIndex = capabilityId.IndexOf('/');
+        return slashIndex < 0 ? capabilityId : capabilityId[(slashIndex + 1)..];
     }
 
     private static AtsParameter ParseParameter(string parameterText)
