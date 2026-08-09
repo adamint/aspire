@@ -2,6 +2,11 @@ name: VS Code extension E2E tests
 
 on:
   workflow_call:
+    inputs:
+      shardName:
+        required: false
+        type: string
+        default: ''
 
 jobs:
   verify_extester_feed:
@@ -276,14 +281,17 @@ jobs:
 
     steps:
       - name: Checkout code
+        if: ${{ inputs.shardName == '' || matrix.shardName == inputs.shardName }}
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Setup Node.js
+        if: ${{ inputs.shardName == '' || matrix.shardName == inputs.shardName }}
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: '22.x'
 
       - name: Install Corepack
+        if: ${{ inputs.shardName == '' || matrix.shardName == inputs.shardName }}
         working-directory: extension
         run: |
           # Scope Corepack's cache to this job so prepareCorepackYarn.mjs cannot
@@ -323,39 +331,46 @@ jobs:
           corepack yarn --version
 
       - name: Setup .NET
+        if: ${{ inputs.shardName == '' || matrix.shardName == inputs.shardName }}
         uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
         with:
           global-json-file: global.json
 
       - name: Download VSIX
+        if: ${{ inputs.shardName == '' || matrix.shardName == inputs.shardName }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: aspire-extension
           path: extension/out
 
       - name: Download CLI archive
+        if: ${{ inputs.shardName == '' || matrix.shardName == inputs.shardName }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: cli-native-archives-${{ matrix.rid }}
           path: artifacts/cli-archive
 
       - name: Download NuGet packages
+        if: ${{ inputs.shardName == '' || matrix.shardName == inputs.shardName }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: built-nugets
           path: artifacts/nugets
 
       - name: Download RID-specific NuGet packages
+        if: ${{ inputs.shardName == '' || matrix.shardName == inputs.shardName }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: built-nugets-for-${{ matrix.rid }}
           path: artifacts/nugets-rid
 
       - name: Validate lockfile registries
+        if: ${{ inputs.shardName == '' || matrix.shardName == inputs.shardName }}
         working-directory: extension
         run: node scripts/validate-lockfile-registry.cjs
 
       - name: Install extension dependencies
+        if: ${{ inputs.shardName == '' || matrix.shardName == inputs.shardName }}
         working-directory: extension
         run: |
           for ($attempt = 1; $attempt -le 3; $attempt++) {
@@ -376,7 +391,7 @@ jobs:
           }
 
       - name: Install Azure Functions E2E prerequisites
-        if: ${{ matrix.installAzureFunctions }}
+        if: ${{ (inputs.shardName == '' || matrix.shardName == inputs.shardName) && matrix.installAzureFunctions }}
         shell: bash
         run: |
           set -euo pipefail
@@ -415,6 +430,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: Prepare Aspire CLI and package hive
+        if: ${{ inputs.shardName == '' || matrix.shardName == inputs.shardName }}
         id: prepare_cli
         run: |
           $ErrorActionPreference = 'Stop'
@@ -478,6 +494,7 @@ jobs:
           & $cli.FullName --version
 
       - name: Compile extension E2E tests
+        if: ${{ inputs.shardName == '' || matrix.shardName == inputs.shardName }}
         working-directory: extension
         run: |
           corepack yarn compile
@@ -492,7 +509,7 @@ jobs:
           }
 
       - name: Install E2E recorder
-        if: ${{ matrix.useXvfb }}
+        if: ${{ (inputs.shardName == '' || matrix.shardName == inputs.shardName) && matrix.useXvfb }}
         run: |
           if (Get-Command ffmpeg -ErrorAction SilentlyContinue) {
             ffmpeg -version | Select-Object -First 1
@@ -502,6 +519,7 @@ jobs:
           }
 
       - name: Run extension E2E tests
+        if: ${{ inputs.shardName == '' || matrix.shardName == inputs.shardName }}
         working-directory: extension
         env:
           ASPIRE_EXTENSION_E2E_VSIX: ${{ github.workspace }}/extension/out/aspire-extension.vsix
@@ -520,7 +538,7 @@ jobs:
 
       - name: Upload E2E diagnostics
         id: upload_e2e_diagnostics
-        if: always()
+        if: ${{ always() && (inputs.shardName == '' || matrix.shardName == inputs.shardName) }}
         continue-on-error: true
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -539,7 +557,7 @@ jobs:
           include-hidden-files: true
 
       - name: Print E2E diagnostics links
-        if: always()
+        if: ${{ always() && (inputs.shardName == '' || matrix.shardName == inputs.shardName) }}
         working-directory: extension
         run: |
           $artifactName = "extension-e2e-diagnostics-${{ matrix.rid }}-${{ matrix.shardName }}-attempt${{ github.run_attempt }}"

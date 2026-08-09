@@ -402,6 +402,28 @@ public sealed class TestTriggerMapTests
     }
 
     [Fact]
+    public void ExtensionE2eSelectionRunsTheBuildOwnershipShard()
+    {
+        var testsYml = File.ReadAllText(Path.Combine(RepoRoot.Path, ".github", "workflows", "tests.yml"));
+        var block = JobBlock(testsYml, "extension_e2e_tests");
+
+        Assert.True(block is not null, "job 'extension_e2e_tests' not found in tests.yml");
+        Assert.Contains("if: ${{ needs.setup_for_tests.outputs.run_extension_e2e == 'true' }}", block);
+        Assert.DoesNotContain("false &&", block);
+        Assert.Contains("shardName: build-ownership", block);
+        Assert.Contains("needs.extension_e2e_tests.result == 'skipped' && (needs.setup_for_tests.outputs.run_extension_e2e == 'true')", testsYml);
+    }
+
+    [Fact]
+    public void ExtensionE2eReusableWorkflowCanFilterToOneShard()
+    {
+        var workflow = File.ReadAllText(Path.Combine(RepoRoot.Path, ".github", "workflows", "extension-e2e-tests.yml"));
+
+        Assert.Contains("shardName:", workflow);
+        Assert.Contains("if: ${{ inputs.shardName == '' || matrix.shardName == inputs.shardName }}", workflow);
+    }
+
+    [Fact]
     public void EveryTestTargetNamesAnExistingTestProject()
     {
         // test:<X> means the matrix project tests/<X> (run-tests.yml entry). A rename or
