@@ -228,6 +228,55 @@ public class LayoutProcessRunnerTests
     }
 
     [Fact]
+    public async Task RunAsync_WhenProcessDoesNotExitWithinTimeout_ThrowsTimeoutException()
+    {
+        var factory = new TestProcessExecutionFactory
+        {
+            AsyncAttemptCallback = async (_, _, cancellationToken) =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+
+                return (0, null);
+            }
+        };
+        var runner = new LayoutProcessRunner(factory);
+        using var cancellationSource = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() => runner.RunAsync(
+            "aspire-managed",
+            ["nuget", "search", "--query", "Aspire.Hosting"],
+            timeout: TimeSpan.FromMilliseconds(50),
+            ct: cancellationSource.Token));
+
+        Assert.Contains("NuGet package search", exception.Message);
+        Assert.Contains("Aspire.Hosting", exception.Message);
+        Assert.Contains("timed out", exception.Message);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenCallerTokenIsCanceled_PropagatesCancellation()
+    {
+        var factory = new TestProcessExecutionFactory
+        {
+            AsyncAttemptCallback = async (_, _, cancellationToken) =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+
+                return (0, null);
+            }
+        };
+        var runner = new LayoutProcessRunner(factory);
+
+        using var cancellationSource = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runner.RunAsync(
+            "aspire-managed",
+            ["nuget", "search", "--query", "Aspire.Hosting"],
+            timeout: TimeSpan.FromMinutes(1),
+            ct: cancellationSource.Token));
+    }
+
+    [Fact]
     public async Task StartAsync_WhenKillOnParentExit_DisarmsCooperativeWatchdogOnWindowsOnly()
     {
         // Same mutual-exclusion contract as RunAsync above, for the long-lived StartAsync helpers
