@@ -40,6 +40,24 @@ public sealed class ReleasePublishNugetPipelineTests
     private const string StableNpmStagingGate =
         "- ${{ if or(eq(parameters.SkipNpmRidPublish, false), eq(parameters.SkipNpmPointerPublish, false), and(eq(parameters.DryRun, false), eq(parameters.IsPrerelease, false), eq(parameters.NpmInternalMirrorAction, 'only'))) }}:";
 
+    /// <summary>
+    /// Compile-time gates for the two npm publish submissions and their placeholder branches.
+    /// <c>NpmInternalMirrorAction=only</c> is documented as a mirror-only rerun that does not
+    /// resubmit packages, so it has to suppress the submissions on its own rather than relying on
+    /// the operator also setting both skip flags.
+    /// </summary>
+    private const string NpmRidPublishGate =
+        "- ${{ if and(eq(parameters.SkipNpmRidPublish, false), ne(parameters.NpmInternalMirrorAction, 'only')) }}:";
+
+    private const string NpmRidPublishSkippedGate =
+        "- ${{ if or(eq(parameters.SkipNpmRidPublish, true), eq(parameters.NpmInternalMirrorAction, 'only')) }}:";
+
+    private const string NpmPointerPublishGate =
+        "- ${{ if and(eq(parameters.SkipNpmPointerPublish, false), ne(parameters.NpmInternalMirrorAction, 'only')) }}:";
+
+    private const string NpmPointerPublishSkippedGate =
+        "- ${{ if or(eq(parameters.SkipNpmPointerPublish, true), eq(parameters.NpmInternalMirrorAction, 'only')) }}:";
+
     [Fact]
     public async Task ValidatesNpmPublishPreconditionsBeforeNuGetPublish()
     {
@@ -228,6 +246,71 @@ public sealed class ReleasePublishNugetPipelineTests
         {
             Assert.True(EvaluateCondition(PublicNpmSmokeCondition, parameters));
         }
+    }
+
+    /// <summary>
+    /// <c>NpmInternalMirrorAction=only</c> promises a mirror-only rerun: "seed and validate without
+    /// resubmitting npm packages". The two publish submissions used to be gated on the skip flags
+    /// alone, so an operator who set just this parameter still resubmitted every package, and the
+    /// already-published preflight failed the run before any mirror work happened - exactly the
+    /// recovery the parameter exists to perform.
+    /// </summary>
+    [Theory]
+    // mirrorAction, ridSkip, pointerSkip, publishesRid, publishesPointer
+    [InlineData("only", false, false, false, false)]
+    [InlineData("only", true, true, false, false)]
+    [InlineData("only", false, true, false, false)]
+    [InlineData("auto", false, false, true, true)]
+    [InlineData("auto", true, false, false, true)]
+    [InlineData("auto", false, true, true, false)]
+    [InlineData("skip", false, false, true, true)]
+    public async Task MirrorOnlyRerunNeverResubmitsNpmPackages(
+        string mirrorAction,
+        bool ridSkip,
+        bool pointerSkip,
+        bool publishesRid,
+        bool publishesPointer)
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        foreach (var gate in new[] { NpmRidPublishGate, NpmRidPublishSkippedGate, NpmPointerPublishGate, NpmPointerPublishSkippedGate })
+        {
+            Assert.Contains(gate, pipeline, StringComparison.Ordinal);
+        }
+
+        var parameters = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["SkipNpmRidPublish"] = ridSkip ? "true" : "false",
+            ["SkipNpmPointerPublish"] = pointerSkip ? "true" : "false",
+            ["NpmInternalMirrorAction"] = mirrorAction
+        };
+
+        Assert.Equal(publishesRid, EvaluateGate(NpmRidPublishGate, parameters));
+        Assert.Equal(publishesPointer, EvaluateGate(NpmPointerPublishGate, parameters));
+
+        // Each placeholder must stay the exact negation of its submission, otherwise a run either
+        // publishes nothing and reports nothing, or double-declares the step.
+        Assert.Equal(!publishesRid, EvaluateGate(NpmRidPublishSkippedGate, parameters));
+        Assert.Equal(!publishesPointer, EvaluateGate(NpmPointerPublishSkippedGate, parameters));
+    }
+
+    /// <summary>
+    /// The already-published preflight runs inside the stable npm gate, which a mirror-only rerun
+    /// satisfies. Every package it would schedule is by definition already on the registry, so it
+    /// must schedule nothing rather than report the whole release as a collision.
+    /// </summary>
+    [Fact]
+    public async Task AlreadyPublishedNpmPreflightSchedulesNothingForAMirrorOnlyRerun()
+    {
+        var pipeline = await ReadRepoFileAsync("eng/pipelines/release-publish-nuget.yml");
+
+        var scheduleIndex = FindRequiredText(pipeline, "$scheduledPackageGroups = [System.Collections.Generic.List[object]]::new()");
+        var displayNameIndex = FindRequiredText(pipeline, "displayName: 'Verify npm Packages Are Not Already Published'");
+        var scheduling = pipeline[scheduleIndex..displayNameIndex];
+
+        Assert.Contains("$isMirrorOnlyRerun = \"${{ parameters.NpmInternalMirrorAction }}\" -eq \"only\"", scheduling, StringComparison.Ordinal);
+        Assert.Contains("\"${{ parameters.SkipNpmRidPublish }}\" -ne \"true\" -and -not $isMirrorOnlyRerun", scheduling, StringComparison.Ordinal);
+        Assert.Contains("\"${{ parameters.SkipNpmPointerPublish }}\" -ne \"true\" -and -not $isMirrorOnlyRerun", scheduling, StringComparison.Ordinal);
     }
 
     private static bool EvaluateGate(string gate, IReadOnlyDictionary<string, string> parameters)

@@ -72,7 +72,9 @@ parameters:
   # of npm work it never asked for, and failing to do so fails the run before it reaches
   # the action being recovered.
   #   auto - seed and validate the mirror only when this run publishes npm packages (default)
-  #   only - mirror-only rerun: seed and validate without resubmitting npm packages
+  #   only - mirror-only rerun: seed and validate without resubmitting npm packages. It
+  #          suppresses both publish submissions and the already-published preflight itself,
+  #          so it does not depend on the operator also setting the two skip flags.
   #   skip - never seed or validate the mirror, even when this run publishes npm packages
   # This parameter controls ONLY the internal dotnet-public-npm mirror steps. The public
   # registry install smoke test is deliberately not gated on it, so a run that publishes
@@ -1538,20 +1540,31 @@ extends:
 
                     $scheduledPackageGroups = [System.Collections.Generic.List[object]]::new()
 
-                    if ("${{ parameters.SkipNpmRidPublish }}" -ne "true") {
+                    # A mirror-only rerun reaches this step because it satisfies the stable npm gate,
+                    # but it publishes nothing: the packages it seeds into the internal mirror are by
+                    # definition already on npm. Scheduling them here would report the entire release
+                    # as an already-published collision and fail the very recovery this action exists
+                    # to perform. It must mirror the publish gates above, which exclude 'only'.
+                    $isMirrorOnlyRerun = "${{ parameters.NpmInternalMirrorAction }}" -eq "only"
+
+                    if ("${{ parameters.SkipNpmRidPublish }}" -ne "true" -and -not $isMirrorOnlyRerun) {
                       $scheduledPackageGroups.Add([PSCustomObject]@{
                         Name = 'RID'
                         Path = "$(Pipeline.Workspace)/npm/rid-packages"
                       }) | Out-Null
+                    } elseif ($isMirrorOnlyRerun) {
+                      Write-Host "Skipping already-published preflight for RID packages because NpmInternalMirrorAction=only does not publish npm packages."
                     } else {
                       Write-Host "Skipping already-published preflight for RID packages because SkipNpmRidPublish=true."
                     }
 
-                    if ("${{ parameters.SkipNpmPointerPublish }}" -ne "true") {
+                    if ("${{ parameters.SkipNpmPointerPublish }}" -ne "true" -and -not $isMirrorOnlyRerun) {
                       $scheduledPackageGroups.Add([PSCustomObject]@{
                         Name = 'pointer'
                         Path = "$(Pipeline.Workspace)/npm/pointer-package"
                       }) | Out-Null
+                    } elseif ($isMirrorOnlyRerun) {
+                      Write-Host "Skipping already-published preflight for pointer package because NpmInternalMirrorAction=only does not publish npm packages."
                     } else {
                       Write-Host "Skipping already-published preflight for pointer package because SkipNpmPointerPublish=true."
                     }
@@ -1655,7 +1668,7 @@ extends:
                     exit 0
                   displayName: 'Verify npm Packages Are Not Already Published'
 
-                - ${{ if eq(parameters.SkipNpmRidPublish, false) }}:
+                - ${{ if and(eq(parameters.SkipNpmRidPublish, false), ne(parameters.NpmInternalMirrorAction, 'only')) }}:
                   - template: MicroBuild.Publish.yml@MicroBuildTemplate
                     parameters:
                       intent: 'PackageDistribution'
@@ -1677,12 +1690,12 @@ extends:
                       Start-Sleep -Seconds ($delayMinutes * 60)
                     displayName: 'Wait for npm RID Package Propagation'
 
-                - ${{ if eq(parameters.SkipNpmRidPublish, true) }}:
+                - ${{ if or(eq(parameters.SkipNpmRidPublish, true), eq(parameters.NpmInternalMirrorAction, 'only')) }}:
                   - powershell: |
                       Write-Host "Skipping npm RID packages. Pointer package handling follows SkipNpmPointerPublish."
                     displayName: 'Skip npm RID Publish (flagged)'
 
-                - ${{ if eq(parameters.SkipNpmPointerPublish, false) }}:
+                - ${{ if and(eq(parameters.SkipNpmPointerPublish, false), ne(parameters.NpmInternalMirrorAction, 'only')) }}:
                   # Preflight: the pointer package pins all RID packages via
                   # optionalDependencies at the same version. If even one RID
                   # tarball is missing from npm at this moment (operator set
@@ -1821,7 +1834,7 @@ extends:
                       }
                     displayName: 'Verify npm RID Packages Present Before Pointer Publish'
                     # DryRun=true never reaches this step because the gating
-                    # parent `if eq(parameters.SkipNpmPointerPublish, false)`
+                    # parent `if and(eq(parameters.SkipNpmPointerPublish, false), ne(parameters.NpmInternalMirrorAction, 'only'))`
                     # is only entered in real publish runs (the pointer publish
                     # step lives directly below this one and is what the gate
                     # protects).
@@ -1836,7 +1849,7 @@ extends:
                       owners: '$(NpmPublishOwnersEffective)'
                       approvers: '$(NpmPublishApproversEffective)'
 
-                - ${{ if eq(parameters.SkipNpmPointerPublish, true) }}:
+                - ${{ if or(eq(parameters.SkipNpmPointerPublish, true), eq(parameters.NpmInternalMirrorAction, 'only')) }}:
                   - powershell: |
                       Write-Host "Skipping npm pointer package publish because SkipNpmPointerPublish=true. Registry validation still runs unless this run neither publishes npm packages nor sets NpmInternalMirrorAction=only."
                     displayName: 'Skip npm Pointer Publish (flagged)'
