@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Buffers;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Semver;
@@ -32,6 +33,7 @@ internal sealed class NpmRegistryClient : INpmRegistryClient
 
     private const string LatestDistTag = "latest";
     private const int MaximumResponseSize = 1024 * 1024;
+    private const int ResponseReadBufferSize = 16 * 1024;
     private static readonly TimeSpan s_defaultTimeout = TimeSpan.FromSeconds(10);
 
     private readonly HttpClient _httpClient;
@@ -122,29 +124,42 @@ internal sealed class NpmRegistryClient : INpmRegistryClient
         }
 
         await using var stream = await content.ReadAsStreamAsync(cancellationToken);
-        var bytes = new byte[MaximumResponseSize + 1];
+        var readBuffer = ArrayPool<byte>.Shared.Rent(ResponseReadBufferSize);
+        using var responseBuffer = new MemoryStream();
         var totalBytesRead = 0;
 
-        while (totalBytesRead < bytes.Length)
+        try
         {
-            var bytesRead = await stream.ReadAsync(
-                bytes.AsMemory(totalBytesRead, bytes.Length - totalBytesRead),
-                cancellationToken);
-            if (bytesRead == 0)
+            while (true)
             {
-                break;
+                // Read one byte beyond the documented maximum so a response without
+                // Content-Length is proven oversized instead of merely filling the buffer exactly.
+                var bytesAllowedBeforeOverflow = MaximumResponseSize - totalBytesRead + 1;
+                var bytesRead = await stream.ReadAsync(
+                    readBuffer.AsMemory(0, Math.Min(readBuffer.Length, bytesAllowedBeforeOverflow)),
+                    cancellationToken);
+                if (bytesRead == 0)
+                {
+                    break;
+                }
+
+                totalBytesRead += bytesRead;
+
+                if (totalBytesRead > MaximumResponseSize)
+                {
+                    throw new InvalidDataException(
+                        $"The npm registry response for {packageName} exceeded the {MaximumResponseSize} byte limit.");
+                }
+
+                responseBuffer.Write(readBuffer.AsSpan(0, bytesRead));
             }
-
-            totalBytesRead += bytesRead;
         }
-
-        if (totalBytesRead > MaximumResponseSize)
+        finally
         {
-            throw new InvalidDataException(
-                $"The npm registry response for {packageName} exceeded the {MaximumResponseSize} byte limit.");
+            ArrayPool<byte>.Shared.Return(readBuffer);
         }
 
-        return bytes.AsMemory(0, totalBytesRead);
+        return responseBuffer.ToArray();
     }
 
     private static SemVersion ParseLatestVersion(string packageName, ReadOnlyMemory<byte> responseBytes)
@@ -172,7 +187,7 @@ internal sealed class NpmRegistryClient : INpmRegistryClient
         if (!SemVersion.TryParse(latestVersion, SemVersionStyles.Strict, out var version))
         {
             throw new InvalidDataException(
-                $"The npm registry reported an unparsable '{LatestDistTag}' version '{latestVersion}' for {packageName}.");
+                $"The npm registry reported an unparsable '{LatestDistTag}' version for {packageName}.");
         }
 
         return version;

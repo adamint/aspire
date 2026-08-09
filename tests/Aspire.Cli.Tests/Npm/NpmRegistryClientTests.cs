@@ -3,6 +3,7 @@
 
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using Aspire.Cli.Npm;
 using Microsoft.AspNetCore.InternalTesting;
 using Microsoft.Extensions.Time.Testing;
@@ -147,6 +148,20 @@ public class NpmRegistryClientTests
     }
 
     [Fact]
+    public async Task GetLatestVersionAsync_BoundsUnparsableLatestVersionInExceptionMessage()
+    {
+        var hostileVersion = $"1.0.0\u001b[31m{new string('x', 10_000)}";
+        var client = CreateClient(_ => CreateJsonResponse($$"""{ "dist-tags": { "latest": {{JsonSerializer.Serialize(hostileVersion)}} } }"""));
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(
+            () => client.GetLatestVersionAsync(PackageName, CancellationToken.None)).DefaultTimeout();
+
+        Assert.Equal(
+            "The npm registry reported an unparsable 'latest' version for @microsoft/aspire-cli.",
+            exception.Message);
+    }
+
+    [Fact]
     public async Task GetLatestVersionAsync_ThrowsWhenDeclaredContentLengthExceedsLimit()
     {
         var client = CreateClient(_ =>
@@ -174,6 +189,22 @@ public class NpmRegistryClientTests
 
         await Assert.ThrowsAsync<InvalidDataException>(
             () => client.GetLatestVersionAsync(PackageName, CancellationToken.None)).DefaultTimeout();
+    }
+
+    [Fact]
+    public async Task GetLatestVersionAsync_AcceptsMaximumSizedBodyWithoutLargeReadBuffer()
+    {
+        var stream = new MaximumSizedPackumentStream("""{ "dist-tags": { "latest": "1.0.0" } }""");
+        var client = CreateClient(_ =>
+        {
+            var content = new StreamContent(stream);
+            content.Headers.ContentLength = MaximumSizedPackumentStream.MaximumResponseSize;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
+        });
+
+        var version = await client.GetLatestVersionAsync(PackageName, CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal("1.0.0", version.ToString());
     }
 
     [Fact]
@@ -281,6 +312,57 @@ public class NpmRegistryClientTests
             return count;
         }
 
+        public override void Flush() => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    private sealed class MaximumSizedPackumentStream(string json) : Stream
+    {
+        public const int MaximumResponseSize = 1024 * 1024;
+        private const int MaximumExpectedReadBufferSize = 16 * 1024;
+        private readonly byte[] _jsonBytes = Encoding.UTF8.GetBytes(json);
+        private int _position;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => MaximumResponseSize;
+        public override long Position { get => _position; set => throw new NotSupportedException(); }
+
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (buffer.Length > MaximumExpectedReadBufferSize)
+            {
+                throw new InvalidOperationException($"Read buffer was {buffer.Length} bytes.");
+            }
+
+            if (_position == MaximumResponseSize)
+            {
+                return ValueTask.FromResult(0);
+            }
+
+            var bytesToCopy = Math.Min(buffer.Length, MaximumResponseSize - _position);
+            var bytesFromJson = Math.Min(bytesToCopy, Math.Max(0, _jsonBytes.Length - _position));
+
+            if (bytesFromJson > 0)
+            {
+                _jsonBytes.AsMemory(_position, bytesFromJson).CopyTo(buffer);
+            }
+
+            if (bytesFromJson < bytesToCopy)
+            {
+                buffer[bytesFromJson..bytesToCopy].Span.Fill((byte)' ');
+            }
+
+            _position += bytesToCopy;
+            return ValueTask.FromResult(bytesToCopy);
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
         public override void Flush() => throw new NotSupportedException();
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();

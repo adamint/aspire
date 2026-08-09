@@ -223,7 +223,7 @@ public sealed class ReleasePublishNugetPipelineTests
         Assert.Equal(seedsMirror, stableSteps && EvaluateCondition(InternalMirrorCondition, parameters));
         Assert.Equal(runsPublicSmoke, stableSteps && EvaluateCondition(PublicNpmSmokeCondition, parameters));
 
-        // Comment 5 regression guard: the public install smoke never depends on mirror seeding.
+        // The public install smoke must keep proving the package can be installed before any mirror seeding runs.
         if (stableSteps && mirrorAction == "skip")
         {
             Assert.True(EvaluateCondition(PublicNpmSmokeCondition, parameters));

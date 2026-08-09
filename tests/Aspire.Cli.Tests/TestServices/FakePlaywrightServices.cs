@@ -32,7 +32,7 @@ internal sealed class FakeNpmRunner : INpmRunner
 /// A fake implementation of <see cref="INpmRegistryClient"/> for testing.
 /// </summary>
 /// <remarks>
-/// Defaults to reporting the same version the running CLI reports so update checks see no update.
+/// Defaults to reporting the sentinel version <c>0.0.0</c>.
 /// Set <see cref="LatestVersion"/> to advertise a newer version, or <see cref="Failure"/> to make
 /// the lookup fail the way an unreachable or malformed registry would.
 /// </remarks>
