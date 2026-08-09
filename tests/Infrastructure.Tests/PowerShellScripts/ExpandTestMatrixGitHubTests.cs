@@ -131,6 +131,40 @@ public class ExpandTestMatrixGitHubTests : IDisposable
 
     [Fact]
     [RequiresTools(["pwsh"])]
+    public async Task ClassShardKeepsTheZeroTestGuardOnTheDiscoveryOS()
+    {
+        var entry = TestDataBuilder.CreateMatrixEntry(
+            name: "MultiOSProject-SomeClass",
+            projectName: "MultiOSProject",
+            testProjectPath: "tests/MultiOSProject/MultiOSProject.csproj",
+            type: "class",
+            classname: "MultiOSProject.SomeClass",
+            supportedOSes: ["windows", "linux", "macos"]);
+        entry.AllowZeroTests = true;
+
+        var canonicalMatrix = Path.Combine(_workspace.Path, "canonical.json");
+        TestDataBuilder.CreateCanonicalMatrixJson(canonicalMatrix, tests: [entry]);
+
+        var outputFile = Path.Combine(_workspace.Path, "expanded.json");
+
+        var result = await RunScript(canonicalMatrix, outputMatrixFile: outputFile);
+
+        result.EnsureSuccessful();
+
+        var expanded = ParseGitHubMatrix(outputFile);
+        Assert.Equal(3, expanded.Include.Length);
+
+        // Class names are discovered on Linux under the same trait exclusions the Linux shard applies,
+        // so a Linux row that reports zero tests means the class filter or discovery broke. Windows and
+        // macOS keep the tolerance: a class whose every test needs containers is legitimately empty
+        // there.
+        Assert.False(expanded.Include.Single(e => e.RunsOn == "ubuntu-latest").AllowZeroTests);
+        Assert.True(expanded.Include.Single(e => e.RunsOn == "windows-latest").AllowZeroTests);
+        Assert.True(expanded.Include.Single(e => e.RunsOn == "macos-latest").AllowZeroTests);
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
     public async Task GeneratesIncludeFormat()
     {
         var entry = TestDataBuilder.CreateMatrixEntry(

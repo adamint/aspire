@@ -53,6 +53,9 @@ $runnerMap = @{
 # Valid OS values
 $validOSes = @('windows', 'linux', 'macos')
 
+# The OS the class list is discovered on: `enumerate-tests` runs in the Linux `setup_for_tests` job.
+$discoveryOS = 'linux'
+
 function Expand-MatrixEntriesByOS {
   param(
     [Parameter(Mandatory=$true)]
@@ -97,6 +100,19 @@ function Expand-MatrixEntriesByOS {
         }
       }
       $expandedEntry['runs-on'] = if ($customRunner) { $customRunner } else { $runnerMap[$osLower] }
+
+      # `allowZeroTests` exists for generated class shards that can legitimately be empty on some
+      # platform - a class whose every test needs containers is real on Linux and filtered away
+      # entirely on Windows. Copying it unchanged to every row also disabled the guard on the OS the
+      # class list came from: `enumerate-tests` discovers class names in the Linux setup job under the
+      # same category=failing, outerloop, and quarantined exclusions the Linux shard then applies, so
+      # a Linux row reporting zero tests means discovery or the class filter broke. That is precisely
+      # the vacuous pass this PR exists to stop, so the tolerance is withheld there.
+      if ($expandedEntry.Contains('type') -and $expandedEntry['type'] -eq 'class' -and
+          $expandedEntry.Contains('allowZeroTests') -and $expandedEntry['allowZeroTests'] -and
+          $osLower -eq $discoveryOS) {
+        $expandedEntry['allowZeroTests'] = $false
+      }
 
       $expandedEntries += [PSCustomObject]$expandedEntry
     }
