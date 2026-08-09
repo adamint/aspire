@@ -18,7 +18,9 @@ suite('E2E shard matrix', () => {
     const disabledIssuePattern = /^https:\/\/github\.com\/microsoft\/aspire\/issues\/\d+$/;
     // Any real disabled shard must be listed here so adding `disabledIssue` requires an
     // intentional test change instead of silently turning coverage into a green skipped shard.
-    const expectedDisabledRows = new Map<string, string>([]);
+    const expectedDisabledRows = new Map<string, string>([
+        ['Linux|azure-functions|out/test-e2e/test-e2e/azureFunctions.e2e.test.js', 'https://github.com/microsoft/aspire/issues/19151'],
+    ]);
 
     /**
      * Compiled spec paths the matrix is allowed to reference, derived from spec file names.
@@ -247,6 +249,26 @@ suite('E2E shard matrix', () => {
         // Guards the deduplication: without it every cross-platform shard would look like a
         // duplicate entry and the set equality check would fail on a correct workflow.
         assertMatrixMatchesSpecs(workflow, ['edgeCases.e2e.test.ts']);
+    });
+
+    test('covers the resource debugger shard on Linux and Windows', () => {
+        const workflow = fs.readFileSync(workflowPath, 'utf8');
+        // Rows pair a platform with the shard name, so the platform coverage of a single shard can
+        // only be read from the two together:
+        //       - name: Linux
+        //         shardName: resource-debugger
+        //         spec: out/test-e2e/test-e2e/resourceDebugger.e2e.test.js
+        const resourceDebuggerPlatforms = [...workflow.matchAll(/-\s*name:\s*(\S+)\s*\n\s*shardName:\s*(\S+)/g)]
+            .filter(match => match[2] === 'resource-debugger')
+            .map(match => match[1]);
+
+        // Resource debugging attaches a second debug adapter underneath the AppHost session, and
+        // tearing that process tree down is the part that differs between the platforms: POSIX
+        // signals a process group, Windows has no equivalent and the extension walks the tree.
+        // A single-platform row would leave exactly the half this shard exists to prove
+        // unexercised, and the set equality test above cannot catch it because the spec would
+        // still be listed - it just would not run everywhere it needs to.
+        assert.deepStrictEqual(resourceDebuggerPlatforms, ['Linux', 'Windows']);
     });
 
     test('rejects a disabled matrix row that is not explicitly tracked', () => {
