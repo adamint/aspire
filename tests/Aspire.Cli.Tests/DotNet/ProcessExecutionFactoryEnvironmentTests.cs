@@ -4,6 +4,7 @@
 using System.Diagnostics;
 using Aspire.Cli.Commands;
 using Aspire.Cli.DotNet;
+using Aspire.Cli.Tests.Acquisition;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
 using Aspire.Hosting;
@@ -18,6 +19,7 @@ namespace Aspire.Cli.Tests.DotNet;
 /// AppHost/build tree, where a nested <c>aspire</c> invocation would misread it as its own selection
 /// origin and skip recording its workspace default.
 /// </summary>
+[Collection(EnvVarMutatingTestCollection.Name)]
 public sealed class ProcessExecutionFactoryEnvironmentTests
 {
     private const string SelectionOrigin = "explicit-launch-configuration";

@@ -153,7 +153,8 @@ internal sealed class ProjectLocator(
     /// <summary>
     /// Identifies a CLI invocation whose AppHost target came from an editor launch configuration
     /// (for example a VS Code <c>launch.json</c> entry with an explicit <c>program</c>). Such a target
-    /// is owned by the individual debug session, so it must never become the workspace default.
+    /// is owned by the individual debug session, so it must never replace an existing workspace
+    /// default, but it may establish one when none is recorded.
     /// </summary>
     private const string ExplicitLaunchConfigurationSelectionOrigin = "explicit-launch-configuration";
 
@@ -1140,23 +1141,23 @@ internal sealed class ProjectLocator(
         // the config lock taken above, so a launch that starts alongside the one establishing the
         // default observes that write rather than racing it.
         //
-        // The recorded default comes from the same directory-scoped reader the SDK version
-        // inheritance below uses, which covers both key spellings, both file layouts
-        // (aspire.config.json and the legacy .aspire/settings.json) and, when the workspace records
-        // nothing, the global settings that already take part in resolving the AppHost
-        // (ConfigurationHelper.RegisterSettingsFiles). Only its presence matters: resolving the path
-        // would mean calling Path.GetFullPath without the IsValidConfiguredAppHostPath guard the
-        // canonical readers apply, which throws on NUL bytes that survive JSON parsing
+        // The recorded default comes from a local-only directory-scoped reader, which covers both
+        // key spellings and both workspace file layouts (aspire.config.json and the legacy
+        // .aspire/settings.json). Global AppHost paths are intentionally ignored here: they are a
+        // stale compatibility hazard, not a workspace default, and must not block establishing the
+        // local default. Only presence matters locally: resolving the path would mean calling
+        // Path.GetFullPath without the IsValidConfiguredAppHostPath guard the canonical readers
+        // apply, which throws on NUL bytes that survive JSON parsing
         // (https://github.com/microsoft/aspire/issues/17624), and a recorded path has to count even
         // when the file it names is missing, because a branch switch or a sparse checkout is
         // indistinguishable from a deletion and would otherwise let the next launch permanently
-        // re-point the default. The cost is that a stale default is healed only by a selection the
-        // user actually made, from any other origin or `aspire config set`.
+        // re-point the default. The cost is that a stale local default is healed only by a selection
+        // the user actually made, from any other origin or `aspire config set`.
         if (isSessionScopedSelection)
         {
             var configRootDirectory = configTarget.ConfigRootDirectory;
-            var recordedDefault = await configurationService.GetConfigurationFromDirectoryAsync(AspireConfigAppHostPathKey, configRootDirectory, cancellationToken: cancellationToken)
-                ?? await configurationService.GetConfigurationFromDirectoryAsync(LegacySettingsAppHostPathKey, configRootDirectory, cancellationToken: cancellationToken);
+            var recordedDefault = await configurationService.GetConfigurationFromDirectoryAsync(AspireConfigAppHostPathKey, configRootDirectory, cancellationToken: cancellationToken, includeGlobalSettings: false)
+                ?? await configurationService.GetConfigurationFromDirectoryAsync(LegacySettingsAppHostPathKey, configRootDirectory, cancellationToken: cancellationToken, includeGlobalSettings: false);
 
             if (!string.IsNullOrEmpty(recordedDefault))
             {

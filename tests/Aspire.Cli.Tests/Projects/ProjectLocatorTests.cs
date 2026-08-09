@@ -177,6 +177,36 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task UseOrFindAppHostProjectFileFromLaunchConfigurationEstablishesDefaultWhenOnlyGlobalAppHostPathExists()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        var appHostDirectory = workspace.WorkspaceRoot.CreateSubdirectory("SecondAppHost");
+        var appHostProjectFile = new FileInfo(Path.Combine(appHostDirectory.FullName, "SecondAppHost.csproj"));
+        await File.WriteAllTextAsync(appHostProjectFile.FullName, "Not a real apphost");
+
+        var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+
+        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var globalConfigPath = Path.Combine(executionContext.HomeDirectory.FullName, ".aspire", AspireConfigFile.FileName);
+        Directory.CreateDirectory(Path.GetDirectoryName(globalConfigPath)!);
+        await File.WriteAllTextAsync(globalConfigPath, """{"appHost":{"path":"StaleGlobal/AppHost.csproj"}}""");
+
+        var projectLocator = CreateProjectLocator(
+            executionContext,
+            configuration: CreateSelectionOriginConfiguration("explicit-launch-configuration"));
+
+        var result = await projectLocator.UseOrFindAppHostProjectFileAsync(
+            appHostProjectFile,
+            MultipleAppHostProjectsFoundBehavior.Prompt,
+            createSettingsFile: true,
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal(appHostProjectFile.FullName, result.SelectedProjectFile?.FullName);
+        Assert.Equal("SecondAppHost/SecondAppHost.csproj", ReadConfiguredAppHostPath(configPath));
+    }
+
+    [Fact]
     public async Task UseOrFindAppHostProjectFileFromLaunchConfigurationPreservesDanglingWorkspaceDefault()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -1859,9 +1889,9 @@ builder.Build().Run();");
             return Task.FromResult<string?>(null);
         }
 
-        public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
+        public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default, bool includeGlobalSettings = true)
         {
-            return _directoryScopedConfigurationService.GetConfigurationFromDirectoryAsync(key, startDirectory, continueSearchWhenKeyMissing, cancellationToken);
+            return _directoryScopedConfigurationService.GetConfigurationFromDirectoryAsync(key, startDirectory, continueSearchWhenKeyMissing, cancellationToken, includeGlobalSettings);
         }
 
         public string GetSettingsFilePath(bool isGlobal)

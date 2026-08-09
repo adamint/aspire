@@ -973,7 +973,7 @@ public class TestConfigurationService : IConfigurationService
         return Task.FromResult<string?>(key);
     }
 
-    public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default)
+    public Task<string?> GetConfigurationFromDirectoryAsync(string key, DirectoryInfo startDirectory, bool continueSearchWhenKeyMissing = false, CancellationToken cancellationToken = default, bool includeGlobalSettings = true)
     {
         return GetConfigurationAsync(key, cancellationToken);
     }
