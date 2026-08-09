@@ -251,6 +251,117 @@ public sealed class DashboardClientTests
     }
 
     [Fact]
+    public async Task SubscribeResources_ReplicaHealthChanged_EmitsParentHealthChange()
+    {
+        var resourceUpdates = Channel.CreateUnbounded<WatchResourcesUpdate>();
+        await using var instance = CreateResourceServiceClient();
+        instance.SetDashboardServiceClient(new MockDashboardServiceClient { ResourceUpdates = resourceUpdates });
+
+        IDashboardClient client = instance;
+        var parent = CreateResource("syndule-api", "Azure Container App", "Scaled to zero");
+        var child = CreateReplicaChild(parent, "syndule-api--0000007", "Running", Aspire.DashboardService.Proto.V1.HealthStatus.Healthy);
+
+        var subscribeTask = client.SubscribeResourcesAsync(CancellationToken.None);
+
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            InitialData = new InitialResourceData
+            {
+                Resources = { parent, child }
+            }
+        });
+
+        var (initialData, subscription) = await subscribeTask.DefaultTimeout();
+        var initialParent = Assert.Single(initialData, r => r.Name == parent.Name);
+        Assert.Equal(Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Healthy, initialParent.HealthStatus);
+
+        // The replica stays in the same state and only its health report changes. The parent row still has to
+        // be re-emitted, because the parent projects the replica's health as well as its state.
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            Changes = new WatchResourcesChanges
+            {
+                Value =
+                {
+                    new WatchResourcesChange
+                    {
+                        Upsert = CreateReplicaChild(parent, child.Name, "Running", Aspire.DashboardService.Proto.V1.HealthStatus.Unhealthy)
+                    }
+                }
+            }
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var enumerator = subscription.GetAsyncEnumerator(cts.Token);
+
+        Assert.True(await enumerator.MoveNextAsync().AsTask().DefaultTimeout());
+        var updatedParent = Assert.Single(enumerator.Current, c => c.ChangeType == ResourceViewModelChangeType.Upsert && c.Resource.Name == parent.Name).Resource;
+        Assert.Equal("Running", updatedParent.State);
+        Assert.Equal(Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Unhealthy, updatedParent.HealthStatus);
+        Assert.Equal(child.Name, Assert.Single(updatedParent.HealthReports).Name);
+    }
+
+    [Fact]
+    public async Task SubscribeResources_ReplicaStateOwnedPropertyChanged_EmitsParentChange()
+    {
+        var resourceUpdates = Channel.CreateUnbounded<WatchResourcesUpdate>();
+        await using var instance = CreateResourceServiceClient();
+        instance.SetDashboardServiceClient(new MockDashboardServiceClient { ResourceUpdates = resourceUpdates });
+
+        IDashboardClient client = instance;
+        var parent = CreateResource("syndule-api", "Azure Container App", "Scaled to zero");
+        var child = CreateReplicaChild(parent, "syndule-api--0000007", "Exited");
+        child.Properties.Add(new ResourceProperty
+        {
+            Name = KnownProperties.Resource.ExitCode,
+            Value = Value.ForNumber(0)
+        });
+
+        var subscribeTask = client.SubscribeResourcesAsync(CancellationToken.None);
+
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            InitialData = new InitialResourceData
+            {
+                Resources = { parent, child }
+            }
+        });
+
+        var (_, subscription) = await subscribeTask.DefaultTimeout();
+
+        // Only the exit code moves. State, health, and timestamps are all unchanged, so the parent row is
+        // re-emitted purely because a state-owned property the parent projects has a different value.
+        var updatedChild = CreateReplicaChild(parent, child.Name, "Exited");
+        updatedChild.Properties.Add(new ResourceProperty
+        {
+            Name = KnownProperties.Resource.ExitCode,
+            Value = Value.ForNumber(137)
+        });
+
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            Changes = new WatchResourcesChanges
+            {
+                Value =
+                {
+                    new WatchResourcesChange
+                    {
+                        Upsert = updatedChild
+                    }
+                }
+            }
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var enumerator = subscription.GetAsyncEnumerator(cts.Token);
+
+        Assert.True(await enumerator.MoveNextAsync().AsTask().DefaultTimeout());
+        var updatedParent = Assert.Single(enumerator.Current, c => c.ChangeType == ResourceViewModelChangeType.Upsert && c.Resource.Name == parent.Name).Resource;
+        Assert.Equal("Exited", updatedParent.State);
+        Assert.Equal(137d, updatedParent.Properties[KnownProperties.Resource.ExitCode].Value.NumberValue);
+    }
+
+    [Fact]
     public async Task SubscribeResources_ReplicaDeleted_EmitsParentFallbackState()
     {
         var resourceUpdates = Channel.CreateUnbounded<WatchResourcesUpdate>();
