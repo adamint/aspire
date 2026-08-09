@@ -17,6 +17,9 @@ public class WslEnvironmentCheckTests
     private const string Wsl2Banner =
         "Linux version 5.15.90.1-microsoft-standard-WSL2 (oe-user@oe-host) (x86_64-msft-linux-gcc (GCC) 9.3.0) #1 SMP Fri Jan 27 02:56:13 UTC 2023";
 
+    private const string EarlyWsl2Banner =
+        "Linux version 4.19.84-microsoft-standard (oe-user@oe-host) (gcc version 8.3.0 (GCC)) #1 SMP Wed Nov 13 11:44:37 UTC 2019";
+
     private const string NewerWsl2Banner =
         "Linux version 6.6.87.2-microsoft-standard-WSL2 (root@builder) (gcc (GCC) 11.2.0) #1 SMP PREEMPT_DYNAMIC Thu Jun 5 18:30:46 UTC 2025";
 
@@ -47,6 +50,12 @@ public class WslEnvironmentCheckTests
     public void DetermineWslVersion_ReportsWsl2_ForRealWsl2Banner()
     {
         Assert.Equal(WslVersion.Wsl2, WslEnvironmentCheck.DetermineWslVersion(Wsl2Banner));
+    }
+
+    [Fact]
+    public void DetermineWslVersion_ReportsWsl2_ForEarlyMicrosoftStandardKernel()
+    {
+        Assert.Equal(WslVersion.Wsl2, WslEnvironmentCheck.DetermineWslVersion(EarlyWsl2Banner));
     }
 
     [Fact]

@@ -116,7 +116,7 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
             return WslVersion.Unknown;
         }
 
-        // WSL 2 runs a genuine Microsoft-built kernel whose release string carries a "WSL2" marker:
+        // WSL 2 runs a genuine Microsoft-built kernel. Newer releases carry a "WSL2" marker:
         //   Linux version 5.15.90.1-microsoft-standard-WSL2 (oe-user@oe-host) (...) #1 SMP ...
         if (procVersion.Contains("WSL2", StringComparison.OrdinalIgnoreCase))
         {
@@ -133,6 +133,16 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
             Wsl1KernelBanner().IsMatch(procVersion))
         {
             return WslVersion.Wsl1;
+        }
+
+        // Early WSL 2 kernels predate the literal WSL2 suffix but still use the Microsoft-built
+        // kernel release line:
+        //   Linux version 4.19.84-microsoft-standard (oe-user@oe-host) (...) #1 SMP ...
+        // Check this after the WSL 1 compatibility banner so the fixed 4.4.0-Microsoft string
+        // continues to report WSL 1. See https://learn.microsoft.com/windows/wsl/kernel-release-notes
+        if (procVersion.Contains("microsoft-standard", StringComparison.OrdinalIgnoreCase))
+        {
+            return WslVersion.Wsl2;
         }
 
         // A custom WSL 2 kernel configured through .wslconfig can omit both markers. Report the
