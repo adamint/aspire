@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { isCsDevKitInstalled } from '../capabilities';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, showHotReloadOutputLabel } from '../loc/strings';
+import { enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, showHotReloadOutputLabel } from '../loc/strings';
 import { isNotificationSuppressed, showInformationMessageWithDontShowAgain } from '../utils/notificationSuppression';
 
 const hotReloadConfigurationSection = 'csharp.experimental.debug';
@@ -136,6 +136,12 @@ export function showHotReloadNotificationIfNeeded(diagnostics: HotReloadDiagnost
             if (selection === showHotReloadOutputLabel) {
                 await vscode.commands.executeCommand(showHotReloadPanelCommand);
             }
+
+            if (selection === enableHotReloadLabel) {
+                await vscode.workspace
+                    .getConfiguration(hotReloadConfigurationSection)
+                    .update(hotReloadConfigurationName, true, vscode.ConfigurationTarget.Global);
+            }
         }
         catch (err) {
             extensionLogOutputChannel.warn(`Hot Reload notification failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -149,7 +155,7 @@ function getHotReloadNotice(diagnostics: HotReloadDiagnostics): { name: string; 
     }
 
     if (!diagnostics.settingEnabled) {
-        return { name: hotReloadDisabledNoticeName, message: hotReloadDisabledNotice, actions: [] };
+        return { name: hotReloadDisabledNoticeName, message: hotReloadDisabledNotice, actions: [enableHotReloadLabel] };
     }
 
     const message = diagnostics.reloadOnSaveEnabled ? hotReloadActiveNotice : hotReloadActiveNoticeSaveDisabled;

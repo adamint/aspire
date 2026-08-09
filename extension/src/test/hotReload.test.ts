@@ -3,7 +3,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { getHotReloadDiagnostics, initializeHotReloadNotificationState, isHotReloadOnSaveEnabled, isHotReloadSettingEnabled, logHotReloadDiagnostics, showHotReloadNotificationIfNeeded } from '../debugger/hotReload';
 import { createHotReloadTestConfiguration, createTestMemento } from './common';
-import { dontShowAgainLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, showHotReloadOutputLabel } from '../loc/strings';
+import { dontShowAgainLabel, enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, showHotReloadOutputLabel } from '../loc/strings';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { getNotificationSuppressionKey, isNotificationSuppressed, showInformationMessageWithDontShowAgain } from '../utils/notificationSuppression';
 
@@ -119,9 +119,13 @@ suite('Hot Reload Tests', () => {
         assert.strictEqual(notification.called, false);
     });
 
-    test('informs when Hot Reload is disabled without offering to mutate settings', async () => {
+    test('offers to enable Hot Reload globally when disabled', async () => {
         initializeHotReloadNotificationState({ globalState: createTestMemento() });
-        const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+        const update = sinon.stub().resolves();
+        const getConfiguration = sinon.stub(vscode.workspace, 'getConfiguration');
+        getConfiguration.withArgs('csharp.experimental.debug').returns(createHotReloadTestConfiguration({ update }, { contributed: true }));
+        getConfiguration.returns({ get: () => undefined } as unknown as vscode.WorkspaceConfiguration);
+        const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(enableHotReloadLabel as unknown as vscode.MessageItem);
 
         showHotReloadNotificationIfNeeded({
             devKitInstalled: true,
@@ -132,7 +136,8 @@ suite('Hot Reload Tests', () => {
         }, true);
         await settleNotifications();
 
-        assert.deepStrictEqual(notification.firstCall.args, [hotReloadDisabledNotice, dontShowAgainLabel]);
+        assert.deepStrictEqual(notification.firstCall.args, [hotReloadDisabledNotice, enableHotReloadLabel, dontShowAgainLabel]);
+        assert.strictEqual(update.calledOnceWithExactly('hotReload', true, vscode.ConfigurationTarget.Global), true);
     });
 
     test('announces active Hot Reload and opens the Dev Kit output when requested', async () => {

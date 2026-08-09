@@ -183,9 +183,10 @@ export const dotNetRunFileBasedExecutableProfileFallback = (profileName: string,
 export const executableLaunchProfileMissingExecutablePath = (profileName: string) => vscode.l10n.t('Launch profile \'{0}\' uses commandName \'Executable\' but does not specify an executablePath. Add an executablePath to the launch profile.', profileName);
 export const lookingForDevkitBuildTask = vscode.l10n.t('C# Dev Kit is installed, looking for C# Dev Kit build task...');
 export const csharpDevKitNotInstalled = vscode.l10n.t('C# Dev Kit is not installed, building using dotnet CLI...');
-export const hotReloadDisabledNotice = vscode.l10n.t('.NET Hot Reload can apply code edits to running Aspire resources without restarting them, but it is turned off in C# Dev Kit. To use it, enable \'csharp.experimental.debug.hotReload\' in your user settings.');
+export const hotReloadDisabledNotice = vscode.l10n.t('.NET Hot Reload can apply code edits to running Aspire resources without restarting them, but it is turned off in C# Dev Kit. Enable it to update \'csharp.experimental.debug.hotReload\' in your user settings.');
 export const hotReloadActiveNotice = vscode.l10n.t('.NET Hot Reload is enabled for .NET project resources in this Aspire app. Saving a file asks C# Dev Kit to apply supported edits to the running resource without restarting it, and the Hot Reload button applies pending edits across them. Dev Kit reports results in the .NET Hot Reload output.');
 export const hotReloadActiveNoticeSaveDisabled = vscode.l10n.t('.NET Hot Reload is enabled for .NET project resources in this Aspire app, but \'csharp.debug.hotReloadOnSave\' is turned off, so saving does not apply edits. Use the Hot Reload button to apply pending edits. Dev Kit reports results in the .NET Hot Reload output.');
+export const enableHotReloadLabel = vscode.l10n.t('Enable Hot Reload');
 export const showHotReloadOutputLabel = vscode.l10n.t('Show Hot Reload Output');
 export const dismissLabel = vscode.l10n.t('Dismiss');
 export const openCliInstallInstructions = vscode.l10n.t('See CLI installation instructions');
