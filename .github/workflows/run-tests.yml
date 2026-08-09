@@ -690,15 +690,22 @@ jobs:
                   exit 1
                 }
 
+                if ($testCount -lt 0) {
+                  Write-Error "  $($trxFile.Name) has a negative ResultSummary/Counters/@total value '$testCount'."
+                  exit 1
+                }
+
                 $validFileCount++
                 $totalTestCount += $testCount
                 Write-Host "  Total tests in file: $testCount"
               } else {
-                Write-Warning "  File appears to be empty or invalid"
+                Write-Error "  $($trxFile.Name) appears to be empty or invalid. This can indicate a truncated .trx file from a crashed or timed-out test host."
+                exit 1
               }
             }
             catch {
-              Write-Warning "Failed to parse $($trxFile.Name): $_"
+              Write-Error "Failed to parse $($trxFile.Name): $_"
+              exit 1
             }
           }
 

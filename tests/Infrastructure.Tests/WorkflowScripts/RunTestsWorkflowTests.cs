@@ -319,6 +319,57 @@ public sealed class RunTestsWorkflowTests
 
     [Fact]
     [RequiresTools(["pwsh"])]
+    public async Task TestResultValidationFailsWhenTrxFileHasNegativeCountersEvenWhenZeroTestsAreAllowed()
+    {
+        string scratchDirectory = CreateScratchDirectory();
+        try
+        {
+            string testResultsDirectory = Path.Combine(scratchDirectory, "testresults");
+            Directory.CreateDirectory(testResultsDirectory);
+            File.WriteAllText(Path.Combine(scratchDirectory, "test-exit-code.txt"), "0");
+            WriteTrxFile(Path.Combine(testResultsDirectory, "negative-count.trx"), totalTests: "-1");
+
+            using var command = new PowerShellCommand(CreateTestResultValidationScript(scratchDirectory, allowZeroTests: true), _output).WithTimeout(TimeSpan.FromMinutes(1));
+
+            CommandResult result = await command.ExecuteAsync(scratchDirectory);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("has a negative ResultSummary/Counters/@total value '-1'", result.Output);
+        }
+        finally
+        {
+            DeleteScratchDirectory(scratchDirectory);
+        }
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
+    public async Task TestResultValidationFailsWhenAnyDiscoveredTrxFileIsMalformed()
+    {
+        string scratchDirectory = CreateScratchDirectory();
+        try
+        {
+            string testResultsDirectory = Path.Combine(scratchDirectory, "testresults");
+            Directory.CreateDirectory(testResultsDirectory);
+            File.WriteAllText(Path.Combine(scratchDirectory, "test-exit-code.txt"), "0");
+            WriteTrxFile(Path.Combine(testResultsDirectory, "valid.trx"), totalTests: 3);
+            File.WriteAllText(Path.Combine(testResultsDirectory, "malformed.trx"), "<not valid xml");
+
+            using var command = new PowerShellCommand(CreateTestResultValidationScript(scratchDirectory), _output).WithTimeout(TimeSpan.FromMinutes(1));
+
+            CommandResult result = await command.ExecuteAsync(scratchDirectory);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("Failed to parse malformed.trx", result.Output);
+        }
+        finally
+        {
+            DeleteScratchDirectory(scratchDirectory);
+        }
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
     public async Task TestResultValidationPassesWhenTrxFilesContainTests()
     {
         string scratchDirectory = CreateScratchDirectory();
