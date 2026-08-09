@@ -654,10 +654,19 @@ public class Program
         }
 
         // Only now, on the failure path, pay for symlink resolution. The two paths can legitimately be
-        // spelled differently - a Windows junction or `subst` drive lets the caller's directory read as
-        // `D:\src\aspire` while git reports `C:/src/aspire` - and refusing a valid run would be its own
-        // bug. Confining canonicalization to this path means a gap in it can only rescue a run that was
-        // already being refused, never block one that was about to succeed.
+        // spelled differently - a symlinked checkout, or a Windows junction, lets the caller's directory
+        // read as `D:\src\aspire` while git reports `C:/src/aspire` - and refusing a valid run would be
+        // its own bug. Confining canonicalization to this path means a gap in it can only rescue a run
+        // that was already being refused, never block one that was about to succeed, so the guard fails
+        // closed rather than open.
+        //
+        // Canonicalize covers symlinks and junctions, which is what ResolveLinkTarget reports. It does
+        // not resolve DOS device mappings such as `subst`: those are per-session drive aliases rather
+        // than reparse points, so resolving them needs a directory handle (GetFinalPathNameByHandle).
+        // That gap is not currently reachable, because a process launched under a mapped drive sees the
+        // mapped spelling from getcwd and git reports the same spelling from --show-toplevel, so the
+        // plain comparison above already matches. If a future git ever reports the physical path here,
+        // the symptom is a refusal to run (exit 4), never a wrong-tree write.
         if (IsSameOrAncestorDirectory(Canonicalize(repoRoot), Canonicalize(currentDirectory)))
         {
             return null;
