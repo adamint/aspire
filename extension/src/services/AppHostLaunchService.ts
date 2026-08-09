@@ -9,6 +9,7 @@ import { classifyError, isCommandCancellation, sendTelemetryEvent, type EventPro
 import { bucketAspireCommand } from '../utils/telemetryBuckets';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
+import { appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { markAspireDebugConfigurationAsExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
 
 function isAspireCommandType(value: unknown): value is AspireCommandType {
@@ -159,7 +160,10 @@ export class AppHostLaunchService implements vscode.Disposable {
         // When a debug session terminates, clear launching state for that AppHost
         // so the tree reverts from "Starting..." if the launch failed or was cancelled.
         this._debugSessionSubscription = vscode.debug.onDidTerminateDebugSession(session => {
-            const appHostPath = session.configuration?.program;
+            const telemetryTargetPath = session.configuration?.[appHostTelemetryTargetPathConfigKey];
+            const appHostPath = typeof telemetryTargetPath === 'string'
+                ? telemetryTargetPath
+                : session.configuration?.program;
             if (appHostPath && session.configuration?.type === 'aspire') {
                 const key = getAppHostPathComparisonKey(appHostPath);
                 this._lifecycleLaunchClaims.delete(key);

@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { AspireExtendedDebugConfiguration } from '../dcp/types';
+import { appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { isAspireDebugConfigurationExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
 import { appHostLifecycleBusy } from '../loc/strings';
 import { AppHostLaunchService, AppHostLifecycleLockTimeoutError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, externalLaunchReservationTimeoutMs } from '../services/AppHostLaunchService';
@@ -980,6 +981,26 @@ suite('AppHostLaunchService', () => {
             command: 'run',
             shouldRequestStopRefresh: true,
         });
+    });
+
+    test('terminated default F5 sessions clear the reservation for the resolved AppHost path', () => {
+        const directory = createAppHostDirectory('AppHost.csproj');
+        const appHostPath = path.join(directory, 'AppHost.csproj');
+
+        assert.strictEqual(service.tryReserveExternalLaunch(appHostPath), true);
+        assert.strictEqual(service.isLaunching(appHostPath), true);
+
+        assert.ok(onDidTerminateDebugSessionCallback);
+        onDidTerminateDebugSessionCallback({
+            configuration: {
+                type: 'aspire',
+                program: directory,
+                command: 'run',
+                [appHostTelemetryTargetPathConfigKey]: appHostPath,
+            },
+        } as unknown as vscode.DebugSession);
+
+        assert.strictEqual(service.isLaunching(appHostPath), false);
     });
 
     test('terminated Aspire sessions drop invalid command values and do not request stop refresh', () => {

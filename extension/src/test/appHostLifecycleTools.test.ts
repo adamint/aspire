@@ -31,6 +31,14 @@ interface LaunchCall {
     noDebug: boolean;
 }
 
+function isContainedPath(folderPath: string, candidatePath: string): boolean {
+    const relative = path.relative(folderPath, candidatePath);
+    return relative.length > 0 &&
+        relative !== '..' &&
+        !relative.startsWith(`..${path.sep}`) &&
+        !path.isAbsolute(relative);
+}
+
 class FakeLaunchService implements AppHostLifecycleLaunchService {
     readonly launchCalls: LaunchCall[] = [];
     launchingPaths = new Set<string>();
@@ -180,10 +188,7 @@ class FakeDiscoveryService implements AppHostLifecycleDiscoveryService {
 
         const folderPath = workspaceFolder.uri.fsPath;
         return this.registeredPaths
-            .filter(candidatePath => {
-                const relative = path.relative(folderPath, candidatePath);
-                return relative.length > 0 && !relative.startsWith('..') && !path.isAbsolute(relative);
-            })
+            .filter(candidatePath => isContainedPath(folderPath, candidatePath))
             .map(candidatePath => ({ path: candidatePath, language: 'csharp', status: 'buildable' }));
     }
 }
@@ -474,6 +479,22 @@ suite('AppHost lifecycle language model tools', () => {
 
             assert.strictEqual(result.outcome, 'started');
             assert.deepStrictEqual(launchService.launchCalls, [{ appHostPath: registryOnly, command: 'run', noDebug: true }]);
+        });
+
+        test('resolves a registry entry in a child folder whose name starts with two dots', async () => {
+            // `path.relative(workspaceRoot, child)` returns `..hidden/AppHost.csproj` for this
+            // legitimate child. Only the exact `..` segment or `../` prefix means the path escaped.
+            const hiddenDirectory = path.join(workspaceRoot, '..hidden');
+            const hiddenAppHost = path.join(hiddenDirectory, 'AppHost.csproj');
+            fs.mkdirSync(hiddenDirectory, { recursive: true });
+            fs.writeFileSync(hiddenAppHost, appHostProjectContents);
+            discoveryService.registeredPaths.push(hiddenAppHost);
+
+            const result = await service.start({ appHostPath: '..hidden/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'started');
+            assert.strictEqual(result.appHostPath, '..hidden/AppHost.csproj');
+            assert.deepStrictEqual(launchService.launchCalls, [{ appHostPath: hiddenAppHost, command: 'run', noDebug: true }]);
         });
 
         test('rejects a selector carrying invisible characters that the registry cannot match', async () => {
@@ -878,7 +899,7 @@ suite('AppHost lifecycle language model tools', () => {
 
             assert.deepStrictEqual(
                 { outcome: result.outcome, controller: result.controller, appHostPath: result.appHostPath, requestedMode: result.requestedMode },
-                { outcome: 'failed', controller: 'editor', appHostPath: 'AppHost/AppHost.csproj', requestedMode: 'run' });
+                { outcome: 'failed', controller: 'unknown', appHostPath: 'AppHost/AppHost.csproj', requestedMode: 'run' });
             assert.strictEqual(launchService.launchCalls.length, 0);
             assert.strictEqual(JSON.stringify(result).includes('/Users/private'), false);
         });
@@ -1037,6 +1058,23 @@ suite('AppHost lifecycle language model tools', () => {
             assert.deepStrictEqual(
                 { outcome: result.outcome, controller: result.controller },
                 { outcome: 'notRunning', controller: 'none' });
+        });
+
+        test('revalidates the external controller after waiting for the stop lifecycle lock', async () => {
+            // An external AppHost can exit while this call waits for another lifecycle operation.
+            // The final no-editor-session answer must come from the post-lock probe, not the stale
+            // pre-lock snapshot.
+            launchService.runningAppHosts = [{ appHostPath: appHostProjectPath }];
+            launchService.onLifecycleLockHeld = () => {
+                launchService.runningAppHosts = [];
+            };
+
+            const result = await service.stop({ appHostPath: 'AppHost/AppHost.csproj' }, new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(
+                { outcome: result.outcome, controller: result.controller },
+                { outcome: 'notRunning', controller: 'none' });
+            assert.strictEqual(launchService.runningAppHostRequests, 2);
         });
 
         test('reports alreadyStarting when asked to stop a launch that has not produced a session yet', async () => {

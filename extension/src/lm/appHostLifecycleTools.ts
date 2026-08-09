@@ -303,12 +303,25 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             // discarded: it is only a fast path, never the authority, because an AppHost
             // started from a terminal while this call waited up to 10s for the lock would
             // leave a stale `false` behind and allow a duplicate launch.
-            if (!this.hasEditorSession(preflight.target.absolutePath) &&
-                await this.isRunningOutsideEditor(preflight.target.absolutePath, token)) {
-                // Launching again would start a second AppHost against the same project.
-                // Report it instead so the agent can decide, and never adopt or kill a
-                // process this extension does not own.
-                return createResult(aspireAppHostStartToolName, 'alreadyRunning', preflight.target.relativePath, 'external', requestedMode, undefined);
+            if (!this.hasEditorSession(preflight.target.absolutePath)) {
+                let runningOutsideEditor: boolean;
+                try {
+                    runningOutsideEditor = await this.isRunningOutsideEditor(preflight.target.absolutePath, token);
+                }
+                catch (error) {
+                    if (isCommandCancellation(error)) {
+                        throw error;
+                    }
+
+                    return this.createErrorResult(aspireAppHostStartToolName, error, preflight.target.relativePath, 'unknown', requestedMode, undefined);
+                }
+
+                if (runningOutsideEditor) {
+                    // Launching again would start a second AppHost against the same project.
+                    // Report it instead so the agent can decide, and never adopt or kill a
+                    // process this extension does not own.
+                    return createResult(aspireAppHostStartToolName, 'alreadyRunning', preflight.target.relativePath, 'external', requestedMode, undefined);
+                }
             }
 
             return await this._dependencies.launchService.runWithAppHostLifecycleLock(preflight.target.absolutePath, token, async lockToken => {
@@ -398,13 +411,13 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         }
 
         try {
-            // Same reasoning as `start`: the `aspire ps` probe stays outside the lock so a
-            // slow or wedged AppHost cannot block the user's own Run/Debug. The probe only
-            // labels the outcome here, so its result is safe to carry into the lock, and it
-            // is skipped entirely when the editor already owns a session for this AppHost.
-            const externalControllerBeforeLock = this.hasEditorSession(preflight.target.absolutePath)
-                ? undefined
-                : await this.probeExternalControllerForStop(preflight.target.absolutePath, token);
+            // Same reasoning as `start`: the `aspire ps` probe stays outside the lock so a slow or
+            // wedged AppHost cannot block the user's own Run/Debug. The result is deliberately not
+            // authoritative after the lock wait; the no-editor-session path below re-probes before
+            // reporting who controls the AppHost.
+            if (!this.hasEditorSession(preflight.target.absolutePath)) {
+                await this.probeExternalControllerForStop(preflight.target.absolutePath, token);
+            }
 
             return await this._dependencies.launchService.runWithAppHostLifecycleLock(preflight.target.absolutePath, token, async lockToken => {
                 const recheck = await this.preflight(aspireAppHostStopToolName, input.appHostPath, lockToken, undefined);
@@ -436,8 +449,7 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
                         return createResult(aspireAppHostStopToolName, 'alreadyStarting', current.relativePath, 'editor', undefined, undefined);
                     }
 
-                    const externalController = externalControllerBeforeLock
-                        ?? await this.probeExternalControllerForStop(current.absolutePath, lockToken);
+                    const externalController = await this.probeExternalControllerForStop(current.absolutePath, lockToken);
                     if (externalController === 'unknown') {
                         // The probe failed, so "nothing is running" would be an assertion the
                         // extension cannot make. Report the failure and let the agent retry
@@ -922,7 +934,10 @@ function describeKnownAppHosts(targets: readonly ResolvedAppHostTarget[]): reado
  */
 function toContainedPosixRelativePath(folderPath: string, candidate: string): string | undefined {
     const relative = path.relative(folderPath, candidate);
-    if (relative.length === 0 || relative.startsWith('..') || path.isAbsolute(relative)) {
+    if (relative.length === 0 ||
+        relative === '..' ||
+        relative.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relative)) {
         return undefined;
     }
 
