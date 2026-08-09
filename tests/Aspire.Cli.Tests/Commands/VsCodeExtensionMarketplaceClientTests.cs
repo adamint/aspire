@@ -164,6 +164,65 @@ public class VsCodeExtensionMarketplaceClientTests
     }
 
     [Fact]
+    public async Task GetLatestVersionsAsync_IgnoresNonObjectEntriesInMarketplaceResponse()
+    {
+        const string responseJson = """
+            {
+              "results": [
+                null,
+                {
+                  "extensions": [
+                    null,
+                    {
+                      "extensionName": "different-extension",
+                      "publisher": null,
+                      "versions": [null]
+                    },
+                    {
+                      "extensionName": "aspire-vscode",
+                      "publisher": {
+                        "publisherName": "microsoft-aspire"
+                      },
+                      "versions": [
+                        null,
+                        {
+                          "version": "1.16.0",
+                          "properties": [
+                            null
+                          ]
+                        },
+                        {
+                          "version": "1.17.0",
+                          "properties": [
+                            null,
+                            {
+                              "key": "Microsoft.VisualStudio.Code.PreRelease",
+                              "value": "true"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+            """;
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
+        };
+        using var handler = new MockHttpMessageHandler((_, _) => Task.FromResult(response));
+        using var httpClient = new HttpClient(handler);
+        var client = new VsCodeExtensionMarketplaceClient(httpClient, TimeProvider.System);
+
+        var versions = await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("1.16.0", versions.StableVersion?.ToString());
+        Assert.Equal("1.17.0", versions.PreReleaseVersion?.ToString());
+    }
+
+    [Fact]
     public async Task GetLatestVersionsAsync_RejectsOversizedResponseBeforeParsing()
     {
         const string responseJson = """

@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Collections.Frozen;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text.Json;
@@ -44,8 +45,21 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
     /// </summary>
     internal const string ExtensionVersionEnvironmentVariable = "ASPIRE_VSCODE_EXTENSION_VERSION";
 
+    /// <summary>
+    /// The environment variable the Aspire VS Code extension contributes with the Marketplace channel
+    /// of the running extension instance.
+    /// </summary>
+    internal const string ExtensionChannelEnvironmentVariable = "ASPIRE_VSCODE_EXTENSION_CHANNEL";
+
+    /// <summary>
+    /// The environment variable the Aspire VS Code extension contributes with the install source of
+    /// the running extension instance.
+    /// </summary>
+    internal const string ExtensionSourceEnvironmentVariable = "ASPIRE_VSCODE_EXTENSION_SOURCE";
+
     private const string StableChannel = "stable";
     private const string PreReleaseChannel = "pre-release";
+    private const string MarketplaceSource = "marketplace";
 
     private const int MaximumManifestSize = 1024 * 1024;
 
@@ -171,6 +185,16 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
 
         metadata["extensionVersionKnown"] = true;
 
+        if (detection.InstallSource is not VsCodeExtensionInstallSource.Marketplace)
+        {
+            return [CreateInstalledResult(metadata, EnvironmentCheckStatus.Pass)];
+        }
+
+        if (detection.ReleaseChannel is VsCodeExtensionReleaseChannel.Unknown)
+        {
+            return [CreateMarketplaceUnavailableResult(metadata, "The installed extension's Marketplace channel could not be determined.")];
+        }
+
         VsCodeExtensionMarketplaceVersions versions;
         try
         {
@@ -208,14 +232,17 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             return [CreateMarketplaceUnavailableResult(metadata, exception)];
         }
 
-        // The extension host API exposes the manifest version but not the gallery's pre-release flag,
-        // so the channel is inferred from the version itself. Daily and PR builds carry a semver
-        // pre-release tag and compare against the pre-release feed. A gallery pre-release install
-        // published without such a tag compares against stable, which is safe: the gallery requires a
-        // pre-release version to sort above the stable one, so the comparison passes instead of
-        // nagging.
-        var channel = installedVersion.IsPrerelease ? PreReleaseChannel : StableChannel;
-        var latestVersion = installedVersion.IsPrerelease ? versions.PreReleaseVersion : versions.StableVersion;
+        // VS Code Marketplace pre-release extensions use plain major.minor.patch versions; the
+        // pre-release bit is gallery metadata, not a semver suffix. Compare against the channel
+        // reported by the active extension (or the installed manifest metadata), never by
+        // SemVersion.IsPrerelease.
+        // See https://github.com/microsoft/vsmarketplace/issues/310.
+        var channel = detection.ReleaseChannel is VsCodeExtensionReleaseChannel.PreRelease
+            ? PreReleaseChannel
+            : StableChannel;
+        var latestVersion = detection.ReleaseChannel is VsCodeExtensionReleaseChannel.PreRelease
+            ? versions.PreReleaseVersion
+            : versions.StableVersion;
         if (latestVersion is null)
         {
             // Comparing a pre-release install against the stable feed (or vice versa) would produce a
@@ -290,57 +317,95 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
                 VsCodeInstalled: true,
                 ExtensionInstalled: true,
                 ExtensionVersion: reportedVersion,
-                VersionSource: VsCodeExtensionVersionSource.Extension);
+                VersionSource: VsCodeExtensionVersionSource.Extension,
+                ReleaseChannel: ParseReleaseChannel(environment.GetEnvironmentVariable(ExtensionChannelEnvironmentVariable)),
+                InstallSource: ParseInstallSource(environment.GetEnvironmentVariable(ExtensionSourceEnvironmentVariable)));
         }
 
         // Outside a VS Code-created process there is no environment signal. Older extension builds also
         // predate the variable entirely, and those are exactly the installations this check exists to
         // find, so the manifest on disk has to be read rather than treating the missing variable as a
         // clean bill of health.
-        var (installed, diskVersion, searchedRoots) = ResolveExtensionFromDisk(environment, homeDirectory);
+        var diskDetection = ResolveExtensionFromDisk(environment, homeDirectory);
 
         return new VsCodeExtensionDetection(
             VsCodeInstalled: true,
-            ExtensionInstalled: installed,
-            ExtensionVersion: diskVersion,
-            VersionSource: diskVersion is null ? VsCodeExtensionVersionSource.None : VsCodeExtensionVersionSource.Manifest,
-            SearchedRoots: searchedRoots);
+            ExtensionInstalled: diskDetection.Installed,
+            ExtensionVersion: diskDetection.Version,
+            VersionSource: diskDetection.Version is null ? VsCodeExtensionVersionSource.None : VsCodeExtensionVersionSource.Manifest,
+            ReleaseChannel: diskDetection.ReleaseChannel,
+            InstallSource: diskDetection.InstallSource,
+            SearchedRoots: diskDetection.SearchedRoots);
     }
 
     /// <summary>
-    /// Finds the highest Aspire extension version installed under any known extension root.
+    /// Finds the Aspire extension version installed under a known extension root.
     /// </summary>
     /// <remarks>
     /// VS Code leaves the previous directory in place after an upgrade, so a root routinely holds
     /// several versions of the same extension at once. The highest version is the one VS Code loads,
     /// and versions are ordered by semver precedence rather than as strings so <c>1.10.0</c> sorts
-    /// above <c>1.9.0</c>.
+    /// above <c>1.9.0</c>. That rule is only safe inside one root. When multiple default roots contain
+    /// Aspire and the extension did not report its active instance, a desktop install can mask the
+    /// remote/server install that launched the CLI, so the version is reported as unknown instead of
+    /// taking a cross-root maximum.
     /// </remarks>
-    private static (bool Installed, string? Version, IReadOnlyList<string> SearchedRoots) ResolveExtensionFromDisk(
+    private static VsCodeExtensionDiskDetection ResolveExtensionFromDisk(
         IEnvironment environment,
         DirectoryInfo homeDirectory)
     {
         var searchedRoots = new List<string>();
-        SemVersion? highestVersion = null;
-        var installed = false;
+        var rootsWithExtension = new List<VsCodeExtensionRootDetection>();
 
         foreach (var extensionsDirectory in VsCodeInstallLayout.GetExtensionRootPaths(environment, homeDirectory))
         {
             searchedRoots.Add(extensionsDirectory);
+            var rootDetection = ResolveExtensionFromRoot(extensionsDirectory);
 
-            foreach (var extensionDirectory in EnumerateExtensionDirectories(extensionsDirectory))
+            if (rootDetection.Installed)
             {
-                installed = true;
-
-                if (TryResolveExtensionVersion(extensionDirectory, out var version) &&
-                    (highestVersion is null || SemVersion.ComparePrecedence(version, highestVersion) > 0))
-                {
-                    highestVersion = version;
-                }
+                rootsWithExtension.Add(rootDetection);
             }
         }
 
-        return (installed, highestVersion?.ToString(), searchedRoots);
+        return rootsWithExtension.Count switch
+        {
+            0 => new VsCodeExtensionDiskDetection(false, null, VsCodeExtensionReleaseChannel.Unknown, VsCodeExtensionInstallSource.Unknown, searchedRoots),
+            1 => new VsCodeExtensionDiskDetection(
+                true,
+                rootsWithExtension[0].Version?.ToString(),
+                rootsWithExtension[0].ReleaseChannel,
+                rootsWithExtension[0].InstallSource,
+                searchedRoots),
+            _ => new VsCodeExtensionDiskDetection(true, null, VsCodeExtensionReleaseChannel.Unknown, VsCodeExtensionInstallSource.Unknown, searchedRoots)
+        };
+    }
+
+    private static VsCodeExtensionRootDetection ResolveExtensionFromRoot(string extensionsDirectory)
+    {
+        SemVersion? highestVersion = null;
+        var releaseChannel = VsCodeExtensionReleaseChannel.Unknown;
+        var installSource = VsCodeExtensionInstallSource.Unknown;
+        var installed = false;
+
+        foreach (var extensionDirectory in EnumerateExtensionDirectories(extensionsDirectory))
+        {
+            installed = true;
+
+            if (TryResolveExtensionVersion(
+                    extensionDirectory,
+                    out var version,
+                    out var candidateReleaseChannel,
+                    out var candidateInstallSource) &&
+                (highestVersion is null || SemVersion.ComparePrecedence(version, highestVersion) > 0))
+            {
+                highestVersion = version;
+                releaseChannel = candidateReleaseChannel;
+                installSource = candidateInstallSource;
+            }
+        }
+
+        return new VsCodeExtensionRootDetection(installed, highestVersion, releaseChannel, installSource);
     }
 
     private static IEnumerable<string> EnumerateExtensionDirectories(string extensionsDirectory)
@@ -349,6 +414,8 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         {
             yield break;
         }
+
+        var obsoleteExtensionDirectories = ReadObsoleteExtensionDirectories(extensionsDirectory);
 
         // IgnoreInaccessible lets the probe skip an unreadable extension folder and keep scanning the
         // rest, instead of throwing and reporting the whole extensions root as "not found" (a false
@@ -395,11 +462,53 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
                     yield break;
                 }
 
-                if (IsVersionedExtensionFolder(Path.GetFileName(current)))
+                var folderName = Path.GetFileName(current);
+                if (IsVersionedExtensionFolder(folderName) &&
+                    !obsoleteExtensionDirectories.Contains(folderName))
                 {
                     yield return current;
                 }
             }
+        }
+    }
+
+    private static IReadOnlySet<string> ReadObsoleteExtensionDirectories(string extensionsDirectory)
+    {
+        var obsoletePath = Path.Combine(extensionsDirectory, ".obsolete");
+
+        try
+        {
+            var obsoleteFile = new FileInfo(obsoletePath);
+            if (!obsoleteFile.Exists || obsoleteFile.Length > MaximumManifestSize)
+            {
+                return FrozenSet<string>.Empty;
+            }
+
+            using var stream = obsoleteFile.OpenRead();
+            using var document = JsonDocument.Parse(stream);
+
+            if (document.RootElement.ValueKind is not JsonValueKind.Object)
+            {
+                return FrozenSet<string>.Empty;
+            }
+
+            var obsoleteExtensionDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // VS Code records extensions pending deletion as:
+            //   { "microsoft-aspire.aspire-vscode-1.2.3": true }
+            // The object is maintained by the extension scanner and keyed by the extracted folder
+            // name; malformed entries are ignored because a corrupt marker must not make doctor fail.
+            // See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/node/extensionsScannerService.ts.
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                obsoleteExtensionDirectories.Add(property.Name);
+            }
+
+            return obsoleteExtensionDirectories;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return FrozenSet<string>.Empty;
         }
     }
 
@@ -417,9 +526,15 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
     /// </remarks>
     private static bool TryResolveExtensionVersion(
         string extensionDirectory,
-        [NotNullWhen(true)] out SemVersion? version)
+        [NotNullWhen(true)] out SemVersion? version,
+        out VsCodeExtensionReleaseChannel releaseChannel,
+        out VsCodeExtensionInstallSource installSource)
     {
-        if (TryReadManifestVersion(Path.Combine(extensionDirectory, "package.json"), out version))
+        if (TryReadManifestVersion(
+                Path.Combine(extensionDirectory, "package.json"),
+                out version,
+                out releaseChannel,
+                out installSource))
         {
             return true;
         }
@@ -432,16 +547,26 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             folderVersion.Metadata.Length == 0)
         {
             version = folderVersion;
+            releaseChannel = VsCodeExtensionReleaseChannel.Unknown;
+            installSource = VsCodeExtensionInstallSource.Unknown;
             return true;
         }
 
         version = null;
+        releaseChannel = VsCodeExtensionReleaseChannel.Unknown;
+        installSource = VsCodeExtensionInstallSource.Unknown;
         return false;
     }
 
-    private static bool TryReadManifestVersion(string manifestPath, [NotNullWhen(true)] out SemVersion? version)
+    private static bool TryReadManifestVersion(
+        string manifestPath,
+        [NotNullWhen(true)] out SemVersion? version,
+        out VsCodeExtensionReleaseChannel releaseChannel,
+        out VsCodeExtensionInstallSource installSource)
     {
         version = null;
+        releaseChannel = VsCodeExtensionReleaseChannel.Unknown;
+        installSource = VsCodeExtensionInstallSource.Unknown;
 
         try
         {
@@ -457,16 +582,56 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             using var stream = manifest.OpenRead();
             using var document = JsonDocument.Parse(stream);
 
-            return document.RootElement.ValueKind == JsonValueKind.Object &&
-                document.RootElement.TryGetProperty("version", out var versionElement) &&
-                versionElement.ValueKind == JsonValueKind.String &&
-                SemVersion.TryParse(versionElement.GetString(), SemVersionStyles.Strict, out version);
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("version", out var versionElement) ||
+                versionElement.ValueKind != JsonValueKind.String ||
+                !SemVersion.TryParse(versionElement.GetString(), SemVersionStyles.Strict, out version))
+            {
+                return false;
+            }
+
+            releaseChannel = GetManifestReleaseChannel(document.RootElement);
+            installSource = GetManifestInstallSource(document.RootElement);
+
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             // A corrupt or locked manifest falls back to the folder name rather than failing the run.
             return false;
         }
+    }
+
+    private static VsCodeExtensionReleaseChannel GetManifestReleaseChannel(JsonElement manifest)
+    {
+        return TryGetManifestMetadata(manifest, out var metadata) &&
+            metadata.TryGetProperty("isPreReleaseVersion", out var isPreReleaseVersion) &&
+            isPreReleaseVersion.ValueKind is JsonValueKind.True
+                ? VsCodeExtensionReleaseChannel.PreRelease
+                : VsCodeExtensionReleaseChannel.Stable;
+    }
+
+    private static VsCodeExtensionInstallSource GetManifestInstallSource(JsonElement manifest)
+    {
+        if (!TryGetManifestMetadata(manifest, out var metadata))
+        {
+            return VsCodeExtensionInstallSource.Unknown;
+        }
+
+        // VS Code adds __metadata.publisherId when it installs a Marketplace extension. VSIX and
+        // development installs normally lack that scanner-owned metadata, so do not send them to the
+        // Marketplace update feed even if their version is parseable.
+        return metadata.TryGetProperty("publisherId", out var publisherId) &&
+            publisherId.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(publisherId.GetString())
+                ? VsCodeExtensionInstallSource.Marketplace
+                : VsCodeExtensionInstallSource.Unknown;
+    }
+
+    private static bool TryGetManifestMetadata(JsonElement manifest, out JsonElement metadata)
+    {
+        return manifest.TryGetProperty("__metadata", out metadata) &&
+            metadata.ValueKind == JsonValueKind.Object;
     }
 
     private EnvironmentCheckResult CreateMarketplaceUnavailableResult(JsonObject metadata, Exception exception)
@@ -536,9 +701,35 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             VsCodeExtensionVersionSource.Manifest => "manifest",
             _ => "unknown"
         };
+        metadata["extensionChannel"] = detection.ReleaseChannel switch
+        {
+            VsCodeExtensionReleaseChannel.Stable => StableChannel,
+            VsCodeExtensionReleaseChannel.PreRelease => PreReleaseChannel,
+            _ => "unknown"
+        };
+        metadata["extensionInstallSource"] = detection.InstallSource switch
+        {
+            VsCodeExtensionInstallSource.Marketplace => MarketplaceSource,
+            _ => "unknown"
+        };
 
         return metadata;
     }
+
+    private static VsCodeExtensionReleaseChannel ParseReleaseChannel(string? channel)
+        => channel?.Trim().ToLowerInvariant() switch
+        {
+            StableChannel => VsCodeExtensionReleaseChannel.Stable,
+            PreReleaseChannel => VsCodeExtensionReleaseChannel.PreRelease,
+            _ => VsCodeExtensionReleaseChannel.Unknown
+        };
+
+    private static VsCodeExtensionInstallSource ParseInstallSource(string? source)
+        => source?.Trim().ToLowerInvariant() switch
+        {
+            MarketplaceSource => VsCodeExtensionInstallSource.Marketplace,
+            _ => VsCodeExtensionInstallSource.Unknown
+        };
 
     /// <summary>
     /// Renders the extension roots that were searched so an unknown version says where it looked.
@@ -608,6 +799,19 @@ internal enum VsCodeExtensionVersionSource
     Manifest
 }
 
+internal enum VsCodeExtensionReleaseChannel
+{
+    Unknown,
+    Stable,
+    PreRelease
+}
+
+internal enum VsCodeExtensionInstallSource
+{
+    Unknown,
+    Marketplace
+}
+
 /// <summary>
 /// Captures whether VS Code and the Aspire VS Code extension were detected, the version that was
 /// resolved for the extension, and where that version came from.
@@ -616,6 +820,8 @@ internal enum VsCodeExtensionVersionSource
 /// <param name="ExtensionInstalled">Whether the Aspire extension was detected.</param>
 /// <param name="ExtensionVersion">The resolved extension version, or <see langword="null"/> when it could not be determined.</param>
 /// <param name="VersionSource">Where <paramref name="ExtensionVersion"/> was read from.</param>
+/// <param name="ReleaseChannel">The Marketplace release channel for the installed extension.</param>
+/// <param name="InstallSource">Where the installed extension came from.</param>
 /// <param name="SearchedRoots">
 /// The extension roots the disk scan looked at, used to explain an unknown version. It is
 /// <see langword="null"/> when the version came from the environment and no scan ran.
@@ -625,4 +831,19 @@ internal sealed record VsCodeExtensionDetection(
     bool ExtensionInstalled,
     string? ExtensionVersion = null,
     VsCodeExtensionVersionSource VersionSource = VsCodeExtensionVersionSource.None,
+    VsCodeExtensionReleaseChannel ReleaseChannel = VsCodeExtensionReleaseChannel.Unknown,
+    VsCodeExtensionInstallSource InstallSource = VsCodeExtensionInstallSource.Unknown,
     IReadOnlyList<string>? SearchedRoots = null);
+
+internal sealed record VsCodeExtensionDiskDetection(
+    bool Installed,
+    string? Version,
+    VsCodeExtensionReleaseChannel ReleaseChannel,
+    VsCodeExtensionInstallSource InstallSource,
+    IReadOnlyList<string> SearchedRoots);
+
+internal sealed record VsCodeExtensionRootDetection(
+    bool Installed,
+    SemVersion? Version,
+    VsCodeExtensionReleaseChannel ReleaseChannel,
+    VsCodeExtensionInstallSource InstallSource);

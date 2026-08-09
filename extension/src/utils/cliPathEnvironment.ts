@@ -38,6 +38,21 @@ export const ASPIRE_CLI_PATH_ENV_VAR = 'AspireCliPath';
  * `src/Aspire.Cli/Utils/EnvironmentChecker/VsCodeExtensionCheck.cs`.
  */
 export const ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR = 'ASPIRE_VSCODE_EXTENSION_VERSION';
+export const ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR = 'ASPIRE_VSCODE_EXTENSION_CHANNEL';
+export const ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR = 'ASPIRE_VSCODE_EXTENSION_SOURCE';
+
+export type AspireVsCodeExtensionChannel = 'stable' | 'pre-release';
+export type AspireVsCodeExtensionSource = 'marketplace' | 'unknown';
+
+interface AspireVsCodePackageMetadata {
+    isPreReleaseVersion?: unknown;
+    publisherId?: unknown;
+}
+
+interface AspireVsCodePackageJson {
+    version?: unknown;
+    __metadata?: AspireVsCodePackageMetadata;
+}
 
 
 /**
@@ -286,18 +301,38 @@ export function registerCliPathEnvironmentSync(
 export function syncAspireExtensionVersionEnvironment(
     collection: CliPathEnvironmentCollection,
     version: string | undefined,
+    channel: AspireVsCodeExtensionChannel = 'stable',
+    source: AspireVsCodeExtensionSource = 'unknown',
     log: ((message: string) => void) | undefined = defaultDeps.log,
 ): string | undefined {
     const trimmedVersion = version?.trim();
     if (trimmedVersion === undefined || trimmedVersion.length === 0) {
         collection.delete(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR);
+        collection.delete(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR);
+        collection.delete(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR);
         log?.(`Not forwarding ${ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR}: the extension manifest reported no version.`);
         return undefined;
     }
 
     collection.replace(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR, trimmedVersion);
-    log?.(`Forwarding ${ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR}=${trimmedVersion} to terminals, tasks, and debug processes.`);
+    collection.replace(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR, channel);
+    collection.replace(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR, source);
+    log?.(`Forwarding ${ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR}=${trimmedVersion}, ${ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR}=${channel}, and ${ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR}=${source} to terminals, tasks, and debug processes.`);
     return trimmedVersion;
+}
+
+export function getAspireExtensionChannel(packageJSON: AspireVsCodePackageJson | undefined): AspireVsCodeExtensionChannel {
+    return packageJSON?.__metadata?.isPreReleaseVersion === true ? 'pre-release' : 'stable';
+}
+
+export function getAspireExtensionSource(packageJSON: AspireVsCodePackageJson | undefined): AspireVsCodeExtensionSource {
+    // VS Code adds __metadata.publisherId when it installs an extension from the Marketplace.
+    // Local development and ordinary VSIX installs do not have that scanner-owned value, so the CLI
+    // treats them as installed but does not compare them against the Marketplace feed.
+    return typeof packageJSON?.__metadata?.publisherId === 'string'
+        && packageJSON.__metadata.publisherId.trim().length > 0
+        ? 'marketplace'
+        : 'unknown';
 }
 
 /**

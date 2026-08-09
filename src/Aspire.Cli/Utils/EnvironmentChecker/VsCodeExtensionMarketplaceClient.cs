@@ -195,7 +195,8 @@ internal sealed class VsCodeExtensionMarketplaceClient : IVsCodeExtensionMarketp
         {
             foreach (var versionEntry in versions.EnumerateArray())
             {
-                if (!versionEntry.TryGetProperty("version", out var versionElement) ||
+                if (versionEntry.ValueKind != JsonValueKind.Object ||
+                    !versionEntry.TryGetProperty("version", out var versionElement) ||
                     versionElement.ValueKind != JsonValueKind.String ||
                     !SemVersion.TryParse(versionElement.GetString(), SemVersionStyles.Strict, out var version))
                 {
@@ -218,12 +219,14 @@ internal sealed class VsCodeExtensionMarketplaceClient : IVsCodeExtensionMarketp
 
     private static bool TryFindExtension(JsonElement root, out JsonElement extension)
     {
-        if (root.TryGetProperty("results", out var results) &&
+        if (root.ValueKind == JsonValueKind.Object &&
+            root.TryGetProperty("results", out var results) &&
             results.ValueKind == JsonValueKind.Array)
         {
             foreach (var result in results.EnumerateArray())
             {
-                if (!result.TryGetProperty("extensions", out var extensions) ||
+                if (result.ValueKind != JsonValueKind.Object ||
+                    !result.TryGetProperty("extensions", out var extensions) ||
                     extensions.ValueKind != JsonValueKind.Array)
                 {
                     continue;
@@ -231,11 +234,17 @@ internal sealed class VsCodeExtensionMarketplaceClient : IVsCodeExtensionMarketp
 
                 foreach (var candidate in extensions.EnumerateArray())
                 {
+                    if (candidate.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
                     var extensionName = candidate.TryGetProperty("extensionName", out var extensionNameElement)
                         ? extensionNameElement.GetString()
                         : null;
                     var publisherName =
                         candidate.TryGetProperty("publisher", out var publisher) &&
+                        publisher.ValueKind == JsonValueKind.Object &&
                         publisher.TryGetProperty("publisherName", out var publisherNameElement)
                             ? publisherNameElement.GetString()
                             : null;
@@ -255,7 +264,8 @@ internal sealed class VsCodeExtensionMarketplaceClient : IVsCodeExtensionMarketp
 
     private static bool IsPreReleaseVersion(JsonElement versionEntry)
     {
-        if (!versionEntry.TryGetProperty("properties", out var properties) ||
+        if (versionEntry.ValueKind != JsonValueKind.Object ||
+            !versionEntry.TryGetProperty("properties", out var properties) ||
             properties.ValueKind != JsonValueKind.Array)
         {
             return false;
@@ -263,7 +273,8 @@ internal sealed class VsCodeExtensionMarketplaceClient : IVsCodeExtensionMarketp
 
         foreach (var property in properties.EnumerateArray())
         {
-            if (property.TryGetProperty("key", out var key) &&
+            if (property.ValueKind == JsonValueKind.Object &&
+                property.TryGetProperty("key", out var key) &&
                 property.TryGetProperty("value", out var value) &&
                 string.Equals(
                     key.GetString(),

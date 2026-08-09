@@ -6,11 +6,15 @@ import {
     CliPathEnvironmentCollection,
     CliPathEnvironmentDependencies,
     createAspireCliPathProcessEnvironment,
+    getAspireExtensionChannel,
+    getAspireExtensionSource,
     getForwardableAspireCliPath,
     initializeCliPathEnvironmentSync,
     registerCliPathEnvironmentSync,
     syncAspireCliPathEnvironment,
     syncAspireExtensionVersionEnvironment,
+    ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR,
+    ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR,
     ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR,
 } from '../utils/cliPathEnvironment';
 import {
@@ -419,34 +423,82 @@ suite('cliPathEnvironment.registerCliPathEnvironmentSync tests', () => {
 });
 
 suite('cliPathEnvironment.syncAspireExtensionVersionEnvironment tests', () => {
+    test('reads pre-release channel from VS Code marketplace metadata', () => {
+        assert.strictEqual(getAspireExtensionChannel({
+            __metadata: {
+                isPreReleaseVersion: true,
+                publisherId: 'publisher-id',
+            },
+        }), 'pre-release');
+    });
+
+    test('reads marketplace source from VS Code marketplace metadata', () => {
+        assert.strictEqual(getAspireExtensionSource({
+            __metadata: {
+                isPreReleaseVersion: false,
+                publisherId: 'publisher-id',
+            },
+        }), 'marketplace');
+    });
+
+    test('reports unknown source when VS Code marketplace metadata is absent', () => {
+        assert.strictEqual(getAspireExtensionSource({ version: '1.17.0' }), 'unknown');
+    });
+
     test('contributes the running extension version', () => {
         const collection = createFakeCollection();
 
-        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, '1.16.0', () => { }), '1.16.0');
+        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, '1.16.0', 'stable', 'unknown', () => { }), '1.16.0');
         assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.16.0');
     });
 
     test('contributes pre-release versions verbatim so the CLI can pick the pre-release feed', () => {
         const collection = createFakeCollection();
 
-        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, '1.17.0-preview.1.25601.3', () => { }), '1.17.0-preview.1.25601.3');
+        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, '1.17.0-preview.1.25601.3', 'pre-release', 'marketplace', () => { }), '1.17.0-preview.1.25601.3');
         assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.17.0-preview.1.25601.3');
+        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), 'pre-release');
+        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR), 'marketplace');
+    });
+
+    test('contributes stable marketplace channel when no pre-release flag is present', () => {
+        const collection = createFakeCollection();
+
+        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, '1.17.0', 'stable', 'marketplace', () => { }), '1.17.0');
+        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.17.0');
+        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), 'stable');
+        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR), 'marketplace');
+    });
+
+    test('contributes unknown source for dev or VSIX installs', () => {
+        const collection = createFakeCollection();
+
+        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, '1.17.0', 'stable', 'unknown', () => { }), '1.17.0');
+        assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR), 'unknown');
     });
 
     test('clears the variable when the manifest reports no version', () => {
         const collection = createFakeCollection();
         collection.replace(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR, '1.0.0');
+        collection.replace(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR, 'stable');
+        collection.replace(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR, 'marketplace');
 
-        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, undefined, () => { }), undefined);
+        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, undefined, 'stable', 'unknown', () => { }), undefined);
         assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), false);
+        assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), false);
+        assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR), false);
     });
 
     test('clears the variable when the manifest version is blank', () => {
         const collection = createFakeCollection();
         collection.replace(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR, '1.0.0');
+        collection.replace(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR, 'stable');
+        collection.replace(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR, 'marketplace');
 
-        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, '   ', () => { }), undefined);
+        assert.strictEqual(syncAspireExtensionVersionEnvironment(collection, '   ', 'stable', 'unknown', () => { }), undefined);
         assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), false);
+        assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR), false);
+        assert.strictEqual(collection.entries.has(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR), false);
     });
 
     test('does not disturb the CLI path contribution or its description', () => {
@@ -454,7 +506,7 @@ suite('cliPathEnvironment.syncAspireExtensionVersionEnvironment tests', () => {
         syncAspireCliPathEnvironment(collection, makeDeps({ getConfiguredPath: () => '/abs/aspire' }));
         const description = collection.description;
 
-        syncAspireExtensionVersionEnvironment(collection, '1.16.0', () => { });
+        syncAspireExtensionVersionEnvironment(collection, '1.16.0', 'stable', 'unknown', () => { });
 
         assert.strictEqual(collection.entries.get(ASPIRE_CLI_PATH_ENV_VAR), '/abs/aspire');
         assert.strictEqual(collection.description, description);
@@ -464,7 +516,7 @@ suite('cliPathEnvironment.syncAspireExtensionVersionEnvironment tests', () => {
         const collection = createFakeCollection();
         syncAspireCliPathEnvironment(collection, makeDeps({ getConfiguredPath: () => 'aspire' }));
 
-        syncAspireExtensionVersionEnvironment(collection, '1.16.0', () => { });
+        syncAspireExtensionVersionEnvironment(collection, '1.16.0', 'stable', 'unknown', () => { });
 
         assert.strictEqual(collection.entries.has(ASPIRE_CLI_PATH_ENV_VAR), false);
         assert.strictEqual(collection.entries.get(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR), '1.16.0');
