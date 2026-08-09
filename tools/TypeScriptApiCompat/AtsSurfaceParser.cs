@@ -218,12 +218,19 @@ internal static class AtsSurfaceParser
             throw new InvalidDataException($"Invalid parameter '{parameterText}'.");
         }
 
+        // Capability parameters are emitted as:
+        //   name?: type?        // optional nullable parameter
+        //   options: Pkg/Options? // required parameter whose nullability still generates an options bag
+        // Optionality lives on the parameter name, and nullability lives on the type token so the
+        // compat guard can mirror the TypeScript projector's `IsOptional || IsNullable` rule.
         var nameText = parameterText[..separatorIndex];
         var isOptional = nameText.EndsWith('?');
         var name = isOptional ? nameText[..^1] : nameText;
-        var typeId = parameterText[(separatorIndex + 2)..];
+        var typeText = parameterText[(separatorIndex + 2)..];
+        var isNullable = typeText.EndsWith('?');
+        var typeId = isNullable ? typeText[..^1] : typeText;
 
-        return new AtsParameter(name, typeId, isOptional);
+        return new AtsParameter(name, typeId, isOptional, isNullable);
     }
 
     private static string StripDescription(string value)

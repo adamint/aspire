@@ -163,7 +163,7 @@ internal sealed class SdkExportCommand : BaseCommand
         var codeGenPackage = await GetCodeGenerationPackageAsync(language, cancellationToken);
         if (codeGenPackage is not null)
         {
-            integrations.Add(IntegrationReference.FromPackage(codeGenPackage, ExecutionContext.IdentityVersion));
+            integrations.Add(IntegrationReference.FromExactPackage(codeGenPackage, ExecutionContext.IdentityVersion));
         }
 
         return CommandResult.FromExitCode(await ExportApiAsync(

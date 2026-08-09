@@ -532,11 +532,11 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
     /// <summary>
     /// A bare NuGet version is a minimum, not an equality, so a package that is missing from the feed
     /// restores as the next one up and the export is published under a version it does not describe.
-    /// Only the requested package is pinned; the code generation package tracks this CLI and is
-    /// resolved the same way <c>sdk generate</c> resolves it.
+    /// Both the requested package and the code generation package are part of the exported surface, so
+    /// both need exact restore ranges.
     /// </summary>
     [Fact]
-    public async Task SdkExportPinsOnlyTheRequestedPackageToAnExactVersion()
+    public async Task SdkExportPinsTheRequestedAndCodeGenerationPackagesToExactVersions()
     {
         var interactionService = new TestInteractionService();
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -553,7 +553,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         var codeGeneration = Assert.Single(
             appHostServerProject.Integrations,
             integration => integration.Name.Contains("CodeGeneration", StringComparison.OrdinalIgnoreCase));
-        Assert.False(codeGeneration.RequireExactVersion);
+        Assert.True(codeGeneration.RequireExactVersion);
     }
 
     [Fact]

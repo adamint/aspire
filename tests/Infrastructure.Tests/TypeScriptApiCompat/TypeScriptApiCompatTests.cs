@@ -30,7 +30,7 @@ public sealed class TypeScriptApiCompatTests(ITestOutputHelper outputHelper)
             Configs.Default: string = "dev" # copied value
 
             # Capabilities
-            Pkg/addThing(name: string, port?: number) -> Pkg/Thing
+            Pkg/addThing(name: string, port?: number, endpoint: string?) -> Pkg/Thing
             """);
 
         var handle = Assert.Single(surface.HandleTypes.Values);
@@ -55,6 +55,11 @@ public sealed class TypeScriptApiCompatTests(ITestOutputHelper outputHelper)
         Assert.Equal("Pkg/Thing", capability.ReturnTypeId);
         Assert.Equal("port", capability.Parameters[1].Name);
         Assert.True(capability.Parameters[1].IsOptional);
+        Assert.False(capability.Parameters[1].IsNullable);
+        Assert.Equal("endpoint", capability.Parameters[2].Name);
+        Assert.False(capability.Parameters[2].IsOptional);
+        Assert.True(capability.Parameters[2].IsNullable);
+        Assert.Equal("string", capability.Parameters[2].TypeId);
     }
 
     [Fact]
@@ -375,6 +380,58 @@ public sealed class TypeScriptApiCompatTests(ITestOutputHelper outputHelper)
         Assert.Contains("'Pkg.One'", message, StringComparison.Ordinal);
         Assert.Contains("'Pkg.Two'", message, StringComparison.Ordinal);
         Assert.Contains("Remedy:", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RunnerFailsWhenNullableParametersProduceUnqualifiedOptionsInterfaceCollision()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var baselineRoot = Path.Combine(workspace.Path, "baseline");
+        var currentRoot = Path.Combine(workspace.Path, "current");
+
+        WriteSurface(baselineRoot, "Pkg.One", """
+            # Capabilities
+            Pkg.One/withShared(port: number?) -> void
+            """);
+        WriteSurface(baselineRoot, "Pkg.Two", """
+            # Capabilities
+            Pkg.Two/withShared(host: string?) -> void
+            """);
+        WriteSurface(currentRoot, "Pkg.One", """
+            # Capabilities
+            Pkg.One/withShared(port: number?) -> void
+            """);
+        WriteSurface(currentRoot, "Pkg.Two", """
+            # Capabilities
+            Pkg.Two/withShared(host: string?) -> void
+            """);
+
+        using var error = new StringWriter();
+        var originalError = Console.Error;
+        try
+        {
+            Console.SetError(error);
+
+            var exitCode = TypeScriptApiCompatRunner.Run(new CommandLineOptions(
+                baselineRoot,
+                currentRoot,
+                workspace.Path,
+                BaselineSuppressionsRoot: null,
+                ExcludedPackagesFile: null,
+                ReportPath: null,
+                GitHubAnnotations: false));
+
+            Assert.Equal(2, exitCode);
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        var message = error.ToString();
+        Assert.Contains("WithSharedOptions", message, StringComparison.Ordinal);
+        Assert.Contains("'Pkg.One'", message, StringComparison.Ordinal);
+        Assert.Contains("'Pkg.Two'", message, StringComparison.Ordinal);
     }
 
     private static void WriteSurface(string rootPath, string packageName, string content)

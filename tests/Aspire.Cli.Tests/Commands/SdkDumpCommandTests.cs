@@ -335,6 +335,35 @@ public class SdkDumpCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public void FormatCi_MarksNullableCapabilityParameters()
+    {
+        var capabilities = new CapabilitiesInfo
+        {
+            Capabilities =
+            [
+                new CapabilityInfo
+                {
+                    CapabilityId = "Pkg/withNullable",
+                    Parameters =
+                    [
+                        new Aspire.Cli.Commands.Sdk.ParameterInfo
+                        {
+                            Name = "name",
+                            IsNullable = true,
+                            Type = new TypeRefInfo { TypeId = "string" }
+                        }
+                    ],
+                    ReturnType = new TypeRefInfo { TypeId = "void" }
+                }
+            ]
+        };
+
+        var output = InvokeFormatter("FormatCi", capabilities);
+
+        Assert.Contains("Pkg/withNullable(name: string?) -> void", output);
+    }
+
+    [Fact]
     public void FormatPretty_IncludesExportedValues()
     {
         var capabilities = CreateCapabilitiesInfo();

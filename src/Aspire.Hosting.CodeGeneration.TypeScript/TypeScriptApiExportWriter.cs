@@ -127,7 +127,10 @@ internal static class TypeScriptApiExportWriter
         AddIfPresent(json, "summary", member.Summary);
         AddIfPresent(json, "remarks", member.Remarks);
         AddIfPresent(json, "examples", member.Examples);
-        AddIfPresent(json, "deprecated", member.DeprecationMessage);
+        if (member.DeprecationMessage is not null)
+        {
+            json["deprecated"] = member.DeprecationMessage;
+        }
 
         if (member.Parameters.Count > 0)
         {

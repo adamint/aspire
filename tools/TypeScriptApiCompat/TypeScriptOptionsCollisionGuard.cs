@@ -19,11 +19,11 @@ internal static class TypeScriptOptionsCollisionGuard
         {
             foreach (var capability in surface.Capabilities.Values.OrderBy(static capability => capability.CapabilityId, StringComparer.Ordinal))
             {
-                var optionalParameters = capability.Parameters
-                    .Where(static parameter => parameter.IsOptional)
+                var optionsParameters = capability.Parameters
+                    .Where(static parameter => parameter.IsOptional || parameter.IsNullable)
                     .ToArray();
 
-                if (optionalParameters.Length == 0 || IsDirectOptionsParameter(optionalParameters, dtoTypeIds))
+                if (optionsParameters.Length == 0 || IsDirectOptionsParameter(optionsParameters, dtoTypeIds))
                 {
                     continue;
                 }
@@ -52,9 +52,9 @@ internal static class TypeScriptOptionsCollisionGuard
         }
     }
 
-    private static bool IsDirectOptionsParameter(IReadOnlyList<AtsParameter> optionalParameters, IReadOnlySet<string> dtoTypeIds)
+    private static bool IsDirectOptionsParameter(IReadOnlyList<AtsParameter> optionsParameters, IReadOnlySet<string> dtoTypeIds)
     {
-        var candidates = optionalParameters
+        var candidates = optionsParameters
             .Where(static parameter => !IsCancellationToken(parameter))
             .ToArray();
 

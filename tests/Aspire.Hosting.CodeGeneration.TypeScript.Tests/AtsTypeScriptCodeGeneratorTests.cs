@@ -1953,6 +1953,58 @@ public partial class AtsTypeScriptCodeGeneratorTests
     }
 
     [Fact]
+    public void ApiExportWritesPlainObsoleteMembersAsDeprecated()
+    {
+        var obsoleteAttribute = typeof(PlainObsoleteFixture).GetMethod(nameof(PlainObsoleteFixture.Old))!
+            .GetCustomAttribute<ObsoleteAttribute>()!;
+
+        var model = new TypeScriptApiModel
+        {
+            SchemaVersion = 1,
+            Language = "typescript",
+            Package = new TypeScriptApiPackageIdentity(TestPackageName, TestPackageVersion),
+            Modules =
+            [
+                new TypeScriptApiModule
+                {
+                    Name = "index",
+                    Items =
+                    [
+                        new TypeScriptApiItem
+                        {
+                            Id = "type:Test",
+                            TypeId = "Test",
+                            Kind = TypeScriptApiItemKind.Interface,
+                            Name = "Test",
+                            Declaration = "export interface Test",
+                            OwningAssemblyName = TestPackageName,
+                            Members =
+                            [
+                                new TypeScriptApiMember
+                                {
+                                    Id = "member:Test.old",
+                                    Kind = TypeScriptApiItemKind.Method,
+                                    Name = "old",
+                                    Declaration = "old(): void",
+                                    DeprecationMessage = obsoleteAttribute.Message ?? string.Empty
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ],
+            Declarations = []
+        };
+
+        var exportJson = TypeScriptApiExportWriter.WriteToJson(model, indented: false);
+        using var document = System.Text.Json.JsonDocument.Parse(exportJson);
+        var member = document.RootElement.GetProperty("modules")[0].GetProperty("items")[0].GetProperty("members")[0];
+
+        Assert.True(member.TryGetProperty("deprecated", out var deprecated));
+        Assert.Equal(string.Empty, deprecated.GetString());
+    }
+
+    [Fact]
     public void ApiExportMethodParametersMatchResolvedPublicSignatures()
     {
         var atsContext = CreateOwnershipFilteredContext();
@@ -3195,5 +3247,13 @@ public partial class AtsTypeScriptCodeGeneratorTests
         }
 
         return membersByInterface;
+    }
+
+    private sealed class PlainObsoleteFixture
+    {
+        [Obsolete]
+        public void Old()
+        {
+        }
     }
 }

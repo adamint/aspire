@@ -421,7 +421,8 @@ internal sealed class SdkDumpCommand : BaseCommand
             var paramStr = string.Join(", ", c.Parameters.Select(p =>
             {
                 var optional = p.IsOptional ? "?" : "";
-                return string.Format(CultureInfo.InvariantCulture, "{0}{1}: {2}", p.Name, optional, p.Type?.TypeId ?? "unknown");
+                var nullable = p.IsNullable ? "?" : "";
+                return string.Format(CultureInfo.InvariantCulture, "{0}{1}: {2}{3}", p.Name, optional, p.Type?.TypeId ?? "unknown", nullable);
             }));
             var returnStr = c.ReturnType?.TypeId ?? "void";
             sb.AppendLine(string.Format(CultureInfo.InvariantCulture, "{0}({1}) -> {2}", c.CapabilityId, paramStr, returnStr));

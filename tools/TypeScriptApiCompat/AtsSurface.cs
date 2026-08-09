@@ -23,7 +23,7 @@ internal sealed record AtsExportedValue(string Path, string TypeId, string Value
 
 internal sealed record AtsCapability(string CapabilityId, IReadOnlyList<AtsParameter> Parameters, string ReturnTypeId);
 
-internal sealed record AtsParameter(string Name, string TypeId, bool IsOptional);
+internal sealed record AtsParameter(string Name, string TypeId, bool IsOptional, bool IsNullable);
 
 internal sealed class AtsSurfaceSet
 {
