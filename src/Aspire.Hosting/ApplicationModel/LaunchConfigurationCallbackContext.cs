@@ -21,7 +21,9 @@ namespace Aspire.Hosting.ApplicationModel;
 /// populate the underlying executable after that rewrite. When a <see cref="ProjectLaunchArgsOverrideAnnotation"/>
 /// pins a project executable to process execution, the debug argument rewrite is suppressed so the process command
 /// line remains runnable. Only the launch configuration returned by the producer is serialized for the IDE.
-/// Processed environment values can contain secrets.
+/// Processed arguments and environment values can both contain secrets: <see cref="IExecutionConfigurationResult.Arguments"/>
+/// carries an <c>IsSensitive</c> flag for exactly this reason, so a resolved parameter can arrive as an argument as
+/// readily as an environment value. Anything a producer copies into the launch configuration is written to the IDE.
 /// </remarks>
 [Experimental("ASPIREEXTENSION001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
 public sealed class LaunchConfigurationCallbackContext

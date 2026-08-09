@@ -31,6 +31,28 @@ public static class LaunchConfigurationTestHelpers
             cancellationToken);
     }
 
+    /// <summary>
+    /// Invokes <paramref name="resource"/>'s launch configuration producer.
+    /// </summary>
+    /// <remarks>
+    /// The underlying <c>CreateLaunchConfigurationAsync</c> overload is internal because the only legal caller is
+    /// the resource's own producer, so it exists for tests and for hosting integrations that ship inside this
+    /// repository. This wrapper lives in <c>Aspire.Hosting.TestUtilities</c> -- which already has
+    /// <c>InternalsVisibleTo</c> from <c>Aspire.Hosting</c> -- so test projects can reach it without each one
+    /// taking its own <c>InternalsVisibleTo</c> grant. Granting it directly to an integration's test project makes
+    /// the internal types that integration links from <c>Aspire.Hosting</c> (for example <c>KnownResourceNames</c>)
+    /// visible from two assemblies at once and breaks the build with CS0433.
+    /// </remarks>
+    public static Task<object> InvokeLaunchConfigurationProducerAsync(
+        IResource resource,
+        LaunchConfigurationCallbackContext callbackContext)
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+        ArgumentNullException.ThrowIfNull(callbackContext);
+
+        return resource.CreateLaunchConfigurationAsync(callbackContext);
+    }
+
     public static IExecutionConfigurationResult CreateExecutionConfigurationResult(
         IEnumerable<string>? arguments = null,
         IEnumerable<KeyValuePair<string, string>>? environmentVariables = null,

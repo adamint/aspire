@@ -4805,11 +4805,16 @@ public static class ResourceBuilderExtensions
             || producerReturnType == typeof(ValueTask)
             || producerReturnType.IsGenericType && producerReturnType.GetGenericTypeDefinition() == typeof(ValueTask<>))
         {
-            throw new InvalidOperationException(
-                $"The legacy {nameof(WithDebugSupport)} overload requires a synchronous launch configuration producer. " +
+            // Keep this an ArgumentException naming the parameter: main already threw that for this exact
+            // input, and it is the right shape for a validation failure about an argument. Only the message
+            // changes, because the replacement overload now takes a context and returns Task<T>, so adding a
+            // CancellationToken parameter is no longer what makes an async producer bind.
+            throw new ArgumentException(
+                $"The launch configuration producer returns '{typeof(TLaunchConfiguration)}'. The legacy {nameof(WithDebugSupport)} overload requires a synchronous producer. " +
                 "Use the overload that accepts LaunchConfigurationCallbackContext and returns Task<TLaunchConfiguration>. " +
                 "A producer that returns ValueTask or ValueTask<TLaunchConfiguration> does not bind to that overload directly; " +
-                "adapt it with AsTask() or wrap it in an async lambda.");
+                "adapt it with AsTask() or wrap it in an async lambda.",
+                nameof(launchConfigurationProducer));
         }
 
 #pragma warning disable ASPIREEXTENSION001 // Forwarding to the replacement experimental API.
@@ -4854,6 +4859,30 @@ public static class ResourceBuilderExtensions
     /// process command line owned by the launch-args override.
     /// </para>
     /// </remarks>
+    /// <example>
+    /// Produce a launch configuration for a resource, reading the arguments and environment Aspire resolved for
+    /// this launch. A synchronous producer returns through <see cref="Task.FromResult{TResult}(TResult)"/>:
+    /// <code language="csharp">
+    /// builder.AddExecutable("tool", "mytool", ".")
+    ///        .WithDebugSupport(
+    ///            context => Task.FromResult(new ExecutableLaunchConfiguration("mytool")
+    ///            {
+    ///                // OriginalExecutionConfiguration is the resolution before the argsCallback below runs,
+    ///                // so the IDE launches the arguments the user asked for rather than the debug rewrite.
+    ///                Args = [.. context.OriginalExecutionConfiguration.Arguments.Select(argument => argument.Processed)],
+    ///                Env = context.OriginalExecutionConfiguration.EnvironmentVariables
+    ///                             .ToDictionary(variable => variable.Key, variable => variable.Value.Processed)
+    ///            }),
+    ///            launchConfigurationType: "mytool",
+    ///            argsCallback: argsContext =>
+    ///            {
+    ///                // Applies only to the process command line, never to the configuration above.
+    ///                argsContext.Args.Insert(0, "--wait-for-debugger");
+    ///            });
+    /// </code>
+    /// Migrating from the obsolete overload: it received only the launch mode, so replace <c>mode</c> with
+    /// <c>context.Mode</c> and wrap the returned value in <see cref="Task.FromResult{TResult}(TResult)"/>.
+    /// </example>
     [Experimental("ASPIREEXTENSION001", UrlFormat = "https://aka.ms/aspire/diagnostics/{0}")]
     [AspireExportIgnore(Reason = "Generic debug launch configuration support is not part of the ATS surface.")]
     public static IResourceBuilder<T> WithDebugSupport<T, TLaunchConfiguration>(

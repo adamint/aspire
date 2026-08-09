@@ -5491,6 +5491,87 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ProjectWithLaunchArgsOverrideAndRewritingNonProjectDebugSupport_LaunchConfigFailure_FallsBackToProcess()
+    {
+        // The Process fallback is denied when the debug rewrite replaced the spec's command line, because running
+        // the rewritten command "as is" would launch something broken. A launch-args override suppresses that
+        // rewrite, so the spec still holds the user's real command line and the fallback is safe -- keying the
+        // guard on the annotation alone denied the fallback to exactly the resources that could still use it, and
+        // a MAUI resource whose producer threw failed to start instead of running as a process.
+        var builder = DistributedApplication.CreateBuilder();
+
+        var projectBuilder = builder.AddProject<TestProject>("proj", launchProfileName: null);
+        var annotationToRemove = projectBuilder.Resource.Annotations.OfType<SupportsDebuggingAnnotation>().FirstOrDefault();
+        if (annotationToRemove is not null)
+        {
+            projectBuilder.Resource.Annotations.Remove(annotationToRemove);
+        }
+
+#pragma warning disable ASPIREPROJECTS001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+        projectBuilder.Resource.Annotations.Add(new ProjectLaunchArgsOverrideAnnotation(["build", "--no-restore", "/t:Run", "-p:NoBuild=true"], leadingResourceArgumentToRemove: "run"));
+#pragma warning restore ASPIREPROJECTS001
+
+        projectBuilder
+            .WithArgs("run", "-f", "net10.0-android")
+            .WithDebugSupport(
+                ThrowingLaunchConfiguration,
+                "maui",
+                argsCallback: static context => context.Args.Clear());
+
+        var runSessionInfo = new RunSessionInfo
+        {
+            ProtocolsSupported = ["coreclr"],
+            SupportedLaunchConfigurations = ["maui"]
+        };
+
+        var configDict = new Dictionary<string, string?>
+        {
+            [DcpExecutor.DebugSessionPortVar] = "12345",
+            [KnownConfigNames.DebugSessionInfo] = JsonSerializer.Serialize(runSessionInfo),
+            [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234",
+            [KnownConfigNames.DebugSessionRunMode] = "Debug"
+        };
+
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+
+        var kubernetesService = new TestKubernetesService();
+        var failedResources = new List<IResource>();
+        var events = new DcpExecutorEvents();
+        events.Subscribe<OnResourceFailedToStartContext>(context =>
+        {
+            failedResources.Add(context.Resource);
+            return Task.CompletedTask;
+        });
+
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var distributedApplicationOptions = new DistributedApplicationOptions { AssemblyName = typeof(DcpExecutorTests).Assembly.FullName };
+        var expectedConfiguration = System.Reflection.CustomAttributeExtensions.GetCustomAttribute<System.Reflection.AssemblyConfigurationAttribute>(typeof(DcpExecutorTests).Assembly)?.Configuration;
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration, distributedApplicationOptions: distributedApplicationOptions, events: events);
+
+        await appExecutor.RunApplicationAsync();
+
+        Assert.Empty(failedResources);
+
+        var exe = GetCreatedExecutableForResource(kubernetesService, "proj");
+        Assert.Equal(ExecutionType.Process, exe.Spec.ExecutionType);
+
+        // The override's command line survived the failed producer, so the fallback launches the real command.
+        var expectedArgs = new List<string> { "build", "--no-restore", "/t:Run", "-p:NoBuild=true", "TestProject" };
+        if (!string.IsNullOrEmpty(expectedConfiguration))
+        {
+            expectedArgs.AddRange(["--configuration", expectedConfiguration]);
+        }
+        expectedArgs.AddRange(["-f", "net10.0-android"]);
+        Assert.Equal(expectedArgs, exe.Spec.Args);
+
+        static Task<TestMauiLaunchConfiguration> ThrowingLaunchConfiguration(LaunchConfigurationCallbackContext context)
+        {
+            throw new InvalidOperationException("Launch configuration failed.");
+        }
+    }
+
+    [Fact]
     public async Task ProjectWithLaunchArgsOverrideAndRewritingNonProjectDebugSupport_DoesNotRewriteProcessArgs()
     {
         var builder = DistributedApplication.CreateBuilder();

@@ -91,9 +91,16 @@ public static class DebugSupportExtensions
     /// This method never resolves arguments or environment variables. Aspire creates <paramref name="context"/>
     /// when the active debug-support annotation is producing a launch configuration for an executable creation.
     /// </para>
+    /// <para>
+    /// Deliberately internal. <see cref="LaunchConfigurationCallbackContext"/> has no public constructor, and
+    /// AppHost code only ever receives one while this resource's own producer is running - where calling this
+    /// would re-enter that producer. Passing another resource's context is rejected below, and holding a context
+    /// past the callback describes a launch that already happened. A public overload would therefore promise an
+    /// inspection flow that no caller outside this assembly can reach; exposing it needs a supported way to build
+    /// a context first.
+    /// </para>
     /// </remarks>
-    [AspireExportIgnore(Reason = "Debug support inspection is a local .NET helper and is not part of the ATS surface.")]
-    public static Task<object> CreateLaunchConfigurationAsync(
+    internal static Task<object> CreateLaunchConfigurationAsync(
         this IResource resource,
         LaunchConfigurationCallbackContext context)
     {

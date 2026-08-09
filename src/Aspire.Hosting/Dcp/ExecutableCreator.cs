@@ -217,6 +217,15 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             var mode = isProjectLaunchConfiguration
                 ? GetProjectLaunchConfigurationMode()
                 : _configuration[KnownConfigNames.DebugSessionRunMode] ?? ExecutableLaunchMode.NoDebug;
+
+            // The fallback below runs the executable spec's command and args "as is", so it is only unsafe
+            // when the debug rewrite actually replaced them. A launch-args override suppresses that rewrite
+            // (applyDebugArgumentRewrite above), which leaves the spec holding the user's real command line
+            // -- so keying the guard on the annotation alone denied the fallback to exactly the resources
+            // that could still use it, and a MAUI or custom project resource whose producer threw failed
+            // outright instead of running.
+            var rewroteArgumentsForDebugging = supportsDebuggingAnnotation.RewritesArgumentsForDebugging
+                && !preparedFromLaunchArgsOverride;
             var callbackContext = new LaunchConfigurationCallbackContext(
                 mode,
                 er.ModelResource,
@@ -238,7 +247,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
             catch (Exception exception) when (
                 (exception is not OperationCanceledException || !callbackContext.CancellationToken.IsCancellationRequested)
                 && !isProjectLaunchConfiguration
-                && !supportsDebuggingAnnotation.RewritesArgumentsForDebugging)
+                && !rewroteArgumentsForDebugging)
             {
                 _logger.LogWarning(
                     exception,

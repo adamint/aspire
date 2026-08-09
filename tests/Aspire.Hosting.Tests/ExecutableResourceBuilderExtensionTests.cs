@@ -173,19 +173,23 @@ public class ExecutableResourceBuilderExtensionTests
     {
         using var builder = TestDistributedApplicationBuilder.Create(DistributedApplicationOperation.Run);
 
-        var taskException = Assert.Throws<InvalidOperationException>(() =>
+        // ArgumentException, not InvalidOperationException: the producer's return type is what is wrong, so the
+        // exception carries the parameter name and matches the shipped behaviour on the base branch.
+        var taskException = Assert.Throws<ArgumentException>(() =>
             builder.AddExecutable("task", "command", "workingdirectory")
                 .WithDebugSupport(
                     (string mode) => Task.FromResult(new ExecutableLaunchConfiguration("go") { Mode = mode }),
                     "go"));
         Assert.Contains("Task", taskException.Message);
+        Assert.Equal("launchConfigurationProducer", taskException.ParamName);
 
-        var valueTaskException = Assert.Throws<InvalidOperationException>(() =>
+        var valueTaskException = Assert.Throws<ArgumentException>(() =>
             builder.AddExecutable("value-task", "command", "workingdirectory")
                 .WithDebugSupport(
                     (string mode) => ValueTask.FromResult(new ExecutableLaunchConfiguration("go") { Mode = mode }),
                     "go"));
         Assert.Contains("ValueTask", valueTaskException.Message);
+        Assert.Equal("launchConfigurationProducer", valueTaskException.ParamName);
     }
 #pragma warning restore CS0618
 
