@@ -170,6 +170,36 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
   }
 
+  private stopResourceDebugSessions(): void {
+    const appHostDebugSessionId = this._appHostDebugSession?.id;
+    for (const session of this._resourceDebugSessions) {
+      if (session.id === appHostDebugSessionId) {
+        continue;
+      }
+
+      try {
+        session.stopSession();
+      }
+      catch (error) {
+        extensionLogOutputChannel.warn(`Failed to stop resource debug session ${session.id}: ${error}`);
+      }
+    }
+  }
+
+  private trackResourceDebugSession(resourceDebugSession: AspireResourceDebugSession): AspireResourceDebugSession {
+    let stopSessionPromise: Thenable<void> | undefined;
+    const stopSession = resourceDebugSession.stopSession.bind(resourceDebugSession);
+    resourceDebugSession.stopSession = () => {
+      stopSessionPromise ??= stopSession();
+
+      return stopSessionPromise;
+    };
+
+    this._resourceDebugSessions.push(resourceDebugSession);
+
+    return resourceDebugSession;
+  }
+
   private stopParentDebugSessionOnce(): Thenable<void> {
     if (this._parentStopPromise) {
       return this._parentStopPromise;
@@ -643,12 +673,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       this._dcpServer.sendNotification(notification);
     });
 
-    this._resourceDebugSessions.push(resourceDebugSession);
-    this._disposables.push({
-      dispose: resourceDebugSession.stopSession
-    });
-
-    return resourceDebugSession;
+    return this.trackResourceDebugSession(resourceDebugSession);
   }
 
   async startAndGetDebugSession(debugConfig: AspireResourceExtendedDebugConfiguration): Promise<AspireResourceDebugSession | undefined> {
@@ -693,13 +718,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
             stopSession: disposalFunction
           };
 
-          this._resourceDebugSessions.push(vsCodeDebugSession);
-          this._disposables.push({
-            dispose: disposalFunction
-          });
+          const trackedDebugSession = this.trackResourceDebugSession(vsCodeDebugSession);
 
           resolved = true;
-          resolve(vsCodeDebugSession);
+          resolve(trackedDebugSession);
         }
       });
 
@@ -866,6 +888,12 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     const appHostIsDirectory = this._appHostIsDirectoryAtLaunch;
     const debugSessionId = this.debugSessionId;
     const dcpServer = this._dcpServer;
+
+    // Stop child debug sessions before any CLI/AppHost shutdown disposable can fire. The normal
+    // VS Code stop path reaches dispose() through DAP `disconnect`/`terminate`, not through the
+    // async stopDebugging() helper above, so dispose() has to preserve the same resource-first
+    // ordering on its own.
+    this.stopResourceDebugSessions();
 
     // Stop child debug sessions first so their `sessionTerminated`
     // notifications can flow back through `AspireDcpServer.sendNotification`

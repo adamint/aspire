@@ -1059,13 +1059,14 @@ async function proveResourceDebugging(command: ResourceDebugProofCommand, aspire
     new vscode.Location(vscode.Uri.file(sourcePath), new vscode.Position(breakpointLine, 0)),
     true);
   vscode.debug.addBreakpoints([breakpoint]);
+  let proofFailure: unknown;
 
   try {
     const appHostElement = getAppHostElement(appHostTreeProvider, appHostPath);
     await runWithE2eDeadline(
       'debug AppHost command',
       deadline,
-      vscode.commands.executeCommand('aspire-vscode.debugAppHost', appHostElement));
+      () => vscode.commands.executeCommand('aspire-vscode.debugAppHost', appHostElement));
 
     const aspireDebugSession = await waitForE2eValue(
       'Aspire AppHost debug startup completion',
@@ -1103,7 +1104,7 @@ async function proveResourceDebugging(command: ResourceDebugProofCommand, aspire
               stackTrace = await runWithE2eDeadline(
                 'resource debug stackTrace request',
                 deadline,
-                session.customRequest('stackTrace', {
+                () => session.customRequest('stackTrace', {
                   threadId: stoppedEvent.threadId,
                   startFrame: 0,
                   levels: 20,
@@ -1194,15 +1195,30 @@ ${JSON.stringify({
       outputHead: outputCapture.getOutputHeadEvents(),
       outputSample: outputCapture.getOutputSampleEvents(40),
     };
+  } catch (error) {
+    proofFailure = error;
+    throw error;
   } finally {
     vscode.debug.removeBreakpoints([breakpoint]);
     sessionSubscription.dispose();
     trackerRegistration.dispose();
     if (request.stopDebuggingOnCompletion) {
-      await runWithE2eDeadline(
-        'stop resource debugging request',
-        deadline,
-        vscode.debug.stopDebugging());
+      try {
+        await runWithE2eDeadline(
+          'stop resource debugging request',
+          deadline,
+          () => vscode.debug.stopDebugging());
+      }
+      catch (error) {
+        if (proofFailure === undefined) {
+          throw error;
+        }
+
+        // Do not replace the startup/breakpoint failure that brought us here with a best-effort
+        // cleanup timeout. The outer E2E teardown still owns the full stop path and reports its
+        // own failure separately if the session cannot be cleaned up.
+        extensionLogOutputChannel.warn(`Failed to stop resource debugging after proof failure: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   }
 }
@@ -1338,7 +1354,7 @@ async function waitForE2eValue<T>(description: string, timeoutMs: number, getVal
   let lastError: string | undefined;
   while (Date.now() < deadline) {
     try {
-      const value = await runWithE2eDeadline(`${description} probe`, deadline, Promise.resolve().then(getValue));
+      const value = await runWithE2eDeadline(`${description} probe`, deadline, () => Promise.resolve().then(getValue));
       if (value !== undefined) {
         return value;
       }

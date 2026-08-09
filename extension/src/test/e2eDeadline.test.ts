@@ -14,10 +14,25 @@ suite('E2E deadline helper', () => {
         assert.strictEqual(await runWithE2eDeadline('completed debugger request', Date.now() + 1000, Promise.resolve('done')), 'done');
     });
 
+    test('does not start a lazy external await after the deadline has already passed', async () => {
+        let started = false;
+
+        await assert.rejects(
+            runWithE2eDeadline('expired debugger request', Date.now() - 1, () => {
+                started = true;
+                return Promise.resolve('late');
+            }),
+            /the E2E deadline has already passed/);
+
+        assert.strictEqual(started, false);
+    });
+
     test('bounds the resource-debugger cleanup stop request by the proof deadline', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const bridge = fs.readFileSync(path.join(extensionRoot, 'src', 'testing', 'e2eStateFileBridge.ts'), 'utf8');
 
-        assert.ok(bridge.includes("runWithE2eDeadline(\n        'stop resource debugging request'"), 'The cleanup stopDebugging request must not outlive the resource-debugger proof deadline.');
+        assert.ok(bridge.includes('let proofFailure: unknown;'), 'Cleanup failures must not mask the startup or breakpoint failure that triggered cleanup.');
+        assert.ok(bridge.includes("runWithE2eDeadline(\n          'stop resource debugging request'"), 'The cleanup stopDebugging request must not outlive the resource-debugger proof deadline.');
+        assert.ok(bridge.includes('() => vscode.debug.stopDebugging()'), 'The cleanup stopDebugging request must not start after the deadline has already passed.');
     });
 });

@@ -1,13 +1,17 @@
-export async function runWithE2eDeadline<T>(description: string, deadlineMs: number, operation: Thenable<T> | Promise<T>): Promise<T> {
+export async function runWithE2eDeadline<T>(description: string, deadlineMs: number, operation: (() => Thenable<T> | Promise<T>) | Thenable<T> | Promise<T>): Promise<T> {
     const timeoutMs = deadlineMs - Date.now();
     if (timeoutMs <= 0) {
         throw new Error(`Timed out waiting for ${description}; the E2E deadline has already passed.`);
     }
 
+    const operationPromise = typeof operation === 'function'
+        ? operation()
+        : operation;
+
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
         return await Promise.race([
-            Promise.resolve(operation),
+            Promise.resolve(operationPromise),
             new Promise<T>((_, reject) => {
                 timeout = setTimeout(() => {
                     timeout = undefined;
