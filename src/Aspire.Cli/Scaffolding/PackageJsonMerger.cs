@@ -30,7 +30,7 @@ internal static class PackageJsonMerger
     /// <summary>
     /// The lowest TypeScript version typescript-eslint 8.58.0 refuses, from its peer range
     /// <c>typescript: "&gt;=4.8.4 &lt;6.1.0"</c>. Kept next to the scaffold floor in
-    /// TypeScriptLanguageSupport, which pins <c>typescript-eslint: "^8.58.0"</c>.
+    /// TypeScriptLanguageSupport, which pins <c>typescript-eslint: "8.58.0"</c>.
     /// </summary>
     private static readonly SemVersion s_firstUnsupportedTypeScript = SemVersion.Parse("6.1.0", SemVersionStyles.Strict);
 
@@ -230,6 +230,7 @@ internal static class PackageJsonMerger
         }
 
         return NpmVersionHelper.TryParseNpmVersion(trimmed, out var resolvedTypeScript) &&
+            !resolvedTypeScript.IsPrerelease &&
             SemVersion.ComparePrecedence(resolvedTypeScript, s_firstUnsupportedTypeScript) < 0;
     }
 

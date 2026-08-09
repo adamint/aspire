@@ -979,6 +979,23 @@ public sealed class SelectTestsAcceptanceTests(ITestOutputHelper outputHelper) :
         Assert.Contains("Infrastructure.Tests", r.TestProjects);
     }
 
+    [Theory]
+    [InlineData("src/Aspire.Cli/Templating/Templates/ts-starter/package-lock.json")]
+    [InlineData("src/Aspire.Cli/Templating/Templates/py-starter/package-lock.json")]
+    [InlineData("tests/Aspire.Hosting.CodeGeneration.TypeScript.JsTests/package-lock.json")]
+    public void RealMapExplicitNpmLockfileChangeRunsInfrastructureTests(string lockfile)
+    {
+        var mapPath = Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml");
+        var selector = new TestSelector(mapPath, EnumerateMatrixTestProjects(), LoadProjectDirectories());
+
+        Assert.True(File.Exists(Path.Combine(RepoRoot.Path, lockfile)), $"{lockfile} does not exist. Update this test if the lockfile moved.");
+
+        var r = selector.Select([lockfile], [], new SelectorOptions());
+
+        Assert.False(r.SelectsAll);
+        Assert.Contains("Infrastructure.Tests", r.TestProjects);
+    }
+
     private static string FirstPolyglotLockfile(string lockfileName)
     {
         var polyglotRoot = Path.Combine(RepoRoot.Path, "tests", "PolyglotAppHosts");

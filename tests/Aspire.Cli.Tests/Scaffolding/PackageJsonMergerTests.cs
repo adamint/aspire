@@ -1493,7 +1493,7 @@ public class PackageJsonMergerTests
     }
 
     /// <summary>
-    /// The scaffold pins typescript-eslint ^8.58.0, whose peer range is
+    /// The scaffold pins typescript-eslint 8.58.0, whose peer range is
     /// typescript ">=4.8.4 &lt;6.1.0". Dependency merging keeps the newer version, so a project
     /// already on TypeScript 7 keeps it and would receive an unsatisfiable pair. Reproduced against
     /// the real resolver: npm reports ERESOLVE "Found: typescript@7.0.2".
@@ -1502,6 +1502,7 @@ public class PackageJsonMergerTests
     [InlineData("^7.0.2")]
     [InlineData("~7.1.0")]
     [InlineData("6.1.0")]
+    [InlineData("6.1.0-beta.1")]
     [InlineData("next")]
     [InlineData("latest")]
     [InlineData("npm:typescript@7.0.2")]
