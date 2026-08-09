@@ -189,6 +189,79 @@ public class NpmRegistryResolverTests : IDisposable
             CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
     }
 
+    [Fact]
+    public void Resolve_IgnoresARegistryNestedUnderAnIniSection()
+    {
+        // npm parses .npmrc with ini, which nests every later assignment under the section, so
+        // "[tool]" followed by "registry" leaves npm's own install registry unset.
+        WriteHomeNpmrc("[tool]", "registry=https://npm.contoso.example/feed/");
+
+        Assert.Equal(PublicRegistry, CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_KeepsARegistryDeclaredAboveAnIniSection()
+    {
+        WriteHomeNpmrc("registry=https://npm.contoso.example/feed/", "[tool]", "registry=https://nested.example/feed/");
+
+        Assert.Equal(
+            "https://npm.contoso.example/feed/",
+            CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Theory]
+    [InlineData("  [tool]")]
+    [InlineData("[tool] ; note")]
+    [InlineData("[to]ol]")]
+    public void Resolve_KeepsReadingPastABracketedLineIniTreatsAsAKey(string bracketedLine)
+    {
+        // ini only matches a section with /^\[([^\]]*)\]\s*$/ against the raw line, so leading
+        // whitespace, a trailing comment, or an early bracket all leave the line a bare key and
+        // the assignments below it stay at the top level where npm reads them.
+        WriteHomeNpmrc(bracketedLine, "registry=https://npm.contoso.example/feed/");
+
+        Assert.Equal(
+            "https://npm.contoso.example/feed/",
+            CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_LeavesAReferenceLiteralWhenAnOddBackslashRunEscapesIt()
+    {
+        // Two stages run in order: ini unescapes the value, then env-replace halves the backslash
+        // run that is left in front of "${" and treats an odd run as an escape. One backslash on
+        // disk survives ini as one backslash, which is odd, so the reference stays literal.
+        WriteHomeNpmrc(@"registry=https://npm.contoso.example/\${SEGMENT}/");
+
+        var resolution = CreateResolver(
+            environment: new Dictionary<string, string>
+            {
+                ["SEGMENT"] = "v1"
+            }).Resolve(PackageName);
+
+        Assert.Equal(
+            new Uri("https://npm.contoso.example/${SEGMENT}/").AbsoluteUri,
+            resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_HalvesAnEvenBackslashRunAndExpandsTheReference()
+    {
+        // Three backslashes on disk survive ini as two, which is even, so env-replace emits half of
+        // them and expands the reference.
+        WriteHomeNpmrc(@"registry=https://npm.contoso.example/\\\${SEGMENT}/");
+
+        var resolution = CreateResolver(
+            environment: new Dictionary<string, string>
+            {
+                ["SEGMENT"] = "v1"
+            }).Resolve(PackageName);
+
+        Assert.Equal(
+            new Uri(@"https://npm.contoso.example/\v1/").AbsoluteUri,
+            resolution.RegistryUri.AbsoluteUri);
+    }
+
     [Theory]
     [InlineData("; registry=https://npm.contoso.example/comment/")]
     [InlineData("# registry=https://npm.contoso.example/comment/")]

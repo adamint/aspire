@@ -297,6 +297,16 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
                 contents = contents[(terminatorIndex + skip)..];
             }
 
+            if (IsIniSectionHeader(line))
+            {
+                // npm parses .npmrc with the ini package, which nests every following assignment
+                // under the section, so npm never sees it as top-level config: "[tool]" followed by
+                // "registry=..." leaves the install registry unset. ini offers no way back to the
+                // top level, so nothing after the first header can affect the registry npm uses.
+                _logger.LogDebug("Ignoring the remainder of {Path} because npm nests it under the {Section} section.", path, line.ToString());
+                break;
+            }
+
             // The key is allow-listed before the value is parsed out of the line, so a
             // "//registry.example.com/:_authToken=..." entry never becomes a token-bearing string.
             if (!TryParseNpmrcKey(line, out var key, out var rawValue) || !IsInterestingKey(key))
@@ -342,6 +352,26 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     /// <see cref="ParseNpmrcValue"/> ever materializes it.
     /// See https://github.com/npm/ini/blob/main/lib/ini.js.
     /// </remarks>
+    private static bool IsIniSectionHeader(ReadOnlySpan<char> line)
+    {
+        // ini matches sections with /^\[([^\]]*)\]\s*$/ against the raw line, so the bracket must be
+        // the very first character and only whitespace may follow the closing bracket:
+        //   "[tool]"        -> section
+        //   "[tool]   "     -> section
+        //   "  [tool]"      -> bare key, because of the leading whitespace
+        //   "[tool] ; note" -> bare key, because ini allows no trailing comment here
+        //   "[to]ol]"       -> bare key, because [^\]]* cannot cross the first bracket
+        // https://github.com/npm/ini/blob/latest/lib/ini.js
+        if (line.IsEmpty || line[0] is not '[')
+        {
+            return false;
+        }
+
+        var closingIndex = line.IndexOf(']');
+
+        return closingIndex >= 0 && line[(closingIndex + 1)..].IsWhiteSpace();
+    }
+
     private static ReadOnlySpan<byte> RemoveByteOrderMark(ReadOnlySpan<byte> contents)
     {
         // Decoding by hand means the UTF-8 BOM is no longer stripped for us. An editor that writes
@@ -451,8 +481,9 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     /// npm matches <c>/(?&lt;!\\)(\\*)\$\{([^${}?]+)(\?)?\}/g</c>: the name may not contain
     /// <c>$</c>, <c>{</c>, <c>}</c>, or <c>?</c>, and a trailing <c>?</c> marks the reference
     /// optional, meaning an undefined variable expands to the empty string instead of being left
-    /// in place. Text that does not match that shape is copied through untouched, matching npm's
-    /// behavior of leaving a non-reference literal.
+    /// in place. A backslash run in front of <c>${</c> is halved, and an odd run escapes the
+    /// reference so it stays literal. Text that does not match that shape is copied through
+    /// untouched, matching npm's behavior of leaving a non-reference literal.
     /// See https://github.com/npm/cli/blob/latest/workspaces/config/lib/env-replace.js.
     /// </remarks>
     private bool TryExpandEnvironmentReferences(string value, [NotNullWhen(true)] out string? expanded)
@@ -499,7 +530,28 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
                 continue;
             }
 
-            builder.Append(value, index, start - index);
+            // npm's pattern captures the backslash run in front of "${" and halves it: an odd run
+            // escapes the reference and leaves it literal, an even run expands it. Half the
+            // backslashes survive either way, so "\${HOME}" is the literal "${HOME}" and
+            // "\\${HOME}" is one backslash followed by the value.
+            var escapeStart = start;
+
+            while (escapeStart > index && value[escapeStart - 1] is '\\')
+            {
+                escapeStart--;
+            }
+
+            var escapeLength = start - escapeStart;
+
+            builder.Append(value, index, escapeStart - index);
+            builder.Append('\\', escapeLength / 2);
+
+            if (escapeLength % 2 is not 0)
+            {
+                builder.Append(value, start, end + 1 - start);
+                index = end + 1;
+                continue;
+            }
 
             var variableValue = _lookupEnvironmentVariable(variableName.ToString());
 
