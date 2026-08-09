@@ -271,20 +271,35 @@ export class AppHostLaunchService implements vscode.Disposable {
     async runWithAppHostLifecycleLock<T>(appHostPath: string, token: vscode.CancellationToken, action: (token: vscode.CancellationToken) => Promise<T>): Promise<T> {
         throwIfCancelled(token);
         const identity = getAppHostIdentityKeyInfo(appHostPath);
-        const key = this.getLifecycleLockKey(identity);
-        this.trackLifecycleLockPathKeys(key, identity);
-        const previous = this._lifecycleLocks.get(key) ?? Promise.resolve();
+        const keys = this.getLifecycleLockKeys(identity);
+        this.trackLifecycleLockPathKeys(keys[0], identity);
+        // Waiting on every overlapping queue, not just the first, is what keeps exclusivity
+        // across a directory mutation that merges two independently active identities. While a
+        // second project file makes `First.csproj` and `Program.cs` ambiguous they hold separate
+        // locks; once it is removed a caller's identity spans both, and queueing behind only one
+        // of them would run this operation beside the other.
+        const active = keys.map(lockKey => this._lifecycleLocks.get(lockKey)).filter(queue => queue !== undefined);
+        const previous = active.length <= 1
+            ? active[0] ?? Promise.resolve()
+            : Promise.all(active).then(() => undefined, () => undefined);
         let release!: () => void;
         const gate = new Promise<void>(resolve => { release = resolve; });
-        // The queue tail follows the prior owner and this operation's gate. A cancelled
-        // waiter releases its gate only after the prior owner settles, so later callers
+        // The queue tail follows the prior owners and this operation's gate. A cancelled
+        // waiter releases its gate only after the prior owners settle, so later callers
         // cannot overtake a still-running editor launch.
         const tail = previous.then(() => gate, () => gate);
-        this._lifecycleLocks.set(key, tail);
+        // Every merged key points at the same tail, so a later caller that only knows one of
+        // them still queues behind this operation.
+        for (const lockKey of keys) {
+            this._lifecycleLocks.set(lockKey, tail);
+        }
+
         void tail.then(() => {
-            if (this._lifecycleLocks.get(key) === tail) {
-                this._lifecycleLocks.delete(key);
-                this._lifecycleLockPathKeys.delete(key);
+            for (const lockKey of keys) {
+                if (this._lifecycleLocks.get(lockKey) === tail) {
+                    this._lifecycleLocks.delete(lockKey);
+                    this._lifecycleLockPathKeys.delete(lockKey);
+                }
             }
         });
 
@@ -327,8 +342,8 @@ export class AppHostLaunchService implements vscode.Disposable {
     }
 
     /**
-     * Maps every path that {@link compareAppHostIdentity} reports as the same AppHost onto
-     * one lifecycle lock key.
+     * Maps every path that {@link compareAppHostIdentity} reports as the same AppHost onto the
+     * lifecycle lock keys an operation for it must queue behind.
      *
      * New lock owners use the identity model from {@link getAppHostIdentityKeyInfo}, but
      * active owners keep the exact project/source paths that were proven equivalent when
@@ -336,17 +351,31 @@ export class AppHostLaunchService implements vscode.Disposable {
      * operation is still running: adding a second project should not let the original
      * project bypass the lock it already shares with `Program.cs`, and removing that
      * second project should not move a queued `Program.cs` caller onto a fresh key.
+     *
+     * More than one active key can overlap, because a directory mutation can merge identities
+     * that were distinct - and therefore separately locked - when their operations started. All
+     * of them are returned so the caller waits for each, rather than picking one and running
+     * beside the rest.
      */
-    private getLifecycleLockKey(identity: AppHostIdentityKeyInfo): string {
-        for (const pathKey of identity.pathKeys) {
-            for (const [activeKey, activePathKeys] of this._lifecycleLockPathKeys) {
-                if (activePathKeys.has(pathKey)) {
-                    return activeKey;
-                }
+    private getLifecycleLockKeys(identity: AppHostIdentityKeyInfo): readonly string[] {
+        const keys: string[] = [];
+        for (const [activeKey, activePathKeys] of this._lifecycleLockPathKeys) {
+            if (identity.pathKeys.some(pathKey => activePathKeys.has(pathKey))) {
+                keys.push(activeKey);
             }
         }
 
-        return identity.key;
+        if (keys.length === 0) {
+            return [identity.key];
+        }
+
+        // The identity's own key joins the wait when it is not already one of the merged keys, so
+        // a caller addressing this AppHost by the merged identity queues behind this operation.
+        if (!keys.includes(identity.key)) {
+            keys.push(identity.key);
+        }
+
+        return keys;
     }
 
     private trackLifecycleLockPathKeys(key: string, identity: AppHostIdentityKeyInfo): void {

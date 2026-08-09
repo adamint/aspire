@@ -54,11 +54,23 @@ function createAppHostDirectory(...entries: readonly string[]): string {
     const fixtureRoot = path.resolve(__dirname, '..', '..', '.test-workspace', 'launch-service');
     const directory = path.join(fixtureRoot, `apphost-${crypto.randomBytes(6).toString('hex')}`);
     fs.mkdirSync(directory, { recursive: true });
+    // Every directory is recorded so teardown can remove it. These fixtures are real - AppHost
+    // identity is read from the directory's contents - so without cleanup each run leaves another
+    // randomly named directory behind under the workspace.
+    createdAppHostDirectories.push(directory);
     for (const entry of entries) {
         fs.writeFileSync(path.join(directory, entry), '');
     }
 
     return directory;
+}
+
+const createdAppHostDirectories: string[] = [];
+
+function removeCreatedAppHostDirectories(): void {
+    for (const directory of createdAppHostDirectories.splice(0)) {
+        fs.rmSync(directory, { recursive: true, force: true });
+    }
 }
 
 suite('AppHostLaunchService', () => {
@@ -84,6 +96,7 @@ suite('AppHostLaunchService', () => {
         resolveCliPathStub.restore();
         onDidTerminateDebugSessionStub.restore();
         onDidTerminateDebugSessionCallback = undefined;
+        removeCreatedAppHostDirectories();
     });
 
     test('isLaunching returns false before launch', () => {
@@ -419,11 +432,18 @@ suite('AppHostLaunchService', () => {
         const clock = sinon.useFakeTimers();
         let releaseActive: (() => void) | undefined;
         try {
+            // Wait for the action itself rather than for a fixed number of microtask turns, so the
+            // test proves the queueing behavior instead of the scheduling shape of the lock code.
+            let signalActiveStarted!: () => void;
+            const activeStarted = new Promise<void>(resolve => { signalActiveStarted = resolve; });
             const active = service.runWithAppHostLifecycleLock(
                 '/repo/AppHost/AppHost.csproj',
                 new vscode.CancellationTokenSource().token,
-                () => new Promise<void>(resolve => { releaseActive = resolve; }));
-            await Promise.resolve();
+                () => new Promise<void>(resolve => {
+                    releaseActive = resolve;
+                    signalActiveStarted();
+                }));
+            await activeStarted;
 
             const blockedLaunch = service.launch('/repo/AppHost/AppHost.csproj', 'run', true);
             const rejection = assert.rejects(blockedLaunch, (error: unknown) => {
@@ -587,6 +607,63 @@ suite('AppHostLaunchService', () => {
             'AppHost.csproj',
             'Program.cs',
             directory => fs.rmSync(path.join(directory, 'Second.csproj')));
+    });
+
+    test('queues behind every active lock a directory mutation merges into one identity', async () => {
+        // `Second.csproj` makes `First.csproj` and `Program.cs` ambiguous, so operations for them
+        // are independent identities and hold separate locks. Removing it merges the two into a
+        // single identity whose path keys span both active locks. Queueing behind only one of them
+        // would run the merged operation beside the other, which is the exclusivity this lock exists
+        // to provide.
+        const directory = createAppHostDirectory('First.csproj', 'Second.csproj', 'Program.cs');
+        const started: string[] = [];
+        let releaseProject!: () => void;
+        let releaseSource!: () => void;
+        let signalProjectStarted!: () => void;
+        let signalSourceStarted!: () => void;
+        const projectStarted = new Promise<void>(resolve => { signalProjectStarted = resolve; });
+        const sourceStarted = new Promise<void>(resolve => { signalSourceStarted = resolve; });
+
+        const projectOperation = service.runWithAppHostLifecycleLock(
+            path.join(directory, 'First.csproj'),
+            new vscode.CancellationTokenSource().token,
+            async () => {
+                started.push('project');
+                signalProjectStarted();
+                await new Promise<void>(resolve => { releaseProject = resolve; });
+                return 'project';
+            });
+        const sourceOperation = service.runWithAppHostLifecycleLock(
+            path.join(directory, 'Program.cs'),
+            new vscode.CancellationTokenSource().token,
+            async () => {
+                started.push('source');
+                signalSourceStarted();
+                await new Promise<void>(resolve => { releaseSource = resolve; });
+                return 'source';
+            });
+        await Promise.all([projectStarted, sourceStarted]);
+
+        fs.rmSync(path.join(directory, 'Second.csproj'));
+
+        const merged = service.runWithAppHostLifecycleLock(
+            path.join(directory, 'First.csproj'),
+            new vscode.CancellationTokenSource().token,
+            async () => {
+                started.push('merged');
+                return 'merged';
+            });
+
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        assert.deepStrictEqual(started, ['project', 'source']);
+
+        releaseProject();
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+        assert.deepStrictEqual(started, ['project', 'source'], 'The merged operation must still wait for the other active lock');
+
+        releaseSource();
+        assert.deepStrictEqual(await Promise.all([projectOperation, sourceOperation, merged]), ['project', 'source', 'merged']);
+        assert.deepStrictEqual(started, ['project', 'source', 'merged']);
     });
 
     test('cancels a lifecycle operation that outruns its budget instead of releasing the lock beside it', async () => {

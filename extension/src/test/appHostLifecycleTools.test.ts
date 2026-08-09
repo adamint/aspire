@@ -173,6 +173,8 @@ class FakeLaunchService implements AppHostLifecycleLaunchService {
  */
 class FakeDiscoveryService implements AppHostLifecycleDiscoveryService {
     readonly registeredPaths: string[] = [];
+    /** Status to report for a registered path. `aspire ls` reports `buildable` for the rest. */
+    readonly statusByPath = new Map<string, string>();
     discoverCalls = 0;
     discoverError: Error | undefined;
 
@@ -189,7 +191,7 @@ class FakeDiscoveryService implements AppHostLifecycleDiscoveryService {
         const folderPath = workspaceFolder.uri.fsPath;
         return this.registeredPaths
             .filter(candidatePath => isContainedPath(folderPath, candidatePath))
-            .map(candidatePath => ({ path: candidatePath, language: 'csharp', status: 'buildable' }));
+            .map(candidatePath => ({ path: candidatePath, language: 'csharp', status: this.statusByPath.get(candidatePath) ?? 'buildable' }));
     }
 }
 
@@ -518,6 +520,22 @@ suite('AppHost lifecycle language model tools', () => {
             discoveryService.registeredPaths.push(invisible);
 
             const result = await service.start({ appHostPath: 'AppHost/App\u200bHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.strictEqual(result.outcome, 'unknownAppHost');
+            assert.deepStrictEqual(result.knownAppHosts, ['AppHost/AppHost.csproj']);
+            assert.strictEqual(launchService.launchCalls.length, 0);
+        });
+
+        test('never offers a candidate the CLI could not confirm is buildable', async () => {
+            // `aspire ls` also reports `possibly-unbuildable` candidates - files that look like an
+            // AppHost but could not be confirmed. The Aspire view filters them out, and the tool's
+            // documented boundary is the same list the view shows, so an agent must not be able to
+            // launch one through this surface either.
+            const unconfirmed = path.join(workspaceRoot, 'Maybe', 'Maybe.csproj');
+            discoveryService.registeredPaths.push(unconfirmed);
+            discoveryService.statusByPath.set(unconfirmed, 'possibly-unbuildable');
+
+            const result = await service.start({ appHostPath: 'Maybe/Maybe.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
 
             assert.strictEqual(result.outcome, 'unknownAppHost');
             assert.deepStrictEqual(result.knownAppHosts, ['AppHost/AppHost.csproj']);
@@ -879,6 +897,27 @@ suite('AppHost lifecycle language model tools', () => {
             assert.strictEqual(result.outcome, 'cancelled');
         });
 
+        test('reports an unknown controller when the authoritative in-lock probe fails', async () => {
+            // The pre-lock probe answers, then the authoritative probe taken inside the lock fails.
+            // No editor session owns this AppHost, so falling through to the outer handler - which
+            // reports `editor` - would tell the agent the editor controls an AppHost it has no
+            // session for. A failed probe means the controller is genuinely unknown.
+            launchService.onRunningAppHostsRequested = () => {
+                if (launchService.runningAppHostRequests === 2) {
+                    launchService.runningAppHostError = new Error('aspire ps failed: /Users/private/AppHost.csproj is unreadable');
+                }
+            };
+
+            const result = await service.start({ appHostPath: 'AppHost/AppHost.csproj', mode: 'run' }, new vscode.CancellationTokenSource().token);
+
+            assert.deepStrictEqual(
+                { outcome: result.outcome, controller: result.controller },
+                { outcome: 'failed', controller: 'unknown' });
+            assert.strictEqual(launchService.runningAppHostRequests, 2);
+            assert.strictEqual(launchService.launchCalls.length, 0);
+            assert.strictEqual(JSON.stringify(result).includes('/Users/private'), false);
+        });
+
         test('reports a bounded busy outcome when the shared lifecycle lock cannot be acquired', async () => {
             launchService.lifecycleLockError = new AppHostLifecycleLockTimeoutError();
 
@@ -1060,10 +1099,12 @@ suite('AppHost lifecycle language model tools', () => {
                 { outcome: 'notRunning', controller: 'none' });
         });
 
-        test('revalidates the external controller after waiting for the stop lifecycle lock', async () => {
-            // An external AppHost can exit while this call waits for another lifecycle operation.
-            // The final no-editor-session answer must come from the post-lock probe, not the stale
-            // pre-lock snapshot.
+        test('determines the external controller from inside the stop lifecycle lock, with a single probe', async () => {
+            // An external AppHost can exit while this call waits for another lifecycle operation,
+            // so the no-editor-session answer must come from a probe taken after the lock wait.
+            // That also makes it the only probe worth running: `aspire ps` spawns the CLI with its
+            // own one-shot timeout, and a pre-lock probe whose result is discarded would spend a
+            // second process, and up to that timeout again, on an answer nothing reads.
             launchService.runningAppHosts = [{ appHostPath: appHostProjectPath }];
             launchService.onLifecycleLockHeld = () => {
                 launchService.runningAppHosts = [];
@@ -1074,7 +1115,7 @@ suite('AppHost lifecycle language model tools', () => {
             assert.deepStrictEqual(
                 { outcome: result.outcome, controller: result.controller },
                 { outcome: 'notRunning', controller: 'none' });
-            assert.strictEqual(launchService.runningAppHostRequests, 2);
+            assert.strictEqual(launchService.runningAppHostRequests, 1);
         });
 
         test('reports alreadyStarting when asked to stop a launch that has not produced a session yet', async () => {

@@ -11,7 +11,7 @@ import {
     appHostLifecycleUnresolvedPath,
     appHostLifecycleUnspecifiedMode,
 } from '../loc/strings';
-import { type CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
+import { isBuildableCandidateAppHost, type CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import { canonicalizeAppHostPath, type AppHostIdentityRelation } from '../utils/appHostIdentity';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { isCommandCancellation } from '../utils/telemetry';
@@ -363,7 +363,23 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
 
                 // Authoritative ownership check immediately before launching. This is the
                 // one that matters: everything before it could be stale by now.
-                if (await this.isRunningOutsideEditor(current.absolutePath, lockToken)) {
+                let runningOutsideEditorNow: boolean;
+                try {
+                    runningOutsideEditorNow = await this.isRunningOutsideEditor(current.absolutePath, lockToken);
+                }
+                catch (error) {
+                    if (isCommandCancellation(error)) {
+                        throw error;
+                    }
+
+                    // `owned` holds no editor session at this point, so letting this reach the
+                    // outer catch - which reports `editor` - would claim the editor controls an
+                    // AppHost it has no session for. The probe failing means the controller is
+                    // genuinely unknown, exactly as the pre-lock probe reports it.
+                    return this.createErrorResult(aspireAppHostStartToolName, error, current.relativePath, 'unknown', requestedMode, undefined);
+                }
+
+                if (runningOutsideEditorNow) {
                     return createResult(aspireAppHostStartToolName, 'alreadyRunning', current.relativePath, 'external', requestedMode, undefined);
                 }
 
@@ -411,14 +427,10 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
         }
 
         try {
-            // Same reasoning as `start`: the `aspire ps` probe stays outside the lock so a slow or
-            // wedged AppHost cannot block the user's own Run/Debug. The result is deliberately not
-            // authoritative after the lock wait; the no-editor-session path below re-probes before
-            // reporting who controls the AppHost.
-            if (!this.hasEditorSession(preflight.target.absolutePath)) {
-                await this.probeExternalControllerForStop(preflight.target.absolutePath, token);
-            }
-
+            // Unlike `start`, `stop` runs the `aspire ps` probe only inside the lock. Its result is
+            // never usable before the lock wait - the no-editor-session path below has to re-probe
+            // to report who controls the AppHost - so probing here as well would spend a second
+            // CLI invocation, with its own one-shot timeout, on an answer that is thrown away.
             return await this._dependencies.launchService.runWithAppHostLifecycleLock(preflight.target.absolutePath, token, async lockToken => {
                 const recheck = await this.preflight(aspireAppHostStopToolName, input.appHostPath, lockToken, undefined);
                 if (recheck.rejected) {
@@ -596,6 +608,14 @@ export class AppHostLifecycleToolService implements vscode.Disposable {
             // alone would let the workspace boundary be crossed under an in-workspace name.
             const canonicalFolderPath = canonicalizeAppHostPath(folder.uri.fsPath);
             for (const candidate of candidates) {
+                // The Aspire view only offers buildable candidates, and the tool's contract is
+                // that it operates on the same list. A `possibly-unbuildable` candidate is one
+                // the CLI could not confirm is an AppHost, so exposing it here would let an agent
+                // launch a target the editor itself refuses to treat as launchable.
+                if (!isBuildableCandidateAppHost(candidate)) {
+                    continue;
+                }
+
                 const relativePath = toContainedPosixRelativePath(folder.uri.fsPath, candidate.path);
                 if (relativePath === undefined) {
                     continue;

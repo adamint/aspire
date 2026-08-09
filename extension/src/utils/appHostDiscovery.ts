@@ -884,7 +884,7 @@ export async function selectWorkspaceAppHostPath(workspaceFolder: vscode.Workspa
 
     const configuredPaths = await findConfiguredAppHostPaths(workspaceFolder);
     for (const configuredPath of configuredPaths) {
-        const candidate = candidates.find(candidate => isBuildableCandidate(candidate) && isSamePath(candidate.path, configuredPath));
+        const candidate = candidates.find(candidate => isBuildableCandidateAppHost(candidate) && isSamePath(candidate.path, configuredPath));
         if (candidate) {
             return candidate.path;
         }
@@ -1156,22 +1156,29 @@ function isCSharpProjectCandidate(candidate: CandidateAppHostDisplayInfo): boole
         && candidate.language?.toLowerCase() === 'csharp';
 }
 
-function isBuildableCandidate(candidate: CandidateAppHostDisplayInfo): boolean {
+/**
+ * Whether the CLI confirmed a discovery candidate is a launchable AppHost.
+ *
+ * `aspire ls` also reports `possibly-unbuildable` candidates - files that look like an AppHost
+ * but could not be confirmed. Every surface that offers a candidate to run must go through this,
+ * so the tree, the pickers, and the language model tools all agree on what is launchable.
+ */
+export function isBuildableCandidateAppHost(candidate: CandidateAppHostDisplayInfo): boolean {
     return candidate.status === 'buildable';
 }
 
 function findSingleSelectedBuildableCandidate(candidates: readonly CandidateAppHostDisplayInfo[]): CandidateAppHostDisplayInfo | undefined {
-    const selectedCandidates = candidates.filter(candidate => candidate.selected && isBuildableCandidate(candidate));
+    const selectedCandidates = candidates.filter(candidate => candidate.selected && isBuildableCandidateAppHost(candidate));
     return selectedCandidates.length === 1 ? selectedCandidates[0] : undefined;
 }
 
 function findOnlyBuildableCandidate(candidates: readonly CandidateAppHostDisplayInfo[]): CandidateAppHostDisplayInfo | undefined {
-    const buildableCandidates = candidates.filter(isBuildableCandidate);
+    const buildableCandidates = candidates.filter(isBuildableCandidateAppHost);
     return buildableCandidates.length === 1 ? buildableCandidates[0] : undefined;
 }
 
 function findOnlyCandidateIfBuildable(candidates: readonly CandidateAppHostDisplayInfo[]): CandidateAppHostDisplayInfo | undefined {
-    return candidates.length === 1 && isBuildableCandidate(candidates[0]) ? candidates[0] : undefined;
+    return candidates.length === 1 && isBuildableCandidateAppHost(candidates[0]) ? candidates[0] : undefined;
 }
 
 function isCSharpSourceFileForProjectCandidate(filePath: string, projectPath: string): boolean {
