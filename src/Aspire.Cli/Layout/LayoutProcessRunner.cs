@@ -174,14 +174,22 @@ internal sealed class LayoutProcessRunner(IProcessExecutionFactory executionFact
     {
         if (timeout.TotalMinutes >= 1 && timeout.TotalSeconds % 60 == 0)
         {
-            return string.Create(CultureInfo.InvariantCulture, $"{timeout.TotalMinutes:0} minutes");
+            return FormatTimeoutUnit(timeout.TotalMinutes, "0", "minute", "minutes");
         }
 
         if (timeout.TotalSeconds >= 1)
         {
-            return string.Create(CultureInfo.InvariantCulture, $"{timeout.TotalSeconds:0.###} seconds");
+            return FormatTimeoutUnit(timeout.TotalSeconds, "0.###", "second", "seconds");
         }
 
-        return string.Create(CultureInfo.InvariantCulture, $"{timeout.TotalMilliseconds:0.###} milliseconds");
+        return FormatTimeoutUnit(timeout.TotalMilliseconds, "0.###", "millisecond", "milliseconds");
+    }
+
+    private static string FormatTimeoutUnit(double value, string format, string singularUnit, string pluralUnit)
+    {
+        var formattedValue = value.ToString(format, CultureInfo.InvariantCulture);
+        var unit = string.Equals(formattedValue, "1", StringComparison.Ordinal) ? singularUnit : pluralUnit;
+
+        return $"{formattedValue} {unit}";
     }
 }
