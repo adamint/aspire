@@ -19,6 +19,14 @@ function stripComments(source: string): string {
     return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 }
 
+function getWorkflowStep(workflow: string, stepName: string): string {
+    const stepStart = workflow.indexOf(`      - name: ${stepName}`);
+    assert.ok(stepStart >= 0, `workflow must contain step '${stepName}'`);
+
+    const nextStepStart = workflow.indexOf('\n      - name:', stepStart + 1);
+    return nextStepStart >= 0 ? workflow.slice(stepStart, nextStepStart) : workflow.slice(stepStart);
+}
+
 suite('E2E launch profile', () => {
     test('creates nothing in the per-run root that a later module-scope throw could strand', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
@@ -233,6 +241,18 @@ suite('E2E launch profile', () => {
         assert.ok(functionsInstallIndex > resourceGroupsInstallIndex);
         assert.ok(runner.includes("path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_RESOURCE_GROUPS_VSIX')"));
         assert.ok(runner.includes("path: resolveRequiredVsixPath('ASPIRE_EXTENSION_E2E_AZURE_FUNCTIONS_VSIX')"));
+    });
+
+    test('skips disabled E2E shards before invoking the runner', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
+        const noteStep = getWorkflowStep(workflow, 'Note skipped Azure Functions E2E shard');
+        const installStep = getWorkflowStep(workflow, 'Install Azure Functions E2E prerequisites');
+        const runStep = getWorkflowStep(workflow, 'Run extension E2E tests');
+
+        assert.ok(noteStep.includes('if: ${{ matrix.disabledIssue }}'));
+        assert.ok(installStep.includes('if: ${{ matrix.installAzureFunctions && !matrix.disabledIssue }}'));
+        assert.ok(runStep.includes('if: ${{ !matrix.disabledIssue }}'));
     });
 
     test('keeps Linux E2E recordings for successful runs by default', () => {
