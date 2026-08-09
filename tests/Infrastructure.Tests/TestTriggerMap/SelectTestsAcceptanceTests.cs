@@ -979,6 +979,32 @@ public sealed class SelectTestsAcceptanceTests(ITestOutputHelper outputHelper) :
         Assert.Contains("Infrastructure.Tests", r.TestProjects);
     }
 
+    // The routing above is what makes NpmLockfileRegistryTests.PolyglotFixtures_ContainNoLockfileFormatThisGuardCannotParse
+    // reachable. That guard fails when a fixture introduces a lockfile format none of its theories can
+    // read, so if the map routed only the four names the guard already parses, the guard could never run
+    // on the change it exists to catch: adding deno.lock or bun.lockb would select job:polyglot alone.
+    // These names are deliberately ones the guard does NOT recognize.
+    [Theory]
+    [InlineData("deno.lock")]
+    [InlineData("bun.lockb")]
+    [InlineData("npm-shrinkwrap.json")]
+    [InlineData("some-new-lock.yaml")]
+    public void RealMapUnknownPolyglotLockfileFormatStillRunsInfrastructureTests(string lockfileName)
+    {
+        var mapPath = Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml");
+        var selector = new TestSelector(mapPath, EnumerateMatrixTestProjects(), LoadProjectDirectories());
+
+        // A format nobody has added yet has no file on disk, so the path is synthesized next to an
+        // existing fixture lockfile rather than discovered. Selection is path-based and never reads it.
+        var existing = FirstPolyglotLockfile("package-lock.json");
+        var candidate = $"{existing[..(existing.LastIndexOf('/') + 1)]}{lockfileName}";
+
+        var r = selector.Select([candidate], [], new SelectorOptions());
+
+        Assert.False(r.SelectsAll);
+        Assert.Contains("Infrastructure.Tests", r.TestProjects);
+    }
+
     [Theory]
     [InlineData("src/Aspire.Cli/Templating/Templates/ts-starter/package-lock.json")]
     [InlineData("src/Aspire.Cli/Templating/Templates/py-starter/package-lock.json")]

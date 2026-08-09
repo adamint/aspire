@@ -174,16 +174,29 @@ path_rules:
   # lockfile is not a compiled item, so Layer 1 is blind to it, and the rules above route these paths
   # to job:polyglot and job:typescript-sdk only. Without this rule the guard never runs on the PR that
   # introduces the drift.
+  #
+  # The polyglot patterns match lockfile *shape* rather than the four names the guard currently parses,
+  # and they deliberately mirror NpmLockfileRegistryTests.IsLockfileShaped. That test fails when a
+  # fixture introduces a format none of its theories can read, so routing only the known four would
+  # make the guard unable to run on the very change it exists to catch: adding `deno.lock` or
+  # `bun.lockb` would select job:polyglot alone and Infrastructure.Tests would never be scheduled.
+  # Keep the two lists in sync -- a shape the test recognizes but this rule does not is a silent hole.
   - paths:
-      - tests/PolyglotAppHosts/**/package-lock.json
-      - tests/PolyglotAppHosts/**/bun.lock
-      - tests/PolyglotAppHosts/**/pnpm-lock.yaml
-      - tests/PolyglotAppHosts/**/yarn.lock
+      - tests/PolyglotAppHosts/**/*.lock
+      - tests/PolyglotAppHosts/**/*.lockb
+      - tests/PolyglotAppHosts/**/*lock*.json
+      - tests/PolyglotAppHosts/**/*lock*.yaml
+      - tests/PolyglotAppHosts/**/*lock*.yml
+      - tests/PolyglotAppHosts/**/*lock*.toml
+      - tests/PolyglotAppHosts/**/*shrinkwrap*.json
+      - tests/PolyglotAppHosts/**/*shrinkwrap*.yaml
+      - tests/PolyglotAppHosts/**/*shrinkwrap*.yml
+      - tests/PolyglotAppHosts/**/*shrinkwrap*.toml
       - src/Aspire.Cli/Templating/Templates/ts-starter/package-lock.json
       - src/Aspire.Cli/Templating/Templates/py-starter/package-lock.json
       - tests/Aspire.Hosting.CodeGeneration.TypeScript.JsTests/package-lock.json
     targets: [test:Infrastructure.Tests]
-    reason: NpmLockfileRegistryTests asserts every tarball URL in these lockfiles resolves through the approved dotnet-public-npm feed; lockfiles are not compiled items, so Layer 1 is blind and this is the only rule that fires the guard on the change that would introduce the drift
+    reason: NpmLockfileRegistryTests asserts every tarball URL in these lockfiles resolves through the approved dotnet-public-npm feed, and also fails when a fixture adds a lockfile format none of its theories parse; lockfiles are not compiled items, so Layer 1 is blind and this is the only rule that fires the guard on the change that would introduce the drift
   - paths:
       - tests/Aspire.Hosting.CodeGeneration.TypeScript.JsTests/**
       - src/Aspire.Cli/Templating/Templates/ts-starter/**
