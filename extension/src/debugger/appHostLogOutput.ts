@@ -45,15 +45,22 @@ export class AppHostLogOutputCoordinator {
     // Aspire debug session; older records are never used for broad message suppression.
     private static readonly _maxCorrelatedRecords = 1024;
     private static readonly _allSources: readonly AppHostLogSource[] = ['backchannel', 'consoleLogger', 'debugLogger'];
+    private static readonly _adapterOnlyIdleFlushDelayMs = 250;
     private readonly _correlatedRecords: CorrelatedRecord[] = [];
     private readonly _fallbackFilter = new AppHostParentOutputFilter();
     private readonly _partialLines = new Map<string, string>();
+    private readonly _idleFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
     private _highestBackchannelSequence = 0;
     // `stdout`, `stderr` and `console` are independent streams that interleave freely, so a
     // record being assembled on one of them says nothing about the others. A single pending
     // record would let an unrelated write on another stream terminate a record mid-assembly,
     // rendering the truncated half and leaking the rest.
     private readonly _pendingRecords = new Map<string, PendingConsoleRecord>();
+
+    constructor(
+        private readonly _onIdleFlush?: (output: AppHostParentOutput) => void,
+        private readonly _idleFlushDelayMs = AppHostLogOutputCoordinator._adapterOnlyIdleFlushDelayMs) {
+    }
 
     handleBackchannelEntry(entry: AppHostLogEntry): AppHostParentOutput | undefined {
         if (entry.sequenceNumber > 0) {
@@ -92,8 +99,10 @@ export class AppHostLogOutputCoordinator {
         const normalizedCategory = category ?? 'console';
         const outputs: AppHostParentOutput[] = [];
 
+        this.clearIdleFlushTimer(normalizedCategory);
+
         const buffered = `${this._partialLines.get(normalizedCategory) ?? ''}${output}`;
-        const lastBreak = Math.max(buffered.lastIndexOf('\n'), buffered.lastIndexOf('\r'));
+        const lastBreak = findLastCompletedLineBreak(buffered);
         const completeLines = buffered.slice(0, lastBreak + 1);
         let partial = buffered.slice(lastBreak + 1);
 
@@ -104,7 +113,7 @@ export class AppHostLogOutputCoordinator {
         // Decide about the trailing partial line only after the complete lines have been
         // consumed, because whether a record is being assembled is exactly what makes an
         // unterminated line worth waiting for.
-        if (partial.length > 0 && !this.shouldHoldPartialLine(partial, normalizedCategory)) {
+        if (partial.length > 0 && !partial.endsWith('\r') && !this.shouldHoldPartialLine(partial, normalizedCategory)) {
             this.consumeLines(partial, normalizedCategory, outputs);
             partial = '';
         }
@@ -114,6 +123,8 @@ export class AppHostLogOutputCoordinator {
         } else {
             this._partialLines.delete(normalizedCategory);
         }
+
+        this.scheduleIdleFlushIfNeeded(normalizedCategory);
 
         return outputs;
     }
@@ -127,6 +138,8 @@ export class AppHostLogOutputCoordinator {
      * in flight is recognized as a duplicate rather than rendered again.
      */
     flush(): AppHostParentOutput[] {
+        this.clearIdleFlushTimers();
+
         const outputs: AppHostParentOutput[] = [];
         const partials = [...this._partialLines.entries()];
         this._partialLines.clear();
@@ -147,6 +160,7 @@ export class AppHostLogOutputCoordinator {
         this._highestBackchannelSequence = 0;
         this._pendingRecords.clear();
         this._partialLines.clear();
+        this.clearIdleFlushTimers();
         this._fallbackFilter.reset();
     }
 
@@ -243,6 +257,54 @@ export class AppHostLogOutputCoordinator {
         if (filtered) {
             outputs.push(filtered);
         }
+    }
+
+    private scheduleIdleFlushIfNeeded(category: string): void {
+        const pending = this._pendingRecords.get(category);
+        if (!this._onIdleFlush || !pending || (pending.body.length === 0 && !this._partialLines.has(category))) {
+            return;
+        }
+
+        // Trace/Debug records do not have a structured backchannel twin, and a final
+        // ConsoleLogger record has no explicit terminator. Flush after a short idle
+        // window so adapter-only records become visible without waiting for AppHost
+        // shutdown, while still giving split DAP chunks time to arrive.
+        const timer = setTimeout(() => {
+            this._idleFlushTimers.delete(category);
+
+            const outputs: AppHostParentOutput[] = [];
+            const partial = this._partialLines.get(category);
+            if (partial !== undefined) {
+                this._partialLines.delete(category);
+                this.consumeLines(partial, category, outputs);
+            }
+
+            this.flushPendingRecord(category, outputs);
+
+            for (const output of outputs) {
+                this._onIdleFlush?.(output);
+            }
+        }, this._idleFlushDelayMs);
+
+        this._idleFlushTimers.set(category, timer);
+    }
+
+    private clearIdleFlushTimer(category: string): void {
+        const timer = this._idleFlushTimers.get(category);
+        if (timer === undefined) {
+            return;
+        }
+
+        clearTimeout(timer);
+        this._idleFlushTimers.delete(category);
+    }
+
+    private clearIdleFlushTimers(): void {
+        for (const timer of this._idleFlushTimers.values()) {
+            clearTimeout(timer);
+        }
+
+        this._idleFlushTimers.clear();
     }
 
     private emitRecord(
@@ -435,6 +497,19 @@ function couldStartConsoleLoggerHeader(text: string): boolean {
         const prefix = `${token}: `;
         return prefix.startsWith(text) || text.startsWith(prefix);
     });
+}
+
+function findLastCompletedLineBreak(text: string): number {
+    // DAP output is a byte stream. On Windows, a CRLF line ending can be split so
+    // one OutputEvent ends with "\r" and the next starts with "\n". Treating that
+    // trailing "\r" as a completed line makes the following "\n" look like a blank
+    // continuation line, which changes the record identity used for deduplication.
+    const lastLineFeed = text.lastIndexOf('\n');
+    const lastCarriageReturn = text.endsWith('\r')
+        ? text.lastIndexOf('\r', text.length - 2)
+        : text.lastIndexOf('\r');
+
+    return Math.max(lastLineFeed, lastCarriageReturn);
 }
 
 function isConsoleLoggerContinuation(output: string): boolean {

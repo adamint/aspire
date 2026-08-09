@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import * as sinon from 'sinon';
 import { AppHostLogEntry, AppHostLogOutputCoordinator, AppHostParentOutput } from '../debugger/appHostLogOutput';
 
 suite('AppHost log output coordinator tests', () => {
@@ -352,6 +353,60 @@ suite('AppHost log output coordinator tests', () => {
         assert.deepStrictEqual(
             renderConsole(coordinator, "info: Example.Category[7]\n      Line one.\n      \n", 'stdout'),
             []);
+    });
+
+    test('retains a trailing CR until the next debug adapter event completes the CRLF', () => {
+        const rawCoordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            rawCoordinator.handleDebugAdapterOutput("partial progress\r", 'stdout'),
+            []);
+        assert.deepStrictEqual(
+            rawCoordinator.handleDebugAdapterOutput("\n", 'stdout'),
+            [{ output: "partial progress\r\n", category: 'stdout' }]);
+
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ logLevel: 'Warning', message: 'Split CRLF warning.' })),
+            {
+                output: '\x1b[33mExample.Category: Warning: Split CRLF warning.\x1b[0m\n',
+                category: 'stdout'
+            });
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput("warn: Example.Category[7]\r", 'stdout'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput("\n      Split CRLF warning.\r\n", 'stdout'),
+            []);
+
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('idle flush emits a pending adapter-only record without waiting for shutdown', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const emitted: AppHostParentOutput[] = [];
+        const coordinator = new (AppHostLogOutputCoordinator as new (onIdleFlush: (output: AppHostParentOutput) => void) => AppHostLogOutputCoordinator)(
+            output => emitted.push(output));
+
+        try {
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput("dbug: Example.Category[7]\n      Last low-level record.\n", 'stdout'),
+                []);
+            assert.deepStrictEqual(emitted, []);
+
+            await clock.tickAsync(1000);
+
+            assert.deepStrictEqual(emitted, [{
+                output: '\x1b[2mExample.Category: Debug: Last low-level record.\x1b[0m\n',
+                category: 'stdout'
+            }]);
+            assert.deepStrictEqual(coordinator.flush(), []);
+        }
+        finally {
+            coordinator.reset();
+            clock.restore();
+        }
     });
 
     test('passes an unterminated line straight through when no record is being assembled', () => {

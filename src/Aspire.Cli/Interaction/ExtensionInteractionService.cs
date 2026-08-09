@@ -558,7 +558,7 @@ internal class ExtensionInteractionService : IExtensionInteractionService, IDisp
     }
 
     /// <summary>
-    /// Queues an AppHost log entry, waiting when too many are already pending.
+    /// Queues an AppHost log entry for asynchronous delivery to the extension.
     /// </summary>
     /// <remarks>
     /// Queued like every other extension operation. This is deliberately not gated: the entries

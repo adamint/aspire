@@ -57,7 +57,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private readonly _onDidSendMessage = new EventEmitter<any>();
   private readonly _onDidSendDebugConsoleOutput = new EventEmitter<AspireDebugConsoleOutputEvent>();
   private _messageSeq = 1;
-  private readonly _appHostLogOutput = new AppHostLogOutputCoordinator();
+  private readonly _appHostLogOutput = new AppHostLogOutputCoordinator(output => this.sendMessage(output.output, false, output.category));
 
   private readonly _session: vscode.DebugSession;
   private readonly _rpcServer: AspireRpcServer;
