@@ -5,7 +5,16 @@ namespace TypeScriptApiCompat;
 
 internal static class TypeScriptApiCompatRunner
 {
-    public static int Run(CommandLineOptions options)
+    /// <summary>
+    /// Runs the TypeScript API compatibility comparison and writes its report.
+    /// </summary>
+    /// <param name="options">The parsed command line options.</param>
+    /// <param name="errorWriter">
+    /// Where failure messages go. Defaults to <see cref="Console.Error"/> for the command line, and is
+    /// injected by tests so they can read the message without replacing the process-wide console,
+    /// which xUnit's parallel classes would otherwise race on.
+    /// </param>
+    public static int Run(CommandLineOptions options, TextWriter? errorWriter = null)
     {
         try
         {
@@ -43,7 +52,7 @@ internal static class TypeScriptApiCompatRunner
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or InvalidOperationException)
         {
-            Console.Error.WriteLine(ex.Message);
+            (errorWriter ?? Console.Error).WriteLine(ex.Message);
             return 2;
         }
     }

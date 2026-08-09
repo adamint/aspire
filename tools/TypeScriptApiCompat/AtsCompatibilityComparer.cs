@@ -234,6 +234,13 @@ internal static class AtsCompatibilityComparer
         }
     }
 
+    // A nullable parameter projects to an optional TypeScript parameter (`name?: type`), so the
+    // TypeScript projector treats IsOptional || IsNullable as optional. Comparing on IsOptional alone
+    // would call a newly added nullable parameter a breaking addition and would miss a nullable
+    // parameter becoming non-nullable, which really does break existing callers.
+    private static bool IsEffectivelyOptional(AtsParameter parameter)
+        => parameter.IsOptional || parameter.IsNullable;
+
     private static void CompareCapabilityParameters(
         string packageName,
         AtsCapability baselineCapability,
@@ -265,7 +272,7 @@ internal static class AtsCompatibilityComparer
                     $"Capability parameter '{symbol}' type changed from '{baselineParameter.TypeId}' to '{currentParameter.TypeId}'."));
             }
 
-            if (baselineParameter.IsOptional && !currentParameter.IsOptional)
+            if (IsEffectivelyOptional(baselineParameter) && !IsEffectivelyOptional(currentParameter))
             {
                 diagnostics.Add(new ApiCompatDiagnostic(
                     "capability-parameter-required",
@@ -277,7 +284,7 @@ internal static class AtsCompatibilityComparer
 
         foreach (var currentParameter in currentCapability.Parameters)
         {
-            if (!currentParameter.IsOptional && !baselineByName.ContainsKey(currentParameter.Name))
+            if (!IsEffectivelyOptional(currentParameter) && !baselineByName.ContainsKey(currentParameter.Name))
             {
                 var symbol = $"{baselineCapability.CapabilityId}({currentParameter.Name})";
                 diagnostics.Add(new ApiCompatDiagnostic(

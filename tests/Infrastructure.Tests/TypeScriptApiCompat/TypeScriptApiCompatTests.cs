@@ -196,6 +196,31 @@ public sealed class TypeScriptApiCompatTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public void NullableCapabilityParametersUseTheSameEffectiveOptionalRuleAsTheProjector()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var baselineRoot = Path.Combine(workspace.Path, "baseline");
+        var currentRoot = Path.Combine(workspace.Path, "current");
+
+        WriteSurface(baselineRoot, "Pkg", """
+            # Capabilities
+            Pkg/addThing(name: string, wasNullable: string?) -> void
+            """);
+        WriteSurface(currentRoot, "Pkg", """
+            # Capabilities
+            Pkg/addThing(name: string, wasNullable: string, addedNullable: number?) -> void
+            """);
+
+        var diagnostics = AtsCompatibilityComparer.Compare(AtsSurfaceSet.Load(baselineRoot), AtsSurfaceSet.Load(currentRoot));
+
+        // The projector emits a nullable parameter as `name?: type`, so dropping the nullability makes
+        // a parameter TypeScript callers could omit into one they cannot, and adding a nullable one
+        // breaks nobody.
+        Assert.Contains(diagnostics, d => d.Kind == "capability-parameter-required" && d.Symbol == "Pkg/addThing(wasNullable)");
+        Assert.DoesNotContain(diagnostics, d => d.Kind == "capability-parameter-added-required");
+    }
+
+    [Fact]
     public void SuppressionsUseExactMatchesAndFailWhenUnused()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
@@ -352,27 +377,23 @@ public sealed class TypeScriptApiCompatTests(ITestOutputHelper outputHelper)
             Pkg.Two/withShared(host?: string) -> void
             """);
 
+        // The writer is injected rather than swapped in through Console.SetError: xUnit runs test
+        // classes in parallel, so replacing the process-wide console lets one test capture another
+        // test's output and lets another test restore the writer mid-assertion.
         using var error = new StringWriter();
-        var originalError = Console.Error;
-        try
-        {
-            Console.SetError(error);
 
-            var exitCode = TypeScriptApiCompatRunner.Run(new CommandLineOptions(
+        var exitCode = TypeScriptApiCompatRunner.Run(
+            new CommandLineOptions(
                 baselineRoot,
                 currentRoot,
                 workspace.Path,
                 BaselineSuppressionsRoot: null,
                 ExcludedPackagesFile: null,
                 ReportPath: null,
-                GitHubAnnotations: false));
+                GitHubAnnotations: false),
+            error);
 
-            Assert.Equal(2, exitCode);
-        }
-        finally
-        {
-            Console.SetError(originalError);
-        }
+        Assert.Equal(2, exitCode);
 
         var message = error.ToString();
         Assert.Contains("Unqualified TypeScript options interface collision", message, StringComparison.Ordinal);
@@ -406,27 +427,23 @@ public sealed class TypeScriptApiCompatTests(ITestOutputHelper outputHelper)
             Pkg.Two/withShared(host: string?) -> void
             """);
 
+        // The writer is injected rather than swapped in through Console.SetError: xUnit runs test
+        // classes in parallel, so replacing the process-wide console lets one test capture another
+        // test's output and lets another test restore the writer mid-assertion.
         using var error = new StringWriter();
-        var originalError = Console.Error;
-        try
-        {
-            Console.SetError(error);
 
-            var exitCode = TypeScriptApiCompatRunner.Run(new CommandLineOptions(
+        var exitCode = TypeScriptApiCompatRunner.Run(
+            new CommandLineOptions(
                 baselineRoot,
                 currentRoot,
                 workspace.Path,
                 BaselineSuppressionsRoot: null,
                 ExcludedPackagesFile: null,
                 ReportPath: null,
-                GitHubAnnotations: false));
+                GitHubAnnotations: false),
+            error);
 
-            Assert.Equal(2, exitCode);
-        }
-        finally
-        {
-            Console.SetError(originalError);
-        }
+        Assert.Equal(2, exitCode);
 
         var message = error.ToString();
         Assert.Contains("WithSharedOptions", message, StringComparison.Ordinal);
