@@ -162,10 +162,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
    * reporting a fabricated `0` would claim a successful program exit that never happened. See
    * docs/specs/IDE-execution.md#session-change-notifications.
    *
-   * The local `_sentSessionTerminations` guard keeps this extension-side path single-shot. DCP-side
-   * lifecycle dedup (microsoft/aspire#19125) is a separate, complementary layer: notifications sent
-   * from here flow through `AspireDcpServer.sendNotification`, so a run that DCP already terminated
-   * via `DELETE /run_session` is collapsed there rather than reaching the wire twice.
+   * The local `_sentSessionTerminations` guard keeps this extension-side path single-shot for each
+   * `(dcpId, runId)` pair, including repeated stop requests for the same browser or WASM session.
    */
   sendSessionTerminated(runId: string, dcpId: string, exitCode?: number): void {
     const key = `${dcpId}\n${runId}`;

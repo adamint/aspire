@@ -96,11 +96,9 @@ export class ResourceSessionTermination {
         // same `debugSessionId` the adapter tracker addresses its notifications to; there is no
         // separate id, so there is nothing to keep in sync.
         //
-        // This is the seam with #19125, which owns the run-scoped termination registry. When that
-        // lands, emission moves behind its `runSessions.terminate(runId)` and this call goes away;
-        // dedupe and retention are its concerns, not this class's. What stays here is stop
-        // orchestration and profile cleanup, which are per-debug-session and have no home in a
-        // run-keyed registry.
+        // This class owns per-debug-session stop orchestration and profile cleanup. It also emits
+        // the terminal notification for `debugSessionEnd` runs, because that signal is observed
+        // here when the owning VS Code debug session finishes.
         if (this._signal === 'debugSessionEnd' && this._dcpId) {
             this._sendSessionTerminated(this._runId, this._dcpId);
         }

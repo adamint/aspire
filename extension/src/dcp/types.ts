@@ -215,13 +215,8 @@ export interface AspireResourceDebugSession {
  * rewiring the DCP lifecycle of `node`/`dotnet` resources, whose callbacks never overwrite it.
  * Deciding it at authoring time keeps it out of reach of settings entirely.
  *
- * The member names deliberately match the `kind` values of the `TerminationTrigger` union in
- * #19125, which owns the run-scoped termination state machine (dedupe, retention, telemetry).
- * That PR currently registers every `PUT /run_session` run as `adapterExit` on the assumption
- * that such resources always launch through a debug adapter — browser runs are the counterexample
- * this signal exists to describe. Keeping the names identical means the two models join by
- * reading `{ kind: configuration.terminationSignal }` at the registration site rather than
- * needing a translation table.
+ * The member names deliberately match the run-scoped trigger kind names so the two models join
+ * without a translation table.
  */
 export type ResourceTerminationSignal = 'adapterExit' | 'debugSessionEnd';
 

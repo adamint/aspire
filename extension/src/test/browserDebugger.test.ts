@@ -23,8 +23,8 @@ import {
 const browserProfileRootName = 'aspire-vscode-browser-debug';
 const expectedRmOptions = { recursive: true, force: true, maxRetries: 3, retryDelay: 100 };
 
-function browserProfileRootDir(): string {
-    return path.join(os.tmpdir(), browserProfileRootName);
+function browserProfileTempRootDir(): string {
+    return os.tmpdir();
 }
 
 /**
@@ -32,14 +32,15 @@ function browserProfileRootDir(): string {
  * suffix because the real code creates it with `mkdtemp` rather than deriving a guessable name.
  */
 function profileDirFor(runId: string): string {
-    return path.join(browserProfileRootDir(), `${runId}-${stubbedMkdtempSuffix}`);
+    return path.join(browserProfileTempRootDir(), `${browserProfileRootName}-${runId}-${stubbedMkdtempSuffix}`);
 }
 
-function assertProperDescendantOfProfileRoot(candidate: string): void {
-    const relative = path.relative(browserProfileRootDir(), candidate);
-    assert.ok(relative.length > 0, `Expected '${candidate}' to be below '${browserProfileRootDir()}', not equal to it`);
-    assert.strictEqual(relative.startsWith(`..${path.sep}`), false, `Expected '${candidate}' to stay below '${browserProfileRootDir()}'`);
-    assert.strictEqual(path.isAbsolute(relative), false, `Expected '${candidate}' to stay below '${browserProfileRootDir()}'`);
+function assertProperDescendantOfTempRoot(candidate: string): void {
+    const relative = path.relative(browserProfileTempRootDir(), candidate);
+    assert.ok(relative.length > 0, `Expected '${candidate}' to be below '${browserProfileTempRootDir()}', not equal to it`);
+    assert.notStrictEqual(relative, '..', `Expected '${candidate}' to stay below '${browserProfileTempRootDir()}'`);
+    assert.strictEqual(relative.startsWith(`..${path.sep}`), false, `Expected '${candidate}' to stay below '${browserProfileTempRootDir()}'`);
+    assert.strictEqual(path.isAbsolute(relative), false, `Expected '${candidate}' to stay below '${browserProfileTempRootDir()}'`);
 }
 
 suite('Browser Debugger Tests', () => {
@@ -128,7 +129,7 @@ suite('Browser Debugger Tests', () => {
     });
 
     // Path containment. The profile directory is deleted recursively when the run ends, so a run id
-    // must never be able to move that delete outside the profile root Aspire owns. `..` is the
+    // must never be able to move that delete outside the OS temp directory. `..` is the
     // dangerous case: `.` and `-` are legal in a run id and survive character sanitizing untouched,
     // so the post-creation realpath containment check is the final guard before cleanup is
     // registered.
@@ -146,7 +147,7 @@ suite('Browser Debugger Tests', () => {
     ];
 
     for (const { runId, description } of escapingRunIds) {
-        test(`keeps the browser profile directory under the profile root for ${description}`, async () => {
+        test(`keeps the browser profile directory under the temp root for ${description}`, async () => {
             const rmStub = sinon.stub(fs.promises, 'rm').resolves();
             stubBrowserProfileFs();
             const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
@@ -161,58 +162,48 @@ suite('Browser Debugger Tests', () => {
                     'Expected the rejected profile directory to be logged');
             }
             else {
-                assertProperDescendantOfProfileRoot(userDataDir);
+                assertProperDescendantOfTempRoot(userDataDir);
             }
 
             cleanupRun(runId);
 
             for (const call of rmStub.getCalls()) {
                 const deleted = call.args[0] as string;
-                assertProperDescendantOfProfileRoot(deleted);
+                assertProperDescendantOfTempRoot(deleted);
             }
         });
     }
 
-    test('creates the browser profile directory under the owned profile root', async () => {
-        // A deterministic path can be pre-created as a symlink by another local process and then
-        // followed. mkdtemp fails rather than following an existing entry, so creation itself is the
-        // race protection.
+    test('creates the browser profile directory directly under the OS temp directory', async () => {
+        // There must not be a fixed shared parent such as
+        // `${os.tmpdir()}/aspire-vscode-browser-debug`: another local user can pre-create it and
+        // make every launch fall back to the browser's default profile. `mkdtemp` creates the
+        // per-run directory itself, so the path Aspire later deletes is always an Aspire-created
+        // leaf.
         const profileFs = stubBrowserProfileFs();
+        profileFs.lstat.resolves({
+            isDirectory: () => true,
+            isSymbolicLink: () => true,
+            mode: 0o777,
+            uid: typeof process.getuid === 'function' ? process.getuid() + 1 : 0,
+        } as fs.Stats);
         const debugConfig = createResourceDebugConfig({ runId: 'run-1' });
 
         await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
 
-        assert.strictEqual(profileFs.mkdir.calledOnceWithExactly(browserProfileRootDir(), { recursive: true, mode: 0o700 }), true);
-        assert.strictEqual(profileFs.lstat.calledOnceWithExactly(browserProfileRootDir()), true);
+        assert.strictEqual(profileFs.mkdir.called, false);
+        assert.strictEqual(profileFs.lstat.called, false);
         assert.strictEqual(profileFs.mkdtemp.calledOnce, true);
-        assert.strictEqual(profileFs.mkdtemp.firstCall.args[0], path.join(browserProfileRootDir(), 'run-1-'));
+        assert.strictEqual(profileFs.mkdtemp.firstCall.args[0], path.join(browserProfileTempRootDir(), `${browserProfileRootName}-run-1-`));
         assert.deepStrictEqual(profileFs.realpath.getCalls().map(call => call.args[0]), [
-            browserProfileRootDir(),
+            browserProfileTempRootDir(),
             profileDirFor('run-1')
         ]);
         // The directory handed to the browser is the one mkdtemp actually created, not the prefix.
         assert.strictEqual(debugConfig.userDataDir, profileDirFor('run-1'));
     });
 
-    test('refuses an unsafe browser profile root before creating a profile directory', async () => {
-        const profileFs = stubBrowserProfileFs();
-        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
-        profileFs.lstat.resolves({
-            isDirectory: () => true,
-            isSymbolicLink: () => true,
-            mode: 0o700,
-            uid: typeof process.getuid === 'function' ? process.getuid() : 0,
-        } as fs.Stats);
-        const debugConfig = createResourceDebugConfig({ runId: 'run-1' });
-
-        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
-
-        assert.strictEqual(profileFs.mkdtemp.called, false);
-        assert.strictEqual(debugConfig.userDataDir, undefined);
-        assert.ok(warnStub.getCalls().some(call => /unsafe browser debug profile root/.test(call.args[0])));
-    });
-
-    test('refuses a created profile directory whose real path escapes the profile root', async () => {
+    test('refuses a created profile directory whose real path escapes the temp root', async () => {
         // Defense in depth behind mkdtemp: whatever produced the final path, a recursive delete
         // must never be aimed outside the intended parent.
         const rmStub = sinon.stub(fs.promises, 'rm').resolves();
@@ -221,7 +212,7 @@ suite('Browser Debugger Tests', () => {
         const createdPath = profileDirFor('run-1');
         profileFs.mkdtemp.resolves(createdPath);
         profileFs.realpath.callsFake(async (candidate: fs.PathLike) =>
-            String(candidate) === createdPath ? path.join(os.tmpdir(), 'escaped-profile') : String(candidate));
+            String(candidate) === createdPath ? path.join(browserProfileTempRootDir(), '..', 'escaped-profile') : String(candidate));
         const debugConfig = createResourceDebugConfig();
 
         await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
@@ -312,11 +303,23 @@ suite('Browser Debugger Tests', () => {
         // extension is installed, so stub it as present for this happy-path assertion.
         sinon.stub(vscode.extensions, 'getExtension').callsFake((id: string) =>
             id === 'firefox-devtools.vscode-firefox-debug' ? ({ id } as vscode.Extension<unknown>) : undefined);
+        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
+        const profileFs = stubBrowserProfileFs();
         const debugConfig = createResourceDebugConfig();
 
         await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001', browser: 'firefox' }, debugConfig);
 
+        const firefoxConfig = debugConfig as typeof debugConfig & { firefoxArgs?: unknown; profile?: unknown; profileDir?: unknown };
         assert.strictEqual(debugConfig.type, 'firefox');
+        assert.strictEqual(debugConfig.runtimeArgs, undefined);
+        assert.strictEqual(debugConfig.userDataDir, undefined);
+        assert.strictEqual(firefoxConfig.firefoxArgs, undefined);
+        assert.strictEqual(firefoxConfig.profile, undefined);
+        assert.strictEqual(firefoxConfig.profileDir, undefined);
+        assert.strictEqual(profileFs.mkdtemp.called, false);
+
+        cleanupRun('run-1');
+        assert.strictEqual(rmStub.called, false);
     });
 
     test('prompts to install the Firefox debugger and fails when the adapter is missing', async () => {
@@ -348,6 +351,27 @@ suite('Browser Debugger Tests', () => {
         await Promise.resolve();
 
         assert.ok(executeCommandStub.calledOnceWithExactly('workbench.extensions.installExtension', 'firefox-devtools.vscode-firefox-debug'));
+    });
+
+    test('logs when the Firefox debugger install command fails', async () => {
+        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+        sinon.stub(vscode.window, 'showErrorMessage').resolves('Install' as any);
+        const executeCommandStub = sinon.stub(vscode.commands, 'executeCommand').rejects(new Error('install failed'));
+        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
+        const debugConfig = createResourceDebugConfig();
+
+        await assert.rejects(
+            configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001', browser: 'firefox' }, debugConfig),
+            /Firefox Debugger extension/);
+
+        // The prompt is fire-and-forget, so let the resolved showErrorMessage promise and its
+        // command handler settle before asserting the logged rejection.
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        assert.ok(executeCommandStub.calledOnceWithExactly('workbench.extensions.installExtension', 'firefox-devtools.vscode-firefox-debug'));
+        assert.ok(warnStub.getCalls().some(call => /Failed to install Firefox Debugger extension/.test(call.args[0]) && /install failed/.test(call.args[0])));
     });
 
     test('logs the missing URL reason when browser launch configuration is incomplete', async () => {
@@ -404,8 +428,8 @@ suite('Browser Debugger Tests', () => {
     });
 
     test('stopSession is awaitable and single-shot for a DCP-requested browser stop', async () => {
-        // This is the shape a DCP `DELETE /run_session` drives (microsoft/aspire#19125 schedules the
-        // debugger teardown after acknowledging the delete). Three things must hold together:
+        // This is the shape a DCP `DELETE /run_session` drives: the handler waits for the debugger
+        // teardown before it acknowledges the delete. Three things must hold together:
         //   1. stopSession() resolves only after VS Code finished stopping the browser session, so the
         //      caller can sequence teardown rather than fire-and-forget.
         //   2. exactly one `sessionTerminated` reaches DCP, with no `exit_code` (a requested stop is

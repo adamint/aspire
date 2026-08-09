@@ -1,5 +1,4 @@
 import { promises as fs } from "node:fs";
-import type { Stats } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, isBrowserLaunchConfiguration } from "../../dcp/types";
@@ -15,7 +14,7 @@ const defaultBrowserRuntimeArgs = [
     '--disable-background-mode'
 ];
 
-/** Directory under the OS temp directory that contains Aspire-owned browser profiles. */
+/** Prefix for Aspire-created browser profile directories under the OS temp directory. */
 const browserProfileRootDirectoryName = 'aspire-vscode-browser-debug';
 
 export const browserDebuggerExtension: ResourceDebuggerExtension = {
@@ -60,25 +59,33 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
         debugConfiguration.webRoot = launchConfig.web_root;
         debugConfiguration.sourceMaps = true;
         debugConfiguration.resolveSourceMapLocations = ['**', '!**/node_modules/**'];
-        debugConfiguration.runtimeArgs = mergeRuntimeArgs(debugConfiguration.runtimeArgs, defaultBrowserRuntimeArgs);
-        const userDataDir = await createBrowserUserDataDir(debugConfiguration.runId);
-        if (userDataDir) {
-            debugConfiguration.userDataDir = userDataDir;
-            // Only a path that createBrowserUserDataDir() created itself, inside a profile root it
-            // verified, ever reaches this recursive delete. That function is the single gate for
-            // both the launch argument and the cleanup, so the two can never disagree about which
-            // directory Aspire owns.
-            registerRunCleanup(debugConfiguration.runId, () => {
-                void fs.rm(userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(error => {
-                    extensionLogOutputChannel.warn(`Failed to delete browser debug profile directory '${userDataDir}': ${error instanceof Error ? error.message : String(error)}`);
-                });
-            });
+        if (debugConfiguration.type === firefoxDebugAdapterType) {
+            // `runtimeArgs` and `userDataDir` are js-debug (`pwa-*`) fields. The Firefox adapter
+            // comes from firefox-devtools.vscode-firefox-debug, which owns its own profile
+            // lifecycle when no `profile`/`profileDir` is supplied.
         }
         else {
-            // Fail closed: run without an isolated profile rather than pointing the browser at, or
-            // aiming a recursive delete at, a directory Aspire does not own. js-debug falls back to
-            // its own default profile, so debugging still works and only profile isolation is lost.
-            extensionLogOutputChannel.warn(`Could not create a contained browser debug profile directory for run '${debugConfiguration.runId}'; launching without an isolated profile.`);
+            debugConfiguration.runtimeArgs = mergeRuntimeArgs(debugConfiguration.runtimeArgs, defaultBrowserRuntimeArgs);
+            const userDataDir = await createBrowserUserDataDir(debugConfiguration.runId);
+            if (userDataDir) {
+                debugConfiguration.userDataDir = userDataDir;
+                // Only a path that createBrowserUserDataDir() created itself, inside the temp root
+                // it verified, ever reaches this recursive delete. That function is the single gate
+                // for both the launch argument and the cleanup, so the two can never disagree about
+                // which directory Aspire owns.
+                registerRunCleanup(debugConfiguration.runId, () => {
+                    void fs.rm(userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }).catch(error => {
+                        extensionLogOutputChannel.warn(`Failed to delete browser debug profile directory '${userDataDir}': ${error instanceof Error ? error.message : String(error)}`);
+                    });
+                });
+            }
+            else {
+                // Fail closed: run without an isolated profile rather than pointing the browser at,
+                // or aiming a recursive delete at, a directory Aspire does not own. js-debug falls
+                // back to its own default profile, so debugging still works and only profile
+                // isolation is lost.
+                extensionLogOutputChannel.warn(`Could not create a contained browser debug profile directory for run '${debugConfiguration.runId}'; launching without an isolated profile.`);
+            }
         }
         // Remove program/args/cwd since browser debugging doesn't use them
         delete debugConfiguration.program;
@@ -135,22 +142,13 @@ function mergeRuntimeArgs(existingRuntimeArgs: unknown, argsToAdd: string[]): st
  */
 async function createBrowserUserDataDir(runId: string): Promise<string | undefined> {
     try {
-        const profileRoot = getBrowserProfileRootDirectory();
-        await fs.mkdir(profileRoot, { recursive: true, mode: 0o700 });
-
-        const profileRootStats = await fs.lstat(profileRoot);
-        if (!isSafeBrowserProfileRoot(profileRootStats)) {
-            extensionLogOutputChannel.warn(`Refusing to use unsafe browser debug profile root '${profileRoot}'.`);
-
-            return undefined;
-        }
-
-        const created = await fs.mkdtemp(path.join(profileRoot, `${sanitizeRunIdSegment(runId)}-`));
-        const profileRootRealPath = await fs.realpath(profileRoot);
+        const tempRoot = os.tmpdir();
+        const created = await fs.mkdtemp(path.join(tempRoot, `${browserProfileRootDirectoryName}-${sanitizeRunIdSegment(runId)}-`));
+        const tempRootRealPath = await fs.realpath(tempRoot);
         const createdRealPath = await fs.realpath(created);
 
-        if (!isProperDescendant(profileRootRealPath, createdRealPath)) {
-            extensionLogOutputChannel.warn(`Refusing to use browser debug profile directory '${created}' because its real path '${createdRealPath}' is outside '${profileRootRealPath}'.`);
+        if (!isProperDescendant(tempRootRealPath, createdRealPath)) {
+            extensionLogOutputChannel.warn(`Refusing to use browser debug profile directory '${created}' because its real path '${createdRealPath}' is outside '${tempRootRealPath}'.`);
 
             return undefined;
         }
@@ -158,30 +156,10 @@ async function createBrowserUserDataDir(runId: string): Promise<string | undefin
         return created;
     }
     catch (error) {
-        extensionLogOutputChannel.warn(`Failed to create a browser debug profile directory under '${getBrowserProfileRootDirectory()}': ${error instanceof Error ? error.message : String(error)}`);
+        extensionLogOutputChannel.warn(`Failed to create a browser debug profile directory under '${os.tmpdir()}': ${error instanceof Error ? error.message : String(error)}`);
 
         return undefined;
     }
-}
-
-function getBrowserProfileRootDirectory(): string {
-    return path.join(os.tmpdir(), browserProfileRootDirectoryName);
-}
-
-function isSafeBrowserProfileRoot(stats: Stats): boolean {
-    if (!stats.isDirectory() || stats.isSymbolicLink()) {
-        return false;
-    }
-
-    if (process.platform === 'win32') {
-        return true;
-    }
-
-    if (typeof process.getuid === 'function' && stats.uid !== process.getuid()) {
-        return false;
-    }
-
-    return (stats.mode & 0o077) === 0;
 }
 
 /**

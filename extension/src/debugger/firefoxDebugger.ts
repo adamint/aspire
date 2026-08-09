@@ -18,11 +18,13 @@ export const firefoxDebugAdapterType = 'firefox';
  */
 export function promptToInstallFirefoxDebugger(): void {
     extensionLogOutputChannel.info(`Firefox debug adapter requested but the ${firefoxDebuggerExtensionId} extension is not installed.`);
-    void vscode.window.showErrorMessage(firefoxDebuggerNotInstalled, installLabel).then(async selection => {
+    void Promise.resolve(vscode.window.showErrorMessage(firefoxDebuggerNotInstalled, installLabel)).then(async selection => {
         if (selection === installLabel) {
             // Installs the extension by id and opens it in the Extensions view.
             await vscode.commands.executeCommand('workbench.extensions.installExtension', firefoxDebuggerExtensionId);
         }
+    }).catch((error: unknown) => {
+        extensionLogOutputChannel.warn(`Failed to install Firefox Debugger extension '${firefoxDebuggerExtensionId}': ${error instanceof Error ? error.message : String(error)}`);
     });
 }
 
