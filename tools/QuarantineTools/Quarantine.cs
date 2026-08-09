@@ -887,14 +887,39 @@ public class Program
     /// See https://docs.kernel.org/filesystems/ext4/overview.html#casefolding.
     /// </remarks>
     private static bool IsCaseSensitiveDirectoryByChildProbe(string directory)
+        => IsCaseSensitiveDirectoryByChildProbe(
+            directory,
+            static full => Directory.EnumerateFileSystemEntries(full).Select(Path.GetFileName),
+            static path => Directory.Exists(path) || File.Exists(path));
+
+    /// <summary>
+    /// The probe's decision procedure, with directory enumeration and existence supplied by the caller
+    /// so both outcomes can be exercised without a filesystem of the matching case sensitivity.
+    /// </summary>
+    internal static bool IsCaseSensitiveDirectoryByChildProbe(
+        string directory,
+        Func<string, IEnumerable<string?>> enumerateChildNames,
+        Func<string, bool> exists)
     {
         var full = TrimTrailingSeparator(directory);
 
         try
         {
-            foreach (var entry in Directory.EnumerateFileSystemEntries(full))
+            // Enumerate once so a resolved flipped name can be told apart from a separately existing
+            // sibling. Without that distinction a case-sensitive directory holding both `Outer` and
+            // `outer` reads as case-insensitive: flipping either one resolves, and the caller then
+            // compares that segment case-insensitively and accepts one checkout as another's ancestor.
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var entryName in enumerateChildNames(full))
             {
-                var name = Path.GetFileName(entry);
+                if (!string.IsNullOrEmpty(entryName))
+                {
+                    names.Add(entryName);
+                }
+            }
+
+            foreach (var name in names)
+            {
                 var flipped = FlipCase(name);
 
                 // A name with no cased letters cannot answer the question; keep looking.
@@ -903,11 +928,16 @@ public class Program
                     continue;
                 }
 
-                // A case-sensitive directory that happens to hold two children differing only by case
-                // is read as case-insensitive here. That only restores the behavior this guard had
-                // before the probe existed, and a checkout layout does not produce such a pair.
-                var flippedPath = Path.Combine(full, flipped);
-                return !Directory.Exists(flippedPath) && !File.Exists(flippedPath);
+                // The flipped spelling is a real, separately enumerated entry, so the directory
+                // distinguishes the two casings and is case-sensitive.
+                if (names.Contains(flipped))
+                {
+                    return true;
+                }
+
+                // Nothing was enumerated under the flipped spelling, so if it still resolves, the
+                // directory reached the same entry through a different casing: case-insensitive.
+                return !exists(Path.Combine(full, flipped));
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -927,11 +957,18 @@ public class Program
     /// </summary>
     internal static string TrimSingleLineTerminator(string value)
     {
-        return value.EndsWith("\r\n", StringComparison.Ordinal)
-            ? value[..^2]
-            : value.Length > 0 && value[^1] is '\n' or '\r'
-                ? value[..^1]
-                : value;
+        // git terminates `rev-parse --show-toplevel` with a single \n on every platform. On POSIX a
+        // path component may legitimately end in \r, so a valid root arrives as "...\r\n" and removing
+        // both characters truncates it, making the wrong-tree guard reject a legitimate checkout. Only
+        // Windows, where \r cannot appear in a name, may treat a preceding \r as part of the terminator.
+        if (OperatingSystem.IsWindows() && value.EndsWith("\r\n", StringComparison.Ordinal))
+        {
+            return value[..^2];
+        }
+
+        return value.Length > 0 && value[^1] is '\n' or '\r'
+            ? value[..^1]
+            : value;
     }
 
     private static string FlipCase(string value)

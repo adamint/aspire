@@ -233,7 +233,6 @@ public class RepoRootTests : IDisposable
 
     [Theory]
     [InlineData("/src/repo\n", "/src/repo")]
-    [InlineData("C:/src/repo\r\n", "C:/src/repo")]
     [InlineData("/src/repo\n\n", "/src/repo\n")]
     [InlineData("/src/repo ", "/src/repo ")]
     [InlineData("/src/repo", "/src/repo")]
@@ -244,6 +243,72 @@ public class RepoRootTests : IDisposable
         // path component to end in a newline or a space, so anything before that terminator is part of
         // the path.
         Assert.Equal(expected, Program.TrimSingleLineTerminator(output));
+    }
+
+    [Fact]
+    public void TrimSingleLineTerminator_KeepsACarriageReturnThatIsPartOfAPosixPath()
+    {
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "A Windows path cannot contain a carriage return.");
+
+        // POSIX permits every byte except '/' and NUL in a path component, so a directory really can be
+        // named "re\r". git terminates `rev-parse --show-toplevel` with a single \n on every platform,
+        // so that root arrives as "...re\r\n": the \r is the path, not the line ending. Removing both
+        // characters truncates the root and makes the wrong-tree write guard reject a valid checkout.
+        Assert.Equal("/src/re\r", Program.TrimSingleLineTerminator("/src/re\r\n"));
+    }
+
+    [Fact]
+    public void TrimSingleLineTerminator_RemovesTheTwoCharacterTerminatorOnWindows()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Only Windows may treat a preceding \\r as part of the terminator.");
+
+        Assert.Equal("C:/src/repo", Program.TrimSingleLineTerminator("C:/src/repo\r\n"));
+    }
+
+    [Fact]
+    public void IsCaseSensitiveDirectoryByChildProbe_SeparatelyEnumeratedCaseFlippedSiblingsMeanCaseSensitive()
+    {
+        // Two children whose names differ only by case are distinct entries, which is only possible when
+        // the directory distinguishes casings. Resolving the flipped spelling is therefore not evidence
+        // of case-insensitive lookup here, and reading it as such let the ancestry walk compare that
+        // segment case-insensitively and accept one checkout as another's ancestor.
+        var probedPaths = new List<string>();
+
+        var result = Program.IsCaseSensitiveDirectoryByChildProbe(
+            "/repos/checkout",
+            _ => ["Ab", "aB"],
+            path =>
+            {
+                probedPaths.Add(path);
+                return true;
+            });
+
+        Assert.True(result);
+        Assert.Empty(probedPaths);
+    }
+
+    [Fact]
+    public void IsCaseSensitiveDirectoryByChildProbe_AFlippedSpellingThatResolvesWithoutBeingEnumeratedMeansCaseInsensitive()
+    {
+        // Only one entry exists, yet its case-flipped spelling still resolves, so the directory reached
+        // the same entry through a different casing.
+        var result = Program.IsCaseSensitiveDirectoryByChildProbe(
+            "/repos/checkout",
+            _ => ["Ab"],
+            _ => true);
+
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void IsCaseSensitiveDirectoryByChildProbe_AFlippedSpellingThatDoesNotResolveMeansCaseSensitive()
+    {
+        var result = Program.IsCaseSensitiveDirectoryByChildProbe(
+            "/repos/checkout",
+            _ => ["Ab"],
+            _ => false);
+
+        Assert.True(result);
     }
 
     [Fact]
