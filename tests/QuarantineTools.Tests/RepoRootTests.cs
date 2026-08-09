@@ -215,12 +215,11 @@ public class RepoRootTests : IDisposable
     [Fact]
     public void Canonicalize_ResolvesAPathWhoseAncestorChainReachesTheFilesystemRoot()
     {
-        // Regression guard for a Windows-only crash in this class's own fixture. Canonicalize walks up the
-        // ancestor chain probing each component for a symlink, and DirectoryInfo.ResolveLinkTarget throws
-        // DirectoryNotFoundException for a drive root such as "C:\". Because the walk happens in the
-        // constructor, that threw before any test body ran and failed all 36 tests in this class with an
-        // error that named neither the root resolution under test nor the real cause. A root cannot be a
-        // symlink, so the walk must stop there rather than probe it.
+        // Canonicalize walks up the ancestor chain probing each component for a symlink, and
+        // DirectoryInfo.ResolveLinkTarget throws DirectoryNotFoundException for a drive root such as "C:\".
+        // The walk runs in this class's constructor, so on Windows that throws before any test body runs and
+        // fails every test in the class with an error naming neither the root resolution nor the real cause.
+        // A root cannot be a symlink, so the walk must stop there rather than probe it.
         var root = Path.GetPathRoot(_scratch.FullName);
         Assert.False(string.IsNullOrEmpty(root));
 
@@ -309,6 +308,29 @@ public class RepoRootTests : IDisposable
             _ => false);
 
         Assert.True(result);
+    }
+
+    [Fact]
+    public void IsSameOrAncestorDirectory_DoesNotProbeCasingWhenEverySegmentAlreadyMatchesOrdinally()
+    {
+        // Identical spellings match under either rule, so the probe cannot change the answer. It is not free:
+        // off Windows it enumerates the whole parent directory, and the walk starts at the filesystem root, so
+        // probing unconditionally stats every ancestor on a run where nothing differs.
+        var ancestor = Path.Combine(_scratch.FullName, "outer", "repo");
+        var directory = Path.Combine(ancestor, "tests", "Sample");
+        var probedPaths = new List<string>();
+
+        var result = Program.IsSameOrAncestorDirectory(
+            ancestor,
+            directory,
+            probedDirectory =>
+            {
+                probedPaths.Add(probedDirectory);
+                return true;
+            });
+
+        Assert.True(result);
+        Assert.Empty(probedPaths);
     }
 
     [Fact]

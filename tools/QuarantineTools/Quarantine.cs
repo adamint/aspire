@@ -601,10 +601,10 @@ public class Program
             }
 
             // git prints a single absolute path followed by one line ending, using forward slashes on
-            // every platform, including Windows (for example `C:/src/aspire\r\n`). Trim exactly that one
-            // terminator: POSIX allows a checkout directory name to end in spaces *or* a newline, and
-            // TrimEnd('\r', '\n') silently truncated such a root, which the wrong-tree guard then
-            // rejected as a different repository.
+            // every platform, including Windows (for example `C:/src/aspire\r\n`). Remove exactly that one
+            // terminator and nothing else: POSIX allows a checkout directory name to end in a space, a
+            // newline, or a carriage return, so any character before the terminator is part of the path,
+            // and trimming it produces a root the wrong-tree guard then rejects as a different repository.
             // See https://git-scm.com/docs/git-rev-parse#Documentation/git-rev-parse.txt---show-toplevel.
             var output = standardOutputTask.Result;
             var trimmed = TrimSingleLineTerminator(output);
@@ -779,8 +779,13 @@ public class Program
             // does the same on Unix, the Windows current directory keeps whatever casing the process
             // was given. Follow each parent instead of applying the repository root's final-segment
             // probe to the whole absolute path.
-            var comparison = isCaseSensitiveDirectory(parent) ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-            if (!string.Equals(ancestorSegments[i], currentSegments[i], comparison))
+            // Identical spellings match under either rule, so settle that before probing. The probe is not
+            // free: off Windows it enumerates the whole parent directory, and the common case walks every
+            // ancestor from the filesystem root down, so probing first would stat `/`, `/home`, and each
+            // directory in between on a run where no segment differs at all.
+            if (!string.Equals(ancestorSegments[i], currentSegments[i], StringComparison.Ordinal)
+                && (isCaseSensitiveDirectory(parent)
+                    || !string.Equals(ancestorSegments[i], currentSegments[i], StringComparison.OrdinalIgnoreCase)))
             {
                 return false;
             }
