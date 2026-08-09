@@ -189,6 +189,7 @@ export const hotReloadActiveNoticeSaveDisabled = vscode.l10n.t('.NET Hot Reload 
 export const enableHotReloadLabel = vscode.l10n.t('Enable Hot Reload');
 export const showHotReloadOutputLabel = vscode.l10n.t('Show Hot Reload Output');
 export const hotReloadEnabledConfirmation = vscode.l10n.t('Hot Reload is enabled. Start debugging again to use it.');
+export const hotReloadEnableFailed = vscode.l10n.t('Hot Reload could not be enabled. See the Aspire output channel for details.');
 export const dismissLabel = vscode.l10n.t('Dismiss');
 export const openCliInstallInstructions = vscode.l10n.t('See CLI installation instructions');
 export const cliNotAvailable = vscode.l10n.t('Aspire CLI is not available on PATH. Please install it and restart VS Code.');

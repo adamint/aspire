@@ -3,7 +3,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { getHotReloadDiagnostics, initializeHotReloadNotificationState, isHotReloadOnSaveEnabled, isHotReloadSettingEnabled, logHotReloadDiagnostics, showHotReloadNotificationIfNeeded } from '../debugger/hotReload';
 import { createHotReloadTestConfiguration, createTestMemento } from './common';
-import { dontShowAgainLabel, enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, hotReloadEnabledConfirmation, showHotReloadOutputLabel } from '../loc/strings';
+import { dontShowAgainLabel, enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, hotReloadEnabledConfirmation, hotReloadEnableFailed, showHotReloadOutputLabel } from '../loc/strings';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { getNotificationSuppressionKey, isNotificationSuppressed, showInformationMessageWithDontShowAgain } from '../utils/notificationSuppression';
 
@@ -290,6 +290,47 @@ suite('Hot Reload Tests', () => {
         assert.deepStrictEqual(notification.getCalls().map(call => call.args[0]), [
             hotReloadDisabledNotice,
             hotReloadEnabledConfirmation
+        ]);
+    });
+
+    test('offers the notice again when enabling Hot Reload fails', async () => {
+        const globalState = createTestMemento();
+        initializeHotReloadNotificationState({ globalState });
+        const update = sinon.stub().rejects(new Error('settings file is read-only'));
+        const getConfiguration = sinon.stub(vscode.workspace, 'getConfiguration');
+        getConfiguration.withArgs('csharp.experimental.debug').returns(createHotReloadTestConfiguration({ update }, { contributed: true }));
+        getConfiguration.returns({ get: () => undefined } as unknown as vscode.WorkspaceConfiguration);
+        const errorNotification = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+        const notification = sinon.stub(vscode.window, 'showInformationMessage');
+        notification.onFirstCall().resolves(enableHotReloadLabel as unknown as vscode.MessageItem);
+        notification.resolves(undefined);
+        const diagnostics = {
+            devKitInstalled: true,
+            workspaceTrusted: true,
+            settingContributed: true,
+            settingEnabled: false,
+            reloadOnSaveEnabled: true,
+        };
+
+        showHotReloadNotificationIfNeeded(diagnostics, true);
+        await settleNotifications();
+
+        assert.deepStrictEqual(errorNotification.getCalls().map(call => call.args[0]), [hotReloadEnableFailed]);
+
+        // The user asked for Hot Reload and did not get it, so the single offer this notice gets must
+        // not have been consumed. Presenting again in this window proves both the in-window guard and
+        // the persisted record were released, since either one alone would still suppress it.
+        showHotReloadNotificationIfNeeded(diagnostics, true);
+        await settleNotifications();
+
+        // That second presentation did consume the offer, so a later window gets nothing.
+        initializeHotReloadNotificationState({ globalState });
+        showHotReloadNotificationIfNeeded(diagnostics, true);
+        await settleNotifications();
+
+        assert.deepStrictEqual(notification.getCalls().map(call => call.args[0]), [
+            hotReloadDisabledNotice,
+            hotReloadDisabledNotice
         ]);
     });
 

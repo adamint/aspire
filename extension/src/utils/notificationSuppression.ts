@@ -43,6 +43,18 @@ export async function markNotificationShown(memento: vscode.Memento | undefined,
     await memento?.update(getNotificationShownKey(notificationName), true);
 }
 
+/**
+ * Releases the "already shown" record so the notification can be presented again.
+ *
+ * Callers that mark a notification as shown before presenting it need this for the case where the
+ * attempt does not reach the user, or reaches them and then fails to do what it offered: the record
+ * would otherwise spend the single chance the notification gets on an interaction that produced
+ * nothing. This deliberately does not touch the suppression flag, which records a user decision.
+ */
+export async function clearNotificationShown(memento: vscode.Memento | undefined, notificationName: string): Promise<void> {
+    await memento?.update(getNotificationShownKey(notificationName), undefined);
+}
+
 export async function showInformationMessageWithDontShowAgain(options: InformationMessageWithDontShowAgainOptions): Promise<string | undefined> {
     const {
         memento,

@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import { isCsDevKitInstalled } from '../capabilities';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, hotReloadEnabledConfirmation, showHotReloadOutputLabel } from '../loc/strings';
-import { hasNotificationBeenShown, isNotificationSuppressed, markNotificationShown, showInformationMessageWithDontShowAgain } from '../utils/notificationSuppression';
+import { enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, hotReloadEnabledConfirmation, hotReloadEnableFailed, showHotReloadOutputLabel } from '../loc/strings';
+import { clearNotificationShown, hasNotificationBeenShown, isNotificationSuppressed, markNotificationShown, showInformationMessageWithDontShowAgain } from '../utils/notificationSuppression';
 
 const hotReloadConfigurationSection = 'csharp.experimental.debug';
 const hotReloadConfigurationName = 'hotReload';
@@ -155,20 +155,48 @@ export function showHotReloadNotificationIfNeeded(diagnostics: HotReloadDiagnost
             }
 
             if (selection === enableHotReloadLabel) {
-                await vscode.workspace
-                    .getConfiguration(hotReloadConfigurationSection)
-                    .update(hotReloadConfigurationName, true, vscode.ConfigurationTarget.Global);
+                try {
+                    await vscode.workspace
+                        .getConfiguration(hotReloadConfigurationSection)
+                        .update(hotReloadConfigurationName, true, vscode.ConfigurationTarget.Global);
 
-                // The resource this prompt came from has already launched with the old setting, and the
-                // prompt is fire-and-forget, so without this a single-resource app gives no sign that the
-                // setting took effect or that another debug start is needed to use it.
-                void vscode.window.showInformationMessage(hotReloadEnabledConfirmation);
+                    // The resource this prompt came from has already launched with the old setting, and the
+                    // prompt is fire-and-forget, so without this a single-resource app gives no sign that the
+                    // setting took effect or that another debug start is needed to use it.
+                    void vscode.window.showInformationMessage(hotReloadEnabledConfirmation);
+                }
+                catch (err) {
+                    extensionLogOutputChannel.warn(`Failed to enable Hot Reload: ${err instanceof Error ? err.message : String(err)}`);
+
+                    // The user asked for Hot Reload and got nothing. Reporting the failure and releasing the
+                    // shown record is what makes that recoverable: this notice is offered at most once per
+                    // user, so leaving the record in place would spend that one offer on a write that failed.
+                    void vscode.window.showErrorMessage(hotReloadEnableFailed);
+                    await releaseNotificationOffer(notice.name);
+                }
             }
         }
         catch (err) {
             extensionLogOutputChannel.warn(`Hot Reload notification failed: ${err instanceof Error ? err.message : String(err)}`);
+
+            // The notice is recorded as shown before it is presented, so an attempt that never reached the
+            // user must give that record back rather than silently consuming the single offer.
+            await releaseNotificationOffer(notice.name);
         }
     })();
+}
+
+async function releaseNotificationOffer(notificationName: string): Promise<void> {
+    hotReloadNotificationsShownThisWindow.delete(notificationName);
+
+    try {
+        await clearNotificationShown(hotReloadNotificationState, notificationName);
+    }
+    catch (err) {
+        // Best effort: the storage write that recorded the notice as shown is the same one being undone
+        // here, so if it is failing there is nothing further this code can do about it.
+        extensionLogOutputChannel.warn(`Failed to reset Hot Reload notification state: ${err instanceof Error ? err.message : String(err)}`);
+    }
 }
 
 function getHotReloadNotice(diagnostics: HotReloadDiagnostics): { name: string; message: string; actions: string[] } | undefined {
