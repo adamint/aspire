@@ -87,6 +87,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private _cliProcess: ChildProcessWithoutNullStreams | undefined;
   private _cliTerminationTimer: ReturnType<typeof setTimeout> | undefined;
   private _cliProcessTreeTerminationAttempted = false;
+  private _extensionShutdownRequested = false;
   // Timestamp for the `debug/apphost/end` duration measurement. Captured the first
   // time we observe a `launch` request so it covers the actual user-visible session
   // lifetime, not the moment the AspireDebugSession object was constructed.
@@ -154,6 +155,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   }
 
   requestCliStopForExtensionShutdown(): Promise<void> {
+    this._extensionShutdownRequested = true;
     if (!this._rpcClient) {
       return Promise.resolve();
     }
@@ -489,12 +491,12 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     };
 
     const cliPath = await this._terminalProvider.getAspireCliExecutablePath();
-    if (this._disposed) {
+    if (this._disposed || this._extensionShutdownRequested) {
       // Resolving the CLI path is asynchronous, so extension deactivation can complete between the
       // launch request and this point. Spawning now would produce an `aspire run` that no teardown
       // path is left to stop — and because it is spawned detached as a process-group leader, it
       // would not even die with the extension host.
-      extensionLogOutputChannel.info(`Skipping Aspire CLI launch for disposed debug session ${this.debugSessionId}.`);
+      extensionLogOutputChannel.info(`Skipping Aspire CLI launch for disposed or shutting-down debug session ${this.debugSessionId}.`);
       disposable.dispose();
       return;
     }

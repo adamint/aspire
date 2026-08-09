@@ -223,7 +223,37 @@ suite('AspireDebugSession tests', () => {
         // A detached process group spawned here would outlive the extension host itself.
         sinon.assert.notCalled(spawnStub);
         assert.strictEqual((aspireDebugSession as any)._cliProcess, undefined);
-        sinon.assert.calledWithMatch(infoStub, 'Skipping Aspire CLI launch for disposed debug session');
+        sinon.assert.calledWithMatch(infoStub, 'Skipping Aspire CLI launch for disposed or shutting-down debug session');
+    });
+
+    test('a launch that resolves the CLI path after extension shutdown was requested does not spawn an orphan CLI', async () => {
+        const spawnStub = sinon.stub(cliModule, 'spawnCliProcess');
+        const infoStub = sinon.stub(extensionLogOutputChannel, 'info');
+        let releaseCliPath!: (cliPath: string) => void;
+        const cliPath = new Promise<string>(resolve => {
+            releaseCliPath = resolve;
+        });
+        let cliPathRequested!: () => void;
+        const cliPathRequestObserved = new Promise<void>(resolve => {
+            cliPathRequested = resolve;
+        });
+        const aspireDebugSession = createSessionForSpawn(() => {
+            cliPathRequested();
+            return cliPath;
+        });
+
+        const spawning = aspireDebugSession.spawnAspireCommand(['run'], '/workspace', false, 'aspire run');
+        await cliPathRequestObserved;
+        await aspireDebugSession.requestCliStopForExtensionShutdown();
+        releaseCliPath('/usr/local/bin/aspire');
+        await spawning;
+
+        // The extension context can request shutdown before it has disposed this session. The
+        // session must still remember that no later async continuation is allowed to create a
+        // detached CLI process after the deactivation force sweep has already run.
+        sinon.assert.notCalled(spawnStub);
+        assert.strictEqual((aspireDebugSession as any)._cliProcess, undefined);
+        sinon.assert.calledWithMatch(infoStub, 'Skipping Aspire CLI launch for disposed or shutting-down debug session');
     });
 
     test('suppresses the Aspire CLI first-run banner for extension-managed launches', async () => {
