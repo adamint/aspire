@@ -384,6 +384,37 @@ public class NpmLockfileRegistryTests
         Assert.Contains("@[^:]+:registry", script, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Fails if the helper stops checking Yarn's scoped registries, which are a namespace separate
+    /// from the top-level registry the other Yarn assertion covers.
+    /// </summary>
+    /// <remarks>
+    /// Measured with Yarn 4.14.1. Berry reads `npmScopes.&lt;scope&gt;.npmRegistryServer` before the
+    /// top-level `npmRegistryServer`, and the AppHosts install scoped packages (@types/*, @esbuild/*).
+    /// Two behaviours make an unchecked scope fail open: a scope pointing elsewhere is used verbatim,
+    /// and a scope that declares no registry does not inherit the configured top-level -- it falls
+    /// back to Yarn's built-in https://registry.yarnpkg.com, which YARN_NPM_REGISTRY_SERVER does not
+    /// override. With the top level pointed at a bogus host, `yarn npm info @types/node` still
+    /// succeeded while unscoped `typescript` failed DNS. No environment variable resets the map, so
+    /// the helper has to enumerate it and fail closed.
+    /// </remarks>
+    [Fact]
+    public void RegistryEnvScript_ChecksYarnScopedRegistries()
+    {
+        var script = ReadRepoFile(RegistryEnvScriptPath);
+
+        Assert.Contains("yarn config get npmScopes --json", script, StringComparison.Ordinal);
+
+        // Reading the map is only half of it: the values have to be compared against the approved
+        // feed, and the check has to actually run from the Yarn branch of the preflight.
+        Assert.Contains("npmRegistryServer", script, StringComparison.Ordinal);
+        Assert.Contains("check_yarn_scoped_registries || failed=1", script, StringComparison.Ordinal);
+
+        // A scope with no npmRegistryServer must be reported as the public registry Yarn actually
+        // substitutes, not skipped as "inherits the approved feed".
+        Assert.Contains("https://registry.yarnpkg.com", script, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void RegistryEnvScript_DefinesTheApprovedFeed()
     {

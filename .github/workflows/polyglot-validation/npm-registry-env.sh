@@ -144,6 +144,71 @@ check_scoped_registries() {
     return "$failed"
 }
 
+# Yarn keeps scoped registries in `npmScopes.<scope>.npmRegistryServer`, a namespace entirely
+# separate from the top-level `npmRegistryServer` the check below reads. Berry consults the scoped
+# entry first, and the AppHosts install scoped packages (@types/*, @esbuild/*), so a scope declared
+# in an ambient ~/.yarnrc.yml redirects exactly those while `yarn config get npmRegistryServer` still
+# reports the approved feed.
+#
+# Measured with Yarn 4.14.1. Two behaviours make this fail open rather than merely unchecked:
+#   - a scope pointing elsewhere is used verbatim: with `npmScopes.types.npmRegistryServer` set to a
+#     bogus host, `yarn npm info @types/node` failed DNS while unscoped `typescript` resolved fine;
+#   - a scope that declares NO registry does not inherit the configured top-level. It falls back to
+#     Yarn's built-in `https://registry.yarnpkg.com`, and YARN_NPM_REGISTRY_SERVER does not override
+#     it. With the top level pointed at a bogus host, `yarn npm info @types/node` still SUCCEEDED
+#     while unscoped `typescript` failed. So merely naming a scope is enough to leave the feed.
+#
+# There is no environment variable that resets the whole map, so this fails closed instead of
+# repointing. `yarn config get npmScopes --json` prints one JSON object keyed by scope name (without
+# the leading '@'), or the bare word `undefined` when no scope is configured:
+#   {"types":{"npmAlwaysAuth":false,...,"npmRegistryServer":"https://scoped.example.invalid/"}}
+check_yarn_scoped_registries() {
+    local failed=0
+    local scopes scope reported
+
+    scopes="$(config_in_neutral_directory yarn config get npmScopes --json)"
+
+    # `undefined` (no scopes) and an empty read are both "nothing to check". Anything else has to
+    # parse as JSON, so a future format change fails closed rather than silently checking nothing.
+    if [ -z "$scopes" ] || [ "$scopes" = "undefined" ]; then
+        echo "  ✅ yarn declares no scoped registries"
+        return 0
+    fi
+
+    while IFS=$'\t' read -r scope reported; do
+        if [ "$scope" = "__PARSE_FAILED__" ]; then
+            echo "  ❌ could not read yarn's npmScopes configuration; refusing to install rather than assume it is empty"
+            return 1
+        fi
+
+        if [ "${reported%/}" != "${APPROVED_NPM_REGISTRY%/}" ]; then
+            echo "  ❌ yarn resolves @$scope packages from '$reported' instead of the approved feed '$APPROVED_NPM_REGISTRY'"
+            failed=1
+        else
+            echo "  ✅ yarn @$scope -> $reported"
+        fi
+    done < <(printf '%s' "$scopes" | node -e '
+        let raw = "";
+        process.stdin.on("data", chunk => raw += chunk);
+        process.stdin.on("end", () => {
+            try {
+                const scopes = JSON.parse(raw);
+                for (const [scope, settings] of Object.entries(scopes ?? {})) {
+                    // A null npmRegistryServer cannot be reported as "inherits the approved feed":
+                    // Yarn substitutes its own public default for it, so report it as the public
+                    // registry it actually resolves from.
+                    process.stdout.write(scope + "\t" + (settings?.npmRegistryServer ?? "https://registry.yarnpkg.com") + "\n");
+                }
+            }
+            catch {
+                process.stdout.write("__PARSE_FAILED__\t\n");
+            }
+        });
+    ')
+
+    return "$failed"
+}
+
 verify_registry_configuration() {
     local failed=0
     local yarn_version
@@ -179,6 +244,7 @@ verify_registry_configuration() {
             failed=1
         else
             check_manager_registry "yarn" "$(config_in_neutral_directory yarn config get npmRegistryServer)" || failed=1
+            check_yarn_scoped_registries || failed=1
         fi
     fi
 
