@@ -578,6 +578,146 @@ public sealed class DashboardClientTests
     }
 
     [Fact]
+    public async Task SubscribeResources_ReplicaStateOwnedPropertyMetadataChanged_EmitsParentChange()
+    {
+        var resourceUpdates = Channel.CreateUnbounded<WatchResourcesUpdate>();
+        await using var instance = CreateResourceServiceClient();
+        instance.SetDashboardServiceClient(new MockDashboardServiceClient { ResourceUpdates = resourceUpdates });
+
+        IDashboardClient client = instance;
+        var parent = CreateResource("syndule-api", "Azure Container App", "Scaled to zero");
+        var child = CreateReplicaChild(parent, "syndule-api--0000007", "Exited");
+        child.Properties.Add(new ResourceProperty
+        {
+            Name = KnownProperties.Resource.ExitCode,
+            Value = Value.ForNumber(137)
+        });
+
+        var subscribeTask = client.SubscribeResourcesAsync(CancellationToken.None);
+
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            InitialData = new InitialResourceData
+            {
+                Resources = { parent, child }
+            }
+        });
+
+        var (initialData, subscription) = await subscribeTask.DefaultTimeout();
+        var initialParent = Assert.Single(initialData, r => r.Name == parent.Name);
+        Assert.False(initialParent.Properties[KnownProperties.Resource.ExitCode].IsHighlighted);
+
+        // The exit code value is unchanged; only its presentation metadata moves. The parent projects the
+        // replica's whole property, so this is still a visible change to the parent's resource details.
+        var updatedChild = CreateReplicaChild(parent, child.Name, "Exited");
+        updatedChild.Properties.Add(new ResourceProperty
+        {
+            Name = KnownProperties.Resource.ExitCode,
+            Value = Value.ForNumber(137),
+            IsHighlighted = true
+        });
+
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            Changes = new WatchResourcesChanges
+            {
+                Value =
+                {
+                    new WatchResourcesChange
+                    {
+                        Upsert = updatedChild
+                    }
+                }
+            }
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var enumerator = subscription.GetAsyncEnumerator(cts.Token);
+
+        Assert.True(await enumerator.MoveNextAsync().AsTask().DefaultTimeout());
+        var updatedParent = Assert.Single(enumerator.Current, c => c.ChangeType == ResourceViewModelChangeType.Upsert && c.Resource.Name == parent.Name).Resource;
+        Assert.Equal(137d, updatedParent.Properties[KnownProperties.Resource.ExitCode].Value.NumberValue);
+        Assert.True(updatedParent.Properties[KnownProperties.Resource.ExitCode].IsHighlighted);
+    }
+
+    [Fact]
+    public async Task SubscribeResources_EmptyInitialData_EmitsDeletesForPreviousResources()
+    {
+        var resourceUpdates = Channel.CreateUnbounded<WatchResourcesUpdate>();
+        await using var instance = CreateResourceServiceClient();
+        instance.SetDashboardServiceClient(new MockDashboardServiceClient { ResourceUpdates = resourceUpdates });
+
+        IDashboardClient client = instance;
+        var parent = CreateResource("syndule-api", "Azure Container App", "Scaled to zero");
+        var child = CreateReplicaChild(parent, "syndule-api--0000007", "Running");
+
+        var subscribeTask = client.SubscribeResourcesAsync(CancellationToken.None);
+
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            InitialData = new InitialResourceData
+            {
+                Resources = { parent, child }
+            }
+        });
+
+        var (initialData, subscription) = await subscribeTask.DefaultTimeout();
+        Assert.Equal(2, initialData.Length);
+
+        // Reconnecting to an AppHost that reports no resources replaces the whole model, so subscribers have
+        // to be told the rows they are showing are gone. A later upsert follows so the assertion below reads a
+        // batch either way and reports what was actually emitted instead of timing out.
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            InitialData = new InitialResourceData()
+        });
+
+        var laterResource = CreateResource("syndule-worker", "Project", "Running");
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            Changes = new WatchResourcesChanges
+            {
+                Value =
+                {
+                    new WatchResourcesChange
+                    {
+                        Upsert = laterResource
+                    }
+                }
+            }
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var enumerator = subscription.GetAsyncEnumerator(cts.Token);
+
+        // Outgoing changes are coalesced on a read interval, so the deletes and the trailing upsert can
+        // arrive in one batch or two. Read until the upsert lands, then assert on everything seen.
+        var received = new List<ResourceViewModelChange>();
+        while (!received.Any(c => c.Resource.Name == laterResource.Name))
+        {
+            Assert.True(await enumerator.MoveNextAsync().AsTask().DefaultTimeout());
+            received.AddRange(enumerator.Current);
+        }
+
+        Assert.Collection(received.OrderBy(c => c.Resource.Name, StringComparer.Ordinal),
+            change =>
+            {
+                Assert.Equal(ResourceViewModelChangeType.Delete, change.ChangeType);
+                Assert.Equal(parent.Name, change.Resource.Name);
+            },
+            change =>
+            {
+                Assert.Equal(ResourceViewModelChangeType.Delete, change.ChangeType);
+                Assert.Equal(child.Name, change.Resource.Name);
+            },
+            change =>
+            {
+                Assert.Equal(ResourceViewModelChangeType.Upsert, change.ChangeType);
+                Assert.Equal(laterResource.Name, change.Resource.Name);
+            });
+    }
+
+    [Fact]
     public async Task SubscribeInteractions_OnCancel_ChannelRemoved()
     {
         await using var instance = CreateResourceServiceClient();

@@ -578,7 +578,11 @@ internal sealed class DashboardClient : IDashboardClient
                     _sourceResourceByName.Clear();
                     _resourceByName.Clear();
 
-                    // TODO send a "clear" event via outgoing channels, in case consumers have extra items to be removed
+                    // An initial snapshot replaces everything subscribers currently display, so the diff below has
+                    // to run even when the snapshot carries no resources. Leaving this null for an empty snapshot
+                    // would skip the diff entirely, so reconnecting to an AppHost that no longer reports a resource
+                    // would never emit its delete and subscribers would keep showing the stale row.
+                    sourceChanges = [];
 
                     foreach (var resource in response.InitialData.Resources)
                     {
@@ -587,7 +591,6 @@ internal sealed class DashboardClient : IDashboardClient
                         _sourceResourceByName[resource.Name] = viewModel;
 
                         // Send this update to any subscribers too.
-                        sourceChanges ??= [];
                         sourceChanges.Add(new(ResourceViewModelChangeType.Upsert, viewModel));
                     }
 

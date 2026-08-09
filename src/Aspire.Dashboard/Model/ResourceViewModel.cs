@@ -174,15 +174,7 @@ public sealed class ResourceViewModel
     /// <summary>
     /// Determines whether this resource and <paramref name="other"/> agree on every property in
     /// <see cref="s_stateOwnedPropertyNames"/>, treating a property either side is missing as absent.
-    /// Callers compare this alongside <see cref="State"/> and friends so a replica change that only moves
-    /// a state-owned property (an exit code, for instance) still counts as a change to a derived parent
-    /// row. Runs allocation free because it is on the steady-state path of every resource update batch.
     /// </summary>
-    /// <remarks>
-    /// This compares the protobuf values rather than the <see cref="ResourcePropertyViewModel"/> wrappers
-    /// because the wrapper is a plain class with reference equality. Every snapshot allocates new wrappers,
-    /// so comparing wrappers would report a change on every batch. <see cref="Value"/> compares structurally.
-    /// </remarks>
     internal bool HasSameStateOwnedProperties(ResourceViewModel other)
     {
         foreach (var name in s_stateOwnedPropertyNames)
@@ -195,13 +187,34 @@ public sealed class ResourceViewModel
                 return false;
             }
 
-            if (hasValue && !Equals(property!.Value, otherProperty!.Value))
+            if (hasValue && !HasSameProjectedProperty(property!, otherProperty!))
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Compares the fields of a state-owned property that <see cref="ProjectStateOwnedProperties"/> carries onto
+    /// a derived parent row.
+    /// </summary>
+    private static bool HasSameProjectedProperty(ResourcePropertyViewModel property, ResourcePropertyViewModel other)
+    {
+        // ResourcePropertyViewModel is a plain class with reference equality, and every snapshot allocates new
+        // instances, so comparing the wrappers themselves would report a change on every batch. The projection
+        // copies the whole wrapper, not just its value, so compare each field the AppHost snapshot owns: a
+        // metadata-only move (sensitivity, display name, highlighting, sort order) is still a visible change to
+        // the parent's resource details. IsValueMasked is excluded on purpose because it is view state the
+        // details grid toggles on the instance it was handed, not something the snapshot decides.
+        return string.Equals(property.Name, other.Name, StringComparisons.ResourcePropertyName) &&
+            Equals(property.Value, other.Value) &&
+            Equals(property.KnownProperty, other.KnownProperty) &&
+            string.Equals(property.DisplayName, other.DisplayName, StringComparison.Ordinal) &&
+            property.IsValueSensitive == other.IsValueSensitive &&
+            property.IsHighlighted == other.IsHighlighted &&
+            property.SortOrder == other.SortOrder;
     }
 
     internal ResourceViewModel WithStateFrom(ResourceViewModel stateSource)
