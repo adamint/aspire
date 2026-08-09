@@ -128,7 +128,11 @@
 
       ContinueOnError only governs this target. MSBuild still reports whatever error the referenced project itself
       logged, so the overall build result is not fully insulated from a reference that cannot answer the probe;
-      SkipAspireProjectResourceTargetName=true opts out of probing entirely for those.
+      SkipAspireProjectResourceTargetName=true opts out of probing entirely for those. That is a limitation of the
+      MSBuild task rather than a choice: an error logged by the referenced project belongs to that project's build,
+      so ContinueOnError lets this target keep running but cannot demote it, and the build still fails. The warnings
+      after each probe exist for that case, so a failure inside a target the user never asked for says where it came
+      from and how to turn it off.
     -->
     <MSBuild Projects="@(_AspirePreparedProjectResource)"
              Targets="GetTargetFrameworks"
@@ -140,6 +144,13 @@
              SkipNonexistentTargets="true">
       <Output TaskParameter="TargetOutputs" ItemName="_AspireProjectResourceTargetFrameworkInfo" />
     </MSBuild>
+
+    <!--
+      Placed immediately after the task because MSBuildLastTaskResult only describes the task that ran last, and
+      the intrinsic ItemGroup below counts as one.
+    -->
+    <Warning Condition="'$(MSBuildLastTaskResult)' == 'false'"
+             Text="Aspire could not ask a project resource for its target frameworks while collecting the debugger target name, and the error that reference reported fails this build. The target name is only a hint - consumers fall back to the project's TargetPath when it is absent - so set SkipAspireProjectResourceTargetName=true to skip this evaluation." />
 
     <!--
       The item list is updated from itself on purpose. Updating one list from another (Update="@(OtherList)") does not
@@ -178,6 +189,9 @@
              SkipNonexistentTargets="true">
       <Output TaskParameter="TargetOutputs" ItemName="_AspireProjectResourceTargetPath" />
     </MSBuild>
+
+    <Warning Condition="'$(MSBuildLastTaskResult)' == 'false'"
+             Text="Aspire could not ask a project resource for its target path while collecting the debugger target name, and the error that reference reported fails this build. The target name is only a hint - consumers fall back to the project's TargetPath when it is absent - so set SkipAspireProjectResourceTargetName=true to skip this evaluation." />
 
   </Target>
 

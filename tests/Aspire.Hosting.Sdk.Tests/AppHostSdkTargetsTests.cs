@@ -502,10 +502,13 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
             extraArguments: ["-p:BuildingProject=true"]);
 
         // ContinueOnError keeps the codegen target running, but it does not demote the error the referenced
-        // project logged: the build still fails. Letting the AppHost build succeed on a reference that cannot
-        // be evaluated would hide a broken project behind a debugger-only convenience.
+        // project logged: that error belongs to the reference's own build, so the AppHost build still fails.
+        // The probe cannot isolate itself from that, which is why it has to explain itself instead - a build
+        // that fails inside a target the user never asked for has to say where the failure came from and how
+        // to turn the probe off, because the target name it collects is only a debugger hint.
         Assert.NotEqual(0, result.DotNetResult.ExitCode);
         Assert.Contains("aspire target name probe hook failed", result.DotNetResult.Output);
+        Assert.Contains("set SkipAspireProjectResourceTargetName=true to skip this evaluation", result.DotNetResult.Output);
 
         using var controlWorkspace = TemporaryWorkspace.Create(outputHelper);
 
