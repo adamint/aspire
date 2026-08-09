@@ -3,6 +3,7 @@
 
 using System.IO.Enumeration;
 using System.Text.Json;
+using System.Text;
 using System.Text.RegularExpressions;
 using Xunit;
 using YamlDotNet.RepresentationModel;
@@ -596,6 +597,70 @@ public class NpmLockfileRegistryTests
             comparisonIndex >= 0 && comparisonIndex < firstAcquisitionIndex,
             $"{dockerfileName} acquires npm packages at offset {firstAcquisitionIndex} without first rejecting an NPM_REGISTRY build arg that is not '{ApprovedNpmRegistry}'.");
     }
+
+    /// <summary>
+    /// Every logical line must begin with a Docker instruction once line continuations are joined.
+    /// </summary>
+    /// <remarks>
+    /// A shell fragment left behind by an edit - a dropped `\` or a duplicated block tail - reads as
+    /// a fresh instruction and fails the image build with `unknown instruction`, which is only
+    /// discovered when the polyglot job actually builds. That job does not run on every PR, so the
+    /// break can reach main. This turns a build-time parse failure into a unit test failure.
+    /// </remarks>
+    [Theory]
+    [MemberData(nameof(PolyglotDockerfiles))]
+    public void PolyglotDockerfile_HasNoOrphanedContinuationLines(string dockerfileName)
+    {
+        var text = ReadRepoFile($"{PolyglotValidationDirectory}/{dockerfileName}");
+
+        var orphans = new List<string>();
+        var buffer = new StringBuilder();
+
+        foreach (var rawLine in text.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+
+            // A comment only starts a logical line when one is not already being continued; inside a
+            // continuation a '#' is shell syntax, not a Dockerfile comment.
+            if (buffer.Length == 0 && line.TrimStart().StartsWith('#'))
+            {
+                continue;
+            }
+
+            buffer.Append(line);
+
+            if (buffer.ToString().TrimEnd().EndsWith('\\'))
+            {
+                var joined = buffer.ToString().TrimEnd();
+                buffer.Clear();
+                buffer.Append(joined, 0, joined.Length - 1);
+                continue;
+            }
+
+            var logicalLine = buffer.ToString();
+            buffer.Clear();
+
+            if (string.IsNullOrWhiteSpace(logicalLine))
+            {
+                continue;
+            }
+
+            var instruction = logicalLine.TrimStart().Split(' ', StringSplitOptions.RemoveEmptyEntries)[0];
+            if (!s_dockerInstructions.Contains(instruction))
+            {
+                orphans.Add(instruction);
+            }
+        }
+
+        Assert.Equal([], orphans);
+    }
+
+    // https://docs.docker.com/reference/dockerfile/
+    private static readonly HashSet<string> s_dockerInstructions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "ADD", "ARG", "CMD", "COPY", "ENTRYPOINT", "ENV", "EXPOSE", "FROM", "HEALTHCHECK", "LABEL",
+        "MAINTAINER", "ONBUILD", "RUN", "SHELL", "STOPSIGNAL", "USER", "VOLUME", "WORKDIR",
+    };
 
     /// <summary>
     /// Discovered from disk rather than listed, so an image that grows a build-time npm install is
