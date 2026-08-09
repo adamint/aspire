@@ -25,8 +25,10 @@ import { aspireCliPathEnvironmentDescription } from '../loc/strings';
 export const ASPIRE_CLI_PATH_ENV_VAR = 'AspireCliPath';
 
 /**
- * Name of the env var carrying this extension's version to every terminal, task,
- * and debug process VS Code creates for the extension.
+ * Name of the env var carrying this extension's version to the terminals VS Code creates for the
+ * extension, which is also how tasks and debug sessions configured with `"console":
+ * "integratedTerminal"` receive it. EnvironmentVariableCollection does not reach a debug process
+ * launched into the internal console; see https://github.com/microsoft/vscode/issues/114818.
  *
  * `aspire doctor` uses it to compare the running extension against the
  * Marketplace. Nothing on disk can answer that question: several extension roots
@@ -241,7 +243,7 @@ export function syncAspireCliPathEnvironment(
 
     collection.description = aspireCliPathEnvironmentDescription;
     collection.replace(ASPIRE_CLI_PATH_ENV_VAR, forwardablePath);
-    deps.log?.(`Forwarding ${ASPIRE_CLI_PATH_ENV_VAR}=${forwardablePath} to terminals, tasks, and debug processes.`);
+    deps.log?.(`Forwarding ${ASPIRE_CLI_PATH_ENV_VAR}=${forwardablePath} to VS Code terminals.`);
     return forwardablePath;
 }
 
@@ -319,7 +321,7 @@ export function syncAspireExtensionVersionEnvironment(
     collection.replace(ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR, trimmedVersion);
     collection.replace(ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR, channel);
     collection.replace(ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR, source);
-    log?.(`Forwarding ${ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR}=${trimmedVersion}, ${ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR}=${channel}, and ${ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR}=${source} to terminals, tasks, and debug processes.`);
+    log?.(`Forwarding ${ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR}=${trimmedVersion}, ${ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR}=${channel}, and ${ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR}=${source} to VS Code terminals.`);
     return trimmedVersion;
 }
 
@@ -338,24 +340,24 @@ export function getAspireExtensionChannel(packageJSON: AspireVsCodePackageJson |
 }
 
 export function getAspireExtensionSource(packageJSON: AspireVsCodePackageJson | undefined): AspireVsCodeExtensionSource {
-    // `__metadata.source` is the authoritative install origin VS Code records: 'gallery' for a
-    // Marketplace install and 'vsix' for a side-load. It wins whenever it is present, because a
-    // side-loaded VSIX that VS Code matched against a gallery entry also gets a `publisherId` and
-    // would otherwise be reported as a Marketplace install.
+    // `__metadata.source` is the only signal that proves how the extension was installed: 'gallery'
+    // for a Marketplace install and 'vsix' for a side-load. `publisherId` is deliberately not used as
+    // a substitute, because VS Code looks a side-loaded VSIX up in the gallery on install and stores
+    // the matched publisherId on it, so inferring 'marketplace' from publisherId makes the CLI issue
+    // the outbound Marketplace request this signal exists to suppress.
     //
-    // It is usually absent. Current VS Code strips `__metadata` from the description entirely and
-    // keeps the full metadata in the profile's extensions.json, so `publisherId` stays as the
-    // fallback rather than the primary signal: requiring `source` would report every install as
-    // unknown and permanently suppress the CLI's Marketplace comparison.
+    // Current VS Code deletes `__metadata` from the manifest before building the description the
+    // extension host sees, and keeps the full metadata in the profile's extensions.json, so this
+    // normally reports 'unknown'. That is the honest answer, and it is not a dead end: the CLI treats
+    // an unknown reported source as "resolve it from disk", where the profile index is readable.
+    // See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/common/extensionsScannerService.ts
+    // (`delete manifest.__metadata` in `scanExtension`).
     const source = packageJSON?.__metadata?.source;
     if (typeof source === 'string' && source.trim().length > 0) {
         return source.trim().toLowerCase() === 'gallery' ? 'marketplace' : 'unknown';
     }
 
-    return typeof packageJSON?.__metadata?.publisherId === 'string'
-        && packageJSON.__metadata.publisherId.trim().length > 0
-        ? 'marketplace'
-        : 'unknown';
+    return 'unknown';
 }
 
 /**

@@ -432,13 +432,15 @@ suite('cliPathEnvironment.syncAspireExtensionVersionEnvironment tests', () => {
         }), 'pre-release');
     });
 
-    test('reads marketplace source from VS Code marketplace metadata', () => {
+    test('reports unknown source when only a publisherId is recorded', () => {
+        // A gallery-matched side-load carries publisherId too, so it cannot stand in for `source`.
+        // Reporting unknown hands the decision to the CLI, which reads the authoritative profile index.
         assert.strictEqual(getAspireExtensionSource({
             __metadata: {
                 isPreReleaseVersion: false,
                 publisherId: 'publisher-id',
             },
-        }), 'marketplace');
+        }), 'unknown');
     });
 
     test('reports unknown source when VS Code marketplace metadata is absent', () => {

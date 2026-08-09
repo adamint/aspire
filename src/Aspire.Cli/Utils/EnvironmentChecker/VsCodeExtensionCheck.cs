@@ -63,6 +63,10 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
 
     private const int MaximumManifestSize = 1024 * 1024;
 
+    // The profile index holds one entry per installed extension, so it is allowed to be larger than a
+    // single manifest while still bounding what doctor will read into memory.
+    private const int MaximumProfileIndexSize = 8 * 1024 * 1024;
+
     private readonly IEnvironment _environment;
     private readonly CliExecutionContext _executionContext;
     private readonly IVsCodeExtensionMarketplaceClient _marketplaceClient;
@@ -301,9 +305,12 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             return new VsCodeExtensionDetection(VsCodeInstalled: false, ExtensionInstalled: false);
         }
 
-        // The extension contributes its own version to every terminal, task, and debug process VS Code
-        // creates for it, so this is the version of the instance that is actually running. It is
-        // preferred over anything on disk: several extension roots can hold the extension at once
+        // The extension contributes its own version through EnvironmentVariableCollection, which VS Code
+        // applies to the terminals it creates (and therefore to tasks and to debug sessions configured
+        // with "console": "integratedTerminal", because those run inside one). It deliberately does not
+        // reach a debug process launched into the internal console; see
+        // https://github.com/microsoft/vscode/issues/114818. When the variable is present it is the
+        // version of the instance that is actually running, so it is preferred over anything on disk: several extension roots can hold the extension at once
         // (desktop plus .vscode-server for Remote/WSL/devcontainers), --extensions-dir is invisible to
         // a child process, and portable mode relocates the whole root.
         //
@@ -311,15 +318,45 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         // to the disk scan instead of being reported as an unknown version.
         var reportedVersion = environment.GetEnvironmentVariable(ExtensionVersionEnvironmentVariable)?.Trim();
         if (!string.IsNullOrEmpty(reportedVersion) &&
-            SemVersion.TryParse(reportedVersion, SemVersionStyles.Strict, out _))
+            SemVersion.TryParse(reportedVersion, SemVersionStyles.Strict, out var reportedSemVersion))
         {
+            var reportedChannel = ParseReleaseChannel(environment.GetEnvironmentVariable(ExtensionChannelEnvironmentVariable));
+            var reportedSource = ParseInstallSource(environment.GetEnvironmentVariable(ExtensionSourceEnvironmentVariable));
+
+            // The extension host cannot see how the extension was installed: VS Code deletes __metadata
+            // from the manifest before building the description an extension reads, so the reported
+            // source is normally unknown even for a Marketplace install. Leaving it there would retire
+            // the Marketplace comparison on the very path that reports the most accurate version, so
+            // the on-disk record is consulted for the missing signals. It is only adopted when the disk
+            // scan resolved the same version that was reported, which is what proves the record belongs
+            // to the instance that is running rather than to a second copy in another extensions root.
+            if (reportedSource is VsCodeExtensionInstallSource.Unknown ||
+                reportedChannel is VsCodeExtensionReleaseChannel.Unknown)
+            {
+                var reportedDiskDetection = ResolveExtensionFromDisk(environment, homeDirectory);
+
+                if (SemVersion.TryParse(reportedDiskDetection.Version, SemVersionStyles.Strict, out var diskVersion) &&
+                    SemVersion.ComparePrecedence(diskVersion, reportedSemVersion) == 0)
+                {
+                    if (reportedSource is VsCodeExtensionInstallSource.Unknown)
+                    {
+                        reportedSource = reportedDiskDetection.InstallSource;
+                    }
+
+                    if (reportedChannel is VsCodeExtensionReleaseChannel.Unknown)
+                    {
+                        reportedChannel = reportedDiskDetection.ReleaseChannel;
+                    }
+                }
+            }
+
             return new VsCodeExtensionDetection(
                 VsCodeInstalled: true,
                 ExtensionInstalled: true,
                 ExtensionVersion: reportedVersion,
                 VersionSource: VsCodeExtensionVersionSource.Extension,
-                ReleaseChannel: ParseReleaseChannel(environment.GetEnvironmentVariable(ExtensionChannelEnvironmentVariable)),
-                InstallSource: ParseInstallSource(environment.GetEnvironmentVariable(ExtensionSourceEnvironmentVariable)));
+                ReleaseChannel: reportedChannel,
+                InstallSource: reportedSource);
         }
 
         // Outside a VS Code-created process there is no environment signal. Older extension builds also
@@ -395,6 +432,7 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         var releaseChannel = VsCodeExtensionReleaseChannel.Unknown;
         var installSource = VsCodeExtensionInstallSource.Unknown;
         var installed = false;
+        var profileMetadata = ReadProfileExtensionMetadata(extensionsDirectory);
 
         foreach (var extensionDirectory in EnumerateExtensionDirectories(extensionsDirectory))
         {
@@ -408,12 +446,103 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
                 (highestVersion is null || SemVersion.ComparePrecedence(version, highestVersion) > 0))
             {
                 highestVersion = version;
-                releaseChannel = candidateReleaseChannel;
-                installSource = candidateInstallSource;
+
+                // The profile index is the authoritative record of how an extension got here, so it
+                // overrides whatever the extracted manifest happened to retain. Current VS Code
+                // writes only { targetPlatform, installedTimestamp, size } into the manifest's
+                // __metadata and keeps source/isPreReleaseVersion here, so without this read a
+                // Marketplace install is classified from publisherId alone -- which a side-loaded
+                // VSIX can also carry once the gallery matches it.
+                var recorded = profileMetadata.TryGetValue(Path.GetFileName(extensionDirectory), out var entry)
+                    ? entry
+                    : default;
+
+                // A null here means the index carried no signal, which is different from the index
+                // saying the install is not from the gallery: the latter has to override the
+                // manifest's weaker publisherId inference rather than fall back to it.
+                releaseChannel = recorded.ReleaseChannel ?? candidateReleaseChannel;
+                installSource = recorded.InstallSource ?? candidateInstallSource;
             }
         }
 
         return new VsCodeExtensionRootDetection(installed, highestVersion, releaseChannel, installSource);
+    }
+
+    /// <summary>
+    /// Reads the profile's extension index, which records how each installed extension was acquired.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This is the signal VS Code itself trusts. The extracted <c>package.json</c> only ever keeps a
+    /// trimmed <c>__metadata</c>, and current builds strip it from the extension description
+    /// entirely, so neither the manifest nor <c>vscode.Extension.packageJSON</c> can answer whether an
+    /// install came from the Marketplace. The index does, for every entry.
+    /// </para>
+    /// <para>
+    /// Entries look like this (trimmed; a real file is an array of these):
+    /// <code>
+    /// [{
+    ///   "identifier": { "id": "microsoft-aspire.aspire-vscode", "uuid": "..." },
+    ///   "version": "1.2.3",
+    ///   "relativeLocation": "microsoft-aspire.aspire-vscode-1.2.3",
+    ///   "metadata": { "source": "gallery", "isPreReleaseVersion": false, "publisherId": "..." }
+    /// }]
+    /// </code>
+    /// <c>relativeLocation</c> is the extracted folder name, which is what the directory scan keys on.
+    /// Older files can omit <c>relativeLocation</c> or <c>metadata</c>, and a partially written index
+    /// is not worth failing doctor over, so anything unexpected is skipped rather than thrown.
+    /// See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/node/extensionsScannerService.ts.
+    /// </para>
+    /// </remarks>
+    private static IReadOnlyDictionary<string, (VsCodeExtensionReleaseChannel? ReleaseChannel, VsCodeExtensionInstallSource? InstallSource)> ReadProfileExtensionMetadata(
+        string extensionsDirectory)
+    {
+        var indexPath = Path.Combine(extensionsDirectory, "extensions.json");
+
+        try
+        {
+            var indexFile = new FileInfo(indexPath);
+
+            // The index grows with the number of installed extensions, so it is allowed to be larger
+            // than a single manifest while still being capped against reading an arbitrary file here.
+            if (!indexFile.Exists || indexFile.Length > MaximumProfileIndexSize)
+            {
+                return FrozenDictionary<string, (VsCodeExtensionReleaseChannel?, VsCodeExtensionInstallSource?)>.Empty;
+            }
+
+            using var stream = indexFile.OpenRead();
+            using var document = JsonDocument.Parse(stream);
+
+            if (document.RootElement.ValueKind is not JsonValueKind.Array)
+            {
+                return FrozenDictionary<string, (VsCodeExtensionReleaseChannel?, VsCodeExtensionInstallSource?)>.Empty;
+            }
+
+            var metadataByFolder = new Dictionary<string, (VsCodeExtensionReleaseChannel?, VsCodeExtensionInstallSource?)>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var entry in document.RootElement.EnumerateArray())
+            {
+                if (entry.ValueKind is not JsonValueKind.Object ||
+                    !entry.TryGetProperty("relativeLocation", out var relativeLocation) ||
+                    relativeLocation.ValueKind != JsonValueKind.String ||
+                    relativeLocation.GetString() is not { Length: > 0 } folderName ||
+                    !entry.TryGetProperty("metadata", out var metadata) ||
+                    metadata.ValueKind is not JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                metadataByFolder[folderName] = (
+                    GetMetadataReleaseChannelOrDefault(metadata),
+                    GetMetadataInstallSourceOrDefault(metadata));
+            }
+
+            return metadataByFolder;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return FrozenDictionary<string, (VsCodeExtensionReleaseChannel?, VsCodeExtensionInstallSource?)>.Empty;
+        }
     }
 
     private static IEnumerable<string> EnumerateExtensionDirectories(string extensionsDirectory)
@@ -611,23 +740,41 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
     }
 
     /// <summary>
-    /// Reads the Marketplace release channel recorded in an installed extension's manifest metadata.
+    /// Reads the Marketplace release channel recorded in an installed extension's manifest metadata,
+    /// treating a manifest that records no channel as stable.
+    /// </summary>
+    private static VsCodeExtensionReleaseChannel GetManifestReleaseChannel(JsonElement manifest)
+        => TryGetManifestMetadata(manifest, out var metadata)
+            ? GetMetadataReleaseChannel(metadata)
+            : VsCodeExtensionReleaseChannel.Stable;
+
+    private static VsCodeExtensionInstallSource GetManifestInstallSource(JsonElement manifest)
+        => TryGetManifestMetadata(manifest, out var metadata)
+            ? GetMetadataInstallSource(metadata)
+            : VsCodeExtensionInstallSource.Unknown;
+
+    private static VsCodeExtensionReleaseChannel GetMetadataReleaseChannel(JsonElement metadata)
+        => GetMetadataReleaseChannelOrDefault(metadata) ?? VsCodeExtensionReleaseChannel.Stable;
+
+    private static VsCodeExtensionInstallSource GetMetadataInstallSource(JsonElement metadata)
+        => GetMetadataInstallSourceOrDefault(metadata) ?? VsCodeExtensionInstallSource.Unknown;
+
+    /// <summary>
+    /// Reads the release channel from a VS Code metadata object, or <see langword="null"/> when the
+    /// object records no channel at all.
     /// </summary>
     /// <remarks>
-    /// <para>
     /// VS Code coerces the flag with <c>!!metadata.isPreReleaseVersion</c>, and older gallery installs
-    /// were written without it at all, so an absent property means stable rather than unknown.
-    /// A property that is present but is not a JSON boolean (for example <c>"isPreReleaseVersion": "true"</c>)
-    /// is a manifest we cannot trust, and guessing stable there would compare a pre-release install
-    /// against the stable feed, so it reports <see cref="VsCodeExtensionReleaseChannel.Unknown"/>.
-    /// </para>
+    /// were written without it, so callers treat an absent property as stable. A property that is
+    /// present but is not a JSON boolean (for example <c>"isPreReleaseVersion": "true"</c>) is metadata
+    /// we cannot trust, and guessing stable there would compare a pre-release install against the
+    /// stable feed, so it reports <see cref="VsCodeExtensionReleaseChannel.Unknown"/>.
     /// </remarks>
-    private static VsCodeExtensionReleaseChannel GetManifestReleaseChannel(JsonElement manifest)
+    private static VsCodeExtensionReleaseChannel? GetMetadataReleaseChannelOrDefault(JsonElement metadata)
     {
-        if (!TryGetManifestMetadata(manifest, out var metadata) ||
-            !metadata.TryGetProperty("isPreReleaseVersion", out var isPreReleaseVersion))
+        if (!metadata.TryGetProperty("isPreReleaseVersion", out var isPreReleaseVersion))
         {
-            return VsCodeExtensionReleaseChannel.Stable;
+            return null;
         }
 
         return isPreReleaseVersion.ValueKind switch
@@ -638,23 +785,17 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         };
     }
 
-    private static VsCodeExtensionInstallSource GetManifestInstallSource(JsonElement manifest)
+    private static VsCodeExtensionInstallSource? GetMetadataInstallSourceOrDefault(JsonElement metadata)
     {
-        if (!TryGetManifestMetadata(manifest, out var metadata))
-        {
-            return VsCodeExtensionInstallSource.Unknown;
-        }
-
-        // __metadata.source is the authoritative install origin VS Code records ("gallery" for a
-        // Marketplace install, "vsix" for a side-load), so it wins whenever it is present:
-        //   "__metadata": { "id": "...", "publisherId": "...", "source": "gallery" }
-        // It is normally absent from an extracted package.json. Current VS Code only persists
-        // { targetPlatform, installedTimestamp, size } there and keeps the full metadata (including
-        // source) in the profile's extensions.json; older builds wrote publisherId and
-        // isPreReleaseVersion but still no source. Requiring source would therefore make every
-        // on-disk install look non-Marketplace and silently retire this comparison, so publisherId
-        // remains the fallback: a development or plain VSIX install normally lacks that
-        // scanner-owned value even though a gallery-matched VSIX can carry it.
+        // source is the authoritative install origin VS Code records ("gallery" for a Marketplace
+        // install, "vsix" for a side-load), so it wins whenever it is present:
+        //   "metadata": { "id": "...", "publisherId": "...", "source": "gallery" }
+        // The profile index carries it for every entry; an extracted package.json usually does not,
+        // because current VS Code persists only { targetPlatform, installedTimestamp, size } there.
+        // ReadProfileExtensionMetadata is therefore consulted first and this fallback only decides a
+        // manifest the index does not list: publisherId is scanner-owned, so a development or plain
+        // VSIX install normally lacks it, though a gallery-matched VSIX can carry it. That residual
+        // ambiguity is why the index takes precedence rather than this being the only signal.
         // See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/common/extensionsScannerService.ts.
         if (metadata.TryGetProperty("source", out var source) &&
             source.ValueKind == JsonValueKind.String)
@@ -668,7 +809,7 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             publisherId.ValueKind == JsonValueKind.String &&
             !string.IsNullOrWhiteSpace(publisherId.GetString())
                 ? VsCodeExtensionInstallSource.Marketplace
-                : VsCodeExtensionInstallSource.Unknown;
+                : null;
     }
 
     private static bool TryGetManifestMetadata(JsonElement manifest, out JsonElement metadata)
