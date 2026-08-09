@@ -133,11 +133,22 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // and reintroduce the orphaned-resource behavior this ordering exists to prevent - on exactly
     // the path where a resource is most likely to be left behind. The rejection is kept and
     // rethrown after the AppHost and the synthetic Aspire parent have been stopped.
-    const resourceStopResults = await Promise.allSettled(resourceDebugSessions.map(session => session.stopSession()));
+    const resourceStopPromises: Promise<void>[] = [];
+    const stopFailures: unknown[] = [];
+    for (const session of resourceDebugSessions) {
+      try {
+        resourceStopPromises.push(Promise.resolve(session.stopSession()));
+      }
+      catch (error) {
+        stopFailures.push(error);
+      }
+    }
+
+    const resourceStopResults = await Promise.allSettled(resourceStopPromises);
     const resourceStopFailures = resourceStopResults
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
       .map(result => result.reason);
-    const stopFailures = [...resourceStopFailures];
+    stopFailures.push(...resourceStopFailures);
 
     // Global/E2E stop requests target the synthetic Aspire session. Stop the real AppHost session
     // explicitly before the parent so we do not rely on VS Code cascading termination before the

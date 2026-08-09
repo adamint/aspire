@@ -636,6 +636,75 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(stopDebuggingStub.callCount, 4);
     });
 
+    test('stopDebugging continues stopping resources after a synchronous resource stop failure', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: { type: 'coreclr', request: 'launch', name: 'AppHost' },
+        };
+        const secondResourceDebugSession = {
+            id: 'second-resource-session',
+            type: 'pwa-chrome',
+            name: 'Browser: http://localhost:5173',
+            configuration: { type: 'pwa-chrome', request: 'launch', name: 'Browser: http://localhost:5173' },
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        const syncStopError = new Error('Resource stop failed synchronously');
+        const stopOrder: string[] = [];
+        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
+            stopOrder.push((session as unknown as { id: string }).id);
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
+        };
+        (aspireDebugSession as any)._resourceDebugSessions = [
+            {
+                id: 'throwing-resource-session',
+                session: {} as unknown as vscode.DebugSession,
+                stopSession: () => {
+                    stopOrder.push('throwing-resource-session');
+                    throw syncStopError;
+                },
+            },
+            {
+                id: secondResourceDebugSession.id,
+                session: secondResourceDebugSession as unknown as vscode.DebugSession,
+                stopSession: () => vscode.debug.stopDebugging(secondResourceDebugSession as unknown as vscode.DebugSession),
+            },
+        ];
+
+        await assert.rejects(() => aspireDebugSession.stopDebugging(), /Resource stop failed synchronously/);
+
+        assert.deepStrictEqual(stopOrder, [
+            'throwing-resource-session',
+            secondResourceDebugSession.id,
+            appHostDebugSession.id,
+            parentDebugSession.id,
+        ]);
+        assert.strictEqual(stopDebuggingStub.callCount, 3);
+    });
+
     test('stopDebugging still stops the Aspire parent session when AppHost stop fails', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
