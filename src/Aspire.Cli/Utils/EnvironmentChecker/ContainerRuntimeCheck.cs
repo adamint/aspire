@@ -36,50 +36,7 @@ internal sealed class ContainerRuntimeCheck(ILogger<ContainerRuntimeCheck> logge
 
             var configuredRuntime = GetConfiguredRuntime(environment);
 
-            // Select best from already-probed results (no re-probing)
-            ContainerRuntimeInfo? selected;
-            if (configuredRuntime is not null)
-            {
-                selected = runtimes.FirstOrDefault(r =>
-                    string.Equals(r.Executable, configuredRuntime, StringComparison.OrdinalIgnoreCase));
-            }
-            else
-            {
-                selected = ContainerRuntimeDetector.FindBestRuntime(runtimes);
-            }
-
-            var results = new List<EnvironmentCheckResult>();
-
-            // Only report runtimes that are installed (or explicitly configured)
-            foreach (var info in runtimes)
-            {
-                if (!info.IsInstalled && (configuredRuntime is null ||
-                    !string.Equals(info.Executable, configuredRuntime, StringComparison.OrdinalIgnoreCase)))
-                {
-                    continue;
-                }
-
-                var isSelected = selected is not null &&
-                    string.Equals(info.Executable, selected.Executable, StringComparison.OrdinalIgnoreCase);
-
-                results.Add(BuildRuntimeResult(info, isSelected, configuredRuntime, cancellationToken));
-            }
-
-            // If nothing is available, show a single failure
-            if (results.Count == 0)
-            {
-                results.Add(new EnvironmentCheckResult
-                {
-                    Category = EnvironmentCheckCategories.Container,
-                    Name = CheckName,
-                    Status = EnvironmentCheckStatus.Fail,
-                    Message = "No container runtime detected",
-                    Fix = "Install Docker Desktop: https://www.docker.com/products/docker-desktop or Podman: https://podman.io/getting-started/installation",
-                    Link = "https://aka.ms/aspire/containers"
-                });
-            }
-
-            return results;
+            return BuildResults(runtimes, configuredRuntime);
         }
         catch (Exception ex)
         {
@@ -93,6 +50,78 @@ internal sealed class ContainerRuntimeCheck(ILogger<ContainerRuntimeCheck> logge
                 Details = ex.Message
             }];
         }
+    }
+
+    /// <summary>
+    /// Turns already-probed runtime information into the reported rows. Kept separate from
+    /// <see cref="CheckAsync"/>, which spawns processes, so the reporting decisions can be exercised
+    /// against fixed runtime states.
+    /// </summary>
+    internal static IReadOnlyList<EnvironmentCheckResult> BuildResults(IReadOnlyList<ContainerRuntimeInfo> runtimes, string? configuredRuntime)
+    {
+        // Select best from already-probed results (no re-probing)
+        ContainerRuntimeInfo? selected;
+        if (configuredRuntime is not null)
+        {
+            selected = runtimes.FirstOrDefault(r =>
+                string.Equals(r.Executable, configuredRuntime, StringComparison.OrdinalIgnoreCase));
+        }
+        else
+        {
+            selected = ContainerRuntimeDetector.FindBestRuntime(runtimes);
+        }
+
+        var results = new List<EnvironmentCheckResult>();
+
+        // Only report runtimes that are installed (or explicitly configured)
+        foreach (var info in runtimes)
+        {
+            if (!info.IsInstalled && (configuredRuntime is null ||
+                !string.Equals(info.Executable, configuredRuntime, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            var isSelected = selected is not null &&
+                string.Equals(info.Executable, selected.Executable, StringComparison.OrdinalIgnoreCase);
+
+            results.Add(BuildRuntimeResult(info, isSelected, configuredRuntime));
+        }
+
+        // If nothing is available, show a single failure
+        if (results.Count == 0)
+        {
+            results.Add(new EnvironmentCheckResult
+            {
+                Category = EnvironmentCheckCategories.Container,
+                Name = CheckName,
+                Status = EnvironmentCheckStatus.Fail,
+                Message = "No container runtime detected",
+                Fix = "Install Docker Desktop: https://www.docker.com/products/docker-desktop or Podman: https://podman.io/getting-started/installation",
+                Link = "https://aka.ms/aspire/containers"
+            });
+        }
+
+        // A configured value that names no known runtime cannot be described by the rows above, which
+        // only ever cover Docker and Podman. Without an explicit failure the report would show an
+        // installed runtime as merely "available" and read as healthy, while the AppHost hands this
+        // value to DCP verbatim and fails to start. Whitespace lands here too, which is why
+        // GetConfiguredRuntime deliberately keeps it non-null instead of normalizing it away.
+        if (configuredRuntime is not null && selected is null)
+        {
+            results.Add(new EnvironmentCheckResult
+            {
+                Category = EnvironmentCheckCategories.Container,
+                Name = CheckName,
+                Status = EnvironmentCheckStatus.Fail,
+                Message = $"Configured container runtime '{configuredRuntime}' is not supported",
+                Details = "Aspire launches the runtime named by ASPIRE_CONTAINER_RUNTIME (or DOTNET_ASPIRE_CONTAINER_RUNTIME) and only supports 'docker' and 'podman'.",
+                Fix = "Set ASPIRE_CONTAINER_RUNTIME to 'docker' or 'podman', or unset it to let Aspire choose an available runtime.",
+                Link = "https://aka.ms/aspire/containers"
+            });
+        }
+
+        return results;
     }
 
     /// <summary>
@@ -180,8 +209,7 @@ internal sealed class ContainerRuntimeCheck(ILogger<ContainerRuntimeCheck> logge
     private static EnvironmentCheckResult BuildRuntimeResult(
         ContainerRuntimeInfo info,
         bool isSelected,
-        string? configuredRuntime,
-        CancellationToken _)
+        string? configuredRuntime)
     {
         var selectedSuffix = isSelected ? " ← active" : "";
 

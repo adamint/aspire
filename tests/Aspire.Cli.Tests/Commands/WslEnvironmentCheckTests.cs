@@ -26,6 +26,11 @@ public class WslEnvironmentCheckTests
     private const string NativeLinuxBanner =
         "Linux version 6.8.0-64-generic (buildd@lcy02-amd64-029) (x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0) #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:31 UTC 2025";
 
+    // A native kernel whose build identity happens to carry a marker this check looks for. /proc/version
+    // records who built the kernel and with what, and none of that says anything about WSL.
+    private const string NativeLinuxBannerBuiltByMicrosoft =
+        "Linux version 6.8.0-64-generic (Microsoft@builder) (x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0) #67-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:31 UTC 2025";
+
     public static TheoryData<string?, string, string?, string?> WslDetectionCases => new()
     {
         { null, NativeLinuxBanner, null, null },
@@ -118,6 +123,27 @@ public class WslEnvironmentCheckTests
         Assert.Equal(WslVersion.Wsl1, WslEnvironmentCheck.DetermineWslVersion(procVersion));
     }
 
+    [Theory]
+    // The WSL 2 marker in the build identity rather than the kernel release. Scanning the whole banner
+    // reported this custom kernel as a confident WSL 2 pass.
+    [InlineData("Linux version 6.1.0-custom (wsl2@builder) (gcc version 11.2.0) #1 SMP Tue Jan 2 00:00:00 UTC 2024")]
+    // Same for the early WSL 2 marker: "microsoft-standard" in the build identity is not a kernel release.
+    [InlineData("Linux version 6.1.0-custom (microsoft-standard@builder) (gcc version 11.2.0) #1 SMP Tue Jan 2 00:00:00 UTC 2024")]
+    public void DetermineWslVersion_ReportsUnknown_WhenMarkersAppearOnlyInBuildMetadata(string procVersion)
+    {
+        Assert.Equal(WslVersion.Unknown, WslEnvironmentCheck.DetermineWslVersion(procVersion));
+    }
+
+    [Fact]
+    public void CreateResult_MakesTheUpgradeConditional_WhenVersionIsUnknown()
+    {
+        // A custom WSL 2 kernel classifies as Unknown, so unconditional upgrade advice would tell a
+        // WSL 2 user to run 'wsl --set-version 2' on an environment that is already WSL 2.
+        Assert.Equal(
+            "Run 'wsl --list --verbose' from Windows to check the version. If it reports 1, upgrade with: wsl --set-version <distro> 2",
+            WslEnvironmentCheck.CreateResult(WslVersion.Unknown).Fix);
+    }
+
     [Fact]
     public void CreateResult_ReportsWarning_WhenVersionIsUnknown()
     {
@@ -162,6 +188,18 @@ public class WslEnvironmentCheckTests
         var check = new WslEnvironmentCheck(
             TestEnvironment.CreateLinux(),
             () => NativeLinuxBanner);
+
+        Assert.Empty(await check.CheckAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData(NativeLinuxBannerBuiltByMicrosoft)]
+    [InlineData("Linux version 6.8.0-64-generic (wsl2@builder) (gcc version 13.3.0) #67 SMP PREEMPT_DYNAMIC Sun Jun 15 20:23:31 UTC 2025")]
+    public async Task CheckAsync_ReportsNothing_WhenOnlyBuildMetadataMentionsWsl(string procVersion)
+    {
+        // Detecting WSL from anywhere in the banner turned a native kernel into a "WSL detected but the
+        // version could not be determined" warning on a machine that has nothing to do with WSL.
+        var check = new WslEnvironmentCheck(TestEnvironment.CreateLinux(), () => procVersion);
 
         Assert.Empty(await check.CheckAsync(TestContext.Current.CancellationToken));
     }

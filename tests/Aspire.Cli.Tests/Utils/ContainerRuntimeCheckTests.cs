@@ -32,6 +32,46 @@ public class ContainerRuntimeCheckTests
         Assert.Equal(expectedRuntime, ContainerRuntimeCheck.GetConfiguredRuntime(new TestEnvironment(variables)));
     }
 
+    [Theory]
+    // Whitespace is the value GetConfiguredRuntime deliberately keeps, because DCP receives it verbatim.
+    [InlineData("   ")]
+    [InlineData("nerdctl")]
+    public void BuildResults_ReportsFailure_WhenConfiguredRuntimeIsNotSupported(string configuredRuntime)
+    {
+        // A healthy Docker is present, so without an explicit failure the report reads as a pass while
+        // the AppHost is about to hand DCP a runtime name it cannot use.
+        var results = ContainerRuntimeCheck.BuildResults([HealthyRuntime("docker", "Docker", isDefault: true)], configuredRuntime);
+
+        Assert.Equal(
+            ["Docker v28.0.0: running (available)", $"Configured container runtime '{configuredRuntime}' is not supported"],
+            results.Select(r => r.Message));
+        Assert.Equal([EnvironmentCheckStatus.Pass, EnvironmentCheckStatus.Fail], results.Select(r => r.Status));
+        Assert.Contains("ASPIRE_CONTAINER_RUNTIME", results[1].Details);
+        Assert.NotNull(results[1].Fix);
+    }
+
+    [Fact]
+    public void BuildResults_ReportsNoFailure_WhenConfiguredRuntimeIsSupported()
+    {
+        var results = ContainerRuntimeCheck.BuildResults([HealthyRuntime("docker", "Docker", isDefault: true)], "docker");
+
+        var result = Assert.Single(results);
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("Docker v28.0.0: running (configured via ASPIRE_CONTAINER_RUNTIME=docker) ← active", result.Message);
+    }
+
+    [Fact]
+    public void BuildResults_ReportsBothProblems_WhenNothingIsInstalledAndTheConfiguredRuntimeIsUnsupported()
+    {
+        var results = ContainerRuntimeCheck.BuildResults(
+            [new ContainerRuntimeInfo { Executable = "docker", Name = "Docker", IsDefault = true }],
+            "nerdctl");
+
+        Assert.Equal(
+            ["No container runtime detected", "Configured container runtime 'nerdctl' is not supported"],
+            results.Select(r => r.Message));
+    }
+
     [Fact]
     public void ParseVersionFromJsonOutput_WithDockerJsonOutput_ReturnsBothVersions()
     {
@@ -326,4 +366,14 @@ public class ContainerRuntimeCheckTests
             Assert.NotNull(result);
         }
     }
+
+    private static ContainerRuntimeInfo HealthyRuntime(string executable, string name, bool isDefault) => new()
+    {
+        Executable = executable,
+        Name = name,
+        IsInstalled = true,
+        IsRunning = true,
+        IsDefault = isDefault,
+        ClientVersion = new Version(28, 0, 0)
+    };
 }
