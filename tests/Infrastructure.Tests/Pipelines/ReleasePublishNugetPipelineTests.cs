@@ -856,9 +856,31 @@ public sealed class ReleasePublishNugetPipelineTests
     }
 
     [Fact]
-    public async Task NpmMirrorOnlyRerunDocumentationSkipsEveryUnrelatedReleaseAction()
+    public async Task NpmMirrorAnonymousDiagnosticIsolatesTheSameConfigLayersAsThePipeline()
     {
         var releaseProcess = await ReadRepoFileAsync("docs/release-process.md");
+        var mirrorRecovery = ExtractSection(
+            releaseProcess,
+            "### npm internal mirror seeding or anonymous validation fails",
+            "### Tag already exists but points to different commit");
+
+        // A diagnostic that succeeds under an inherited project .npmrc or an ambient NPM_CONFIG_*
+        // credential proves nothing about anonymous mirror access, which is the only question it is
+        // run to answer. It must therefore pin the same layers the pipeline pins.
+        Assert.Contains(
+            "printf '%s' '{\"name\":\"aspire-npm-isolated\",\"version\":\"0.0.0\",\"private\":true}' >package.json",
+            mirrorRecovery,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "toupper($1) ~ /^NPM_CONFIG_/ || toupper($1) == \"NPM_TOKEN\" || toupper($1) == \"NODE_AUTH_TOKEN\"",
+            mirrorRecovery,
+            StringComparison.Ordinal);
+        Assert.Contains("env \"${npm_env_overrides[@]}\" \\", mirrorRecovery, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NpmMirrorOnlyRerunDocumentationSkipsEveryUnrelatedReleaseAction()
+    {        var releaseProcess = await ReadRepoFileAsync("docs/release-process.md");
         var mirrorRecovery = ExtractSection(
             releaseProcess,
             "### npm internal mirror seeding or anonymous validation fails",

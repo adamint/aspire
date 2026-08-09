@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Buffers;
 using System.Collections;
 using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.Logging;
@@ -24,9 +25,14 @@ namespace Aspire.Cli.Npm;
 /// Node-on-PATH requirement that the HTTP-based lookup deliberately removed.
 /// </para>
 /// <para>
-/// Only <c>registry</c> and <c>&lt;scope&gt;:registry</c> keys are ever materialized. Credential
-/// keys such as <c>//registry.example.com/:_authToken</c> are skipped while parsing, so no token
-/// is read into memory, and the lookup itself stays anonymous.
+/// Nothing outside <c>registry</c>, <c>&lt;scope&gt;:registry</c>, and <c>userconfig</c> is ever
+/// retained. Credential keys such as <c>//registry.example.com/:_authToken</c> are rejected by the
+/// allow list before their value is parsed out of the line, and the environment layer keeps only
+/// the <c>npm_config_*</c> variables that clear the same allow list, so no process environment
+/// value and no credential entry outlives the parse. A <c>.npmrc</c> line and the value behind a
+/// <c>${VAR}</c> reference still pass through managed strings while they are being read, which no
+/// in-process parser can avoid; the guarantee is that they are not held afterwards. The lookup
+/// itself is anonymous.
 /// </para>
 /// See https://docs.npmjs.com/cli/using-npm/config for the precedence rules implemented here.
 /// </remarks>
@@ -44,19 +50,38 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     private const string UserConfigKey = "userconfig";
     private const string NpmrcFileName = ".npmrc";
 
+    // npm expands ${VAR} by indexing Node's process.env, which is case-insensitive only on Windows.
+    // Matching that means ${npm_host} must not pick up NPM_HOST on Linux or macOS, where npm would
+    // leave the reference unexpanded and install from a different registry than we probed.
+    // See https://nodejs.org/api/process.html#processenv.
+    internal static StringComparer EnvironmentVariableNameComparer { get; } =
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+
+    // npm's env-replace name group is [^${}?]+, so a reference containing any of these is not a
+    // reference at all. '}' cannot appear because scanning stops at the first one.
+    private static readonly SearchValues<char> s_charactersExcludedFromVariableNames = SearchValues.Create("${?");
+
     // A .npmrc is a small ini file; anything this large is not one, and the update check should
     // not read an arbitrarily large file off disk on the startup path.
     private const int MaximumNpmrcSizeInBytes = 1024 * 1024;
 
     private readonly DirectoryInfo _homeDirectory;
     private readonly ILogger<NpmRegistryResolver> _logger;
-    private readonly IReadOnlyDictionary<string, string> _environment;
+    private readonly IReadOnlyDictionary<string, string> _npmConfigVariables;
+    private readonly Func<string, string?> _lookupEnvironmentVariable;
     private readonly Lock _configurationLock = new();
 
     private IReadOnlyDictionary<string, ConfigurationValue>? _configuration;
 
     public NpmRegistryResolver(CliExecutionContext executionContext, ILogger<NpmRegistryResolver> logger)
-        : this(executionContext.WorkingDirectory, executionContext.HomeDirectory, ReadProcessEnvironment(), logger)
+        : this(
+            executionContext.WorkingDirectory,
+            executionContext.HomeDirectory,
+            ReadNpmConfigVariables(),
+            // Reading each ${VAR} on demand keeps unrelated process values - cloud credentials,
+            // NPM_TOKEN, CI secrets - out of this singleton, which lives for the whole command.
+            Environment.GetEnvironmentVariable,
+            logger)
     {
     }
 
@@ -65,14 +90,31 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         DirectoryInfo homeDirectory,
         IReadOnlyDictionary<string, string> environment,
         ILogger<NpmRegistryResolver> logger)
+        : this(
+            workingDirectory,
+            homeDirectory,
+            FilterNpmConfigVariables(environment),
+            CreateEnvironmentVariableLookup(environment),
+            logger)
+    {
+    }
+
+    private NpmRegistryResolver(
+        DirectoryInfo workingDirectory,
+        DirectoryInfo homeDirectory,
+        IReadOnlyDictionary<string, string> npmConfigVariables,
+        Func<string, string?> lookupEnvironmentVariable,
+        ILogger<NpmRegistryResolver> logger)
     {
         ArgumentNullException.ThrowIfNull(workingDirectory);
         ArgumentNullException.ThrowIfNull(homeDirectory);
-        ArgumentNullException.ThrowIfNull(environment);
+        ArgumentNullException.ThrowIfNull(npmConfigVariables);
+        ArgumentNullException.ThrowIfNull(lookupEnvironmentVariable);
         ArgumentNullException.ThrowIfNull(logger);
 
         _homeDirectory = homeDirectory;
-        _environment = environment;
+        _npmConfigVariables = npmConfigVariables;
+        _lookupEnvironmentVariable = lookupEnvironmentVariable;
         _logger = logger;
     }
 
@@ -167,16 +209,9 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         // the prefix, so both npm_config_registry and NPM_CONFIG_REGISTRY are honored. npm also
         // injects these into the environment of scripts it runs, which makes them the right
         // highest-precedence layer when the CLI is launched through npm exec or npx.
-        foreach (var (name, value) in _environment)
+        foreach (var (name, value) in _npmConfigVariables)
         {
-            if (!name.StartsWith(EnvironmentVariablePrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var key = NormalizeKey(name[EnvironmentVariablePrefix.Length..]);
-
-            if (!IsInterestingKey(key))
+            if (!TryGetNpmConfigKey(name, out var key))
             {
                 continue;
             }
@@ -218,15 +253,18 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
 
         foreach (var line in lines)
         {
-            if (!TryParseNpmrcLine(line, out var key, out var rawValue) || !IsInterestingKey(key))
+            // The key is allow-listed before the value is parsed out of the line, so a
+            // "//registry.example.com/:_authToken=..." entry never becomes a token-bearing string.
+            if (!TryParseNpmrcKey(line, out var key, out var rawValue) || !IsInterestingKey(key))
             {
                 continue;
             }
 
-            if (!TryExpandEnvironmentReferences(rawValue, out var value))
+            if (!TryExpandEnvironmentReferences(ParseNpmrcValue(rawValue), out var value))
             {
-                // npm fails the whole config load on an unresolved ${VAR}; skipping just this entry
-                // is the softer equivalent and keeps the remaining layers usable.
+                // Current npm leaves an unresolved ${VAR} in place, which cannot parse as a
+                // registry address; dropping just this entry reaches the same outcome and keeps
+                // the remaining layers usable.
                 _logger.LogDebug("Ignoring npm '{Key}' in {Path} because it references an undefined environment variable.", key, path);
                 continue;
             }
@@ -243,7 +281,7 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     }
 
     /// <summary>
-    /// Parses a single <c>.npmrc</c> line.
+    /// Parses the key out of a single <c>.npmrc</c> line and hands back the value text unparsed.
     /// </summary>
     /// <remarks>
     /// <c>.npmrc</c> is ini-formatted. Representative content:
@@ -255,18 +293,17 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     /// //npm.contoso.example/:_authToken=${NPM_TOKEN}
     /// </code>
     /// Values may be quoted and may contain '=' (a URL query), so only the first '=' separates the
-    /// key from the value. Unquoted values follow npm/ini comment rules: the first unescaped
-    /// <c>;</c> or <c>#</c> starts an inline comment, while <c>\;</c>, <c>\#</c>, and <c>\\</c>
-    /// unescape to literal characters. Credential lines such as <c>_authToken</c> are matched by
-    /// <see cref="IsInterestingKey"/> and never retained.
+    /// key from the value. The value is returned as a span rather than a string so the caller can
+    /// reject a credential key through <see cref="IsInterestingKey"/> before
+    /// <see cref="ParseNpmrcValue"/> ever materializes it.
     /// See https://github.com/npm/ini/blob/main/lib/ini.js.
     /// </remarks>
-    private static bool TryParseNpmrcLine(string line, out string key, [NotNullWhen(true)] out string? value)
+    private static bool TryParseNpmrcKey(ReadOnlySpan<char> line, out string key, out ReadOnlySpan<char> rawValue)
     {
         key = string.Empty;
-        value = null;
+        rawValue = default;
 
-        var trimmed = line.AsSpan().Trim();
+        var trimmed = line.Trim();
 
         // '[' opens an ini section header. npm's own config keys are never sectioned, so a section
         // header carries nothing this resolver needs.
@@ -290,11 +327,19 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         }
 
         key = NormalizeKey(parsedKey.ToString());
-        value = ParseNpmrcValue(trimmed[(separatorIndex + 1)..].Trim());
+        rawValue = trimmed[(separatorIndex + 1)..].Trim();
 
         return true;
     }
 
+    /// <summary>
+    /// Parses the value half of a <c>.npmrc</c> line.
+    /// </summary>
+    /// <remarks>
+    /// Unquoted values follow npm/ini comment rules: the first unescaped <c>;</c> or <c>#</c>
+    /// starts an inline comment, while <c>\;</c>, <c>\#</c>, and <c>\\</c> unescape to literal
+    /// characters. Quoted values are taken verbatim.
+    /// </remarks>
     private static string ParseNpmrcValue(ReadOnlySpan<char> value)
     {
         if (value.Length >= 2 &&
@@ -350,6 +395,14 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     /// Expands the <c>${VAR}</c> references npm substitutes from the environment when it loads a
     /// <c>.npmrc</c>.
     /// </summary>
+    /// <remarks>
+    /// npm matches <c>/(?&lt;!\\)(\\*)\$\{([^${}?]+)(\?)?\}/g</c>: the name may not contain
+    /// <c>$</c>, <c>{</c>, <c>}</c>, or <c>?</c>, and a trailing <c>?</c> marks the reference
+    /// optional, meaning an undefined variable expands to the empty string instead of being left
+    /// in place. Text that does not match that shape is copied through untouched, matching npm's
+    /// behavior of leaving a non-reference literal.
+    /// See https://github.com/npm/cli/blob/latest/workspaces/config/lib/env-replace.js.
+    /// </remarks>
     private bool TryExpandEnvironmentReferences(string value, [NotNullWhen(true)] out string? expanded)
     {
         expanded = null;
@@ -381,13 +434,31 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
                 break;
             }
 
+            var reference = value.AsSpan((start + 2)..end);
+            var isOptional = reference.EndsWith("?", StringComparison.Ordinal);
+            var variableName = isOptional ? reference[..^1] : reference;
+
+            if (variableName.IsEmpty || variableName.ContainsAny(s_charactersExcludedFromVariableNames))
+            {
+                // Not a reference npm would expand, so copy "${...}" through verbatim. Such a value
+                // cannot parse as a registry address, which is exactly what npm ends up using.
+                builder.Append(value, index, end + 1 - index);
+                index = end + 1;
+                continue;
+            }
+
             builder.Append(value, index, start - index);
 
-            var variableName = value[(start + 2)..end];
+            var variableValue = _lookupEnvironmentVariable(variableName.ToString());
 
-            if (!_environment.TryGetValue(variableName, out var variableValue))
+            if (variableValue is null)
             {
-                return false;
+                if (!isOptional)
+                {
+                    return false;
+                }
+
+                variableValue = string.Empty;
             }
 
             builder.Append(variableValue);
@@ -453,7 +524,7 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
 
     /// <summary>
     /// Limits what is retained to the registry keys and the user-config redirect, so credential
-    /// entries in a <c>.npmrc</c> are never held in memory.
+    /// entries in a <c>.npmrc</c> or in the process environment are never retained.
     /// </summary>
     private static bool IsInterestingKey(string key)
     {
@@ -512,19 +583,83 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         return true;
     }
 
-    private static Dictionary<string, string> ReadProcessEnvironment()
+    /// <summary>
+    /// Snapshots the <c>npm_config_*</c> variables this resolver is allowed to use.
+    /// </summary>
+    /// <remarks>
+    /// The process environment routinely carries credentials (<c>NPM_TOKEN</c>, cloud tokens, CI
+    /// secrets). This resolver is a singleton that lives for the whole command, so only the
+    /// variables that clear <see cref="IsInterestingKey"/> are copied out of it;
+    /// <c>${VAR}</c> references are read on demand instead.
+    /// </remarks>
+    internal static Dictionary<string, string> ReadNpmConfigVariables()
     {
-        var environment = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var variables = new Dictionary<string, string>(EnvironmentVariableNameComparer);
 
         foreach (DictionaryEntry entry in Environment.GetEnvironmentVariables())
         {
-            if (entry.Key is string name && entry.Value is string value)
+            if (entry.Key is string name && entry.Value is string value && TryGetNpmConfigKey(name, out _))
             {
-                environment[name] = value;
+                variables[name] = value;
             }
         }
 
-        return environment;
+        return variables;
+    }
+
+    private static Dictionary<string, string> FilterNpmConfigVariables(IReadOnlyDictionary<string, string> environment)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+
+        var variables = new Dictionary<string, string>(EnvironmentVariableNameComparer);
+
+        foreach (var (name, value) in environment)
+        {
+            if (TryGetNpmConfigKey(name, out _))
+            {
+                variables[name] = value;
+            }
+        }
+
+        return variables;
+    }
+
+    private static Func<string, string?> CreateEnvironmentVariableLookup(IReadOnlyDictionary<string, string> environment)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+
+        // Re-keyed rather than queried through the supplied dictionary so the caller's comparer
+        // cannot decide whether ${npm_host} may pick up NPM_HOST; that answer belongs to the
+        // platform. Assignment rather than Add because a Windows-comparer copy of a case-sensitive
+        // source could otherwise throw, and the real Windows environment cannot hold both spellings.
+        var lookup = new Dictionary<string, string>(EnvironmentVariableNameComparer);
+
+        foreach (var (name, value) in environment)
+        {
+            lookup[name] = value;
+        }
+
+        return name => lookup.TryGetValue(name, out var value) ? value : null;
+    }
+
+    private static bool TryGetNpmConfigKey(string name, [NotNullWhen(true)] out string? key)
+    {
+        key = null;
+
+        if (!name.StartsWith(EnvironmentVariablePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var candidate = NormalizeKey(name[EnvironmentVariablePrefix.Length..]);
+
+        if (!IsInterestingKey(candidate))
+        {
+            return false;
+        }
+
+        key = candidate;
+        return true;
     }
 
     private sealed record ConfigurationValue(string Value, string Source);

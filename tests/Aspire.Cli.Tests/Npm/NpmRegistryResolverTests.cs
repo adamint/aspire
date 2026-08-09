@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Collections;
 using Aspire.Cli.Npm;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -10,6 +11,10 @@ public class NpmRegistryResolverTests : IDisposable
 {
     private const string PackageName = "@microsoft/aspire-cli";
     private const string PublicRegistry = "https://registry.npmjs.org/";
+
+    // Credential-shaped and npm_config-prefixed, so it exercises the allow list rather than just
+    // the prefix filter.
+    private const string CredentialVariableName = "npm_config__authToken";
 
     private readonly DirectoryInfo _root = Directory.CreateTempSubdirectory("aspire-npmrc-tests");
 
@@ -214,11 +219,92 @@ public class NpmRegistryResolverTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_MatchesPlatformCaseSensitivityForEnvironmentReferences()
+    {
+        // npm expands ${VAR} through Node's process.env, which is case-insensitive only on Windows.
+        WriteHomeNpmrc("registry=https://${npm_host}/feed/");
+
+        var resolution = CreateResolver(
+            environment: new Dictionary<string, string>
+            {
+                ["NPM_HOST"] = "npm.contoso.example"
+            }).Resolve(PackageName);
+
+        Assert.Equal(
+            OperatingSystem.IsWindows() ? "https://npm.contoso.example/feed/" : PublicRegistry,
+            resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_ExpandsOptionalEnvironmentReferenceWhenDefined()
+    {
+        WriteHomeNpmrc("registry=https://${NPM_HOST?}/feed/");
+
+        var resolution = CreateResolver(
+            environment: new Dictionary<string, string>
+            {
+                ["NPM_HOST"] = "npm.contoso.example"
+            }).Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/feed/", resolution.RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_ExpandsUndefinedOptionalEnvironmentReferenceToEmptyString()
+    {
+        // "${VAR?}" is npm's optional form: undefined expands to empty rather than being left in
+        // place, so the surrounding value still resolves.
+        WriteHomeNpmrc("registry=https://npm.contoso.example/${NPM_PATH_NOT_SET?}feed/");
+
+        Assert.Equal(
+            "https://npm.contoso.example/feed/",
+            CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
     public void Resolve_IgnoresEntryWithUndefinedEnvironmentReference()
     {
         WriteHomeNpmrc("registry=https://${NPM_HOST_NOT_SET}/feed/");
 
         Assert.Equal(PublicRegistry, CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void ReadNpmConfigVariables_RetainsOnlyRegistryConfigurationFromTheProcessEnvironment()
+    {
+        // The resolver is a singleton for the whole command, so snapshotting the process
+        // environment would keep unrelated credentials alive for that long.
+        Environment.SetEnvironmentVariable(CredentialVariableName, "super-secret-token");
+
+        try
+        {
+            var processVariableNames = Environment.GetEnvironmentVariables()
+                .Cast<DictionaryEntry>()
+                .Select(entry => (string)entry.Key)
+                .ToArray();
+
+            var retained = NpmRegistryResolver.ReadNpmConfigVariables();
+
+            // Without the credential variable actually present, the filter below would prove nothing.
+            Assert.Contains(CredentialVariableName, processVariableNames);
+            Assert.Equal([], retained.Keys.Where(name => !IsRegistryConfigurationVariable(name)).Order().ToArray());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CredentialVariableName, null);
+        }
+    }
+
+    private static bool IsRegistryConfigurationVariable(string name)
+    {
+        if (!name.StartsWith(NpmRegistryResolver.EnvironmentVariablePrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var key = name[NpmRegistryResolver.EnvironmentVariablePrefix.Length..].ToLowerInvariant();
+
+        return key is "registry" or "userconfig" || key.EndsWith(":registry", StringComparison.Ordinal);
     }
 
     [Fact]

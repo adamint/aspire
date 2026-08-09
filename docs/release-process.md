@@ -350,19 +350,36 @@ release_validation_dir="$(mktemp -d)"
 trap 'rm -rf "$release_validation_dir"' EXIT
 cd "$release_validation_dir"
 
+internal_registry=https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/
 fresh_npmrc="$PWD/clean.npmrc"
 fresh_cache_dir="$PWD/npm-cache"
 
-cat >"$fresh_npmrc" <<'EOF'
-registry=https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/
+cat >"$fresh_npmrc" <<EOF
+registry=$internal_registry
 EOF
 
 mkdir -p "$fresh_cache_dir"
 
-NPM_CONFIG_USERCONFIG="$fresh_npmrc" \
-NPM_CONFIG_GLOBALCONFIG=/dev/null \
-NPM_CONFIG_CACHE="$fresh_cache_dir" \
-npm view @microsoft/aspire-cli@latest version --prefer-online --registry https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/
+# npm picks its local prefix by walking up from the working directory to the first package.json or
+# node_modules, then reads that directory's .npmrc, which the userconfig/globalconfig settings below
+# do not cover. A scoped '@microsoft:registry' there outranks --registry even for this command, so an
+# ancestor config could silently redirect or authenticate the lookup and make it look anonymous when
+# it is not. This private marker stops the walk here, matching Set-NpmLocalPrefixMarker in the
+# release pipeline.
+printf '%s' '{"name":"aspire-npm-isolated","version":"0.0.0","private":true}' >package.json
+
+# npm also takes configuration and credentials from the environment, so drop every ambient npm value
+# before running. Same reason as the env scrub in the pipeline's mirror validation step.
+npm_env_overrides=()
+while IFS= read -r variable; do
+  npm_env_overrides+=(-u "$variable")
+done < <(env | awk -F= 'toupper($1) ~ /^NPM_CONFIG_/ || toupper($1) == "NPM_TOKEN" || toupper($1) == "NODE_AUTH_TOKEN" { print $1 }')
+
+env "${npm_env_overrides[@]}" \
+  NPM_CONFIG_USERCONFIG="$fresh_npmrc" \
+  NPM_CONFIG_GLOBALCONFIG=/dev/null \
+  NPM_CONFIG_CACHE="$fresh_cache_dir" \
+  npm view @microsoft/aspire-cli@latest version --prefer-online --registry "$internal_registry"
 ```
 
 ### Tag already exists but points to different commit
