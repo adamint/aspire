@@ -83,6 +83,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   // drains this before stopping the AppHost so late starts keep the resources-before-AppHost
   // ordering and their failures reach the caller instead of only the log.
   private readonly _lateResourceStops: Promise<void>[] = [];
+  // Resource starts that are in flight. A start only queues its stop once it finishes, so a start
+  // that has not finished yet is represented nowhere else and the drain would not see it.
+  private readonly _pendingResourceStarts = new Set<Promise<unknown>>();
   private _parentStopPromise: Thenable<void> | undefined;
   // Timestamp for the `debug/apphost/end` duration measurement. Captured the first
   // time we observe a `launch` request so it covers the actual user-visible session
@@ -220,12 +223,42 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private async drainLateResourceStops(): Promise<unknown[]> {
     const stopFailures: unknown[] = [];
 
-    while (this._lateResourceStops.length > 0) {
+    while (this._pendingResourceStarts.size > 0 || this._lateResourceStops.length > 0) {
+      // Starts first. A start still in flight has not had the chance to queue its stop yet, so
+      // draining the stop list alone would observe an empty array, return, and let stopDebugging()
+      // resolve while that resource's debugger was still being launched and then stopped.
+      // A start FAILURE is reported to whoever requested the start, not here - this only needs the
+      // start to be finished so its stop, if any, is queued.
+      await Promise.allSettled([...this._pendingResourceStarts]);
+
       const draining = this._lateResourceStops.splice(0, this._lateResourceStops.length);
       stopFailures.push(...await this.settleResourceStops(draining));
     }
 
     return stopFailures;
+  }
+
+  /**
+   * Runs a resource start under the shutdown latch, returning undefined if the session is already
+   * stopping. Registering and checking in the same synchronous block is what makes this safe: a
+   * caller that checked {@link isShuttingDown} itself and then started could be interleaved with the
+   * shutdown between the two steps.
+   */
+  startResourceIfNotShuttingDown<T>(start: () => Promise<T>): Promise<T> | undefined {
+    if (this.isShuttingDown) {
+      return undefined;
+    }
+
+    // startStop() rather than start() directly, so a synchronous throw becomes a rejection and the
+    // pending marker is still registered and still removed.
+    const operation = startStop(start);
+
+    this._pendingResourceStarts.add(operation);
+    // The derived promise is only used to deregister; its rejection is the caller's to handle, so
+    // sink it here to avoid a second, unhandled one.
+    operation.finally(() => this._pendingResourceStarts.delete(operation)).catch(() => { });
+
+    return operation;
   }
 
   private async settleResourceStops(stops: Promise<void>[]): Promise<unknown[]> {
@@ -262,7 +295,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
    * True once the session has begun stopping, whether through {@link stopDebugging} or
    * {@link dispose}. Resource start paths use this to refuse late registrations.
    */
-  private get isShuttingDown(): boolean {
+  get isShuttingDown(): boolean {
     return this._disposed || this._stopping;
   }
 
@@ -811,7 +844,11 @@ export class AspireDebugSession implements vscode.DebugAdapter {
         const workspaceFolder = this.getDebugSessionWorkspaceFolder(debugConfig);
         const maxAttempts = debugConfig.type === 'maui' ? AspireDebugSession._mauiDebugStartMaxAttempts : 1;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-          if (this._disposed) {
+          // isShuttingDown rather than _disposed: stopAllSessions() waits for in-flight starts before
+          // stopping the AppHost, and _disposed is only set at the very end of that shutdown. Gating
+          // on it would let a MAUI launch keep retrying - up to two 5s sleeps - while the shutdown
+          // that is waiting on this start has already begun.
+          if (this.isShuttingDown) {
             break;
           }
 
@@ -820,7 +857,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
             break;
           }
 
-          if (attempt < maxAttempts && !this._disposed) {
+          if (attempt < maxAttempts && !this.isShuttingDown) {
             extensionLogOutputChannel.warn(`Debug session did not start for run ID ${debugConfig.runId}; retrying (${attempt}/${maxAttempts}).`);
             await delay(AspireDebugSession._mauiDebugStartRetryDelayMs);
           }
@@ -1137,12 +1174,13 @@ function startStopSession(session: AspireResourceDebugSession): Promise<void> {
 }
 
 /**
- * Invokes a stop callback synchronously and converts a synchronous throw into a rejected promise.
- * Shared by the snapshot stops and the late-start stops so both get the same conversion.
+ * Invokes a callback synchronously and converts a synchronous throw into a rejected promise.
+ * Shared by the snapshot stops, the late-start stops, and the tracked resource starts, so all three
+ * get the same conversion.
  */
-function startStop(stop: () => Thenable<void>): Promise<void> {
+function startStop<T>(operation: () => Thenable<T>): Promise<T> {
   try {
-    return Promise.resolve(stop());
+    return Promise.resolve(operation());
   }
   catch (err) {
     return Promise.reject(err);

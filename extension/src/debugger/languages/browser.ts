@@ -58,11 +58,12 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
         // The hosting side defaults web_root to an empty string when the resource has no web root.
         // js-debug treats any non-empty webRoot as a real path and resolves source maps against it,
         // so a whitespace-only value is as broken as an empty one - it just happens to be truthy.
-        // Test the trimmed value, and forward that same trimmed value so what was validated is what
-        // js-debug receives.
-        const webRoot = launchConfig.web_root?.trim();
-        if (webRoot) {
-            debugConfiguration.webRoot = webRoot;
+        // Trim only to decide whether the value is blank; forward the original. Leading and trailing
+        // spaces are valid characters in a POSIX path, so trimming the forwarded value would silently
+        // redirect a web root such as '/workspace/frontend ' to a different directory. This matches
+        // how `browser` above is handled: validate what was sent, relay it unchanged.
+        if (launchConfig.web_root?.trim()) {
+            debugConfiguration.webRoot = launchConfig.web_root;
         }
 
         debugConfiguration.sourceMaps = true;

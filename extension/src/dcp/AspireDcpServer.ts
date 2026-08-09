@@ -373,18 +373,42 @@ export default class AspireDcpServer {
                 }
 
                 try {
-                    const preparedSession = await prepareDebugSession(
-                        aspireDebugSession.configuration,
-                        launchConfig,
-                        payload.args,
-                        payload.env ?? [],
-                        { debug: launchConfig.mode === "Debug", runId, debugSessionId: dcpId, isApphost: false, debugSession: aspireDebugSession },
-                        foundDebuggerExtension
-                    );
+                    // The whole start - preparation included - runs under the Aspire session's
+                    // shutdown latch. prepareDebugSession() can take a while (resource-type
+                    // extensions spawn their own hosts), and a start still inside it has not queued
+                    // a stop yet, so a shutdown that only drained the queued stops would resolve
+                    // while this resource was still being launched.
+                    const startOperation = aspireDebugSession.startResourceIfNotShuttingDown(async () => {
+                        const preparedSession = await prepareDebugSession(
+                            aspireDebugSession.configuration,
+                            launchConfig,
+                            payload.args,
+                            payload.env ?? [],
+                            { debug: launchConfig.mode === "Debug", runId, debugSessionId: dcpId, isApphost: false, debugSession: aspireDebugSession },
+                            foundDebuggerExtension
+                        );
 
-                    const resourceDebugSession = preparedSession.alreadyStartedSession
-                        ? aspireDebugSession.trackAlreadyStartedResourceSession(preparedSession.debugConfiguration, preparedSession.alreadyStartedSession)
-                        : await aspireDebugSession.startAndGetDebugSession(preparedSession.debugConfiguration);
+                        return preparedSession.alreadyStartedSession
+                            ? aspireDebugSession.trackAlreadyStartedResourceSession(preparedSession.debugConfiguration, preparedSession.alreadyStartedSession)
+                            : await aspireDebugSession.startAndGetDebugSession(preparedSession.debugConfiguration);
+                    });
+
+                    if (!startOperation) {
+                        emitRunSessionFailureEnd('debug_session_stopping');
+
+                        const error: ErrorDetails = {
+                            code: 'DebugSessionStopping',
+                            message: `Aspire debug session ${debugSessionId} is shutting down and cannot start run ${runId}`,
+                            details: []
+                        };
+
+                        extensionLogOutputChannel.info(`Refusing to start run ${runId}: ${error.message}`);
+                        const response: ErrorResponse = { error };
+                        respondWithError(res, 409, response);
+                        return;
+                    }
+
+                    const resourceDebugSession = await startOperation;
 
                     if (!resourceDebugSession) {
                         emitRunSessionFailureEnd('debugger_did_not_start');

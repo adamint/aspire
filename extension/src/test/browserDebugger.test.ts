@@ -55,11 +55,17 @@ suite('Browser Debugger Tests', () => {
         });
     }
 
-    test('forwards the trimmed web root so the validated value is the one js-debug receives', async () => {
-        const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173', web_root: '  /workspace/frontend/src\t' });
+    // Leading and trailing spaces are valid characters in a POSIX path, so a padded value is a
+    // different directory rather than a sloppy spelling of the unpadded one. The trim decides only
+    // whether the value is blank; rewriting what the AppHost sent would silently point js-debug at
+    // a directory the AppHost never named.
+    for (const paddedWebRoot of ['  /workspace/frontend/src\t', '/workspace/frontend ', ' /workspace/frontend']) {
+        test(`forwards the web root ${JSON.stringify(paddedWebRoot)} unchanged instead of rewriting the path`, async () => {
+            const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173', web_root: paddedWebRoot });
 
-        assert.strictEqual(debugConfig.webRoot, '/workspace/frontend/src');
-    });
+            assert.strictEqual(debugConfig.webRoot, paddedWebRoot);
+        });
+    }
 
     test('omits the web root when the AppHost does not send one', async () => {
         const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173' });

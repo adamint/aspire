@@ -1172,6 +1172,99 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             });
     });
 
+    // The drain only sees stops that have already been QUEUED. A start still in flight has not
+    // queued one, so without pending-start tracking the drain observes an empty list, stopDebugging()
+    // resolves, and the resource that finishes starting a moment later is stopped with its failure
+    // only logged - the exact swallowing this shutdown path exists to eliminate.
+    test('stopDebugging waits for a resource start that is still in flight and reports its stop failure', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async () => { });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+
+        // A start that is registered before the shutdown begins but only finishes afterwards, which
+        // is what the DCP run_session handler does around prepareDebugSession().
+        const lateStopFailure = new Error('In-flight resource stop failed');
+        let releaseStart: (() => void) | undefined;
+        const startGate = new Promise<void>(resolve => { releaseStart = resolve; });
+        const startOperation = aspireDebugSession.startResourceIfNotShuttingDown(async () => {
+            await startGate;
+
+            return aspireDebugSession.trackAlreadyStartedResourceSession(
+                { type: 'node', request: 'launch', name: 'late', runId: 'late-run', debugSessionId: null } as any,
+                {
+                    id: 'in-flight-resource-session',
+                    processId: 4321,
+                    session: { id: 'in-flight-resource-session' } as unknown as vscode.DebugSession,
+                    stopSession: () => { throw lateStopFailure; },
+                    termination: new Promise<number>(() => { }),
+                } as any);
+        });
+
+        assert.ok(startOperation, 'A start requested before the shutdown began must be accepted');
+
+        const stopPromise = aspireDebugSession.stopDebugging();
+        let stopSettled = false;
+        stopPromise.catch(() => { }).finally(() => { stopSettled = true; });
+        await new Promise(resolve => setTimeout(resolve, 0));
+
+        // Nothing is queued yet - the start has not finished - so a drain that only looked at the
+        // queued stops would be finished by now.
+        assert.strictEqual(stopSettled, false, 'stopDebugging must not settle while a resource start is still in flight');
+
+        releaseStart!();
+
+        await assert.rejects(
+            () => stopPromise,
+            (error: unknown) => {
+                assert.strictEqual(error, lateStopFailure);
+                return true;
+            });
+    });
+
+    test('a resource start requested after the shutdown began is refused rather than tracked', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async () => { });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+
+        await aspireDebugSession.stopDebugging();
+
+        const start = sinon.stub().resolves(undefined);
+        const refused = aspireDebugSession.startResourceIfNotShuttingDown(start);
+
+        assert.strictEqual(refused, undefined, 'A start requested during shutdown must be refused');
+        assert.strictEqual(start.callCount, 0, 'A refused start must not run: nothing would await it');
+    });
+
     test('stopDebugging does not stop the Aspire parent session twice when AppHost stop disposes the Aspire session', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
@@ -2066,6 +2159,87 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(session?.id, 'maui-session');
         assert.strictEqual(startAttemptsWhilePending, 1);
         assert.strictEqual(startDebuggingStub.firstCall.args[2], undefined);
+    });
+
+    // The MAUI retry loop sleeps 5s between attempts. stopAllSessions() now waits for in-flight
+    // starts, and _disposed is only set at the very end of that shutdown, so a loop gated on
+    // _disposed would keep retrying - and keep the shutdown waiting - after stopDebugging() began.
+    test('stops retrying a MAUI start once the shutdown has begun', async () => {
+        let startSessionCallback: ((session: vscode.DebugSession) => void) | undefined;
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/MauiAppHost/MauiAppHost.csproj',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = {
+            isDebugConfigEnvironmentLoggingEnabled: () => false,
+        };
+        const debugConfig = {
+            runId: 'run-1',
+            debugSessionId: 'debug-1',
+            type: 'maui',
+            name: 'MAUI',
+            request: 'launch',
+            project: '/workspace/MauiApp/MauiApp.csproj',
+            cwd: '/workspace/MauiApp',
+        } as AspireResourceExtendedDebugConfiguration;
+        sinon.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+        sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(callback => {
+            startSessionCallback = callback;
+            return { dispose: sinon.stub() };
+        });
+        // The AppHost stop is held open so the shutdown is demonstrably IN PROGRESS but not finished
+        // while the retry decision is made: _stopping is set, _disposed is not. That is the only
+        // window in which the two latches differ, and it is exactly the window the drain creates by
+        // waiting on in-flight starts.
+        let releaseAppHostStop: (() => void) | undefined;
+        const appHostStopGate = new Promise<void>(resolve => { releaseAppHostStop = resolve; });
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async () => { });
+        // Every attempt reports "did not start", which is what drives the retry loop.
+        const startDebuggingStub = sinon.stub(vscode.debug, 'startDebugging').resolves(false);
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: 'apphost-session',
+            session: { id: 'apphost-session' } as unknown as vscode.DebugSession,
+            stopSession: () => appHostStopGate,
+        };
+
+        const sessionPromise = aspireDebugSession.startAndGetDebugSession(debugConfig);
+        await clock.tickAsync(1);
+
+        const attemptsBeforeShutdown = startDebuggingStub.callCount;
+        assert.strictEqual(attemptsBeforeShutdown, 1, 'The first attempt should already have run');
+
+        const stopPromise = aspireDebugSession.stopDebugging();
+        await clock.tickAsync(1);
+
+        assert.strictEqual((aspireDebugSession as any)._disposed, false, 'The shutdown must still be in progress for this test to mean anything');
+
+        // Advance well past both remaining retry delays. The loop must have stopped.
+        await clock.tickAsync(60_000);
+
+        assert.strictEqual(
+            startDebuggingStub.callCount,
+            attemptsBeforeShutdown,
+            'A MAUI start must not keep retrying once the shutdown has begun');
+
+        releaseAppHostStop!();
+        startSessionCallback = undefined;
+        await clock.tickAsync(1);
+        await stopPromise;
+        await sessionPromise;
+        clock.restore();
     });
 
     test('stops MAUI resource debug sessions that start after Aspire session disposal', async () => {
