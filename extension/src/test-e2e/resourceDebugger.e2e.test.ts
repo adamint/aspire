@@ -114,8 +114,10 @@ suite('Aspire resource debugger E2E', function () {
         // would replace the assertion error with the teardown error and hide why the test failed.
         await executeE2eControlCommand({ name: 'stopDebugging' }, { waitFor: 'started' });
 
-        await waitForProcessExit(debuggeePid, 'the debugged Node resource process', 120000);
-        await waitForProcessExit(childPid, 'the Node resource child process', 120000);
+        await Promise.all([
+            waitForProcessExit(debuggeePid, 'the debugged Node resource process', 120000),
+            waitForProcessExit(childPid, 'the Node resource child process', 120000),
+        ]);
 
         await waitForNoDebugSessions();
 

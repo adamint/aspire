@@ -19,6 +19,18 @@ function stripComments(source: string): string {
     return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 }
 
+function getTestBlock(source: string, testName: string): string {
+    const testStart = source.indexOf(`test('${testName}'`);
+    assert.ok(testStart >= 0, `Expected to find test '${testName}'.`);
+
+    const nextTestStart = source.indexOf('\n    test(', testStart + 1);
+    const suiteEnd = source.indexOf('\n});', testStart + 1);
+    const testEnd = nextTestStart >= 0 && nextTestStart < suiteEnd ? nextTestStart : suiteEnd;
+    assert.ok(testEnd > testStart, `Expected to find the end of test '${testName}'.`);
+
+    return source.slice(testStart, testEnd);
+}
+
 suite('E2E launch profile', () => {
     test('creates nothing in the per-run root that a later module-scope throw could strand', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
@@ -500,14 +512,35 @@ suite('E2E launch profile', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const fixtures = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'helpers', 'fixtures.ts'), 'utf8');
         const appHostTree = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'appHostTree.e2e.test.ts'), 'utf8');
+        const runningBeforeDiscoveryTest = getTestBlock(appHostTree, 'running AppHosts appear before slow discovery results');
 
         assert.ok(fixtures.includes('writeGatedStreamingDiscoveryCliWrapper'));
         assert.ok(fixtures.includes('function waitForReleaseFile'));
         assert.ok(appHostTree.includes('writeGatedStreamingDiscoveryCliWrapper'));
         assert.ok(appHostTree.includes('discoveryGate.releasePsSnapshot();'));
         assert.ok(appHostTree.includes('discoveryGate.releaseLsCandidate();'));
-        assert.ok(appHostTree.indexOf('await waitForWorkspaceRediscoveryLoading') < appHostTree.indexOf('discoveryGate.releasePsSnapshot();'));
-        assert.ok(appHostTree.indexOf('discoveryGate.releasePsSnapshot();') < appHostTree.indexOf('discoveryGate.releaseLsCandidate();'));
+
+        const cleanupIndex = runningBeforeDiscoveryTest.indexOf('finally {');
+        assert.ok(cleanupIndex >= 0, 'Expected the E2E to keep cleanup releases in a finally block.');
+        const testBeforeCleanup = runningBeforeDiscoveryTest.slice(0, cleanupIndex);
+        const loadingIndex = testBeforeCleanup.indexOf('await waitForWorkspaceRediscoveryLoading');
+        const releasePsIndex = testBeforeCleanup.indexOf('discoveryGate.releasePsSnapshot();');
+        const releaseLsIndex = testBeforeCleanup.indexOf('discoveryGate.releaseLsCandidate();');
+
+        assert.ok(loadingIndex >= 0, 'The E2E must wait for the transient loading UI before releasing the running AppHost snapshot.');
+        assert.ok(releasePsIndex > loadingIndex, 'The running AppHost snapshot must be released after the loading UI has been observed.');
+        assert.ok(releaseLsIndex > releasePsIndex, 'The slow workspace candidate must be released after the running AppHost snapshot.');
+    });
+
+    test('waits for resource debugger child processes in parallel', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const resourceDebugger = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'resourceDebugger.e2e.test.ts'), 'utf8');
+        const nodeProofTest = getTestBlock(resourceDebugger, 'stopping debugging tears down the Node resource process tree');
+
+        assert.ok(nodeProofTest.includes('await Promise.all(['), 'The two process-exit waits must share the same wall-clock budget.');
+        assert.ok(nodeProofTest.indexOf('waitForProcessExit(debuggeePid') > nodeProofTest.indexOf('await Promise.all(['));
+        assert.ok(nodeProofTest.indexOf('waitForProcessExit(childPid') > nodeProofTest.indexOf('waitForProcessExit(debuggeePid'));
+        assert.ok(nodeProofTest.indexOf(']);') > nodeProofTest.indexOf('waitForProcessExit(childPid'));
     });
 
     test('patches ExTester launch arguments without replacement-token expansion', () => {

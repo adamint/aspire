@@ -1199,7 +1199,10 @@ ${JSON.stringify({
     sessionSubscription.dispose();
     trackerRegistration.dispose();
     if (request.stopDebuggingOnCompletion) {
-      await vscode.debug.stopDebugging();
+      await runWithE2eDeadline(
+        'stop resource debugging request',
+        deadline,
+        vscode.debug.stopDebugging());
     }
   }
 }
