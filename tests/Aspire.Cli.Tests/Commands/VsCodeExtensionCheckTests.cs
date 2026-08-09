@@ -1452,6 +1452,46 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         Assert.Equal(0, marketplaceClient.CallCount);
     }
 
+    [Theory]
+    [InlineData("linux", 0, "unknown")]
+    [InlineData("macos", 1, "marketplace")]
+    [InlineData("windows", 1, "marketplace")]
+    public async Task CheckAsync_MatchesTheOverriddenExtensionsRootAgainstKnownRootsUsingThePlatformsPathCasing(
+        string platform,
+        int expectedMarketplaceCalls,
+        string expectedInstallSource)
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        // Only Windows and macOS have case-insensitive file systems. On Linux ~/.VSCODE/extensions is
+        // a different directory from VS Code's ~/.vscode/extensions, so a VSCodium or custom-gallery
+        // build parked there must not inherit the Microsoft Marketplace.
+        var extensions = Directory.CreateDirectory(Path.Combine(home.FullName, ".VSCODE", "extensions"));
+        CreateInstalledExtension(extensions, "1.2.3", marketplace: true);
+        var variables = new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = extensions.FullName
+        };
+        var environment = platform switch
+        {
+            "linux" => TestEnvironment.CreateLinux(variables),
+            "macos" => TestEnvironment.CreateMacOS(variables),
+            _ => TestEnvironment.CreateWindows(variables)
+        };
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            StableVersionCallback = _ => Task.FromResult(SemVersion.Parse("1.2.3", SemVersionStyles.Strict))
+        };
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal(expectedInstallSource, result.Metadata!["extensionInstallSource"]!.GetValue<string>());
+        Assert.Equal(expectedMarketplaceCalls, marketplaceClient.CallCount);
+    }
+
     [Fact]
     public async Task CheckAsync_ReportsTheVersionTheProfileIndexLists_WhenTheEntryCarriesNoMetadata()
     {

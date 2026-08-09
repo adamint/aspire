@@ -1,0 +1,15 @@
+Match the extensions-root override the way the file system would
+
+The override path was compared to the known VS Code roots case-insensitively
+everywhere, but only Windows and macOS have case-insensitive file systems. On
+Linux ~/.VSCODE/extensions is a genuinely different directory, so a VSCodium
+or custom-gallery build parked there was promoted to the Microsoft Marketplace
+and got the outbound lookup this classification exists to prevent.
+
+Also stops the disk-recovery comment from claiming more than it can. Version
+equality rules out a copy in another extensions root, not a non-default
+profile that side-loaded the same version -- profiles share the extracted
+folder and keep their own metadata, and VS Code exposes no per-profile source
+signal to close that gap.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

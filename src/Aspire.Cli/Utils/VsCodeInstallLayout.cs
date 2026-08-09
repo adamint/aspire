@@ -98,7 +98,7 @@ internal static class VsCodeInstallLayout
             // than being guessed into a Marketplace comparison.
             yield return new VsCodeExtensionRoot(
                 overrideDirectory,
-                UsesMicrosoftGalleryByPath(overrideDirectory, homeDirectory));
+                UsesMicrosoftGalleryByPath(environment, overrideDirectory, homeDirectory));
             yield break;
         }
 
@@ -130,9 +130,17 @@ internal static class VsCodeInstallLayout
     // An override that points at a build's own extensions root still identifies the build, so the
     // path is matched against the known data folders before giving up. Only a Microsoft-gallery
     // folder promotes the root; an OSS or VSCodium folder, or a path matching nothing, does not.
-    private static bool UsesMicrosoftGalleryByPath(string extensionsDirectory, DirectoryInfo homeDirectory)
+    private static bool UsesMicrosoftGalleryByPath(IEnvironment environment, string extensionsDirectory, DirectoryInfo homeDirectory)
     {
         var home = homeDirectory.FullName;
+
+        // Case-insensitively on Windows and macOS, where the file system is, and exactly on Linux,
+        // where ~/.VSCODE/extensions is a genuinely different directory from ~/.vscode/extensions.
+        // Matching case-insensitively there would promote a VSCodium or custom-gallery override to
+        // the Microsoft Marketplace and make the outbound request this classification prevents.
+        var pathComparison = environment.IsWindows() || environment.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
 
         foreach (var variant in s_knownVariants)
         {
@@ -147,7 +155,7 @@ internal static class VsCodeInstallLayout
                 if (string.Equals(
                         Path.TrimEndingDirectorySeparator(extensionsDirectory),
                         Path.TrimEndingDirectorySeparator(root),
-                        StringComparison.OrdinalIgnoreCase))
+                        pathComparison))
                 {
                     return true;
                 }

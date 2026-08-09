@@ -338,8 +338,12 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             // source is normally unknown even for a Marketplace install. Leaving it there would retire
             // the Marketplace comparison on the very path that reports the most accurate version, so
             // the on-disk record is consulted for the missing signals. It is only adopted when the disk
-            // scan resolved the same version that was reported, which is what proves the record belongs
-            // to the instance that is running rather than to a second copy in another extensions root.
+            // scan resolved the same version that was reported, which rules out a second copy in
+            // another extensions root donating its origin. It cannot rule out everything: profiles
+            // share the extracted extension folder but keep their own metadata, so a non-default
+            // profile that side-loaded this exact version still reads the default profile's record.
+            // Closing that gap needs a per-profile source signal, and VS Code exposes none -- the
+            // reason this fallback exists at all.
             if (reportedSource is VsCodeExtensionInstallSource.Unknown ||
                 reportedChannel is VsCodeExtensionReleaseChannel.Unknown)
             {
