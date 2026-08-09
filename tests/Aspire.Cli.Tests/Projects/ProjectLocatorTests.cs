@@ -588,6 +588,52 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
             ProjectLocator.GetWorkspaceConfigLockFileName(Path.Combine(configRoot, "nested")));
     }
 
+    [Fact]
+    public void WorkspaceConfigLockFileNameIgnoresConfigRootUnicodeNormalization()
+    {
+        // A case-insensitive APFS volume is normalization-insensitive as well, so "café" written in
+        // composed form by one launch and decomposed form by another opens the same directory. Both
+        // spellings therefore have to fold to one lock name for the same reason casing does.
+        var composedConfigRoot = Path.Combine(Path.DirectorySeparatorChar.ToString(), "Workspaces", "caf\u00e9", "src");
+        var decomposedConfigRoot = Path.Combine(Path.DirectorySeparatorChar.ToString(), "Workspaces", "cafe\u0301", "src");
+
+        Assert.NotEqual(composedConfigRoot, decomposedConfigRoot);
+
+        Assert.Equal(
+            ProjectLocator.GetWorkspaceConfigLockFileName(composedConfigRoot),
+            ProjectLocator.GetWorkspaceConfigLockFileName(decomposedConfigRoot));
+    }
+
+    [Fact]
+    public async Task RecordedAppHostPathIsReplacedWhenOnlyItsCasingMatchesOnACaseSensitiveVolume()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        // Two directories that differ only in casing are one project on Windows and macOS but two
+        // on Linux, so folding the recorded path against the discovered one would leave the second
+        // project unable to become the workspace default.
+        var upperDirectory = workspace.WorkspaceRoot.CreateSubdirectory("Foo");
+        var lowerDirectory = workspace.WorkspaceRoot.CreateSubdirectory("foo");
+        await File.WriteAllTextAsync(Path.Combine(upperDirectory.FullName, "AppHost.csproj"), "Not a real apphost");
+        await File.WriteAllTextAsync(Path.Combine(lowerDirectory.FullName, "AppHost.csproj"), "Not a real apphost");
+
+        var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        await File.WriteAllTextAsync(configPath, """{"appHost":{"path":"Foo/AppHost.csproj"}}""");
+
+        var selectedAppHost = new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "foo", "AppHost.csproj"));
+        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var projectLocator = CreateProjectLocator(executionContext, environment: TestEnvironment.CreateLinux());
+
+        var result = await projectLocator.UseOrFindAppHostProjectFileAsync(
+            selectedAppHost,
+            MultipleAppHostProjectsFoundBehavior.Prompt,
+            createSettingsFile: true,
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.Equal(selectedAppHost.FullName, result.SelectedProjectFile?.FullName);
+        Assert.Equal("foo/AppHost.csproj", ReadConfiguredAppHostPath(configPath));
+    }
+
     private static IConfiguration CreateSelectionOriginConfiguration(string? selectionOrigin)
     {
         var builder = new ConfigurationBuilder();

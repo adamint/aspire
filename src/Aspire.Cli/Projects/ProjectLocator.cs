@@ -1253,11 +1253,20 @@ internal sealed class ProjectLocator(
                     var resolvedPath = Path.GetFullPath(
                         Path.IsPathRooted(existingPath) ? existingPath : Path.Combine(configDir, existingPath));
 
+                    // Windows and default macOS APFS volumes are case-insensitive, so a
+                    // differently-cased recorded path still names the file discovery found. On a
+                    // case-sensitive volume "Foo/AppHost.csproj" and "foo/AppHost.csproj" are two
+                    // projects, and folding them together would make the second one unable to take
+                    // over the workspace default. See https://github.com/microsoft/aspire/issues/17635.
+                    var pathComparison = environment.IsWindows() || environment.IsMacOS()
+                        ? StringComparison.OrdinalIgnoreCase
+                        : StringComparison.Ordinal;
+
                     // Only skip creation if the config already points to the discovered apphost.
                     // If the path is stale/invalid, fall through so the config gets healed. For
                     // session-scoped origins, the later presence-only check still preserves the raw
                     // recorded value without resolving it.
-                    if (string.Equals(resolvedPath, projectFile.FullName, StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(resolvedPath, projectFile.FullName, pathComparison))
                     {
                         logger.LogDebug(
                             "Config at {Path} already references apphost {AppHost}, skipping creation",
@@ -1364,7 +1373,23 @@ internal sealed class ProjectLocator(
         //
         // ToLowerInvariant rather than the current culture for the same reason: two CLI processes in
         // different locales must derive the same name.
-        return $"{Convert.ToHexString(XxHash3.Hash(Encoding.UTF8.GetBytes(configRootPath.ToLowerInvariant()))).ToLowerInvariant()}.lock";
+        //
+        // NFC first, because a case-insensitive APFS volume is normalization-insensitive too: a
+        // workspace named "café" spelled NFC by one launch and NFD by another opens one file but
+        // would otherwise hash to two names. Paths that fail to normalize (an unpaired surrogate is
+        // legal in a Windows path) fall back to the raw string, which is no worse than today.
+        string foldedConfigRootPath;
+
+        try
+        {
+            foldedConfigRootPath = configRootPath.Normalize(NormalizationForm.FormC);
+        }
+        catch (ArgumentException)
+        {
+            foldedConfigRootPath = configRootPath;
+        }
+
+        return $"{Convert.ToHexString(XxHash3.Hash(Encoding.UTF8.GetBytes(foldedConfigRootPath.ToLowerInvariant()))).ToLowerInvariant()}.lock";
     }
 
     private FileInfo GetOrCreateLocalAspireConfigFile()
