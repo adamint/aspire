@@ -91,10 +91,14 @@ internal static class VsCodeInstallLayout
         var overrideDirectory = environment.GetEnvironmentVariable("VSCODE_EXTENSIONS");
         if (!string.IsNullOrWhiteSpace(overrideDirectory))
         {
-            // An overridden root says nothing about which build points at it, and the VS Code
-            // Marketplace is the overwhelmingly common case, so it is treated as one rather than
-            // withholding the comparison from every user of VSCODE_EXTENSIONS.
-            yield return new VsCodeExtensionRoot(overrideDirectory, UsesMicrosoftGallery: true);
+            // VSCODE_EXTENSIONS names a directory, not a product: VS Code, VSCodium, and code-oss all
+            // honor it, so an override cannot establish which gallery the build installs from. The
+            // path is still matched against the known data folders, which covers the common case of
+            // pointing the override at a build's own root, and anything else stays unknown rather
+            // than being guessed into a Marketplace comparison.
+            yield return new VsCodeExtensionRoot(
+                overrideDirectory,
+                UsesMicrosoftGalleryByPath(overrideDirectory, homeDirectory));
             yield break;
         }
 
@@ -121,6 +125,36 @@ internal static class VsCodeInstallLayout
                 yield return new VsCodeExtensionRoot(path, variant.UsesMicrosoftGallery);
             }
         }
+    }
+
+    // An override that points at a build's own extensions root still identifies the build, so the
+    // path is matched against the known data folders before giving up. Only a Microsoft-gallery
+    // folder promotes the root; an OSS or VSCodium folder, or a path matching nothing, does not.
+    private static bool UsesMicrosoftGalleryByPath(string extensionsDirectory, DirectoryInfo homeDirectory)
+    {
+        var home = homeDirectory.FullName;
+
+        foreach (var variant in s_knownVariants)
+        {
+            if (!variant.UsesMicrosoftGallery)
+            {
+                continue;
+            }
+
+            foreach (var dataFolderName in new[] { variant.DesktopDataFolderName, variant.ServerDataFolderName })
+            {
+                var root = Path.Combine(home, dataFolderName, "extensions");
+                if (string.Equals(
+                        Path.TrimEndingDirectorySeparator(extensionsDirectory),
+                        Path.TrimEndingDirectorySeparator(root),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

@@ -43,7 +43,7 @@ export const ASPIRE_VSCODE_EXTENSION_VERSION_ENV_VAR = 'ASPIRE_VSCODE_EXTENSION_
 export const ASPIRE_VSCODE_EXTENSION_CHANNEL_ENV_VAR = 'ASPIRE_VSCODE_EXTENSION_CHANNEL';
 export const ASPIRE_VSCODE_EXTENSION_SOURCE_ENV_VAR = 'ASPIRE_VSCODE_EXTENSION_SOURCE';
 
-export type AspireVsCodeExtensionChannel = 'stable' | 'pre-release';
+export type AspireVsCodeExtensionChannel = 'stable' | 'pre-release' | 'unknown';
 export type AspireVsCodeExtensionSource = 'marketplace' | 'unknown';
 
 interface AspireVsCodePackageMetadata {
@@ -290,8 +290,11 @@ export function registerCliPathEnvironmentSync(
 }
 
 /**
- * Contributes the running extension's version to terminals, tasks, and debug
- * processes so `aspire doctor` can identify the active installation.
+ * Contributes the running extension's version to the terminals VS Code creates
+ * so `aspire doctor` can identify the active installation. Tasks and debug
+ * sessions configured with `"console": "integratedTerminal"` inherit it because
+ * they run in a terminal; a debug process launched into the internal console
+ * does not.
  *
  * Deliberately independent of `syncAspireCliPathEnvironment`: that function
  * clears the collection description and deletes its variable when no forwardable
@@ -336,7 +339,17 @@ export function getAspireExtensionChannel(packageJSON: AspireVsCodePackageJson |
         return packageJSON.preRelease ? 'pre-release' : 'stable';
     }
 
-    return packageJSON?.__metadata?.isPreReleaseVersion === true ? 'pre-release' : 'stable';
+    const isPreReleaseVersion = packageJSON?.__metadata?.isPreReleaseVersion;
+    if (typeof isPreReleaseVersion === 'boolean') {
+        return isPreReleaseVersion ? 'pre-release' : 'stable';
+    }
+
+    // An absent flag means stable: VS Code coerces it with `!!metadata.isPreReleaseVersion`, and
+    // gallery installs predating the flag were written without it. A flag that is present but not a
+    // boolean ({ "isPreReleaseVersion": "true" }) is a different case -- reporting stable there would
+    // have the CLI compare a possibly pre-release install against the stable feed, so the channel is
+    // reported as unknown and the CLI declines the comparison instead.
+    return isPreReleaseVersion === undefined ? 'stable' : 'unknown';
 }
 
 export function getAspireExtensionSource(

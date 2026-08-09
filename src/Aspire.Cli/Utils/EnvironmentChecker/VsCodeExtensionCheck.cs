@@ -39,9 +39,11 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
     internal const string MarketplaceUrl = "https://aka.ms/aspire/vscode-extension";
 
     /// <summary>
-    /// The environment variable the Aspire VS Code extension contributes to every terminal, task, and
-    /// debug process it creates, carrying the version of the extension instance that is actually
-    /// running. See <c>extension/src/utils/cliPathEnvironment.ts</c>.
+    /// The environment variable the Aspire VS Code extension contributes to the terminals VS Code
+    /// creates for it, carrying the version of the extension instance that is actually running. Tasks
+    /// and debug sessions configured with <c>"console": "integratedTerminal"</c> inherit it because
+    /// they run in a terminal; a debug process launched into the internal console does not.
+    /// See <c>extension/src/utils/cliPathEnvironment.ts</c>.
     /// </summary>
     internal const string ExtensionVersionEnvironmentVariable = "ASPIRE_VSCODE_EXTENSION_VERSION";
 
@@ -343,8 +345,11 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             {
                 var reportedDiskDetection = ResolveExtensionFromDisk(environment, homeDirectory);
 
+                // Full equality rather than ComparePrecedence: precedence ignores build metadata, so
+                // 1.2.3+loaded and 1.2.3+disk would compare equal and let an unrelated copy donate its
+                // origin and channel to the running instance, which is the thing this guard prevents.
                 if (SemVersion.TryParse(reportedDiskDetection.Version, SemVersionStyles.Strict, out var diskVersion) &&
-                    SemVersion.ComparePrecedence(diskVersion, reportedSemVersion) == 0)
+                    diskVersion.Equals(reportedSemVersion))
                 {
                     if (reportedSource is VsCodeExtensionInstallSource.Unknown)
                     {
@@ -567,16 +572,21 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
                 if (entry.ValueKind is not JsonValueKind.Object ||
                     !entry.TryGetProperty("relativeLocation", out var relativeLocation) ||
                     relativeLocation.ValueKind != JsonValueKind.String ||
-                    relativeLocation.GetString() is not { Length: > 0 } folderName ||
-                    !entry.TryGetProperty("metadata", out var metadata) ||
-                    metadata.ValueKind is not JsonValueKind.Object)
+                    relativeLocation.GetString() is not { Length: > 0 } folderName)
                 {
                     continue;
                 }
 
-                metadataByFolder[folderName] = (
-                    GetMetadataReleaseChannelOrDefault(metadata),
-                    GetMetadataInstallSourceOrDefault(metadata));
+                // metadata is optional in the stored schema. The entry is still kept, because
+                // relativeLocation alone answers which folder the profile loads; only its channel and
+                // origin are left unknown. Dropping the entry would hand that question back to the
+                // directory scan, which can only pick the highest version on disk.
+                var hasMetadata = entry.TryGetProperty("metadata", out var metadata) &&
+                    metadata.ValueKind is JsonValueKind.Object;
+
+                metadataByFolder[folderName] = hasMetadata
+                    ? (GetMetadataReleaseChannelOrDefault(metadata), GetMetadataInstallSourceOrDefault(metadata))
+                    : (null, null);
             }
 
             return metadataByFolder;

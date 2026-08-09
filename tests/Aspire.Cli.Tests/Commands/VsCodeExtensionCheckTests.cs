@@ -40,7 +40,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // VS Code is present (TERM_PROGRAM) but the extension contributed no version and the override
         // extensions directory is empty.
         var environment = new TestEnvironment(new Dictionary<string, string?>
@@ -150,7 +150,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // Regression test for the reported defect: an extension predating the environment variable, or
         // a doctor run outside a VS Code-created process, must still be compared rather than passing.
         CreateInstalledExtension(extensions, "1.2.3");
@@ -182,7 +182,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         CreateInstalledExtension(extensions, "1.9.0");
         var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
         var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
@@ -204,7 +204,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // The folder name is a convention; the manifest is the contract, so the manifest wins.
         CreateInstalledExtension(extensions, folderVersion: "1.2.3", manifestVersion: "1.9.0");
         var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
@@ -225,7 +225,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         CreateInstalledExtension(extensions, folderVersion: "1.2.3", manifestVersion: null);
         var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
         var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
@@ -245,7 +245,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         CreateInstalledExtension(extensions, "1.2.3", marketplace: false);
         var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
         var marketplaceClient = CreateUnusedMarketplaceClient();
@@ -272,7 +272,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         foreach (var installedVersion in installedVersions)
         {
             CreateInstalledExtension(extensions, installedVersion);
@@ -297,7 +297,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // The extension is installed but neither the manifest nor the folder name yields a version, so
         // the outcome must be a distinct "unknown" warning rather than a pass on absent evidence.
         var extensionDirectory = Directory.CreateDirectory(
@@ -328,7 +328,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // A corrupted variable must not be trusted, and must not short-circuit the disk scan either.
         CreateInstalledExtension(extensions, "1.2.3");
         var environment = new TestEnvironment(new Dictionary<string, string?>
@@ -355,7 +355,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // A platform-specific VSIX unpacks to "<id>-1.2.3-darwin-arm64", whose suffix parses as the
         // semver pre-release "1.2.3-darwin-arm64". Without a manifest that is not a usable version.
         Directory.CreateDirectory(
@@ -650,7 +650,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // VS Code looks a side-loaded VSIX up in the gallery and stores the matched publisherId, so
         // publisherId alone does not prove a Marketplace install. __metadata.source records the real
         // origin and has to win over it.
@@ -676,7 +676,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // A source VS Code did write, in any shape, settles the question. Treating a malformed one as
         // absent would let the weaker publisherId inference override metadata that is present but
         // untrustworthy, and send the outbound request this signal exists to gate.
@@ -702,7 +702,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // Opting into pre-release updates flips `preRelease` immediately while `isPreReleaseVersion`
         // still describes the stable artifact on disk. The install now moves along the pre-release
         // feed, so that is the feed the comparison has to use.
@@ -742,7 +742,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         CreateInstalledExtension(extensions, "1.2.3");
         // The layout scans VSCodium's .vscode-oss roots, so a machine with only VSCodium must not be
         // dismissed before the scan runs; the extension is installed and doctor has to say so.
@@ -766,7 +766,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // Current VS Code hides the install origin from the extension host, so the extension reports a
         // version and no source. Without recovering the source from disk the Marketplace comparison
         // would never run on the path that reports the most accurate version.
@@ -812,7 +812,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // The reported version wins over disk precisely because the running instance can live in a root
         // the CLI cannot see. A record for some other version is then a different copy of the extension,
         // and its install origin says nothing about the one that is loaded.
@@ -854,7 +854,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // A side-loaded VSIX that the gallery matched carries a publisherId in the extracted manifest,
         // which on its own reads as a Marketplace install. The profile index records the real origin,
         // so it has to override the manifest rather than merely being a fallback for it.
@@ -890,7 +890,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // Current VS Code trims the extracted manifest's __metadata down to installer bookkeeping, so
         // the profile index is the only place a Marketplace install can still be recognised from.
         CreateInstalledExtensionWithMetadata(
@@ -930,7 +930,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         CreateInstalledExtensionWithMetadata(
             extensions,
             "1.2.3",
@@ -970,7 +970,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         CreateInstalledExtensionWithMetadata(
             extensions,
             "1.2.3",
@@ -996,7 +996,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // A manifest that stringifies the flag cannot be trusted to say which feed to compare
         // against, and guessing stable would report a pre-release install as out of date.
         CreateInstalledExtensionWithMetadata(
@@ -1022,7 +1022,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // VS Code coerces the flag with !!metadata.isPreReleaseVersion and gallery installs predating
         // it were written without it, so an absent flag means stable. Reporting unknown here would
         // retire the comparison for every one of those installs.
@@ -1051,7 +1051,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // Only the running extension sets the variable, so a corrupted value still proves the
         // extension is loaded. Telling the user to install what they already have would be wrong.
         var environment = new TestEnvironment(new Dictionary<string, string?>
@@ -1104,7 +1104,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // Remote, portable, and --extensions-dir installs put the extension somewhere the CLI cannot
         // enumerate. The contributed version is authoritative precisely for those cases.
         var environment = new TestEnvironment(new Dictionary<string, string?>
@@ -1127,7 +1127,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         Directory.CreateDirectory(Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-1.2.3"));
         var environment = new TestEnvironment(new Dictionary<string, string?>
         {
@@ -1148,7 +1148,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         Directory.CreateDirectory(Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-1.2.3"));
         var environment = new TestEnvironment(new Dictionary<string, string?>
         {
@@ -1211,7 +1211,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         const string folderName = "microsoft-aspire.aspire-vscode-1.2.3";
         Directory.CreateDirectory(Path.Combine(extensions.FullName, folderName));
         File.WriteAllText(Path.Combine(extensions.FullName, ".obsolete"), $$"""{"{{folderName}}":true}""");
@@ -1310,7 +1310,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         Directory.CreateDirectory(Path.Combine(extensions.FullName, "Microsoft-Aspire.Aspire-VSCode-9.9.9"));
         var environment = new TestEnvironment(new Dictionary<string, string?>
         {
@@ -1328,7 +1328,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         Directory.CreateDirectory(Path.Combine(extensions.FullName, "ms-dotnettools.csharp-2.0.0"));
         var environment = new TestEnvironment(new Dictionary<string, string?>
         {
@@ -1347,7 +1347,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // A different extension whose id begins with ours. Without the digit boundary the prefix match
         // would incorrectly treat this as the Aspire extension.
         Directory.CreateDirectory(Path.Combine(extensions.FullName, "microsoft-aspire.aspire-vscode-extras-1.0.0"));
@@ -1402,7 +1402,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // The unknown-version warning is raised before the install-source guard, so it is the one
         // place a side-load or an Open VSX install can still be handed a Marketplace link for a feed
         // it did not come from.
@@ -1423,11 +1423,98 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task CheckAsync_DoesNotCheckMarketplace_WhenTheExtensionsRootIsOverriddenToAnUnrecognizedPath()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        // VS Code, VSCodium, and code-oss all honor VSCODE_EXTENSIONS, so an override that matches no
+        // known data folder cannot say which gallery "gallery" refers to.
+        var extensions = workspace.CreateDirectory("portable-extensions");
+        CreateInstalledExtension(extensions, "1.2.3");
+        CreateProfileExtensionIndex(
+            extensions,
+            """
+            [{
+              "identifier": { "id": "microsoft-aspire.aspire-vscode" },
+              "version": "1.2.3",
+              "relativeLocation": "microsoft-aspire.aspire-vscode-1.2.3",
+              "metadata": { "source": "gallery", "isPreReleaseVersion": false }
+            }]
+            """);
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = CreateUnusedMarketplaceClient();
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("unknown", result.Metadata!["extensionInstallSource"]!.GetValue<string>());
+        Assert.Equal(0, marketplaceClient.CallCount);
+    }
+
+    [Fact]
+    public async Task CheckAsync_ReportsTheVersionTheProfileIndexLists_WhenTheEntryCarriesNoMetadata()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = CreateDefaultExtensionsRoot(home);
+        // metadata is optional in the stored schema, but relativeLocation still names the folder the
+        // profile loads. Discarding the entry would hand the choice back to the highest version on
+        // disk, which is the stale folder.
+        CreateInstalledExtension(extensions, "1.2.3");
+        CreateInstalledExtension(extensions, "9.9.9");
+        CreateProfileExtensionIndex(
+            extensions,
+            """
+            [{
+              "identifier": { "id": "microsoft-aspire.aspire-vscode" },
+              "version": "1.2.3",
+              "relativeLocation": "microsoft-aspire.aspire-vscode-1.2.3"
+            }]
+            """);
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            StableVersionCallback = _ => Task.FromResult(SemVersion.Parse("1.2.3", SemVersionStyles.Strict))
+        };
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal("1.2.3", result.Metadata!["extensionVersion"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task CheckAsync_DoesNotAdoptTheDiskRecord_WhenItDiffersOnlyByBuildMetadata()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = CreateDefaultExtensionsRoot(home);
+        // Semver precedence ignores build metadata, so 1.2.3+disk and 1.2.3+loaded would compare equal
+        // and let a different build donate its origin to the running instance.
+        CreateInstalledExtension(extensions, "1.2.3", "1.2.3+disk");
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = extensions.FullName,
+            [ReportedVersionVariable] = "1.2.3+loaded"
+        });
+        var marketplaceClient = CreateUnusedMarketplaceClient();
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("unknown", result.Metadata!["extensionInstallSource"]!.GetValue<string>());
+        Assert.Equal(0, marketplaceClient.CallCount);
+    }
+
+    [Fact]
     public async Task CheckAsync_DoesNotCheckMarketplace_WhenOnlyAPublisherIdIsRecorded()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // VS Code looks a side-loaded VSIX up in the gallery on install and stamps the matched
         // publisherId onto it, so a publisherId with no recorded source does not establish that the
         // install came from the Marketplace, and guessing that it did makes the outbound request the
@@ -1454,7 +1541,7 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var home = workspace.CreateDirectory("home");
-        var extensions = workspace.CreateDirectory("extensions");
+        var extensions = CreateDefaultExtensionsRoot(home);
         // An interrupted update or a hand-copied directory leaves a higher-numbered folder behind that
         // the profile never loads. The index names the folder VS Code actually runs, so reporting the
         // highest folder on disk would describe an extension the user does not have loaded.
@@ -1516,6 +1603,12 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         Assert.Equal("unknown", result.Metadata!["extensionInstallSource"]!.GetValue<string>());
         Assert.Equal(0, marketplaceClient.CallCount);
     }
+
+    // The default desktop root of a Marketplace build. Tests point VSCODE_EXTENSIONS here rather than
+    // at an arbitrary directory because the override is product-agnostic: only a path that matches a
+    // known Microsoft-gallery folder is treated as one.
+    private static DirectoryInfo CreateDefaultExtensionsRoot(DirectoryInfo home)
+        => Directory.CreateDirectory(Path.Combine(home.FullName, ".vscode", "extensions"));
 
     private static TestEnvironment CreateVsCodeEnvironmentWithoutReportedVersion(DirectoryInfo extensions)
         => new(new Dictionary<string, string?>

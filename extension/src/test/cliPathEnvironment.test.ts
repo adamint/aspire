@@ -489,6 +489,15 @@ suite('cliPathEnvironment.syncAspireExtensionVersionEnvironment tests', () => {
         assert.strictEqual(getAspireExtensionChannel({ version: '1.17.0', preRelease: false }), 'stable');
     });
 
+    test('reports an unknown channel for a present but non-boolean pre-release flag', () => {
+        // Reporting stable for a flag VS Code did not write would compare a possibly pre-release
+        // install against the stable feed. The CLI declines the comparison on an unknown channel.
+        assert.strictEqual(getAspireExtensionChannel({
+            version: '1.17.0',
+            __metadata: { isPreReleaseVersion: 'true' },
+        }), 'unknown');
+    });
+
     test('reports the stable channel when neither signal is present', () => {
         assert.strictEqual(getAspireExtensionChannel({ version: '1.17.0' }), 'stable');
     });
