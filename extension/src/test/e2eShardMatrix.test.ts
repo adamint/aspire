@@ -16,8 +16,9 @@ suite('E2E shard matrix', () => {
     const workflowPath = path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml');
     const specDirectory = path.join(extensionRoot, 'src', 'test-e2e');
     const disabledIssuePattern = /^https:\/\/github\.com\/microsoft\/aspire\/issues\/\d+$/;
-    // Any real disabled shard must be listed here so adding `disabledIssue` requires an
-    // intentional test change instead of silently turning coverage into a green skipped shard.
+    // `disabledIssue` is reserved metadata for future disabled-shard handling. The workflow does
+    // not consume it today, so adding it must require an intentional test change instead of
+    // silently documenting a disabled shard that the runner still executes normally.
     const expectedDisabledRows = new Map<string, string>([]);
 
     /**
@@ -48,6 +49,43 @@ suite('E2E shard matrix', () => {
             .sort();
     }
 
+    function matrixIncludeBlock(workflow: string): string {
+        const lines = workflow.split(/\r?\n/);
+        const stack: Array<{ indent: number; key: string }> = [];
+        const includeLine = lines.findIndex(line => {
+            const key = /^(\s*)([A-Za-z0-9_-]+):\s*$/.exec(line);
+            if (key === null) {
+                return false;
+            }
+
+            const indent = key[1].length;
+            while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+                stack.pop();
+            }
+
+            stack.push({ indent, key: key[2] });
+
+            return stack.map(entry => entry.key).join('/') === 'jobs/extension_e2e/strategy/matrix/include';
+        });
+        assert.notStrictEqual(includeLine, -1, 'Expected extension-e2e-tests.yml to have a matrix include block.');
+
+        const includeIndent = leadingWhitespace(lines[includeLine]);
+        const block: string[] = [];
+        for (const line of lines.slice(includeLine + 1)) {
+            if (line.trim() !== '' && leadingWhitespace(line) <= includeIndent) {
+                break;
+            }
+
+            block.push(line);
+        }
+
+        return block.join('\n');
+    }
+
+    function leadingWhitespace(line: string): number {
+        return /^\s*/.exec(line)?.[0].length ?? 0;
+    }
+
     /**
      * Matrix rows carry the compiled spec path:
      *       - name: Linux
@@ -57,7 +95,7 @@ suite('E2E shard matrix', () => {
      * deduplicated before being compared with the canonical set.
      */
     function matrixSpecPaths(workflow: string): string[] {
-        return [...new Set([...workflow.matchAll(/^\s*spec:\s*(\S+)\s*$/gm)].map(match => parseWorkflowScalar(match[1])))].sort();
+        return [...new Set([...matrixIncludeBlock(workflow).matchAll(/^\s*spec:\s*(\S+)\s*$/gm)].map(match => parseWorkflowScalar(match[1])))].sort();
     }
 
     function matrixRows(workflow: string): MatrixRow[] {
@@ -71,7 +109,7 @@ suite('E2E shard matrix', () => {
         //     disabledIssue: 'https://github.com/microsoft/aspire/issues/19151'
         // This deliberately extracts only the fields the guard owns rather than becoming a
         // general YAML parser for workflow syntax.
-        for (const line of workflow.split(/\r?\n/)) {
+        for (const line of matrixIncludeBlock(workflow).split(/\r?\n/)) {
             const rowStart = /^\s*-\s+name:\s*(.*?)\s*$/.exec(line);
             if (rowStart !== null) {
                 appendCurrentRow();
@@ -145,7 +183,7 @@ suite('E2E shard matrix', () => {
     function workflowWithSpecs(...specs: readonly string[]): string {
         return [
             'jobs:',
-            '  e2e:',
+            '  extension_e2e:',
             '    strategy:',
             '      matrix:',
             '        include:',
@@ -161,7 +199,7 @@ suite('E2E shard matrix', () => {
     function workflowWithDisabledSpec(spec: string, disabledIssue: string, name = 'Linux'): string {
         return [
             'jobs:',
-            '  e2e:',
+            '  extension_e2e:',
             '    strategy:',
             '      matrix:',
             '        include:',
@@ -186,9 +224,9 @@ suite('E2E shard matrix', () => {
     function assertMatrixMatchesSpecs(workflow: string, specFileNames: readonly string[]): void {
         // Deliberately full set equality rather than a containment check in either direction. A
         // missing entry means a spec silently never runs. An extra entry that is not a spec (a
-        // helper module, or a spec that was renamed or deleted) is caught later by the E2E runner,
-        // but only after the workflow has already scheduled a dead shard. Keep this unit guard as
-        // the first signal that the matrix and Mocha's recursive discovery have drifted.
+        // helper module, or a spec that was renamed or deleted) can schedule a shard that runs zero
+        // tests. Keep this unit guard as the first signal that the matrix and Mocha's recursive
+        // discovery have drifted.
         assert.deepStrictEqual(
             matrixSpecPaths(workflow),
             canonicalSpecPaths(specFileNames),
@@ -266,6 +304,30 @@ suite('E2E shard matrix', () => {
         const workflow = workflowWithSpecs("'out/test-e2e/test-e2e/edgeCases.e2e.test.js'");
 
         assertMatrixMatchesSpecs(workflow, ['edgeCases.e2e.test.ts']);
+    });
+
+    test('rejects a spec that only appears outside the E2E matrix', () => {
+        const workflow = [
+            'jobs:',
+            '  unrelated:',
+            '    steps:',
+            '      - name: Configure unrelated action',
+            '        with:',
+            '          spec: out/test-e2e/test-e2e/azureFunctions.e2e.test.js',
+            '  extension_e2e:',
+            '    strategy:',
+            '      matrix:',
+            '        include:',
+            '          - name: Linux',
+            '            shardName: shard',
+            '            spec: out/test-e2e/test-e2e/edgeCases.e2e.test.js',
+            '',
+        ].join('\n');
+
+        assert.throws(
+            () => assertMatrixMatchesSpecs(workflow, ['edgeCases.e2e.test.ts', 'azureFunctions.e2e.test.ts']),
+            assert.AssertionError,
+            'A spec-like workflow input outside the matrix must not satisfy the E2E shard guard.');
     });
 
     test('rejects a disabled matrix row that is not explicitly tracked', () => {
