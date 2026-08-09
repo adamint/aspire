@@ -19,6 +19,18 @@ function stripComments(source: string): string {
     return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 }
 
+function getTestBlock(source: string, testName: string): string {
+    const testStart = source.indexOf(`test('${testName}'`);
+    assert.ok(testStart >= 0, `Expected to find test '${testName}'.`);
+
+    const nextTestStart = source.indexOf('\n    test(', testStart + 1);
+    const suiteEnd = source.indexOf('\n});', testStart + 1);
+    const testEnd = nextTestStart >= 0 && nextTestStart < suiteEnd ? nextTestStart : suiteEnd;
+    assert.ok(testEnd > testStart, `Expected to find the end of test '${testName}'.`);
+
+    return source.slice(testStart, testEnd);
+}
+
 suite('E2E launch profile', () => {
     test('creates nothing in the per-run root that a later module-scope throw could strand', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
@@ -335,6 +347,18 @@ suite('E2E launch profile', () => {
         assert.ok(e2eStateFileBridge.includes("context.globalState.update(dashboardDefaultChangedNotificationKey, undefined)"));
         assert.ok(fixtures.includes('resetDashboardDefaultChangedNotificationForE2E'));
         assert.ok(debugDashboard.includes('await resetDashboardDefaultChangedNotificationForE2E();'));
+    });
+
+    test('observes CLI run status before asserting it is not a notification', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const debugDashboard = fs.readFileSync(path.join(extensionRoot, 'src', 'test-e2e', 'debugDashboard.e2e.test.ts'), 'utf8');
+        const statusNotificationTest = getTestBlock(debugDashboard, 'keeps long-running CLI run status out of notifications');
+        const statusWaitIndex = statusNotificationTest.indexOf('await waitForAnyWorkbenchText(cliRunStatusTexts, 120000);');
+        const notificationReadIndex = statusNotificationTest.indexOf('const notificationMessages = await getNotificationMessages();');
+
+        assert.ok(debugDashboard.includes('waitForAnyWorkbenchText'));
+        assert.ok(statusWaitIndex >= 0, 'The E2E must observe a live CLI status before classifying notification UI.');
+        assert.ok(notificationReadIndex > statusWaitIndex, 'Notifications must be read while the delayed status is still present.');
     });
 
     test('uses known AppHost PID when E2E teardown CLI status probes time out', () => {

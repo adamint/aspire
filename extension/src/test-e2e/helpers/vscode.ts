@@ -312,6 +312,21 @@ export async function waitForWorkbenchText(expectedText: string, timeoutMs = 300
     }
 }
 
+export async function waitForAnyWorkbenchText(expectedTexts: readonly string[], timeoutMs = 30000): Promise<string> {
+    let lastText = '';
+    const expectedTextDescription = expectedTexts.map(text => `'${text}'`).join(' or ');
+
+    try {
+        return await VSBrowser.instance.driver.wait(async () => {
+            lastText = await getWorkbenchAndWebviewText();
+            return expectedTexts.some(text => lastText.includes(text)) ? lastText : false;
+        }, timeoutMs, `Timed out waiting for workbench text containing ${expectedTextDescription}.`);
+    }
+    catch (error) {
+        throw withWaitDiagnostics(error, [`Last workbench/webview text (${lastText.length} chars):\n${truncateDiagnosticText(lastText)}`]);
+    }
+}
+
 export async function waitForWorkbenchTextAfterIntegratedBrowserNavigation(expectedText: string | readonly string[], timeoutMs = 120000): Promise<string> {
     const expectedTexts = Array.isArray(expectedText) ? expectedText : [expectedText];
     const expectedTextDescription = expectedTexts.map(text => `'${text}'`).join(' or ');
