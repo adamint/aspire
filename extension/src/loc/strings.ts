@@ -140,6 +140,7 @@ export const attachDebuggerResourceNotFound = vscode.l10n.t('The selected resour
 export const attachDebuggerCsharpExtensionRequired = vscode.l10n.t('Install the C# extension to attach the debugger to .NET project resources.');
 export const attachDebuggerDeclined = (resource: string) => vscode.l10n.t('VS Code did not start the debugger attach session for {0}.', resource);
 export const attachDebuggerProcessNameUnresolved = (resource: string, error: string) => vscode.l10n.t('Could not determine the process to attach to for {0}: {1}. Check that the project can be evaluated by MSBuild, or start the debugger and attach manually.', resource, error);
+export const attachDebuggerTargetNameProbeAssumesDefaultConfiguration = (resource: string, projectPath: string) => vscode.l10n.t('{0} does not report a project target name, so the process to attach to is being evaluated from {1} using its default configuration. If the assembly name depends on the build configuration, update the AppHost so it reports the target name.', resource, projectPath);
 export const resourceCountDescription = (count: number) => vscode.l10n.t('({0} resources)', count);
 export const appHostCandidateDescription = (language: string, status: string) => vscode.l10n.t('{0} · {1}', language, status);
 export const workspaceViewSelectedSingleAppHost = (language?: string) => language

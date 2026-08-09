@@ -9,6 +9,8 @@ import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration
 import * as io from '../utils/io';
 import { ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
 import { AppHostParentOutputFilter, AspireDebugSession } from '../debugger/AspireDebugSession';
+import { extensionLogOutputChannel } from '../utils/logging';
+import { attachDebuggerTargetNameProbeAssumesDefaultConfiguration } from '../loc/strings';
 
 class TestDotNetService {
     private _hasDevKit: boolean;
@@ -86,6 +88,7 @@ suite('Dotnet Debugger Extension Tests', () => {
 
     test('attach configuration derives process name from evaluated TargetPath when target name is not reported', async () => {
         const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/My Attach Service.dll', null, true, true);
+        const warn = sinon.stub(extensionLogOutputChannel, 'warn');
 
         const configuration = await extension.createAttachDebugSessionConfigurationCallback!({
             name: 'worker',
@@ -101,6 +104,13 @@ suite('Dotnet Debugger Extension Tests', () => {
 
         assert.strictEqual(configuration.processName, 'My Attach Service');
         assert.ok(dotNetService.getDotNetTargetPathStub.calledOnceWith('/repo/worker/AttachDemo.Worker.csproj'));
+
+        // The probe answers for the project's default configuration, which is not necessarily the one the
+        // AppHost is running. Recording that is the only remedy available: the configuration is not in the
+        // resource contract of an AppHost old enough to need this fallback.
+        assert.deepStrictEqual(warn.getCalls().map(call => call.args[0]), [
+            attachDebuggerTargetNameProbeAssumesDefaultConfiguration('Worker', '/repo/worker/AttachDemo.Worker.csproj')
+        ]);
     });
 
     test('attach configuration treats blank reported target name as absent', async () => {

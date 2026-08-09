@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { extensionLogOutputChannel } from '../../utils/logging';
-import { noCsharpBuildTask, buildFailedWithExitCode, noOutputFromMsbuild, failedToGetTargetPath, invalidLaunchConfiguration, buildFailedForProjectWithError, processExitedWithCode, lookingForDevkitBuildTask, csharpDevKitNotInstalled, failedToInspectRuntimeConfig, dotNetRunFallbackDisablesDebugger, dotNetRunFileBasedExecutableProfileFallback, executableLaunchProfileMissingExecutablePath, attachDebuggerConfigurationName, attachDebuggerProcessNameUnresolved } from '../../loc/strings';
+import { noCsharpBuildTask, buildFailedWithExitCode, noOutputFromMsbuild, failedToGetTargetPath, invalidLaunchConfiguration, buildFailedForProjectWithError, processExitedWithCode, lookingForDevkitBuildTask, csharpDevKitNotInstalled, failedToInspectRuntimeConfig, dotNetRunFallbackDisablesDebugger, dotNetRunFileBasedExecutableProfileFallback, executableLaunchProfileMissingExecutablePath, attachDebuggerConfigurationName, attachDebuggerProcessNameUnresolved, attachDebuggerTargetNameProbeAssumesDefaultConfiguration } from '../../loc/strings';
 import { ChildProcessWithoutNullStreams, execFile, spawn } from 'child_process';
 import * as util from 'util';
 import * as path from 'path';
@@ -498,6 +498,16 @@ async function createDotNetAttachDebugSessionConfiguration(resource: DebuggableR
 }
 
 async function getProcessNameFromTargetPath(projectPath: string, resourceLabel: string, dotNetService: IDotNetService): Promise<string> {
+    // This probe evaluates the project with MSBuild's default global properties, so it answers for the
+    // project's default configuration rather than the one the AppHost is running. That is only wrong for
+    // a project whose assembly name is conditioned on Configuration, and it cannot be made right here:
+    // the resource contract of an AppHost old enough to omit project.targetName carries no configuration,
+    // and executable.args - the one property that would name the running assembly outright - is published
+    // as sensitive and redacted to null before the extension ever sees it (AuxiliaryBackchannelRpcTarget
+    // replaces every IsSensitive value with null). Failing closed instead would remove attach support from
+    // exactly the AppHosts this fallback exists to serve, so the probe stays best effort and says so.
+    extensionLogOutputChannel.warn(attachDebuggerTargetNameProbeAssumesDefaultConfiguration(resourceLabel, projectPath));
+
     try {
         const targetPath = await dotNetService.getDotNetTargetPath(projectPath);
         const fileName = targetPath.trim().split(/[\\/]/).pop() ?? '';

@@ -859,6 +859,9 @@
     <trans-unit id="aspire-vscode.strings.aspireCliCommandTimedOut">
       <source xml:lang="en">timed out after {0}ms</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.attachDebuggerTargetNameProbeAssumesDefaultConfiguration">
+      <source xml:lang="en">{0} does not report a project target name, so the process to attach to is being evaluated from {1} using its default configuration. If the assembly name depends on the build configuration, update the AppHost so it reports the target name.</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.aspireCliCommandFailed">
       <source xml:lang="en">{0} exited with code {1}{2}</source>
     </trans-unit>

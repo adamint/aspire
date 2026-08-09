@@ -479,6 +479,47 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         Assert.Null(GetGeneratedTargetNameMember(generatedSource));
     }
 
+    [Theory]
+    [InlineData("GetTargetFrameworks")]
+    [InlineData("GetTargetPath")]
+    public async Task ProjectMetadataTargetNameProbeFailureStillFailsTheBuild(string probedTarget)
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var referencedProjectXml = $"""
+              <PropertyGroup>
+                <OutputType>Exe</OutputType>
+                <TargetFramework>net8.0</TargetFramework>
+              </PropertyGroup>
+              <Target Name="FailAspireTargetNameProbe" BeforeTargets="{probedTarget}">
+                <Error Text="aspire target name probe hook failed" />
+              </Target>
+            """;
+
+        var result = await RunProjectMetadataSourceGenerationAsync(
+            workspace,
+            referencedProjectXml,
+            extraArguments: ["-p:BuildingProject=true"]);
+
+        // ContinueOnError keeps the codegen target running, but it does not demote the error the referenced
+        // project logged: the build still fails. Letting the AppHost build succeed on a reference that cannot
+        // be evaluated would hide a broken project behind a debugger-only convenience.
+        Assert.NotEqual(0, result.DotNetResult.ExitCode);
+        Assert.Contains("aspire target name probe hook failed", result.DotNetResult.Output);
+
+        using var controlWorkspace = TemporaryWorkspace.Create(outputHelper);
+
+        // The same project, with only the probe turned off, builds cleanly. That is what attributes the failure
+        // above to the probe rather than to a project that was broken to begin with, and it also shows neither
+        // probed target runs on an Aspire project reference during an ordinary build.
+        var controlResult = await RunProjectMetadataSourceGenerationAsync(
+            controlWorkspace,
+            referencedProjectXml,
+            extraArguments: ["-p:BuildingProject=true", "-p:SkipAspireProjectResourceTargetName=true"]);
+
+        Assert.True(controlResult.DotNetResult.ExitCode == 0, controlResult.DotNetResult.Output);
+    }
+
     [Fact]
     public async Task ComputeRunArgumentsUsesAspireCliWhenCliBundleIsEnabled()
     {
