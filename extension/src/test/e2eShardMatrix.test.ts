@@ -110,11 +110,11 @@ suite('E2E shard matrix', () => {
         // This deliberately extracts only the fields the guard owns rather than becoming a
         // general YAML parser for workflow syntax.
         for (const line of matrixIncludeBlock(workflow).split(/\r?\n/)) {
-            const rowStart = /^\s*-\s+(name|shardName|spec|disabledIssue):\s*(.*?)\s*$/.exec(line);
+            const rowStart = /^\s*-\s+([A-Za-z0-9_-]+):\s*(.*?)\s*$/.exec(line);
             if (rowStart !== null) {
                 appendCurrentRow();
                 currentRow = {};
-                currentRow[rowStart[1] as keyof MatrixRow] = parseWorkflowScalar(rowStart[2]);
+                setMatrixRowField(currentRow, rowStart[1], rowStart[2]);
                 continue;
             }
 
@@ -127,7 +127,7 @@ suite('E2E shard matrix', () => {
                 continue;
             }
 
-            currentRow[field[1] as keyof MatrixRow] = parseWorkflowScalar(field[2]);
+            setMatrixRowField(currentRow, field[1], field[2]);
         }
 
         appendCurrentRow();
@@ -137,6 +137,12 @@ suite('E2E shard matrix', () => {
         function appendCurrentRow(): void {
             if (currentRow?.spec !== undefined || currentRow?.disabledIssue !== undefined) {
                 rows.push(currentRow);
+            }
+        }
+
+        function setMatrixRowField(row: MatrixRow, fieldName: string, value: string): void {
+            if (fieldName === 'name' || fieldName === 'shardName' || fieldName === 'spec' || fieldName === 'disabledIssue') {
+                row[fieldName] = parseWorkflowScalar(value);
             }
         }
     }
@@ -349,7 +355,7 @@ suite('E2E shard matrix', () => {
         assertDisabledRowsAreTracked(workflow, new Map([[`Linux|azure-functions|${spec}`, issue]]));
     });
 
-    test('accepts matrix rows whose first key is not name', () => {
+    test('accepts matrix rows whose first key is not tracked by the guard', () => {
         const spec = 'out/test-e2e/test-e2e/azureFunctions.e2e.test.js';
         const issue = 'https://github.com/microsoft/aspire/issues/19151';
         const workflow = [
@@ -358,7 +364,8 @@ suite('E2E shard matrix', () => {
             '    strategy:',
             '      matrix:',
             '        include:',
-            `          - spec: ${spec}`,
+            '          - runner: ubuntu-latest',
+            `            spec: ${spec}`,
             '            shardName: azure-functions',
             `            disabledIssue: ${issue}`,
             '            name: Linux',
