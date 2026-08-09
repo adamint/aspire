@@ -84,6 +84,34 @@ suite('AspireExtensionContext', () => {
         }
     });
 
+    test('deactivation does not start cooperative stop requests after the stop deadline', async () => {
+        const order: string[] = [];
+        const context = createContext(order);
+        const timeoutMs = (AspireExtensionContext as any)._cliStopTimeoutMs;
+        (AspireExtensionContext as any)._cliStopTimeoutMs = 0;
+
+        addSession(context, 'expired', () => {
+            order.push('stop expired');
+            return Promise.resolve();
+        }, () => order.push('dispose expired'), () => order.push('terminate expired'));
+
+        try {
+            await deactivateContext(context);
+
+            assert.deepStrictEqual(order, [
+                'terminate expired',
+                'dispose expired',
+                'rpc server',
+                'dcp server',
+                'terminal provider',
+                'editor command provider',
+            ]);
+        }
+        finally {
+            (AspireExtensionContext as any)._cliStopTimeoutMs = timeoutMs;
+        }
+    });
+
     test('dispose does not race an in-flight deactivation and repeated shutdown is idempotent', async () => {
         const order: string[] = [];
         const context = createContext(order);

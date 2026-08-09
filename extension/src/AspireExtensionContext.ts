@@ -157,7 +157,7 @@ export class AspireExtensionContext implements vscode.Disposable {
         // from registering a session, so a debug-adapter descriptor or an RPC-triggered
         // `startDebugSession` that lands mid-await would never be asked to stop if the array were
         // captured only once. Requesting a stop is idempotent per session, so re-scanning is safe.
-        while (this._collectStopRequests(requested) && Date.now() < deadline) {
+        while (Date.now() < deadline && this._collectStopRequests(requested)) {
             const timedOut = await this._settleStopRequests([...requested.values()], deadline);
             if (timedOut) {
                 extensionLogOutputChannel.warn(`Timed out after ${AspireExtensionContext._cliStopTimeoutMs}ms waiting for Aspire CLI stop requests; continuing extension teardown.`);
