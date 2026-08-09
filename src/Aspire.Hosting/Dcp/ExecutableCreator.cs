@@ -689,19 +689,61 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         };
         var rewrittenArgs = await activeDebugArgsAnnotation.AsCallbackAnnotation().EvaluateOnceAsync(callbackContext).ConfigureAwait(false);
 
+        // Arguments the debug rewrite kept were already resolved into originalConfiguration for this same
+        // executable creation. IValueProvider carries no idempotence guarantee, so resolving them a second
+        // time can produce a different value or repeat a side effect - the same hazard that stopped ordinary
+        // WithArgs callbacks from being replayed above. Reuse those resolutions by reference identity and
+        // send only what the callback introduced or replaced through the gatherer.
+        var previouslyResolved = new Dictionary<object, (string Value, bool IsSensitive)>(ReferenceEqualityComparer.Instance);
+        foreach (var argument in originalConfiguration.ArgumentsWithUnprocessed)
+        {
+            previouslyResolved.TryAdd(argument.Unprocessed, (argument.Processed, argument.IsSensitive));
+        }
+
         var rewrittenArgsGathererContext = new ExecutionConfigurationGathererContext();
-        rewrittenArgsGathererContext.Arguments.AddRange(rewrittenArgs);
+        rewrittenArgsGathererContext.Arguments.AddRange(rewrittenArgs.Where(argument => !previouslyResolved.ContainsKey(argument)));
         var rewrittenArgsConfiguration = await rewrittenArgsGathererContext
             .ResolveAsync(resource, resourceLogger, _executionContext, cancellationToken)
             .ConfigureAwait(false);
+
+        // ResolveAsync drops arguments that resolve to null, so the newly resolved values are matched back by
+        // reference identity rather than by position, and an argument missing from both maps is dropped here
+        // for the same reason it would have been dropped there.
+        var newlyResolved = new Dictionary<object, (string Value, bool IsSensitive)>(ReferenceEqualityComparer.Instance);
+        foreach (var argument in rewrittenArgsConfiguration.ArgumentsWithUnprocessed)
+        {
+            newlyResolved.TryAdd(argument.Unprocessed, (argument.Processed, argument.IsSensitive));
+        }
+
+        var reusedReferences = new List<object>();
+        var argumentsWithUnprocessed = new List<(object Unprocessed, string Processed, bool IsSensitive)>(rewrittenArgs.Count);
+        foreach (var argument in rewrittenArgs)
+        {
+            if (newlyResolved.TryGetValue(argument, out var resolved))
+            {
+                argumentsWithUnprocessed.Add((argument, resolved.Value, resolved.IsSensitive));
+            }
+            else if (previouslyResolved.TryGetValue(argument, out var reused))
+            {
+                argumentsWithUnprocessed.Add((argument, reused.Value, reused.IsSensitive));
+
+                // ResolveAsync never saw this argument, so its reference has to be contributed here or the
+                // executable would lose the dependency edge that the original resolution recorded.
+                if (argument is IValueProvider or IManifestExpressionProvider)
+                {
+                    reusedReferences.Add(argument);
+                }
+            }
+        }
+
         var environmentReferences = originalConfiguration.EnvironmentVariablesWithUnprocessed
             .Select(static kvp => kvp.Value.Unprocessed)
             .Where(static value => value is IValueProvider or IManifestExpressionProvider);
 
         return new ExecutionConfigurationResult
         {
-            References = environmentReferences.Concat(rewrittenArgsConfiguration.References).ToHashSet(),
-            ArgumentsWithUnprocessed = rewrittenArgsConfiguration.ArgumentsWithUnprocessed,
+            References = environmentReferences.Concat(rewrittenArgsConfiguration.References).Concat(reusedReferences).ToHashSet(),
+            ArgumentsWithUnprocessed = argumentsWithUnprocessed,
             EnvironmentVariablesWithUnprocessed = originalConfiguration.EnvironmentVariablesWithUnprocessed,
             AdditionalConfigurationData = originalConfiguration.AdditionalConfigurationData,
             Exception = CombineExecutionConfigurationExceptions(originalConfiguration.Exception, rewrittenArgsConfiguration.Exception)

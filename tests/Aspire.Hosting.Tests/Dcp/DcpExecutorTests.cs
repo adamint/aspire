@@ -4739,6 +4739,56 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task DebugArgumentRewriting_ReusesOriginalResolutionForArgumentsTheCallbackKept()
+    {
+        // The debug rewrite runs after the executable's arguments have already been resolved once. Arguments
+        // the callback keeps are the very same IValueProvider instances, and IValueProvider carries no
+        // idempotence guarantee - a second GetValueAsync may return a different value or repeat a side
+        // effect. Carrying the original resolution forward by reference identity is what keeps the two
+        // resolutions from diverging.
+        var builder = DistributedApplication.CreateBuilder();
+
+        var configDict = new Dictionary<string, string?>
+        {
+            [DcpExecutor.DebugSessionPortVar] = "12345",
+            [KnownConfigNames.DebugSessionInfo] = JsonSerializer.Serialize(new RunSessionInfo
+            {
+                ProtocolsSupported = ["test"],
+                SupportedLaunchConfigurations = ["test"]
+            }),
+            [KnownConfigNames.ExtensionEndpoint] = "http://localhost:1234"
+        };
+
+        // The debug args callback re-checks SupportsDebugging against the application builder's own
+        // configuration, so the debug session has to be visible there and not only to the executor.
+        builder.Configuration.AddInMemoryCollection(configDict);
+
+        var countingArgument = new CountingValueProvider("resolved-once");
+
+        var debuggableExecutable = new TestExecutableResource("test-working-directory");
+        builder.AddResource(debuggableExecutable)
+            .WithArgs(context => context.Args.Add(countingArgument))
+            .WithDebugSupport(
+                static context => Task.FromResult(new ExecutableLaunchConfiguration("test") { Mode = context.Mode }),
+                "test",
+                argsCallback: context => context.Args.Insert(0, "--debug"));
+
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(configDict).Build();
+
+        var kubernetesService = new TestKubernetesService();
+        using var app = builder.Build();
+        var distributedAppModel = app.Services.GetRequiredService<DistributedApplicationModel>();
+        var appExecutor = CreateAppExecutor(distributedAppModel, kubernetesService: kubernetesService, configuration: configuration);
+
+        await appExecutor.RunApplicationAsync();
+
+        var exe = Assert.Single(kubernetesService.CreatedResources.OfType<Executable>(), e => e.AppModelResourceName == "TestExecutable");
+
+        Assert.Equal(1, countingArgument.ResolutionCount);
+        Assert.Equal(["--debug", "resolved-once"], exe.Spec.Args);
+    }
+
+    [Fact]
     public async Task CustomExecutable_DebugSessionInfoContainsType_RunInIde()
     {
         // Arrange
@@ -8375,6 +8425,21 @@ public class DcpExecutorTests(ITestOutputHelper outputHelper)
     }
 
     private sealed class TestExecutableResource(string directory) : ExecutableResource("TestExecutable", "test", directory);
+
+    // Counts resolutions so a test can prove an argument was resolved exactly once across the original
+    // resolution and the debug-argument rewrite that follows it.
+    private sealed class CountingValueProvider(string value) : IValueProvider
+    {
+        private int _resolutionCount;
+
+        public int ResolutionCount => Volatile.Read(ref _resolutionCount);
+
+        public ValueTask<string?> GetValueAsync(CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _resolutionCount);
+            return new ValueTask<string?>(value);
+        }
+    }
     private sealed class TestOtherExecutableResource(string directory) : ExecutableResource("TestOtherExecutable", "test-other", directory);
 
     // Models a DotnetProjectResource: a plain ExecutableResource (launches `dotnet`) that carries

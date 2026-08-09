@@ -4807,7 +4807,9 @@ public static class ResourceBuilderExtensions
         {
             throw new InvalidOperationException(
                 $"The legacy {nameof(WithDebugSupport)} overload requires a synchronous launch configuration producer. " +
-                "Use the overload that accepts LaunchConfigurationCallbackContext for Task or ValueTask returning producers.");
+                "Use the overload that accepts LaunchConfigurationCallbackContext and returns Task<TLaunchConfiguration>. " +
+                "A producer that returns ValueTask or ValueTask<TLaunchConfiguration> does not bind to that overload directly; " +
+                "adapt it with AsTask() or wrap it in an async lambda.");
         }
 
 #pragma warning disable ASPIREEXTENSION001 // Forwarding to the replacement experimental API.
