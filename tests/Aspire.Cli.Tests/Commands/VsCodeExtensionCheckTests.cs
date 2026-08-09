@@ -672,6 +672,96 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task CheckAsync_DoesNotCheckMarketplace_WhenTheRecordedInstallSourceIsMalformed()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        // A source VS Code did write, in any shape, settles the question. Treating a malformed one as
+        // absent would let the weaker publisherId inference override metadata that is present but
+        // untrustworthy, and send the outbound request this signal exists to gate.
+        CreateInstalledExtensionWithMetadata(
+            extensions,
+            "1.2.3",
+            """
+            { "source": 7, "publisherId": "5f5636e7-69ed-4afe-b5d6-8d231fb3d3ee" }
+            """);
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = CreateUnusedMarketplaceClient();
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("unknown", result.Metadata!["extensionInstallSource"]!.GetValue<string>());
+        Assert.Equal(0, marketplaceClient.CallCount);
+    }
+
+    [Fact]
+    public async Task CheckAsync_UsesTheTrackedChannel_WhenItDisagreesWithTheInstalledArtifact()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        // Opting into pre-release updates flips `preRelease` immediately while `isPreReleaseVersion`
+        // still describes the stable artifact on disk. The install now moves along the pre-release
+        // feed, so that is the feed the comparison has to use.
+        CreateInstalledExtensionWithMetadata(
+            extensions,
+            "1.2.3",
+            """
+            { "targetPlatform": "undefined" }
+            """);
+        CreateProfileExtensionIndex(
+            extensions,
+            """
+            [{
+              "identifier": { "id": "microsoft-aspire.aspire-vscode" },
+              "version": "1.2.3",
+              "relativeLocation": "microsoft-aspire.aspire-vscode-1.2.3",
+              "metadata": { "isPreReleaseVersion": false, "preRelease": true, "source": "gallery" }
+            }]
+            """);
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            GetLatestVersionsAsyncCallback = _ => Task.FromResult(new VsCodeExtensionMarketplaceVersions(
+                SemVersion.Parse("9.9.9", SemVersionStyles.Strict),
+                SemVersion.Parse("1.2.3", SemVersionStyles.Strict)))
+        };
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("pre-release", result.Metadata!["extensionChannel"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void Detect_ReportsVsCodeInstalled_WhenOnlyTheVsCodiumLauncherIsOnPath()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        CreateInstalledExtension(extensions, "1.2.3");
+        // The layout scans VSCodium's .vscode-oss roots, so a machine with only VSCodium must not be
+        // dismissed before the scan runs; the extension is installed and doctor has to say so.
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["VSCODE_EXTENSIONS"] = extensions.FullName
+        });
+
+        var detection = VsCodeExtensionCheck.Detect(
+            environment,
+            home,
+            command => command == "codium" ? "/usr/local/bin/codium" : null);
+
+        Assert.True(detection.VsCodeInstalled);
+        Assert.True(detection.ExtensionInstalled);
+        Assert.Equal("1.2.3", detection.ExtensionVersion);
+    }
+
+    [Fact]
     public async Task CheckAsync_ChecksMarketplace_WhenTheExtensionReportsItselfWithoutAnInstallSource()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);

@@ -63,6 +63,10 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
 
     private const int MaximumManifestSize = 1024 * 1024;
 
+    // "codium" is VSCodium's stable launcher and "code-oss" is the name Linux distributions use for
+    // the OSS build; both install into the .vscode-oss roots the layout already scans.
+    private static readonly string[] s_vsCodeLaunchers = ["code", "code-insiders", "codium", "codium-insiders", "code-oss"];
+
     // The profile index holds one entry per installed extension, so it is allowed to be larger than a
     // single manifest while still bounding what doctor will read into memory.
     private const int MaximumProfileIndexSize = 8 * 1024 * 1024;
@@ -491,6 +495,13 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
     /// <c>relativeLocation</c> is the extracted folder name, which is what the directory scan keys on.
     /// Older files can omit <c>relativeLocation</c> or <c>metadata</c>, and a partially written index
     /// is not worth failing doctor over, so anything unexpected is skipped rather than thrown.
+    /// </para>
+    /// <para>
+    /// This reads the default profile's index, which sits beside the extension root. A non-default
+    /// profile keeps its own index under the user-data directory, so an extension installed only
+    /// there is not listed here and falls back to the extracted manifest. That degrades to an unknown
+    /// origin, which suppresses the update comparison rather than asserting a wrong one; it never
+    /// reports the extension as missing, because the directory scan is what proves installation.
     /// See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/node/extensionsScannerService.ts.
     /// </para>
     /// </remarks>
@@ -764,20 +775,30 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
     /// object records no channel at all.
     /// </summary>
     /// <remarks>
-    /// VS Code coerces the flag with <c>!!metadata.isPreReleaseVersion</c>, and older gallery installs
-    /// were written without it, so callers treat an absent property as stable. A property that is
-    /// present but is not a JSON boolean (for example <c>"isPreReleaseVersion": "true"</c>) is metadata
-    /// we cannot trust, and guessing stable there would compare a pre-release install against the
-    /// stable feed, so it reports <see cref="VsCodeExtensionReleaseChannel.Unknown"/>.
+    /// <para>
+    /// <c>preRelease</c> is the channel the install tracks and <c>isPreReleaseVersion</c> only
+    /// describes the artifact that happens to be extracted, so <c>preRelease</c> is read first: after
+    /// opting into pre-release updates the two disagree until the next update lands, and it is the
+    /// tracked channel that says which feed the install will move along. It is also the field the
+    /// extension host is given, so reading it here keeps the CLI and the extension on one answer.
+    /// </para>
+    /// <para>
+    /// VS Code coerces both flags with <c>!!</c>, and older gallery installs were written without
+    /// either, so callers treat an absent property as stable. A property that is present but is not a
+    /// JSON boolean (for example <c>"isPreReleaseVersion": "true"</c>) is metadata we cannot trust,
+    /// and guessing stable there would compare a pre-release install against the stable feed, so it
+    /// reports <see cref="VsCodeExtensionReleaseChannel.Unknown"/>.
+    /// </para>
     /// </remarks>
     private static VsCodeExtensionReleaseChannel? GetMetadataReleaseChannelOrDefault(JsonElement metadata)
     {
-        if (!metadata.TryGetProperty("isPreReleaseVersion", out var isPreReleaseVersion))
+        if (!metadata.TryGetProperty("preRelease", out var channelFlag) &&
+            !metadata.TryGetProperty("isPreReleaseVersion", out channelFlag))
         {
             return null;
         }
 
-        return isPreReleaseVersion.ValueKind switch
+        return channelFlag.ValueKind switch
         {
             JsonValueKind.True => VsCodeExtensionReleaseChannel.PreRelease,
             JsonValueKind.False => VsCodeExtensionReleaseChannel.Stable,
@@ -797,12 +818,15 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         // VSIX install normally lacks it, though a gallery-matched VSIX can carry it. That residual
         // ambiguity is why the index takes precedence rather than this being the only signal.
         // See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/common/extensionsScannerService.ts.
-        if (metadata.TryGetProperty("source", out var source) &&
-            source.ValueKind == JsonValueKind.String)
+        if (metadata.TryGetProperty("source", out var source))
         {
-            return string.Equals(source.GetString()?.Trim(), "gallery", StringComparison.OrdinalIgnoreCase)
-                ? VsCodeExtensionInstallSource.Marketplace
-                : VsCodeExtensionInstallSource.Unknown;
+            // Any present source ends the decision, including one that is not a string at all
+            // ({ "source": 7 }). Falling through to publisherId there would let a weaker inference
+            // override metadata VS Code did write, which is the opposite of the intended precedence.
+            return source.ValueKind == JsonValueKind.String &&
+                string.Equals(source.GetString()?.Trim(), "gallery", StringComparison.OrdinalIgnoreCase)
+                    ? VsCodeExtensionInstallSource.Marketplace
+                    : VsCodeExtensionInstallSource.Unknown;
         }
 
         return metadata.TryGetProperty("publisherId", out var publisherId) &&
@@ -937,15 +961,28 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         IEnvironment environment,
         Func<string, string?> commandResolver)
     {
-        // VS Code sets TERM_PROGRAM for integrated terminals. Outside an integrated terminal,
-        // probe the stable and Insiders launchers without spawning either process.
-        // See https://code.visualstudio.com/docs/terminal/shell-integration.
-        return string.Equals(
+        // VS Code sets TERM_PROGRAM for integrated terminals. Outside an integrated terminal, probe the
+        // launchers without spawning any of them. VSCodium is included because VsCodeInstallLayout
+        // scans its .vscode-oss roots: recognising the roots but not the launcher would make the check
+        // exit before the scan on a machine that only has VSCodium, and never report the extension it
+        // would have found. See https://code.visualstudio.com/docs/terminal/shell-integration.
+        if (string.Equals(
                 environment.GetEnvironmentVariable("TERM_PROGRAM"),
                 "vscode",
-                StringComparison.OrdinalIgnoreCase)
-            || commandResolver("code") is not null
-            || commandResolver("code-insiders") is not null;
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        foreach (var launcher in s_vsCodeLaunchers)
+        {
+            if (commandResolver(launcher) is not null)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // Matches an extension folder name against the Aspire extension id. A case-insensitive prefix match
