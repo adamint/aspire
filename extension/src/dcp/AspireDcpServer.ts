@@ -393,7 +393,11 @@ export default class AspireDcpServer {
                             : await aspireDebugSession.startAndGetDebugSession(preparedSession.debugConfiguration);
                     });
 
-                    if (!startOperation) {
+                    // A shutdown that begins while this start is still preparing is an expected
+                    // cancellation, not a launch failure: the start paths deliberately stop the late
+                    // session and resolve without one. Reporting it as DebugSessionFailed/500 would
+                    // record debugger_did_not_start telemetry for a run nothing was wrong with.
+                    const respondSessionStopping = (): void => {
                         emitRunSessionFailureEnd('debug_session_stopping');
 
                         const error: ErrorDetails = {
@@ -404,11 +408,24 @@ export default class AspireDcpServer {
 
                         extensionLogOutputChannel.info(`Refusing to start run ${runId}: ${error.message}`);
                         const response: ErrorResponse = { error };
-                        respondWithError(res, 409, response);
+                        // Deliberately not respondWithError: that pops a modal error toast, and a
+                        // start refused because the user asked the session to stop is not something
+                        // the user needs to act on. DCP just needs the status code.
+                        respondWithoutNotifyingUser(res, 409, response);
+                    };
+
+                    if (!startOperation) {
+                        respondSessionStopping();
                         return;
                     }
 
                     const resourceDebugSession = await startOperation;
+
+                    if (!resourceDebugSession && aspireDebugSession.isShuttingDown) {
+                        cleanupRun(runId);
+                        respondSessionStopping();
+                        return;
+                    }
 
                     if (!resourceDebugSession) {
                         emitRunSessionFailureEnd('debugger_did_not_start');
@@ -718,4 +735,13 @@ function getDcpIdPrefix(dcpId: string): string | null {
 function respondWithError(res: Response, statusCode: number, message: ErrorResponse): void {
     res.status(statusCode).json(message).end();
     vscode.window.showErrorMessage(encounteredErrorStartingResource(message.error.message));
+}
+
+/**
+ * Same wire response as {@link respondWithError} but without the user-facing error notification.
+ * For outcomes the caller expects - such as refusing a run because the debug session is already
+ * shutting down - the status code is for DCP, not something to interrupt the user with.
+ */
+function respondWithoutNotifyingUser(res: Response, statusCode: number, message: ErrorResponse): void {
+    res.status(statusCode).json(message).end();
 }

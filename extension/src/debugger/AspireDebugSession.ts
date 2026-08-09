@@ -86,6 +86,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   // Resource starts that are in flight. A start only queues its stop once it finishes, so a start
   // that has not finished yet is represented nowhere else and the drain would not see it.
   private readonly _pendingResourceStarts = new Set<Promise<unknown>>();
+  // The in-flight (or completed) ordered shutdown, so overlapping stop requests share one.
+  private _stopPromise: Promise<void> | undefined;
   private _parentStopPromise: Thenable<void> | undefined;
   // Timestamp for the `debug/apphost/end` duration measurement. Captured the first
   // time we observe a `launch` request so it covers the actual user-visible session
@@ -143,7 +145,18 @@ export class AspireDebugSession implements vscode.DebugAdapter {
    * must go through here. Calling `dispose()` directly instead only fires the registered
    * disposables, which is unordered, fire-and-forget, and silently drops stop failures.
    */
-  async stopDebugging(): Promise<void> {
+  stopDebugging(): Promise<void> {
+    // Single-flight. Two overlapping stop requests would otherwise both run the ordered shutdown and
+    // race over _lateResourceStops: one drain can splice a late stop while the other observes an
+    // empty queue and goes on to stop the AppHost before that resource has finished stopping. It
+    // would also hand the two callers different failure lists for the same shutdown. Memoizing the
+    // whole operation gives every caller the one result, the same way the parent stop is memoized.
+    this._stopPromise ??= this.stopDebuggingCore();
+
+    return this._stopPromise;
+  }
+
+  private async stopDebuggingCore(): Promise<void> {
     // Latch before the first await so any resource that starts while the shutdown is in flight is
     // stopped immediately by the start paths instead of being registered behind the snapshot.
     this._stopping = true;

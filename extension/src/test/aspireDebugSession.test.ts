@@ -1236,6 +1236,61 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             });
     });
 
+    // Two overlapping stop requests must not both run the ordered shutdown: they would race over the
+    // late-stop queue, and one caller could be told the shutdown succeeded while the other was told
+    // it failed.
+    test('overlapping stopDebugging calls share one shutdown and one result', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+        const resourceStopFailure = new Error('Resource stop failed');
+        let releaseResourceStop: (() => void) | undefined;
+        const resourceStopGate = new Promise<void>(resolve => { releaseResourceStop = resolve; });
+        const stopSession = sinon.stub().callsFake(async () => {
+            await resourceStopGate;
+            throw resourceStopFailure;
+        });
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async () => { });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._resourceDebugSessions = [
+            {
+                id: 'resource-session',
+                session: { id: 'resource-session' } as unknown as vscode.DebugSession,
+                stopSession,
+            },
+        ];
+
+        const first = aspireDebugSession.stopDebugging();
+        const second = aspireDebugSession.stopDebugging();
+
+        assert.strictEqual(first, second, 'Overlapping stop requests must share the same shutdown promise');
+
+        releaseResourceStop!();
+
+        const failures = await Promise.allSettled([first, second]);
+
+        assert.deepStrictEqual(
+            failures.map(result => result.status),
+            ['rejected', 'rejected'],
+            'Both callers must see the same failed shutdown');
+        assert.strictEqual((failures[0] as PromiseRejectedResult).reason, resourceStopFailure);
+        assert.strictEqual((failures[1] as PromiseRejectedResult).reason, resourceStopFailure);
+        assert.strictEqual(stopSession.callCount, 1, 'The ordered shutdown must run once, not once per caller');
+    });
+
     test('a resource start requested after the shutdown began is refused rather than tracked', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
