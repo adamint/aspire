@@ -208,7 +208,8 @@ suite('E2E launch profile', () => {
         assert.ok(workflow.includes('Verify locked ExTester'));
         assert.ok(workflow.includes('verify_extester_feed:'));
         assert.ok(workflow.includes('run: node scripts/run-e2e.js --verify-extester-feed'));
-        assert.ok(workflow.includes('needs: verify_extester_feed'));
+        // The e2e job also needs select_shards, which builds the matrix, so `needs` is now a list.
+        assert.ok(workflow.includes('needs: [verify_extester_feed, select_shards]'));
         assert.ok(!workflow.includes('extester_feed_unavailable:'));
         assert.ok(!workflow.includes('VS Code extension E2E matrix skipped'));
     });
@@ -217,11 +218,14 @@ suite('E2E launch profile', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
         const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
         const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
+        const shards = JSON.parse(fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-shards.json'), 'utf8')) as Array<Record<string, unknown>>;
         const resourceGroupsInstallIndex = runner.indexOf("displayName: 'Azure Resource Groups'");
         const functionsInstallIndex = runner.indexOf("displayName: 'Azure Functions'");
 
-        assert.ok(workflow.includes('shardName: azure-functions'));
-        assert.ok(workflow.includes('installAzureFunctions: true'));
+        // The matrix lives in extension-e2e-shards.json so a single-shard call can filter it; a step-level
+        // `if:` cannot unschedule a matrix cell, so these two fields moved out of the workflow.
+        assert.ok(shards.some(shard => shard.shardName === 'azure-functions'));
+        assert.ok(shards.some(shard => shard.installAzureFunctions === true));
         assert.ok(workflow.includes("core_tools_version='4.12.1'"));
         assert.ok(workflow.includes('faf8fb8d50b5293df338bec70594b12f45730e9fe251805298859b2238cf627e'));
         assert.ok(workflow.includes('vscode-azureresourcegroups/0.12.7/vspackage'));
