@@ -38,3 +38,13 @@ Start/stop feels like the right granularity for lifecycle ownership: mode belong
 - Green: the same test passed after the stop path checks the launching reservation.
 - Red: the schema-description test first failed because the text only mentioned duplicate relative paths in multi-root workspaces.
 - Green: the same manifest test passed after the description changed to always require the workspace folder prefix in multi-root workspaces.
+
+## Closeout notes
+
+The granularity still looks right to me: `start` and `stop` are the two user intents an agent can safely express, while mode is just a start option. I would not add a combined restart tool yet because it would hide the two ownership decisions that matter: whether the editor is allowed to stop the current process, and whether a new launch is still needed afterward.
+
+The one follow-up I would consider is a read-only status tool. Without it, an agent may use `start` as a status probe and hit a confirmation dialog even when it only wanted to know whether an AppHost is already running.
+
+Honest read: I do not see a remaining test that is knowingly cosmetic. The duplicate-launch E2E went red under mutation, and the stop-during-start unit test went red before the fix. The remaining proof gap is an organic AppHost process exit/failure in the middle of a lifecycle call; unit tests cover launch rejection and `stopDebugging` rejection as bounded `failed` results, but not every real process-exit interleaving.
+
+The PR body is stale against the current diff. In particular, the tool unit-test count is now 77 rather than 59, the body does not mention the E2E matrix row, and the confirmation-spoofing text should include Markdown entity escaping. I drafted an updated body in `files/body-19134.md` rather than editing the PR body.
