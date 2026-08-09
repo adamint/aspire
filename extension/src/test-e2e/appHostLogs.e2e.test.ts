@@ -2,18 +2,20 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { countDebugConsoleOccurrences, getCommandInvocationCount, waitForCommandOutcome, waitForDebugConsoleOutput, waitForDebugSessionStartup, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForSettledDebugConsoleOutput, waitForWorkspaceAppHost, type DebugConsoleOutput } from './helpers/assertions';
+import { appHostLogProbeCategory as probeCategory, appHostLogProbeMarkers } from './helpers/appHostLogProbeMarkers';
 import { executeE2eControlCommand, runE2eTeardown, stopPrimaryAppHostIfRunning, writeFileWithRetry } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath } from './helpers/paths';
 import { openAspireView } from './helpers/vscode';
 
-const probeCategory = 'AspireE2E.LogProbe';
-const infoMarker = 'E2ELOGPROBEINFO';
-const repeatedMarker = 'E2ELOGPROBEREPEAT';
-const warningMarker = 'E2ELOGPROBEWARN_ONE';
-const warningContinuationMarker = 'E2ELOGPROBEWARN_TWO';
-const debugMarker = 'E2ELOGPROBEDEBUG';
-const errorMarker = 'E2ELOGPROBEERROR';
-const exceptionMarker = 'E2ELOGPROBEEXCEPTION';
+const {
+    information: infoMarker,
+    repeated: repeatedMarker,
+    warning: warningMarker,
+    warningContinuation: warningContinuationMarker,
+    debug: debugMarker,
+    error: errorMarker,
+    exception: exceptionMarker,
+} = appHostLogProbeMarkers;
 
 const yellowAnsi = '\u001b[33m';
 const dimAnsi = '\u001b[2m';

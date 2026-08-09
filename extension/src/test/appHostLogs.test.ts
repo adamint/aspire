@@ -1,16 +1,18 @@
 /// <reference types="mocha" />
 
 import * as assert from 'assert';
-import * as fs from 'fs';
-import * as path from 'path';
 import { countDebugConsoleOccurrences, type DebugConsoleOutput } from '../test-e2e/helpers/assertions';
+import { appHostLogProbeMarkers, countedAppHostLogProbeMarkers } from '../test-e2e/helpers/appHostLogProbeMarkers';
+
+interface PrefixCollision {
+    prefix: string;
+    marker: string;
+}
 
 suite('AppHost debug console log E2E helpers', () => {
     test('probe marker counts stay independent when continuation line shares the warning record', () => {
-        const sourcePath = path.resolve(__dirname, '..', '..', 'src', 'test-e2e', 'appHostLogs.e2e.test.ts');
-        const source = fs.readFileSync(sourcePath, 'utf8');
-        const warningMarker = getStringConst(source, 'warningMarker');
-        const warningContinuationMarker = getStringConst(source, 'warningContinuationMarker');
+        const warningMarker = appHostLogProbeMarkers.warning;
+        const warningContinuationMarker = appHostLogProbeMarkers.warningContinuation;
         const outputs: readonly DebugConsoleOutput[] = [{
             sequence: 1,
             debugSessionId: 'debug-session',
@@ -22,15 +24,31 @@ suite('AppHost debug console log E2E helpers', () => {
         assert.strictEqual(countDebugConsoleOccurrences(outputs, warningMarker), 1);
         assert.strictEqual(countDebugConsoleOccurrences(outputs, warningContinuationMarker), 1);
     });
+
+    test('counted probe markers are mutually non-prefix', () => {
+        const collisions = getPrefixCollisions(countedAppHostLogProbeMarkers);
+
+        assert.strictEqual(
+            collisions.length,
+            0,
+            `Counted AppHost log probe markers must be mutually non-prefix because countDebugConsoleOccurrences uses substring splitting. Colliding marker pairs: ${formatPrefixCollisions(collisions)}`);
+    });
 });
 
-function getStringConst(source: string, name: string): string {
-    // Parse marker declarations in the E2E source, for example:
-    //   const warningMarker = 'E2ELOGPROBEWARN';
-    // These probe marker literals are intentionally simple because the AppHost source
-    // instrumentation interpolates them into C# string literals.
-    const match = new RegExp(`const\\s+${name}\\s*=\\s*'([^']+)';`).exec(source);
-    assert.ok(match, `Expected to find ${name} in appHostLogs.e2e.test.ts.`);
+function getPrefixCollisions(markers: readonly string[]): PrefixCollision[] {
+    const collisions: PrefixCollision[] = [];
 
-    return match[1];
+    for (const prefix of markers) {
+        for (const marker of markers) {
+            if (prefix !== marker && marker.startsWith(prefix)) {
+                collisions.push({ prefix, marker });
+            }
+        }
+    }
+
+    return collisions;
+}
+
+function formatPrefixCollisions(collisions: readonly PrefixCollision[]): string {
+    return collisions.map(collision => `${collision.prefix} -> ${collision.marker}`).join(', ');
 }
