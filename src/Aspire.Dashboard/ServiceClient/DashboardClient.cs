@@ -800,10 +800,10 @@ internal sealed class DashboardClient : IDashboardClient
                 return healthComparison;
             }
 
-            // DashboardClient.CalculateReplicaIndex assigns "number of resources sharing this display
-            // name + 1" on every upsert, so an existing replica gets a new index each time it changes.
-            // Tie-break on the immutable resource name instead to avoid parent state flapping between
-            // equally ranked replicas based purely on which replica the app host pushed last.
+            // CalculateReplicaIndex derives the index from the current number of resources sharing the
+            // display name. An inserted resource gets a different index on its first replacement, and
+            // later replacements can change it again after that count changes, so it is not stable across
+            // upserts. Tie-break on the immutable resource name so update order cannot change the parent state.
             return StringComparers.ResourceName.Compare(a.Name, b.Name);
         }
     }

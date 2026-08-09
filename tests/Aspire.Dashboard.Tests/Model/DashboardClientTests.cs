@@ -362,6 +362,169 @@ public sealed class DashboardClientTests
     }
 
     [Fact]
+    public async Task SubscribeResources_ReplicaStateStyleChanged_EmitsParentChange()
+    {
+        var resourceUpdates = Channel.CreateUnbounded<WatchResourcesUpdate>();
+        await using var instance = CreateResourceServiceClient();
+        instance.SetDashboardServiceClient(new MockDashboardServiceClient { ResourceUpdates = resourceUpdates });
+
+        IDashboardClient client = instance;
+        var parent = CreateResource("syndule-api", "Azure Container App", "Scaled to zero");
+        var child = CreateReplicaChild(parent, "syndule-api--0000007", "Running");
+        child.StateStyle = "info";
+
+        var subscribeTask = client.SubscribeResourcesAsync(CancellationToken.None);
+
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            InitialData = new InitialResourceData
+            {
+                Resources = { parent, child }
+            }
+        });
+
+        var (initialData, subscription) = await subscribeTask.DefaultTimeout();
+        var initialParent = Assert.Single(initialData, r => r.Name == parent.Name);
+        Assert.Equal("info", initialParent.StateStyle);
+
+        var updatedChild = CreateReplicaChild(parent, child.Name, "Running");
+        updatedChild.CreatedAt = child.CreatedAt;
+        updatedChild.StateStyle = "warning";
+
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            Changes = new WatchResourcesChanges
+            {
+                Value =
+                {
+                    new WatchResourcesChange
+                    {
+                        Upsert = updatedChild
+                    }
+                }
+            }
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var enumerator = subscription.GetAsyncEnumerator(cts.Token);
+
+        Assert.True(await enumerator.MoveNextAsync().AsTask().DefaultTimeout());
+        var updatedParent = Assert.Single(enumerator.Current, c => c.ChangeType == ResourceViewModelChangeType.Upsert && c.Resource.Name == parent.Name).Resource;
+        Assert.Equal("Running", updatedParent.State);
+        Assert.Equal("warning", updatedParent.StateStyle);
+    }
+
+    [Fact]
+    public async Task SubscribeResources_ReplicaStartedAtChanged_EmitsParentChange()
+    {
+        var resourceUpdates = Channel.CreateUnbounded<WatchResourcesUpdate>();
+        await using var instance = CreateResourceServiceClient();
+        instance.SetDashboardServiceClient(new MockDashboardServiceClient { ResourceUpdates = resourceUpdates });
+
+        IDashboardClient client = instance;
+        var parent = CreateResource("syndule-api", "Azure Container App", "Scaled to zero");
+        var child = CreateReplicaChild(parent, "syndule-api--0000007", "Running");
+        var initialStartedAt = new DateTime(2026, 8, 9, 12, 0, 0, DateTimeKind.Utc);
+        child.StartedAt = Timestamp.FromDateTime(initialStartedAt);
+
+        var subscribeTask = client.SubscribeResourcesAsync(CancellationToken.None);
+
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            InitialData = new InitialResourceData
+            {
+                Resources = { parent, child }
+            }
+        });
+
+        var (initialData, subscription) = await subscribeTask.DefaultTimeout();
+        var initialParent = Assert.Single(initialData, r => r.Name == parent.Name);
+        Assert.Equal(initialStartedAt, initialParent.StartTimeStamp);
+
+        var updatedStartedAt = initialStartedAt.AddMinutes(1);
+        var updatedChild = CreateReplicaChild(parent, child.Name, "Running");
+        updatedChild.CreatedAt = child.CreatedAt;
+        updatedChild.StartedAt = Timestamp.FromDateTime(updatedStartedAt);
+
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            Changes = new WatchResourcesChanges
+            {
+                Value =
+                {
+                    new WatchResourcesChange
+                    {
+                        Upsert = updatedChild
+                    }
+                }
+            }
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var enumerator = subscription.GetAsyncEnumerator(cts.Token);
+
+        Assert.True(await enumerator.MoveNextAsync().AsTask().DefaultTimeout());
+        var updatedParent = Assert.Single(enumerator.Current, c => c.ChangeType == ResourceViewModelChangeType.Upsert && c.Resource.Name == parent.Name).Resource;
+        Assert.Equal("Running", updatedParent.State);
+        Assert.Equal(updatedStartedAt, updatedParent.StartTimeStamp);
+    }
+
+    [Fact]
+    public async Task SubscribeResources_ReplicaStoppedAtChanged_EmitsParentChange()
+    {
+        var resourceUpdates = Channel.CreateUnbounded<WatchResourcesUpdate>();
+        await using var instance = CreateResourceServiceClient();
+        instance.SetDashboardServiceClient(new MockDashboardServiceClient { ResourceUpdates = resourceUpdates });
+
+        IDashboardClient client = instance;
+        var parent = CreateResource("syndule-api", "Azure Container App", "Scaled to zero");
+        var child = CreateReplicaChild(parent, "syndule-api--0000007", "Exited");
+        var initialStoppedAt = new DateTime(2026, 8, 9, 12, 1, 0, DateTimeKind.Utc);
+        child.StoppedAt = Timestamp.FromDateTime(initialStoppedAt);
+
+        var subscribeTask = client.SubscribeResourcesAsync(CancellationToken.None);
+
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            InitialData = new InitialResourceData
+            {
+                Resources = { parent, child }
+            }
+        });
+
+        var (initialData, subscription) = await subscribeTask.DefaultTimeout();
+        var initialParent = Assert.Single(initialData, r => r.Name == parent.Name);
+        Assert.Equal(initialStoppedAt, initialParent.StopTimeStamp);
+
+        var updatedStoppedAt = initialStoppedAt.AddMinutes(1);
+        var updatedChild = CreateReplicaChild(parent, child.Name, "Exited");
+        updatedChild.CreatedAt = child.CreatedAt;
+        updatedChild.StoppedAt = Timestamp.FromDateTime(updatedStoppedAt);
+
+        resourceUpdates.Writer.TryWrite(new WatchResourcesUpdate
+        {
+            Changes = new WatchResourcesChanges
+            {
+                Value =
+                {
+                    new WatchResourcesChange
+                    {
+                        Upsert = updatedChild
+                    }
+                }
+            }
+        });
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var enumerator = subscription.GetAsyncEnumerator(cts.Token);
+
+        Assert.True(await enumerator.MoveNextAsync().AsTask().DefaultTimeout());
+        var updatedParent = Assert.Single(enumerator.Current, c => c.ChangeType == ResourceViewModelChangeType.Upsert && c.Resource.Name == parent.Name).Resource;
+        Assert.Equal("Exited", updatedParent.State);
+        Assert.Equal(updatedStoppedAt, updatedParent.StopTimeStamp);
+    }
+
+    [Fact]
     public async Task SubscribeResources_ReplicaDeleted_EmitsParentFallbackState()
     {
         var resourceUpdates = Channel.CreateUnbounded<WatchResourcesUpdate>();
