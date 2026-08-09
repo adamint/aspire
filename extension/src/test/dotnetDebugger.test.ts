@@ -503,6 +503,31 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(notification.callCount, 1, 'sibling resources must not stack identical Hot Reload notifications');
     });
 
+    test('reports a run-only resource through the real launch path when Hot Reload is off', async () => {
+        initializeHotReloadNotificationState({ globalState: createTestMemento() });
+        stubCsDevKitExtension({});
+        const notification = vscode.window.showInformationMessage as sinon.SinonStub;
+        notification.resolves(undefined);
+        stubHotReloadSettingContribution({
+            get: () => false
+        });
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+
+        await createProjectDebugConfiguration({ debug: false });
+        await new Promise(resolve => setTimeout(resolve, 5));
+
+        // Driven through the shipping launch callback rather than logHotReloadDiagnostics directly, because
+        // the failure this guards against is a user reading the resource's own output: stopping at the
+        // disabled reason tells them to flip a setting that still cannot cover a resource launched without
+        // a debugger.
+        const logged = info.getCalls().map(call => String(call.args[0])).filter(line => /hot reload/i.test(line));
+        assert.strictEqual(logged.length, 3, logged.join('\n'));
+        assert.match(logged[0], /^Hot Reload state for .+: workspaceTrusted=true, settingContributed=true, csharp\.experimental\.debug\.hotReload=false/);
+        assert.strictEqual(logged[1], "Hot Reload is disabled because 'csharp.experimental.debug.hotReload' is not enabled in user settings.");
+        assert.match(logged[2], /is running without a debugger, so Hot Reload does not apply to it\.$/);
+        assert.strictEqual(notification.called, false, 'a run-only resource must not consume the one-time advisory');
+    });
+
     test('advertises the coreclr project debugger and extracts project_path for .csproj and file-based .cs', () => {
         // A DotnetProjectResource (AddDotnetProject) advertises the same "project" launch capability as
         // AddProject and emits a ProjectLaunchConfiguration carrying project_path (a .csproj or a file-based

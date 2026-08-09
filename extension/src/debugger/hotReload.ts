@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import { isCsDevKitInstalled } from '../capabilities';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, showHotReloadOutputLabel } from '../loc/strings';
-import { isNotificationSuppressed, showInformationMessageWithDontShowAgain } from '../utils/notificationSuppression';
+import { enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, hotReloadEnabledConfirmation, showHotReloadOutputLabel } from '../loc/strings';
+import { hasNotificationBeenShown, isNotificationSuppressed, markNotificationShown, showInformationMessageWithDontShowAgain } from '../utils/notificationSuppression';
 
 const hotReloadConfigurationSection = 'csharp.experimental.debug';
 const hotReloadConfigurationName = 'hotReload';
@@ -78,13 +78,16 @@ export function logHotReloadDiagnostics(resourceName: string, diagnostics: HotRe
             "Hot Reload is disabled because 'csharp.experimental.debug.hotReload' is not enabled in user settings.");
     }
 
-    if (!isHotReloadExpected(diagnostics)) {
-        return;
-    }
-
+    // Reported before the prerequisite gate below so a run-only resource still says so. Otherwise the
+    // per-resource output would stop at "Hot Reload is disabled because ...", implying that flipping the
+    // setting is enough to cover a resource that is not being debugged at all.
     if (!isDebugSession) {
         extensionLogOutputChannel.info(
             `${resourceName} is running without a debugger, so Hot Reload does not apply to it.`);
+        return;
+    }
+
+    if (!isHotReloadExpected(diagnostics)) {
         return;
     }
 
@@ -92,8 +95,12 @@ export function logHotReloadDiagnostics(resourceName: string, diagnostics: HotRe
         ? "Saving a file asks Dev Kit to apply the edit ('csharp.debug.hotReloadOnSave'); the toolbar button applies pending edits"
         : "'csharp.debug.hotReloadOnSave' is off, so saving does not apply edits; the toolbar button applies pending edits";
 
+    // Reported as configured rather than covered: this runs before vscode.debug.startDebugging, so the
+    // settings only establish what is expected. Whether Hot Reload actually attaches depends on the
+    // launch succeeding and on the target debugger engine supporting applying changes, and only Dev Kit
+    // can answer that.
     extensionLogOutputChannel.info(
-        `Hot Reload covers ${resourceName}. ${gesture} across .NET resources at once. ` +
+        `Hot Reload is configured for ${resourceName} and applies once C# Dev Kit starts the session. ${gesture} across .NET resources at once. ` +
         "Dev Kit reports what it actually applied in the '.NET Hot Reload' output channel.");
 }
 
@@ -113,10 +120,15 @@ export function showHotReloadNotificationIfNeeded(diagnostics: HotReloadDiagnost
     }
 
     const notice = getHotReloadNotice(diagnostics);
-    if (!notice || hotReloadNotificationsShownThisWindow.has(notice.name) || isNotificationSuppressed(hotReloadNotificationState, notice.name)) {
+    if (!notice
+        || hotReloadNotificationsShownThisWindow.has(notice.name)
+        || hasNotificationBeenShown(hotReloadNotificationState, notice.name)
+        || isNotificationSuppressed(hotReloadNotificationState, notice.name)) {
         return;
     }
 
+    // The in-window set is the synchronous guard: several resources launch at once, and the persisted
+    // flag below is only readable after its await resolves, so it cannot deduplicate that burst.
     hotReloadNotificationsShownThisWindow.add(notice.name);
 
     if (hotReloadNotificationState === undefined && !hotReloadNotificationStateMissingLogged) {
@@ -126,6 +138,11 @@ export function showHotReloadNotificationIfNeeded(diagnostics: HotReloadDiagnost
 
     void (async () => {
         try {
+            // Recorded before the notification is presented rather than after it is answered. Each notice
+            // is offered at most once per user, and a window that closes while the notification is still
+            // up has already used that one chance.
+            await markNotificationShown(hotReloadNotificationState, notice.name);
+
             const selection = await showInformationMessageWithDontShowAgain({
                 memento: hotReloadNotificationState,
                 notificationName: notice.name,
@@ -141,6 +158,11 @@ export function showHotReloadNotificationIfNeeded(diagnostics: HotReloadDiagnost
                 await vscode.workspace
                     .getConfiguration(hotReloadConfigurationSection)
                     .update(hotReloadConfigurationName, true, vscode.ConfigurationTarget.Global);
+
+                // The resource this prompt came from has already launched with the old setting, and the
+                // prompt is fire-and-forget, so without this a single-resource app gives no sign that the
+                // setting took effect or that another debug start is needed to use it.
+                void vscode.window.showInformationMessage(hotReloadEnabledConfirmation);
             }
         }
         catch (err) {

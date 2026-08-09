@@ -3,7 +3,7 @@ import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { getHotReloadDiagnostics, initializeHotReloadNotificationState, isHotReloadOnSaveEnabled, isHotReloadSettingEnabled, logHotReloadDiagnostics, showHotReloadNotificationIfNeeded } from '../debugger/hotReload';
 import { createHotReloadTestConfiguration, createTestMemento } from './common';
-import { dontShowAgainLabel, enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, showHotReloadOutputLabel } from '../loc/strings';
+import { dontShowAgainLabel, enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, hotReloadEnabledConfirmation, showHotReloadOutputLabel } from '../loc/strings';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { getNotificationSuppressionKey, isNotificationSuppressed, showInformationMessageWithDontShowAgain } from '../utils/notificationSuppression';
 
@@ -97,10 +97,53 @@ suite('Hot Reload Tests', () => {
             reloadOnSaveEnabled: true,
         }, false);
 
-        const logged = info.getCalls().map(call => String(call.args[0])).join('\n');
-        assert.match(logged, /Hot Reload state for api/);
-        assert.match(logged, /running without a debugger/);
-        assert.doesNotMatch(logged, /Hot Reload covers api/);
+        assert.deepStrictEqual(info.getCalls().map(call => String(call.args[0])), [
+            'Hot Reload state for api: workspaceTrusted=true, settingContributed=true, '
+            + 'csharp.experimental.debug.hotReload=true, csharp.debug.hotReloadOnSave=true',
+            'api is running without a debugger, so Hot Reload does not apply to it.'
+        ]);
+    });
+
+    test('still reports a run-only resource when the Hot Reload setting is off', () => {
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+
+        logHotReloadDiagnostics('api', {
+            devKitInstalled: true,
+            workspaceTrusted: true,
+            settingContributed: true,
+            settingEnabled: false,
+            reloadOnSaveEnabled: true,
+        }, false);
+
+        // The disabled reason on its own would imply that enabling the setting is enough to cover this
+        // resource, which it is not while the resource runs without a debugger.
+        assert.deepStrictEqual(info.getCalls().map(call => String(call.args[0])), [
+            'Hot Reload state for api: workspaceTrusted=true, settingContributed=true, '
+            + 'csharp.experimental.debug.hotReload=false, csharp.debug.hotReloadOnSave=true',
+            "Hot Reload is disabled because 'csharp.experimental.debug.hotReload' is not enabled in user settings.",
+            'api is running without a debugger, so Hot Reload does not apply to it.'
+        ]);
+    });
+
+    test('reports Hot Reload as configured rather than already applied', () => {
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+
+        logHotReloadDiagnostics('api', {
+            devKitInstalled: true,
+            workspaceTrusted: true,
+            settingContributed: true,
+            settingEnabled: true,
+            reloadOnSaveEnabled: true,
+        }, true);
+
+        // This runs before the debug session is created, so the log may only state what is expected.
+        assert.deepStrictEqual(info.getCalls().map(call => String(call.args[0])), [
+            'Hot Reload state for api: workspaceTrusted=true, settingContributed=true, '
+            + 'csharp.experimental.debug.hotReload=true, csharp.debug.hotReloadOnSave=true',
+            'Hot Reload is configured for api and applies once C# Dev Kit starts the session. '
+            + "Saving a file asks Dev Kit to apply the edit ('csharp.debug.hotReloadOnSave'); the toolbar button applies pending edits "
+            + "across .NET resources at once. Dev Kit reports what it actually applied in the '.NET Hot Reload' output channel."
+        ]);
     });
 
     test('does not show a misleading disabled notification when the Dev Kit setting is absent', async () => {
@@ -198,6 +241,55 @@ suite('Hot Reload Tests', () => {
         assert.deepStrictEqual(notification.getCalls().map(call => call.args[0]), [
             hotReloadDisabledNotice,
             hotReloadActiveNotice
+        ]);
+    });
+
+    test('shows each notice at most once per user, not once per window', async () => {
+        const globalState = createTestMemento();
+        initializeHotReloadNotificationState({ globalState });
+        const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
+        const diagnostics = {
+            devKitInstalled: true,
+            workspaceTrusted: true,
+            settingContributed: true,
+            settingEnabled: true,
+            reloadOnSaveEnabled: true,
+        };
+
+        showHotReloadNotificationIfNeeded(diagnostics, true);
+        await settleNotifications();
+
+        // Same stored state, fresh window: only the persisted flag can suppress the second presentation.
+        initializeHotReloadNotificationState({ globalState });
+        showHotReloadNotificationIfNeeded(diagnostics, true);
+        await settleNotifications();
+
+        assert.deepStrictEqual(notification.getCalls().map(call => call.args[0]), [hotReloadActiveNotice]);
+    });
+
+    test('confirms that Hot Reload was enabled after the prompt writes the setting', async () => {
+        initializeHotReloadNotificationState({ globalState: createTestMemento() });
+        const update = sinon.stub().resolves();
+        const getConfiguration = sinon.stub(vscode.workspace, 'getConfiguration');
+        getConfiguration.withArgs('csharp.experimental.debug').returns(createHotReloadTestConfiguration({ update }, { contributed: true }));
+        getConfiguration.returns({ get: () => undefined } as unknown as vscode.WorkspaceConfiguration);
+        const notification = sinon.stub(vscode.window, 'showInformationMessage');
+        notification.onFirstCall().resolves(enableHotReloadLabel as unknown as vscode.MessageItem);
+        notification.resolves(undefined);
+
+        showHotReloadNotificationIfNeeded({
+            devKitInstalled: true,
+            workspaceTrusted: true,
+            settingContributed: true,
+            settingEnabled: false,
+            reloadOnSaveEnabled: true,
+        }, true);
+        await settleNotifications();
+
+        assert.strictEqual(update.calledOnceWithExactly('hotReload', true, vscode.ConfigurationTarget.Global), true);
+        assert.deepStrictEqual(notification.getCalls().map(call => call.args[0]), [
+            hotReloadDisabledNotice,
+            hotReloadEnabledConfirmation
         ]);
     });
 

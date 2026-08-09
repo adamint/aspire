@@ -171,6 +171,7 @@
   "aspire-vscode.strings.hotReloadActiveNoticeSaveDisabled": ".NET Hot Reload is enabled for .NET project resources in this Aspire app, but 'csharp.debug.hotReloadOnSave' is turned off, so saving does not apply edits. Use the Hot Reload button to apply pending edits. Dev Kit reports results in the .NET Hot Reload output.",
   "aspire-vscode.strings.enableHotReloadLabel": "Enable Hot Reload",
   "aspire-vscode.strings.showHotReloadOutputLabel": "Show Hot Reload Output",
+  "aspire-vscode.strings.hotReloadEnabledConfirmation": "Hot Reload is enabled. Start debugging again to use it.",
   "aspire-vscode.strings.cliNotAvailable": "Aspire CLI is not available on PATH. Please install it and restart VS Code.",
   "aspire-vscode.strings.cliFoundAtDefaultPath": "Aspire CLI found at {0}. The extension will use this path.",
   "aspire-vscode.strings.openCliInstallInstructions": "See CLI installation instructions",
