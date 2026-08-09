@@ -3,6 +3,7 @@ import { isSamePath, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRep
 import { clearBreakpoints, executeE2eControlCommand, getAppHostPidFromState, getNodeAppBreakpointLine, isProcessAlive, runE2eTeardown, stopPrimaryAppHostIfRunning, waitForProcessExit } from './helpers/fixtures';
 import { getNodeAppScriptPath, getPrimaryAppHostProjectPath } from './helpers/paths';
 import { openAspireView } from './helpers/vscode';
+import { readReportedPidFromDebugOutput } from '../testing/resourceDebugOutput';
 
 interface ResourceDebugSessionSnapshot {
     id: string;
@@ -96,8 +97,8 @@ suite('Aspire resource debugger E2E', function () {
         // event when it runs inside VS Code: it only sends `process` from its standalone DAP server
         // entry points, and even there it carries no `systemProcessId`.
         // See https://github.com/microsoft/vscode-js-debug/blob/main/src/vsDebugServer.ts
-        const debuggeePid = readReportedPid(proof, 'ASPIRE_E2E_NODE_PID');
-        const childPid = readReportedPid(proof, 'ASPIRE_E2E_NODE_CHILD_PID');
+        const debuggeePid = readReportedPidFromDebugOutput(proof, 'ASPIRE_E2E_NODE_PID');
+        const childPid = readReportedPidFromDebugOutput(proof, 'ASPIRE_E2E_NODE_CHILD_PID');
         assert.ok(isProcessAlive(debuggeePid), `Expected the Node resource process ${debuggeePid} to still be running before debugging stops.`);
         assert.ok(isProcessAlive(childPid), `Expected the Node child process ${childPid} to still be running before debugging stops.`);
 
@@ -169,31 +170,6 @@ async function runResourceDebugProof(options: { stopDebuggingOnCompletion: boole
     assert.ok(proof, `The resource debug proof returned no result: ${JSON.stringify(status)}`);
 
     return proof;
-}
-
-/**
- * Reads a pid the Node fixture printed, for example:
- *   ASPIRE_E2E_NODE_CHILD_PID=54321
- * The value arrives as a js-debug `output` event, which can split or batch lines, so the whole
- * captured output is searched rather than a single event.
- *
- * The stopped resource session is preferred but not required. js-debug launches the process from the
- * parent session and, under `outputCapture: 'std'`, pipes its stdio over DAP from there, while the
- * breakpoint is reported by the child session attached to the target - so the debuggee's output
- * usually carries a different session id than the one that stopped.
- *
- * The proof starts the resource explicitly, which restarts a resource the AppHost had already
- * started, so more than one process can report a pid. The last reported pid belongs to the process
- * the debugger is attached to; earlier ones are already gone.
- */
-function readReportedPid(proof: ResourceDebugProof, marker: string): number {
-    const events = [...proof.outputHead, ...proof.outputSample];
-    const stoppedSessionEvents = events.filter(event => event.sessionId === proof.resourceDebugSession?.id);
-    const output = (stoppedSessionEvents.length > 0 ? stoppedSessionEvents : events).map(event => event.output).join('');
-    const matches = [...output.matchAll(new RegExp(`${marker}=(\\d+)`, 'g'))];
-    assert.ok(matches.length > 0, `Expected the Node fixture to print ${marker} in its debug output: ${JSON.stringify(events)}`);
-
-    return Number(matches[matches.length - 1][1]);
 }
 
 function toSessionSummary(session: ResourceDebugSessionSnapshot): { id: string; type: string; name: string } {

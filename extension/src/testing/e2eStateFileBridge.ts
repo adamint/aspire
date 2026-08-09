@@ -17,6 +17,7 @@ import { extensionLogOutputChannel } from '../utils/logging';
 import { onDidInvokeCommand } from '../utils/telemetry';
 import { AspireAppHostTreeProvider } from '../views/AspireAppHostTreeProvider';
 import { AppHostDataRepository } from '../views/AppHostDataRepository';
+import { runWithE2eDeadline } from './e2eDeadline';
 
 let atomicWriteSequence = 0;
 
@@ -1061,7 +1062,10 @@ async function proveResourceDebugging(command: ResourceDebugProofCommand, aspire
 
   try {
     const appHostElement = getAppHostElement(appHostTreeProvider, appHostPath);
-    await vscode.commands.executeCommand('aspire-vscode.debugAppHost', appHostElement);
+    await runWithE2eDeadline(
+      'debug AppHost command',
+      deadline,
+      vscode.commands.executeCommand('aspire-vscode.debugAppHost', appHostElement));
 
     const aspireDebugSession = await waitForE2eValue(
       'Aspire AppHost debug startup completion',
@@ -1096,11 +1100,14 @@ async function proveResourceDebugging(command: ResourceDebugProofCommand, aspire
 
             let stackTrace: { stackFrames?: Array<{ source?: { path?: string }; line?: number }> } | undefined;
             try {
-              stackTrace = await session.customRequest('stackTrace', {
-                threadId: stoppedEvent.threadId,
-                startFrame: 0,
-                levels: 20,
-              });
+              stackTrace = await runWithE2eDeadline(
+                'resource debug stackTrace request',
+                deadline,
+                session.customRequest('stackTrace', {
+                  threadId: stoppedEvent.threadId,
+                  startFrame: 0,
+                  levels: 20,
+                }));
             }
             catch {
               continue;
@@ -1324,10 +1331,11 @@ async function runAspireCliForE2E(terminalProvider: AspireTerminalProvider, args
 
 async function waitForE2eValue<T>(description: string, timeoutMs: number, getValue: () => T | undefined | Promise<T | undefined>): Promise<T> {
   const started = Date.now();
+  const deadline = started + timeoutMs;
   let lastError: string | undefined;
-  while (Date.now() - started < timeoutMs) {
+  while (Date.now() < deadline) {
     try {
-      const value = await getValue();
+      const value = await runWithE2eDeadline(`${description} probe`, deadline, Promise.resolve().then(getValue));
       if (value !== undefined) {
         return value;
       }
@@ -1336,7 +1344,7 @@ async function waitForE2eValue<T>(description: string, timeoutMs: number, getVal
       lastError = error instanceof Error ? error.message : String(error);
     }
 
-    await delay(500);
+    await delay(Math.min(500, Math.max(1, deadline - Date.now())));
   }
 
   throw new Error(`Timed out after ${timeoutMs}ms waiting for ${description}. Last error: ${lastError ?? '<none>'}`);
