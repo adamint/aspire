@@ -1245,18 +1245,23 @@ internal sealed class ProjectLocator(
 
             if (existingConfig?.AppHost?.Path is { } existingPath)
             {
-                // Resolve the stored path relative to the config file's directory.
-                var resolvedPath = Path.GetFullPath(
-                    Path.IsPathRooted(existingPath) ? existingPath : Path.Combine(configDir, existingPath));
-
-                // Only skip creation if the config already points to the discovered apphost.
-                // If the path is stale/invalid, fall through so the config gets healed.
-                if (string.Equals(resolvedPath, projectFile.FullName, StringComparison.OrdinalIgnoreCase))
+                if (IsValidConfiguredAppHostPath(existingPath, targetSettingsFilePath, AspireConfigAppHostPathKey, silent: true))
                 {
-                    logger.LogDebug(
-                        "Config at {Path} already references apphost {AppHost}, skipping creation",
-                        nearAppHost, projectFile.FullName);
-                    return null;
+                    // Resolve the stored path relative to the config file's directory.
+                    var resolvedPath = Path.GetFullPath(
+                        Path.IsPathRooted(existingPath) ? existingPath : Path.Combine(configDir, existingPath));
+
+                    // Only skip creation if the config already points to the discovered apphost.
+                    // If the path is stale/invalid, fall through so the config gets healed. For
+                    // session-scoped origins, the later presence-only check still preserves the raw
+                    // recorded value without resolving it.
+                    if (string.Equals(resolvedPath, projectFile.FullName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        logger.LogDebug(
+                            "Config at {Path} already references apphost {AppHost}, skipping creation",
+                            nearAppHost, projectFile.FullName);
+                        return null;
+                    }
                 }
             }
 
