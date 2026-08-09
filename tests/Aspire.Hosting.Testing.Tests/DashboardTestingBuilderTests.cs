@@ -25,6 +25,9 @@ public class DashboardTestingBuilderTests
     private const string ResourceServiceEndpointUrl = "ASPIRE_RESOURCE_SERVICE_ENDPOINT_URL";
     private const string DashboardFrontendBrowserToken = "ASPIRE_DASHBOARD_FRONTEND_BROWSERTOKEN";
     private const string AppHostBrowserToken = "AppHost:BrowserToken";
+    private const string DashboardResourceServiceApiKey = "ASPIRE_DASHBOARD_RESOURCESERVICE_APIKEY";
+    private const string AppHostResourceServiceAuthMode = "AppHost:ResourceService:AuthMode";
+    private const string AppHostResourceServiceApiKey = "AppHost:ResourceService:ApiKey";
 
     [Fact]
     public void DashboardIsDisabledByDefault()
@@ -487,6 +490,46 @@ public class DashboardTestingBuilderTests
 
         var dashboardOptions = app.Services.GetRequiredService<IOptions<DashboardOptions>>().Value;
         Assert.True(string.IsNullOrEmpty(dashboardOptions.DashboardToken));
+    }
+
+    [Theory]
+    [InlineData(CreationSurface.Generic, "--unsecure-apphost-resource-service")]
+    [InlineData(CreationSurface.Generic, "--clear-apphost-resource-service-key")]
+    [InlineData(CreationSurface.Type, "--unsecure-apphost-resource-service")]
+    [InlineData(CreationSurface.Type, "--clear-apphost-resource-service-key")]
+    public async Task DashboardTestingRestoresResourceServiceAuthenticationAnAppHostDowngraded(CreationSurface creationSurface, string appHostFlag)
+    {
+        // The resource-service credential sits in the same construction-to-start window as the browser token.
+        // DashboardServiceHost binds AppHost:ResourceService when the application starts, and
+        // ResourceServiceApiKeyAuthenticationHandler authenticates every request once the mode is not ApiKey, so an
+        // AppHost that downgrades either half would otherwise expose the resource model on the loopback endpoint.
+        await using var builder = await CreateDashboardBuilderAsync(creationSurface, [appHostFlag]);
+
+        Assert.Equal(nameof(ResourceServiceAuthMode.ApiKey), builder.Configuration[AppHostResourceServiceAuthMode]);
+        Assert.False(string.IsNullOrEmpty(builder.Configuration[AppHostResourceServiceApiKey]));
+    }
+
+    [Theory]
+    [InlineData(CreationSurface.Generic)]
+    [InlineData(CreationSurface.Type)]
+    public async Task DashboardTestingGeneratesAFreshResourceServiceApiKeyPerApplication(CreationSurface creationSurface)
+    {
+        // An ambient ASPIRE_DASHBOARD_RESOURCESERVICE_APIKEY is what the builder adopts when configuration supplies
+        // one, which on a CI agent would hand every test application the same resource-service credential.
+        const string SharedKey = "shared-resource-service-key";
+        string[] args = [$"--{DashboardResourceServiceApiKey}={SharedKey}"];
+
+        await using var first = await CreateDashboardBuilderAsync(creationSurface, args);
+        await using var second = await CreateDashboardBuilderAsync(creationSurface, args);
+
+        var firstKey = first.Configuration[AppHostResourceServiceApiKey];
+        var secondKey = second.Configuration[AppHostResourceServiceApiKey];
+
+        Assert.False(string.IsNullOrEmpty(firstKey));
+        Assert.False(string.IsNullOrEmpty(secondKey));
+        Assert.NotEqual(SharedKey, firstKey);
+        Assert.NotEqual(SharedKey, secondKey);
+        Assert.NotEqual(firstKey, secondKey);
     }
 
     [Fact]

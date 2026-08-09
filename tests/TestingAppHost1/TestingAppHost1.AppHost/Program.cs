@@ -43,6 +43,22 @@ if (args.Contains("--null-apphost-browser-token"))
     builder.Configuration["AppHost:BrowserToken"] = null;
 }
 
+if (args.Contains("--unsecure-apphost-resource-service"))
+{
+    // The resource service has the same post-construction window as the browser token: DashboardServiceHost does
+    // not bind this section until the application starts. Downgrading the mode alone is enough, because
+    // ResourceServiceApiKeyAuthenticationHandler only inspects the API key header while the mode is ApiKey.
+    builder.Configuration["AppHost:ResourceService:AuthMode"] = "Unsecured";
+    builder.Configuration["AppHost:ResourceService:ApiKey"] = "";
+}
+
+if (args.Contains("--clear-apphost-resource-service-key"))
+{
+    // Clearing only the key is the other half. ValidateResourceServiceOptions would fail the start in this state,
+    // so without the restore the application does not come up at all rather than coming up unauthenticated.
+    builder.Configuration["AppHost:ResourceService:ApiKey"] = "";
+}
+
 builder.Configuration["ConnectionStrings:cs"] = "testconnection";
 
 builder.AddConnectionString("cs");

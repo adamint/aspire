@@ -9,6 +9,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Dashboard;
 using Aspire.Hosting.Eventing;
 using Aspire.Hosting.Pipelines;
 using Microsoft.Extensions.Configuration;
@@ -304,11 +305,13 @@ public static class DistributedApplicationTestingBuilder
         }
 
         var browserToken = TokenGenerator.GenerateToken();
+        var resourceServiceApiKey = TokenGenerator.GenerateToken();
 
         dashboardTestingState = new DashboardTestingState(
             Enabled: true,
             DefaultWaitBehavior: testingOptions?.DefaultWaitBehavior ?? WaitBehavior.StopOnResourceUnavailable,
-            BrowserToken: browserToken);
+            BrowserToken: browserToken,
+            ResourceServiceApiKey: resourceServiceApiKey);
 
         applicationOptions.DisableDashboard = false;
 
@@ -323,6 +326,10 @@ public static class DistributedApplicationTestingBuilder
         // without this, an ambient ASPIRE_DASHBOARD_FRONTEND_BROWSERTOKEN on a CI agent would share a single known
         // token across every test application running there.
         //
+        // The resource service API key is seeded the same way and for the same second reason. The builder generates
+        // one when configuration does not supply it, but an ambient ASPIRE_DASHBOARD_RESOURCESERVICE_APIKEY would
+        // otherwise be adopted, giving every test application on that agent the same resource-service credential.
+        //
         // DistributedApplicationFactory assigns the same array instance to both properties before the AppHost
         // callback runs, and that callback is free to replace either one. Read whichever instance it left in place,
         // and both when they diverged, so caller arguments are appended to rather than silently dropped.
@@ -334,7 +341,8 @@ public static class DistributedApplicationTestingBuilder
         [
             .. existingArgs,
             $"{KnownConfigNames.DashboardUnsecuredAllowAnonymous}=false",
-            $"{KnownConfigNames.DashboardFrontendBrowserToken}={browserToken}"
+            $"{KnownConfigNames.DashboardFrontendBrowserToken}={browserToken}",
+            $"{KnownConfigNames.DashboardResourceServiceClientApiKey}={resourceServiceApiKey}"
         ];
         applicationOptions.Args = hostBuilderOptions.Args;
 
@@ -372,6 +380,23 @@ public static class DistributedApplicationTestingBuilder
         if (string.IsNullOrEmpty(builder.Configuration["AppHost:BrowserToken"]))
         {
             builder.Configuration["AppHost:BrowserToken"] = dashboardTestingState.BrowserToken;
+        }
+
+        // Restore resource-service authentication for the same reason and through the same window. The builder
+        // freezes AppHost:ResourceService:AuthMode and :ApiKey during construction, but DashboardServiceHost does
+        // not bind that section into ResourceServiceOptions until the application starts, so AppHost code running in
+        // between can downgrade either one. ResourceServiceApiKeyAuthenticationHandler only checks the API key
+        // header when AuthMode is ApiKey and otherwise authenticates every request, and ValidateResourceServiceOptions
+        // likewise stops requiring a key once the mode is Unsecured, so clearing either value alone is enough to
+        // expose the resource model on the loopback resource-service endpoint. Both halves are restored together
+        // because either one on its own leaves the endpoint unauthenticated. Unlike the browser token there is no
+        // "deliberately chosen" value to preserve: a caller who supplied their own key still ends up in ApiKey mode
+        // with that key, so this only rewrites configuration that would have been unauthenticated.
+        if (!string.Equals(builder.Configuration["AppHost:ResourceService:AuthMode"], nameof(ResourceServiceAuthMode.ApiKey), StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrEmpty(builder.Configuration["AppHost:ResourceService:ApiKey"]))
+        {
+            builder.Configuration["AppHost:ResourceService:AuthMode"] = nameof(ResourceServiceAuthMode.ApiKey);
+            builder.Configuration["AppHost:ResourceService:ApiKey"] = dashboardTestingState.ResourceServiceApiKey;
         }
 
         // Enabling the dashboard makes the hosting default wait indefinitely when a dependency becomes unavailable,
@@ -429,7 +454,7 @@ public static class DistributedApplicationTestingBuilder
     /// The dashboard testing configuration resolved during builder construction. Carried as a single value so the
     /// pre-construction and post-construction halves of the configuration cannot drift apart.
     /// </summary>
-    private readonly record struct DashboardTestingState(bool Enabled, WaitBehavior DefaultWaitBehavior, string? BrowserToken);
+    private readonly record struct DashboardTestingState(bool Enabled, WaitBehavior DefaultWaitBehavior, string? BrowserToken, string? ResourceServiceApiKey);
 
     private sealed class SuspendingDistributedApplicationFactory(
         Type entryPoint,
