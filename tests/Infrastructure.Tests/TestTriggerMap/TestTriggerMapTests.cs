@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Text.Json;
 using Microsoft.Extensions.FileSystemGlobbing;
 using Xunit;
 
@@ -415,12 +416,31 @@ public sealed class TestTriggerMapTests
     }
 
     [Fact]
-    public void ExtensionE2eReusableWorkflowCanFilterToOneShard()
+    public void ExtensionE2eReusableWorkflowFiltersTheMatrixBeforeSchedulingRunners()
     {
-        var workflow = File.ReadAllText(Path.Combine(RepoRoot.Path, ".github", "workflows", "extension-e2e-tests.yml"));
+        var workflowPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "extension-e2e-tests.yml");
+        var workflow = File.ReadAllText(workflowPath);
+        var shardsPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "extension-e2e-shards.json");
 
-        Assert.Contains("shardName:", workflow);
-        Assert.Contains("if: ${{ inputs.shardName == '' || matrix.shardName == inputs.shardName }}", workflow);
+        // A step-level `if:` cannot unschedule a matrix cell - GitHub expands the matrix and queues
+        // every cell before any step condition is evaluated - so a single-shard call would still claim
+        // a runner for all 23 cells. The matrix has to come from the filtered output instead.
+        Assert.Contains("include: ${{ fromJSON(needs.select_shards.outputs.include) }}", workflow);
+        Assert.DoesNotContain("matrix.shardName == inputs.shardName", workflow);
+
+        Assert.True(File.Exists(shardsPath), "extension-e2e-shards.json is the matrix source of truth and must exist");
+
+        using var shards = JsonDocument.Parse(File.ReadAllText(shardsPath));
+        var shardNames = shards.RootElement.EnumerateArray()
+            .Select(cell => cell.GetProperty("shardName").GetString())
+            .ToList();
+
+        Assert.Contains("build-ownership", shardNames);
+        Assert.All(shards.RootElement.EnumerateArray(), cell =>
+        {
+            Assert.True(cell.TryGetProperty("runner", out _), "every shard cell needs a runner");
+            Assert.True(cell.TryGetProperty("spec", out _), "every shard cell needs a spec");
+        });
     }
 
     [Fact]
