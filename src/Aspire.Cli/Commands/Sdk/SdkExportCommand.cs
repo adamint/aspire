@@ -93,8 +93,12 @@ internal sealed class SdkExportCommand : BaseCommand
         {
             // Documentation has to describe the SDK this CLI generates against, so the default is
             // the CLI's own identity version rather than whatever the feed currently calls latest.
+            // IdentitySdkVersion, not IdentityVersion: an informational version carries the build
+            // metadata suffix (13.4.0-preview.1.25366.3+abc123), and NuGet does not treat that as
+            // part of package identity, so recording it verbatim would label the export with a
+            // version no feed serves -- the same drift the explicit package path normalizes away.
             packageName = CorePackageName;
-            packageVersion = ExecutionContext.IdentityVersion;
+            packageVersion = ExecutionContext.IdentitySdkVersion;
         }
         else
         {

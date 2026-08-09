@@ -71,8 +71,46 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
 
         // Defaulting to the CLI's own SDK version is the entire point of the command: documentation
         // must describe the SDK this CLI would actually generate against, not a floating latest.
-        var expectedVersion = provider.GetRequiredService<Aspire.Cli.CliExecutionContext>().IdentityVersion;
+        var expectedVersion = provider.GetRequiredService<Aspire.Cli.CliExecutionContext>().IdentitySdkVersion;
         Assert.Equal(("typescript", "Aspire.Hosting", expectedVersion), rpcClient.LastExportRequest);
+    }
+
+    [Fact]
+    public async Task SdkExportDefaultsToTheIdentityVersionWithoutItsBuildMetadata()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(
+            interactionService,
+            workspace,
+            rpcClient,
+            new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName),
+            identityVersion: "13.5.0-dev+abc123");
+
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript");
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+
+        // A real informational version carries the commit suffix. NuGet ignores it for identity, so
+        // exporting under it would label the document with a version no feed serves.
+        Assert.Equal(("typescript", "Aspire.Hosting", "13.5.0-dev"), rpcClient.LastExportRequest);
+    }
+
+    [Fact]
+    public async Task SdkExportPublishesTheNormalizedVersionForAnAbbreviatedRequest()
+    {
+        var interactionService = new TestInteractionService();
+        using var provider = CreateProvider(interactionService, out var workspace, out var rpcClient);
+        using var _ = workspace;
+
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Contoso.Aspire.Widgets@2.0");
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+
+        // NuGet resolves Contoso.Aspire.Widgets@2.0 to the 2.0.0 package, so the document has to be
+        // keyed on the version that was actually restored.
+        Assert.Equal(("typescript", "Contoso.Aspire.Widgets", "2.0.0"), rpcClient.LastExportRequest);
     }
 
     [Fact]

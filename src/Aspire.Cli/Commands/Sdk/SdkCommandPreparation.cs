@@ -78,12 +78,22 @@ internal static class SdkCommandPreparation
             return false;
         }
 
-        if (!SemVersion.TryParse(packageVersion, SemVersionStyles.Any, out _))
+        if (!SemVersion.TryParse(packageVersion, SemVersionStyles.Any, out var parsedVersion))
         {
             errorMessage = requireExactVersion
                 ? $"Invalid version '{packageVersion}' in '{argument}'. Expected an exact NuGet version (e.g. 9.2.0); floating and range versions are not supported."
                 : $"Invalid version '{packageVersion}' in '{argument}'. Expected a valid NuGet version (e.g. 9.2.0).";
             return false;
+        }
+
+        if (requireExactVersion)
+        {
+            // SemVersionStyles.Any accepts abbreviated and decorated forms -- "2.0", "v2.0.0",
+            // "2.01.0" -- that NuGet normalizes on restore. A caller who asks for Package@2.0 gets
+            // the 2.0.0 package, so recording the raw text would label the export with a version no
+            // feed serves. Callers that require an exact version get the normalized string, which is
+            // the one NuGet resolved.
+            packageVersion = parsedVersion.ToString();
         }
 
         reference = IntegrationReference.FromPackage(packageName, packageVersion);
