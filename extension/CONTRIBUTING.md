@@ -167,7 +167,7 @@ The build rejects public registry URLs in `yarn.lock`; ensure regenerated entrie
 > error Error: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/vscode-extension-tester/-/vscode-extension-tester-8.24.0.tgz: Request failed "404 Not Found"
 > ```
 >
-> This is easy to miss locally, because a global `.npmrc` pointing at another registry lets `yarn install` succeed on your machine while the rewritten `yarn.lock` URL still 404s for CI. Nothing in this repo can force the mirror to ingest a version — anonymous and authenticated requests both 404 until the sync picks it up — so the only options are to wait or to pin a version the feed already has. Check the whole set of new `resolved` URLs, since a bump also drags in transitive dependencies published at the same time:
+> This is easy to miss locally, because a global `.npmrc` pointing at another registry lets `yarn install` succeed on your machine while the rewritten `yarn.lock` URL still 404s for CI. Requesting the missing tarball does not pull it in on demand: the feed answers with a `PackageNotFoundException` rather than fetching from the upstream, so repeating the install cannot prime the cache. The options are to wait for the sync or to pin a version the feed already has. Check the whole set of new `resolved` URLs, since a bump also drags in transitive dependencies published at the same time:
 >
 > ```bash
 > git diff origin/main -- yarn.lock | grep '^+.*resolved "' | sed 's/^+ *resolved "//; s/".*$//' | sort -u \
@@ -175,6 +175,12 @@ The build rejects public registry URLs in `yarn.lock`; ensure regenerated entrie
 > ```
 >
 > A `404` means the feed does not have it yet; `303` means it is cached and safe to pin.
+>
+> Pinning back to the previous release is not automatically a neutral fallback for `vscode-extension-tester`, because consecutive releases can declare disjoint VS Code ranges. Compare the `supportedVersions` field of both candidates before downgrading — 8.23.0 declares `1.109.5`–`1.111.0` while 8.24.0 declares `1.129.1`–`1.131.0`, so reverting the pin would move the `max` alias backwards past the previously hardcoded default rather than holding it steady:
+>
+> ```bash
+> npm view vscode-extension-tester@8.24.0 supportedVersions
+> ```
 
 ## Updating the Yarn version
 
