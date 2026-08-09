@@ -39,7 +39,7 @@ The full analysis runs in four passes:
 
 1. **Infrastructure annotation check** — Hardcoded patterns match runner failures, action download failures, and other known infrastructure errors from job annotations.
 2. **Infrastructure log override** — For non-test-execution failures, job logs are checked against a hardcoded list of high-confidence network failure patterns (NuGet feed timeouts, GitHub API errors, etc.).
-3. **Job log pattern matching** — For test execution failures (`Run tests*` step), the job log is matched against configurable `jobFailurePatterns` from [`eng/test-retry-patterns.json`](../../eng/test-retry-patterns.json).
+3. **Job log pattern matching** — For test execution failures (the `Run tests*`, `Verify test results exist`, and `Check for hang dump files` steps), the job log is matched against configurable `jobFailurePatterns` from [`eng/test-retry-patterns.json`](../../eng/test-retry-patterns.json).
 4. **TRX test output matching** — If any test execution failures remain unmatched, the workflow downloads the `All-TestResults` artifact, parses the `.trx` files, and matches individual failed test output against configurable `testFailurePatterns` from the same config file.
 
 Passes 1–2 are hardcoded because they target well-known infrastructure signatures that rarely change. Passes 3–4 are configurable because transient test failure patterns evolve as integrations are added or CI environments change.
@@ -187,7 +187,7 @@ The workflow is intentionally conservative. All of these conditions must be met 
 | **Retryable job cap** | At least 1 but no more than 5 retryable jobs (default). On attempts > 1, the cap is stricter: the count must be *strictly less than* 5. |
 | **Open PR** | At least one associated pull request must still be open. |
 | **Non-aggregator** | Aggregator jobs (`Final Results`, `Tests / Final Test Results`) are excluded from analysis. |
-| **Mixed-failure veto** | A job with both a test execution failure (`Run tests*`) and unrelated transient post-step noise is *not* retried on infrastructure grounds alone — the test execution failure must match a pattern (pass 3 or 4) to qualify. |
+| **Mixed-failure veto** | A job with both a test execution failure (`Run tests*`, `Verify test results exist`, or `Check for hang dump files`) and unrelated transient post-step noise is *not* retried on infrastructure grounds alone — the test execution failure must match a pattern (pass 3 or 4) to qualify. |
 
 When a rerun is requested, GitHub reruns **all** failed jobs for that attempt — not just the matched ones. This is a GitHub API constraint (there is no API for atomically rerunning a subset of failed jobs). The matched-job count and safety rails are the eligibility gate; once eligible, the rerun covers the full failed set.
 

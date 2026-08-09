@@ -1860,9 +1860,11 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
     [RequiresTools(["node"])]
     public async Task HasTestExecutionFailureStepReturnsTrueForTheVerifyTestResultsGate()
     {
-        // "Verify test results exist" is where run-tests.yml now makes the authoritative pass/fail call:
-        // the test steps persist the MTP exit code and exit 0, and this gate classifies it. A failure here
-        // is a real test-execution failure, so it must veto the infrastructure-network log override the
+        // "Verify test results exist" reaches its own verdict from the persisted exit code and the TRX
+        // artifacts after the runner step reported success, so it fails on outcomes the runner step does
+        // not: zero tests discovered, or a missing or malformed TRX. In quarantine mode the runner step
+        // exits 0 even for a real failure, leaving this the only step that fails. A failure here is
+        // therefore a test-execution verdict and must veto the infrastructure-network log override the
         // same way a failed "Run tests" does. Otherwise a stray feed-network signature elsewhere in the
         // job log reruns a job whose tests genuinely failed.
         bool result = await InvokeHarnessAsync<bool>(

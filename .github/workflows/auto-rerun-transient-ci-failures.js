@@ -39,9 +39,12 @@ const retryableWithAnnotationStepPatterns = [
 const ignoredFailureStepPatterns = [
     /^Run tests\b/i,
     /^Run nuget dependent tests\b/i,
-    // "Verify test results exist" is the authoritative pass/fail gate in run-tests.yml: the test steps
-    // now swallow the MTP exit code and this step classifies it. Its failure therefore means the same
-    // thing "Run tests" used to, so it belongs in both step lists alongside it.
+    // "Verify test results exist" reaches its own verdict from the persisted exit code and the TRX
+    // artifacts, after the runner step has already reported success. It catches deterministic outcomes
+    // the runner step does not fail on: zero tests discovered, or a missing or malformed TRX. In
+    // quarantine mode (ignoreTestFailures) the runner step exits 0 even for a real failure, so this is
+    // the only step that fails. Either way its failure means a test-execution verdict, not runner
+    // noise, so it belongs in both step lists alongside "Run tests".
     /^Verify test results exist$/i,
     /^Check for hang dump files$/i,
     /^Build test project$/i,

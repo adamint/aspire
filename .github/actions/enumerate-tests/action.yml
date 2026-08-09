@@ -39,6 +39,11 @@ inputs:
 #   - extraTestArgs: Additional test arguments (e.g., '--filter-trait "Partition=P1"')
 #   - collection: (collection type only) Collection/partition name
 #   - classname: (class type only) Fully qualified test class name
+#   - allowZeroTests: (class type only) True. Class shards are generated mechanically from the
+#       discovered class names, so a class that is real on one OS can be legitimately empty on
+#       another once CI applies its environment trait filters (for example a class whose tests all
+#       require containers, filtered out on Windows). Discovering zero tests is therefore not a
+#       failure for these entries, unlike regular and collection shards.
 outputs:
   all_tests:
     description: Combined matrix of all test entries
