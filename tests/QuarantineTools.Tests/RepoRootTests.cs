@@ -212,6 +212,25 @@ public class RepoRootTests : IDisposable
         Assert.True(Program.IsCaseSensitiveDirectory(probed));
     }
 
+    [Fact]
+    public void Canonicalize_ResolvesAPathWhoseAncestorChainReachesTheFilesystemRoot()
+    {
+        // Regression guard for a Windows-only crash in this class's own fixture. Canonicalize walks up the
+        // ancestor chain probing each component for a symlink, and DirectoryInfo.ResolveLinkTarget throws
+        // DirectoryNotFoundException for a drive root such as "C:\". Because the walk happens in the
+        // constructor, that threw before any test body ran and failed all 36 tests in this class with an
+        // error that named neither the root resolution under test nor the real cause. A root cannot be a
+        // symlink, so the walk must stop there rather than probe it.
+        var root = Path.GetPathRoot(_scratch.FullName);
+        Assert.False(string.IsNullOrEmpty(root));
+
+        var canonicalRoot = Canonicalize(root);
+        Assert.False(string.IsNullOrEmpty(canonicalRoot));
+
+        // The scratch directory canonicalizes through that same chain, so it must still round-trip.
+        Assert.Equal(_scratch.FullName, Canonicalize(_scratch.FullName));
+    }
+
     [Theory]
     [InlineData("/src/repo\n", "/src/repo")]
     [InlineData("C:/src/repo\r\n", "C:/src/repo")]
@@ -570,13 +589,19 @@ public class RepoRootTests : IDisposable
     {
         var info = new DirectoryInfo(Path.GetFullPath(path));
 
+        // Stop at the root before probing for a link. On Windows, ResolveLinkTarget throws
+        // DirectoryNotFoundException for a drive root such as "C:\", which would fail every test in this
+        // class from the constructor. A root is never a symlink, so there is nothing to resolve there.
+        if (info.Parent is null)
+        {
+            return Path.TrimEndingDirectorySeparator(info.FullName);
+        }
+
         if (info.ResolveLinkTarget(returnFinalTarget: true) is { } target)
         {
             return Canonicalize(target.FullName);
         }
 
-        return info.Parent is { } parent
-            ? Path.Combine(Canonicalize(parent.FullName), info.Name)
-            : Path.TrimEndingDirectorySeparator(info.FullName);
+        return Path.Combine(Canonicalize(info.Parent.FullName), info.Name);
     }
 }
