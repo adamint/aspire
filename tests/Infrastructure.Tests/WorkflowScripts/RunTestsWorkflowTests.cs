@@ -14,6 +14,8 @@ public sealed class RunTestsWorkflowTests
 {
     private static readonly string s_workflowPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "run-tests.yml");
     private static readonly string s_testsWorkflowPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "tests.yml");
+    private static readonly string s_specializedTestRunnerWorkflowPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "specialized-test-runner.yml");
+    private static readonly string s_specializedTestRunsheetBuilderTargetsPath = Path.Combine(RepoRoot.Path, "eng", "SpecializedTestRunsheetBuilderBase.targets");
 
     private readonly ITestOutputHelper _output;
 
@@ -119,6 +121,44 @@ public sealed class RunTestsWorkflowTests
         {
             Assert.Contains("allowZeroTests: ${{ matrix.allowZeroTests || false }}", match.Groups["block"].Value);
         }
+    }
+
+    [Fact]
+    public void SpecializedTestRunnerWorkflowAlwaysOptsIntoAllowZeroTests()
+    {
+        // eng/SpecializedTestRunsheetBuilderBase.targets generates every row this workflow's matrix
+        // consumes (quarantined and outerloop tests), and it unconditionally appends
+        // /p:IgnoreZeroTestResult=true to each row's command (asserted below). The generated rows
+        // never carry an "allowZeroTests" key, so `matrix.tests.allowZeroTests || false` is a vacuous
+        // expression that always evaluates to false: it silently re-enables the zero-test guard for
+        // every specialized test run. The call site must instead pass allowZeroTests: true directly.
+        string workflowText = File.ReadAllText(s_specializedTestRunnerWorkflowPath);
+        MatchCollection matches = Regex.Matches(
+            workflowText,
+            @"uses: \./\.github/workflows/run-tests\.yml(?<block>.*?)(?=\n\n|\z)",
+            RegexOptions.Singleline);
+
+        Assert.Single(matches);
+        string block = matches[0].Groups["block"].Value;
+
+        Assert.Contains("allowZeroTests: true", block);
+        Assert.DoesNotContain("matrix.tests.allowZeroTests", block);
+    }
+
+    [Fact]
+    public void SpecializedTestRunsheetBuilderUnconditionallyIgnoresZeroTestResult()
+    {
+        // This asserts the invariant that SpecializedTestRunnerWorkflowAlwaysOptsIntoAllowZeroTests
+        // relies on: every generated runsheet row's command tolerates zero tests via
+        // /p:IgnoreZeroTestResult=true, with no surrounding Condition that could turn it off for some
+        // rows. If this ever becomes conditional, the workflow's blanket allowZeroTests: true would
+        // need to become row-specific too (see option (b) in the regression fix for PR #19177).
+        string targetsText = File.ReadAllText(s_specializedTestRunsheetBuilderTargetsPath);
+        string[] lines = targetsText.ReplaceLineEndings("\n").Split('\n');
+
+        int commandLineIndex = Array.FindIndex(lines, line => line.Contains("/p:IgnoreZeroTestResult=true", StringComparison.Ordinal));
+        Assert.True(commandLineIndex >= 0, $"Could not find the /p:IgnoreZeroTestResult=true line in {s_specializedTestRunsheetBuilderTargetsPath}.");
+        Assert.DoesNotContain("Condition", lines[commandLineIndex], StringComparison.Ordinal);
     }
 
     [Fact]

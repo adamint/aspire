@@ -173,7 +173,14 @@ jobs:
       mtpBaseArgs: ${{ matrix.tests.mtpBaseArgs }}
       extraTestArgs: ${{ inputs.extraTestArgs }}
       ignoreTestFailures: ${{ inputs.ignoreTestFailures }}
-      allowZeroTests: ${{ matrix.tests.allowZeroTests || false }}
+      # The rows in this matrix are always produced by eng/SpecializedTestRunsheetBuilderBase.targets,
+      # which unconditionally appends /p:IgnoreZeroTestResult=true to every generated test command
+      # (a specialized test class may only exist on some OSes, and the runsheet builder can't know
+      # that in advance). Mirror that tolerance here so run-tests.yml's zero-test guard doesn't fail
+      # rows that are allowed to report zero specialized tests on a given OS. Do not source this from
+      # the matrix row itself: the generated rows never carry an allowZeroTests property, so reading
+      # it from there would silently and permanently evaluate to false.
+      allowZeroTests: true
 
 
   results:
