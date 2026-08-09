@@ -82,14 +82,11 @@ function createDependencies(overrides: Partial<DebuggerInstallHintServiceDepende
 suite('debugger install hints', () => {
     teardown(() => sinon.restore());
 
-    test('maps every launch configuration type Aspire can debug to its debug adapter extension', () => {
+    test('maps every supported launch configuration type to its debug adapter extension', () => {
         const mappings = [
-            ['project', 'ms-dotnettools.csharp', 'C#'],
-            ['azure-functions', 'ms-dotnettools.csharp', 'C#'],
             ['python', 'ms-python.debugpy', 'Python'],
             ['go', 'golang.go', 'Go'],
             ['bun', 'oven.bun-vscode', 'Bun'],
-            ['maui', 'ms-dotnettools.dotnet-maui', '.NET MAUI'],
         ];
 
         assert.deepStrictEqual(
@@ -98,6 +95,10 @@ suite('debugger install hints', () => {
                 return [launchConfigurationType, hint?.extensionId, hint?.debuggerName];
             }),
             mappings);
+    });
+
+    test('does not suggest incomplete Azure Functions install hints', () => {
+        assert.strictEqual(getDebuggerInstallHintForResource(createResource('azure-functions')), undefined);
     });
 
     test('has no hint for adapters built into VS Code, unknown types, or resources without debug support', () => {
@@ -467,8 +468,8 @@ suite('debugger install hints', () => {
         const { dependencies, extensionChanges } = createDependencies({ showInformationMessage });
         const service = new DebuggerInstallHintService(createTestMemento(), dependencies);
 
-        // Several Python resources, and a project and an Azure Functions resource that share the C#
-        // extension, spread across what would be two AppHosts.
+        // Several Python resources, plus unsupported launch configuration types, spread across what
+        // would be two AppHosts.
         service.notifyMissingDebuggers([
             createResource('python'),
             createResource('python'),
@@ -484,7 +485,6 @@ suite('debugger install hints', () => {
             showInformationMessage.args.map(args => args[0]),
             [
                 'Install the Python debugger extension to debug resources in this app.',
-                'Install the C# debugger extension to debug resources in this app.',
             ]);
 
         service.dispose();

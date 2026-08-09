@@ -6,9 +6,11 @@ import {
     debuggerInstalledRestartAppHost,
     dontShowAgainLabel,
 } from '../loc/strings';
-import { getAllResourceDebuggerExtensions } from './debuggerExtensions';
 import { ResourceState } from '../editor/resourceConstants';
 import { extensionLogOutputChannel } from '../utils/logging';
+import { bunDebuggerExtension } from './languages/bun';
+import { goDebuggerExtension } from './languages/go';
+import { pythonDebuggerExtension } from './languages/python';
 
 /**
  * Snapshot property published by Aspire.Hosting from `SupportsDebuggingAnnotation.LaunchConfigurationType`
@@ -41,23 +43,21 @@ export interface DebuggerInstallHintServiceDependencies {
 }
 
 /**
- * Install hints keyed by launch configuration type, derived from the same table that drives actual
- * debugging (`languages/*.ts`). Deriving both from one table is what keeps a resource that Aspire can
- * debug from silently getting no hint: any integration that adds a launch configuration type, including a
- * third-party one, is covered as soon as it has a `ResourceDebuggerExtension`.
+ * Install hints keyed by launch configuration type. Keep this list to debuggers whose missing
+ * prerequisite is exactly one extension. Azure Functions needs both the C# and Azure Functions
+ * extensions, so a single-extension hint can be incomplete and is intentionally not modeled here.
  */
 const debuggerInstallHintsByLaunchConfigurationType = new Map<string, DebuggerInstallHint>();
 
-for (const debuggerExtension of getAllResourceDebuggerExtensions()) {
+for (const debuggerExtension of [bunDebuggerExtension, goDebuggerExtension, pythonDebuggerExtension]) {
     if (!debuggerExtension.extensionId) {
         // A null extensionId means the debug adapter ships with VS Code, so there is nothing to install.
         continue;
     }
 
     debuggerInstallHintsByLaunchConfigurationType.set(debuggerExtension.resourceType, {
-        // The display name describes the extension, not the language, because several launch
-        // configuration types can share one extension ('project' and 'azure-functions' both need the C#
-        // extension) and the toast is coalesced per extension id.
+        // The display name describes the extension, not the launch configuration type, because the
+        // toast is coalesced per extension id.
         debuggerName: debuggerExtension.extensionDisplayName ?? debuggerExtension.extensionId,
         extensionId: debuggerExtension.extensionId,
     });
