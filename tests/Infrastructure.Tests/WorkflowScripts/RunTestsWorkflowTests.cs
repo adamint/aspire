@@ -130,6 +130,32 @@ public sealed class RunTestsWorkflowTests
 
     [Fact]
     [RequiresTools(["pwsh"])]
+    public async Task TestResultValidationAllowsTrxFilesContainNoTestsWhenOptedOut()
+    {
+        string scratchDirectory = CreateScratchDirectory();
+        try
+        {
+            string testResultsDirectory = Path.Combine(scratchDirectory, "testresults");
+            Directory.CreateDirectory(testResultsDirectory);
+            File.WriteAllText(Path.Combine(scratchDirectory, "test-exit-code.txt"), "0");
+            WriteTrxFile(Path.Combine(testResultsDirectory, "empty.trx"), totalTests: 0);
+
+            using var command = new PowerShellCommand(CreateTestResultValidationScript(scratchDirectory, allowZeroTests: true), _output).WithTimeout(TimeSpan.FromMinutes(1));
+
+            CommandResult result = await command.ExecuteAsync(scratchDirectory);
+
+            result.EnsureSuccessful();
+            Assert.Contains("No tests were reported in the .trx files, but allowZeroTests is true.", result.Output);
+            Assert.Contains("0 test(s)", result.Output);
+        }
+        finally
+        {
+            DeleteScratchDirectory(scratchDirectory);
+        }
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
     public async Task TestResultValidationPassesWhenTrxFilesContainTests()
     {
         string scratchDirectory = CreateScratchDirectory();
@@ -186,13 +212,13 @@ public sealed class RunTestsWorkflowTests
         return scriptPath;
     }
 
-    private static string CreateTestResultValidationScript(string scratchDirectory)
+    private static string CreateTestResultValidationScript(string scratchDirectory, bool allowZeroTests = false)
     {
         string scriptPath = Path.Combine(scratchDirectory, "validate-test-results.ps1");
         string script = ExtractPowerShellStep("Verify test results exist")
             .Replace("${{ github.workspace }}", "$Workspace", StringComparison.Ordinal)
             .Replace("'${{ inputs.ignoreTestFailures }}'", "'true'", StringComparison.Ordinal)
-            .Replace("'${{ inputs.allowZeroTests }}'", "'false'", StringComparison.Ordinal);
+            .Replace("'${{ inputs.allowZeroTests }}'", $"'{allowZeroTests.ToString().ToLowerInvariant()}'", StringComparison.Ordinal);
 
         File.WriteAllText(
             scriptPath,
@@ -262,11 +288,15 @@ public sealed class RunTestsWorkflowTests
 
     private static void WriteTrxFile(string path, int totalTests)
     {
+        // MTP TRX files use the TeamTest namespace and report counts as:
+        //   <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+        //     <ResultSummary><Counters total="3" ... /></ResultSummary>
+        // The workflow parser depends on that loosely structured XML shape, so keep the fixture representative.
         File.WriteAllText(
             path,
             $$"""
             <?xml version="1.0" encoding="utf-8"?>
-            <TestRun>
+            <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
               <ResultSummary outcome="Completed">
                 <Counters total="{{totalTests}}" executed="{{totalTests}}" passed="{{totalTests}}" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" />
               </ResultSummary>
