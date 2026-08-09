@@ -445,6 +445,41 @@ suite('cliPathEnvironment.syncAspireExtensionVersionEnvironment tests', () => {
         assert.strictEqual(getAspireExtensionSource({ version: '1.17.0' }), 'unknown');
     });
 
+    test('reports unknown source for a side-loaded VSIX that carries a matched publisherId', () => {
+        // VS Code looks a VSIX up in the gallery on install and stores the matched publisherId, so
+        // publisherId alone does not prove a Marketplace install. __metadata.source records the real
+        // origin and has to win over it, otherwise the CLI makes the Marketplace request this signal
+        // exists to suppress.
+        assert.strictEqual(getAspireExtensionSource({
+            __metadata: {
+                isPreReleaseVersion: false,
+                publisherId: 'publisher-id',
+                source: 'vsix',
+            },
+        }), 'unknown');
+    });
+
+    test('reports marketplace source when VS Code records a gallery install', () => {
+        assert.strictEqual(getAspireExtensionSource({
+            __metadata: {
+                isPreReleaseVersion: false,
+                source: 'gallery',
+            },
+        }), 'marketplace');
+    });
+
+    test('reads the pre-release channel from the extension description', () => {
+        // Current VS Code deletes __metadata from the manifest before building the description the
+        // extension host sees, and exposes the channel as `preRelease` instead. Without this the
+        // channel silently reports stable for every pre-release install.
+        assert.strictEqual(getAspireExtensionChannel({ version: '1.17.0', preRelease: true }), 'pre-release');
+        assert.strictEqual(getAspireExtensionChannel({ version: '1.17.0', preRelease: false }), 'stable');
+    });
+
+    test('reports the stable channel when neither signal is present', () => {
+        assert.strictEqual(getAspireExtensionChannel({ version: '1.17.0' }), 'stable');
+    });
+
     test('contributes the running extension version', () => {
         const collection = createFakeCollection();
 

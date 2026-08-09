@@ -223,6 +223,109 @@ public class VsCodeExtensionMarketplaceClientTests
     }
 
     [Fact]
+    public async Task GetLatestVersionsAsync_IgnoresNonStringIdentityMembers()
+    {
+        // JsonElement.GetString throws InvalidOperationException, not JsonException, when a property is
+        // present but is not a JSON string. CheckAsync does not translate that into the documented
+        // "Marketplace unavailable" warning, so an entry such as "extensionName": 1 would drop the
+        // whole vscode-extension check from doctor's output instead of degrading gracefully.
+        const string responseJson = """
+            {
+              "results": [
+                {
+                  "extensions": [
+                    {
+                      "extensionName": 1,
+                      "publisher": {
+                        "publisherName": "microsoft-aspire"
+                      },
+                      "versions": [
+                        {
+                          "version": "99.0.0",
+                          "properties": []
+                        }
+                      ]
+                    },
+                    {
+                      "extensionName": "aspire-vscode",
+                      "publisher": {
+                        "publisherName": ["microsoft-aspire"]
+                      },
+                      "versions": [
+                        {
+                          "version": "98.0.0",
+                          "properties": []
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+            """;
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
+        };
+        using var handler = new MockHttpMessageHandler((_, _) => Task.FromResult(response));
+        using var httpClient = new HttpClient(handler);
+        var client = new VsCodeExtensionMarketplaceClient(httpClient, TimeProvider.System);
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => client.GetLatestVersionsAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task GetLatestVersionsAsync_IgnoresNonStringPreReleaseProperties()
+    {
+        // The gallery emits the pre-release flag as a stringly-typed key/value pair. A non-string
+        // member on either side must not escape as InvalidOperationException.
+        const string responseJson = """
+            {
+              "results": [
+                {
+                  "extensions": [
+                    {
+                      "extensionName": "aspire-vscode",
+                      "publisher": {
+                        "publisherName": "microsoft-aspire"
+                      },
+                      "versions": [
+                        {
+                          "version": "1.16.0",
+                          "properties": [
+                            {
+                              "key": 7,
+                              "value": "true"
+                            },
+                            {
+                              "key": "Microsoft.VisualStudio.Code.PreRelease",
+                              "value": true
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+            """;
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
+        };
+        using var handler = new MockHttpMessageHandler((_, _) => Task.FromResult(response));
+        using var httpClient = new HttpClient(handler);
+        var client = new VsCodeExtensionMarketplaceClient(httpClient, TimeProvider.System);
+
+        var versions = await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("1.16.0", versions.StableVersion?.ToString());
+        Assert.Null(versions.PreReleaseVersion);
+    }
+
+    [Fact]
     public async Task GetLatestVersionsAsync_RejectsOversizedResponseBeforeParsing()
     {
         const string responseJson = """

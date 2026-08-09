@@ -47,10 +47,12 @@ export type AspireVsCodeExtensionSource = 'marketplace' | 'unknown';
 interface AspireVsCodePackageMetadata {
     isPreReleaseVersion?: unknown;
     publisherId?: unknown;
+    source?: unknown;
 }
 
 interface AspireVsCodePackageJson {
     version?: unknown;
+    preRelease?: unknown;
     __metadata?: AspireVsCodePackageMetadata;
 }
 
@@ -322,13 +324,34 @@ export function syncAspireExtensionVersionEnvironment(
 }
 
 export function getAspireExtensionChannel(packageJSON: AspireVsCodePackageJson | undefined): AspireVsCodeExtensionChannel {
+    // `context.extension.packageJSON` is the `IExtensionDescription`, not the raw manifest, and the
+    // scanner deletes `__metadata` from the manifest before building it. `preRelease` is the field
+    // the description carries instead, so it is read first and `__metadata.isPreReleaseVersion` is
+    // only a fallback for older VS Code builds that still exposed the raw metadata.
+    // See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/common/extensionsScannerService.ts
+    // (`delete manifest.__metadata` in `scanExtension`, and `preRelease` in `toExtensionDescription`).
+    if (typeof packageJSON?.preRelease === 'boolean') {
+        return packageJSON.preRelease ? 'pre-release' : 'stable';
+    }
+
     return packageJSON?.__metadata?.isPreReleaseVersion === true ? 'pre-release' : 'stable';
 }
 
 export function getAspireExtensionSource(packageJSON: AspireVsCodePackageJson | undefined): AspireVsCodeExtensionSource {
-    // VS Code adds __metadata.publisherId when it installs an extension from the Marketplace.
-    // Local development and ordinary VSIX installs do not have that scanner-owned value, so the CLI
-    // treats them as installed but does not compare them against the Marketplace feed.
+    // `__metadata.source` is the authoritative install origin VS Code records: 'gallery' for a
+    // Marketplace install and 'vsix' for a side-load. It wins whenever it is present, because a
+    // side-loaded VSIX that VS Code matched against a gallery entry also gets a `publisherId` and
+    // would otherwise be reported as a Marketplace install.
+    //
+    // It is usually absent. Current VS Code strips `__metadata` from the description entirely and
+    // keeps the full metadata in the profile's extensions.json, so `publisherId` stays as the
+    // fallback rather than the primary signal: requiring `source` would report every install as
+    // unknown and permanently suppress the CLI's Marketplace comparison.
+    const source = packageJSON?.__metadata?.source;
+    if (typeof source === 'string' && source.trim().length > 0) {
+        return source.trim().toLowerCase() === 'gallery' ? 'marketplace' : 'unknown';
+    }
+
     return typeof packageJSON?.__metadata?.publisherId === 'string'
         && packageJSON.__metadata.publisherId.trim().length > 0
         ? 'marketplace'

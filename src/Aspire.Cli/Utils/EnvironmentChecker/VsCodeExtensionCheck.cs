@@ -328,9 +328,17 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         // clean bill of health.
         var diskDetection = ResolveExtensionFromDisk(environment, homeDirectory);
 
+        // A non-empty but unparseable reported version still proves the extension is loaded: only the
+        // running extension sets the variable. The disk scan can legitimately come up empty for that
+        // same installation (portable mode, --extensions-dir, or a remote/server root the CLI cannot
+        // see), so falling back to diskDetection.Installed alone would report the extension as MISSING
+        // and tell the user to install what they already have. Keep the reported signal so the run
+        // lands on the "installed, version unknown" warning instead.
+        var extensionReportedItself = !string.IsNullOrEmpty(reportedVersion);
+
         return new VsCodeExtensionDetection(
             VsCodeInstalled: true,
-            ExtensionInstalled: diskDetection.Installed,
+            ExtensionInstalled: diskDetection.Installed || extensionReportedItself,
             ExtensionVersion: diskDetection.Version,
             VersionSource: diskDetection.Version is null ? VsCodeExtensionVersionSource.None : VsCodeExtensionVersionSource.Manifest,
             ReleaseChannel: diskDetection.ReleaseChannel,
@@ -602,13 +610,32 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         }
     }
 
+    /// <summary>
+    /// Reads the Marketplace release channel recorded in an installed extension's manifest metadata.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// VS Code coerces the flag with <c>!!metadata.isPreReleaseVersion</c>, and older gallery installs
+    /// were written without it at all, so an absent property means stable rather than unknown.
+    /// A property that is present but is not a JSON boolean (for example <c>"isPreReleaseVersion": "true"</c>)
+    /// is a manifest we cannot trust, and guessing stable there would compare a pre-release install
+    /// against the stable feed, so it reports <see cref="VsCodeExtensionReleaseChannel.Unknown"/>.
+    /// </para>
+    /// </remarks>
     private static VsCodeExtensionReleaseChannel GetManifestReleaseChannel(JsonElement manifest)
     {
-        return TryGetManifestMetadata(manifest, out var metadata) &&
-            metadata.TryGetProperty("isPreReleaseVersion", out var isPreReleaseVersion) &&
-            isPreReleaseVersion.ValueKind is JsonValueKind.True
-                ? VsCodeExtensionReleaseChannel.PreRelease
-                : VsCodeExtensionReleaseChannel.Stable;
+        if (!TryGetManifestMetadata(manifest, out var metadata) ||
+            !metadata.TryGetProperty("isPreReleaseVersion", out var isPreReleaseVersion))
+        {
+            return VsCodeExtensionReleaseChannel.Stable;
+        }
+
+        return isPreReleaseVersion.ValueKind switch
+        {
+            JsonValueKind.True => VsCodeExtensionReleaseChannel.PreRelease,
+            JsonValueKind.False => VsCodeExtensionReleaseChannel.Stable,
+            _ => VsCodeExtensionReleaseChannel.Unknown
+        };
     }
 
     private static VsCodeExtensionInstallSource GetManifestInstallSource(JsonElement manifest)
@@ -618,9 +645,25 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             return VsCodeExtensionInstallSource.Unknown;
         }
 
-        // VS Code adds __metadata.publisherId when it installs a Marketplace extension. VSIX and
-        // development installs normally lack that scanner-owned metadata, so do not send them to the
-        // Marketplace update feed even if their version is parseable.
+        // __metadata.source is the authoritative install origin VS Code records ("gallery" for a
+        // Marketplace install, "vsix" for a side-load), so it wins whenever it is present:
+        //   "__metadata": { "id": "...", "publisherId": "...", "source": "gallery" }
+        // It is normally absent from an extracted package.json. Current VS Code only persists
+        // { targetPlatform, installedTimestamp, size } there and keeps the full metadata (including
+        // source) in the profile's extensions.json; older builds wrote publisherId and
+        // isPreReleaseVersion but still no source. Requiring source would therefore make every
+        // on-disk install look non-Marketplace and silently retire this comparison, so publisherId
+        // remains the fallback: a development or plain VSIX install normally lacks that
+        // scanner-owned value even though a gallery-matched VSIX can carry it.
+        // See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/common/extensionsScannerService.ts.
+        if (metadata.TryGetProperty("source", out var source) &&
+            source.ValueKind == JsonValueKind.String)
+        {
+            return string.Equals(source.GetString()?.Trim(), "gallery", StringComparison.OrdinalIgnoreCase)
+                ? VsCodeExtensionInstallSource.Marketplace
+                : VsCodeExtensionInstallSource.Unknown;
+        }
+
         return metadata.TryGetProperty("publisherId", out var publisherId) &&
             publisherId.ValueKind == JsonValueKind.String &&
             !string.IsNullOrWhiteSpace(publisherId.GetString())

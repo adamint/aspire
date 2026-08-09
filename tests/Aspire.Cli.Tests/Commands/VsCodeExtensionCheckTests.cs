@@ -646,6 +646,140 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task CheckAsync_DoesNotCheckMarketplace_WhenManifestRecordsAVsixInstallSource()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        // VS Code looks a side-loaded VSIX up in the gallery and stores the matched publisherId, so
+        // publisherId alone does not prove a Marketplace install. __metadata.source records the real
+        // origin and has to win over it.
+        CreateInstalledExtensionWithMetadata(
+            extensions,
+            "1.2.3",
+            """
+            { "publisherId": "microsoft-aspire", "isPreReleaseVersion": false, "source": "vsix" }
+            """);
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = CreateUnusedMarketplaceClient();
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("unknown", result.Metadata!["extensionInstallSource"]!.GetValue<string>());
+        Assert.Equal(0, marketplaceClient.CallCount);
+    }
+
+    [Fact]
+    public async Task CheckAsync_ChecksMarketplace_WhenManifestRecordsAGalleryInstallSource()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        CreateInstalledExtensionWithMetadata(
+            extensions,
+            "1.2.3",
+            """
+            { "isPreReleaseVersion": false, "source": "gallery" }
+            """);
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            StableVersionCallback = _ => Task.FromResult(SemVersion.Parse("1.2.3", SemVersionStyles.Strict))
+        };
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("marketplace", result.Metadata!["extensionInstallSource"]!.GetValue<string>());
+        Assert.Equal(1, marketplaceClient.CallCount);
+    }
+
+    [Fact]
+    public async Task CheckAsync_ReportsUnknownChannel_WhenManifestPreReleaseFlagIsNotABoolean()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        // A manifest that stringifies the flag cannot be trusted to say which feed to compare
+        // against, and guessing stable would report a pre-release install as out of date.
+        CreateInstalledExtensionWithMetadata(
+            extensions,
+            "1.2.3",
+            """
+            { "publisherId": "microsoft-aspire", "isPreReleaseVersion": "true" }
+            """);
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = CreateUnusedMarketplaceClient();
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal("unknown", result.Metadata!["extensionChannel"]!.GetValue<string>());
+        Assert.Equal("unavailable", result.Metadata["latestVersionError"]!.GetValue<string>());
+        Assert.Equal(0, marketplaceClient.CallCount);
+    }
+
+    [Fact]
+    public async Task CheckAsync_UsesStableChannel_WhenManifestOmitsThePreReleaseFlag()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        // VS Code coerces the flag with !!metadata.isPreReleaseVersion and gallery installs predating
+        // it were written without it, so an absent flag means stable. Reporting unknown here would
+        // retire the comparison for every one of those installs.
+        CreateInstalledExtensionWithMetadata(
+            extensions,
+            "1.2.3",
+            """
+            { "publisherId": "microsoft-aspire" }
+            """);
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion(extensions);
+        var marketplaceClient = new TestVsCodeExtensionMarketplaceClient
+        {
+            StableVersionCallback = _ => Task.FromResult(SemVersion.Parse("1.2.3", SemVersionStyles.Strict))
+        };
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
+        Assert.Equal("stable", result.Metadata!["extensionChannel"]!.GetValue<string>());
+        Assert.Equal(1, marketplaceClient.CallCount);
+    }
+
+    [Fact]
+    public async Task CheckAsync_ReturnsUnknownVersionWarning_WhenReportedVersionIsUnparseableAndNothingIsOnDisk()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = workspace.CreateDirectory("extensions");
+        // Only the running extension sets the variable, so a corrupted value still proves the
+        // extension is loaded. Telling the user to install what they already have would be wrong.
+        var environment = new TestEnvironment(new Dictionary<string, string?>
+        {
+            ["TERM_PROGRAM"] = "vscode",
+            ["VSCODE_EXTENSIONS"] = extensions.FullName,
+            [ReportedVersionVariable] = "not-a-version"
+        });
+        var marketplaceClient = CreateUnusedMarketplaceClient();
+        var check = CreateCheck(environment, home, marketplaceClient);
+
+        var result = Assert.Single(await check.CheckAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(EnvironmentCheckStatus.Warning, result.Status);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionVersionUnknownMessage, result.Message);
+        Assert.Equal(DoctorCommandStrings.VsCodeExtensionVersionUnknownFix, result.Fix);
+        Assert.True(result.Metadata!["extensionInstalled"]!.GetValue<bool>());
+        Assert.False(result.Metadata["extensionVersionKnown"]!.GetValue<bool>());
+        Assert.Equal(0, marketplaceClient.CallCount);
+    }
+
+    [Fact]
     public void Detect_UsesVersionReportedByTheRunningExtension()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
@@ -1011,6 +1145,22 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
                 Path.Combine(directory.FullName, "package.json"),
                 $$"""{ "name": "aspire-vscode", "publisher": "microsoft-aspire", "version": "{{manifestVersion}}"{{metadata}} }""");
         }
+    }
+
+    // Lays out an installed extension whose manifest carries a specific __metadata body, so tests can
+    // reproduce the exact scanner-owned shapes VS Code writes, for example:
+    //   "__metadata": { "publisherId": "microsoft-aspire", "isPreReleaseVersion": false, "source": "gallery" }
+    private static void CreateInstalledExtensionWithMetadata(
+        DirectoryInfo extensionsRoot,
+        string version,
+        string metadataJson)
+    {
+        var directory = Directory.CreateDirectory(
+            Path.Combine(extensionsRoot.FullName, $"microsoft-aspire.aspire-vscode-{version}"));
+
+        File.WriteAllText(
+            Path.Combine(directory.FullName, "package.json"),
+            $$"""{ "name": "aspire-vscode", "publisher": "microsoft-aspire", "version": "{{version}}", "__metadata": {{metadataJson}} }""");
     }
 
     private static TestVsCodeExtensionMarketplaceClient CreateUnusedMarketplaceClient()

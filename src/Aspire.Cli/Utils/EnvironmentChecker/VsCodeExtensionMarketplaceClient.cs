@@ -239,13 +239,22 @@ internal sealed class VsCodeExtensionMarketplaceClient : IVsCodeExtensionMarketp
                         continue;
                     }
 
-                    var extensionName = candidate.TryGetProperty("extensionName", out var extensionNameElement)
-                        ? extensionNameElement.GetString()
-                        : null;
+                    // Every read below is value-kind guarded before GetString. JsonElement.GetString
+                    // throws InvalidOperationException (not JsonException) when a property is present
+                    // but is not a JSON string, and that exception is not one of the failures
+                    // CheckAsync translates into the documented "Marketplace unavailable" warning, so
+                    // a response such as { "extensionName": 1 } would drop the whole vscode-extension
+                    // check from doctor's output instead of degrading gracefully.
+                    var extensionName =
+                        candidate.TryGetProperty("extensionName", out var extensionNameElement) &&
+                        extensionNameElement.ValueKind == JsonValueKind.String
+                            ? extensionNameElement.GetString()
+                            : null;
                     var publisherName =
                         candidate.TryGetProperty("publisher", out var publisher) &&
                         publisher.ValueKind == JsonValueKind.Object &&
-                        publisher.TryGetProperty("publisherName", out var publisherNameElement)
+                        publisher.TryGetProperty("publisherName", out var publisherNameElement) &&
+                        publisherNameElement.ValueKind == JsonValueKind.String
                             ? publisherNameElement.GetString()
                             : null;
                     if (string.Equals(extensionName, "aspire-vscode", StringComparison.OrdinalIgnoreCase) &&
@@ -273,9 +282,16 @@ internal sealed class VsCodeExtensionMarketplaceClient : IVsCodeExtensionMarketp
 
         foreach (var property in properties.EnumerateArray())
         {
+            // The gallery emits the flag as a stringly-typed key/value pair:
+            //   { "key": "Microsoft.VisualStudio.Code.PreRelease", "value": "true" }
+            // Both members are value-kind guarded before GetString for the same reason as
+            // TryFindExtension: a non-string "key" or "value" would raise InvalidOperationException,
+            // which CheckAsync does not translate into the "Marketplace unavailable" warning.
             if (property.ValueKind == JsonValueKind.Object &&
                 property.TryGetProperty("key", out var key) &&
+                key.ValueKind == JsonValueKind.String &&
                 property.TryGetProperty("value", out var value) &&
+                value.ValueKind == JsonValueKind.String &&
                 string.Equals(
                     key.GetString(),
                     "Microsoft.VisualStudio.Code.PreRelease",
