@@ -118,11 +118,16 @@
       <_AspirePreparedProjectResource Include="@(_MSBuildProjectReferenceExistent->WithMetadataValue('IsAspireProjectResource', 'true')->WithMetadataValue('BuildReference', 'true'))" />
     </ItemGroup>
 
+    <PropertyGroup>
+      <_AspireProjectResourceTargetNameProbeContinueOnError Condition="'$(BuildingProject)' == 'true'">ErrorAndStop</_AspireProjectResourceTargetNameProbeContinueOnError>
+      <_AspireProjectResourceTargetNameProbeContinueOnError Condition="'$(BuildingProject)' != 'true'">WarnAndContinue</_AspireProjectResourceTargetNameProbeContinueOnError>
+    </PropertyGroup>
+
     <MSBuild Projects="@(_AspirePreparedProjectResource)"
              Targets="GetTargetFrameworks"
              BuildInParallel="$(BuildInParallel)"
              Properties="%(_AspirePreparedProjectResource.SetConfiguration); %(_AspirePreparedProjectResource.SetPlatform)"
-             ContinueOnError="!$(BuildingProject)"
+             ContinueOnError="$(_AspireProjectResourceTargetNameProbeContinueOnError)"
              RemoveProperties="%(_AspirePreparedProjectResource.GlobalPropertiesToRemove);TargetFramework;RuntimeIdentifier;SelfContained;$(_GlobalPropertiesToRemoveFromProjectReferences)"
              SkipNonexistentProjects="true"
              SkipNonexistentTargets="true">
@@ -160,7 +165,7 @@
              Targets="GetTargetPath"
              BuildInParallel="$(BuildInParallel)"
              Properties="%(_AspireProjectResourceTargetPathProbe.SetConfiguration); %(_AspireProjectResourceTargetPathProbe.SetPlatform); %(_AspireProjectResourceTargetPathProbe.SetTargetFramework)"
-             ContinueOnError="!$(BuildingProject)"
+             ContinueOnError="$(_AspireProjectResourceTargetNameProbeContinueOnError)"
              RemoveProperties="%(_AspireProjectResourceTargetPathProbe.EffectiveGlobalPropertiesToRemove);%(_AspireProjectResourceTargetPathProbe.RemoveGlobalProperties);$(_GlobalPropertiesToRemoveFromProjectReferences)"
              SkipNonexistentProjects="true"
              SkipNonexistentTargets="true">

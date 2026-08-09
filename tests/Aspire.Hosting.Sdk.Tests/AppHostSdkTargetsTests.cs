@@ -442,26 +442,55 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task ProjectMetadataResolvesTargetNameWhenProbeFailuresAreFatal()
+    public async Task ProjectMetadataFailsTargetNameProbeFailuresDuringBuild()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
 
-        // The probe passes ContinueOnError="!$(BuildingProject)", so a real build makes a failed
-        // reference probe fatal while a design-time build stays tolerant. Every other test here runs
-        // a bare -t: invocation, which never executes BuildOnlySettings and therefore leaves
-        // BuildingProject at its default of false. Forcing it to true covers the strict path.
-        var generatedSource = await GenerateProjectMetadataSourceAsync(
+        // Fail without logging from inside the referenced project so the parent MSBuild task's
+        // ContinueOnError setting owns whether target-name probing stops the AppHost build.
+        var result = await RunProjectMetadataSourceGenerationAsync(
             workspace,
             referencedProjectXml: """
                   <PropertyGroup>
                     <OutputType>Exe</OutputType>
                     <TargetFramework>net8.0</TargetFramework>
-                    <AssemblyName>My Attach Service</AssemblyName>
                   </PropertyGroup>
+                  <UsingTask TaskName="FailWithoutLogging"
+                             TaskFactory="RoslynCodeTaskFactory"
+                             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+                    <Task>
+                      <Code Type="Class" Language="cs">
+                        <![CDATA[
+                        using Microsoft.Build.Framework;
+                        using Microsoft.Build.Utilities;
+
+                        public sealed class FailWithoutLogging : Task
+                        {
+                            public override bool Execute() => false;
+                        }
+                        ]]>
+                      </Code>
+                    </Task>
+                  </UsingTask>
+                  <Target Name="FailTargetPathProbe" BeforeTargets="GetTargetPath">
+                    <FailWithoutLogging />
+                  </Target>
                 """,
             extraArguments: ["-p:BuildingProject=true"]);
 
-        Assert.Equal("""    public string? TargetName => @"My Attach Service";""", GetGeneratedTargetNameMember(generatedSource));
+        Assert.NotEqual(0, result.DotNetResult.ExitCode);
+        Assert.Contains("MSB4181", result.DotNetResult.Output);
+    }
+
+    [Fact]
+    public void ProjectMetadataTargetNameProbesStayFatalDuringBuild()
+    {
+        var targets = File.ReadAllText(Path.Combine(GetRepoRoot(), "src", "Aspire.Hosting.AppHost", "build", "Aspire.Hosting.AppHost.in.targets"));
+
+        Assert.Contains("<_AspireProjectResourceTargetNameProbeContinueOnError Condition=\"'$(BuildingProject)' == 'true'\">ErrorAndStop</_AspireProjectResourceTargetNameProbeContinueOnError>", targets);
+        Assert.Equal(
+            2,
+            Regex.Matches(targets, "ContinueOnError=\"\\$\\(_AspireProjectResourceTargetNameProbeContinueOnError\\)\"").Count);
     }
 
     [Fact]
@@ -1132,6 +1161,38 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         string? ancestorDirectoryBuildPropsXml = null,
         bool buildProjectInSolution = true)
     {
+        var result = await RunProjectMetadataSourceGenerationAsync(
+            workspace,
+            referencedProjectXml,
+            referencedDirectoryBuildPropsXml,
+            extraArguments,
+            targetFramework,
+            configuration,
+            projectReferenceMetadataXml,
+            solutionProjectConfiguration,
+            referencedProjectDirectoryName,
+            ancestorDirectoryBuildPropsXml,
+            buildProjectInSolution);
+
+        Assert.True(result.DotNetResult.ExitCode == 0, result.DotNetResult.Output);
+        Assert.True(File.Exists(result.GeneratedPath), $"Generated project metadata was not found at '{result.GeneratedPath}'.{Environment.NewLine}{result.DotNetResult.Output}");
+
+        return await File.ReadAllTextAsync(result.GeneratedPath);
+    }
+
+    private static async Task<ProjectMetadataSourceGenerationResult> RunProjectMetadataSourceGenerationAsync(
+        TemporaryWorkspace workspace,
+        string referencedProjectXml,
+        string? referencedDirectoryBuildPropsXml = null,
+        string[]? extraArguments = null,
+        string targetFramework = "net8.0",
+        string configuration = "Debug",
+        string? projectReferenceMetadataXml = null,
+        string? solutionProjectConfiguration = null,
+        string referencedProjectDirectoryName = "Worker",
+        string? ancestorDirectoryBuildPropsXml = null,
+        bool buildProjectInSolution = true)
+    {
         var repoRoot = GetRepoRoot();
 
         // Terminate MSBuild's upward Directory.Build.props/targets probe at the workspace root so the
@@ -1257,12 +1318,8 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         }
 
         var result = await RunDotNetWithArgumentsAsync(appHostDirectory, [.. arguments]);
-        Assert.True(result.ExitCode == 0, result.Output);
-
         var generatedPath = Path.Combine(appHostDirectory, "obj", configuration, targetFramework, "Aspire", "references", "Worker.ProjectMetadata.g.cs");
-        Assert.True(File.Exists(generatedPath), $"Generated project metadata was not found at '{generatedPath}'.{Environment.NewLine}{result.Output}");
-
-        return await File.ReadAllTextAsync(generatedPath);
+        return new ProjectMetadataSourceGenerationResult(result, generatedPath);
     }
 
     private static string? GetGeneratedTargetNameMember(string generatedSource)
@@ -1910,6 +1967,8 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
     }
 
     private sealed record RunHookProject(string ProjectDirectory, string ProjectFile);
+
+    private sealed record ProjectMetadataSourceGenerationResult(DotNetResult DotNetResult, string GeneratedPath);
 
     private sealed record DotNetResult(int ExitCode, string StandardOutput, string StandardError)
     {

@@ -43,8 +43,9 @@ public interface IProjectMetadata : IResourceAnnotation
     /// </para>
     /// <para>
     /// Implementations that are not produced by the AppHost build - for example metadata created from a project
-    /// path at runtime, file-based apps, or third-party implementations - return <see langword="null"/>. Consumers
-    /// must therefore treat the value as an optional hint and fall back to their existing behavior when it is absent.
+    /// path at runtime, file-based apps, or third-party implementations - default to <see langword="null"/> when
+    /// they cannot determine the evaluated target name. Consumers must therefore treat the value as an optional
+    /// hint and fall back to their existing behavior when it is absent.
     /// </para>
     /// </remarks>
     public string? TargetName => null;
