@@ -268,7 +268,10 @@ suite('E2E shard matrix', () => {
         // A single-platform row would leave exactly the half this shard exists to prove
         // unexercised, and the set equality test above cannot catch it because the spec would
         // still be listed - it just would not run everywhere it needs to.
-        assert.deepStrictEqual(resourceDebuggerPlatforms, ['Linux', 'Windows']);
+        assert.deepStrictEqual(
+            [...resourceDebuggerPlatforms].sort(),
+            ['Linux', 'Windows'],
+            'The resource-debugger shard must run on Linux and Windows.');
     });
 
     test('rejects a disabled matrix row that is not explicitly tracked', () => {
