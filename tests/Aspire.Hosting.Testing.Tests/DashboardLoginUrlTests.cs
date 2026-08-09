@@ -296,6 +296,43 @@ public class DashboardLoginUrlTests
         Assert.EndsWith(".app.github.dev", dashboardUri.Host, StringComparison.Ordinal);
     }
 
+    [Fact]
+    [RequiresFeature(TestFeature.Docker)]
+    public async Task DashboardStartupSummaryDoesNotWriteTheBrowserTokenToAppHostLogs()
+    {
+        // The AppHost's startup summary writes ".../login?t={token}" through ILogger<DistributedApplication>,
+        // and under a test host that logger is test and CI output. The token is a live credential for this
+        // application's dashboard, so it must not land in a retained log artifact. Tests that want the URL call
+        // GetDashboardLoginUrlAsync instead.
+        await using var builder = await CreateDashboardBuilderAsync();
+        var logCollector = new FakeLogCollector();
+        builder.Services.AddLogging(logging => logging.AddProvider(new FakeLoggerProvider(logCollector)));
+
+        await using var app = await builder.BuildAsync();
+        await app.StartAsync().WaitAsync(TestConstants.LongTimeoutTimeSpan);
+
+        using var cancellationTokenSource = new CancellationTokenSource(TestConstants.LongTimeoutTimeSpan);
+        var dashboardUri = await app.GetDashboardLoginUrlAsync(cancellationTokenSource.Token);
+
+        // Read the token from the URL the supported accessor returns, so this asserts against the credential the
+        // dashboard actually validates rather than a copy of it.
+        var token = dashboardUri.Query["?t=".Length..];
+        Assert.NotEmpty(token);
+
+        var written = string.Join(
+            Environment.NewLine,
+            logCollector.GetSnapshot().Select(record => record.Message + " " + record.StructuredState?.Aggregate(
+                string.Empty,
+                (accumulated, pair) => accumulated + " " + pair.Value)));
+
+        Assert.False(
+            written.Contains(token, StringComparison.Ordinal),
+            "The dashboard browser token was written to AppHost logs.");
+
+        // The summary itself must still be produced; suppressing the whole thing would make this vacuous.
+        Assert.Contains("Aspire Dashboard", written, StringComparison.Ordinal);
+    }
+
     private static Task<IDistributedApplicationTestingBuilder> CreateDashboardBuilderAsync(string[]? args = null)
     {
         return DistributedApplicationTestingBuilder.CreateAsync<Projects.TestingAppHost1_AppHost>(

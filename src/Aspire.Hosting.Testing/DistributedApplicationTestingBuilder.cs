@@ -429,7 +429,15 @@ public static class DistributedApplicationTestingBuilder
 
             [KnownConfigNames.AllowUnsecuredTransport] = "true",
             [KnownConfigNames.DashboardUnsecuredAllowAnonymous] = "false",
-            [KnownConfigNames.InteractivityEnabled] = "false"
+            [KnownConfigNames.InteractivityEnabled] = "false",
+
+            // The AppHost's startup summary otherwise writes ".../login?t={token}" through
+            // ILogger<DistributedApplication>, which under a test host is test and CI output. The token is a
+            // live credential for this application's dashboard, and emitting it there is both the opposite of
+            // this opt-in's "no login URL in test output" behavior and a credential in a retained log artifact.
+            // Tests get the same URL from GetDashboardLoginUrlAsync. Only the login URL is withheld; the
+            // dashboard and OTLP endpoint lines are unaffected.
+            ["AppHost:SuppressDashboardLoginUrlInStartupSummary"] = "true"
         });
     }
 
