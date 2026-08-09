@@ -86,6 +86,7 @@ public class RepoRootTests : IDisposable
     public async Task FindRepoRoot_PreservesTrailingSpacesInTheRepositoryPath()
     {
         Assert.SkipUnless(IsGitAvailable(), "git is not available on PATH");
+        Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows APIs trim trailing spaces from directory names.");
 
         var repository = CreateRepositoryWithASampleTest("repo ");
 
@@ -171,6 +172,26 @@ public class RepoRootTests : IDisposable
     }
 
     [Fact]
+    public void IsCaseSensitiveDirectory_FailsClosedOnWindowsWhenDirectoryMetadataCannotBeRead()
+    {
+        var probed = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "CaseProbeUnavailable")).FullName;
+        var fallbackCalled = false;
+
+        var result = Program.IsCaseSensitiveDirectory(
+            probed,
+            _ => null,
+            _ =>
+            {
+                fallbackCalled = true;
+                return false;
+            },
+            isWindows: true);
+
+        Assert.True(result);
+        Assert.False(fallbackCalled);
+    }
+
+    [Fact]
     public void IsCaseSensitiveDirectory_FailsClosedWhenTheFinalSegmentProbeCannotAnswer()
     {
         Assert.SkipWhen(OperatingSystem.IsWindows(), "Windows uses FileCaseSensitiveInfo instead of the final-segment fallback.");
@@ -194,6 +215,16 @@ public class RepoRootTests : IDisposable
                 Path.TrimEndingDirectorySeparator(probedDirectory),
                 Path.TrimEndingDirectorySeparator(parent),
                 StringComparison.Ordinal)));
+    }
+
+    [Theory]
+    [InlineData("C:/", "C:/")]
+    [InlineData("C:/repo/", "C:/repo")]
+    [InlineData("//server/share/", "//server/share/")]
+    [InlineData("//server/share/repo/", "//server/share/repo")]
+    public void TrimTrailingSeparator_PreservesWindowsRoots(string path, string expected)
+    {
+        Assert.Equal(expected, Program.TrimTrailingSeparator(path));
     }
 
     [Fact]

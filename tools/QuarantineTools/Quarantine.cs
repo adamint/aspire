@@ -809,11 +809,23 @@ public class Program
         => IsCaseSensitiveDirectory(directory, TryGetKnownDirectoryCaseSensitivity, IsCaseSensitiveDirectoryByFinalSegmentProbe);
 
     internal static bool IsCaseSensitiveDirectory(string directory, Func<string, bool?> tryGetKnownDirectoryCaseSensitivity, Func<string, bool> fallbackProbe)
+        => IsCaseSensitiveDirectory(directory, tryGetKnownDirectoryCaseSensitivity, fallbackProbe, OperatingSystem.IsWindows());
+
+    internal static bool IsCaseSensitiveDirectory(string directory, Func<string, bool?> tryGetKnownDirectoryCaseSensitivity, Func<string, bool> fallbackProbe, bool isWindows)
     {
         var full = TrimTrailingSeparator(Path.GetFullPath(directory));
         if (tryGetKnownDirectoryCaseSensitivity(full) is { } knownCaseSensitivity)
         {
             return knownCaseSensitivity;
+        }
+
+        // Windows case sensitivity is a property of the directory being queried, not its parent.
+        // If FileCaseSensitiveInfo is unavailable, the final-segment fallback would ask the parent
+        // whether this directory's own name is case-sensitive and could approve a case-only wrong
+        // tree. Refuse the optimization instead of guessing.
+        if (isWindows)
+        {
+            return true;
         }
 
         return fallbackProbe(full);
@@ -945,12 +957,53 @@ public class Program
         uint dwBufferSize);
 #pragma warning restore SYSLIB1054
 
-    private static string TrimTrailingSeparator(string path)
+    internal static string TrimTrailingSeparator(string path)
     {
-        // A root such as "/" or "C:\" must keep its separator, so never trim the path down to empty.
-        var trimmed = path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        return trimmed.Length == 0 ? path : trimmed;
+        // Path.TrimEndingDirectorySeparator preserves roots on the current platform. Keep the same
+        // invariant for Windows-shaped roots when this pure string helper is exercised on Unix.
+        if (IsWindowsRootWithTrailingSeparator(path))
+        {
+            return path;
+        }
+
+        return Path.TrimEndingDirectorySeparator(path);
     }
+
+    private static bool IsWindowsRootWithTrailingSeparator(string path)
+        => IsWindowsDriveRoot(path) || IsWindowsUncShareRoot(path);
+
+    private static bool IsWindowsDriveRoot(string path)
+        => path.Length == 3 &&
+            char.IsAsciiLetter(path[0]) &&
+            path[1] == ':' &&
+            IsWindowsDirectorySeparator(path[2]);
+
+    private static bool IsWindowsUncShareRoot(string path)
+    {
+        if (path.Length < 6 || !IsWindowsDirectorySeparator(path[0]) || !IsWindowsDirectorySeparator(path[1]))
+        {
+            return false;
+        }
+
+        var serverStart = 2;
+        var serverEnd = path.IndexOfAny(['\\', '/'], serverStart);
+        if (serverEnd <= serverStart)
+        {
+            return false;
+        }
+
+        var shareStart = serverEnd + 1;
+        if (shareStart >= path.Length)
+        {
+            return false;
+        }
+
+        var shareEnd = path.IndexOfAny(['\\', '/'], shareStart);
+        return shareEnd == path.Length - 1;
+    }
+
+    private static bool IsWindowsDirectorySeparator(char c)
+        => c is '\\' or '/';
 
     /// <summary>
     /// Parses a fully-qualified method name like "A.B.Type+Nested.Method" into its enclosing path
