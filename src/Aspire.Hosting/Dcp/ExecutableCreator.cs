@@ -587,6 +587,7 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
         var executableConfiguration = shouldBuildDebugArguments
             ? await BuildExecutableConfigurationWithDebugArgumentsAsync(
                     originalConfiguration,
+                    activeDebugArgsAnnotation!,
                     er.ModelResource,
                     resourceLogger,
                     cancellationToken)
@@ -669,30 +670,37 @@ internal sealed class ExecutableCreator : IObjectCreator<Executable, EmptyCreati
 
     private async Task<IExecutionConfigurationResult> BuildExecutableConfigurationWithDebugArgumentsAsync(
         IExecutionConfigurationResult originalConfiguration,
+        CommandLineArgsCallbackAnnotation activeDebugArgsAnnotation,
         IResource resource,
         ILogger resourceLogger,
         CancellationToken cancellationToken)
     {
-        if (resource.TryGetAnnotationsOfType<CommandLineArgsCallbackAnnotation>(out var argumentAnnotations))
+        // The executable snapshot is the original resolved argument list with only the active debug rewrite
+        // applied. Do not replay ordinary WithArgs annotations here: they may have side effects, and the
+        // original snapshot already evaluated them for this executable creation.
+        activeDebugArgsAnnotation.AsCallbackAnnotation().ForgetCachedResult();
+        var callbackContext = new CommandLineArgsCallbackContext(
+            [.. originalConfiguration.ArgumentsWithUnprocessed.Select(argument => argument.Unprocessed)],
+            resource,
+            cancellationToken)
         {
-            foreach (var annotation in argumentAnnotations)
-            {
-                // The original snapshot intentionally skips the active debug annotation, but that can cache
-                // downstream WithArgs annotations against the pre-rewrite list. Clear the per-annotation
-                // caches before the executable snapshot so annotations after WithDebugSupport are evaluated
-                // against the debug-rewritten arguments.
-                annotation.AsCallbackAnnotation().ForgetCachedResult();
-            }
-        }
+            Logger = resourceLogger,
+            ExecutionContext = _executionContext
+        };
+        var rewrittenArgs = await activeDebugArgsAnnotation.AsCallbackAnnotation().EvaluateOnceAsync(callbackContext).ConfigureAwait(false);
 
-        var rewrittenArgsConfiguration = await ExecutionConfigurationBuilder.Create(resource)
-            .WithArgumentsConfig()
-            .BuildAsync(_executionContext, resourceLogger, cancellationToken)
+        var rewrittenArgsGathererContext = new ExecutionConfigurationGathererContext();
+        rewrittenArgsGathererContext.Arguments.AddRange(rewrittenArgs);
+        var rewrittenArgsConfiguration = await rewrittenArgsGathererContext
+            .ResolveAsync(resource, resourceLogger, _executionContext, cancellationToken)
             .ConfigureAwait(false);
+        var environmentReferences = originalConfiguration.EnvironmentVariablesWithUnprocessed
+            .Select(static kvp => kvp.Value.Unprocessed)
+            .Where(static value => value is IValueProvider or IManifestExpressionProvider);
 
         return new ExecutionConfigurationResult
         {
-            References = originalConfiguration.References.Concat(rewrittenArgsConfiguration.References).ToHashSet(),
+            References = environmentReferences.Concat(rewrittenArgsConfiguration.References).ToHashSet(),
             ArgumentsWithUnprocessed = rewrittenArgsConfiguration.ArgumentsWithUnprocessed,
             EnvironmentVariablesWithUnprocessed = originalConfiguration.EnvironmentVariablesWithUnprocessed,
             AdditionalConfigurationData = originalConfiguration.AdditionalConfigurationData,
