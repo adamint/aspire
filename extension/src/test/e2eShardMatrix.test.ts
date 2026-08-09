@@ -110,10 +110,11 @@ suite('E2E shard matrix', () => {
         // This deliberately extracts only the fields the guard owns rather than becoming a
         // general YAML parser for workflow syntax.
         for (const line of matrixIncludeBlock(workflow).split(/\r?\n/)) {
-            const rowStart = /^\s*-\s+name:\s*(.*?)\s*$/.exec(line);
+            const rowStart = /^\s*-\s+(name|shardName|spec|disabledIssue):\s*(.*?)\s*$/.exec(line);
             if (rowStart !== null) {
                 appendCurrentRow();
-                currentRow = { name: parseWorkflowScalar(rowStart[1]) };
+                currentRow = {};
+                currentRow[rowStart[1] as keyof MatrixRow] = parseWorkflowScalar(rowStart[2]);
                 continue;
             }
 
@@ -344,6 +345,25 @@ suite('E2E shard matrix', () => {
         const spec = 'out/test-e2e/test-e2e/azureFunctions.e2e.test.js';
         const issue = 'https://github.com/microsoft/aspire/issues/19151';
         const workflow = workflowWithDisabledSpec(spec, issue);
+
+        assertDisabledRowsAreTracked(workflow, new Map([[`Linux|azure-functions|${spec}`, issue]]));
+    });
+
+    test('accepts matrix rows whose first key is not name', () => {
+        const spec = 'out/test-e2e/test-e2e/azureFunctions.e2e.test.js';
+        const issue = 'https://github.com/microsoft/aspire/issues/19151';
+        const workflow = [
+            'jobs:',
+            '  extension_e2e:',
+            '    strategy:',
+            '      matrix:',
+            '        include:',
+            `          - spec: ${spec}`,
+            '            shardName: azure-functions',
+            `            disabledIssue: ${issue}`,
+            '            name: Linux',
+            '',
+        ].join('\n');
 
         assertDisabledRowsAreTracked(workflow, new Map([[`Linux|azure-functions|${spec}`, issue]]));
     });
