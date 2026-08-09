@@ -13,6 +13,7 @@ namespace Infrastructure.Tests;
 public sealed class RunTestsWorkflowTests
 {
     private static readonly string s_workflowPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "run-tests.yml");
+    private static readonly string s_testsWorkflowPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "tests.yml");
 
     private readonly ITestOutputHelper _output;
 
@@ -101,6 +102,23 @@ public sealed class RunTestsWorkflowTests
             "steps.run-tests-windows.outcome == 'success') }}";
 
         Assert.Equal(expectedCondition, condition);
+    }
+
+    [Fact]
+    public void TestsWorkflowPassesAllowZeroTestsToRunTestsWorkflow()
+    {
+        string workflowText = File.ReadAllText(s_testsWorkflowPath);
+        MatchCollection matches = Regex.Matches(
+            workflowText,
+            @"uses: \./\.github/workflows/run-tests\.yml(?<block>.*?)(?=\n  [a-zA-Z0-9_]+:|\z)",
+            RegexOptions.Singleline);
+
+        Assert.NotEmpty(matches);
+
+        foreach (Match match in matches)
+        {
+            Assert.Contains("allowZeroTests: ${{ matrix.allowZeroTests || false }}", match.Groups["block"].Value);
+        }
     }
 
     [Fact]

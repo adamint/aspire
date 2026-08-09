@@ -173,6 +173,7 @@ jobs:
       mtpBaseArgs: ${{ matrix.tests.mtpBaseArgs }}
       extraTestArgs: ${{ inputs.extraTestArgs }}
       ignoreTestFailures: ${{ inputs.ignoreTestFailures }}
+      allowZeroTests: ${{ matrix.tests.allowZeroTests || false }}
 
 
   results:

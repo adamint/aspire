@@ -310,6 +310,9 @@ public class CanonicalMatrixEntry
     [JsonPropertyName("splitTests")]
     public bool SplitTests { get; set; }
 
+    [JsonPropertyName("allowZeroTests")]
+    public bool AllowZeroTests { get; set; }
+
     [JsonPropertyName("supportedOSes")]
     public string[] SupportedOSes { get; set; } = ["windows", "linux", "macos"];
 

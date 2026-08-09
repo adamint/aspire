@@ -253,6 +253,10 @@ function New-ClassTestEntry {
 
   # Add test filter for class-based splitting
   $entry['extraTestArgs'] = "--filter-class `"$ClassName`""
+  # Class-mode shards are generated mechanically from discovered class names, then CI
+  # applies environment trait filters such as category=failing. A class can be real on
+  # Linux but intentionally empty on Windows when every test requires containers.
+  $entry['allowZeroTests'] = $true
 
   # Add supported OSes from metadata
   if ($Metadata.PSObject.Properties['supportedOSes']) {
