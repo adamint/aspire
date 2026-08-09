@@ -39,7 +39,7 @@ export function collapseWhitespace(str: string): string {
  * See `escapeIcons` in https://github.com/microsoft/vscode/blob/main/src/vs/base/common/iconLabels.ts.
  */
 export function escapeCodicons(str: string): string {
-  return str.replace(/(\\)?\$\(/g, (match, alreadyEscaped) => alreadyEscaped ? match : '\\$(');
+  return str.replace(/(\\)?\$\([a-z0-9-]+(?:~[a-z0-9-]+)?\)/g, (match, alreadyEscaped) => alreadyEscaped ? match : `\\${match}`);
 }
 
 export function applyTextStyle(text: string, style: string | null | undefined): string {

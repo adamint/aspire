@@ -35,6 +35,7 @@ suite('utils/strings tests', () => {
         assert.strictEqual(escapeCodicons('$(sync~spin)$(bug)'), '\\$(sync~spin)\\$(bug)');
         // An already escaped sequence must not be double escaped, otherwise the backslash shows up.
         assert.strictEqual(escapeCodicons('Building \\$(error) now'), 'Building \\$(error) now');
+        assert.strictEqual(escapeCodicons('Running $(step one)'), 'Running $(step one)');
         assert.strictEqual(escapeCodicons('Cost is $5 (approx)'), 'Cost is $5 (approx)');
     });
 
