@@ -77,6 +77,24 @@ suite('E2E bridge production gate', () => {
             'The E2E VSIX package step must assert the emitted VSIX still contains the real bridge.');
     });
 
+    /**
+     * The bridge-included VSIX above only proves the E2E opt-in still works; it says nothing about
+     * what ships when nobody sets ASPIRE_EXTENSION_E2E_INCLUDE_BRIDGE. Without a separate assertion
+     * against a VSIX packaged the same way Extension.proj packages one for real users, the
+     * NormalModuleReplacementPlugin wiring in webpack.config.js could regress silently: every other
+     * check in this workflow would stay green while the bridge shipped to the Marketplace.
+     */
+    test('packages a production VSIX without the bridge opt-in and asserts the bridge is absent', () => {
+        const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'tests.yml'), 'utf8');
+
+        assert.ok(
+            workflow.includes('corepack yarn run vsce package --pre-release -o out/aspire-extension-production.vsix'),
+            'The workflow must package a second VSIX without the bridge include env var to represent the real shipping build.');
+        assert.ok(
+            workflow.includes('assert-extension-e2e-bridge-vsix.ps1 -VsixPath out/aspire-extension-production.vsix -Expected Absent'),
+            'The E2E VSIX package step must assert the production VSIX excludes the real bridge.');
+    });
+
     test('does not accumulate plugins across repeated configuration calls', () => {
         const configure = loadWebpackConfig();
 
