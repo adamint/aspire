@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using Aspire.TestUtilities;
 using Xunit;
 
@@ -153,12 +154,25 @@ public sealed class RunTestsWorkflowTests
         // /p:IgnoreZeroTestResult=true, with no surrounding Condition that could turn it off for some
         // rows. If this ever becomes conditional, the workflow's blanket allowZeroTests: true would
         // need to become row-specific too (see option (b) in the regression fix for PR #19177).
-        string targetsText = File.ReadAllText(s_specializedTestRunsheetBuilderTargetsPath);
-        string[] lines = targetsText.ReplaceLineEndings("\n").Split('\n');
+        var document = XDocument.Load(s_specializedTestRunsheetBuilderTargetsPath);
+        var commandElements = document
+            .Descendants()
+            .Where(element =>
+                element.Name.LocalName == "_TestCommand" &&
+                element.Value.Contains("/p:IgnoreZeroTestResult=true", StringComparison.Ordinal))
+            .ToArray();
 
-        int commandLineIndex = Array.FindIndex(lines, line => line.Contains("/p:IgnoreZeroTestResult=true", StringComparison.Ordinal));
-        Assert.True(commandLineIndex >= 0, $"Could not find the /p:IgnoreZeroTestResult=true line in {s_specializedTestRunsheetBuilderTargetsPath}.");
-        Assert.DoesNotContain("Condition", lines[commandLineIndex], StringComparison.Ordinal);
+        Assert.NotEmpty(commandElements);
+
+        foreach (var commandElement in commandElements)
+        {
+            AssertNoUnexpectedCondition(commandElement);
+
+            foreach (var ancestor in commandElement.Ancestors().TakeWhile(static ancestor => ancestor.Name.LocalName != "Target"))
+            {
+                AssertNoUnexpectedCondition(ancestor);
+            }
+        }
     }
 
     [Fact]
@@ -246,6 +260,56 @@ public sealed class RunTestsWorkflowTests
             result.EnsureSuccessful();
             Assert.Contains("No tests were reported in the .trx files, but allowZeroTests is true.", result.Output);
             Assert.Contains("0 test(s)", result.Output);
+        }
+        finally
+        {
+            DeleteScratchDirectory(scratchDirectory);
+        }
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
+    public async Task TestResultValidationFailsWhenTrxFileHasNoCountersEvenWhenZeroTestsAreAllowed()
+    {
+        string scratchDirectory = CreateScratchDirectory();
+        try
+        {
+            string testResultsDirectory = Path.Combine(scratchDirectory, "testresults");
+            Directory.CreateDirectory(testResultsDirectory);
+            File.WriteAllText(Path.Combine(scratchDirectory, "test-exit-code.txt"), "0");
+            WriteTrxFileWithoutCounters(Path.Combine(testResultsDirectory, "truncated.trx"));
+
+            using var command = new PowerShellCommand(CreateTestResultValidationScript(scratchDirectory, allowZeroTests: true), _output).WithTimeout(TimeSpan.FromMinutes(1));
+
+            CommandResult result = await command.ExecuteAsync(scratchDirectory);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("has no parseable ResultSummary/Counters/@total", result.Output);
+        }
+        finally
+        {
+            DeleteScratchDirectory(scratchDirectory);
+        }
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
+    public async Task TestResultValidationFailsWhenTrxFileHasUnparseableCountersEvenWhenZeroTestsAreAllowed()
+    {
+        string scratchDirectory = CreateScratchDirectory();
+        try
+        {
+            string testResultsDirectory = Path.Combine(scratchDirectory, "testresults");
+            Directory.CreateDirectory(testResultsDirectory);
+            File.WriteAllText(Path.Combine(scratchDirectory, "test-exit-code.txt"), "0");
+            WriteTrxFile(Path.Combine(testResultsDirectory, "bad-count.trx"), totalTests: "not-a-number");
+
+            using var command = new PowerShellCommand(CreateTestResultValidationScript(scratchDirectory, allowZeroTests: true), _output).WithTimeout(TimeSpan.FromMinutes(1));
+
+            CommandResult result = await command.ExecuteAsync(scratchDirectory);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("has an unparseable ResultSummary/Counters/@total value 'not-a-number'", result.Output);
         }
         finally
         {
@@ -385,7 +449,24 @@ public sealed class RunTestsWorkflowTests
         return "";
     }
 
+    private static void AssertNoUnexpectedCondition(XElement element)
+    {
+        var condition = element.Attribute("Condition");
+        if (condition is null)
+        {
+            return;
+        }
+
+        Assert.True(
+            element.Name.LocalName == "PropertyGroup" &&
+            string.Equals(condition.Value, " '$(_HasSpecializedTests)' == 'true' ", StringComparison.Ordinal),
+            $"{element.Name.LocalName} must not have an unexpected Condition attribute here: {condition.Value}");
+    }
+
     private static void WriteTrxFile(string path, int totalTests)
+        => WriteTrxFile(path, totalTests.ToString());
+
+    private static void WriteTrxFile(string path, string totalTests)
     {
         // MTP TRX files use the TeamTest namespace and report counts as:
         //   <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
@@ -399,6 +480,20 @@ public sealed class RunTestsWorkflowTests
               <ResultSummary outcome="Completed">
                 <Counters total="{{totalTests}}" executed="{{totalTests}}" passed="{{totalTests}}" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" />
               </ResultSummary>
+            </TestRun>
+            """);
+    }
+
+    private static void WriteTrxFileWithoutCounters(string path)
+    {
+        // Represents a truncated MTP TRX that has flushed the TestRun shell but not the counters yet:
+        //   <TestRun><ResultSummary outcome="InProgress" /></TestRun>
+        File.WriteAllText(
+            path,
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <ResultSummary outcome="InProgress" />
             </TestRun>
             """);
     }

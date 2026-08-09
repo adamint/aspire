@@ -677,16 +677,22 @@ jobs:
 
               # Check if the XML is valid and non-empty
               if ($trxContent -and $trxContent.TestRun) {
-                $validFileCount++
                 $countersNode = $trxContent.TestRun.ResultSummary.Counters
 
-                if ($countersNode -and $countersNode.total) {
-                  $testCount = [int]$countersNode.total
-                  $totalTestCount += $testCount
-                  Write-Host "  Total tests in file: $testCount"
-                } else {
-                  Write-Host "  File is valid but has no test count information"
+                if (-not $countersNode -or -not $countersNode.total) {
+                  Write-Error "  $($trxFile.Name) has no parseable ResultSummary/Counters/@total value. This can indicate a truncated .trx file from a crashed or timed-out test host."
+                  exit 1
                 }
+
+                $testCount = 0
+                if (-not [int]::TryParse([string]$countersNode.total, [ref]$testCount)) {
+                  Write-Error "  $($trxFile.Name) has an unparseable ResultSummary/Counters/@total value '$($countersNode.total)'."
+                  exit 1
+                }
+
+                $validFileCount++
+                $totalTestCount += $testCount
+                Write-Host "  Total tests in file: $testCount"
               } else {
                 Write-Warning "  File appears to be empty or invalid"
               }
