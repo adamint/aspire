@@ -185,13 +185,52 @@ suite('E2E launch profile', () => {
         assert.strictEqual(packageJson.resolutions.undici, '7.29.0');
         assert.ok(lockfile.includes('vscode-extension-tester@8.23.0'));
         assert.ok(lockfile.includes('undici@7.29.0'));
-        assert.ok(lockfile.split(/\r?\n/).filter(l => /^\s*resolved\s+"/.test(l)).every(l => l.includes(internalFeed)));
+        const resolvedLines = getLockfileResolvedLines(lockfile);
+        assert.ok(resolvedLines.length > 0, 'Expected extension/yarn.lock to contain resolved registry entries.');
+        assert.deepStrictEqual(resolvedLines.filter(l => !l.includes(internalFeed)), []);
         assert.ok(workflow.includes('NPM_REGISTRY: https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/'));
         assert.ok(fs.existsSync(path.join(extensionRoot, 'scripts', 'validate-lockfile-registry.cjs')));
         assert.ok(workflow.includes('run: node scripts/validate-lockfile-registry.cjs'));
         assert.ok(workflow.includes('corepack yarn install --frozen-lockfile --non-interactive'));
         assert.ok(!workflow.includes('ASPIRE_EXTENSION_E2E_EXTESTER_NPM_REGISTRY'));
         assert.ok(!workflow.includes('registry=https://'));
+    });
+
+    test('rejects lockfiles without resolved registry entries', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const scratchRoot = fs.mkdtempSync(path.join(extensionRoot, '.lockfile-registry-guard-'));
+        try {
+            fs.writeFileSync(path.join(scratchRoot, 'yarn.lock'), [
+                'vscode-extension-tester@8.23.0:',
+                '  version "8.23.0"',
+                '',
+            ].join('\n'));
+
+            const result = spawnSync(process.execPath, [path.join(extensionRoot, 'scripts', 'validate-lockfile-registry.cjs')], {
+                cwd: scratchRoot,
+                encoding: 'utf8',
+                timeout: 120000,
+            });
+
+            assert.notStrictEqual(result.status, 0, `Expected validate-lockfile-registry.cjs to reject lockfiles with no resolved entries. stdout: ${result.stdout}; stderr: ${result.stderr}`);
+            assert.match(result.stderr, /does not contain any resolved entries/);
+        }
+        finally {
+            fs.rmSync(scratchRoot, { recursive: true, force: true });
+        }
+    });
+
+    test('runs every E2E spec from the workflow matrix', () => {
+        const extensionRoot = path.resolve(__dirname, '..', '..');
+        const workflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'extension-e2e-tests.yml'), 'utf8');
+        const actualRows = getE2eMatrixEntries(workflow)
+            .map(({ name, shardName, spec }) => ({ name, shardName, spec }))
+            .sort(compareE2eMatrixRows);
+        const expectedRows = getCompiledE2eSpecPaths(extensionRoot)
+            .flatMap(spec => getExpectedE2eMatrixPlatforms(spec).map(name => ({ name, shardName: getExpectedE2eShardName(spec), spec })))
+            .sort(compareE2eMatrixRows);
+
+        assert.deepStrictEqual(actualRows, expectedRows);
     });
 
     test('preflights locked ExTester dependency graph before starting the E2E matrix', () => {
@@ -953,4 +992,61 @@ function assertTextOrder(source: string, before: string, after: string): void {
     assert.ok(beforeIndex >= 0, `Expected to find "${before}".`);
     assert.ok(afterIndex >= 0, `Expected to find "${after}".`);
     assert.ok(beforeIndex < afterIndex, `Expected "${before}" to appear before "${after}".`);
+}
+
+function getLockfileResolvedLines(lockfile: string): string[] {
+    return lockfile.split(/\r?\n/).filter(l => /^\s*resolved\s+"/.test(l));
+}
+
+interface E2eMatrixEntry {
+    name: string;
+    shardName: string;
+    spec: string;
+}
+
+function getE2eMatrixEntries(workflow: string): E2eMatrixEntry[] {
+    const includeStart = workflow.indexOf('        include:');
+    const defaultsStart = workflow.indexOf('    defaults:', includeStart);
+
+    assert.ok(includeStart >= 0, 'Expected extension E2E workflow to define a matrix include list.');
+    assert.ok(defaultsStart > includeStart, 'Expected extension E2E workflow defaults after the matrix include list.');
+
+    const include = workflow.slice(includeStart, defaultsStart);
+    const entries: E2eMatrixEntry[] = [];
+    const rowPattern = /^\s+- name: ([^\r\n]+)\r?\n\s+shardName: ([^\r\n]+)\r?\n\s+spec: ([^\r\n]+)/gm;
+    for (const match of include.matchAll(rowPattern)) {
+        entries.push({ name: match[1], shardName: match[2], spec: match[3] });
+    }
+
+    assert.ok(entries.length > 0, 'Expected extension E2E workflow matrix include entries.');
+
+    return entries;
+}
+
+function getCompiledE2eSpecPaths(extensionRoot: string): string[] {
+    const testRoot = path.join(extensionRoot, 'src', 'test-e2e');
+    const specs = fs.readdirSync(testRoot)
+        .filter(file => file.endsWith('.e2e.test.ts'))
+        .map(file => `out/test-e2e/test-e2e/${file.replace(/\.ts$/, '.js')}`)
+        .sort();
+
+    assert.ok(specs.length > 0, 'Expected extension E2E spec files under src/test-e2e.');
+
+    return specs;
+}
+
+function getExpectedE2eMatrixPlatforms(spec: string): string[] {
+    return spec.endsWith('/azureFunctions.e2e.test.js') ? ['Linux'] : ['Linux', 'Windows'];
+}
+
+function getExpectedE2eShardName(spec: string): string {
+    const fileName = path.basename(spec, '.e2e.test.js');
+    return fileName
+        .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+        .toLowerCase()
+        .replace(/^app-host-/, 'apphost-');
+}
+
+function compareE2eMatrixRows(left: E2eMatrixEntry, right: E2eMatrixEntry): number {
+    return `${left.spec}:${left.name}:${left.shardName}`.localeCompare(`${right.spec}:${right.name}:${right.shardName}`);
 }
