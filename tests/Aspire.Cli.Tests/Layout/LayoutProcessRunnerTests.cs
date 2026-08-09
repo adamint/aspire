@@ -323,5 +323,4 @@ public class LayoutProcessRunnerTests
             Assert.True(capturedEnv.ContainsKey("ASPIRE_CLI_PID"));
         }
     }
-
 }
