@@ -47,10 +47,19 @@ RUN case "$NODE_VERSION" in 22|24) ;; *) echo "Unsupported NODE_VERSION: $NODE_V
 # entrypoint, long after this layer has already downloaded the toolchain.
 #
 # npm resolves config as cli > env > project .npmrc > user .npmrc > global .npmrc > builtin. Owning
-# the user config and the working directory therefore outranks every source an ambient scoped key
-# could come from, so each scope npm reports is re-pinned to the approved feed in the user config
-# rather than compared against it - there is no value to normalize and no way for the check to pass
-# while the install still resolves elsewhere.
+# the user config and the working directory outranks the project, user and global .npmrc an ambient
+# scoped key could come from, so each scope npm reports is re-pinned to the approved feed in the
+# user config rather than compared against it - there is no value to normalize.
+#
+# The environment outranks the user config, though, so re-pinning alone is not proof. Measured with
+# npm 11.4.2: with `npm_config_@types:registry` set in the environment, `npm config list` prints
+#   ; @types:registry = "https://approved.example.test/" ; overridden by env
+#   @types:registry = "https://ambient-env.example.invalid/"
+# and `npm config get @types:registry` returns the environment's value. The re-pin would be written,
+# the loop would report success, and the install would still leave the approved feed. So every scope
+# is read back afterwards and the build fails if the approved feed did not win. The read-back is a
+# `for` loop rather than `while read`: a `while` fed by a pipe runs in a subshell, where `exit 1`
+# ends only the subshell and the RUN would still succeed.
 #
 # `npm config list` prints one setting per line, quoted, with `;`-prefixed comments naming the file
 # each block came from:
@@ -75,6 +84,14 @@ RUN APPROVED_NPM_REGISTRY=https://pkgs.dev.azure.com/dnceng/public/_packaging/do
     while read -r scope; do \
         echo "Re-pinning ambient npm scope ${scope} to ${NPM_REGISTRY}"; \
         printf '%s:registry=%s\n' "${scope}" "${NPM_REGISTRY}" >> /usr/local/etc/polyglot-npm/npmrc; \
+    done && \
+    for scope in $(npm config list | sed -n 's/^\(@[^:]*\):registry = .*/\1/p' | sort -u); do \
+        effective="$(npm config get "${scope}:registry")"; \
+        if [ "${effective%/}" != "${NPM_REGISTRY%/}" ]; then \
+            echo "npm resolves ${scope} packages from '${effective}' instead of the approved feed '${NPM_REGISTRY}'; a higher-precedence config source is overriding the re-pin." >&2; \
+            exit 1; \
+        fi; \
+        echo "Verified npm scope ${scope} resolves from ${effective}"; \
     done && \
     cd /usr/local/etc/polyglot-npm && \
     npm install --global --force --registry "${NPM_REGISTRY}" \

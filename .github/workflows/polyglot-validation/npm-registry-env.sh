@@ -108,6 +108,15 @@ config_in_neutral_directory() {
     (cd "$NPM_REGISTRY_CONFIG_DIR" && "$@" 2>/dev/null) || true
 }
 
+# Same neutral directory, but the command's exit status survives. `config_in_neutral_directory`
+# swallows it with `|| true`, which is right for the checks that treat "no answer" as "nothing
+# configured". It is wrong wherever an unanswered query and a genuinely empty configuration have to
+# be told apart: a renamed setting or a yarn that fails to start would otherwise read as "no scoped
+# registries" and let an ambient scope through with the job green.
+config_in_neutral_directory_strict() {
+    (cd "$NPM_REGISTRY_CONFIG_DIR" && "$@" 2>/dev/null)
+}
+
 # Exporting the variables above is not proof that they took effect. A package manager bump could
 # rename a setting, or an image could bake in a conflicting config with higher precedence, and the
 # installs would quietly fall back to the public registry with the job still green. Ask each manager
@@ -166,13 +175,23 @@ check_yarn_scoped_registries() {
     local failed=0
     local scopes scope reported
 
-    scopes="$(config_in_neutral_directory yarn config get npmScopes --json)"
+    if ! scopes="$(config_in_neutral_directory_strict yarn config get npmScopes --json)"; then
+        echo "  ❌ 'yarn config get npmScopes --json' failed; refusing to install rather than assume no scoped registries are configured"
+        return 1
+    fi
 
-    # `undefined` (no scopes) and an empty read are both "nothing to check". Anything else has to
-    # parse as JSON, so a future format change fails closed rather than silently checking nothing.
-    if [ -z "$scopes" ] || [ "$scopes" = "undefined" ]; then
+    # Only the literal `undefined` means "no scopes are configured" - that is what Yarn 4.14.1
+    # prints for an unset map. An empty read is not the same thing: it means the query answered
+    # nothing at all, which is the renamed-setting case, so it fails closed with everything else
+    # that does not parse as JSON.
+    if [ "$scopes" = "undefined" ]; then
         echo "  ✅ yarn declares no scoped registries"
         return 0
+    fi
+
+    if [ -z "$scopes" ]; then
+        echo "  ❌ 'yarn config get npmScopes --json' returned nothing; refusing to install rather than assume no scoped registries are configured"
+        return 1
     fi
 
     while IFS=$'\t' read -r scope reported; do

@@ -1,10 +1,12 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Diagnostics;
 using System.IO.Enumeration;
 using System.Text.Json;
 using System.Text;
 using System.Text.RegularExpressions;
+using Aspire.TestUtilities;
 using Xunit;
 using YamlDotNet.RepresentationModel;
 
@@ -414,6 +416,111 @@ public class NpmLockfileRegistryTests
         // A scope with no npmRegistryServer must be reported as the public registry Yarn actually
         // substitutes, not skipped as "inherits the approved feed".
         Assert.Contains("https://registry.yarnpkg.com", script, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Runs the shipped <c>check_yarn_scoped_registries</c> against a stub <c>yarn</c> to prove it
+    /// fails closed on every answer that is not an explicit, parseable scope map.
+    /// </summary>
+    /// <remarks>
+    /// The helper reads Yarn's scope map through a wrapper that discards stderr, so a yarn that
+    /// exits nonzero and one that is configured with no scopes both arrive as an empty string. Only
+    /// the literal <c>undefined</c> means "no scopes"; anything else has to be rejected, or a
+    /// renamed setting silently turns the check into a no-op while an ambient scope redirects the
+    /// install. Theory data covers the answers in the order they matter: broken, silent, genuinely
+    /// empty, redirected, approved.
+    /// </remarks>
+    [Theory]
+    [InlineData("exit 3", 1, "failed")]
+    [InlineData("printf ''", 1, "returned nothing")]
+    [InlineData("printf 'undefined'", 0, "declares no scoped registries")]
+    [InlineData("printf 'not json'", 1, "could not read yarn's npmScopes configuration")]
+    [InlineData("""printf '{"types":{"npmRegistryServer":"https://scoped.example.invalid/"}}'""", 1, "instead of the approved feed")]
+    [InlineData("""printf '{"types":{"npmRegistryServer":null}}'""", 1, "registry.yarnpkg.com")]
+    // APPROVED_FEED is substituted below rather than interpolated here: an attribute argument has
+    // to be a constant, and nesting the feed URL inside a raw string literal in an attribute is
+    // more fragile than it is worth.
+    [InlineData("""printf '{"types":{"npmRegistryServer":"APPROVED_FEED"}}'""", 0, "yarn @types ->")]
+    [RequiresTools(["bash", "node"])]
+    public async Task RegistryEnvScript_YarnScopeCheckFailsClosed(string yarnStubBody, int expectedExitCode, string expectedOutput)
+    {
+        var workspace = Directory.CreateTempSubdirectory("aspire-yarn-scope-check");
+
+        try
+        {
+            var binDirectory = Path.Combine(workspace.FullName, "bin");
+            Directory.CreateDirectory(binDirectory);
+
+            var yarnStubPath = Path.Combine(binDirectory, "yarn");
+            var yarnStub = yarnStubBody.Replace("APPROVED_FEED", ApprovedNpmRegistry, StringComparison.Ordinal);
+            await File.WriteAllTextAsync(yarnStubPath, $"#!/bin/sh\n{yarnStub}\n");
+            MakeExecutable(yarnStubPath);
+
+            // The script runs verify_registry_configuration on source, which needs a real toolchain,
+            // so lift out just the three functions under test. awk copies them verbatim out of the
+            // shipped file - the test executes the same bytes CI does, not a transcription.
+            var driverPath = Path.Combine(workspace.FullName, "driver.sh");
+            await File.WriteAllTextAsync(driverPath, """
+                set -uo pipefail
+                APPROVED_NPM_REGISTRY="$1"
+                NPM_REGISTRY_CONFIG_DIR="$2"
+                script="$3"
+                eval "$(awk '/^config_in_neutral_directory\(\)/,/^}/' "$script")"
+                eval "$(awk '/^config_in_neutral_directory_strict\(\)/,/^}/' "$script")"
+                eval "$(awk '/^check_yarn_scoped_registries\(\)/,/^}$/' "$script")"
+                check_yarn_scoped_registries
+                """);
+
+            var result = await RunBashAsync(
+                driverPath,
+                [ApprovedNpmRegistry, workspace.FullName, Path.Combine(RepoRoot.Path, RegistryEnvScriptPath)],
+                new Dictionary<string, string?>
+                {
+                    ["PATH"] = binDirectory + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH")
+                });
+
+            Assert.True(
+                expectedExitCode == result.ExitCode,
+                $"Expected exit code {expectedExitCode} for yarn stub '{yarnStub}' but got {result.ExitCode}.{Environment.NewLine}{result.Output}");
+            Assert.Contains(expectedOutput, result.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            workspace.Delete(recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The image re-pins every ambient npm scope in the config file it owns, but npm resolves
+    /// <c>cli &gt; env &gt; project .npmrc &gt; user .npmrc &gt; global .npmrc &gt; builtin</c>, so an
+    /// ambient scope supplied through the environment outranks that write.
+    /// </summary>
+    /// <remarks>
+    /// Measured with npm 11.4.2: with <c>npm_config_@types:registry</c> exported,
+    /// <c>npm config list</c> prints the user value followed by <c>; overridden by env</c> and
+    /// <c>npm config get @types:registry</c> answers with the environment's host. Writing the
+    /// approved value is therefore not proof it won, so the layer has to read each scope back. The
+    /// read-back must not be a <c>while read</c> fed by a pipe: that body runs in a subshell where
+    /// <c>exit 1</c> ends only the subshell and the RUN still succeeds.
+    /// </remarks>
+    [Fact]
+    public void PolyglotValidationImage_VerifiesTheScopeRepinActuallyWon()
+    {
+        var dockerfile = ReadRepoFile($"{PolyglotValidationDirectory}/Dockerfile.typescript");
+
+        var readBack = Regex.Match(
+            dockerfile,
+            """for scope in \$\(npm config list.*?done""",
+            RegexOptions.Singleline);
+
+        Assert.True(
+            readBack.Success,
+            "Dockerfile.typescript re-pins the ambient npm scopes but never reads them back, so an environment-supplied scope silently outranks the re-pin.");
+
+        var body = readBack.Value;
+
+        Assert.Contains("npm config get", body, StringComparison.Ordinal);
+        Assert.Contains("exit 1", body, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1264,6 +1371,50 @@ public class NpmLockfileRegistryTests
         Assert.True(File.Exists(lockfilePath), $"{relativePath} does not exist. Update the lockfile theory data if it moved or was removed.");
 
         return File.ReadAllText(lockfilePath);
+    }
+
+    private static void MakeExecutable(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        File.SetUnixFileMode(path,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+            UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+            UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+    }
+
+    private static async Task<(int ExitCode, string Output)> RunBashAsync(string scriptPath, string[] arguments, Dictionary<string, string?> environment)
+    {
+        using var process = new Process();
+        process.StartInfo.FileName = "bash";
+        process.StartInfo.ArgumentList.Add(scriptPath);
+
+        foreach (var argument in arguments)
+        {
+            process.StartInfo.ArgumentList.Add(argument);
+        }
+
+        process.StartInfo.RedirectStandardError = true;
+        process.StartInfo.RedirectStandardOutput = true;
+        process.StartInfo.UseShellExecute = false;
+
+        foreach (var (name, value) in environment)
+        {
+            process.StartInfo.Environment[name] = value;
+        }
+
+        process.Start();
+
+        // Read both streams concurrently to avoid deadlock when a pipe buffer fills.
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        using var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await process.WaitForExitAsync(cancellationTokenSource.Token);
+
+        return (process.ExitCode, await outputTask + await errorTask);
     }
 
     private static string ReadRepoFile(string relativePath)
