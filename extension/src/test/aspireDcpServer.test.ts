@@ -10,7 +10,7 @@ import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import { nodeDebuggerExtension } from '../debugger/languages/node';
 import { cleanupRun, registerRunCleanup } from '../debugger/runCleanupRegistry';
 import AspireDcpServer, { DcpServerOptions, getSessionRoutingKey } from '../dcp/AspireDcpServer';
-import type { AspireResourceDebugSession, AspireResourceExtendedDebugConfiguration, NodeLaunchConfiguration, ProcessRestartedNotification, RunSessionNotification, RunSessionPayload, ServiceLogsNotification, SessionMessageNotification, SessionTerminatedNotification } from '../dcp/types';
+import type { AspireResourceDebugSession, AspireResourceExtendedDebugConfiguration, BrowserLaunchConfiguration, NodeLaunchConfiguration, ProcessRestartedNotification, RunSessionNotification, RunSessionPayload, ServiceLogsNotification, SessionMessageNotification, SessionTerminatedNotification } from '../dcp/types';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { __setReporterForTests } from '../utils/telemetry';
 
@@ -374,6 +374,66 @@ suite('Aspire DCP server', () => {
 
         assert.deepStrictEqual(client.notifications, [notification]);
         assert.strictEqual(getInternals(harness.dcpServer)._runSessions.get(runId)?.lifecycle, 'stopRequested');
+    });
+
+    test('DELETE for debug-session-owned resources waits for confirmed stop before reporting termination', async () => {
+        const stopStarted = createDeferred<void>();
+        const stopCompleted = createDeferred<void>();
+        const stopCompletedObserved = sinon.spy();
+        harness.stopDebugging.callsFake(() => {
+            stopStarted.resolve();
+            return stopCompleted.promise.then(() => {
+                stopCompletedObserved();
+            });
+        });
+        const client = await openNotificationClient(harness);
+        const createResponse = await createBrowserRunSession(harness);
+        const runLocation = createResponse.headers.location;
+        assert.ok(runLocation);
+        const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
+
+        const deletePromise = request(harness, 'DELETE', `/run_session/${runId}`);
+        const notificationPromise = client.waitForNotification();
+        await stopStarted.promise;
+        await drainNotifications(client);
+
+        assert.deepStrictEqual(client.notifications, []);
+        assert.strictEqual(stopCompletedObserved.called, false);
+
+        stopCompleted.resolve();
+        const [deleteResponse, notification] = await Promise.all([deletePromise, notificationPromise]);
+        await drainNotifications(client);
+
+        assert.strictEqual(deleteResponse.statusCode, 200);
+        assert.deepStrictEqual(notification, {
+            notification_type: 'sessionTerminated',
+            session_id: runId,
+        });
+        assert.strictEqual(stopCompletedObserved.calledOnce, true);
+        assert.strictEqual(harness.stopDebugging.calledOnce, true);
+        assert.deepStrictEqual(client.notifications, [notification]);
+        assert.strictEqual(getInternals(harness.dcpServer)._runSessions.get(runId), undefined);
+    });
+
+    test('DELETE for debug-session-owned resources does not report termination when confirmed stop fails', async () => {
+        harness.stopDebugging.rejects(new Error('browser stop failed'));
+        const warn = sinon.stub(extensionLogOutputChannel, 'warn');
+        const client = await openNotificationClient(harness);
+        const createResponse = await createBrowserRunSession(harness);
+        const runLocation = createResponse.headers.location;
+        assert.ok(runLocation);
+        const runId = runLocation.substring(runLocation.lastIndexOf('/') + 1);
+
+        const deleteResponse = await request(harness, 'DELETE', `/run_session/${runId}`);
+        await drainNotifications(client);
+
+        assert.strictEqual(deleteResponse.statusCode, 500);
+        assert.strictEqual(JSON.parse(deleteResponse.body).error.code, 'DebugSessionStopFailed');
+        assert.strictEqual(harness.stopDebugging.calledOnce, true);
+        assert.strictEqual(warn.calledOnce, true);
+        assert.deepStrictEqual(client.notifications, []);
+        assert.strictEqual(getInternals(harness.dcpServer)._runSessions.get(runId)?.lifecycle, 'running');
+        assert.strictEqual(getInternals(harness.dcpServer)._runTelemetryById.has(runId), true);
     });
 
     test('repeated DELETE does not retry production-memoized debugger teardown', async () => {
@@ -1351,6 +1411,20 @@ async function createRunSession(harness: Harness, stopDebugging?: sinon.SinonStu
     if (stopDebugging) {
         harness.queuedStopDebugging.push(stopDebugging);
     }
+
+    return await request(harness, 'PUT', '/run_session', payload);
+}
+
+async function createBrowserRunSession(harness: Harness): Promise<HttpResponse> {
+    const launchConfiguration: BrowserLaunchConfiguration = {
+        type: 'browser',
+        mode: 'Debug',
+        url: 'https://localhost:5001',
+        browser: 'msedge',
+    };
+    const payload: RunSessionPayload = {
+        launch_configurations: [launchConfiguration],
+    };
 
     return await request(harness, 'PUT', '/run_session', payload);
 }

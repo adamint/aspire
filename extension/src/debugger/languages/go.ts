@@ -16,6 +16,7 @@ export const goDebuggerExtension: ResourceDebuggerExtension = {
     resourceType: 'go',
     debugAdapter: 'go',
     extensionId: 'golang.go',
+    terminationSignal: 'adapterExit',
     getDisplayName: (launchConfiguration: ExecutableLaunchConfiguration) => {
         if (isGoLaunchConfiguration(launchConfiguration)) {
             const displayPath = launchConfiguration.program || launchConfiguration.working_directory || '';

@@ -418,13 +418,11 @@ export default class AspireDcpServer {
                 // tracker is created during startup and resolves this run by `runId`, so the
                 // registration must exist before startup can produce callbacks.
                 //
-                // `PUT /run_session` resources always launch through a debug adapter, so the
-                // adapter's exit is the authoritative exit code for this run.
                 const run = runSessions.register({
                     debugSessions: processes,
                     runId,
                     sessionPrefix: debugSessionId,
-                    terminationTrigger: { kind: 'adapterExit' } satisfies TerminationTrigger,
+                    terminationTrigger: { kind: foundDebuggerExtension.terminationSignal } satisfies TerminationTrigger,
                 });
                 runTelemetryById.set(runId, { startTimeMs: runSessionStartTimeMs, resourceType: supportedResourceType, mode, debugSessionId });
 
@@ -546,7 +544,7 @@ export default class AspireDcpServer {
                 }
             });
 
-            app.delete('/run_session/:id', requireHeaders, (req: Request, res: Response) => {
+            app.delete('/run_session/:id', requireHeaders, async (req: Request, res: Response) => {
                 const runId = req.params.id as string;
                 const run = runSessions.get(runId);
                 if (!run) {
@@ -574,9 +572,28 @@ export default class AspireDcpServer {
                     return;
                 }
 
-                // DCP's DELETE contract is the protocol acknowledgement that the run has
-                // terminated. Complete that contract before entering VS Code debugger
-                // teardown, whose implementation may wait on another extension.
+                if (run.terminationTrigger.kind === 'debugSessionEnd') {
+                    try {
+                        await dcpServer._stopDebuggerForDelete(run);
+                    } catch (error) {
+                        const message = `Failed to stop debug session for run ${runId}: ${error instanceof Error ? error.message : String(error)}`;
+                        extensionLogOutputChannel.warn(message);
+                        res.status(500).json({ error: { code: 'DebugSessionStopFailed', message, details: [] } }).end();
+                        return;
+                    }
+
+                    // Browser-style resources do not produce a later adapter-exit notification.
+                    // Only report DCP termination after VS Code confirms the owning debug session
+                    // stopped; otherwise the browser may still be running even though DCP has
+                    // already cleaned up the run.
+                    runSessions.requestStop(runId);
+                    res.status(200).end();
+                    return;
+                }
+
+                // Adapter-backed resources keep #19125's DCP contract: DELETE immediately
+                // terminates the notification stream, then debugger teardown runs out of band.
+                // A later adapter exit can still refine telemetry while the record is retained.
                 runSessions.requestStop(runId);
                 res.status(200).end();
                 dcpServer._scheduleDebuggerTeardown(run);
@@ -752,6 +769,29 @@ export default class AspireDcpServer {
                 }
             }
         });
+    }
+
+    private async _stopDebuggerForDelete(run: RunSessionRecord): Promise<void> {
+        if (run.teardownPromise) {
+            return await run.teardownPromise;
+        }
+
+        run.teardownStarted = true;
+        run.teardownPromise = Promise.all(run.debugSessions.map(debugSession => {
+            try {
+                return Promise.resolve(debugSession.stopSession());
+            } catch (error) {
+                return Promise.reject(error);
+            }
+        })).then(() => undefined);
+
+        try {
+            return await run.teardownPromise;
+        } catch (error) {
+            run.teardownStarted = false;
+            run.teardownPromise = undefined;
+            throw error;
+        }
     }
 
     private _logDebuggerTeardownFailure(runId: string, error: unknown): void {

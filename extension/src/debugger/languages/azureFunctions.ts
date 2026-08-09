@@ -217,6 +217,7 @@ export const azureFunctionsDebuggerExtension: ResourceDebuggerExtension = {
     resourceType: 'azure-functions',
     debugAdapter: 'coreclr',
     extensionId: 'ms-dotnettools.csharp',
+    terminationSignal: 'adapterExit',
     getDisplayName: (launchConfig: ExecutableLaunchConfiguration) => {
         if (isAzureFunctionsLaunchConfiguration(launchConfig) && launchConfig.project_path) {
             return `Azure Functions: ${path.basename(launchConfig.project_path)}`;

@@ -27,6 +27,7 @@ export const pythonDebuggerExtension: ResourceDebuggerExtension = {
     resourceType: 'python',
     debugAdapter: 'debugpy',
     extensionId: 'ms-python.python',
+    terminationSignal: 'adapterExit',
     getDisplayName: (launchConfiguration: ExecutableLaunchConfiguration) => `Python: ${vscode.workspace.asRelativePath(getProjectFile(launchConfiguration))}`,
     getSupportedFileTypes: () => ['.py'],
     getProjectFile: (launchConfig) => getProjectFile(launchConfig),

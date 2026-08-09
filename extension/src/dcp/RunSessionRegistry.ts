@@ -11,7 +11,7 @@ import { AspireResourceDebugSession, RunSessionNotification, SessionTerminatedNo
  * - `adapterExit`: a debug adapter is attached and its exit reports the real exit code.
  *   A requested stop terminates the stream immediately and the registry keeps the record
  *   for a bounded window so the adapter's later exit can still refine the recorded exit
- *   code. This is the default for `PUT /run_session` resources.
+ *   code.
  * - `debugSessionEnd`: no adapter exit ever arrives; the run ends when VS Code reports the
  *   debug session terminated. That signal carries no exit code, so nothing is gained by
  *   waiting after a requested stop.
@@ -44,6 +44,7 @@ export interface RunSessionRecord {
     lifecycle: RunSessionLifecycle;
     retentionTimer?: NodeJS.Timeout;
     teardownStarted: boolean;
+    teardownPromise?: Promise<void>;
     terminated: boolean;
 }
 

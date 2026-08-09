@@ -755,6 +755,7 @@ export const mauiDebuggerExtension: ResourceDebuggerExtension = {
     resourceType: 'maui',
     debugAdapter: 'maui',
     extensionId: 'ms-dotnettools.dotnet-maui',
+    terminationSignal: 'adapterExit',
     getDisplayName,
     getSupportedFileTypes: () => ['.csproj'],
     getProjectFile: (launchConfig) => getProjectFile(launchConfig),
