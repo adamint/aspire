@@ -32,6 +32,7 @@ suite('utils/strings tests', () => {
         // VS Code renders `$(name)` as an icon in the status bar and in window progress, so CLI
         // controlled status text could otherwise draw an arbitrary (or spinning) icon.
         assert.strictEqual(escapeCodicons('Building $(error) now'), 'Building \\$(error) now');
+        assert.strictEqual(escapeCodicons('Building $(myExt-Icon~spin) now'), 'Building \\$(myExt-Icon~spin) now');
         assert.strictEqual(escapeCodicons('$(sync~spin)$(bug)'), '\\$(sync~spin)\\$(bug)');
         // An already escaped sequence must not be double escaped, otherwise the backslash shows up.
         assert.strictEqual(escapeCodicons('Building \\$(error) now'), 'Building \\$(error) now');
