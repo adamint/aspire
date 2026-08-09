@@ -185,10 +185,10 @@ suite('E2E shard matrix', () => {
      */
     function assertMatrixMatchesSpecs(workflow: string, specFileNames: readonly string[]): void {
         // Deliberately full set equality rather than a containment check in either direction. A
-        // missing entry means a spec silently never runs; an extra entry that is not a spec (a
-        // helper module, or a spec that was renamed or deleted) means the runner's glob matches
-        // nothing and the shard reports success while running zero tests. Both are invisible in a
-        // green workflow, so the matrix has to equal the spec set exactly.
+        // missing entry means a spec silently never runs. An extra entry that is not a spec (a
+        // helper module, or a spec that was renamed or deleted) is caught later by the E2E runner,
+        // but only after the workflow has already scheduled a dead shard. Keep this unit guard as
+        // the first signal that the matrix and Mocha's recursive discovery have drifted.
         assert.deepStrictEqual(
             matrixSpecPaths(workflow),
             canonicalSpecPaths(specFileNames),
