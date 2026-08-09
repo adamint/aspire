@@ -173,6 +173,9 @@ jobs:
       mtpBaseArgs: ${{ matrix.tests.mtpBaseArgs }}
       extraTestArgs: ${{ inputs.extraTestArgs }}
       ignoreTestFailures: ${{ inputs.ignoreTestFailures }}
+      # Specialized runsheets intentionally ignore zero-test results because some
+      # discovered tests only apply to one OS.
+      allowZeroTests: true
 
 
   results:

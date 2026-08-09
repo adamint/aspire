@@ -166,6 +166,36 @@ public class BuildTestMatrixTests : IDisposable
 
     [Fact]
     [RequiresTools(["pwsh"])]
+    public async Task ClassEntriesAllowZeroTests()
+    {
+        var artifactsDir = Path.Combine(_workspace.Path, "artifacts");
+        Directory.CreateDirectory(artifactsDir);
+
+        TestDataBuilder.CreateSplitTestsMetadataJson(
+            Path.Combine(artifactsDir, "ClassSplitProject.tests-metadata.json"),
+            projectName: "ClassSplitProject",
+            testProjectPath: "tests/ClassSplitProject/ClassSplitProject.csproj",
+            shortName: "ClassSplit");
+
+        TestDataBuilder.CreateClassBasedPartitionsJson(
+            Path.Combine(artifactsDir, "ClassSplitProject.tests-partitions.json"),
+            "MyNamespace.TestClassA");
+
+        var outputFile = Path.Combine(_workspace.Path, "matrix.json");
+
+        var result = await RunScript(artifactsDir, outputFile);
+
+        result.EnsureSuccessful();
+
+        using var document = JsonDocument.Parse(File.ReadAllText(outputFile));
+        var entry = Assert.Single(document.RootElement.GetProperty("tests").EnumerateArray());
+
+        Assert.True(entry.TryGetProperty("allowZeroTests", out var allowZeroTests), "Class split entries should opt into zero-test tolerance.");
+        Assert.True(allowZeroTests.GetBoolean());
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
     public async Task DefaultsMtpBaseArgsToEmptyWhenNotSpecified()
     {
         // Arrange

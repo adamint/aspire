@@ -386,6 +386,7 @@ jobs:
       extraTestArgs: "--filter-not-trait \"quarantined=true\" --filter-not-trait \"outerloop=true\" ${{ matrix.extraTestArgs }}"
       versionOverrideArg: ${{ inputs.versionOverrideArg }}
       properties: ${{ toJson(matrix.properties) }}
+      allowZeroTests: ${{ matrix.allowZeroTests || false }}
 
   tests_no_nugets_overflow:
     name: ${{ matrix.shortname }}
@@ -403,6 +404,7 @@ jobs:
       extraTestArgs: "--filter-not-trait \"quarantined=true\" --filter-not-trait \"outerloop=true\" ${{ matrix.extraTestArgs }}"
       versionOverrideArg: ${{ inputs.versionOverrideArg }}
       properties: ${{ toJson(matrix.properties) }}
+      allowZeroTests: ${{ matrix.allowZeroTests || false }}
 
   # Split requires-nugets tests by OS so each group depends only on
   # the CLI archive build for its platform, avoiding cross-OS blocking.
@@ -422,6 +424,7 @@ jobs:
       extraTestArgs: "--filter-not-trait \"quarantined=true\" --filter-not-trait \"outerloop=true\" ${{ matrix.extraTestArgs }}"
       versionOverrideArg: ${{ inputs.versionOverrideArg }}
       properties: ${{ toJson(matrix.properties) }}
+      allowZeroTests: ${{ matrix.allowZeroTests || false }}
 
   tests_requires_nugets_windows:
     name: ${{ matrix.shortname }}
@@ -439,6 +442,7 @@ jobs:
       extraTestArgs: "--filter-not-trait \"quarantined=true\" --filter-not-trait \"outerloop=true\" ${{ matrix.extraTestArgs }}"
       versionOverrideArg: ${{ inputs.versionOverrideArg }}
       properties: ${{ toJson(matrix.properties) }}
+      allowZeroTests: ${{ matrix.allowZeroTests || false }}
 
   tests_requires_nugets_macos:
     name: ${{ matrix.shortname }}
@@ -456,6 +460,7 @@ jobs:
       extraTestArgs: "--filter-not-trait \"quarantined=true\" --filter-not-trait \"outerloop=true\" ${{ matrix.extraTestArgs }}"
       versionOverrideArg: ${{ inputs.versionOverrideArg }}
       properties: ${{ toJson(matrix.properties) }}
+      allowZeroTests: ${{ matrix.allowZeroTests || false }}
 
   tests_requires_cli_archive:
     name: ${{ matrix.shortname }}
@@ -473,6 +478,7 @@ jobs:
       extraTestArgs: "--filter-not-trait \"quarantined=true\" --filter-not-trait \"outerloop=true\" ${{ matrix.extraTestArgs }}"
       versionOverrideArg: ${{ inputs.versionOverrideArg }}
       properties: ${{ toJson(matrix.properties) }}
+      allowZeroTests: ${{ matrix.allowZeroTests || false }}
 
   polyglot_validation:
     name: Polyglot SDK Validation

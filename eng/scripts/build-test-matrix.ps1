@@ -57,6 +57,7 @@ foreach ($item in $ciTestsPropsXml.Project.ItemGroup.CITestsProperty) {
 $script:defaults = @{
   extraTestArgs = ''
   mtpBaseArgs = ''
+  allowZeroTests = $false
   properties = [ordered]@{}
   supportedOSes = @('windows', 'linux', 'macos')
 }
@@ -99,6 +100,7 @@ function Complete-EntryWithDefaults {
   # Apply defaults for missing properties
   if (-not $Entry.Contains('extraTestArgs')) { $Entry['extraTestArgs'] = $script:defaults.extraTestArgs }
   if (-not $Entry.Contains('mtpBaseArgs')) { $Entry['mtpBaseArgs'] = $script:defaults.mtpBaseArgs }
+  if (-not $Entry.Contains('allowZeroTests')) { $Entry['allowZeroTests'] = $script:defaults.allowZeroTests }
   if (-not $Entry['supportedOSes'] -or $Entry['supportedOSes'].Count -eq 0) {
     $Entry['supportedOSes'] = $script:defaults.supportedOSes
   }
@@ -245,6 +247,11 @@ function New-ClassTestEntry {
     workitemprefix = "$($Metadata.projectName)_$shortClassName"
     classname = $ClassName
     splitTests = $true
+    # Class shards are generated from discovery on the matrix-generation OS. Some traits are
+    # intentionally OS-sensitive (for example RequiresFeature adds category=failing for container
+    # tests on Windows CI), so a valid class shard can be empty after the runner applies filters on
+    # another OS.
+    allowZeroTests = $true
   }
 
   if ($Metadata.PSObject.Properties['mtpBaseArgs'] -and $Metadata.mtpBaseArgs) { $entry['mtpBaseArgs'] = $Metadata.mtpBaseArgs }

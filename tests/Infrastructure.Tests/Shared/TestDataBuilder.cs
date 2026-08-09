@@ -193,6 +193,7 @@ public static class TestDataBuilder
         bool requiresTestSdk = false,
         bool requiresCliArchive = false,
         bool enablePlaywrightInstall = false,
+        bool allowZeroTests = false,
         string[]? supportedOSes = null,
         Dictionary<string, string>? runners = null)
     {
@@ -208,6 +209,7 @@ public static class TestDataBuilder
             Classname = classname,
             ExtraTestArgs = extraTestArgs ?? "",
             MtpBaseArgs = mtpBaseArgs,
+            AllowZeroTests = allowZeroTests,
             Properties = new Dictionary<string, bool>
             {
                 ["requiresNugets"] = requiresNugets,
@@ -303,6 +305,9 @@ public class CanonicalMatrixEntry
 
     [JsonPropertyName("mtpBaseArgs")]
     public string MtpBaseArgs { get; set; } = "";
+
+    [JsonPropertyName("allowZeroTests")]
+    public bool AllowZeroTests { get; set; }
 
     [JsonPropertyName("properties")]
     public Dictionary<string, bool> Properties { get; set; } = new();

@@ -13,6 +13,8 @@ namespace Infrastructure.Tests;
 public sealed class RunTestsWorkflowTests
 {
     private static readonly string s_workflowPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "run-tests.yml");
+    private static readonly string s_testsWorkflowPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "tests.yml");
+    private static readonly string s_specializedTestRunnerWorkflowPath = Path.Combine(RepoRoot.Path, ".github", "workflows", "specialized-test-runner.yml");
 
     private readonly ITestOutputHelper _output;
 
@@ -101,6 +103,25 @@ public sealed class RunTestsWorkflowTests
             "steps.run-tests-windows.outcome == 'success') }}";
 
         Assert.Equal(expectedCondition, condition);
+    }
+
+    [Fact]
+    public void TestsWorkflowPassesAllowZeroTestsToEveryRunTestsCaller()
+    {
+        string workflowText = File.ReadAllText(s_testsWorkflowPath);
+        int reusableRunTestsCallers = Regex.Matches(workflowText, @"(?m)^    uses: \./\.github/workflows/run-tests\.yml$").Count;
+        int allowZeroTestsInputs = Regex.Matches(workflowText, @"(?m)^      allowZeroTests: \$\{\{ matrix\.allowZeroTests \|\| false \}\}$").Count;
+
+        Assert.True(reusableRunTestsCallers > 0, $"Could not find any run-tests.yml callers in {s_testsWorkflowPath}.");
+        Assert.Equal(reusableRunTestsCallers, allowZeroTestsInputs);
+    }
+
+    [Fact]
+    public void SpecializedTestRunnerAllowsZeroTestRuns()
+    {
+        string workflowText = File.ReadAllText(s_specializedTestRunnerWorkflowPath);
+
+        Assert.Contains("allowZeroTests: true", workflowText);
     }
 
     [Fact]
