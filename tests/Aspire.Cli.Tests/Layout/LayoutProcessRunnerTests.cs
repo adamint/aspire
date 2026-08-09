@@ -2,7 +2,6 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System.Globalization;
-using System.Reflection;
 using Aspire.Cli.DotNet;
 using Aspire.Cli.Layout;
 using Aspire.Cli.Tests.TestServices;
@@ -268,7 +267,7 @@ public class LayoutProcessRunnerTests
         var timeout = TimeSpan.FromMilliseconds(timeoutMilliseconds);
         var workingDirectory = new DirectoryInfo(AppContext.BaseDirectory);
 
-        var message = BuildTimeoutMessage(timeout, workingDirectory);
+        var message = LayoutProcessRunner.BuildTimeoutMessage("aspire-managed", [], workingDirectory, timeout);
 
         Assert.Equal($"Process 'aspire-managed' timed out after {expectedTimeoutText} in '{workingDirectory.FullName}'.", message);
     }
@@ -325,11 +324,4 @@ public class LayoutProcessRunnerTests
         }
     }
 
-    private static string BuildTimeoutMessage(TimeSpan timeout, DirectoryInfo workingDirectory)
-    {
-        var method = typeof(LayoutProcessRunner).GetMethod("BuildTimeoutMessage", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(method);
-
-        return Assert.IsType<string>(method.Invoke(null, new object[] { "aspire-managed", Array.Empty<string>(), workingDirectory, timeout }));
-    }
 }

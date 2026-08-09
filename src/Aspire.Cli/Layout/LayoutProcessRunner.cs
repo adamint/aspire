@@ -137,7 +137,7 @@ internal sealed class LayoutProcessRunner(IProcessExecutionFactory executionFact
             ? new Dictionary<string, string>(StringComparer.Ordinal)
             : new Dictionary<string, string>(environmentVariables, StringComparer.Ordinal);
 
-    private static string BuildTimeoutMessage(string toolPath, IReadOnlyList<string> arguments, DirectoryInfo workingDirectory, TimeSpan timeout)
+    internal static string BuildTimeoutMessage(string toolPath, IReadOnlyList<string> arguments, DirectoryInfo workingDirectory, TimeSpan timeout)
     {
         var timeoutText = FormatTimeout(timeout);
         if (arguments is ["nuget", "search", ..])
