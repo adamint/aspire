@@ -509,6 +509,75 @@ public class NpmLockfileRegistryTests
         Assert.Contains(RegistryEnvScriptName, copied);
     }
 
+    /// <summary>
+    /// The runtime helper cannot protect what an image downloads while it is being built, because
+    /// nothing under /scripts runs until the entrypoint. Any image layer that acquires npm packages
+    /// therefore has to own npm's config itself, before the acquisition.
+    /// </summary>
+    /// <remarks>
+    /// Owning the default registry is not enough. A <c>@scope:registry</c> key is a separate setting
+    /// that wins for that scope, and neither <c>--registry</c> nor <c>npm_config_registry</c>
+    /// overrides it (see <see cref="RegistryEnvScript_IsolatesNpmFromAmbientScopedRegistries"/>).
+    /// The TypeScript image installs <c>@yarnpkg/cli-dist</c> directly and pulls typescript's
+    /// <c>@typescript/*</c> platform packages transitively, so an ambient scoped key in the base
+    /// image would redirect exactly the packages this guard exists to protect.
+    /// </remarks>
+    [Theory]
+    [MemberData(nameof(NpmAcquiringPolyglotDockerfiles))]
+    public void PolyglotValidationImage_OwnsNpmConfigBeforeAcquiringPackages(string dockerfileName)
+    {
+        var dockerfile = ReadRepoFile($"{PolyglotValidationDirectory}/{dockerfileName}");
+        var firstAcquisitionIndex = FindFirstPackageAcquisition(dockerfile);
+
+        var userConfigIndex = dockerfile.IndexOf("export NPM_CONFIG_USERCONFIG=", StringComparison.Ordinal);
+        Assert.True(
+            userConfigIndex >= 0 && userConfigIndex < firstAcquisitionIndex,
+            $"{dockerfileName} acquires npm packages at offset {firstAcquisitionIndex} without first pointing NPM_CONFIG_USERCONFIG at a config file the build owns.");
+
+        // Owning the file only removes user-level keys. Scopes inherited from the global or builtin
+        // config are neutralized by writing them back at the higher-precedence user level, so the
+        // Dockerfile has to enumerate what npm reports rather than trusting the default alone.
+        var scopePinIndex = dockerfile.IndexOf(":registry=%s", StringComparison.Ordinal);
+        Assert.True(
+            scopePinIndex >= 0 && scopePinIndex < firstAcquisitionIndex,
+            $"{dockerfileName} does not re-pin the npm scopes it inherits to the approved feed before acquiring packages at offset {firstAcquisitionIndex}.");
+    }
+
+    /// <summary>
+    /// The build arg cannot be its own authority. If the image trusted whatever NPM_REGISTRY it was
+    /// handed, <c>--build-arg NPM_REGISTRY=https://registry.npmjs.org</c> would make every step agree
+    /// with itself while the toolchain came from an unapproved host — the same hole
+    /// npm-registry-env.sh closes for the job's own NPM_REGISTRY override.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(NpmAcquiringPolyglotDockerfiles))]
+    public void PolyglotValidationImage_RejectsAnUnapprovedNpmRegistryBuildArg(string dockerfileName)
+    {
+        var dockerfile = ReadRepoFile($"{PolyglotValidationDirectory}/{dockerfileName}");
+        var firstAcquisitionIndex = FindFirstPackageAcquisition(dockerfile);
+
+        var argDefault = Regex.Match(dockerfile, @"^ARG NPM_REGISTRY=(?<url>\S+)$", RegexOptions.Multiline);
+        Assert.True(argDefault.Success, $"{dockerfileName} no longer declares an NPM_REGISTRY build arg in the expected form.");
+        Assert.Equal(ApprovedNpmRegistry, argDefault.Groups["url"].Value);
+
+        var comparisonIndex = dockerfile.IndexOf($"APPROVED_NPM_REGISTRY={ApprovedNpmRegistry}", StringComparison.Ordinal);
+        Assert.True(
+            comparisonIndex >= 0 && comparisonIndex < firstAcquisitionIndex,
+            $"{dockerfileName} acquires npm packages at offset {firstAcquisitionIndex} without first rejecting an NPM_REGISTRY build arg that is not '{ApprovedNpmRegistry}'.");
+    }
+
+    /// <summary>
+    /// Discovered from disk rather than listed, so an image that grows a build-time npm install is
+    /// held to the same rule instead of being silently exempt.
+    /// </summary>
+    public static TheoryData<string> NpmAcquiringPolyglotDockerfiles => ToTheoryData(
+        Directory.EnumerateFiles(Path.Combine(RepoRoot.Path, PolyglotValidationDirectory), "Dockerfile.*")
+            .Where(path => FindFirstPackageAcquisition(File.ReadAllText(path)) != int.MaxValue)
+            .Select(Path.GetFileName)
+            .Where(name => name is not null)
+            .Select(name => name!)
+            .OrderBy(name => name, StringComparer.Ordinal));
+
     public static TheoryData<string> PolyglotDockerfiles => ToTheoryData(
         Directory.EnumerateFiles(Path.Combine(RepoRoot.Path, PolyglotValidationDirectory), "Dockerfile.*")
             .Select(Path.GetFileName)

@@ -1005,10 +1005,14 @@ public sealed class SelectTestsAcceptanceTests(ITestOutputHelper outputHelper) :
         Assert.Contains("Infrastructure.Tests", r.TestProjects);
     }
 
+    // Discovered rather than hardcoded, because the guard this routing exists to schedule
+    // (NpmLockfileRegistryTests.ShippedLockfiles_NotYetOnTheApprovedFeed_UseExactlyTheKnownOrigins)
+    // enumerates every src/**/package-lock.json itself. Listing a subset here would let a lockfile
+    // the guard checks - the java-starter, py-starter, ts-starter and aspire-ts-cs-starter frontend
+    // lockfiles pinned to their legacy origins - be repointed at any host without the guard ever
+    // running on that PR.
     [Theory]
-    [InlineData("src/Aspire.Cli/Templating/Templates/ts-starter/package-lock.json")]
-    [InlineData("src/Aspire.Cli/Templating/Templates/py-starter/package-lock.json")]
-    [InlineData("tests/Aspire.Hosting.CodeGeneration.TypeScript.JsTests/package-lock.json")]
+    [MemberData(nameof(ShippedNpmLockfiles))]
     public void RealMapExplicitNpmLockfileChangeRunsInfrastructureTests(string lockfile)
     {
         var mapPath = Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml");
@@ -1020,6 +1024,46 @@ public sealed class SelectTestsAcceptanceTests(ITestOutputHelper outputHelper) :
 
         Assert.False(r.SelectsAll);
         Assert.Contains("Infrastructure.Tests", r.TestProjects);
+    }
+
+    // The guard also fails when a source lockfile it has never seen appears, so that failure has to
+    // be reachable on the PR that adds one. A path with no file on disk is the only way to assert
+    // that; selection is path-based and never reads the file.
+    [Theory]
+    [InlineData("src/Aspire.Cli/Templating/Templates/java-starter/package-lock.json")]
+    [InlineData("src/Components/Aspire.SomeNewIntegration/package-lock.json")]
+    public void RealMapNewlyAddedSourceNpmLockfileRunsInfrastructureTests(string lockfile)
+    {
+        var mapPath = Path.Combine(RepoRoot.Path, "eng", "github-ci", "test-trigger-map.yml");
+        var selector = new TestSelector(mapPath, EnumerateMatrixTestProjects(), LoadProjectDirectories());
+
+        Assert.False(File.Exists(Path.Combine(RepoRoot.Path, lockfile)), $"{lockfile} now exists, so it no longer exercises the newly-added case. Pick a path that does not exist.");
+
+        var r = selector.Select([lockfile], [], new SelectorOptions());
+
+        Assert.False(r.SelectsAll);
+        Assert.Contains("Infrastructure.Tests", r.TestProjects);
+    }
+
+    public static TheoryData<string> ShippedNpmLockfiles
+    {
+        get
+        {
+            var data = new TheoryData<string>();
+
+            var lockfiles = Directory.EnumerateFiles(Path.Combine(RepoRoot.Path, "src"), "package-lock.json", SearchOption.AllDirectories)
+                .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}node_modules{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+                .Select(path => Path.GetRelativePath(RepoRoot.Path, path).Replace(Path.DirectorySeparatorChar, '/'))
+                .Append("tests/Aspire.Hosting.CodeGeneration.TypeScript.JsTests/package-lock.json")
+                .Order(StringComparer.Ordinal);
+
+            foreach (var lockfile in lockfiles)
+            {
+                data.Add(lockfile);
+            }
+
+            return data;
+        }
     }
 
     private static string FirstPolyglotLockfile(string lockfileName)

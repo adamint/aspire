@@ -188,8 +188,13 @@ path_rules:
   # silent hole on exactly the change this rule exists to catch.
   - paths:
       - tests/PolyglotAppHosts/**
-      - src/Aspire.Cli/Templating/Templates/ts-starter/package-lock.json
-      - src/Aspire.Cli/Templating/Templates/py-starter/package-lock.json
+      # Every shipped lockfile under src/, not just the two AppHost ones. ShippedLockfiles_NotYet-
+      # OnTheApprovedFeed_UseExactlyTheKnownOrigins enumerates all of src/**/package-lock.json and
+      # pins the exact origins the four frontend lockfiles are still allowed to use, so routing only
+      # a subset means repointing java-starter/frontend at an arbitrary host never schedules the
+      # guard on the PR that introduces the drift. The glob also covers lockfiles that do not exist
+      # yet, which is what makes the test's "a new source lockfile appeared" failure reachable.
+      - src/**/package-lock.json
       - tests/Aspire.Hosting.CodeGeneration.TypeScript.JsTests/package-lock.json
     targets: [test:Infrastructure.Tests]
     reason: NpmLockfileRegistryTests asserts every tarball URL in these lockfiles resolves through the approved dotnet-public-npm feed, and also fails when a fixture adds a lockfile format none of its theories parse; lockfiles are not compiled items, so Layer 1 is blind and this is the only rule that fires the guard on the change that would introduce the drift
