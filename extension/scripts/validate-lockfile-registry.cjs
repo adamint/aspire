@@ -23,13 +23,17 @@ if (!resolved.length) {
 // substring/`.includes()` check can be defeated by a hostile host that merely
 // contains the feed string in its path (`https://evil.example/pkgs.dev.azure.com/...`),
 // a hostname suffix (`https://pkgs.dev.azure.com.evil.example/...`), a URL
-// fragment (`https://evil.example/x.tgz#pkgs.dev.azure.com/...`), or a
+// fragment (`https://evil.example/x.tgz#pkgs.dev.azure.com/...`), a non-default
+// port on the approved host (`https://pkgs.dev.azure.com:444/...`), or a
 // downgrade to plaintext `http://`.
 function isInternalFeedUrl(url) {
   try {
     const parsed = new URL(url);
-    return parsed.protocol === 'https:'
-      && parsed.hostname === 'pkgs.dev.azure.com'
+    // Compare `origin`, not `protocol` + `hostname`: `URL.hostname` excludes the port, so a
+    // hostname-only check accepts https://pkgs.dev.azure.com:444/... and fetches from an
+    // unapproved endpoint on the right host. `origin` normalizes away the default :443, so the
+    // legitimate explicit-default form still compares equal to `internalFeedOrigin`.
+    return parsed.origin === internalFeedOrigin
       && parsed.pathname.startsWith(internalFeedPathPrefix);
   }
   catch {

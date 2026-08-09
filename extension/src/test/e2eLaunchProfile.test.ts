@@ -220,10 +220,12 @@ suite('E2E launch profile', () => {
         }
     });
 
-    // The four bypass shapes below all defeated the previous `.includes(internalFeed)`
+    // The bypass shapes below all defeated the previous `.includes(internalFeed)`
     // substring check: it tested against the raw line, not a parsed URL's origin, so
-    // any of these could smuggle a hostile host past the guard. Each case pins one
-    // shape so a regression to substring matching fails a specifically-named test.
+    // any of these could smuggle a hostile host past the guard. The two port cases
+    // additionally defeated the first parsed-URL fix, which compared `hostname` --
+    // that excludes the port, so an unapproved endpoint on the approved host passed.
+    // Each case pins one shape so a regression fails a specifically-named test.
     for (const bypass of [
         {
             name: 'a hostile host with the feed string smuggled into its path',
@@ -241,6 +243,18 @@ suite('E2E launch profile', () => {
             name: 'the feed string appearing only in the URL fragment',
             resolvedLine: 'resolved "https://evil.example/x.tgz#pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm"',
         },
+        {
+            name: 'a non-default port on the approved feed host',
+            resolvedLine: 'resolved "https://pkgs.dev.azure.com:444/dnceng/public/_packaging/dotnet-public-npm/pkg.tgz"',
+        },
+        {
+            name: 'a high non-default port on the approved feed host',
+            resolvedLine: 'resolved "https://pkgs.dev.azure.com:8080/dnceng/public/_packaging/dotnet-public-npm/pkg.tgz"',
+        },
+        {
+            name: 'userinfo naming the feed host ahead of a hostile host',
+            resolvedLine: 'resolved "https://pkgs.dev.azure.com@evil.example/dnceng/public/_packaging/dotnet-public-npm/pkg.tgz"',
+        },
     ]) {
         test(`rejects a resolved entry using ${bypass.name}`, () => {
             const result = runLockfileRegistryGuard(bypass.resolvedLine);
@@ -257,6 +271,12 @@ suite('E2E launch profile', () => {
         {
             name: 'a scoped internal-feed package path (@types/node)',
             resolvedLine: 'resolved "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/@types/node/-/node-20.0.0.tgz#9e6074ce28f0b1bab7bfdacd1a7760b2ba73688d"',
+        },
+        {
+            // https: defaults to 443, and `URL.origin` normalizes the explicit default away, so
+            // this must stay accepted -- rejecting it would make the port check overzealous.
+            name: 'an explicit default :443 port on the internal feed',
+            resolvedLine: 'resolved "https://pkgs.dev.azure.com:443/dnceng/public/_packaging/dotnet-public-npm/npm/registry/pkg/-/pkg-1.2.3.tgz"',
         },
     ]) {
         test(`accepts a genuine internal-feed resolved entry: ${legit.name}`, () => {
