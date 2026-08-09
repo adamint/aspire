@@ -164,14 +164,23 @@ internal sealed class SdkExportCommand : BaseCommand
         // The code generator lives in a separate package that the scanner AppHost does not reference
         // by default, so without this the server loads no generators and every export fails with
         // "No code generator found". `sdk generate` adds the same package for the same reason.
-        var codeGenPackage = await GetCodeGenerationPackageAsync(language, cancellationToken);
+        var languageInfo = await GetLanguageInfoAsync(language, cancellationToken);
+        var codeGenPackage = languageInfo is null
+            ? null
+            : await GetCodeGenerationPackageAsync(languageInfo, cancellationToken);
         if (codeGenPackage is not null)
         {
             integrations.Add(IntegrationReference.FromExactPackage(codeGenPackage, ExecutionContext.IdentityVersion));
         }
 
+        // The server keys generators by ICodeGenerator.Language ("TypeScript"), not by the language
+        // id or the abbreviation the user typed, so the matched generator name is what crosses the
+        // RPC. `aspire sdk export --language typescript/nodejs` resolves its package here and would
+        // otherwise fail with "No code generator found" on the far side. `sdk generate` sends the
+        // same value. An unresolved language is forwarded verbatim so the server produces the
+        // authoritative unsupported-language error rather than this command guessing at one.
         return CommandResult.FromExitCode(await ExportApiAsync(
-            language,
+            languageInfo?.CodeGenerator ?? language,
             packageName,
             packageVersion,
             integrations,
@@ -182,30 +191,41 @@ internal sealed class SdkExportCommand : BaseCommand
     }
 
     /// <summary>
-    /// Resolves the code generation package that provides the requested language, matching the way
-    /// <c>sdk generate</c> resolves it. Returns <see langword="null"/> when the language is unknown so
-    /// that the server produces the authoritative unsupported-language error.
+    /// Resolves the language the user asked for, matching the way <c>sdk generate</c> resolves it.
+    /// Returns <see langword="null"/> when the language is unknown so that the server produces the
+    /// authoritative unsupported-language error.
     /// </summary>
-    private async Task<string?> GetCodeGenerationPackageAsync(string language, CancellationToken cancellationToken)
+    private async Task<LanguageInfo?> GetLanguageInfoAsync(string language, CancellationToken cancellationToken)
     {
         try
         {
             var languages = await _languageDiscovery.GetAvailableLanguagesAsync(cancellationToken);
 
-            var languageInfo = languages.FirstOrDefault(l =>
+            return languages.FirstOrDefault(l =>
                 l.LanguageId.Value.StartsWith(language, StringComparison.OrdinalIgnoreCase) ||
                 l.CodeGenerator.Equals(language, StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Failed to resolve the language {Language}", language);
+            return null;
+        }
+    }
 
-            if (languageInfo is null)
-            {
-                return null;
-            }
-
+    /// <summary>
+    /// Resolves the code generation package that provides the requested language. Returns
+    /// <see langword="null"/> when discovery fails so that the export still runs and the server
+    /// reports the missing generator.
+    /// </summary>
+    private async Task<string?> GetCodeGenerationPackageAsync(LanguageInfo languageInfo, CancellationToken cancellationToken)
+    {
+        try
+        {
             return await _languageDiscovery.GetPackageForLanguageAsync(languageInfo.LanguageId, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _logger.LogDebug(ex, "Failed to resolve the code generation package for language {Language}", language);
+            _logger.LogDebug(ex, "Failed to resolve the code generation package for language {Language}", languageInfo.LanguageId.Value);
             return null;
         }
     }

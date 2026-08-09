@@ -39,6 +39,28 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         Assert.Equal(0, exitCode);
     }
 
+    /// <summary>
+    /// The server keys generators by <c>ICodeGenerator.Language</c>, so every accepted spelling of a
+    /// language has to arrive there as the generator name. The canonical language id is the spelling
+    /// most likely to be typed and the one furthest from the generator name.
+    /// </summary>
+    [Theory]
+    [InlineData("typescript/nodejs")]
+    [InlineData("typescript")]
+    [InlineData("TypeScript")]
+    public async Task SdkExportSendsTheGeneratorNameForEveryAcceptedLanguageSpelling(string language)
+    {
+        var interactionService = new TestInteractionService();
+        using var provider = CreateProvider(interactionService, out var workspace, out var rpcClient);
+        using var _ = workspace;
+
+        var exitCode = await InvokeAsync(provider, $"sdk export --language {language}");
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        var request = Assert.NotNull(rpcClient.LastExportRequest);
+        Assert.Equal("TypeScript", request.Language);
+    }
+
     [Fact]
     public async Task SdkExportForExactPackageWritesCanonicalDocumentToStdout()
     {
@@ -50,7 +72,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await InvokeAsync(provider, $"sdk export --language typescript --package Aspire.Hosting.Redis@{packageVersion}");
 
         Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.Equal(("typescript", "Aspire.Hosting.Redis", packageVersion), rpcClient.LastExportRequest);
+        Assert.Equal(("TypeScript", "Aspire.Hosting.Redis", packageVersion), rpcClient.LastExportRequest);
 
         var stdout = Assert.Single(interactionService.DisplayedRawText, entry => entry.ConsoleOverride == ConsoleOutput.Standard);
         using var document = JsonDocument.Parse(stdout.Text);
@@ -72,7 +94,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         // Defaulting to the CLI's own SDK version is the entire point of the command: documentation
         // must describe the SDK this CLI would actually generate against, not a floating latest.
         var expectedVersion = provider.GetRequiredService<Aspire.Cli.CliExecutionContext>().IdentitySdkVersion;
-        Assert.Equal(("typescript", "Aspire.Hosting", expectedVersion), rpcClient.LastExportRequest);
+        Assert.Equal(("TypeScript", "Aspire.Hosting", expectedVersion), rpcClient.LastExportRequest);
     }
 
     [Fact]
@@ -94,7 +116,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
 
         // A real informational version carries the commit suffix. NuGet ignores it for identity, so
         // exporting under it would label the document with a version no feed serves.
-        Assert.Equal(("typescript", "Aspire.Hosting", "13.5.0-dev"), rpcClient.LastExportRequest);
+        Assert.Equal(("TypeScript", "Aspire.Hosting", "13.5.0-dev"), rpcClient.LastExportRequest);
     }
 
     [Fact]
@@ -110,7 +132,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
 
         // NuGet resolves Contoso.Aspire.Widgets@2.0 to the 2.0.0 package, so the document has to be
         // keyed on the version that was actually restored.
-        Assert.Equal(("typescript", "Contoso.Aspire.Widgets", "2.0.0"), rpcClient.LastExportRequest);
+        Assert.Equal(("TypeScript", "Contoso.Aspire.Widgets", "2.0.0"), rpcClient.LastExportRequest);
     }
 
     [Fact]
@@ -231,7 +253,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         // The metadata is accepted but must not survive into the document: see
         // SdkExportPublishesTheVersionNuGetResolvesRatherThanTheRequestedBuildMetadata.
         Assert.Equal(
-            ("typescript", "Aspire.Hosting", executionContext.IdentitySdkVersion),
+            ("TypeScript", "Aspire.Hosting", executionContext.IdentitySdkVersion),
             rpcClient.LastExportRequest);
     }
 
@@ -255,7 +277,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
             "sdk export --language typescript --package Contoso.Aspire.Widgets@2.0.0+fake");
 
         Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.Equal(("typescript", "Contoso.Aspire.Widgets", "2.0.0"), rpcClient.LastExportRequest);
+        Assert.Equal(("TypeScript", "Contoso.Aspire.Widgets", "2.0.0"), rpcClient.LastExportRequest);
 
         var requested = Assert.Single(
             appHostServerProject.Integrations,
@@ -326,7 +348,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await InvokeAsync(provider, $"sdk export --language typescript --package Aspire.Hosting.Redis@{checkoutVersion}");
 
         Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.Equal(("typescript", "Aspire.Hosting.Redis", checkoutVersion), rpcClient.LastExportRequest);
+        Assert.Equal(("TypeScript", "Aspire.Hosting.Redis", checkoutVersion), rpcClient.LastExportRequest);
     }
 
     [Fact]
@@ -371,7 +393,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Contoso.Aspire.Widgets@2.0.0");
 
         Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.Equal(("typescript", "Contoso.Aspire.Widgets", "2.0.0"), rpcClient.LastExportRequest);
+        Assert.Equal(("TypeScript", "Contoso.Aspire.Widgets", "2.0.0"), rpcClient.LastExportRequest);
     }
 
     [Fact]
@@ -624,7 +646,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package aspire.hosting@13.5.0");
 
         Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.Equal(("typescript", "Aspire.Hosting", "13.5.0"), rpcClient.LastExportRequest);
+        Assert.Equal(("TypeScript", "Aspire.Hosting", "13.5.0"), rpcClient.LastExportRequest);
 
         var stdout = Assert.Single(interactionService.DisplayedRawText, entry => entry.ConsoleOverride == ConsoleOutput.Standard);
         using var document = JsonDocument.Parse(stdout.Text);
@@ -673,7 +695,7 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
             "sdk export --language typescript --package CommunityToolkit.Aspire.Hosting.ActiveMQ@13.4.0");
 
         Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.Equal(("typescript", "CommunityToolkit.Aspire.Hosting.ActiveMQ", "13.4.0"), rpcClient.LastExportRequest);
+        Assert.Equal(("TypeScript", "CommunityToolkit.Aspire.Hosting.ActiveMQ", "13.4.0"), rpcClient.LastExportRequest);
     }
 
     /// <summary>
