@@ -254,6 +254,31 @@ public class NpmRegistryClientTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => lookupTask).DefaultTimeout();
     }
 
+    [Fact]
+    public async Task GetLatestVersionAsync_DoesNotSendCredentialsEmbeddedInTheResolvedRegistry()
+    {
+        // npm accepts "user:token@" in a .npmrc registry value, so the resolved address can carry
+        // one. This lookup is documented as anonymous, and RequestUri is read by every delegating
+        // handler, DiagnosticSource listener, and HttpRequestException message, so the credential
+        // must not reach the request at all.
+        HttpRequestMessage? capturedRequest = null;
+        var client = CreateClient(
+            request =>
+            {
+                capturedRequest = request;
+                return CreateJsonResponse("""{ "dist-tags": { "latest": "13.4.6" } }""");
+            },
+            registry: "https://user:super-secret-token@npm.contoso.example/feed/");
+
+        await client.GetLatestVersionAsync(PackageName, CancellationToken.None).DefaultTimeout();
+
+        Assert.NotNull(capturedRequest);
+        Assert.Equal(string.Empty, capturedRequest.RequestUri?.UserInfo);
+        Assert.Equal(
+            "https://npm.contoso.example/feed/%40microsoft%2Faspire-cli",
+            capturedRequest.RequestUri?.AbsoluteUri);
+    }
+
     private static NpmRegistryClient CreateClient(
         Func<HttpRequestMessage, HttpResponseMessage> handler,
         TimeProvider? timeProvider = null,

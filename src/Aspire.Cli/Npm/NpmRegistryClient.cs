@@ -105,7 +105,11 @@ internal sealed class NpmRegistryClient : INpmRegistryClient
         // Scoped names carry a '/' that has to be percent-encoded, because the registry addresses a
         // package as a single path segment: "@microsoft/aspire-cli" is requested as
         // "%40microsoft%2Faspire-cli".
-        var requestUri = new Uri(registry.RegistryUri, Uri.EscapeDataString(packageName));
+        //
+        // Composed from RequestUri rather than RegistryUri so a credential embedded in a .npmrc
+        // registry value never reaches RequestUri on the wire object. Relative resolution already
+        // drops the base query, but it carries the authority - and therefore "user:token@" - through.
+        var requestUri = new Uri(registry.RequestUri, Uri.EscapeDataString(packageName));
         var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue(AbbreviatedMetadataMediaType));
 

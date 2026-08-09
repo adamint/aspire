@@ -336,6 +336,31 @@ public class NpmRegistryResolverTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_RedactsQueryAndFragmentFromTheDisplayUri()
+    {
+        // A registry address can carry its credential in the query rather than the authority - an
+        // Azure Storage-backed or Artifactory feed signs the URL - and DisplayUri reaches the debug
+        // log and the timeout message. PackageSourceRedactor already strips the query from NuGet
+        // sources for this reason.
+        WriteHomeNpmrc("registry=https://npm.contoso.example/feed/?sv=2021-08-06&sig=SUPERSECRETSIGNATURE#frag");
+
+        var resolution = CreateResolver().Resolve(PackageName);
+
+        Assert.Equal("https://npm.contoso.example/feed/", resolution.DisplayUri);
+    }
+
+    [Fact]
+    public void Resolve_StripsEmbeddedCredentialsFromTheRequestUri()
+    {
+        WriteHomeNpmrc("registry=https://user:super-secret-token@npm.contoso.example/feed/");
+
+        var resolution = CreateResolver().Resolve(PackageName);
+
+        Assert.Equal(string.Empty, resolution.RequestUri.UserInfo);
+        Assert.Equal("https://npm.contoso.example/feed/", resolution.RequestUri.AbsoluteUri);
+    }
+
+    [Fact]
     public void Resolve_UnscopedPackageUsesGlobalRegistry()
     {
         WriteHomeNpmrc(
