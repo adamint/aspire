@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { createDebugAdapterOutputCapture, findBreakpointRemovalRequest, getResourceDebugProofRequest, isBreakpointRemovalAcknowledged, resourceDebugProofPhaseBudgetMs, type DebugAdapterMessageSummary } from '../testing/e2eStateFileBridge';
+import { createDebugAdapterOutputCapture, getResourceDebugProofRequest, resourceDebugProofPhaseBudgetMs } from '../testing/e2eStateFileBridge';
 import type { AspireExtensionE2EControlCommand } from '../types/extensionApi';
 
 suite('Resource debug proof request', () => {
@@ -181,98 +181,5 @@ suite('Resource debug proof output capture', () => {
             ['ASPIRE_E2E_NODE_PID=12345\n', 'ASPIRE_E2E_NODE_CHILD_PID=12346\n']);
         assert.strictEqual(capture.observedOutputEventCount, 23);
         assert.strictEqual(capture.getOutputSampleEvents().length, 5);
-    });
-});
-
-suite('Resource debug proof breakpoint removal correlation', () => {
-    const resourceSessionId = 'resource-session';
-    const appHostSessionId = 'apphost-session';
-    const sourcePath = '/workspace/AspireE2E.NodeApp/app.js';
-
-    function setBreakpointsRequest(overrides: Partial<DebugAdapterMessageSummary> & { sessionId: string; seq?: number }): DebugAdapterMessageSummary {
-        return {
-            sessionType: 'pwa-node',
-            sessionName: 'e2e-node',
-            command: 'setBreakpoints',
-            body: { source: { path: sourcePath, name: 'app.js' }, breakpoints: [] },
-            ...overrides,
-        };
-    }
-
-    function setBreakpointsResponse(overrides: Partial<DebugAdapterMessageSummary> & { sessionId: string; requestSeq?: number }): DebugAdapterMessageSummary {
-        return {
-            sessionType: 'pwa-node',
-            sessionName: 'e2e-node',
-            command: 'setBreakpoints',
-            success: true,
-            ...overrides,
-        };
-    }
-
-    test('picks the removal request for the resumed session and source', () => {
-        const request = findBreakpointRemovalRequest([
-            setBreakpointsRequest({ sessionId: appHostSessionId, seq: 11, sessionType: 'aspire' }),
-            setBreakpointsRequest({ sessionId: resourceSessionId, seq: 12, body: { source: { path: '/workspace/other.js' } } }),
-            setBreakpointsRequest({ sessionId: resourceSessionId, seq: 13 }),
-        ], resourceSessionId, sourcePath);
-
-        assert.strictEqual(request?.seq, 13);
-    });
-
-    test('ignores a configurationDone request on the resumed session', () => {
-        const request = findBreakpointRemovalRequest([
-            setBreakpointsRequest({ sessionId: resourceSessionId, seq: 21, command: 'configurationDone' }),
-        ], resourceSessionId, sourcePath);
-
-        assert.strictEqual(request, undefined);
-    });
-
-    test('ignores a removal request that carries no sequence number to correlate on', () => {
-        const request = findBreakpointRemovalRequest([
-            setBreakpointsRequest({ sessionId: resourceSessionId, seq: undefined }),
-        ], resourceSessionId, sourcePath);
-
-        assert.strictEqual(request, undefined);
-    });
-
-    test('matches a source path the adapter reports in a non-normalized form', () => {
-        // js-debug echoes back the path VS Code sent, but other adapters normalize it differently, so
-        // the comparison goes through isSamePath rather than a string equality check.
-        const request = findBreakpointRemovalRequest([
-            setBreakpointsRequest({ sessionId: resourceSessionId, seq: 31, body: { source: { path: '/workspace/AspireE2E.NodeApp/./app.js' } } }),
-        ], resourceSessionId, '/workspace/AspireE2E.NodeApp/app.js');
-
-        assert.strictEqual(request?.seq, 31);
-    });
-
-    test('ignores a request whose body carries no source path', () => {
-        const request = findBreakpointRemovalRequest([
-            setBreakpointsRequest({ sessionId: resourceSessionId, seq: 41, body: { breakpoints: [] } }),
-            setBreakpointsRequest({ sessionId: resourceSessionId, seq: 42, body: undefined }),
-        ], resourceSessionId, sourcePath);
-
-        assert.strictEqual(request, undefined);
-    });
-
-    test('accepts only the successful response to the correlated request', () => {
-        const responses = [
-            setBreakpointsResponse({ sessionId: appHostSessionId, requestSeq: 13, sessionType: 'aspire' }),
-            setBreakpointsResponse({ sessionId: resourceSessionId, requestSeq: 12 }),
-            setBreakpointsResponse({ sessionId: resourceSessionId, requestSeq: 13, success: false }),
-        ];
-
-        assert.strictEqual(isBreakpointRemovalAcknowledged(responses, resourceSessionId, 13), false);
-
-        assert.strictEqual(
-            isBreakpointRemovalAcknowledged([...responses, setBreakpointsResponse({ sessionId: resourceSessionId, requestSeq: 13 })], resourceSessionId, 13),
-            true);
-    });
-
-    test('does not accept another command answered with the same sequence number', () => {
-        assert.strictEqual(
-            isBreakpointRemovalAcknowledged([
-                setBreakpointsResponse({ sessionId: resourceSessionId, requestSeq: 13, command: 'configurationDone' }),
-            ], resourceSessionId, 13),
-            false);
     });
 });

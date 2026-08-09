@@ -1226,54 +1226,6 @@ ${JSON.stringify({
   }
 }
 
-/**
- * Finds the `setBreakpoints` request that carries the proof breakpoint's removal.
- *
- * `requestsSinceRemoval` must already be limited to requests observed after `removeBreakpoints` was
- * called; this narrows those to the debug session being resumed and to the source the breakpoint was
- * set in, and requires a sequence number so the response can be matched to this exact request.
- */
-export function findBreakpointRemovalRequest(
-  requestsSinceRemoval: readonly DebugAdapterMessageSummary[],
-  sessionId: string,
-  breakpointSourcePath: string): DebugAdapterMessageSummary | undefined {
-  return requestsSinceRemoval.find(request =>
-    request.sessionId === sessionId &&
-    request.command === 'setBreakpoints' &&
-    typeof request.seq === 'number' &&
-    isSetBreakpointsRequestForSource(request.body, breakpointSourcePath));
-}
-
-/** Whether the adapter answered the given `setBreakpoints` request on the given session successfully. */
-export function isBreakpointRemovalAcknowledged(
-  responses: readonly DebugAdapterMessageSummary[],
-  sessionId: string,
-  requestSeq: number): boolean {
-  return responses.some(response =>
-    response.sessionId === sessionId &&
-    response.command === 'setBreakpoints' &&
-    response.requestSeq === requestSeq &&
-    response.success === true);
-}
-
-/**
- * Whether a captured `setBreakpoints` request targets the given source file. The captured body is the
- * request's arguments:
- *   { "source": { "path": "/workspace/AspireE2E.NodeApp/app.js", "name": "app.js" },
- *     "lines": [14], "breakpoints": [{ "line": 14 }], "sourceModified": false }
- * Only the source is matched, not the remaining breakpoint lines, because the protocol's line
- * numbering depends on the client's `linesStartAt1` handshake with each adapter.
- * See https://microsoft.github.io/debug-adapter-protocol/specification#Requests_SetBreakpoints
- */
-function isSetBreakpointsRequestForSource(requestBody: unknown, breakpointSourcePath: string): boolean {
-  if (!requestBody || typeof requestBody !== 'object') {
-    return false;
-  }
-
-  const source = (requestBody as { source?: { path?: unknown } }).source;
-  return typeof source?.path === 'string' && isSamePath(source.path, breakpointSourcePath);
-}
-
 function toDebugSessionSnapshot(session: vscode.DebugSession): DebugSessionSnapshot {
   return {
     id: session.id,
