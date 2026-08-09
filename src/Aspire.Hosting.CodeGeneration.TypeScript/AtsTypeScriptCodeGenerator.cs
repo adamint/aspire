@@ -3,7 +3,6 @@
 
 using System.Globalization;
 using System.Text;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using Aspire.Shared.Json;
 using Aspire.TypeSystem;
@@ -106,7 +105,7 @@ internal sealed class ExportedValueTreeNode
 /// </list>
 /// </para>
 /// </remarks>
-internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReferenceExporter
+internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator
 {
     private TextWriter _writer = null!;
 
@@ -442,26 +441,6 @@ internal sealed class AtsTypeScriptCodeGenerator : ICodeGenerator, IApiReference
         files["aspire.mts"] = GenerateAspireSdk(context);
 
         return files;
-    }
-
-    /// <inheritdoc />
-    public JsonElement ExportApi(AtsContext context, ApiReferenceExportOptions options)
-    {
-        ArgumentNullException.ThrowIfNull(context);
-        ArgumentNullException.ThrowIfNull(options);
-
-        // Build the projector from the same context the generator would use, so the exported
-        // documentation describes the exact signatures generation would emit rather than a
-        // second, independently derived reading of the ATS context.
-        var projector = new TypeScriptApiProjector(context);
-        var model = projector.BuildApiModel(
-            new TypeScriptApiPackageIdentity(options.PackageName, options.PackageVersion),
-            options.ExportingAssemblyNames);
-
-        // JsonDocument.Parse + Clone rather than JsonSerializer, because this assembly is
-        // AOT-compatible and the serializer's reflection-based overloads are not.
-        using var document = JsonDocument.Parse(TypeScriptApiExportWriter.WriteToJson(model));
-        return document.RootElement.Clone();
     }
 
     /// <summary>

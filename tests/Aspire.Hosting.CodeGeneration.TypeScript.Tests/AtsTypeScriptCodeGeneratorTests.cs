@@ -2184,6 +2184,35 @@ public partial class AtsTypeScriptCodeGeneratorTests
             new TypeScriptApiPackageIdentity(TestPackageName, TestPackageVersion),
             [TestPackageName]);
 
+        AssertDeclarationFragmentsAreSelfContained(model);
+    }
+
+    /// <summary>
+    /// A package contributing an entry point must be self-contained too.
+    /// </summary>
+    /// <remarks>
+    /// Entry points are the one exported shape that names <c>AspireClientRpc</c>: they are free
+    /// functions, so the client is passed explicitly as the first parameter. The runtime fragment
+    /// declared every other base-library symbol but not that one, so an <c>Aspire.Hosting</c> export
+    /// published a signature naming a type no fragment declared, and aspire.dev's concatenation of
+    /// the manifest failed to resolve it. The context used above has no entry point, which is why
+    /// the sibling test never saw the gap.
+    /// </remarks>
+    [Fact]
+    public void ApiExportDeclarationFragmentsForEntryPointsReferenceOnlyDeclaredOrBuiltInSymbols()
+    {
+        var context = CreateEntryPointContext();
+
+        var projector = new TypeScriptApiProjector(context);
+        var model = projector.BuildApiModel(
+            new TypeScriptApiPackageIdentity(EntryPointPackage, TestPackageVersion),
+            [EntryPointPackage]);
+
+        AssertDeclarationFragmentsAreSelfContained(model);
+    }
+
+    private static void AssertDeclarationFragmentsAreSelfContained(TypeScriptApiModel model)
+    {
         var declaredNames = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var declaration in model.Declarations)

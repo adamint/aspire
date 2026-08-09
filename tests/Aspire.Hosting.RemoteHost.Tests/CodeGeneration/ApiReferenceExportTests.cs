@@ -146,7 +146,7 @@ public class ApiReferenceExportTests
     {
         var service = CreateCodeGenerationService();
 
-        // Go generates runtime source but does not implement IApiReferenceExporter, so asking it for
+        // Go generates runtime source but ships no IApiReferenceExporter, so asking it for
         // an API export has to fail with a message that names the gap rather than returning an empty
         // document that a documentation site would silently publish.
         var ex = Assert.Throws<NotSupportedException>(() => service.ExportApi("Go", "Aspire.Hosting", "13.5.0"));

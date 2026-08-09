@@ -46,7 +46,12 @@ internal sealed partial class TypeScriptApiProjector
     {
         "Awaitable", "MarshalledHandle", "Handle", "HandleReference", "AbortSignal", "CancellationToken",
         "ReferenceExpression", "AspireList", "AspireDict", "ResourceBuilderBase", "InputType",
-        "InteractionInput", "InteractionInputCollection", "InteractionInputCollectionPromise"
+        "InteractionInput", "InteractionInputCollection", "InteractionInputCollectionPromise",
+        // Every exported entry point is a free function that takes the client explicitly
+        // (see EntryPointClientParameterType), so a package contributing an entry point names this
+        // symbol in a signature. Without it here the fragment would be the only self-contained
+        // declaration set that does not compile on its own.
+        "AspireClientRpc"
     };
 
     private const string RuntimeDeclarationContent = """
@@ -64,6 +69,7 @@ internal sealed partial class TypeScriptApiProjector
         export interface InteractionInput { readonly name: string; }
         export interface InteractionInputCollection extends HandleReference {}
         export interface InteractionInputCollectionPromise extends PromiseLike<InteractionInputCollection> {}
+        export interface AspireClientRpc { readonly connected: boolean; invokeCapability<TResult = unknown>(capabilityId: string, args?: Record<string, unknown>): Promise<TResult>; }
         """;
 
     private readonly TypeScriptResolvedModel _resolved;

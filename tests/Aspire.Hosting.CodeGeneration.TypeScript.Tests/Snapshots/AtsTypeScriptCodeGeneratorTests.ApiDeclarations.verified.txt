@@ -988,3 +988,4 @@ export interface ResourceBuilderBase extends HandleReference {}
 export interface InteractionInput { readonly name: string; }
 export interface InteractionInputCollection extends HandleReference {}
 export interface InteractionInputCollectionPromise extends PromiseLike<InteractionInputCollection> {}
+export interface AspireClientRpc { readonly connected: boolean; invokeCapability<TResult = unknown>(capabilityId: string, args?: Record<string, unknown>): Promise<TResult>; }

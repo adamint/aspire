@@ -115,7 +115,13 @@ internal sealed class SdkExportCommand : BaseCommand
                     $"Invalid package '{package}'. Expected PackageName@Version (e.g. Aspire.Hosting.Redis@13.5.0); project references are not supported by sdk export.");
             }
 
-            packageVersion = reference.Version;
+            // SemVer build metadata is not part of NuGet package identity
+            // (https://semver.org/#spec-item-10), so `Contoso@2.0.0+fake` restores exactly the
+            // package `Contoso@2.0.0` does. Recording the requested string verbatim would publish
+            // that package's surface under a version no feed can serve, which is precisely the
+            // exact-version guarantee this command exists to make. Normalizing once here keeps the
+            // first-party guard, the restore pin, and the exported label naming the same version.
+            packageVersion = StripBuildMetadata(reference.Version);
 
             // NuGet package ids are case-insensitive, so `aspire.hosting` names the core package
             // exactly as `Aspire.Hosting` does:
@@ -131,14 +137,13 @@ internal sealed class SdkExportCommand : BaseCommand
 
             if (IsFirstPartyHostingPackage(packageName))
             {
-                var requested = StripBuildMetadata(packageVersion);
-                if (!string.Equals(requested, ExecutionContext.IdentitySdkVersion, StringComparison.OrdinalIgnoreCase))
+                if (!string.Equals(packageVersion, ExecutionContext.IdentitySdkVersion, StringComparison.OrdinalIgnoreCase))
                 {
                     return CommandResult.Failure(
                         CliExitCodes.InvalidCommand,
                         $"This CLI can only export first-party Aspire packages at {ExecutionContext.IdentitySdkVersion}, but {packageName}@{packageVersion} was requested. " +
                         $"The TypeScript generator is restored at this CLI's version, so exporting a different package version would describe a mixed SDK surface. " +
-                        $"Run the export with the {requested} CLI instead.");
+                        $"Run the export with the {packageVersion} CLI instead.");
                 }
             }
 
@@ -146,9 +151,9 @@ internal sealed class SdkExportCommand : BaseCommand
             {
                 // Pin the requested version: a bare NuGet version is a minimum, so an unavailable
                 // version would restore as a later one and be published under the wrong number.
-                // Use packageName rather than reference.Name so the restored reference and the
-                // exported label can never name the package differently.
-                integrations.Add(IntegrationReference.FromExactPackage(packageName, reference.Version));
+                // Use packageName/packageVersion rather than the raw reference so the restored
+                // reference and the exported label can never name a different package or version.
+                integrations.Add(IntegrationReference.FromExactPackage(packageName, packageVersion));
             }
         }
 

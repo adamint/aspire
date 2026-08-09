@@ -174,8 +174,13 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
     public async Task SdkExportAcceptsCoreVersionThatDiffersOnlyByBuildMetadata()
     {
         var interactionService = new TestInteractionService();
-        using var provider = CreateProvider(interactionService, out var workspace, out _);
-        using var _2 = workspace;
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(
+            interactionService,
+            workspace,
+            rpcClient,
+            new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName));
 
         var executionContext = provider.GetRequiredService<Aspire.Cli.CliExecutionContext>();
 
@@ -184,6 +189,40 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
             $"sdk export --language typescript --package Aspire.Hosting@{executionContext.IdentitySdkVersion}+build.5");
 
         Assert.Equal(0, exitCode);
+
+        // The metadata is accepted but must not survive into the document: see
+        // SdkExportPublishesTheVersionNuGetResolvesRatherThanTheRequestedBuildMetadata.
+        Assert.Equal(
+            ("typescript", "Aspire.Hosting", executionContext.IdentitySdkVersion),
+            rpcClient.LastExportRequest);
+    }
+
+    /// <summary>
+    /// SemVer build metadata is not part of NuGet package identity, so <c>2.0.0+fake</c> restores the
+    /// same package <c>2.0.0</c> does. Publishing the surface under the requested string would label
+    /// the document with a version no feed can serve, which is exactly the exact-version guarantee
+    /// this command exists to make. The restore pin has to agree for the same reason.
+    /// </summary>
+    [Fact]
+    public async Task SdkExportPublishesTheVersionNuGetResolvesRatherThanTheRequestedBuildMetadata()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new CapturingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(interactionService, workspace, rpcClient, appHostServerProject);
+
+        var exitCode = await InvokeAsync(
+            provider,
+            "sdk export --language typescript --package Contoso.Aspire.Widgets@2.0.0+fake");
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal(("typescript", "Contoso.Aspire.Widgets", "2.0.0"), rpcClient.LastExportRequest);
+
+        var requested = Assert.Single(
+            appHostServerProject.Integrations,
+            integration => integration.Name == "Contoso.Aspire.Widgets");
+        Assert.Equal("2.0.0", requested.Version);
     }
 
     [Theory]

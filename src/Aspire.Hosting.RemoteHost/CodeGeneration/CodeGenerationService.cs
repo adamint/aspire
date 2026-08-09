@@ -303,10 +303,13 @@ internal sealed class CodeGenerationService
                 throw new ArgumentException(BuildNoCodeGeneratorMessage(language));
             }
 
-            if (generator is not IApiReferenceExporter exporter)
+            // Resolved through the resolver rather than cast off the generator: the exporter is
+            // discovered as its own type so that adding the interface never changes the generator
+            // type's eagerly resolved interface list. See AtsTypeScriptApiReferenceExporter.
+            if (_resolver.GetApiReferenceExporter(language) is not { } exporter)
             {
                 throw new NotSupportedException(
-                    $"The '{generator.Language}' code generator does not implement {nameof(IApiReferenceExporter)}, " +
+                    $"The '{generator.Language}' language provides no {nameof(IApiReferenceExporter)}, " +
                     "so it cannot produce an API reference export. " +
                     $"Supported languages for API export: {BuildApiExportLanguageList()}.");
             }
