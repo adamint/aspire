@@ -1,15 +1,4 @@
 import * as vscode from 'vscode';
-import { dontShowAgainLabel } from '../loc/strings';
-
-export type ShowInformationMessage = (message: string, ...items: string[]) => Thenable<string | undefined>;
-
-export interface InformationMessageWithDontShowAgainOptions {
-    memento?: vscode.Memento;
-    notificationName: string;
-    message: string;
-    items?: readonly string[];
-    showInformationMessage?: ShowInformationMessage;
-}
 
 export function getNotificationSuppressionKey(notificationName: string): string {
     return `${notificationName}Suppressed`;
@@ -53,25 +42,4 @@ export async function markNotificationShown(memento: vscode.Memento | undefined,
  */
 export async function clearNotificationShown(memento: vscode.Memento | undefined, notificationName: string): Promise<void> {
     await memento?.update(getNotificationShownKey(notificationName), undefined);
-}
-
-export async function showInformationMessageWithDontShowAgain(options: InformationMessageWithDontShowAgainOptions): Promise<string | undefined> {
-    const {
-        memento,
-        notificationName,
-        message,
-        items = [],
-        showInformationMessage = (message, ...items) => vscode.window.showInformationMessage(message, ...items)
-    } = options;
-
-    if (isNotificationSuppressed(memento, notificationName)) {
-        return undefined;
-    }
-
-    const selection = await showInformationMessage(message, ...items, dontShowAgainLabel);
-    if (selection === dontShowAgainLabel) {
-        await suppressNotification(memento, notificationName);
-    }
-
-    return selection;
 }

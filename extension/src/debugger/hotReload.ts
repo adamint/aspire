@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { isCsDevKitInstalled } from '../capabilities';
 import { extensionLogOutputChannel } from '../utils/logging';
 import { enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, hotReloadEnabledConfirmation, hotReloadEnableFailed, showHotReloadOutputLabel } from '../loc/strings';
-import { clearNotificationShown, hasNotificationBeenShown, isNotificationSuppressed, markNotificationShown, showInformationMessageWithDontShowAgain } from '../utils/notificationSuppression';
+import { clearNotificationShown, hasNotificationBeenShown, markNotificationShown } from '../utils/notificationSuppression';
 
 const hotReloadConfigurationSection = 'csharp.experimental.debug';
 const hotReloadConfigurationName = 'hotReload';
@@ -122,8 +122,7 @@ export function showHotReloadNotificationIfNeeded(diagnostics: HotReloadDiagnost
     const notice = getHotReloadNotice(diagnostics);
     if (!notice
         || hotReloadNotificationsShownThisWindow.has(notice.name)
-        || hasNotificationBeenShown(hotReloadNotificationState, notice.name)
-        || isNotificationSuppressed(hotReloadNotificationState, notice.name)) {
+        || hasNotificationBeenShown(hotReloadNotificationState, notice.name)) {
         return;
     }
 
@@ -143,12 +142,12 @@ export function showHotReloadNotificationIfNeeded(diagnostics: HotReloadDiagnost
             // up has already used that one chance.
             await markNotificationShown(hotReloadNotificationState, notice.name);
 
-            const selection = await showInformationMessageWithDontShowAgain({
-                memento: hotReloadNotificationState,
-                notificationName: notice.name,
-                message: notice.message,
-                items: notice.actions
-            });
+            // No "Don't show again" action here. The record above already limits each notice to one
+            // presentation per user, so that button would promise a choice the user does not have:
+            // dismissing the toast suppresses the notice just as permanently as clicking it. It would
+            // also cost a slot in a toast that VS Code collapses into an overflow menu, pushing the
+            // action the notice exists for out of sight.
+            const selection = await vscode.window.showInformationMessage(notice.message, ...notice.actions);
 
             if (selection === showHotReloadOutputLabel) {
                 await vscode.commands.executeCommand(showHotReloadPanelCommand);

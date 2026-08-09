@@ -5,7 +5,7 @@ import { getHotReloadDiagnostics, initializeHotReloadNotificationState, isHotRel
 import { createHotReloadTestConfiguration, createTestMemento } from './common';
 import { dontShowAgainLabel, enableHotReloadLabel, hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled, hotReloadDisabledNotice, hotReloadEnabledConfirmation, hotReloadEnableFailed, showHotReloadOutputLabel } from '../loc/strings';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { getNotificationSuppressionKey, isNotificationSuppressed, showInformationMessageWithDontShowAgain } from '../utils/notificationSuppression';
+import { getNotificationSuppressionKey, isNotificationSuppressed } from '../utils/notificationSuppression';
 
 suite('Hot Reload Tests', () => {
     teardown(() => sinon.restore());
@@ -179,7 +179,7 @@ suite('Hot Reload Tests', () => {
         }, true);
         await settleNotifications();
 
-        assert.deepStrictEqual(notification.firstCall.args, [hotReloadDisabledNotice, enableHotReloadLabel, dontShowAgainLabel]);
+        assert.deepStrictEqual(notification.firstCall.args, [hotReloadDisabledNotice, enableHotReloadLabel]);
         assert.strictEqual(update.calledOnceWithExactly('hotReload', true, vscode.ConfigurationTarget.Global), true);
     });
 
@@ -334,22 +334,121 @@ suite('Hot Reload Tests', () => {
         ]);
     });
 
-    test('uses shared suppression keys and the shared Dont Show Again action', async () => {
-        const memento = createTestMemento();
-        const notification = sinon.stub().resolves(dontShowAgainLabel);
+    test('retires the notice by dismissal alone, without offering or writing a suppression flag', async () => {
+        const globalState = createTestMemento();
+        initializeHotReloadNotificationState({ globalState });
+        // Dismissal, not an action: this is the gesture that has to retire a once-per-user notice.
+        const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
-        const selection = await showInformationMessageWithDontShowAgain({
-            memento,
-            notificationName: 'hotReload.disabledNoticeV1',
-            message: 'message',
-            items: ['Action'],
-            showInformationMessage: notification
-        });
+        const diagnostics = {
+            devKitInstalled: true,
+            workspaceTrusted: true,
+            settingContributed: true,
+            settingEnabled: false,
+            reloadOnSaveEnabled: true,
+        };
 
-        assert.strictEqual(selection, dontShowAgainLabel);
+        showHotReloadNotificationIfNeeded(diagnostics, true);
+        await settleNotifications();
+
+        assert.deepStrictEqual(notification.firstCall.args, [hotReloadDisabledNotice, enableHotReloadLabel]);
+        assert.strictEqual(notification.firstCall.args.includes(dontShowAgainLabel), false);
+        assert.strictEqual(isNotificationSuppressed(globalState, 'hotReload.disabledNoticeV1'), false);
+
+        // A fresh window: dismissal alone already retired the notice, which is what makes the
+        // suppression action redundant rather than merely unused.
+        initializeHotReloadNotificationState({ globalState });
+        showHotReloadNotificationIfNeeded(diagnostics, true);
+        await settleNotifications();
+
+        assert.deepStrictEqual(notification.getCalls().map(call => call.args[0]), [hotReloadDisabledNotice]);
         assert.strictEqual(getNotificationSuppressionKey('resourceCommandArguments.secretWarning'), 'resourceCommandArguments.secretWarningSuppressed');
-        assert.strictEqual(isNotificationSuppressed(memento, 'hotReload.disabledNoticeV1'), true);
-        assert.deepStrictEqual(notification.firstCall.args, ['message', 'Action', dontShowAgainLabel]);
+    });
+
+    // The two tests below deliberately let the production code reach the real VS Code APIs instead of
+    // stubbing them. They are the most of this flow that can be automated: the notice is gated on C#
+    // Dev Kit being installed and on `csharp.experimental.debug.hotReload` being a contributed setting,
+    // and neither the Extension Host test instance nor the vscode-extension-tester E2E instance
+    // (extension/scripts/run-e2e.js installs only the Aspire VSIX and runs extester --offline) has the
+    // ms-dotnettools extensions that supply them, so no harness here can make the toast appear for a
+    // UI driver to click. What is reachable is what happens after a click, so that is what these cover.
+
+    test('recovers when VS Code itself refuses to write the Hot Reload setting', async () => {
+        const globalState = createTestMemento();
+        initializeHotReloadNotificationState({ globalState });
+
+        // Captured before the stub replaces getConfiguration so that `update` below is the real VS Code
+        // write, not a test double. It rejects because the setting is only registered by the C# extension,
+        // which is exactly the shape of the production failure: Dev Kit disabled or uninstalled while the
+        // toast is still up leaves the extension holding an action it can no longer perform.
+        const realConfiguration = vscode.workspace.getConfiguration('csharp.experimental.debug');
+        const getConfiguration = sinon.stub(vscode.workspace, 'getConfiguration');
+        getConfiguration.withArgs('csharp.experimental.debug').returns(createHotReloadTestConfiguration({
+            get: (name: string) => name === 'hotReload' ? false : undefined,
+            update: (section: string, value: unknown, target?: vscode.ConfigurationTarget | boolean | null) => realConfiguration.update(section, value, target),
+        }, { contributed: true }));
+        getConfiguration.returns({ get: () => undefined } as unknown as vscode.WorkspaceConfiguration);
+
+        const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(enableHotReloadLabel as unknown as vscode.MessageItem);
+        const errorMessage = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+        const warn = sinon.stub(extensionLogOutputChannel, 'warn');
+
+        const diagnostics = {
+            devKitInstalled: true,
+            workspaceTrusted: true,
+            settingContributed: true,
+            settingEnabled: false,
+            reloadOnSaveEnabled: true,
+        };
+
+        showHotReloadNotificationIfNeeded(diagnostics, true);
+        await settleNotifications();
+
+        // Pins that the rejection came from VS Code rather than from a stub that happened to throw.
+        assert.strictEqual(
+            warn.getCalls().some(call => String(call.args[0]).includes('not a registered configuration')),
+            true,
+            `Expected a real configuration rejection, got: ${JSON.stringify(warn.getCalls().map(call => call.args[0]))}`);
+        assert.deepStrictEqual(errorMessage.getCalls().map(call => call.args[0]), [hotReloadEnableFailed]);
+
+        initializeHotReloadNotificationState({ globalState });
+        showHotReloadNotificationIfNeeded(diagnostics, true);
+        await settleNotifications();
+
+        assert.deepStrictEqual(notification.getCalls().map(call => call.args[0]), [hotReloadDisabledNotice, hotReloadDisabledNotice]);
+    });
+
+    test('recovers when the Dev Kit Hot Reload output command is not registered', async () => {
+        const globalState = createTestMemento();
+        initializeHotReloadNotificationState({ globalState });
+
+        // executeCommand is intentionally not stubbed: 'csdevkit.debug.showHotReloadPanel' belongs to Dev
+        // Kit, so the real command registry rejects it here the same way it would for a user whose Dev Kit
+        // is present but too old to contribute the panel.
+        const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(showHotReloadOutputLabel as unknown as vscode.MessageItem);
+        const warn = sinon.stub(extensionLogOutputChannel, 'warn');
+
+        const diagnostics = {
+            devKitInstalled: true,
+            workspaceTrusted: true,
+            settingContributed: true,
+            settingEnabled: true,
+            reloadOnSaveEnabled: true,
+        };
+
+        showHotReloadNotificationIfNeeded(diagnostics, true);
+        await settleNotifications();
+
+        assert.strictEqual(
+            warn.getCalls().some(call => String(call.args[0]).includes("command 'csdevkit.debug.showHotReloadPanel' not found")),
+            true,
+            `Expected the real command registry to reject, got: ${JSON.stringify(warn.getCalls().map(call => call.args[0]))}`);
+
+        initializeHotReloadNotificationState({ globalState });
+        showHotReloadNotificationIfNeeded(diagnostics, true);
+        await settleNotifications();
+
+        assert.deepStrictEqual(notification.getCalls().map(call => call.args[0]), [hotReloadActiveNotice, hotReloadActiveNotice]);
     });
 
     async function settleNotifications(): Promise<void> {
