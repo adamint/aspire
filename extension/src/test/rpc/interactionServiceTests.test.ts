@@ -795,6 +795,83 @@ suite('InteractionService endpoints', () => {
 			sandbox.restore();
 		}
 	});
+
+	// The CLI's `stopDebugging` RPC endpoint is the production shutdown path. It used to call
+	// AspireDebugSession.dispose(), which fires the registered disposables and discards whatever
+	// they reject with, so a failing adapter looked like a clean stop to the CLI and to the user.
+	test("stopDebugging reports aggregated debug session stop failures to the caller", async () => {
+		const sandbox = sinon.createSandbox();
+
+		try {
+			const parentDebugSession = {
+				id: 'aspire-session',
+				type: 'aspire',
+				name: 'Aspire',
+				workspaceFolder: undefined,
+				configuration: {
+					type: 'aspire',
+					request: 'launch',
+					name: 'Aspire',
+					program: '/workspace/apphost.cs',
+					command: 'run',
+				},
+				customRequest: sandbox.stub(),
+				getDebugProtocolBreakpoint: sandbox.stub(),
+			};
+			const appHostDebugSession = { id: 'apphost-session', type: 'coreclr', name: 'AppHost' };
+			const resourceDebugSession = { id: 'resource-session', type: 'pwa-node', name: 'Node.js: server.js' };
+			const resourceStopFailure = new Error('Resource stop failed');
+			const appHostStopFailure = new Error('AppHost stop failed');
+			const stopDebuggingStub = sandbox.stub(vscode.debug, 'stopDebugging')
+				.callsFake(async session => {
+					if (session === resourceDebugSession as unknown as vscode.DebugSession) {
+						throw resourceStopFailure;
+					}
+
+					if (session === appHostDebugSession as unknown as vscode.DebugSession) {
+						throw appHostStopFailure;
+					}
+				});
+			const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+			const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+			(aspireDebugSession as any)._appHostDebugSession = {
+				id: appHostDebugSession.id,
+				session: appHostDebugSession as unknown as vscode.DebugSession,
+				stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
+			};
+			(aspireDebugSession as any)._resourceDebugSessions = [
+				{
+					id: resourceDebugSession.id,
+					session: resourceDebugSession as unknown as vscode.DebugSession,
+					stopSession: () => vscode.debug.stopDebugging(resourceDebugSession as unknown as vscode.DebugSession),
+				},
+			];
+			const testInfo = await createTestRpcServer(null, () => aspireDebugSession);
+
+			await assert.rejects(
+				() => testInfo.interactionService.stopDebugging(),
+				(error: unknown) => {
+					assert.ok(error instanceof AggregateError, `Expected an AggregateError but got ${error}`);
+					assert.deepStrictEqual((error as AggregateError).errors, [resourceStopFailure, appHostStopFailure]);
+					return true;
+				});
+
+			// Resources first, then the AppHost, then the synthetic Aspire parent - the ordered
+			// shutdown, not the unordered fan-out that dispose() performs.
+			assert.deepStrictEqual(
+				stopDebuggingStub.getCalls().map(call => call.args[0]),
+				[
+					resourceDebugSession as unknown as vscode.DebugSession,
+					appHostDebugSession as unknown as vscode.DebugSession,
+					parentDebugSession as unknown as vscode.DebugSession,
+				]);
+			// The session is still released even though the stop failed.
+			assert.strictEqual((aspireDebugSession as any)._disposed, true);
+		}
+		finally {
+			sandbox.restore();
+		}
+	});
 });
 
 type RpcServerTestInfo = {

@@ -59,6 +59,7 @@ export const csharpSupportNotEnabled = vscode.l10n.t('C# support is not enabled 
 export const failedToStartProject = (errorMessage: string) => vscode.l10n.t('Failed to start project: {0}.', errorMessage);
 export const dcpServerNotInitialized = vscode.l10n.t('DCP server not initialized - cannot forward debug output.');
 export const appHostSessionTerminated = vscode.l10n.t('The AppHost process has terminated. To view console output, select the AppHost session from the debug console dropdown.');
+export const debugSessionsFailedToStop = (count: number) => vscode.l10n.t('{0} debug sessions failed to stop.', count);
 export const invalidTokenProvided = vscode.l10n.t('Invalid token provided.');
 export const noWorkspaceFolder = vscode.l10n.t('No workspace folder found.');
 export const aspireConfigExists = vscode.l10n.t('Aspire launch configuration already exists in launch.json.');

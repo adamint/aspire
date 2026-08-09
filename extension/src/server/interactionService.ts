@@ -37,7 +37,7 @@ export interface IInteractionService {
     openEditor: (path: string) => Promise<void>;
     logMessage: (logLevel: CSLogLevel, message: string) => void;
     launchAppHost(projectFile: string, args: string[], environment: EnvVar[], debug: boolean): Promise<void>;
-    stopDebugging: () => void;
+    stopDebugging: () => Promise<void>;
     closeDashboard: () => void;
     notifyAppHostStartupCompleted: () => void;
     startDebugSession: (workingDirectory: string, projectFile: string | null, debug: boolean, options?: DebugSessionOptions) => Promise<void>;
@@ -647,9 +647,14 @@ export class InteractionService implements IInteractionService {
         return debugSession.startAppHost(projectFile, args, environment, debug, { forceBuild });
     }
 
-    stopDebugging() {
+    async stopDebugging(): Promise<void> {
         this.clearProgressNotification();
-        this._getAspireDebugSession()?.dispose();
+        // Go through AspireDebugSession.stopDebugging() rather than dispose(). dispose() only fires
+        // the registered disposables, which stops the resource sessions, the AppHost, and the Aspire
+        // parent concurrently and discards whatever they reject with. stopDebugging() performs the
+        // ordered shutdown, disposes the session afterwards, and rethrows the failures so the CLI
+        // (and the user, via the endpoint middleware) learns that the shutdown did not complete.
+        await this._getAspireDebugSession()?.stopDebugging();
     }
 
     notifyAppHostStartupCompleted() {

@@ -6,7 +6,7 @@ import { AspireResourceExtendedDebugConfiguration, AspireResourceDebugSession, E
 import { extensionLogOutputChannel } from "../utils/logging";
 import AspireDcpServer, { generateDcpIdPrefix } from "../dcp/AspireDcpServer";
 import { spawnCliProcess } from "./languages/cli";
-import { disconnectingFromSession, launchingWithAppHost, launchingWithDirectory, processExceptionOccurred, processExitedWithCode, aspireDashboard, appHostSessionTerminated } from "../loc/strings";
+import { disconnectingFromSession, launchingWithAppHost, launchingWithDirectory, processExceptionOccurred, processExitedWithCode, aspireDashboard, appHostSessionTerminated, debugSessionsFailedToStop } from "../loc/strings";
 import { projectDebuggerExtension } from "./languages/dotnet";
 import { AnsiColors } from "../utils/AspireTerminalProvider";
 import { applyTextStyle } from "../utils/strings";
@@ -123,7 +123,39 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     });
   }
 
+  /**
+   * Performs the ordered shutdown of this Aspire session: resource sessions, then the AppHost,
+   * then the synthetic Aspire parent, then disposal. Every caller that wants a session stopped -
+   * the CLI's `stopDebugging` RPC endpoint on `InteractionService` and the E2E state-file bridge -
+   * must go through here. Calling `dispose()` directly instead only fires the registered
+   * disposables, which is unordered, fire-and-forget, and silently drops stop failures.
+   */
   async stopDebugging(): Promise<void> {
+    const stopFailures = await this.stopAllSessions();
+
+    // Dispose even when a stop failed, otherwise a failing adapter would leak the debug adapter
+    // trackers, the terminal, and this session's entry in the extension's live-session registry.
+    // dispose() is idempotent and every stopSession() implementation memoizes its own result, so
+    // re-running the registered disposables here does not issue a second stop request for a
+    // session that was already stopped above.
+    this.dispose();
+
+    if (stopFailures.length === 1) {
+      throw stopFailures[0];
+    }
+
+    if (stopFailures.length > 1) {
+      // More than one adapter failed, so no single reason describes the shutdown. AggregateError
+      // keeps every reason instead of picking one and discarding the rest.
+      throw new AggregateError(stopFailures, debugSessionsFailedToStop(stopFailures.length));
+    }
+  }
+
+  /**
+   * Stops every session this Aspire session owns and returns the reasons of the ones that failed
+   * instead of throwing, so the caller can finish the shutdown before surfacing them.
+   */
+  private async stopAllSessions(): Promise<unknown[]> {
     // A resource launched under a debugger can keep the AppHost shutdown in flight until its debug
     // session exits. Stop those sessions before the AppHost to avoid waiting on a process whose
     // debugger would otherwise only be stopped later by dispose().
@@ -133,7 +165,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // and reintroduce the orphaned-resource behavior this ordering exists to prevent - on exactly
     // the path where a resource is most likely to be left behind. The rejection is kept and
     // rethrown after the AppHost and the synthetic Aspire parent have been stopped.
-    const resourceStopResults = await Promise.allSettled(resourceDebugSessions.map(session => session.stopSession()));
+    const resourceStopResults = await Promise.allSettled(resourceDebugSessions.map(session => startStopSession(session)));
     const resourceStopFailures = resourceStopResults
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
       .map(result => result.reason);
@@ -156,17 +188,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       stopFailures.push(err);
     }
 
-    if (stopFailures.length === 1) {
-      throw stopFailures[0];
-    }
-
-    if (stopFailures.length > 1) {
-      // More than one adapter failed, so no single reason describes the shutdown. AggregateError
-      // keeps every reason instead of picking one and discarding the rest. The message is a
-      // diagnostic rather than UI text: stopDebugging() is reached from the E2E state-file bridge,
-      // not from a user-facing command, so it is intentionally not localized.
-      throw new AggregateError(stopFailures, `${stopFailures.length} debug sessions failed to stop.`);
-    }
+    return stopFailures;
   }
 
   private stopParentDebugSessionOnce(): Thenable<void> {
@@ -178,7 +200,14 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // the AppHost termination event. Record the request before calling VS Code
     // so the Aspire parent has a single stop owner in either ordering, and
     // return the original Thenable so callers still wait for the in-flight stop.
-    this._parentStopPromise = vscode.debug.stopDebugging(this._session);
+    try {
+      this._parentStopPromise = vscode.debug.stopDebugging(this._session);
+    }
+    catch (err) {
+      // Memoize the failure too. Without this, the dispose() that follows a failed stop would
+      // retry the stop and rethrow out of dispose(), masking the failures we are aggregating.
+      this._parentStopPromise = Promise.reject(err);
+    }
 
     return this._parentStopPromise;
   }
@@ -874,7 +903,13 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // be missed and the summary would under-report failures.
     this._disposables.forEach(disposable => disposable.dispose());
     this._trackedDebugAdapters = [];
-    void this.stopParentDebugSessionOnce();
+    // dispose() cannot wait for the stop, but the promise still needs a rejection handler.
+    // stopDebugging() disposes after aggregating its failures, and VS Code's own disposal path
+    // has nobody to report to, so an unobserved rejection here would only surface as an
+    // "unhandled rejection" warning in the extension host.
+    void Promise.resolve(this.stopParentDebugSessionOnce()).catch(err => {
+      extensionLogOutputChannel.warn(`Failed to stop the Aspire parent debug session during disposal: ${err instanceof Error ? err.message : String(err)}`);
+    });
     this._onDidSendDebugConsoleOutput.dispose();
 
     // Telemetry: emit `debug/apphost/end` after a short grace window so any
@@ -993,6 +1028,28 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Starts a resource stop and always returns a promise.
+ *
+ * `stopSession()` is contributed by resource debugger extensions and is only typed as returning a
+ * `Thenable<void>` - nothing forces the implementation to be `async`. A synchronous throw from one
+ * of them would escape the surrounding `.map(...)` callback before `Promise.allSettled` ever saw
+ * the array, aborting the whole shutdown and leaving every not-yet-visited resource, the AppHost,
+ * and the Aspire parent running. `Promise.allSettled` only absorbs rejected promises, not throws
+ * raised while the promise array is being built, so the conversion has to happen here.
+ *
+ * The call itself stays synchronous (rather than being deferred with `Promise.resolve().then(...)`)
+ * so all resource stops are still started eagerly and run concurrently.
+ */
+function startStopSession(session: AspireResourceDebugSession): Promise<void> {
+  try {
+    return Promise.resolve(session.stopSession());
+  }
+  catch (err) {
+    return Promise.reject(err);
+  }
 }
 
 export function buildAspireCommandArgs(command: string, commandArgs: string[], extensionArgs: string[]): string[] {

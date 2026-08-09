@@ -693,6 +693,89 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(stopDebuggingStub.thirdCall.args[0], parentDebugSession);
     });
 
+    test('stopDebugging stops the remaining sessions when a resource stopSession throws synchronously', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: {
+                type: 'coreclr',
+                request: 'launch',
+                name: 'AppHost',
+            },
+        };
+        const healthyResourceDebugSession = {
+            id: 'healthy-resource-session',
+            type: 'pwa-node',
+            name: 'Node.js: server.js',
+            configuration: {
+                type: 'pwa-node',
+                request: 'launch',
+                name: 'Node.js: server.js',
+            },
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+        };
+        const synchronousStopFailure = new Error('Synchronous resource stop failed');
+        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
+        };
+        (aspireDebugSession as any)._resourceDebugSessions = [
+            {
+                // stopSession() is only typed as returning a Thenable, so a resource debugger
+                // extension is free to throw before it ever produces one. Ordered first so a
+                // regression that lets the throw escape the promise-array construction would
+                // abort the shutdown before any other session is stopped.
+                id: 'throwing-resource-session',
+                session: { id: 'throwing-resource-session' } as unknown as vscode.DebugSession,
+                stopSession: () => {
+                    throw synchronousStopFailure;
+                },
+            },
+            {
+                id: healthyResourceDebugSession.id,
+                session: healthyResourceDebugSession as unknown as vscode.DebugSession,
+                stopSession: () => vscode.debug.stopDebugging(healthyResourceDebugSession as unknown as vscode.DebugSession),
+            },
+        ];
+
+        await assert.rejects(
+            () => aspireDebugSession.stopDebugging(),
+            (error: unknown) => {
+                assert.strictEqual(error, synchronousStopFailure);
+                return true;
+            });
+
+        assert.deepStrictEqual(
+            stopDebuggingStub.getCalls().map(call => call.args[0]),
+            [
+                healthyResourceDebugSession as unknown as vscode.DebugSession,
+                appHostDebugSession as unknown as vscode.DebugSession,
+                parentDebugSession as unknown as vscode.DebugSession,
+            ]);
+        assert.strictEqual((aspireDebugSession as any)._disposed, true);
+    });
+
     test('stopDebugging does not stop the Aspire parent session twice when AppHost stop disposes the Aspire session', async () => {
         const parentDebugSession = {
             id: 'aspire-session',

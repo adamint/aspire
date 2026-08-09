@@ -847,6 +847,9 @@
     <trans-unit id="aspire-vscode.strings.aspireCliCommandTimedOut">
       <source xml:lang="en">timed out after {0}ms</source>
     </trans-unit>
+    <trans-unit id="aspire-vscode.strings.debugSessionsFailedToStop">
+      <source xml:lang="en">{0} debug sessions failed to stop.</source>
+    </trans-unit>
     <trans-unit id="aspire-vscode.strings.aspireCliCommandFailed">
       <source xml:lang="en">{0} exited with code {1}{2}</source>
     </trans-unit>
