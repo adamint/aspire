@@ -2,10 +2,16 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { AspireExtensionE2EControlCommand } from '../types/extensionApi';
-import { getCommandInvocationCount, getDebugLaunchCount, isSamePath, waitForCommandOutcome, waitForDebugLaunch, waitForExtensionState, waitForRepositoryIdle, waitForWorkspaceAppHost } from './helpers/assertions';
-import { createExternalSingleFileAppHost, executeE2eControlCommand, removeExternalSingleFileAppHost, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setDebugLaunchSuppressedForE2E, stopAppHostIfRunning, stopPrimaryAppHostIfRunning } from './helpers/fixtures';
+import { getCommandInvocationCount, getDebugLaunchCount, isSamePath, waitForCommandOutcome, waitForDebugLaunch, waitForDebugSessionStartup, waitForExtensionState, waitForNoDebugSessions, waitForNoRunningAppHost, waitForRepositoryIdle, waitForRunningAppHost, waitForWorkspaceAppHost } from './helpers/assertions';
+import { createExternalSingleFileAppHost, executeE2eControlCommand, isProcessAlive, removeExternalSingleFileAppHost, restoreWorkspaceCliPath, runE2eTeardown, setCliUnavailableForE2E, setDebugLaunchSuppressedForE2E, stopAppHostIfRunning, stopPrimaryAppHostIfRunning, waitForKnownProcessExit } from './helpers/fixtures';
 import { getPrimaryAppHostProjectPath, getWorkspaceRoot } from './helpers/paths';
 import { chooseActiveQuickPick, executeCommandFromPalette, openAspireView, waitForEditorTitle } from './helpers/vscode';
+
+interface DebugSessionProcessInfo {
+    appHostPath?: string;
+    cliPid?: number;
+    appHostPid?: number;
+}
 
 suite('Aspire extension edge case E2E', function () {
     this.timeout(240000);
@@ -138,5 +144,35 @@ suite('Aspire extension edge case E2E', function () {
         'external AppHost and resources to remain followed after its tab is backgrounded and the Aspire panel is hidden',
         60000);
         assert.ok(backgrounded.state.appHosts.some(appHost => isSamePath(appHost.appHostPath, appHostPath)));
+    });
+
+    test('deactivation process cleanup stops the owned CLI and AppHost process tree', async () => {
+        await openAspireView();
+        await waitForRepositoryIdle();
+        const discovered = await waitForWorkspaceAppHost();
+        const appHostPath = discovered.state.workspaceAppHostPath ?? getPrimaryAppHostProjectPath();
+
+        const beforeInvocation = getCommandInvocationCount('aspire-vscode.debugAppHost');
+        await executeE2eControlCommand({ name: 'debugAppHost', appHostPath }, { waitFor: 'started' });
+        await waitForCommandOutcome('aspire-vscode.debugAppHost', 'success', 180000, beforeInvocation);
+        await waitForDebugSessionStartup(appHostPath, 180000);
+        await waitForRunningAppHost(180000);
+
+        const processInfoStatus = await executeE2eControlCommand({ name: 'getDebugSessionProcessInfo', appHostPath });
+        const processInfo = processInfoStatus.result as DebugSessionProcessInfo | undefined;
+        assert.ok(processInfo?.cliPid, `Expected the E2E bridge to report the owned Aspire CLI pid: ${JSON.stringify(processInfoStatus)}`);
+        assert.ok(processInfo?.appHostPid, `Expected the E2E bridge to report the owned AppHost pid: ${JSON.stringify(processInfoStatus)}`);
+        assert.ok(isProcessAlive(processInfo.cliPid), `Expected the Aspire CLI process ${processInfo.cliPid} to be running before deactivation.`);
+        assert.ok(isProcessAlive(processInfo.appHostPid), `Expected the AppHost process ${processInfo.appHostPid} to be running before deactivation.`);
+
+        // This uses the same process-owner cleanup methods that extension deactivation reaches,
+        // but keeps the extension host alive. Full workbench reloads did stop these processes
+        // locally, but left ExTester unable to complete its own after-all browser shutdown.
+        await executeE2eControlCommand({ name: 'stopOwnedDebugSessionProcesses', appHostPath }, { timeoutMs: 30000 });
+
+        await waitForKnownProcessExit(processInfo.cliPid, 'the Aspire CLI process owned by the deactivated extension', 120000);
+        await waitForKnownProcessExit(processInfo.appHostPid, 'the AppHost process owned by the deactivated extension', 120000);
+        await waitForNoDebugSessions(120000);
+        await waitForNoRunningAppHost(120000, appHostPath);
     });
 });

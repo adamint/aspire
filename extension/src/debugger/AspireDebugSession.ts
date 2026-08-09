@@ -126,6 +126,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     return this._disposed;
   }
 
+  get cliProcessId(): number | undefined {
+    return this._cliProcess?.pid;
+  }
+
   constructor(session: vscode.DebugSession, rpcServer: AspireRpcServer, dcpServer: AspireDcpServer, terminalProvider: AspireTerminalProvider, removeAspireDebugSession: (session: AspireDebugSession) => void, debugSessionId: string = generateDcpIdPrefix()) {
     this._session = session;
     this._rpcServer = rpcServer;
@@ -535,10 +539,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
         debugSessionId: this.debugSessionId,
         noDebug: noDebug,
         env: env,
-        // `aspire run` owns the AppHost and every resource process beneath it. Spawning it as a
-        // process-group leader is what lets `terminateCliProcess` signal the whole tree by negative
-        // PID when the cooperative `stopCli` RPC does not finish the job. Every other CLI spawn
-        // site in the extension already does this; this one is the longest-lived of them.
+        // `aspire run` owns the AppHost and every resource process beneath it. Spawning this
+        // long-lived CLI as a process-group leader is what lets `terminateCliProcess` signal the
+        // whole tree by negative PID when the cooperative `stopCli` RPC does not finish the job.
         createProcessGroup: true,
       },
     );
