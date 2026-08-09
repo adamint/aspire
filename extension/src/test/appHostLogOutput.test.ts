@@ -703,6 +703,40 @@ suite('AppHost log output coordinator tests', () => {
             }]);
     });
 
+    test('stops extending a DebugLogger record once its backchannel twin has arrived', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        // The CLI relays one complete record per entry, so the warning cannot still be growing by
+        // the time an unrelated Debug.WriteLine lands in the same idle window.
+        assert.ok(coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 1, logLevel: 'Warning', message: 'Disk is nearly full.' })));
+
+        // Nothing renders: the warning is recognised as the twin's console copy and dropped, and
+        // console-category passthrough is dropped by design because the debug console already
+        // shows it. Absorbing 'progress' into the warning instead would break that identity and
+        // render the warning a second time, in yellow, with the unrelated line inside it.
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Warning: Disk is nearly full.\nprogress\n',
+                'console'),
+            []);
+    });
+
+    test('canonicalizes control characters so both copies of a record still correlate', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        // A console formatter that escapes control characters would spell the message differently
+        // from the backchannel copy, and the record would render twice.
+        assert.ok(coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 1, logLevel: 'Warning', message: 'Boom\u001b[31m.' })));
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                'Example.Category: Warning: Boom\\u001B[31m.\n',
+                'console'),
+            []);
+    });
+
     test('keeps an exception body attached to its DebugLogger record', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 

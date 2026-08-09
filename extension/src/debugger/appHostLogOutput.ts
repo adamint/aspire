@@ -244,7 +244,7 @@ export class AppHostLogOutputCoordinator {
 
                 const pendingDebugRecord = this._pendingDebugRecords.get(category);
                 if (pendingDebugRecord) {
-                    if (startsUnrelatedDebuggerOutput(line)) {
+                    if (startsUnrelatedDebuggerOutput(line) || this.hasUnmatchedBackchannelTwin(pendingDebugRecord)) {
                         flushPassthrough();
                         this.flushPendingDebugRecord(category, outputs);
                     } else {
@@ -301,6 +301,29 @@ export class AppHostLogOutputCoordinator {
 
         return this._correlatedRecords.some(candidate =>
             !candidate.sources.has('debugLogger') && areEquivalentRecords(candidate.record, merged));
+    }
+
+    /**
+     * Reports whether the record assembled so far already has a backchannel copy waiting for its
+     * twin.
+     *
+     * The CLI relays one complete record per backchannel entry, so a pending DebugLogger record
+     * that already equals one cannot still be growing: the next line belongs to something else.
+     * Without this an unrelated `Debug.WriteLine` inside the idle window would be appended to a
+     * warning, breaking the identity that dedupe depends on and rendering both copies.
+     *
+     * Trace and Debug have no backchannel twin, so they still rely on the idle flush.
+     */
+    private hasUnmatchedBackchannelTwin(pending: PendingDebugRecord): boolean {
+        const record = parseDebugLoggerRecord(pending.text);
+        if (!record) {
+            return false;
+        }
+
+        return this._correlatedRecords.some(candidate =>
+            candidate.sources.has('backchannel') &&
+            !candidate.sources.has('debugLogger') &&
+            isCompletedTwin(candidate.record, record));
     }
 
     private flushPendingDebugRecord(category: string, outputs: AppHostParentOutput[]): void {
@@ -713,6 +736,17 @@ function splitMessageAndException(value: string): { message: string; exception?:
     };
 }
 
+function isCompletedTwin(backchannelRecord: AppHostLoggerRecord, pendingRecord: AppHostLoggerRecord): boolean {
+    // Deliberately stricter than areEquivalentRecords, which treats a missing exception as a
+    // wildcard so the two sources still correlate once both are whole. A record that is still
+    // being assembled matches that wildcard as soon as its first line lands, so using it here
+    // would cut the exception off the record it belongs to.
+    return backchannelRecord.categoryName === pendingRecord.categoryName
+        && backchannelRecord.logLevel === pendingRecord.logLevel
+        && backchannelRecord.message === pendingRecord.message
+        && backchannelRecord.exception === pendingRecord.exception;
+}
+
 function areEquivalentRecords(left: AppHostLoggerRecord, right: AppHostLoggerRecord): boolean {
     if (left.categoryName !== right.categoryName || left.logLevel !== right.logLevel) {
         return false;
@@ -776,7 +810,20 @@ function normalizeRecordText(value: string): string {
     // an extra padded line while the backchannel copy keeps a bare newline. Trimming
     // trailing whitespace makes the two comparable and does not change how a record
     // reads.
-    return normalizeLineEndings(value).replace(/[ \t\n]+$/, '');
+    return escapeConsoleControlCharacters(normalizeLineEndings(value)).replace(/[ \t\n]+$/, '');
+}
+
+function escapeConsoleControlCharacters(value: string): string {
+    // The console formatters escape C0, DEL and C1 as \uXXXX before writing, keeping only
+    // \t \n \r, so a message carrying a raw ESC reaches the console escaped while the
+    // backchannel copy keeps it raw and the two stop correlating. Applying the same rule to
+    // every source is stable in both directions: an already-escaped copy has no control
+    // characters left to escape, and a raw copy ends up spelled the same way.
+    //
+    // https://github.com/dotnet/runtime/pull/128741 added the sanitizer, which is not in
+    // release/10.0, so today this only ever fires on a message that both sources carry raw.
+    return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, character =>
+        `\\u${character.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
 }
 
 function normalizeLineEndings(value: string): string {

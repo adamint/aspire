@@ -3951,7 +3951,8 @@ public class RunCommandTests(ITestOutputHelper outputHelper)
 
     [Fact]
     public async Task CaptureAppHostLogsAsync_FallsBackToLegacyMessagesWhenCapabilityProbeFails()
-    {        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var logFilePath = Path.Combine(workspace.WorkspaceRoot.FullName, "test.log");
         var errorWriter = new TestStartupErrorWriter();
         using var fileLoggerProvider = new FileLoggerProvider(logFilePath, errorWriter);
