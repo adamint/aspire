@@ -322,6 +322,34 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(rmStub.called, false);
     });
 
+    test('gives the Firefox adapter an empty pathMappings list when the resource has no web root', async () => {
+        // firefox-devtools.vscode-firefox-debug rejects a launch configuration that has a `url` but
+        // neither `webRoot` nor `pathMappings`, and `web_root` is optional in the launch
+        // configuration Aspire receives. Without the fallback the session never starts.
+        sinon.stub(vscode.extensions, 'getExtension').callsFake((id: string) =>
+            id === 'firefox-devtools.vscode-firefox-debug' ? ({ id } as vscode.Extension<unknown>) : undefined);
+        const debugConfig = createResourceDebugConfig();
+
+        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001', browser: 'firefox' }, debugConfig);
+
+        assert.strictEqual(debugConfig.type, 'firefox');
+        assert.strictEqual(debugConfig.webRoot, undefined);
+        assert.deepStrictEqual(debugConfig.pathMappings, [], 'Expected an empty pathMappings list so the Firefox adapter accepts the url-only configuration');
+    });
+
+    test('leaves pathMappings alone when the Firefox resource supplies a web root', async () => {
+        // `webRoot` already satisfies the adapter's requirement, so Aspire must not add a mapping
+        // list that would compete with the source root the resource declared.
+        sinon.stub(vscode.extensions, 'getExtension').callsFake((id: string) =>
+            id === 'firefox-devtools.vscode-firefox-debug' ? ({ id } as vscode.Extension<unknown>) : undefined);
+        const debugConfig = createResourceDebugConfig();
+
+        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001', browser: 'firefox', web_root: '/workspace/app/wwwroot' }, debugConfig);
+
+        assert.strictEqual(debugConfig.webRoot, '/workspace/app/wwwroot');
+        assert.strictEqual(debugConfig.pathMappings, undefined);
+    });
+
     test('prompts to install the Firefox debugger and fails when the adapter is missing', async () => {
         const getExtensionStub = sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
         const showErrorStub = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined as any);
@@ -395,6 +423,63 @@ suite('Browser Debugger Tests', () => {
 
         assert.ok(resourceDebugSession);
         harness.terminateSession(resourceDebugSession.session);
+
+        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
+            notification_type: 'sessionTerminated',
+            session_id: 'run-1',
+            dcp_id: 'dcp-1'
+        }]);
+        assert.strictEqual(harness.rm.calledOnceWithExactly(profileDirFor('run-1'), expectedRmOptions), true);
+
+        harness.dispose();
+    });
+
+    test('stopping an already-ended browser session succeeds without asking VS Code to stop it', async () => {
+        // A browser run ends on its own as often as it is stopped by DCP, and VS Code drops the
+        // ended session from its model. A later `DELETE /run_session` must not reach stopDebugging
+        // for a session VS Code no longer knows about: that rejects, which fails the delete and
+        // leaves the run entry behind in the DCP server's map.
+        const harness = new DebugSessionHarness();
+        const debugConfig = createResourceDebugConfig();
+        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
+
+        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
+
+        assert.ok(resourceDebugSession);
+        harness.terminateSession(resourceDebugSession.session);
+        harness.stopDebugging.rejects(new Error('debug session not found'));
+
+        await resourceDebugSession.stopSession();
+
+        assert.strictEqual(harness.stopDebugging.called, false, 'Expected no stop request for a session that already ended');
+        assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
+            notification_type: 'sessionTerminated',
+            session_id: 'run-1',
+            dcp_id: 'dcp-1'
+        }]);
+
+        harness.dispose();
+    });
+
+    test('a stop that loses the race with the browser session ending still resolves', async () => {
+        // The same DCP-requested stop, but the session ends after the stop was issued. VS Code
+        // rejects a stop for a session it has already dropped, and the run is over either way, so
+        // the requested stop has to report success rather than failing `DELETE /run_session`.
+        const harness = new DebugSessionHarness({ stopDebugging: 'deferred' });
+        const debugConfig = createResourceDebugConfig();
+        await configureBrowserDebugSession({ type: 'browser', url: 'https://localhost:5001' }, debugConfig);
+
+        const resourceDebugSession = await harness.aspireDebugSession.startAndGetDebugSession(debugConfig);
+
+        assert.ok(resourceDebugSession);
+        const stop = Promise.resolve(resourceDebugSession.stopSession());
+        await Promise.resolve();
+
+        assert.strictEqual(harness.stopDebugging.callCount, 1);
+        harness.terminateSession(resourceDebugSession.session);
+        harness.failStopDebugging(new Error('debug session not found'));
+
+        await stop;
 
         assert.deepStrictEqual(harness.sessionTerminatedNotifications(), [{
             notification_type: 'sessionTerminated',

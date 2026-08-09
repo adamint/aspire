@@ -1,6 +1,7 @@
 import * as assert from 'assert';
 import type { TelemetryReporter } from '@vscode/extension-telemetry';
 import * as vscode from 'vscode';
+import { sendRunSessionEndTelemetry } from '../dcp/AspireDcpServer';
 import {
     __resetCommonPropertiesForTests,
     __resetTelemetryLoggerFactoryForTests,
@@ -186,6 +187,37 @@ suite('telemetry utilities', () => {
         assert.strictEqual(fake.events[0].name, 'aspire/vscode/debug/runsession/end');
         assert.strictEqual(fake.events[0].isError, true);
         assert.strictEqual(fake.events[0].measurements?.duration_ms, 12);
+    });
+
+    // `sendRunSessionEndTelemetry` lives on the DCP server but is exercised here because this suite
+    // already installs the reporter fake that distinguishes the usage channel from the error channel.
+    test('a terminated run session without an exit code reports the unknown bucket on the usage channel', () => {
+        sendRunSessionEndTelemetry({ startTimeMs: 0, resourceType: 'browser', mode: 'run', debugSessionId: 'dcp-1' }, undefined, 42);
+
+        assert.strictEqual(fake.events.length, 1);
+        assert.strictEqual(fake.events[0].name, 'aspire/vscode/debug/runsession/end');
+        assert.strictEqual(fake.events[0].isError, undefined, 'A run that reported no exit code is not an error');
+        assert.deepStrictEqual(fake.events[0].properties, {
+            resource_type: 'browser',
+            mode: 'run',
+            exit_code_bucket: 'unknown',
+        });
+        // No fabricated exit code may reach telemetry when DCP omitted one.
+        assert.deepStrictEqual(fake.events[0].measurements, { duration_ms: 42 });
+    });
+
+    test('a terminated run session buckets reported exit codes and routes non-zero exits to the error channel', () => {
+        sendRunSessionEndTelemetry({ startTimeMs: 0, resourceType: 'project', mode: 'run', debugSessionId: 'dcp-1' }, 0, 1);
+        sendRunSessionEndTelemetry({ startTimeMs: 0, resourceType: 'project', mode: 'run', debugSessionId: 'dcp-1' }, -1, 2);
+        sendRunSessionEndTelemetry({ startTimeMs: 0, resourceType: 'project', mode: 'run', debugSessionId: 'dcp-1' }, 3, 3);
+
+        assert.deepStrictEqual(fake.events.map(event => event.properties?.exit_code_bucket), ['success', 'canceled', 'nonzero']);
+        assert.deepStrictEqual(fake.events.map(event => event.isError), [undefined, undefined, true]);
+        assert.deepStrictEqual(fake.events.map(event => event.measurements), [
+            { duration_ms: 1, exit_code: 0 },
+            { duration_ms: 2, exit_code: -1 },
+            { duration_ms: 3, exit_code: 3 },
+        ]);
     });
 
     test('telemetry levels are consulted on every emit', () => {

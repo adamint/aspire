@@ -63,6 +63,19 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
             // `runtimeArgs` and `userDataDir` are js-debug (`pwa-*`) fields. The Firefox adapter
             // comes from firefox-devtools.vscode-firefox-debug, which owns its own profile
             // lifecycle when no `profile`/`profileDir` is supplied.
+            //
+            // That adapter also refuses a launch configuration that has a `url` but neither
+            // `webRoot` nor `pathMappings`:
+            //   if (config.url) { if (!config.webRoot) {
+            //       if ((config.request === 'launch') && !config.pathMappings) { throw `If you set
+            //       "url" you also have to set "webRoot" or "pathMappings" ...`; } } }
+            // https://github.com/firefox-devtools/vscode-firefox-debug/blob/master/src/adapter/configuration.ts
+            // `web_root` is optional in the launch configuration Aspire receives, so without this the
+            // session fails to start. An empty list satisfies the check without inventing a source root
+            // that does not exist; the adapter still installs its own default `file://` mappings.
+            if (!debugConfiguration.webRoot) {
+                debugConfiguration.pathMappings ??= [];
+            }
         }
         else {
             debugConfiguration.runtimeArgs = mergeRuntimeArgs(debugConfiguration.runtimeArgs, defaultBrowserRuntimeArgs);

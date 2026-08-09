@@ -112,8 +112,18 @@ export class ResourceSessionTermination {
      * The returned promise settles only after VS Code has finished stopping, and rejects if VS Code
      * failed to stop the session. Callers that can act on (or report) the failure should await it;
      * fire-and-forget callers should use {@link stopAndLogFailure} so the rejection is not unhandled.
+     *
+     * Stopping an already-finished lifecycle succeeds without touching VS Code. A browser run ends on
+     * its own (`onDidTerminateDebugSession`) as often as it is stopped by DCP, and VS Code drops the
+     * ended session from its model, so a later `DELETE /run_session` would otherwise reach
+     * `stopDebugging` for a session VS Code no longer knows about and fail the request for a run that
+     * has already ended.
      */
     stop(): Promise<void> {
+        if (this._finished) {
+            return Promise.resolve();
+        }
+
         this._stopPromise ??= this.stopCore();
 
         return this._stopPromise;
@@ -153,6 +163,16 @@ export class ResourceSessionTermination {
             await vscode.debug.stopDebugging(this._session);
         }
         catch (error) {
+            if (this._finished) {
+                // The session ended while this stop was in flight, so VS Code rejected a stop for a
+                // session it had already dropped. The run is over either way and the terminal
+                // bookkeeping has already run, so report success rather than failing the DCP
+                // `DELETE /run_session` that asked for a stop that effectively happened.
+                extensionLogOutputChannel.trace(`Debug session '${this._session.name}' had already ended when the stop was issued: ${error instanceof Error ? error.message : String(error)}`);
+
+                return;
+            }
+
             extensionLogOutputChannel.warn(`Failed to stop debug session '${this._session.name}': ${error instanceof Error ? error.message : String(error)}`);
             // Deliberately do not finish here. A rejected stop means VS Code never confirmed the
             // session ended, so the debuggee may well still be running. Reporting sessionTerminated
