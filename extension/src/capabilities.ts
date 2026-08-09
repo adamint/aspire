@@ -67,13 +67,19 @@ export function isBunInstalled() {
 export function getSupportedCapabilities(): Capabilities {
     const capabilities: Capabilities = ['prompting', 'baseline.v1', 'secret-prompts.v1', 'file-pickers.v1', 'build-dotnet-using-cli'];
 
-    // Pushed rather than added to the literal above so this feature never has to be reconciled
-    // with the build-ownership token that shares that line. Resolving a conflict there by keeping
-    // both sides is what would restore the unversioned 'build-dotnet-using-cli' and with it
-    // https://github.com/microsoft/aspire/issues/15850, so the line is left to the change that
-    // owns it. Capability tokens here are versioned per feature; an unversioned token silently
-    // fails to match the other side rather than erroring. test/appHostLogOutputCapability.test.ts
-    // enforces that for this token.
+    // 'apphost-log-output.v1' must stay character-identical to KnownCapabilities.AppHostLogOutput
+    // on the CLI side: nothing compiles the two together, and a mismatch silently disables
+    // structured AppHost log correlation instead of erroring.
+    // test/appHostLogOutputCapability.test.ts enforces the exact token. Note that only the
+    // extension side is negotiated - the CLI decides whether the AppHost can produce structured
+    // entries from the sequence number on each entry, not from an AppHost capability.
+    //
+    // It is pushed rather than added to the literal above because a separate in-flight change
+    // rewrites that line to version the build-ownership token
+    // ('build-dotnet-using-cli' -> 'build-dotnet-using-cli.v2'). Keeping this feature off the line
+    // lets the two merge without a conflict whose instinctive both-sides resolution would leave
+    // the unversioned token in place and bring back
+    // https://github.com/microsoft/aspire/issues/15850.
     capabilities.push('apphost-log-output.v1');
 
     if (isCsDevKitInstalled()) {

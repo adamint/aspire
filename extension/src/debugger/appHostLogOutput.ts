@@ -94,12 +94,17 @@ export class AppHostLogOutputCoordinator {
      * Consumes one debug adapter output event and returns whatever became renderable.
      *
      * A record is only known to have ended once a line that cannot continue it arrives, so
-     * the last record of a burst stays buffered until the next event or {@link flush}.
-     * That costs no visible latency: the CLI relays the same record over its own path —
-     * structured for a capable extension, a dim message for an older one — and whichever
-     * copy lands first is the one rendered. Guessing that a record had ended instead would
-     * render it truncated and leak the rest as raw text whenever a stream chunk happened
-     * to break on a line boundary inside the record.
+     * the last record of a burst stays buffered until the next event, the idle flush, or
+     * {@link flush}. Guessing that a record had ended instead would render it truncated and
+     * leak the rest as raw text whenever a stream chunk happened to break on a line boundary
+     * inside the record.
+     *
+     * Information and above cost no visible latency, because the CLI relays the same record
+     * over its own path — structured for a capable extension, a dim message for an older one —
+     * and whichever copy lands first is the one rendered. Trace and Debug have no such twin:
+     * {@link https://github.com/microsoft/aspire/blob/main/src/Aspire.Cli/Commands/RunCommand.cs RunCommand}
+     * deliberately does not forward them, so a final low-level record waits for the idle flush
+     * scheduled by {@link scheduleIdleFlushIfNeeded} — the reason that timer exists.
      */
     handleDebugAdapterOutput(output: string, category: string | undefined): AppHostParentOutput[] {
         const normalizedCategory = category ?? 'console';
@@ -225,6 +230,12 @@ export class AppHostLogOutputCoordinator {
                 // grammar to that provenance so user stdout shaped like
                 // "Status: Error: connection refused" is never reclassified.
                 if (isDebugLoggerHeader(line)) {
+                    const pending = this._pendingDebugRecords.get(category);
+                    if (pending && this.continuesPendingDebugRecord(pending, line)) {
+                        pending.text += line;
+                        continue;
+                    }
+
                     flushPassthrough();
                     this.flushPendingDebugRecord(category, outputs);
                     this._pendingDebugRecords.set(category, { text: line, category });
@@ -256,6 +267,35 @@ export class AppHostLogOutputCoordinator {
         }
 
         flushPassthrough();
+    }
+
+    /**
+     * Decides whether a header-shaped line continues the pending DebugLogger record instead of
+     * starting a new one.
+     *
+     * `Debug.WriteLine(message, category)` prefixes only the first line of a record, so a
+     * multi-line message whose continuation happens to read like `Category: Error: detail` is
+     * textually identical to two adjacent records:
+     *
+     *   Example.Category: Warning: Deployment failed.
+     *   Other.Category: Error: image pull failed.
+     *
+     * Nothing in the text resolves that, and both readings occur, so the only evidence is a copy
+     * of the same record from another provider. When the merged reading matches one already seen,
+     * the line belongs to this record; otherwise the boundary reading is kept, because adjacent
+     * records are the common case and merging them would corrupt both.
+     *
+     * The evidence only exists when the twin arrived first. A DebugLogger copy that wins the race
+     * is still split, so the ambiguity is reduced rather than eliminated.
+     */
+    private continuesPendingDebugRecord(pending: PendingDebugRecord, line: string): boolean {
+        const merged = parseDebugLoggerRecord(`${pending.text}${line}`);
+        if (!merged) {
+            return false;
+        }
+
+        return this._correlatedRecords.some(candidate =>
+            !candidate.sources.has('debugLogger') && areEquivalentRecords(candidate.record, merged));
     }
 
     private flushPendingDebugRecord(category: string, outputs: AppHostParentOutput[]): void {

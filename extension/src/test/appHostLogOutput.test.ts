@@ -562,6 +562,24 @@ suite('AppHost log output coordinator tests', () => {
         }]);
     });
 
+    test('keeps a DebugLogger record intact when its message line reads like another header', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const message = 'Deployment failed.\nOther.Category: Error: image pull failed.';
+
+        // Debug.WriteLine prefixes only the first line, so this record is textually identical to
+        // two adjacent records. The backchannel copy arriving first is what resolves it.
+        assert.deepStrictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 1, logLevel: 'Warning', message })),
+            {
+                output: `\x1b[33mExample.Category: Warning: ${message}\x1b[0m\n`,
+                category: 'stdout'
+            });
+
+        assert.deepStrictEqual(
+            renderConsole(coordinator, `Example.Category: Warning: ${message}\n`, 'console'),
+            []);
+    });
+
     test('renders each DebugLogger record once when several arrive in a single debug adapter event', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
