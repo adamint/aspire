@@ -96,6 +96,28 @@ public class WslEnvironmentCheckTests
             WslEnvironmentCheck.DetermineWslVersion("Linux version unknown-microsoft (build@host)"));
     }
 
+    [Theory]
+    // A 4.4.x kernel that is not the fixed WSL 1 compatibility release, built by someone whose name
+    // happens to contain "Microsoft". Matching only the "4.4." prefix plus a "Microsoft" mention
+    // anywhere in the banner reported this as WSL 1 and recommended an upgrade that does not apply.
+    [InlineData("Linux version 4.4.1-custom (Microsoft@builder) (gcc version 11.2.0) #1 SMP Tue Jan 2 00:00:00 UTC 2024")]
+    // The WSL 1 build number is required: a 4.4.0 release without it is a stock kernel, not WSL 1.
+    [InlineData("Linux version 4.4.0-generic (Microsoft@builder) #1 SMP Tue Jan 2 00:00:00 UTC 2024")]
+    public void DetermineWslVersion_ReportsUnknown_ForNonWsl1KernelsMentioningMicrosoft(string procVersion)
+    {
+        Assert.Equal(WslVersion.Unknown, WslEnvironmentCheck.DetermineWslVersion(procVersion));
+    }
+
+    [Theory]
+    // Real WSL 1 banners across Windows builds. The build number varies, the rest of the release does not.
+    [InlineData("Linux version 4.4.0-19041-Microsoft (Microsoft@Microsoft.com) (gcc version 5.4.0 (GCC) ) #488-Microsoft Mon Sep 01 13:43:00 PST 2020")]
+    [InlineData("Linux version 4.4.0-18362-Microsoft (Microsoft@Microsoft.com) (gcc version 5.4.0 (GCC) ) #476-Microsoft Fri Nov 01 16:53:00 PST 2019")]
+    [InlineData("Linux version 4.4.0-43-Microsoft (Microsoft@Microsoft.com) (gcc version 5.4.0 (GCC) ) #1-Microsoft Wed Dec 31 14:42:53 PST 2014")]
+    public void DetermineWslVersion_ReportsWsl1_AcrossWsl1BuildNumbers(string procVersion)
+    {
+        Assert.Equal(WslVersion.Wsl1, WslEnvironmentCheck.DetermineWslVersion(procVersion));
+    }
+
     [Fact]
     public void CreateResult_ReportsWarning_WhenVersionIsUnknown()
     {

@@ -549,9 +549,11 @@ internal sealed class DevCertsCheck(ILogger<DevCertsCheck> logger, ICertificateT
     /// </summary>
     /// <remarks>
     /// <para>
-    /// When <c>SSL_CERT_DIR</c> is already set, only the dev-certs trust path is appended
-    /// (preserving the existing value via <c>$SSL_CERT_DIR</c> shell expansion). When it is
-    /// not set, the command includes system certificate directories so they are not lost.
+    /// When <c>SSL_CERT_DIR</c> holds a real value, only the dev-certs trust path is appended
+    /// (preserving the existing value via <c>$SSL_CERT_DIR</c> shell expansion). When it is unset or
+    /// blank, the command is built entirely from the detected directories: expanding <c>$SSL_CERT_DIR</c>
+    /// there would either leave a leading empty path component or, for a whitespace value, turn that
+    /// whitespace into the first certificate directory OpenSSL searches.
     /// </para>
     /// <para>
     /// Includes system certificate directories detected via OpenSSL or well-known fallback
@@ -573,8 +575,7 @@ internal sealed class DevCertsCheck(ILogger<DevCertsCheck> logger, ICertificateT
         var systemCertDirs = CertificateHelpers.GetSystemCertificateDirectories();
         systemCertDirs.Add(devCertsTrustPath);
 
-        // We still prepend $SSL_CERT_DIR to be safe in case the user makes later modifications to their environment
-        return $"export SSL_CERT_DIR=\"$SSL_CERT_DIR:{string.Join(':', systemCertDirs)}\"";
+        return $"export SSL_CERT_DIR=\"{string.Join(':', systemCertDirs)}\"";
     }
 
     private sealed record OpenSslCertificateCacheStatus(string Message, string Details, string Fix);

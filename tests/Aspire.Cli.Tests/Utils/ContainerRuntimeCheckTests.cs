@@ -11,16 +11,23 @@ public class ContainerRuntimeCheckTests
     public static TheoryData<IReadOnlyDictionary<string, string?>, string?> ConfiguredRuntimeCases => new()
     {
         { new Dictionary<string, string?>(), null },
+        // An empty primary value is present as far as IConfiguration is concerned, so DcpOptions keeps it and
+        // DcpHost omits --container-runtime entirely. Doctor must report "no configured runtime", not the
+        // legacy value that the AppHost has already discarded.
         { new Dictionary<string, string?> { ["ASPIRE_CONTAINER_RUNTIME"] = "" }, null },
-        { new Dictionary<string, string?> { ["ASPIRE_CONTAINER_RUNTIME"] = "   " }, null },
-        { new Dictionary<string, string?> { ["ASPIRE_CONTAINER_RUNTIME"] = "", ["DOTNET_ASPIRE_CONTAINER_RUNTIME"] = "podman" }, "podman" },
-        { new Dictionary<string, string?> { ["ASPIRE_CONTAINER_RUNTIME"] = "   ", ["DOTNET_ASPIRE_CONTAINER_RUNTIME"] = "podman" }, "podman" },
+        { new Dictionary<string, string?> { ["ASPIRE_CONTAINER_RUNTIME"] = "", ["DOTNET_ASPIRE_CONTAINER_RUNTIME"] = "podman" }, null },
+        // Whitespace is non-empty, so DcpHost forwards it to DCP verbatim. Reporting it keeps doctor honest
+        // about the runtime the AppHost will fail to start with.
+        { new Dictionary<string, string?> { ["ASPIRE_CONTAINER_RUNTIME"] = "   " }, "   " },
+        { new Dictionary<string, string?> { ["ASPIRE_CONTAINER_RUNTIME"] = "   ", ["DOTNET_ASPIRE_CONTAINER_RUNTIME"] = "podman" }, "   " },
         { new Dictionary<string, string?> { ["ASPIRE_CONTAINER_RUNTIME"] = "docker", ["DOTNET_ASPIRE_CONTAINER_RUNTIME"] = "podman" }, "docker" },
+        { new Dictionary<string, string?> { ["DOTNET_ASPIRE_CONTAINER_RUNTIME"] = "podman" }, "podman" },
+        { new Dictionary<string, string?> { ["DOTNET_ASPIRE_CONTAINER_RUNTIME"] = "" }, null },
     };
 
     [Theory]
     [MemberData(nameof(ConfiguredRuntimeCases))]
-    public void GetConfiguredRuntime_TreatsBlankVariablesAsUnset(IReadOnlyDictionary<string, string?> variables, string? expectedRuntime)
+    public void GetConfiguredRuntime_MatchesTheRuntimeTheAppHostWouldLaunch(IReadOnlyDictionary<string, string?> variables, string? expectedRuntime)
     {
         Assert.Equal(expectedRuntime, ContainerRuntimeCheck.GetConfiguredRuntime(new TestEnvironment(variables)));
     }

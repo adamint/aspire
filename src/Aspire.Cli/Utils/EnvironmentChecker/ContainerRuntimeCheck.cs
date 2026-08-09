@@ -95,16 +95,33 @@ internal sealed class ContainerRuntimeCheck(ILogger<ContainerRuntimeCheck> logge
         }
     }
 
+    /// <summary>
+    /// Resolves the container runtime the AppHost would launch with, so <c>aspire doctor</c> reports the
+    /// same runtime the application will actually use.
+    /// </summary>
+    /// <remarks>
+    /// The resolution deliberately mirrors the AppHost, not an idealized "blank means unset" rule:
+    /// <list type="bullet">
+    /// <item><description>
+    /// <c>DcpOptions</c> reads these keys through <c>configuration.GetString(primary, secondary)</c> with
+    /// <c>fallbackOnEmpty: false</c>, which returns the primary value whenever the key is present at all.
+    /// A blank <c>ASPIRE_CONTAINER_RUNTIME</c> therefore suppresses the legacy variable instead of falling
+    /// back to it, so falling back here would make doctor name a runtime the AppHost will never launch.
+    /// </description></item>
+    /// <item><description>
+    /// <c>DcpHost.CreateDcpProcessSpec</c> only forwards <c>--container-runtime</c> when the resolved value
+    /// is non-empty, so an empty value means "let DCP pick its default". Whitespace is forwarded verbatim,
+    /// which is why it is reported as configured rather than normalized away: the AppHost really will hand
+    /// that value to DCP, and doctor's job is to surface that, not to hide it.
+    /// </description></item>
+    /// </list>
+    /// </remarks>
     internal static string? GetConfiguredRuntime(IEnvironment environment)
     {
-        var configuredRuntime = environment.GetEnvironmentVariable("ASPIRE_CONTAINER_RUNTIME");
-        if (!string.IsNullOrWhiteSpace(configuredRuntime))
-        {
-            return configuredRuntime;
-        }
+        var configuredRuntime = environment.GetEnvironmentVariable("ASPIRE_CONTAINER_RUNTIME")
+            ?? environment.GetEnvironmentVariable("DOTNET_ASPIRE_CONTAINER_RUNTIME");
 
-        configuredRuntime = environment.GetEnvironmentVariable("DOTNET_ASPIRE_CONTAINER_RUNTIME");
-        return string.IsNullOrWhiteSpace(configuredRuntime) ? null : configuredRuntime;
+        return string.IsNullOrEmpty(configuredRuntime) ? null : configuredRuntime;
     }
 
     /// <summary>

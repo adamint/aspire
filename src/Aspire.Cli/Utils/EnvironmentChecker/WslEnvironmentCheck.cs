@@ -129,8 +129,14 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
         // Because 4.4.0 is a constant rather than a real release, it must not be compared ordinally
         // against WSL 2 kernels; early WSL 2 shipped 4.19, so any "major >= 4" test classifies real
         // WSL 1 systems as WSL 2. See https://learn.microsoft.com/windows/wsl/compare-versions
-        if (procVersion.Contains("Microsoft", StringComparison.OrdinalIgnoreCase) &&
-            Wsl1KernelBanner().IsMatch(procVersion))
+        //
+        // The whole release token is matched, not just the "4.4." prefix plus a "Microsoft" mention
+        // elsewhere in the banner: a custom kernel such as
+        //   Linux version 4.4.1-custom (Microsoft@builder) ...
+        // is not WSL 1, and reporting it as WSL 1 would tell that user to perform an upgrade they
+        // cannot perform. An unrecognized banner falls through to Unknown, which is the state this
+        // check exists to report.
+        if (Wsl1KernelBanner().IsMatch(procVersion))
         {
             return WslVersion.Wsl1;
         }
@@ -166,7 +172,9 @@ internal sealed partial class WslEnvironmentCheck : IEnvironmentCheck
         }
     }
 
-    [GeneratedRegex(@"Linux\s+version\s+4\.4\.", RegexOptions.IgnoreCase)]
+    // Matches the complete WSL 1 compatibility release, "4.4.0-<build>-Microsoft", rather than the bare
+    // "4.4." prefix. The build number is the Windows build the distribution runs on (for example 19041).
+    [GeneratedRegex(@"Linux\s+version\s+4\.4\.0-\d+-Microsoft\b", RegexOptions.IgnoreCase)]
     private static partial Regex Wsl1KernelBanner();
 }
 
