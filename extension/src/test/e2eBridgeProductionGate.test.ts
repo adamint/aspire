@@ -8,6 +8,7 @@ type WebpackConfigFactory = ((env: unknown, argv: { mode?: string }) => Array<{ 
 };
 
 const extensionRoot = path.resolve(__dirname, '..', '..');
+const e2eBridgeBuildEnvironmentVariable = 'ASPIRE_EXTENSION_E2E_INCLUDE_BRIDGE';
 const loadWebpackConfig = (): WebpackConfigFactory => require(path.join(extensionRoot, 'webpack.config.js')) as WebpackConfigFactory;
 
 /**
@@ -20,19 +21,38 @@ suite('E2E bridge production gate', () => {
     test('replaces the E2E bridge in production builds', () => {
         const configure = loadWebpackConfig();
 
-        const [productionConfig] = configure({}, { mode: 'production' });
+        withE2eBridgeBuildEnvironment(undefined, () => {
+            const [productionConfig] = configure({}, { mode: 'production' });
 
-        assert.strictEqual(productionConfig.plugins.length, 1);
-        assert.strictEqual((productionConfig.plugins[0] as object).constructor.name, 'NormalModuleReplacementPlugin');
+            assert.strictEqual(productionConfig.plugins.length, 1);
+            assert.strictEqual((productionConfig.plugins[0] as object).constructor.name, 'NormalModuleReplacementPlugin');
+        });
     });
 
-    test('keeps the E2E bridge in development and E2E builds', () => {
+    test('keeps the E2E bridge in development builds', () => {
         const configure = loadWebpackConfig();
 
-        // `yarn compile` passes no mode, which is what the E2E runner builds with and what has to
-        // keep driving the real bridge.
+        // `yarn compile` passes no mode, so local extension development keeps driving the real
+        // bridge.
         assert.deepStrictEqual(configure({}, {}).map(config => config.plugins), [[]]);
         assert.deepStrictEqual(configure({}, { mode: 'none' }).map(config => config.plugins), [[]]);
+    });
+
+    test('keeps the E2E bridge in production builds only when the E2E package opts in', () => {
+        const configure = loadWebpackConfig();
+
+        withE2eBridgeBuildEnvironment('true', () => {
+            assert.deepStrictEqual(configure({}, { mode: 'production' }).map(config => config.plugins), [[]]);
+        });
+    });
+
+    test('packages the CI and local E2E VSIX with the bridge included', () => {
+        const testsWorkflow = fs.readFileSync(path.join(extensionRoot, '..', '.github', 'workflows', 'tests.yml'), 'utf8');
+        const runner = fs.readFileSync(path.join(extensionRoot, 'scripts', 'run-e2e.js'), 'utf8');
+        const packageVsixStep = getWorkflowStep(testsWorkflow, 'Package VSIX');
+
+        assert.ok(packageVsixStep.includes(`${e2eBridgeBuildEnvironmentVariable}: true`));
+        assert.ok(runner.includes(`${e2eBridgeBuildEnvironmentVariable}: 'true'`));
     });
 
     test('does not accumulate plugins across repeated configuration calls', () => {
@@ -70,3 +90,34 @@ suite('E2E bridge production gate', () => {
             'The production stub must export every binding extension.ts imports, or the production build breaks.');
     });
 });
+
+function getWorkflowStep(workflow: string, stepName: string): string {
+    const stepStart = workflow.indexOf(`      - name: ${stepName}`);
+    assert.ok(stepStart >= 0, `workflow must contain step '${stepName}'`);
+
+    const nextStepStart = workflow.indexOf('\n      - name:', stepStart + 1);
+    return nextStepStart >= 0 ? workflow.slice(stepStart, nextStepStart) : workflow.slice(stepStart);
+}
+
+function withE2eBridgeBuildEnvironment(value: string | undefined, action: () => void): void {
+    const original = process.env[e2eBridgeBuildEnvironmentVariable];
+
+    try {
+        if (value === undefined) {
+            delete process.env[e2eBridgeBuildEnvironmentVariable];
+        }
+        else {
+            process.env[e2eBridgeBuildEnvironmentVariable] = value;
+        }
+
+        action();
+    }
+    finally {
+        if (original === undefined) {
+            delete process.env[e2eBridgeBuildEnvironmentVariable];
+        }
+        else {
+            process.env[e2eBridgeBuildEnvironmentVariable] = original;
+        }
+    }
+}

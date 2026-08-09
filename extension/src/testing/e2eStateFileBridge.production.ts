@@ -16,9 +16,10 @@ import type { AppHostDataRepository } from '../views/AppHostDataRepository';
  * enforce that - the code would still ship and would still be reachable by anyone who can set an
  * environment variable on the VS Code process.
  *
- * `webpack.config.js` swaps this module in for production builds, which is the mode
+ * `webpack.config.js` swaps this module in for default production builds, which is the mode
  * `vscode:prepublish` uses, so the shipped VSIX contains these no-ops and none of the bridge.
- * Development and E2E bundles (`webpack --mode none`) keep the real implementation.
+ * E2E VSIX package paths set `ASPIRE_EXTENSION_E2E_INCLUDE_BRIDGE=true` at build time so the
+ * installed test artifact keeps the real implementation.
  *
  * The exported surface must stay in sync with the parts of `e2eStateFileBridge.ts` that
  * `extension.ts` imports, otherwise the production build breaks at bundle time rather than at
