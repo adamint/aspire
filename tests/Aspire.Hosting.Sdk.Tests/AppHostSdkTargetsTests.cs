@@ -441,56 +441,42 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         Assert.Null(GetGeneratedTargetNameMember(generatedSource));
     }
 
-    [Fact]
-    public async Task ProjectMetadataFailsTargetNameProbeFailuresDuringBuild()
+    [Theory]
+    [InlineData("GetTargetFrameworks")]
+    [InlineData("GetTargetPath")]
+    public async Task ProjectMetadataIsStillGeneratedWhenTheTargetNameProbeFails(string probedTarget)
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
 
-        // Fail without logging from inside the referenced project so the parent MSBuild task's
-        // ContinueOnError setting owns whether target-name probing stops the AppHost build.
+        // Hooking the probed target from the referenced project fails exactly the evaluation the probe performs and
+        // nothing else. Neither GetTargetFrameworks nor GetTargetPath runs on an Aspire project reference during a
+        // normal build, which is the whole point of the finding this pins: a reference that builds perfectly well
+        // can still be unable to answer the probe.
         var result = await RunProjectMetadataSourceGenerationAsync(
             workspace,
-            referencedProjectXml: """
+            referencedProjectXml: $"""
                   <PropertyGroup>
                     <OutputType>Exe</OutputType>
                     <TargetFramework>net8.0</TargetFramework>
                   </PropertyGroup>
-                  <UsingTask TaskName="FailWithoutLogging"
-                             TaskFactory="RoslynCodeTaskFactory"
-                             AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
-                    <Task>
-                      <Code Type="Class" Language="cs">
-                        <![CDATA[
-                        using Microsoft.Build.Framework;
-                        using Microsoft.Build.Utilities;
-
-                        public sealed class FailWithoutLogging : Task
-                        {
-                            public override bool Execute() => false;
-                        }
-                        ]]>
-                      </Code>
-                    </Task>
-                  </UsingTask>
-                  <Target Name="FailTargetPathProbe" BeforeTargets="GetTargetPath">
-                    <FailWithoutLogging />
+                  <Target Name="FailAspireTargetNameProbe" BeforeTargets="{probedTarget}">
+                    <Error Text="aspire target name probe hook failed" />
                   </Target>
                 """,
             extraArguments: ["-p:BuildingProject=true"]);
 
-        Assert.NotEqual(0, result.DotNetResult.ExitCode);
-        Assert.Contains("MSB4181", result.DotNetResult.Output);
-    }
+        // Without this the assertions below would also pass on a build where the hook never ran and the probe
+        // simply succeeded with no name to report.
+        Assert.Contains("aspire target name probe hook failed", result.DotNetResult.Output);
 
-    [Fact]
-    public void ProjectMetadataTargetNameProbesStayFatalDuringBuild()
-    {
-        var targets = File.ReadAllText(Path.Combine(GetRepoRoot(), "src", "Aspire.Hosting.AppHost", "build", "Aspire.Hosting.AppHost.in.targets"));
+        // TargetName is a debugger hint, not a build input. A probe that cannot answer has to degrade to omitting
+        // the member - attach consumers fall back to TargetPath from there - rather than stopping the target and
+        // leaving the AppHost with no reference metadata at all.
+        Assert.True(File.Exists(result.GeneratedPath), $"Generated project metadata was not found at '{result.GeneratedPath}'.{Environment.NewLine}{result.DotNetResult.Output}");
 
-        Assert.Contains("<_AspireProjectResourceTargetNameProbeContinueOnError Condition=\"'$(BuildingProject)' == 'true'\">ErrorAndStop</_AspireProjectResourceTargetNameProbeContinueOnError>", targets);
-        Assert.Equal(
-            2,
-            Regex.Matches(targets, "ContinueOnError=\"\\$\\(_AspireProjectResourceTargetNameProbeContinueOnError\\)\"").Count);
+        var generatedSource = await File.ReadAllTextAsync(result.GeneratedPath);
+        Assert.Contains("Worker.csproj", generatedSource);
+        Assert.Null(GetGeneratedTargetNameMember(generatedSource));
     }
 
     [Fact]

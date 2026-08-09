@@ -118,16 +118,23 @@
       <_AspirePreparedProjectResource Include="@(_MSBuildProjectReferenceExistent->WithMetadataValue('IsAspireProjectResource', 'true')->WithMetadataValue('BuildReference', 'true'))" />
     </ItemGroup>
 
-    <PropertyGroup>
-      <_AspireProjectResourceTargetNameProbeContinueOnError Condition="'$(BuildingProject)' == 'true'">ErrorAndStop</_AspireProjectResourceTargetNameProbeContinueOnError>
-      <_AspireProjectResourceTargetNameProbeContinueOnError Condition="'$(BuildingProject)' != 'true'">WarnAndContinue</_AspireProjectResourceTargetNameProbeContinueOnError>
-    </PropertyGroup>
+    <!--
+      Both probes below use ContinueOnError="WarnAndContinue" because an absent TargetName is a supported signal:
+      attach consumers fall back to TargetPath when the metadata is missing. A reference that builds perfectly well
+      can still fail these two evaluations, because neither is part of a normal build of that reference - Aspire
+      project references default SkipGetTargetFrameworkProperties=true (see Aspire.AppHost.Sdk/SDK/Sdk.in.targets)
+      and ResolveProjectReferences builds them rather than asking for GetTargetPath. WarnAndContinue keeps this
+      target running so the reference metadata is still written, just without the debugger hint.
 
+      ContinueOnError only governs this target. MSBuild still reports whatever error the referenced project itself
+      logged, so the overall build result is not fully insulated from a reference that cannot answer the probe;
+      SkipAspireProjectResourceTargetName=true opts out of probing entirely for those.
+    -->
     <MSBuild Projects="@(_AspirePreparedProjectResource)"
              Targets="GetTargetFrameworks"
              BuildInParallel="$(BuildInParallel)"
              Properties="%(_AspirePreparedProjectResource.SetConfiguration); %(_AspirePreparedProjectResource.SetPlatform)"
-             ContinueOnError="$(_AspireProjectResourceTargetNameProbeContinueOnError)"
+             ContinueOnError="WarnAndContinue"
              RemoveProperties="%(_AspirePreparedProjectResource.GlobalPropertiesToRemove);TargetFramework;RuntimeIdentifier;SelfContained;$(_GlobalPropertiesToRemoveFromProjectReferences)"
              SkipNonexistentProjects="true"
              SkipNonexistentTargets="true">
@@ -165,7 +172,7 @@
              Targets="GetTargetPath"
              BuildInParallel="$(BuildInParallel)"
              Properties="%(_AspireProjectResourceTargetPathProbe.SetConfiguration); %(_AspireProjectResourceTargetPathProbe.SetPlatform); %(_AspireProjectResourceTargetPathProbe.SetTargetFramework)"
-             ContinueOnError="$(_AspireProjectResourceTargetNameProbeContinueOnError)"
+             ContinueOnError="WarnAndContinue"
              RemoveProperties="%(_AspireProjectResourceTargetPathProbe.EffectiveGlobalPropertiesToRemove);%(_AspireProjectResourceTargetPathProbe.RemoveGlobalProperties);$(_GlobalPropertiesToRemoveFromProjectReferences)"
              SkipNonexistentProjects="true"
              SkipNonexistentTargets="true">
@@ -183,8 +190,13 @@
 
     GetTargetPath returns a single primary output for an SDK project, so each batch holds one target path. If a
     reference ever returns more than one, the last wins - acceptable because the result is only ever a hint and the
-    property is dropped entirely when nothing resolves. Note the path comparison is MSBuild's, which is case
-    insensitive, so two references differing only in path casing would collide on a case-sensitive file system.
+    property is dropped entirely when nothing resolves.
+
+    The path comparison below is MSBuild's, which is case insensitive, but two references differing only in path
+    casing cannot get each other's name: MSBuild's target batching is case insensitive too, so such references share
+    a single batch in CreateAspireProjectMetadataSources above and are already collapsed into one generated resource
+    before this target runs. Comparing ordinally here would change nothing except to risk dropping the hint if the
+    two item lists ever spelled the same path differently.
   -->
   <Target Name="_SetAspireProjectMetadataTargetNames"
           DependsOnTargets="CreateAspireProjectMetadataSources;_GetAspireProjectResourceTargetNames"
