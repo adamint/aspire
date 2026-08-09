@@ -13,9 +13,8 @@ The registry is the one npm itself would use, because that is the source the adv
 Registry selection follows npm's own precedence, highest first:
 
 1. `npm_config_registry` / `npm_config_@scope:registry` environment variables, which npm also injects when it runs the CLI through `npm exec` or `npx`.
-2. The project `.npmrc` at npm's local prefix — the nearest ancestor of the working directory holding a `package.json` or `node_modules`, falling back to the working directory. This layer applies even to `-g` installs, because npm loads configuration before it interprets the command.
-3. The user `.npmrc`, at `npm_config_userconfig` when set and `~/.npmrc` otherwise.
-4. npm's built-in default, `https://registry.npmjs.org`.
+2. The user `.npmrc`, at `npm_config_userconfig` when set and `~/.npmrc` otherwise.
+3. npm's built-in default, `https://registry.npmjs.org`.
 
 A scoped `@microsoft:registry` outranks the global `registry` for this package, matching npm's scope-to-registry association. npm's global (`$PREFIX/etc/npmrc`) and builtin layers are not read: locating them requires npm's install prefix, which is only discoverable by running npm — the process launch this lookup exists to avoid. Registry pinning lives in the environment or user layer in practice.
 

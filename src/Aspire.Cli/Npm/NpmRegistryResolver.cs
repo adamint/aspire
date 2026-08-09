@@ -44,16 +44,10 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     private const string UserConfigKey = "userconfig";
     private const string NpmrcFileName = ".npmrc";
 
-    // npm locates the project config by walking up from the working directory to the nearest
-    // "local prefix". The bound stops a pathological path (or a cycle introduced by symlinks)
-    // from turning a startup-path lookup into an unbounded directory walk.
-    private const int MaximumLocalPrefixSearchDepth = 64;
-
     // A .npmrc is a small ini file; anything this large is not one, and the update check should
     // not read an arbitrarily large file off disk on the startup path.
     private const int MaximumNpmrcSizeInBytes = 1024 * 1024;
 
-    private readonly DirectoryInfo _workingDirectory;
     private readonly DirectoryInfo _homeDirectory;
     private readonly ILogger<NpmRegistryResolver> _logger;
     private readonly IReadOnlyDictionary<string, string> _environment;
@@ -77,7 +71,6 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentNullException.ThrowIfNull(logger);
 
-        _workingDirectory = workingDirectory;
         _homeDirectory = homeDirectory;
         _environment = environment;
         _logger = logger;
@@ -149,19 +142,19 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
 
     private Dictionary<string, ConfigurationValue> BuildConfiguration()
     {
-        // Highest precedence first; the first layer to supply a key wins, matching npm's
-        // cli > env > project > user > global > builtin ordering. The npm CLI's own global and
-        // builtin npmrc layers are not read because locating them requires npm's install prefix,
+        // Highest precedence first; the first layer to supply a key wins, matching the subset of
+        // npm's cli > env > user > global > builtin ordering that applies to the global install
+        // command doctor recommends. Project .npmrc files are deliberately skipped: npm documents
+        // that they are not read in global mode, and the suggested remedy is
+        // "npm install -g @microsoft/aspire-cli@latest".
+        // See https://docs.npmjs.com/cli/v10/configuring-npm/npmrc#per-project-config-file.
+        //
+        // The npm CLI's own global and builtin npmrc layers are not read because locating them requires npm's install prefix,
         // which is only discoverable by running npm - the process launch this lookup exists to
         // avoid. Registry pinning lives in the env or user layer in practice.
         var configuration = new Dictionary<string, ConfigurationValue>(StringComparer.Ordinal);
 
         MergeEnvironment(configuration);
-
-        if (TryGetLocalPrefix(out var localPrefix))
-        {
-            MergeNpmrcFile(configuration, Path.Combine(localPrefix, NpmrcFileName));
-        }
 
         MergeNpmrcFile(configuration, GetUserConfigPath(configuration));
 
@@ -221,6 +214,8 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             return;
         }
 
+        var fileConfiguration = new Dictionary<string, ConfigurationValue>(StringComparer.Ordinal);
+
         foreach (var line in lines)
         {
             if (!TryParseNpmrcLine(line, out var key, out var rawValue) || !IsInterestingKey(key))
@@ -236,7 +231,14 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
                 continue;
             }
 
-            AddIfAbsent(configuration, key, value, path);
+            SetIfPresent(fileConfiguration, key, value, path);
+        }
+
+        foreach (var (key, value) in fileConfiguration)
+        {
+            // Cross-layer precedence is still first-wins because layers are merged highest to
+            // lowest. Only duplicate scalar keys inside one ini file are last-wins.
+            configuration.TryAdd(key, value);
         }
     }
 
@@ -253,8 +255,11 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     /// //npm.contoso.example/:_authToken=${NPM_TOKEN}
     /// </code>
     /// Values may be quoted and may contain '=' (a URL query), so only the first '=' separates the
-    /// key from the value. Credential lines such as <c>_authToken</c> are matched by
+    /// key from the value. Unquoted values follow npm/ini comment rules: the first unescaped
+    /// <c>;</c> or <c>#</c> starts an inline comment, while <c>\;</c>, <c>\#</c>, and <c>\\</c>
+    /// unescape to literal characters. Credential lines such as <c>_authToken</c> are matched by
     /// <see cref="IsInterestingKey"/> and never retained.
+    /// See https://github.com/npm/ini/blob/main/lib/ini.js.
     /// </remarks>
     private static bool TryParseNpmrcLine(string line, out string key, [NotNullWhen(true)] out string? value)
     {
@@ -285,12 +290,12 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         }
 
         key = NormalizeKey(parsedKey.ToString());
-        value = Unquote(trimmed[(separatorIndex + 1)..].Trim());
+        value = ParseNpmrcValue(trimmed[(separatorIndex + 1)..].Trim());
 
         return true;
     }
 
-    private static string Unquote(ReadOnlySpan<char> value)
+    private static string ParseNpmrcValue(ReadOnlySpan<char> value)
     {
         if (value.Length >= 2 &&
             (value[0] is '"' && value[^1] is '"' || value[0] is '\'' && value[^1] is '\''))
@@ -298,7 +303,47 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             return value[1..^1].ToString();
         }
 
-        return value.ToString();
+        var builder = new System.Text.StringBuilder(value.Length);
+        var escaping = false;
+
+        foreach (var c in value)
+        {
+            if (escaping)
+            {
+                if (c is ';' or '#' or '\\')
+                {
+                    builder.Append(c);
+                }
+                else
+                {
+                    builder.Append('\\');
+                    builder.Append(c);
+                }
+
+                escaping = false;
+                continue;
+            }
+
+            if (c is '\\')
+            {
+                escaping = true;
+                continue;
+            }
+
+            if (c is ';' or '#')
+            {
+                break;
+            }
+
+            builder.Append(c);
+        }
+
+        if (escaping)
+        {
+            builder.Append('\\');
+        }
+
+        return builder.ToString().Trim();
     }
 
     /// <summary>
@@ -353,44 +398,6 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         return true;
     }
 
-    /// <summary>
-    /// Finds the directory whose <c>.npmrc</c> npm would load as the project config.
-    /// </summary>
-    /// <remarks>
-    /// npm's local prefix is the nearest ancestor of the working directory containing a
-    /// <c>package.json</c> or a <c>node_modules</c> directory, falling back to the working
-    /// directory itself. This layer applies even to <c>-g</c> installs, because npm loads config
-    /// before it interprets the command.
-    /// </remarks>
-    private bool TryGetLocalPrefix([NotNullWhen(true)] out string? localPrefix)
-    {
-        var directory = _workingDirectory;
-        var depth = 0;
-
-        while (directory is not null && depth++ < MaximumLocalPrefixSearchDepth)
-        {
-            try
-            {
-                if (File.Exists(Path.Combine(directory.FullName, "package.json")) ||
-                    Directory.Exists(Path.Combine(directory.FullName, "node_modules")))
-                {
-                    localPrefix = directory.FullName;
-                    return true;
-                }
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                _logger.LogDebug(exception, "Could not inspect {Directory} while locating the npm local prefix.", directory.FullName);
-                break;
-            }
-
-            directory = directory.Parent;
-        }
-
-        localPrefix = _workingDirectory.FullName;
-        return true;
-    }
-
     private string? GetUserConfigPath(IReadOnlyDictionary<string, ConfigurationValue> configuration)
     {
         // npm_config_userconfig relocates the user layer, and tooling that isolates npm (CI images,
@@ -410,13 +417,38 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         string? value,
         string source)
     {
+        if (TryCreateConfigurationValue(value, source, out var configurationValue))
+        {
+            // Layers are merged highest precedence first, so an existing entry always outranks this one.
+            configuration.TryAdd(key, configurationValue);
+        }
+    }
+
+    private static void SetIfPresent(
+        Dictionary<string, ConfigurationValue> configuration,
+        string key,
+        string? value,
+        string source)
+    {
+        if (TryCreateConfigurationValue(value, source, out var configurationValue))
+        {
+            configuration[key] = configurationValue;
+        }
+    }
+
+    private static bool TryCreateConfigurationValue(
+        string? value,
+        string source,
+        [NotNullWhen(true)] out ConfigurationValue? configurationValue)
+    {
         if (string.IsNullOrWhiteSpace(value))
         {
-            return;
+            configurationValue = null;
+            return false;
         }
 
-        // Layers are merged highest precedence first, so an existing entry always outranks this one.
-        configuration.TryAdd(key, new ConfigurationValue(value.Trim(), source));
+        configurationValue = new ConfigurationValue(value.Trim(), source);
+        return true;
     }
 
     /// <summary>

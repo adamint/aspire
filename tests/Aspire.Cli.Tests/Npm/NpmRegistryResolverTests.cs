@@ -85,19 +85,17 @@ public class NpmRegistryResolverTests : IDisposable
     }
 
     [Fact]
-    public void Resolve_ProjectNpmrcOutranksUserNpmrc()
+    public void Resolve_UserNpmrcOutranksProjectNpmrcForGlobalInstall()
     {
         WriteHomeNpmrc("registry=https://npm.contoso.example/user/");
 
-        // npm's local prefix is the nearest ancestor holding a package.json, and that directory's
-        // .npmrc is the project layer - even for a -g install.
         var project = CreateWorkingDirectory("repo", "src");
         File.WriteAllText(Path.Combine(_root.FullName, "repo", "package.json"), "{}");
         File.WriteAllText(Path.Combine(_root.FullName, "repo", ".npmrc"), "registry=https://npm.contoso.example/project/");
 
         var resolution = CreateResolver(workingDirectory: project).Resolve(PackageName);
 
-        Assert.Equal("https://npm.contoso.example/project/", resolution.RegistryUri.AbsoluteUri);
+        Assert.Equal("https://npm.contoso.example/user/", resolution.RegistryUri.AbsoluteUri);
     }
 
     [Fact]
@@ -141,6 +139,48 @@ public class NpmRegistryResolverTests : IDisposable
         WriteHomeNpmrc(line);
 
         Assert.Equal(expected, CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_UsesLastDuplicateKeyWithinSingleNpmrcFile()
+    {
+        WriteHomeNpmrc(
+            "registry=https://npm.contoso.example/first/",
+            "registry=https://npm.contoso.example/second/");
+
+        Assert.Equal(
+            "https://npm.contoso.example/second/",
+            CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_StripsInlineCommentFromUnquotedNpmrcValue()
+    {
+        WriteHomeNpmrc("registry=https://npm.contoso.example/feed/ ; mirror");
+
+        Assert.Equal(
+            "https://npm.contoso.example/feed/",
+            CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_PreservesEscapedSemicolonInUnquotedNpmrcValue()
+    {
+        WriteHomeNpmrc(@"registry=https://npm.contoso.example/feed/\;mirror/");
+
+        Assert.Equal(
+            "https://npm.contoso.example/feed/;mirror/",
+            CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_PreservesEscapedHashInUnquotedNpmrcValue()
+    {
+        WriteHomeNpmrc(@"registry=https://npm.contoso.example/feed/\#mirror");
+
+        Assert.Equal(
+            "https://npm.contoso.example/feed/#mirror",
+            CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
     }
 
     [Theory]

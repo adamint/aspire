@@ -6,7 +6,7 @@ using Semver;
 namespace Aspire.Cli.Npm;
 
 /// <summary>
-/// Reads published package metadata from the public npm registry.
+/// Reads published package metadata from the npm registry selected for the package.
 /// </summary>
 internal interface INpmRegistryClient
 {
