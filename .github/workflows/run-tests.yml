@@ -39,6 +39,12 @@ on:
         required: false
         type: boolean
         default: false
+      # Only set this for generated shards that are expected to be empty. Normal CI should
+      # fail when a named shard produces .trx files that report zero tests.
+      allowZeroTests:
+        required: false
+        type: boolean
+        default: false
 
 jobs:
 
@@ -365,6 +371,7 @@ jobs:
 
       - name: Run nuget dependent tests (Linux/macOS)
         if: ${{ fromJson(inputs.properties).requiresNugets == true && runner.os != 'Windows' }}
+        id: run-nuget-tests-unix
         working-directory: ${{ github.workspace }}/run-tests/
         env:
           ASPIRE__TEST__DCPLOGBASEPATH: ${{ github.workspace }}/testresults/dcp
@@ -418,6 +425,7 @@ jobs:
 
       - name: Run nuget dependent tests (Windows)
         if: ${{ fromJson(inputs.properties).requiresNugets == true && runner.os == 'Windows' }}
+        id: run-nuget-tests-windows
         working-directory: ${{ github.workspace }}/run-tests/
         shell: pwsh
         env:
@@ -611,7 +619,7 @@ jobs:
           exit $testExitCode
 
       - name: Verify test results exist
-        if: ${{ inputs.ignoreTestFailures }}
+        if: ${{ always() && (steps.run-nuget-tests-unix.outcome == 'success' || steps.run-nuget-tests-windows.outcome == 'success' || steps.run-tests-unix.outcome == 'success' || steps.run-tests-windows.outcome == 'success') }}
         shell: pwsh
         run: |
           # Classify the test run using the MTP exit code captured by the test step.
@@ -660,6 +668,7 @@ jobs:
           Write-Host "Found $($trxFiles.Count) .trx file(s)"
 
           $validFileCount = 0
+          $totalTestCount = 0
           foreach ($trxFile in $trxFiles) {
             Write-Host "Checking $($trxFile.Name)..."
 
@@ -673,6 +682,7 @@ jobs:
 
                 if ($countersNode -and $countersNode.total) {
                   $testCount = [int]$countersNode.total
+                  $totalTestCount += $testCount
                   Write-Host "  Total tests in file: $testCount"
                 } else {
                   Write-Host "  File is valid but has no test count information"
@@ -691,7 +701,16 @@ jobs:
             exit 1
           }
 
-          Write-Host "✓ Test execution completed successfully (found $validFileCount valid .trx file(s))"
+          if ($totalTestCount -eq 0) {
+            if ('${{ inputs.allowZeroTests }}' -eq 'true') {
+              Write-Warning "No tests were reported in the .trx files, but allowZeroTests is true."
+            } else {
+              Write-Error "No tests were reported in the .trx files. Set allowZeroTests only for generated shards that are expected to be empty."
+              exit 1
+            }
+          }
+
+          Write-Host "✓ Test execution completed successfully (found $validFileCount valid .trx file(s), $totalTestCount test(s))"
 
       - name: Check for hang dump files
         if: always()

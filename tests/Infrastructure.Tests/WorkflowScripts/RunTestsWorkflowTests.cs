@@ -89,6 +89,70 @@ public sealed class RunTestsWorkflowTests
         }
     }
 
+    [Fact]
+    public void TestResultValidationRunsAfterSuccessfulTestRunnerSteps()
+    {
+        string condition = ExtractStepProperty("Verify test results exist", "if");
+        string expectedCondition =
+            "${{ always() && " +
+            "(steps.run-nuget-tests-unix.outcome == 'success' || " +
+            "steps.run-nuget-tests-windows.outcome == 'success' || " +
+            "steps.run-tests-unix.outcome == 'success' || " +
+            "steps.run-tests-windows.outcome == 'success') }}";
+
+        Assert.Equal(expectedCondition, condition);
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
+    public async Task TestResultValidationFailsWhenTrxFilesContainNoTests()
+    {
+        string scratchDirectory = CreateScratchDirectory();
+        try
+        {
+            string testResultsDirectory = Path.Combine(scratchDirectory, "testresults");
+            Directory.CreateDirectory(testResultsDirectory);
+            File.WriteAllText(Path.Combine(scratchDirectory, "test-exit-code.txt"), "0");
+            WriteTrxFile(Path.Combine(testResultsDirectory, "empty.trx"), totalTests: 0);
+
+            using var command = new PowerShellCommand(CreateTestResultValidationScript(scratchDirectory), _output).WithTimeout(TimeSpan.FromMinutes(1));
+
+            CommandResult result = await command.ExecuteAsync(scratchDirectory);
+
+            Assert.Equal(1, result.ExitCode);
+            Assert.Contains("No tests were reported in the .trx files.", result.Output);
+        }
+        finally
+        {
+            DeleteScratchDirectory(scratchDirectory);
+        }
+    }
+
+    [Fact]
+    [RequiresTools(["pwsh"])]
+    public async Task TestResultValidationPassesWhenTrxFilesContainTests()
+    {
+        string scratchDirectory = CreateScratchDirectory();
+        try
+        {
+            string testResultsDirectory = Path.Combine(scratchDirectory, "testresults");
+            Directory.CreateDirectory(testResultsDirectory);
+            File.WriteAllText(Path.Combine(scratchDirectory, "test-exit-code.txt"), "0");
+            WriteTrxFile(Path.Combine(testResultsDirectory, "tests.trx"), totalTests: 3);
+
+            using var command = new PowerShellCommand(CreateTestResultValidationScript(scratchDirectory), _output).WithTimeout(TimeSpan.FromMinutes(1));
+
+            CommandResult result = await command.ExecuteAsync(scratchDirectory);
+
+            result.EnsureSuccessful();
+            Assert.Contains("3 test(s)", result.Output);
+        }
+        finally
+        {
+            DeleteScratchDirectory(scratchDirectory);
+        }
+    }
+
     private static string[] GetHangDumpDetectorFilters()
     {
         string workflowText = File.ReadAllText(s_workflowPath);
@@ -120,6 +184,94 @@ public sealed class RunTestsWorkflowTests
             """);
 
         return scriptPath;
+    }
+
+    private static string CreateTestResultValidationScript(string scratchDirectory)
+    {
+        string scriptPath = Path.Combine(scratchDirectory, "validate-test-results.ps1");
+        string script = ExtractPowerShellStep("Verify test results exist")
+            .Replace("${{ github.workspace }}", "$Workspace", StringComparison.Ordinal)
+            .Replace("'${{ inputs.ignoreTestFailures }}'", "'true'", StringComparison.Ordinal)
+            .Replace("'${{ inputs.allowZeroTests }}'", "'false'", StringComparison.Ordinal);
+
+        File.WriteAllText(
+            scriptPath,
+            $$"""
+            param(
+              [Parameter(Mandatory=$true)][string]$Workspace
+            )
+
+            {{script}}
+            """);
+
+        return scriptPath;
+    }
+
+    private static string ExtractPowerShellStep(string stepName)
+    {
+        string workflowText = File.ReadAllText(s_workflowPath);
+        string[] lines = workflowText.ReplaceLineEndings("\n").Split('\n');
+        int stepStart = Array.FindIndex(lines, line => line == $"      - name: {stepName}");
+        Assert.True(stepStart >= 0, $"Could not find step '{stepName}' in {s_workflowPath}.");
+
+        int runStart = Array.FindIndex(lines, stepStart, line => line == "        run: |");
+        Assert.True(runStart >= 0, $"Could not find PowerShell run block for step '{stepName}' in {s_workflowPath}.");
+
+        var scriptLines = new List<string>();
+        for (int i = runStart + 1; i < lines.Length; i++)
+        {
+            string line = lines[i];
+            if (line.StartsWith("      - name:", StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            Assert.True(line.Length == 0 || line.StartsWith("          ", StringComparison.Ordinal), $"Unexpected line indentation in step '{stepName}': {line}");
+            scriptLines.Add(line.Length >= 10 ? line[10..] : line);
+        }
+
+        Assert.NotEmpty(scriptLines);
+        return string.Join(Environment.NewLine, scriptLines);
+    }
+
+    private static string ExtractStepProperty(string stepName, string propertyName)
+    {
+        string workflowText = File.ReadAllText(s_workflowPath);
+        string[] lines = workflowText.ReplaceLineEndings("\n").Split('\n');
+        int stepStart = Array.FindIndex(lines, line => line == $"      - name: {stepName}");
+        Assert.True(stepStart >= 0, $"Could not find step '{stepName}' in {s_workflowPath}.");
+
+        for (int i = stepStart + 1; i < lines.Length; i++)
+        {
+            string line = lines[i];
+            if (line.StartsWith("      - name:", StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            string prefix = $"        {propertyName}: ";
+            if (line.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return line[prefix.Length..];
+            }
+        }
+
+        Assert.Fail($"Could not find property '{propertyName}' for step '{stepName}' in {s_workflowPath}.");
+        return "";
+    }
+
+    private static void WriteTrxFile(string path, int totalTests)
+    {
+        File.WriteAllText(
+            path,
+            $$"""
+            <?xml version="1.0" encoding="utf-8"?>
+            <TestRun>
+              <ResultSummary outcome="Completed">
+                <Counters total="{{totalTests}}" executed="{{totalTests}}" passed="{{totalTests}}" failed="0" error="0" timeout="0" aborted="0" inconclusive="0" />
+              </ResultSummary>
+            </TestRun>
+            """);
     }
 
     private static string[] GetOutputLines(CommandResult result)
