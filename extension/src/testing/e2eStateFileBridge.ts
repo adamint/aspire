@@ -1151,7 +1151,10 @@ ${JSON.stringify({
     }
 
     if (pauseOnBreakpointMs > 0) {
-      await delay(pauseOnBreakpointMs);
+      await runWithE2eDeadline(
+        'resource breakpoint pause',
+        deadline,
+        () => delay(pauseOnBreakpointMs));
     }
 
     // Return without continuing the resource. If the caller owns teardown, it can now stop while the

@@ -463,7 +463,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(stopDebuggingStub.thirdCall.args[0], parentDebugSession);
     });
 
-    test('dispose stops resource sessions before CLI and parent shutdown', () => {
+    test('dispose waits for resource sessions before CLI and parent shutdown', async () => {
         const parentDebugSession = {
             id: 'aspire-session',
             type: 'aspire',
@@ -495,8 +495,14 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             isCliDebugLoggingEnabled: () => false,
         };
         const stopOrder: string[] = [];
+        let releaseResourceStop!: () => void;
+        const resourceStopGate = new Promise<void>(resolve => { releaseResourceStop = resolve; });
         sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
             stopOrder.push((session as unknown as { id: string }).id);
+            if (session === (resourceDebugSession as unknown as vscode.DebugSession)) {
+                await resourceStopGate;
+                stopOrder.push('resource-session-settled');
+            }
         });
         const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
         (aspireDebugSession as any)._appHostDebugSession = {
@@ -516,8 +522,13 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         aspireDebugSession.dispose();
 
+        assert.deepStrictEqual(stopOrder, [resourceDebugSession.id]);
+        releaseResourceStop();
+        await new Promise(resolve => setTimeout(resolve, 0));
+
         assert.deepStrictEqual(stopOrder, [
             resourceDebugSession.id,
+            'resource-session-settled',
             'cli stop',
             parentDebugSession.id,
         ]);

@@ -170,20 +170,23 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
   }
 
-  private stopResourceDebugSessions(): void {
+  private stopResourceDebugSessions(): Promise<void>[] {
     const appHostDebugSessionId = this._appHostDebugSession?.id;
+    const stopPromises: Promise<void>[] = [];
     for (const session of this._resourceDebugSessions) {
       if (session.id === appHostDebugSessionId) {
         continue;
       }
 
       try {
-        session.stopSession();
+        stopPromises.push(Promise.resolve(session.stopSession()));
       }
       catch (error) {
         extensionLogOutputChannel.warn(`Failed to stop resource debug session ${session.id}: ${error}`);
       }
     }
+
+    return stopPromises;
   }
 
   private trackResourceDebugSession(resourceDebugSession: AspireResourceDebugSession): AspireResourceDebugSession {
@@ -889,11 +892,42 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     const debugSessionId = this.debugSessionId;
     const dcpServer = this._dcpServer;
 
+    const finishDispose = () => {
+      this.finishDisposeAfterResourceStops(
+        startMs,
+        mode,
+        language,
+        languagePromise,
+        targetVersion,
+        targetVersionPromise,
+        appHostIsDirectory,
+        debugSessionId,
+        dcpServer);
+    };
+
     // Stop child debug sessions before any CLI/AppHost shutdown disposable can fire. The normal
     // VS Code stop path reaches dispose() through DAP `disconnect`/`terminate`, not through the
     // async stopDebugging() helper above, so dispose() has to preserve the same resource-first
     // ordering on its own.
-    this.stopResourceDebugSessions();
+    const resourceStopPromises = this.stopResourceDebugSessions();
+    if (resourceStopPromises.length > 0) {
+      void Promise.allSettled(resourceStopPromises).then(finishDispose);
+    }
+    else {
+      finishDispose();
+    }
+  }
+
+  private finishDisposeAfterResourceStops(
+    startMs: number | undefined,
+    mode: 'run' | 'debug',
+    language: 'csharp' | 'typescript' | 'unknown',
+    languagePromise: Promise<'csharp' | 'typescript' | 'unknown'> | undefined,
+    targetVersion: string,
+    targetVersionPromise: Promise<string> | undefined,
+    appHostIsDirectory: 'true' | 'false' | 'unknown',
+    debugSessionId: string,
+    dcpServer: AspireDcpServer): void {
 
     // Stop child debug sessions first so their `sessionTerminated`
     // notifications can flow back through `AspireDcpServer.sendNotification`

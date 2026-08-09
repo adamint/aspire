@@ -32,6 +32,7 @@ suite('E2E deadline helper', () => {
         const bridge = fs.readFileSync(path.join(extensionRoot, 'src', 'testing', 'e2eStateFileBridge.ts'), 'utf8');
 
         assert.ok(bridge.includes('let proofFailure: unknown;'), 'Cleanup failures must not mask the startup or breakpoint failure that triggered cleanup.');
+        assert.ok(bridge.includes("'resource breakpoint pause'"), 'Breakpoint pauses must share the resource-debugger proof deadline.');
         assert.ok(bridge.includes("runWithE2eDeadline(\n          'stop resource debugging request'"), 'The cleanup stopDebugging request must not outlive the resource-debugger proof deadline.');
         assert.ok(bridge.includes('() => vscode.debug.stopDebugging()'), 'The cleanup stopDebugging request must not start after the deadline has already passed.');
     });
