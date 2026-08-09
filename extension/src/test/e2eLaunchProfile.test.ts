@@ -519,8 +519,17 @@ suite('E2E launch profile', () => {
         assert.ok(appHostTree.includes('writeGatedStreamingDiscoveryCliWrapper'));
         assert.ok(appHostTree.includes('discoveryGate.releasePsSnapshot();'));
         assert.ok(appHostTree.includes('discoveryGate.releaseLsCandidate();'));
-        assert.ok(runningBeforeDiscoveryTest.indexOf('await waitForWorkspaceRediscoveryLoading') < runningBeforeDiscoveryTest.indexOf('discoveryGate.releasePsSnapshot();'));
-        assert.ok(runningBeforeDiscoveryTest.indexOf('discoveryGate.releasePsSnapshot();') < runningBeforeDiscoveryTest.indexOf('discoveryGate.releaseLsCandidate();'));
+
+        const cleanupIndex = runningBeforeDiscoveryTest.indexOf('finally {');
+        assert.ok(cleanupIndex >= 0, 'Expected the E2E to keep cleanup releases in a finally block.');
+        const testBeforeCleanup = runningBeforeDiscoveryTest.slice(0, cleanupIndex);
+        const loadingIndex = testBeforeCleanup.indexOf('await waitForWorkspaceRediscoveryLoading');
+        const releasePsIndex = testBeforeCleanup.indexOf('discoveryGate.releasePsSnapshot();');
+        const releaseLsIndex = testBeforeCleanup.indexOf('discoveryGate.releaseLsCandidate();');
+
+        assert.ok(loadingIndex >= 0, 'The E2E must wait for the transient loading UI before releasing the running AppHost snapshot.');
+        assert.ok(releasePsIndex > loadingIndex, 'The running AppHost snapshot must be released after the loading UI has been observed.');
+        assert.ok(releaseLsIndex > releasePsIndex, 'The slow workspace candidate must be released after the running AppHost snapshot.');
     });
 
     test('patches ExTester launch arguments without replacement-token expansion', () => {
