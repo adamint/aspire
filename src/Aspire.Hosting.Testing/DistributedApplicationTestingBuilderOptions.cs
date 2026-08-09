@@ -9,10 +9,10 @@ namespace Aspire.Hosting.Testing;
 /// Options that control how an <see cref="IDistributedApplicationTestingBuilder"/> is created.
 /// </summary>
 /// <remarks>
-/// These options are applied while the underlying distributed application builder is being constructed, because
-/// dashboard services and dashboard authentication are selected during construction and cannot be added afterwards.
-/// Settings that remain adjustable at runtime, such as port allocation, interactivity, and dependency waiting, can
-/// still be overridden through the returned builder before the application is built.
+/// These options are applied while the underlying distributed application builder is being constructed, because the
+/// dashboard services themselves are selected during construction and cannot be added afterwards. The settings those
+/// services read - port allocation, interactivity, dependency waiting, and the generated browser token - remain
+/// adjustable through the returned builder until the application is built.
 /// </remarks>
 /// <example>
 /// The following example creates a testing builder that runs the dashboard:
@@ -40,8 +40,10 @@ public sealed class DistributedApplicationTestingBuilderOptions
     /// The default is <see langword="false"/>.
     /// </value>
     /// <remarks>
-    /// When the dashboard runs, it listens on authenticated loopback endpoints using dynamically assigned ports so
-    /// that concurrent test applications cannot collide or reach each other. Use
+    /// When the dashboard runs, it listens on loopback endpoints using dynamically assigned ports, so concurrent
+    /// test applications do not compete for a fixed port. Loopback still means every dashboard on the machine is
+    /// reachable from it; what keeps applications out of each other's dashboards is that each one generates its own
+    /// browser token. Use
     /// <see cref="DistributedApplicationHostingTestingExtensions.GetDashboardLoginUrlAsync"/> to obtain an
     /// authenticated URL for the running dashboard.
     /// </remarks>

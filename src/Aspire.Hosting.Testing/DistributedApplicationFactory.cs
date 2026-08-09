@@ -511,9 +511,17 @@ public class DistributedApplicationFactory(Type entryPoint, string[] args) : IDi
         }
 
         OnDisposed();
+
+        // Claim the completion source before deciding whether there is an application to tear down.
+        // OnBuiltCoreAsync disposes the application it built only when its own TrySetResult loses, so exactly
+        // one of these two calls wins and the loser owns disposal. Reading IsCompletedSuccessfully first and
+        // cancelling afterwards left a window between the two: a TrySetResult landing inside it made this
+        // cancellation fail, this method return early, and OnBuiltCoreAsync see a successful publish - so
+        // neither side stopped the host, and it stayed running for the lifetime of the test process.
+        _appTcs.TrySetCanceled();
+
         if (_appTcs.Task is not { IsCompletedSuccessfully: true } appTask)
         {
-            _appTcs.TrySetCanceled();
             return;
         }
 
