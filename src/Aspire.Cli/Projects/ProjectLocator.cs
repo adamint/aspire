@@ -160,7 +160,9 @@ internal sealed class ProjectLocator(
 
     /// <summary>
     /// Identifies a CLI invocation whose AppHost target was chosen by an agent or language model
-    /// tool (for example the extension's <c>#aspireStartAppHost</c> tool) rather than by the user.
+    /// tool rather than by the user. The extension carries this origin on
+    /// <c>AppHostLaunchService.launch</c>; no in-tree tool passes it yet, so today it is reserved
+    /// for callers that pick a target on the user's behalf.
     /// </summary>
     private const string AgentSelectionOrigin = "agent-selection";
 
