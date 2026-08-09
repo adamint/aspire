@@ -39,6 +39,7 @@ const retryableWithAnnotationStepPatterns = [
 const ignoredFailureStepPatterns = [
     /^Run tests\b/i,
     /^Run nuget dependent tests\b/i,
+    /^Check for hang dump files$/i,
     /^Build test project$/i,
     /^Build and archive test project$/i,
     /^Build RID-specific packages\b/i,
@@ -56,6 +57,7 @@ const ignoredFailureStepPatterns = [
 const testExecutionFailureStepPatterns = [
     /^Run tests\b/i,
     /^Run nuget dependent tests\b/i,
+    /^Check for hang dump files$/i,
 ];
 
 const transientAnnotationPatterns = [

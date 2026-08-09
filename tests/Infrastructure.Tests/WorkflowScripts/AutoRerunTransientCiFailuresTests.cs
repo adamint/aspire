@@ -287,6 +287,24 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
 
     [Fact]
     [RequiresTools(["node"])]
+    public async Task DoesNotApplyBroadNetworkOverrideWhenHangDumpDetectionFailed()
+    {
+        WorkflowJob job = CreateJob(failedSteps: ["Check for hang dump files"]);
+
+        AnalyzeFailedJobsResult result = await AnalyzeSingleJobAsync(
+            job,
+            "Process completed with exit code 1.",
+            "error : Unable to load the service index for source https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public/nuget/v3/index.json.");
+
+        Assert.Empty(result.RetryableJobs);
+        Assert.Single(result.SkippedJobs);
+        Assert.Equal(
+            "Failed step 'Check for hang dump files' includes a test execution failure, so the job was not retried without a high-confidence infrastructure override.",
+            result.SkippedJobs[0].Reason);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
     public async Task DoesNotRetryIgnoredBuildStepsWhenTheLogLacksFeedNetworkSignature()
     {
         WorkflowJob job = CreateJob(failedSteps: ["Build test project"]);

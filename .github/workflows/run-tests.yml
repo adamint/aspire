@@ -646,7 +646,9 @@ jobs:
             # MTP does not produce .trx files when the test run is aborted (e.g., by --hangdump-timeout).
             # Check for recordings or other test artifacts that prove tests actually ran before failing.
             $hasRecordings = Test-Path "${{ github.workspace }}/testresults/recordings/*.cast"
-            $hasHangDumps = Get-ChildItem -Path "${{ github.workspace }}/testresults" -Filter *hangdump* -Recurse -ErrorAction SilentlyContinue
+            # MTP's default hang dump file name is "<process>_<pid>_hang.dmp"; use the suffix so
+            # crash dumps and unrelated .dmp files stay out of this timeout-only classification.
+            $hasHangDumps = Get-ChildItem -Path "${{ github.workspace }}/testresults" -Filter *_hang.dmp -Recurse -ErrorAction SilentlyContinue
             if ($hasRecordings -or $hasHangDumps) {
               Write-Warning "No .trx files found, but test artifacts exist — test run likely aborted by timeout before trx was flushed."
               exit 0
@@ -704,7 +706,9 @@ jobs:
           # Only check for hang dump files — these indicate a test timed out.
           # Crash dumps (e.g. *_crash.dmp) can be produced during process cleanup
           # even when all tests passed, so we don't fail on those.
-          $hangDumpFiles = Get-ChildItem -Path $testResultsDir -Filter *hangdump* -Recurse -ErrorAction SilentlyContinue
+          # MTP's default hang dump file name is "<process>_<pid>_hang.dmp"; use the suffix so
+          # crash dumps and unrelated .dmp files do not fail otherwise-successful runs.
+          $hangDumpFiles = Get-ChildItem -Path $testResultsDir -Filter *_hang.dmp -Recurse -ErrorAction SilentlyContinue
           if ($hangDumpFiles.Count -gt 0) {
             # When ignoreTestFailures is true (the quarantine workflow), a hang dump must NOT fail the job.
             # Quarantined tests are flaky by definition and routinely time out; the whole point of that
