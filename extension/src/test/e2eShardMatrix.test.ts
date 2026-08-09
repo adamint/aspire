@@ -57,7 +57,7 @@ suite('E2E shard matrix', () => {
      * deduplicated before being compared with the canonical set.
      */
     function matrixSpecPaths(workflow: string): string[] {
-        return [...new Set([...workflow.matchAll(/^\s*spec:\s*(\S+)\s*$/gm)].map(match => match[1]))].sort();
+        return [...new Set([...workflow.matchAll(/^\s*spec:\s*(\S+)\s*$/gm)].map(match => parseWorkflowScalar(match[1])))].sort();
     }
 
     function matrixRows(workflow: string): MatrixRow[] {
@@ -259,6 +259,12 @@ suite('E2E shard matrix', () => {
 
         // Guards the deduplication: without it every cross-platform shard would look like a
         // duplicate entry and the set equality check would fail on a correct workflow.
+        assertMatrixMatchesSpecs(workflow, ['edgeCases.e2e.test.ts']);
+    });
+
+    test('accepts a quoted spec scalar', () => {
+        const workflow = workflowWithSpecs("'out/test-e2e/test-e2e/edgeCases.e2e.test.js'");
+
         assertMatrixMatchesSpecs(workflow, ['edgeCases.e2e.test.ts']);
     });
 
