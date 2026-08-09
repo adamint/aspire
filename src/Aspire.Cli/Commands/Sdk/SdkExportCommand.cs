@@ -166,6 +166,7 @@ internal sealed class SdkExportCommand : BaseCommand
             packageName,
             packageVersion,
             integrations,
+            codeGenPackage,
             packageSource,
             outputFile,
             cancellationToken));
@@ -257,8 +258,9 @@ internal sealed class SdkExportCommand : BaseCommand
     /// <param name="serverProject">The scanner AppHost that will restore the export.</param>
     /// <param name="packageName">The package being exported.</param>
     /// <param name="packageVersion">The version the caller asked for.</param>
+    /// <param name="codeGenPackage">The code generation package the export will load, when one was resolved.</param>
     /// <returns>The rejection reason, or <see langword="null"/> when the request is exportable.</returns>
-    private string? ValidateRequestedPackageIsRestorable(IAppHostServerProject serverProject, string packageName, string packageVersion)
+    private string? ValidateRequestedPackageIsRestorable(IAppHostServerProject serverProject, string packageName, string packageVersion, string? codeGenPackage)
     {
         var isCorePackage = string.Equals(packageName, CorePackageName, StringComparison.OrdinalIgnoreCase);
 
@@ -283,7 +285,7 @@ internal sealed class SdkExportCommand : BaseCommand
         // src/Aspire.Hosting.
         if (serverProject.GetLocalProjectSubstitution(packageName) is not { } substitution)
         {
-            return null;
+            return ValidateCodeGenerationPackageIsRestorable(serverProject, codeGenPackage);
         }
 
         var preamble = $"This CLI runs from an Aspire repository checkout, so {packageName} is built from {substitution.ProjectPath} " +
@@ -328,6 +330,55 @@ internal sealed class SdkExportCommand : BaseCommand
                    $"Run the export with the {requested} CLI, or request {packageName}@{ExecutionContext.IdentitySdkVersion}.";
         }
 
+        return ValidateCodeGenerationPackageIsRestorable(serverProject, codeGenPackage);
+    }
+
+    /// <summary>
+    /// Rejects an export whose code generator would be built from a checkout that does not match this
+    /// CLI, or <see langword="null"/> when the generator is exportable.
+    /// </summary>
+    /// <remarks>
+    /// The generator reference is pinned to <see cref="CliExecutionContext.IdentityVersion"/> when it is
+    /// added, but repository mode substitutes <em>every</em> <c>Aspire.Hosting*</c> reference with the
+    /// matching project under <c>src/</c> and that substitution ignores the pin. The exported document
+    /// is labelled with the requested package version and records the generator's output shape, so a
+    /// checkout on a different version line silently publishes generator output this CLI never
+    /// produced. The request-level checks above cannot catch it: for a third-party integration they
+    /// return before looking at anything, because nothing under <c>src/</c> carries that name.
+    /// </remarks>
+    private string? ValidateCodeGenerationPackageIsRestorable(IAppHostServerProject serverProject, string? codeGenPackage)
+    {
+        if (codeGenPackage is null || serverProject.GetLocalProjectSubstitution(codeGenPackage) is not { } substitution)
+        {
+            return null;
+        }
+
+        var preamble = $"This CLI runs from an Aspire repository checkout, so the {codeGenPackage} code generator is built from " +
+                       $"{substitution.ProjectPath} instead of being restored at this CLI's version.";
+
+        if (ExecutionContext.IdentityVersionForged)
+        {
+            return $"{preamble} This run also claims a version through ASPIRE_CLI_VERSION, so nothing can confirm the " +
+                   $"checkout really is {ExecutionContext.IdentityVersion}. Re-run without the override, or export from an installed CLI.";
+        }
+
+        if (substitution.CheckoutVersionPrefix is not string checkoutPrefix)
+        {
+            return $"{preamble} This checkout does not say which version it builds (eng/Versions.props is missing or unreadable), " +
+                   $"so the generated document cannot be attributed to a known generator. Export from an installed CLI instead.";
+        }
+
+        // Compare on Major.Minor.Patch only. CheckoutVersionPrefix is that shape by construction while
+        // the identity carries whatever prerelease label this build was stamped with, so comparing the
+        // strings rejected the ordinary local development case where the checkout is exactly this CLI.
+        if (!SemVersion.TryParse(ExecutionContext.IdentitySdkVersion, SemVersionStyles.Any, out var identityVersion)
+            || $"{identityVersion.Major}.{identityVersion.Minor}.{identityVersion.Patch}" != checkoutPrefix)
+        {
+            return $"{preamble} That checkout builds {checkoutPrefix}, but this CLI is {ExecutionContext.IdentitySdkVersion}, so the " +
+                   $"export would describe the checkout's generator output as this CLI's. " +
+                   $"Export from a {checkoutPrefix} CLI, or point this one at a {ExecutionContext.IdentitySdkVersion} checkout.";
+        }
+
         return null;
     }
 
@@ -336,6 +387,7 @@ internal sealed class SdkExportCommand : BaseCommand
         string packageName,
         string packageVersion,
         List<IntegrationReference> integrations,
+        string? codeGenPackage,
         string? packageSource,
         FileInfo? outputFile,
         CancellationToken cancellationToken)
@@ -357,7 +409,7 @@ internal sealed class SdkExportCommand : BaseCommand
             sdkVersion,
             integrations,
             packageSource,
-            validateProject: serverProject => rejection = ValidateRequestedPackageIsRestorable(serverProject, packageName, packageVersion),
+            validateProject: serverProject => rejection = ValidateRequestedPackageIsRestorable(serverProject, packageName, packageVersion, codeGenPackage),
             cancellationToken);
 
         if (session is null)

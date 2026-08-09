@@ -253,6 +253,51 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task SdkExportRejectsWhenTheCheckoutWouldSubstituteAGeneratorFromADifferentVersionLine()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(
+            interactionService,
+            workspace,
+            rpcClient,
+            appHostServerProject,
+            identityVersion: "13.5.0");
+        appHostServerProject.AddLocalProjectSubstitution("Aspire.Hosting.CodeGeneration.TypeScript", "13.4.0");
+
+        // The generator is a first-party Aspire.Hosting* reference, so repository mode builds it from
+        // src/ and discards the version it was pinned to. A third-party package name matches nothing
+        // under src/, so the request-level guard finds no substitution and returns clean — yet the
+        // document this run would publish carries the requested version while describing the shape a
+        // 13.4.0 generator emits.
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Contoso.Aspire.Widgets@2.0.0");
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.Null(rpcClient.LastExportRequest);
+        Assert.Empty(interactionService.DisplayedRawText);
+    }
+
+    [Fact]
+    public async Task SdkExportAllowsASubstitutedGeneratorAtTheCheckoutVersion()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(interactionService, workspace, rpcClient, appHostServerProject);
+        appHostServerProject.AddLocalProjectSubstitution("Aspire.Hosting.CodeGeneration.TypeScript", CheckoutVersionPrefix(provider));
+
+        // A checkout on this CLI's own version line is the local development case: the generator built
+        // from src/ is the generator this CLI would have restored, so the export stays supported.
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Contoso.Aspire.Widgets@2.0.0");
+
+        Assert.Equal(CliExitCodes.Success, exitCode);
+        Assert.Equal(("typescript", "Contoso.Aspire.Widgets", "2.0.0"), rpcClient.LastExportRequest);
+    }
+
+    [Fact]
     public async Task SdkExportRejectsFirstPartyPackageVersionSkewEvenWithoutCheckoutSubstitution()
     {
         var interactionService = new TestInteractionService();
