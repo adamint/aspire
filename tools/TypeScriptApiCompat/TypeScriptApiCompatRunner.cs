@@ -12,6 +12,7 @@ internal static class TypeScriptApiCompatRunner
             var excludedPackages = ExcludedPackageLoader.Load(options.ExcludedPackagesFile);
             var baseline = AtsSurfaceSet.Load(options.BaselinePath);
             var current = AtsSurfaceSet.Load(options.CurrentPath);
+            TypeScriptOptionsCollisionGuard.Validate(current);
             var diagnostics = AtsCompatibilityComparer.Compare(baseline, current, excludedPackages);
             var suppressionLoadResult = ApiCompatSuppressionLoader.Load(options.SuppressionsRoot);
             var baselineSuppressionLoadResult = options.BaselineSuppressionsRoot is null

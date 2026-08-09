@@ -2053,29 +2053,29 @@ public partial class AtsTypeScriptCodeGeneratorTests
             member => member.Name == "withOptionalString");
         Assert.Collection(
             withOptionalString.Parameters,
-            parameter => AssertParameter(parameter, "options", $"{TestOptionsPrefix}WithOptionalStringOptions", isOptional: true));
+            parameter => AssertParameter(parameter, "options", "WithOptionalStringOptions", isOptional: true));
 
         var withOptionsCollision = Assert.Single(
             testRedisResource.Members,
             member => member.Name == "withOptionsCollision");
         Assert.Equal(
-            $"withOptionsCollision(options: string, optionsBag: string, _optionsBag?: {TestOptionsPrefix}WithOptionsCollisionOptions): Promise<boolean>",
+            "withOptionsCollision(options: string, optionsBag: string, _optionsBag?: WithOptionsCollisionOptions): Promise<boolean>",
             withOptionsCollision.Declaration);
         Assert.Collection(
             withOptionsCollision.Parameters,
             parameter => AssertParameter(parameter, "options", "string", isOptional: false, "Required options value."),
             parameter => AssertParameter(parameter, "optionsBag", "string", isOptional: false, "Required options bag value."),
-            parameter => AssertParameter(parameter, "_optionsBag", $"{TestOptionsPrefix}WithOptionsCollisionOptions", isOptional: true));
+            parameter => AssertParameter(parameter, "_optionsBag", "WithOptionsCollisionOptions", isOptional: true));
 
         var withOptionalOptionsField = Assert.Single(
             testRedisResource.Members,
             member => member.Name == "withOptionalOptionsField");
         Assert.Equal(
-            $"withOptionalOptionsField(options?: {TestOptionsPrefix}WithOptionalOptionsFieldOptions): Promise<boolean>",
+            "withOptionalOptionsField(options?: WithOptionalOptionsFieldOptions): Promise<boolean>",
             withOptionalOptionsField.Declaration);
         Assert.Collection(
             withOptionalOptionsField.Parameters,
-            parameter => AssertParameter(parameter, "options", $"{TestOptionsPrefix}WithOptionalOptionsFieldOptions", isOptional: true));
+            parameter => AssertParameter(parameter, "options", "WithOptionalOptionsFieldOptions", isOptional: true));
 
         var withDirectOptionsAndCancellation = Assert.Single(
             testRedisResource.Members,
@@ -2097,7 +2097,7 @@ public partial class AtsTypeScriptCodeGeneratorTests
         Assert.Contains(withOptionalOptionsField.Declaration, testRedisResourceMembers);
         Assert.Contains(withDirectOptionsAndCancellation.Declaration, testRedisResourceMembers);
         Assert.Contains(
-            $$"""async withOptionalOptionsField(optionsBag?: {{TestOptionsPrefix}}WithOptionalOptionsFieldOptions): Promise<boolean> {""",
+            "async withOptionalOptionsField(optionsBag?: WithOptionalOptionsFieldOptions): Promise<boolean> {",
             generatedSource);
         Assert.Contains("const options = optionsBag?.options;", generatedSource);
         Assert.DoesNotContain("const options = options?.options;", generatedSource);
@@ -2671,6 +2671,14 @@ public partial class AtsTypeScriptCodeGeneratorTests
         Assert.Equal("Aspire_x002E_RedisRunAsEmulatorOptions", aspireRedis);
         Assert.Equal("RedisRunAsEmulatorOptions", bareRedis);
         Assert.Equal(3, new[] { hostingRedis, aspireRedis, bareRedis }.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void UniqueOptionsInterfaceNamesStayUnqualified()
+    {
+        var name = TypeScriptApiProjector.GetOptionsInterfaceName("withUniqueSetting", "Aspire.Hosting.Redis");
+
+        Assert.Equal("WithUniqueSettingOptions", name);
     }
 
     /// <summary>

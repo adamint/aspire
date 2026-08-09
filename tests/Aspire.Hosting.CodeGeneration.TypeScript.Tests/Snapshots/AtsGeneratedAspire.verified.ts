@@ -172,20 +172,12 @@ export namespace TestConfigs {
 // Options Interfaces
 // ============================================================================
 
-export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsAddTestChildDatabaseOptions {
+export interface AddTestChildDatabaseOptions {
     databaseName?: string;
 }
 
-export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsAddTestRedisOptions {
+export interface AddTestRedisOptions {
     port?: number;
-}
-
-export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsGetStatusAsyncOptions {
-    cancellationToken?: AbortSignal | CancellationToken;
-}
-
-export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWaitForReadyAsyncOptions {
-    cancellationToken?: AbortSignal | CancellationToken;
 }
 
 export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithDataVolumeOptions {
@@ -193,27 +185,35 @@ export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002
     isReadOnly?: boolean;
 }
 
-export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions {
+export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithPersistenceOptions {
+    mode?: TestPersistenceMode;
+}
+
+export interface GetStatusAsyncOptions {
+    cancellationToken?: AbortSignal | CancellationToken;
+}
+
+export interface WaitForReadyAsyncOptions {
+    cancellationToken?: AbortSignal | CancellationToken;
+}
+
+export interface WithMergeLoggingOptions {
     enableConsole?: boolean;
     maxFiles?: number;
 }
 
-export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions {
+export interface WithMergeLoggingPathOptions {
     enableConsole?: boolean;
     maxFiles?: number;
 }
 
-export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions {
+export interface WithOptionalCallbackOptions {
     callback?: (arg: TestCallbackContext) => Promise<void>;
 }
 
-export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions {
+export interface WithOptionalStringOptions {
     value?: string;
     enabled?: boolean;
-}
-
-export interface Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithPersistenceOptions {
-    mode?: TestPersistenceMode;
 }
 
 // ============================================================================
@@ -667,7 +667,7 @@ export interface DistributedApplicationBuilder {
      * @param options Additional options.
      * @returns The ATS test Redis resource builder.
      */
-    addTestRedis(name: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsAddTestRedisOptions): TestRedisResourcePromise;
+    addTestRedis(name: string, options?: AddTestRedisOptions): TestRedisResourcePromise;
     /** Adds a test vault resource */
     addTestVault(name: string): TestVaultResourcePromise;
 }
@@ -679,7 +679,7 @@ export interface DistributedApplicationBuilderPromise extends PromiseLike<Distri
      * @param options Additional options.
      * @returns The ATS test Redis resource builder.
      */
-    addTestRedis(name: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsAddTestRedisOptions): TestRedisResourcePromise;
+    addTestRedis(name: string, options?: AddTestRedisOptions): TestRedisResourcePromise;
     /** Adds a test vault resource */
     addTestVault(name: string): TestVaultResourcePromise;
 }
@@ -712,7 +712,7 @@ class DistributedApplicationBuilderImpl implements DistributedApplicationBuilder
      * @param options Additional options.
      * @returns The ATS test Redis resource builder.
      */
-    addTestRedis(name: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsAddTestRedisOptions): TestRedisResourcePromise {
+    addTestRedis(name: string, options?: AddTestRedisOptions): TestRedisResourcePromise {
         const port = options?.port;
         return new TestRedisResourcePromiseImpl(this._addTestRedisInternal(name, port), this._client);
     }
@@ -749,7 +749,7 @@ class DistributedApplicationBuilderPromiseImpl implements DistributedApplication
         return this._promise.then(onfulfilled, onrejected);
     }
 
-    addTestRedis(name: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsAddTestRedisOptions): TestRedisResourcePromise {
+    addTestRedis(name: string, options?: AddTestRedisOptions): TestRedisResourcePromise {
         return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.addTestRedis(name, options)), this._client);
     }
 
@@ -769,7 +769,7 @@ export interface TestDatabaseResource {
      * Adds an optional string parameter
      * @param options Additional options.
      */
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): TestDatabaseResourcePromise;
+    withOptionalString(options?: WithOptionalStringOptions): TestDatabaseResourcePromise;
     /** Configures the resource with a DTO */
     withConfig(config: TestConfigDto): TestDatabaseResourcePromise;
     /** Configures environment with callback (test version) */
@@ -784,7 +784,7 @@ export interface TestDatabaseResource {
      * Configures with optional callback
      * @param options Additional options.
      */
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): TestDatabaseResourcePromise;
+    withOptionalCallback(options?: WithOptionalCallbackOptions): TestDatabaseResourcePromise;
     /** Sets the resource status */
     withStatus(status: TestResourceStatus): TestDatabaseResourcePromise;
     /** Configures with nested DTO */
@@ -820,12 +820,12 @@ export interface TestDatabaseResource {
      * Configures resource logging
      * @param options Additional options.
      */
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): TestDatabaseResourcePromise;
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): TestDatabaseResourcePromise;
     /**
      * Configures resource logging with file path
      * @param options Additional options.
      */
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): TestDatabaseResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): TestDatabaseResourcePromise;
     /** Configures a route */
     withMergeRoute(path: string, method: string, handler: string, priority: number): TestDatabaseResourcePromise;
     /** Configures a route with middleware */
@@ -837,7 +837,7 @@ export interface TestDatabaseResourcePromise extends PromiseLike<TestDatabaseRes
      * Adds an optional string parameter
      * @param options Additional options.
      */
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): TestDatabaseResourcePromise;
+    withOptionalString(options?: WithOptionalStringOptions): TestDatabaseResourcePromise;
     /** Configures the resource with a DTO */
     withConfig(config: TestConfigDto): TestDatabaseResourcePromise;
     /** Configures environment with callback (test version) */
@@ -852,7 +852,7 @@ export interface TestDatabaseResourcePromise extends PromiseLike<TestDatabaseRes
      * Configures with optional callback
      * @param options Additional options.
      */
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): TestDatabaseResourcePromise;
+    withOptionalCallback(options?: WithOptionalCallbackOptions): TestDatabaseResourcePromise;
     /** Sets the resource status */
     withStatus(status: TestResourceStatus): TestDatabaseResourcePromise;
     /** Configures with nested DTO */
@@ -888,12 +888,12 @@ export interface TestDatabaseResourcePromise extends PromiseLike<TestDatabaseRes
      * Configures resource logging
      * @param options Additional options.
      */
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): TestDatabaseResourcePromise;
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): TestDatabaseResourcePromise;
     /**
      * Configures resource logging with file path
      * @param options Additional options.
      */
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): TestDatabaseResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): TestDatabaseResourcePromise;
     /** Configures a route */
     withMergeRoute(path: string, method: string, handler: string, priority: number): TestDatabaseResourcePromise;
     /** Configures a route with middleware */
@@ -925,7 +925,7 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
      * Adds an optional string parameter
      * @param options Additional options.
      */
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): TestDatabaseResourcePromise {
+    withOptionalString(options?: WithOptionalStringOptions): TestDatabaseResourcePromise {
         const value = options?.value;
         const enabled = options?.enabled;
         return new TestDatabaseResourcePromiseImpl(this._withOptionalStringInternal(value, enabled), this._client);
@@ -1031,7 +1031,7 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
      * Configures with optional callback
      * @param options Additional options.
      */
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): TestDatabaseResourcePromise {
+    withOptionalCallback(options?: WithOptionalCallbackOptions): TestDatabaseResourcePromise {
         const callback = options?.callback;
         return new TestDatabaseResourcePromiseImpl(this._withOptionalCallbackInternal(callback), this._client);
     }
@@ -1279,7 +1279,7 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
      * Configures resource logging
      * @param options Additional options.
      */
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): TestDatabaseResourcePromise {
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): TestDatabaseResourcePromise {
         const enableConsole = options?.enableConsole;
         const maxFiles = options?.maxFiles;
         return new TestDatabaseResourcePromiseImpl(this._withMergeLoggingInternal(logLevel, enableConsole, maxFiles), this._client);
@@ -1301,7 +1301,7 @@ class TestDatabaseResourceImpl extends ResourceBuilderBase<TestDatabaseResourceH
      * Configures resource logging with file path
      * @param options Additional options.
      */
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): TestDatabaseResourcePromise {
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): TestDatabaseResourcePromise {
         const enableConsole = options?.enableConsole;
         const maxFiles = options?.maxFiles;
         return new TestDatabaseResourcePromiseImpl(this._withMergeLoggingPathInternal(logLevel, logPath, enableConsole, maxFiles), this._client);
@@ -1356,7 +1356,7 @@ class TestDatabaseResourcePromiseImpl implements TestDatabaseResourcePromise {
         return this._promise.then(onfulfilled, onrejected);
     }
 
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): TestDatabaseResourcePromise {
+    withOptionalString(options?: WithOptionalStringOptions): TestDatabaseResourcePromise {
         return new TestDatabaseResourcePromiseImpl(this._promise.then(obj => obj.withOptionalString(options)), this._client);
     }
 
@@ -1380,7 +1380,7 @@ class TestDatabaseResourcePromiseImpl implements TestDatabaseResourcePromise {
         return new TestDatabaseResourcePromiseImpl(this._promise.then(obj => obj.withCorrelationId(correlationId)), this._client);
     }
 
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): TestDatabaseResourcePromise {
+    withOptionalCallback(options?: WithOptionalCallbackOptions): TestDatabaseResourcePromise {
         return new TestDatabaseResourcePromiseImpl(this._promise.then(obj => obj.withOptionalCallback(options)), this._client);
     }
 
@@ -1440,11 +1440,11 @@ class TestDatabaseResourcePromiseImpl implements TestDatabaseResourcePromise {
         return new TestDatabaseResourcePromiseImpl(this._promise.then(obj => obj.withMergeEndpointScheme(endpointName, port, scheme)), this._client);
     }
 
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): TestDatabaseResourcePromise {
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): TestDatabaseResourcePromise {
         return new TestDatabaseResourcePromiseImpl(this._promise.then(obj => obj.withMergeLogging(logLevel, options)), this._client);
     }
 
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): TestDatabaseResourcePromise {
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): TestDatabaseResourcePromise {
         return new TestDatabaseResourcePromiseImpl(this._promise.then(obj => obj.withMergeLoggingPath(logLevel, logPath, options)), this._client);
     }
 
@@ -1471,7 +1471,7 @@ export interface TestRedisResource {
      * returns builder type B (e.g., SqlServerServerResource.AddDatabase returning SqlServerDatabaseResource).
      * @param options Additional options.
      */
-    addTestChildDatabase(name: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsAddTestChildDatabaseOptions): TestDatabaseResourcePromise;
+    addTestChildDatabase(name: string, options?: AddTestChildDatabaseOptions): TestDatabaseResourcePromise;
     /**
      * Configures the Redis resource with persistence
      * @param options Additional options.
@@ -1481,7 +1481,7 @@ export interface TestRedisResource {
      * Adds an optional string parameter
      * @param options Additional options.
      */
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): TestRedisResourcePromise;
+    withOptionalString(options?: WithOptionalStringOptions): TestRedisResourcePromise;
     /** Configures the resource with a DTO */
     withConfig(config: TestConfigDto): TestRedisResourcePromise;
     /** Gets the tags for the resource */
@@ -1502,7 +1502,7 @@ export interface TestRedisResource {
      * Configures with optional callback
      * @param options Additional options.
      */
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): TestRedisResourcePromise;
+    withOptionalCallback(options?: WithOptionalCallbackOptions): TestRedisResourcePromise;
     /** Sets the resource status */
     withStatus(status: TestResourceStatus): TestRedisResourcePromise;
     /** Configures with nested DTO */
@@ -1529,14 +1529,14 @@ export interface TestRedisResource {
      * Gets the status of the resource asynchronously
      * @param options Additional options.
      */
-    getStatusAsync(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsGetStatusAsyncOptions): Promise<string>;
+    getStatusAsync(options?: GetStatusAsyncOptions): Promise<string>;
     /** Performs a cancellable operation */
     withCancellableOperation(operation: (arg: CancellationToken) => Promise<void>): TestRedisResourcePromise;
     /**
      * Waits for the resource to be ready
      * @param options Additional options.
      */
-    waitForReadyAsync(timeout: number, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWaitForReadyAsyncOptions): Promise<boolean>;
+    waitForReadyAsync(timeout: number, options?: WaitForReadyAsyncOptions): Promise<boolean>;
     /** Tests multi-param callback destructuring */
     withMultiParamHandleCallback(callback: (arg1: TestCallbackContext, arg2: TestEnvironmentContext) => Promise<void>): TestRedisResourcePromise;
     /**
@@ -1556,12 +1556,12 @@ export interface TestRedisResource {
      * Configures resource logging
      * @param options Additional options.
      */
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): TestRedisResourcePromise;
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): TestRedisResourcePromise;
     /**
      * Configures resource logging with file path
      * @param options Additional options.
      */
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): TestRedisResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): TestRedisResourcePromise;
     /** Configures a route */
     withMergeRoute(path: string, method: string, handler: string, priority: number): TestRedisResourcePromise;
     /** Configures a route with middleware */
@@ -1576,7 +1576,7 @@ export interface TestRedisResourcePromise extends PromiseLike<TestRedisResource>
      * returns builder type B (e.g., SqlServerServerResource.AddDatabase returning SqlServerDatabaseResource).
      * @param options Additional options.
      */
-    addTestChildDatabase(name: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsAddTestChildDatabaseOptions): TestDatabaseResourcePromise;
+    addTestChildDatabase(name: string, options?: AddTestChildDatabaseOptions): TestDatabaseResourcePromise;
     /**
      * Configures the Redis resource with persistence
      * @param options Additional options.
@@ -1586,7 +1586,7 @@ export interface TestRedisResourcePromise extends PromiseLike<TestRedisResource>
      * Adds an optional string parameter
      * @param options Additional options.
      */
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): TestRedisResourcePromise;
+    withOptionalString(options?: WithOptionalStringOptions): TestRedisResourcePromise;
     /** Configures the resource with a DTO */
     withConfig(config: TestConfigDto): TestRedisResourcePromise;
     /** Gets the tags for the resource */
@@ -1607,7 +1607,7 @@ export interface TestRedisResourcePromise extends PromiseLike<TestRedisResource>
      * Configures with optional callback
      * @param options Additional options.
      */
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): TestRedisResourcePromise;
+    withOptionalCallback(options?: WithOptionalCallbackOptions): TestRedisResourcePromise;
     /** Sets the resource status */
     withStatus(status: TestResourceStatus): TestRedisResourcePromise;
     /** Configures with nested DTO */
@@ -1634,14 +1634,14 @@ export interface TestRedisResourcePromise extends PromiseLike<TestRedisResource>
      * Gets the status of the resource asynchronously
      * @param options Additional options.
      */
-    getStatusAsync(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsGetStatusAsyncOptions): Promise<string>;
+    getStatusAsync(options?: GetStatusAsyncOptions): Promise<string>;
     /** Performs a cancellable operation */
     withCancellableOperation(operation: (arg: CancellationToken) => Promise<void>): TestRedisResourcePromise;
     /**
      * Waits for the resource to be ready
      * @param options Additional options.
      */
-    waitForReadyAsync(timeout: number, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWaitForReadyAsyncOptions): Promise<boolean>;
+    waitForReadyAsync(timeout: number, options?: WaitForReadyAsyncOptions): Promise<boolean>;
     /** Tests multi-param callback destructuring */
     withMultiParamHandleCallback(callback: (arg1: TestCallbackContext, arg2: TestEnvironmentContext) => Promise<void>): TestRedisResourcePromise;
     /**
@@ -1661,12 +1661,12 @@ export interface TestRedisResourcePromise extends PromiseLike<TestRedisResource>
      * Configures resource logging
      * @param options Additional options.
      */
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): TestRedisResourcePromise;
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): TestRedisResourcePromise;
     /**
      * Configures resource logging with file path
      * @param options Additional options.
      */
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): TestRedisResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): TestRedisResourcePromise;
     /** Configures a route */
     withMergeRoute(path: string, method: string, handler: string, priority: number): TestRedisResourcePromise;
     /** Configures a route with middleware */
@@ -1700,7 +1700,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
      * returns builder type B (e.g., SqlServerServerResource.AddDatabase returning SqlServerDatabaseResource).
      * @param options Additional options.
      */
-    addTestChildDatabase(name: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsAddTestChildDatabaseOptions): TestDatabaseResourcePromise {
+    addTestChildDatabase(name: string, options?: AddTestChildDatabaseOptions): TestDatabaseResourcePromise {
         const databaseName = options?.databaseName;
         return new TestDatabaseResourcePromiseImpl(this._addTestChildDatabaseInternal(name, databaseName), this._client);
     }
@@ -1741,7 +1741,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
      * Adds an optional string parameter
      * @param options Additional options.
      */
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): TestRedisResourcePromise {
+    withOptionalString(options?: WithOptionalStringOptions): TestRedisResourcePromise {
         const value = options?.value;
         const enabled = options?.enabled;
         return new TestRedisResourcePromiseImpl(this._withOptionalStringInternal(value, enabled), this._client);
@@ -1880,7 +1880,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
      * Configures with optional callback
      * @param options Additional options.
      */
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): TestRedisResourcePromise {
+    withOptionalCallback(options?: WithOptionalCallbackOptions): TestRedisResourcePromise {
         const callback = options?.callback;
         return new TestRedisResourcePromiseImpl(this._withOptionalCallbackInternal(callback), this._client);
     }
@@ -2056,7 +2056,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
      * Gets the status of the resource asynchronously
      * @param options Additional options.
      */
-    async getStatusAsync(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsGetStatusAsyncOptions): Promise<string> {
+    async getStatusAsync(options?: GetStatusAsyncOptions): Promise<string> {
         const cancellationToken = options?.cancellationToken;
         const rpcArgs: Record<string, unknown> = { builder: this._handle };
         if (cancellationToken !== undefined) rpcArgs.cancellationToken = CancellationToken.fromValue(cancellationToken);
@@ -2089,7 +2089,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
      * Waits for the resource to be ready
      * @param options Additional options.
      */
-    async waitForReadyAsync(timeout: number, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWaitForReadyAsyncOptions): Promise<boolean> {
+    async waitForReadyAsync(timeout: number, options?: WaitForReadyAsyncOptions): Promise<boolean> {
         const cancellationToken = options?.cancellationToken;
         const rpcArgs: Record<string, unknown> = { builder: this._handle, timeout };
         if (cancellationToken !== undefined) rpcArgs.cancellationToken = CancellationToken.fromValue(cancellationToken);
@@ -2219,7 +2219,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
      * Configures resource logging
      * @param options Additional options.
      */
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): TestRedisResourcePromise {
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): TestRedisResourcePromise {
         const enableConsole = options?.enableConsole;
         const maxFiles = options?.maxFiles;
         return new TestRedisResourcePromiseImpl(this._withMergeLoggingInternal(logLevel, enableConsole, maxFiles), this._client);
@@ -2241,7 +2241,7 @@ class TestRedisResourceImpl extends ResourceBuilderBase<TestRedisResourceHandle>
      * Configures resource logging with file path
      * @param options Additional options.
      */
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): TestRedisResourcePromise {
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): TestRedisResourcePromise {
         const enableConsole = options?.enableConsole;
         const maxFiles = options?.maxFiles;
         return new TestRedisResourcePromiseImpl(this._withMergeLoggingPathInternal(logLevel, logPath, enableConsole, maxFiles), this._client);
@@ -2296,7 +2296,7 @@ class TestRedisResourcePromiseImpl implements TestRedisResourcePromise {
         return this._promise.then(onfulfilled, onrejected);
     }
 
-    addTestChildDatabase(name: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsAddTestChildDatabaseOptions): TestDatabaseResourcePromise {
+    addTestChildDatabase(name: string, options?: AddTestChildDatabaseOptions): TestDatabaseResourcePromise {
         return new TestDatabaseResourcePromiseImpl(this._promise.then(obj => obj.addTestChildDatabase(name, options)), this._client);
     }
 
@@ -2304,7 +2304,7 @@ class TestRedisResourcePromiseImpl implements TestRedisResourcePromise {
         return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.withPersistence(options)), this._client);
     }
 
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): TestRedisResourcePromise {
+    withOptionalString(options?: WithOptionalStringOptions): TestRedisResourcePromise {
         return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.withOptionalString(options)), this._client);
     }
 
@@ -2340,7 +2340,7 @@ class TestRedisResourcePromiseImpl implements TestRedisResourcePromise {
         return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.withCorrelationId(correlationId)), this._client);
     }
 
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): TestRedisResourcePromise {
+    withOptionalCallback(options?: WithOptionalCallbackOptions): TestRedisResourcePromise {
         return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.withOptionalCallback(options)), this._client);
     }
 
@@ -2388,7 +2388,7 @@ class TestRedisResourcePromiseImpl implements TestRedisResourcePromise {
         return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.withEnvironmentVariables(variables)), this._client);
     }
 
-    getStatusAsync(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsGetStatusAsyncOptions): Promise<string> {
+    getStatusAsync(options?: GetStatusAsyncOptions): Promise<string> {
         return this._promise.then(obj => obj.getStatusAsync(options));
     }
 
@@ -2396,7 +2396,7 @@ class TestRedisResourcePromiseImpl implements TestRedisResourcePromise {
         return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.withCancellableOperation(operation)), this._client);
     }
 
-    waitForReadyAsync(timeout: number, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWaitForReadyAsyncOptions): Promise<boolean> {
+    waitForReadyAsync(timeout: number, options?: WaitForReadyAsyncOptions): Promise<boolean> {
         return this._promise.then(obj => obj.waitForReadyAsync(timeout, options));
     }
 
@@ -2424,11 +2424,11 @@ class TestRedisResourcePromiseImpl implements TestRedisResourcePromise {
         return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.withMergeEndpointScheme(endpointName, port, scheme)), this._client);
     }
 
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): TestRedisResourcePromise {
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): TestRedisResourcePromise {
         return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.withMergeLogging(logLevel, options)), this._client);
     }
 
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): TestRedisResourcePromise {
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): TestRedisResourcePromise {
         return new TestRedisResourcePromiseImpl(this._promise.then(obj => obj.withMergeLoggingPath(logLevel, logPath, options)), this._client);
     }
 
@@ -2452,7 +2452,7 @@ export interface TestVaultResource {
      * Adds an optional string parameter
      * @param options Additional options.
      */
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): TestVaultResourcePromise;
+    withOptionalString(options?: WithOptionalStringOptions): TestVaultResourcePromise;
     /** Configures the resource with a DTO */
     withConfig(config: TestConfigDto): TestVaultResourcePromise;
     /** Configures environment with callback (test version) */
@@ -2467,7 +2467,7 @@ export interface TestVaultResource {
      * Configures with optional callback
      * @param options Additional options.
      */
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): TestVaultResourcePromise;
+    withOptionalCallback(options?: WithOptionalCallbackOptions): TestVaultResourcePromise;
     /** Sets the resource status */
     withStatus(status: TestResourceStatus): TestVaultResourcePromise;
     /** Configures with nested DTO */
@@ -2500,12 +2500,12 @@ export interface TestVaultResource {
      * Configures resource logging
      * @param options Additional options.
      */
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): TestVaultResourcePromise;
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): TestVaultResourcePromise;
     /**
      * Configures resource logging with file path
      * @param options Additional options.
      */
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): TestVaultResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): TestVaultResourcePromise;
     /** Configures a route */
     withMergeRoute(path: string, method: string, handler: string, priority: number): TestVaultResourcePromise;
     /** Configures a route with middleware */
@@ -2517,7 +2517,7 @@ export interface TestVaultResourcePromise extends PromiseLike<TestVaultResource>
      * Adds an optional string parameter
      * @param options Additional options.
      */
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): TestVaultResourcePromise;
+    withOptionalString(options?: WithOptionalStringOptions): TestVaultResourcePromise;
     /** Configures the resource with a DTO */
     withConfig(config: TestConfigDto): TestVaultResourcePromise;
     /** Configures environment with callback (test version) */
@@ -2532,7 +2532,7 @@ export interface TestVaultResourcePromise extends PromiseLike<TestVaultResource>
      * Configures with optional callback
      * @param options Additional options.
      */
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): TestVaultResourcePromise;
+    withOptionalCallback(options?: WithOptionalCallbackOptions): TestVaultResourcePromise;
     /** Sets the resource status */
     withStatus(status: TestResourceStatus): TestVaultResourcePromise;
     /** Configures with nested DTO */
@@ -2565,12 +2565,12 @@ export interface TestVaultResourcePromise extends PromiseLike<TestVaultResource>
      * Configures resource logging
      * @param options Additional options.
      */
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): TestVaultResourcePromise;
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): TestVaultResourcePromise;
     /**
      * Configures resource logging with file path
      * @param options Additional options.
      */
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): TestVaultResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): TestVaultResourcePromise;
     /** Configures a route */
     withMergeRoute(path: string, method: string, handler: string, priority: number): TestVaultResourcePromise;
     /** Configures a route with middleware */
@@ -2602,7 +2602,7 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
      * Adds an optional string parameter
      * @param options Additional options.
      */
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): TestVaultResourcePromise {
+    withOptionalString(options?: WithOptionalStringOptions): TestVaultResourcePromise {
         const value = options?.value;
         const enabled = options?.enabled;
         return new TestVaultResourcePromiseImpl(this._withOptionalStringInternal(value, enabled), this._client);
@@ -2708,7 +2708,7 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
      * Configures with optional callback
      * @param options Additional options.
      */
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): TestVaultResourcePromise {
+    withOptionalCallback(options?: WithOptionalCallbackOptions): TestVaultResourcePromise {
         const callback = options?.callback;
         return new TestVaultResourcePromiseImpl(this._withOptionalCallbackInternal(callback), this._client);
     }
@@ -2951,7 +2951,7 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
      * Configures resource logging
      * @param options Additional options.
      */
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): TestVaultResourcePromise {
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): TestVaultResourcePromise {
         const enableConsole = options?.enableConsole;
         const maxFiles = options?.maxFiles;
         return new TestVaultResourcePromiseImpl(this._withMergeLoggingInternal(logLevel, enableConsole, maxFiles), this._client);
@@ -2973,7 +2973,7 @@ class TestVaultResourceImpl extends ResourceBuilderBase<TestVaultResourceHandle>
      * Configures resource logging with file path
      * @param options Additional options.
      */
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): TestVaultResourcePromise {
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): TestVaultResourcePromise {
         const enableConsole = options?.enableConsole;
         const maxFiles = options?.maxFiles;
         return new TestVaultResourcePromiseImpl(this._withMergeLoggingPathInternal(logLevel, logPath, enableConsole, maxFiles), this._client);
@@ -3028,7 +3028,7 @@ class TestVaultResourcePromiseImpl implements TestVaultResourcePromise {
         return this._promise.then(onfulfilled, onrejected);
     }
 
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): TestVaultResourcePromise {
+    withOptionalString(options?: WithOptionalStringOptions): TestVaultResourcePromise {
         return new TestVaultResourcePromiseImpl(this._promise.then(obj => obj.withOptionalString(options)), this._client);
     }
 
@@ -3052,7 +3052,7 @@ class TestVaultResourcePromiseImpl implements TestVaultResourcePromise {
         return new TestVaultResourcePromiseImpl(this._promise.then(obj => obj.withCorrelationId(correlationId)), this._client);
     }
 
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): TestVaultResourcePromise {
+    withOptionalCallback(options?: WithOptionalCallbackOptions): TestVaultResourcePromise {
         return new TestVaultResourcePromiseImpl(this._promise.then(obj => obj.withOptionalCallback(options)), this._client);
     }
 
@@ -3112,11 +3112,11 @@ class TestVaultResourcePromiseImpl implements TestVaultResourcePromise {
         return new TestVaultResourcePromiseImpl(this._promise.then(obj => obj.withMergeEndpointScheme(endpointName, port, scheme)), this._client);
     }
 
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): TestVaultResourcePromise {
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): TestVaultResourcePromise {
         return new TestVaultResourcePromiseImpl(this._promise.then(obj => obj.withMergeLogging(logLevel, options)), this._client);
     }
 
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): TestVaultResourcePromise {
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): TestVaultResourcePromise {
         return new TestVaultResourcePromiseImpl(this._promise.then(obj => obj.withMergeLoggingPath(logLevel, logPath, options)), this._client);
     }
 
@@ -3140,7 +3140,7 @@ export interface Resource {
      * Adds an optional string parameter
      * @param options Additional options.
      */
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): ResourcePromise;
+    withOptionalString(options?: WithOptionalStringOptions): ResourcePromise;
     /** Configures the resource with a DTO */
     withConfig(config: TestConfigDto): ResourcePromise;
     /** Sets the created timestamp */
@@ -3153,7 +3153,7 @@ export interface Resource {
      * Configures with optional callback
      * @param options Additional options.
      */
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): ResourcePromise;
+    withOptionalCallback(options?: WithOptionalCallbackOptions): ResourcePromise;
     /** Sets the resource status */
     withStatus(status: TestResourceStatus): ResourcePromise;
     /** Configures with nested DTO */
@@ -3182,12 +3182,12 @@ export interface Resource {
      * Configures resource logging
      * @param options Additional options.
      */
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): ResourcePromise;
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): ResourcePromise;
     /**
      * Configures resource logging with file path
      * @param options Additional options.
      */
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): ResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): ResourcePromise;
     /** Configures a route */
     withMergeRoute(path: string, method: string, handler: string, priority: number): ResourcePromise;
     /** Configures a route with middleware */
@@ -3199,7 +3199,7 @@ export interface ResourcePromise extends PromiseLike<Resource> {
      * Adds an optional string parameter
      * @param options Additional options.
      */
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): ResourcePromise;
+    withOptionalString(options?: WithOptionalStringOptions): ResourcePromise;
     /** Configures the resource with a DTO */
     withConfig(config: TestConfigDto): ResourcePromise;
     /** Sets the created timestamp */
@@ -3212,7 +3212,7 @@ export interface ResourcePromise extends PromiseLike<Resource> {
      * Configures with optional callback
      * @param options Additional options.
      */
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): ResourcePromise;
+    withOptionalCallback(options?: WithOptionalCallbackOptions): ResourcePromise;
     /** Sets the resource status */
     withStatus(status: TestResourceStatus): ResourcePromise;
     /** Configures with nested DTO */
@@ -3241,12 +3241,12 @@ export interface ResourcePromise extends PromiseLike<Resource> {
      * Configures resource logging
      * @param options Additional options.
      */
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): ResourcePromise;
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): ResourcePromise;
     /**
      * Configures resource logging with file path
      * @param options Additional options.
      */
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): ResourcePromise;
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): ResourcePromise;
     /** Configures a route */
     withMergeRoute(path: string, method: string, handler: string, priority: number): ResourcePromise;
     /** Configures a route with middleware */
@@ -3278,7 +3278,7 @@ class ResourceImpl extends ResourceBuilderBase<IResourceHandle> implements Resou
      * Adds an optional string parameter
      * @param options Additional options.
      */
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): ResourcePromise {
+    withOptionalString(options?: WithOptionalStringOptions): ResourcePromise {
         const value = options?.value;
         const enabled = options?.enabled;
         return new ResourcePromiseImpl(this._withOptionalStringInternal(value, enabled), this._client);
@@ -3364,7 +3364,7 @@ class ResourceImpl extends ResourceBuilderBase<IResourceHandle> implements Resou
      * Configures with optional callback
      * @param options Additional options.
      */
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): ResourcePromise {
+    withOptionalCallback(options?: WithOptionalCallbackOptions): ResourcePromise {
         const callback = options?.callback;
         return new ResourcePromiseImpl(this._withOptionalCallbackInternal(callback), this._client);
     }
@@ -3577,7 +3577,7 @@ class ResourceImpl extends ResourceBuilderBase<IResourceHandle> implements Resou
      * Configures resource logging
      * @param options Additional options.
      */
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): ResourcePromise {
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): ResourcePromise {
         const enableConsole = options?.enableConsole;
         const maxFiles = options?.maxFiles;
         return new ResourcePromiseImpl(this._withMergeLoggingInternal(logLevel, enableConsole, maxFiles), this._client);
@@ -3599,7 +3599,7 @@ class ResourceImpl extends ResourceBuilderBase<IResourceHandle> implements Resou
      * Configures resource logging with file path
      * @param options Additional options.
      */
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): ResourcePromise {
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): ResourcePromise {
         const enableConsole = options?.enableConsole;
         const maxFiles = options?.maxFiles;
         return new ResourcePromiseImpl(this._withMergeLoggingPathInternal(logLevel, logPath, enableConsole, maxFiles), this._client);
@@ -3654,7 +3654,7 @@ class ResourcePromiseImpl implements ResourcePromise {
         return this._promise.then(onfulfilled, onrejected);
     }
 
-    withOptionalString(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalStringOptions): ResourcePromise {
+    withOptionalString(options?: WithOptionalStringOptions): ResourcePromise {
         return new ResourcePromiseImpl(this._promise.then(obj => obj.withOptionalString(options)), this._client);
     }
 
@@ -3674,7 +3674,7 @@ class ResourcePromiseImpl implements ResourcePromise {
         return new ResourcePromiseImpl(this._promise.then(obj => obj.withCorrelationId(correlationId)), this._client);
     }
 
-    withOptionalCallback(options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithOptionalCallbackOptions): ResourcePromise {
+    withOptionalCallback(options?: WithOptionalCallbackOptions): ResourcePromise {
         return new ResourcePromiseImpl(this._promise.then(obj => obj.withOptionalCallback(options)), this._client);
     }
 
@@ -3726,11 +3726,11 @@ class ResourcePromiseImpl implements ResourcePromise {
         return new ResourcePromiseImpl(this._promise.then(obj => obj.withMergeEndpointScheme(endpointName, port, scheme)), this._client);
     }
 
-    withMergeLogging(logLevel: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingOptions): ResourcePromise {
+    withMergeLogging(logLevel: string, options?: WithMergeLoggingOptions): ResourcePromise {
         return new ResourcePromiseImpl(this._promise.then(obj => obj.withMergeLogging(logLevel, options)), this._client);
     }
 
-    withMergeLoggingPath(logLevel: string, logPath: string, options?: Aspire_x002E_Hosting_x002E_CodeGeneration_x002E_TypeScript_x002E_TestsWithMergeLoggingPathOptions): ResourcePromise {
+    withMergeLoggingPath(logLevel: string, logPath: string, options?: WithMergeLoggingPathOptions): ResourcePromise {
         return new ResourcePromiseImpl(this._promise.then(obj => obj.withMergeLoggingPath(logLevel, logPath, options)), this._client);
     }
 

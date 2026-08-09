@@ -1662,35 +1662,36 @@ internal sealed partial class TypeScriptApiProjector
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Names are qualified by the owning assembly so that they are a function of the capability
-    /// alone. Two assemblies can then never derive the same name — which is what lets a per-package
-    /// API export be projected on its own and still agree with a projection over the whole app host,
-    /// and what keeps concatenated export fragments from redeclaring one interface with different
-    /// members.
+    /// Names stay unqualified unless the checked-in shipped ATS surface already has a real
+    /// cross-package collision for that unqualified name. That preserves the old public names for
+    /// the unique option bags while still making the known collision groups a function of the
+    /// capability alone.
     /// </para>
     /// <para>
-    /// The core hosting package keeps unqualified names. It is present in every scan, so its names
-    /// were never the ones at risk, and leaving them alone confines the rename to the packages that
-    /// actually needed it. Other packages carry an encoding of their full assembly name, so
+    /// The core hosting package keeps unqualified names even inside a collision group. Other
+    /// packages in those groups carry an encoding of their full assembly name, so
     /// <c>Aspire.Hosting.Azure.EventHubs</c> yields
-    /// <c>Aspire_x002E_Hosting_x002E_Azure_x002E_EventHubsRunAsEmulatorOptions</c>. See
-    /// <see cref="GetOptionsInterfaceQualifier"/> for why the encoding has to be reversible rather
-    /// than simply stripping the punctuation or common prefixes.
+    /// <c>Aspire_x002E_Hosting_x002E_Azure_x002E_EventHubsRunAsEmulatorOptions</c>. The TypeScript
+    /// API compatibility path guards this selective list so a new cross-package collision cannot
+    /// silently preserve an unsafe unqualified name.
     /// </para>
     /// </remarks>
     internal static string GetOptionsInterfaceName(string methodName, string owningAssemblyName)
     {
-        // Strip type prefix if present (e.g., "EndpointReference.getExpression" -> "getExpression")
-        var simpleName = methodName.Contains('.')
-            ? methodName[(methodName.LastIndexOf('.') + 1)..]
-            : methodName;
+        var unqualifiedName = TypeScriptOptionsInterfaceNaming.GetUnqualifiedOptionsInterfaceName(methodName);
+        if (string.IsNullOrEmpty(owningAssemblyName) ||
+            string.Equals(owningAssemblyName, AtsConstants.AspireHostingAssembly, StringComparison.Ordinal) ||
+            !TypeScriptOptionsInterfaceNaming.RequiresPackageQualifier(unqualifiedName))
+        {
+            return unqualifiedName;
+        }
 
-        return $"{GetOptionsInterfaceQualifier(owningAssemblyName)}{ToPascalCase(simpleName)}Options";
+        return $"{GetOptionsInterfaceQualifier(owningAssemblyName)}{unqualifiedName}";
     }
 
     /// <summary>
-    /// Derives the name-space prefix an assembly's options interfaces carry, or an empty string for
-    /// the core hosting package and for symbols whose owner could not be resolved.
+    /// Derives the name-space prefix an assembly's options interfaces carry when their unqualified
+    /// names are in a known collision group.
     /// </summary>
     /// <remarks>
     /// <para>

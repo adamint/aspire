@@ -323,6 +323,60 @@ public sealed class TypeScriptApiCompatTests(ITestOutputHelper outputHelper)
         Assert.DoesNotContain("Unused suppressions", report, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void RunnerFailsWhenUnqualifiedOptionsInterfaceNamesCollide()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+        var baselineRoot = Path.Combine(workspace.Path, "baseline");
+        var currentRoot = Path.Combine(workspace.Path, "current");
+
+        WriteSurface(baselineRoot, "Pkg.One", """
+            # Capabilities
+            Pkg.One/withShared(port?: number) -> void
+            """);
+        WriteSurface(baselineRoot, "Pkg.Two", """
+            # Capabilities
+            Pkg.Two/withShared(host?: string) -> void
+            """);
+        WriteSurface(currentRoot, "Pkg.One", """
+            # Capabilities
+            Pkg.One/withShared(port?: number) -> void
+            """);
+        WriteSurface(currentRoot, "Pkg.Two", """
+            # Capabilities
+            Pkg.Two/withShared(host?: string) -> void
+            """);
+
+        using var error = new StringWriter();
+        var originalError = Console.Error;
+        try
+        {
+            Console.SetError(error);
+
+            var exitCode = TypeScriptApiCompatRunner.Run(new CommandLineOptions(
+                baselineRoot,
+                currentRoot,
+                workspace.Path,
+                BaselineSuppressionsRoot: null,
+                ExcludedPackagesFile: null,
+                ReportPath: null,
+                GitHubAnnotations: false));
+
+            Assert.Equal(2, exitCode);
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+
+        var message = error.ToString();
+        Assert.Contains("Unqualified TypeScript options interface collision", message, StringComparison.Ordinal);
+        Assert.Contains("WithSharedOptions", message, StringComparison.Ordinal);
+        Assert.Contains("'Pkg.One'", message, StringComparison.Ordinal);
+        Assert.Contains("'Pkg.Two'", message, StringComparison.Ordinal);
+        Assert.Contains("Remedy:", message, StringComparison.Ordinal);
+    }
+
     private static void WriteSurface(string rootPath, string packageName, string content)
     {
         var apiDirectory = Path.Combine(rootPath, "src", packageName, "api");
