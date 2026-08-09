@@ -39,6 +39,10 @@ const retryableWithAnnotationStepPatterns = [
 const ignoredFailureStepPatterns = [
     /^Run tests\b/i,
     /^Run nuget dependent tests\b/i,
+    // "Verify test results exist" is the authoritative pass/fail gate in run-tests.yml: the test steps
+    // now swallow the MTP exit code and this step classifies it. Its failure therefore means the same
+    // thing "Run tests" used to, so it belongs in both step lists alongside it.
+    /^Verify test results exist$/i,
     /^Check for hang dump files$/i,
     /^Build test project$/i,
     /^Build and archive test project$/i,
@@ -57,6 +61,10 @@ const ignoredFailureStepPatterns = [
 const testExecutionFailureStepPatterns = [
     /^Run tests\b/i,
     /^Run nuget dependent tests\b/i,
+    // Without this, a deterministic verdict failure (a failed test, zero tests, or missing/malformed
+    // TRX) leaves canUseInfrastructureNetworkLogOverride eligible, so an unrelated feed-network
+    // signature elsewhere in the same job log would rerun a genuine test failure.
+    /^Verify test results exist$/i,
     /^Check for hang dump files$/i,
 ];
 

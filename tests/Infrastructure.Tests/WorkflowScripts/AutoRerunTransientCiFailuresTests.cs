@@ -1856,6 +1856,40 @@ public sealed class AutoRerunTransientCiFailuresTests : IDisposable
         Assert.False(result);
     }
 
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task HasTestExecutionFailureStepReturnsTrueForTheVerifyTestResultsGate()
+    {
+        // "Verify test results exist" is where run-tests.yml now makes the authoritative pass/fail call:
+        // the test steps persist the MTP exit code and exit 0, and this gate classifies it. A failure here
+        // is a real test-execution failure, so it must veto the infrastructure-network log override the
+        // same way a failed "Run tests" does. Otherwise a stray feed-network signature elsewhere in the
+        // job log reruns a job whose tests genuinely failed.
+        bool result = await InvokeHarnessAsync<bool>(
+            "hasTestExecutionFailureStep",
+            new { failedSteps = new[] { "Verify test results exist" } });
+
+        Assert.True(result);
+    }
+
+    [Fact]
+    [RequiresTools(["node"])]
+    public async Task KeepsMixedFailureVetoWhenTheVerifyTestResultsGateFailsAlongsideANetworkSignature()
+    {
+        // The zero-test / missing-TRX case: the gate fails deterministically while an unrelated feed
+        // network error still sits in the job's annotations. That combination must not be retried,
+        // exactly as a failed "Run tests" is not.
+        WorkflowJob job = CreateJob(failedSteps: ["Verify test results exist", "Upload logs, and test results"]);
+
+        AnalyzeFailedJobsResult result = await AnalyzeSingleJobAsync(job, "Failed to CreateArtifact: Unable to make request: ENOTFOUND");
+
+        Assert.Empty(result.RetryableJobs);
+        Assert.Single(result.SkippedJobs);
+        Assert.Equal(
+            "Failed steps 'Verify test results exist | Upload logs, and test results' include a test execution failure, so the job was not retried without a high-confidence infrastructure override.",
+            result.SkippedJobs[0].Reason);
+    }
+
     // --- TRX parsing tests ---
 
     [Fact]
