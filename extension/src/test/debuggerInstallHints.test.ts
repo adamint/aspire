@@ -287,6 +287,37 @@ suite('debugger install hints', () => {
         second.extensionChanges.dispose();
     });
 
+    test("retries notification in the same session after saving Don't show again fails", async () => {
+        let notificationShown = false;
+        let updateCount = 0;
+        const globalState = {
+            keys: () => notificationShown ? ['shown'] : [],
+            get: <T>(_key: string, defaultValue?: T) => notificationShown ? true as T : defaultValue,
+            update: () => {
+                updateCount++;
+                if (updateCount === 1) {
+                    return Promise.reject(new Error('persistence failed'));
+                }
+
+                notificationShown = true;
+                return Promise.resolve();
+            },
+            setKeysForSync: () => { },
+        } as vscode.Memento;
+        const showInformationMessage = sinon.stub().resolves(dontShowAgainLabel);
+        const { dependencies, extensionChanges } = createDependencies({ showInformationMessage });
+        const service = new DebuggerInstallHintService(globalState, dependencies);
+        const hint = hintFor('go');
+
+        await assert.rejects(service.showNotificationIfNeeded(hint), /persistence failed/);
+        await service.showNotificationIfNeeded(hint);
+
+        assert.strictEqual(showInformationMessage.callCount, 2);
+        assert.strictEqual(updateCount, 2);
+        service.dispose();
+        extensionChanges.dispose();
+    });
+
     test('retries notification after display fails', async () => {
         const showInformationMessage = sinon.stub();
         showInformationMessage.onFirstCall().rejects(new Error('display failed'));

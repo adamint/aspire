@@ -168,7 +168,12 @@ export class DebuggerInstallHintService implements vscode.Disposable {
         }
 
         if (selected === dontShowAgainLabel) {
-            await this._globalState.update(`${notificationSuppressedKeyPrefix}${hint.extensionId}`, true);
+            try {
+                await this._globalState.update(`${notificationSuppressedKeyPrefix}${hint.extensionId}`, true);
+            } catch (error) {
+                this._notificationsShownThisSession.delete(hint.extensionId);
+                throw error;
+            }
         } else if (selected === debuggerInstallAction) {
             await this.installExtension(hint);
         }
