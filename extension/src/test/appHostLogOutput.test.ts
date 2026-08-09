@@ -409,6 +409,37 @@ suite('AppHost log output coordinator tests', () => {
         }
     });
 
+    test('idle flush waits for a partial ConsoleLogger line before rendering the record', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const emitted: AppHostParentOutput[] = [];
+        const coordinator = new AppHostLogOutputCoordinator(output => emitted.push(output));
+
+        try {
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput("warn: Example.Category[7]\n      Port is alrea", 'stdout'),
+                []);
+
+            await clock.tickAsync(1000);
+
+            assert.deepStrictEqual(emitted, []);
+            assert.deepStrictEqual(
+                coordinator.handleDebugAdapterOutput("dy allocated.\n", 'stdout'),
+                []);
+
+            await clock.tickAsync(1000);
+
+            assert.deepStrictEqual(emitted, [{
+                output: '\x1b[33mExample.Category: Warning: Port is already allocated.\x1b[0m\n',
+                category: 'stdout'
+            }]);
+            assert.deepStrictEqual(coordinator.flush(), []);
+        }
+        finally {
+            coordinator.reset();
+            clock.restore();
+        }
+    });
+
     test('passes an unterminated line straight through when no record is being assembled', () => {
         const coordinator = new AppHostLogOutputCoordinator();
 
@@ -513,6 +544,48 @@ suite('AppHost log output coordinator tests', () => {
                     category: 'stderr'
                 }
             ]);
+    });
+
+    test('assembles a DebugLogger record split across debug adapter events', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput("Example.Category: Warning: First line.\n", 'console'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput("Second line.\n", 'console'),
+            []);
+
+        assert.deepStrictEqual(coordinator.flush(), [{
+            output: '\x1b[33mExample.Category: Warning: First line.\nSecond line.\x1b[0m\n',
+            category: 'stdout'
+        }]);
+    });
+
+    test('renders each DebugLogger record once when several arrive in a single debug adapter event', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            renderConsole(
+                coordinator,
+                "Example.Category: Warning: First warning.\nOther.Category: Error: Second failure.\n",
+                'console'),
+            [
+                {
+                    output: '\x1b[33mExample.Category: Warning: First warning.\x1b[0m\n',
+                    category: 'stdout'
+                },
+                {
+                    output: 'Other.Category: Error: Second failure.\n',
+                    category: 'stderr'
+                }
+            ]);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 1, logLevel: 'Warning', message: 'First warning.' })),
+            undefined);
+        assert.strictEqual(
+            coordinator.handleBackchannelEntry(createEntry({ sequenceNumber: 2, categoryName: 'Other.Category', logLevel: 'Error', message: 'Second failure.' })),
+            undefined);
     });
 });
 

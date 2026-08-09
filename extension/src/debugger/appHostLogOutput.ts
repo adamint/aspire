@@ -39,6 +39,11 @@ interface PendingConsoleRecord {
     category: string;
 }
 
+interface PendingDebugRecord {
+    text: string;
+    category: string;
+}
+
 export class AppHostLogOutputCoordinator {
     // Correlation is one-for-one, so repeated identical ILogger calls remain distinct.
     // The queue only needs to bridge provider/RPC interleaving and is owned by one
@@ -56,6 +61,7 @@ export class AppHostLogOutputCoordinator {
     // record would let an unrelated write on another stream terminate a record mid-assembly,
     // rendering the truncated half and leaking the rest.
     private readonly _pendingRecords = new Map<string, PendingConsoleRecord>();
+    private readonly _pendingDebugRecords = new Map<string, PendingDebugRecord>();
 
     constructor(
         private readonly _onIdleFlush?: (output: AppHostParentOutput) => void,
@@ -152,6 +158,10 @@ export class AppHostLogOutputCoordinator {
             this.flushPendingRecord(category, outputs);
         }
 
+        for (const category of [...this._pendingDebugRecords.keys()]) {
+            this.flushPendingDebugRecord(category, outputs);
+        }
+
         return outputs;
     }
 
@@ -159,6 +169,7 @@ export class AppHostLogOutputCoordinator {
         this._correlatedRecords.length = 0;
         this._highestBackchannelSequence = 0;
         this._pendingRecords.clear();
+        this._pendingDebugRecords.clear();
         this._partialLines.clear();
         this.clearIdleFlushTimers();
         this._fallbackFilter.reset();
@@ -201,16 +212,6 @@ export class AppHostLogOutputCoordinator {
             const block = passthrough;
             passthrough = '';
 
-            // System.Diagnostics.Debug output is delivered as DAP `console` output,
-            // while Console.WriteLine uses stdout/stderr. Restrict the DebugLogger
-            // grammar to that provenance so user stdout shaped like
-            // "Status: Error: connection refused" is never reclassified.
-            const record = category === 'console' ? parseDebugLoggerRecord(block) : undefined;
-            if (record) {
-                this.emitRecord(record, 'debugLogger', block, category, outputs);
-                return;
-            }
-
             const filtered = this._fallbackFilter.filter(block, category);
             if (filtered) {
                 outputs.push(filtered);
@@ -218,6 +219,25 @@ export class AppHostLogOutputCoordinator {
         };
 
         for (const line of lines) {
+            if (category === 'console') {
+                // System.Diagnostics.Debug output is delivered as DAP `console` output,
+                // while Console.WriteLine uses stdout/stderr. Restrict the DebugLogger
+                // grammar to that provenance so user stdout shaped like
+                // "Status: Error: connection refused" is never reclassified.
+                if (isDebugLoggerHeader(line)) {
+                    flushPassthrough();
+                    this.flushPendingDebugRecord(category, outputs);
+                    this._pendingDebugRecords.set(category, { text: line, category });
+                    continue;
+                }
+
+                const pendingDebugRecord = this._pendingDebugRecords.get(category);
+                if (pendingDebugRecord) {
+                    pendingDebugRecord.text += line;
+                    continue;
+                }
+            }
+
             const pending = this._pendingRecords.get(category);
             if (pending && isConsoleLoggerContinuation(line)) {
                 pending.body += line;
@@ -236,6 +256,26 @@ export class AppHostLogOutputCoordinator {
         }
 
         flushPassthrough();
+    }
+
+    private flushPendingDebugRecord(category: string, outputs: AppHostParentOutput[]): void {
+        const pending = this._pendingDebugRecords.get(category);
+        if (!pending) {
+            return;
+        }
+
+        this._pendingDebugRecords.delete(category);
+
+        const record = parseDebugLoggerRecord(pending.text);
+        if (record) {
+            this.emitRecord(record, 'debugLogger', pending.text, pending.category, outputs);
+            return;
+        }
+
+        const filtered = this._fallbackFilter.filter(pending.text, pending.category);
+        if (filtered) {
+            outputs.push(filtered);
+        }
     }
 
     private flushPendingRecord(category: string, outputs: AppHostParentOutput[]): void {
@@ -261,25 +301,23 @@ export class AppHostLogOutputCoordinator {
 
     private scheduleIdleFlushIfNeeded(category: string): void {
         const pending = this._pendingRecords.get(category);
-        if (!this._onIdleFlush || !pending || (pending.body.length === 0 && !this._partialLines.has(category))) {
+        const hasPendingConsoleRecord = pending !== undefined && pending.body.length > 0;
+        const hasPendingDebugRecord = this._pendingDebugRecords.has(category);
+        if (!this._onIdleFlush || this._partialLines.has(category) || (!hasPendingConsoleRecord && !hasPendingDebugRecord)) {
             return;
         }
 
-        // Trace/Debug records do not have a structured backchannel twin, and a final
-        // ConsoleLogger record has no explicit terminator. Flush after a short idle
-        // window so adapter-only records become visible without waiting for AppHost
-        // shutdown, while still giving split DAP chunks time to arrive.
+        // Trace/Debug records do not have a structured backchannel twin, and final
+        // ConsoleLogger/DebugLogger records have no explicit terminator. Flush after a
+        // short idle window so adapter-only records become visible without waiting for
+        // AppHost shutdown. A trailing partial line keeps the record buffered because
+        // its suffix may still arrive in a later DAP event.
         const timer = setTimeout(() => {
             this._idleFlushTimers.delete(category);
 
             const outputs: AppHostParentOutput[] = [];
-            const partial = this._partialLines.get(category);
-            if (partial !== undefined) {
-                this._partialLines.delete(category);
-                this.consumeLines(partial, category, outputs);
-            }
-
             this.flushPendingRecord(category, outputs);
+            this.flushPendingDebugRecord(category, outputs);
 
             for (const output of outputs) {
                 this._onIdleFlush?.(output);
@@ -539,6 +577,10 @@ function parseDebugLoggerRecord(output: string): AppHostLoggerRecord | undefined
         message: normalizeRecordText(message),
         exception: normalizeOptionalRecordText(exception)
     };
+}
+
+function isDebugLoggerHeader(output: string): boolean {
+    return /^[^\r\n]+: (Trace|Debug|Information|Warning|Error|Critical): .*(?:\r\n|\r|\n)?$/.test(output);
 }
 
 function splitMessageAndException(value: string): { message: string; exception?: string } {
