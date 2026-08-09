@@ -600,9 +600,11 @@ public class Program
                 return null;
             }
 
-            // git prints a single absolute path using forward slashes on every platform, including
-            // Windows (for example `C:/src/aspire`). GetFullPath normalizes the separators.
-            var trimmed = standardOutputTask.Result.Trim();
+            // git prints a single absolute path followed by a line ending, using forward slashes on every
+            // platform, including Windows (for example `C:/src/aspire\r\n`). Trim only the line ending:
+            // POSIX allows a checkout directory name to end in spaces, and those spaces are part of the path.
+            // See https://git-scm.com/docs/git-rev-parse#Documentation/git-rev-parse.txt---show-toplevel.
+            var trimmed = standardOutputTask.Result.TrimEnd('\r', '\n');
             return trimmed.Length == 0 ? null : Path.GetFullPath(trimmed);
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
@@ -702,7 +704,7 @@ public class Program
         }
 
         return info.Parent is { } parent
-            ? Path.Combine(CanonicalizeCore(parent.FullName, remainingDepth - 1), info.Name)
+            ? Path.Combine(CanonicalizeCore(parent.FullName, remainingDepth), info.Name)
             : Path.TrimEndingDirectorySeparator(info.FullName);
     }
 

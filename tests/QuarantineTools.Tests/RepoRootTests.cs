@@ -83,6 +83,18 @@ public class RepoRootTests : IDisposable
     }
 
     [Fact]
+    public async Task FindRepoRoot_PreservesTrailingSpacesInTheRepositoryPath()
+    {
+        Assert.SkipUnless(IsGitAvailable(), "git is not available on PATH");
+
+        var repository = CreateRepositoryWithASampleTest("repo ");
+
+        var resolved = await Program.FindRepoRootAsync(repository, TestContext.Current.CancellationToken);
+
+        Assert.Equal(Path.TrimEndingDirectorySeparator(repository), Path.TrimEndingDirectorySeparator(resolved!));
+    }
+
+    [Fact]
     public async Task FindRepoRoot_OutsideAnyRepository_ReturnsNull()
     {
         var loose = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "loose")).FullName;
@@ -283,6 +295,29 @@ public class RepoRootTests : IDisposable
         Assert.False(Program.IsSameOrAncestorDirectory(realRepo, viaLink), "the two spellings should differ textually, otherwise this test proves nothing");
         Assert.Null(Program.TryGetWrongTreeError(realRepo, viaLink));
         Assert.Null(Program.TryGetWrongTreeError(realRepo, inside));
+    }
+
+    [Fact]
+    public void WrongTreeError_IsNull_WhenSymlinkedPathHasMoreThanTheLinkDepthInOrdinarySegments()
+    {
+        Assert.SkipUnless(!OperatingSystem.IsWindows(), "creating symlinks requires elevation on Windows");
+
+        var realBase = Directory.CreateDirectory(Path.Combine(_scratch.FullName, "deep-realbase")).FullName;
+        var realRepo = Directory.CreateDirectory(Path.Combine(realBase, "repo")).FullName;
+        Directory.CreateSymbolicLink(Path.Combine(_scratch.FullName, "deep-repolink"), Path.Combine("deep-realbase", "repo"));
+
+        var inside = realRepo;
+        var viaLink = Path.Combine(_scratch.FullName, "deep-repolink");
+
+        for (var i = 0; i < 45; i++)
+        {
+            var segment = $"level-{i:00}";
+            inside = Directory.CreateDirectory(Path.Combine(inside, segment)).FullName;
+            viaLink = Path.Combine(viaLink, segment);
+        }
+
+        Assert.False(Program.IsSameOrAncestorDirectory(realRepo, viaLink), "the two spellings should differ textually, otherwise this test proves nothing");
+        Assert.Null(Program.TryGetWrongTreeError(realRepo, viaLink));
     }
 
     private static bool IsGitAvailable()
