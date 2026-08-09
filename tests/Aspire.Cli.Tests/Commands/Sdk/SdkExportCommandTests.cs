@@ -45,11 +45,12 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         var interactionService = new TestInteractionService();
         using var provider = CreateProvider(interactionService, out var workspace, out var rpcClient);
         using var _ = workspace;
+        var packageVersion = provider.GetRequiredService<Aspire.Cli.CliExecutionContext>().IdentitySdkVersion;
 
-        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0");
+        var exitCode = await InvokeAsync(provider, $"sdk export --language typescript --package Aspire.Hosting.Redis@{packageVersion}");
 
         Assert.Equal(CliExitCodes.Success, exitCode);
-        Assert.Equal(("typescript", "Aspire.Hosting.Redis", "13.5.0"), rpcClient.LastExportRequest);
+        Assert.Equal(("typescript", "Aspire.Hosting.Redis", packageVersion), rpcClient.LastExportRequest);
 
         var stdout = Assert.Single(interactionService.DisplayedRawText, entry => entry.ConsoleOverride == ConsoleOutput.Standard);
         using var document = JsonDocument.Parse(stdout.Text);
@@ -80,8 +81,9 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         var interactionService = new TestInteractionService();
         using var provider = CreateProvider(interactionService, out var workspace, out _);
         using var _2 = workspace;
+        var packageVersion = provider.GetRequiredService<Aspire.Cli.CliExecutionContext>().IdentitySdkVersion;
 
-        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0 --output " + Path.Combine(workspace.WorkspaceRoot.FullName, "api.json"));
+        var exitCode = await InvokeAsync(provider, $"sdk export --language typescript --package Aspire.Hosting.Redis@{packageVersion} --output " + Path.Combine(workspace.WorkspaceRoot.FullName, "api.json"));
 
         Assert.Equal(CliExitCodes.Success, exitCode);
 
@@ -104,8 +106,9 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var appHostServerProject = new CapturingAppHostServerProject(workspace.WorkspaceRoot.FullName);
         using var provider = CreateProvider(interactionService, workspace, new StubExportRpcClient(), appHostServerProject);
+        var packageVersion = provider.GetRequiredService<Aspire.Cli.CliExecutionContext>().IdentitySdkVersion;
 
-        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0 --source /tmp/aspire-hive");
+        var exitCode = await InvokeAsync(provider, $"sdk export --language typescript --package Aspire.Hosting.Redis@{packageVersion} --source /tmp/aspire-hive");
 
         Assert.Equal(CliExitCodes.Success, exitCode);
         Assert.Equal("/tmp/aspire-hive", appHostServerProject.PackageSourceOverride);
@@ -123,8 +126,9 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var appHostServerProject = new CapturingAppHostServerProject(workspace.WorkspaceRoot.FullName);
         using var provider = CreateProvider(interactionService, workspace, new StubExportRpcClient(), appHostServerProject);
+        var packageVersion = provider.GetRequiredService<Aspire.Cli.CliExecutionContext>().IdentitySdkVersion;
 
-        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0");
+        var exitCode = await InvokeAsync(provider, $"sdk export --language typescript --package Aspire.Hosting.Redis@{packageVersion}");
 
         Assert.Equal(CliExitCodes.Success, exitCode);
         Assert.Contains(
@@ -246,6 +250,27 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
 
         Assert.Equal(CliExitCodes.Success, exitCode);
         Assert.Equal(("typescript", "Aspire.Hosting.Redis", checkoutVersion), rpcClient.LastExportRequest);
+    }
+
+    [Fact]
+    public async Task SdkExportRejectsFirstPartyPackageVersionSkewEvenWithoutCheckoutSubstitution()
+    {
+        var interactionService = new TestInteractionService();
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var appHostServerProject = new FakeSucceedingAppHostServerProject(workspace.WorkspaceRoot.FullName);
+        var rpcClient = new StubExportRpcClient();
+        using var provider = CreateProvider(
+            interactionService,
+            workspace,
+            rpcClient,
+            appHostServerProject,
+            identityVersion: "13.5.0");
+
+        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.4.0");
+
+        Assert.Equal(CliExitCodes.InvalidCommand, exitCode);
+        Assert.Null(rpcClient.LastExportRequest);
+        Assert.Empty(interactionService.DisplayedRawText);
     }
 
     /// <summary>
@@ -542,8 +567,9 @@ public class SdkExportCommandTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         var appHostServerProject = new CapturingAppHostServerProject(workspace.WorkspaceRoot.FullName);
         using var provider = CreateProvider(interactionService, workspace, new StubExportRpcClient(), appHostServerProject);
+        var packageVersion = provider.GetRequiredService<Aspire.Cli.CliExecutionContext>().IdentitySdkVersion;
 
-        var exitCode = await InvokeAsync(provider, "sdk export --language typescript --package Aspire.Hosting.Redis@13.5.0");
+        var exitCode = await InvokeAsync(provider, $"sdk export --language typescript --package Aspire.Hosting.Redis@{packageVersion}");
 
         Assert.Equal(CliExitCodes.Success, exitCode);
 

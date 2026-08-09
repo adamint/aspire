@@ -129,25 +129,20 @@ internal sealed class SdkExportCommand : BaseCommand
             var isCorePackage = string.Equals(reference.Name, CorePackageName, StringComparison.OrdinalIgnoreCase);
             packageName = isCorePackage ? CorePackageName : reference.Name;
 
-            // The core package is always restored by the scanner AppHost, so adding it again would
-            // produce a duplicate package reference.
-            if (isCorePackage)
+            if (IsFirstPartyHostingPackage(packageName))
             {
-                // The scanner loads the core assemblies this CLI was built against, so a different
-                // requested version would be exported as this CLI's surface under someone else's
-                // version number. That is the same stale-signature problem this command exists to
-                // fix, so refuse instead of labelling the export with a version it does not describe.
                 var requested = StripBuildMetadata(packageVersion);
                 if (!string.Equals(requested, ExecutionContext.IdentitySdkVersion, StringComparison.OrdinalIgnoreCase))
                 {
                     return CommandResult.Failure(
                         CliExitCodes.InvalidCommand,
-                        $"This CLI can only export {CorePackageName}@{ExecutionContext.IdentitySdkVersion}, but {packageVersion} was requested. " +
-                        $"The scanner loads the core assemblies this CLI ships with, so exporting a different version would describe the wrong API surface. " +
+                        $"This CLI can only export first-party Aspire packages at {ExecutionContext.IdentitySdkVersion}, but {packageName}@{packageVersion} was requested. " +
+                        $"The TypeScript generator is restored at this CLI's version, so exporting a different package version would describe a mixed SDK surface. " +
                         $"Run the export with the {requested} CLI instead.");
                 }
             }
-            else
+
+            if (!isCorePackage)
             {
                 // Pin the requested version: a bare NuGet version is a minimum, so an unavailable
                 // version would restore as a later one and be published under the wrong number.
@@ -214,6 +209,10 @@ internal sealed class SdkExportCommand : BaseCommand
         var plusIndex = version.IndexOf('+', StringComparison.Ordinal);
         return plusIndex < 0 ? version : version[..plusIndex];
     }
+
+    private static bool IsFirstPartyHostingPackage(string packageName)
+        => string.Equals(packageName, CorePackageName, StringComparison.OrdinalIgnoreCase) ||
+           packageName.StartsWith($"{CorePackageName}.", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Refuses an export the scanner would satisfy from a local checkout instead of restoring the

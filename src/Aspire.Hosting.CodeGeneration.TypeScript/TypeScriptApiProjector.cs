@@ -1662,10 +1662,11 @@ internal sealed partial class TypeScriptApiProjector
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Names stay unqualified unless the checked-in shipped ATS surface already has a real
-    /// cross-package collision for that unqualified name. That preserves the old public names for
-    /// the unique option bags while still making the known collision groups a function of the
-    /// capability alone.
+    /// First-party Aspire names stay unqualified unless the checked-in shipped ATS surface already
+    /// has a real cross-package collision for that unqualified name. That preserves the old public
+    /// names for the unique option bags while still making the known collision groups a function of
+    /// the capability alone. Third-party assemblies are always qualified because their package
+    /// exports are produced one at a time and cannot rely on this repository's collision guard.
     /// </para>
     /// <para>
     /// The core hosting package keeps unqualified names even inside a collision group. Other
@@ -1681,7 +1682,7 @@ internal sealed partial class TypeScriptApiProjector
         var unqualifiedName = TypeScriptOptionsInterfaceNaming.GetUnqualifiedOptionsInterfaceName(methodName);
         if (string.IsNullOrEmpty(owningAssemblyName) ||
             string.Equals(owningAssemblyName, AtsConstants.AspireHostingAssembly, StringComparison.Ordinal) ||
-            !TypeScriptOptionsInterfaceNaming.RequiresPackageQualifier(unqualifiedName))
+            !TypeScriptOptionsInterfaceNaming.RequiresPackageQualifier(unqualifiedName, owningAssemblyName))
         {
             return unqualifiedName;
         }

@@ -2733,6 +2733,14 @@ public partial class AtsTypeScriptCodeGeneratorTests
         Assert.Equal("WithUniqueSettingOptions", name);
     }
 
+    [Fact]
+    public void ThirdPartyOptionsInterfaceNamesAreQualifiedEvenWhenTheNameIsUniqueInThisRepository()
+    {
+        var name = TypeScriptApiProjector.GetOptionsInterfaceName("withDescription", "Contoso.Aspire.Hosting.Widgets");
+
+        Assert.Equal("Contoso_x002E_Aspire_x002E_Hosting_x002E_WidgetsWithDescriptionOptions", name);
+    }
+
     /// <summary>
     /// An options interface is documented by, and keyed to, the assembly whose capability produced
     /// it rather than the package the export was requested for.
