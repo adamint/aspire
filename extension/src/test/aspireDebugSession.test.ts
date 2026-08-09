@@ -776,6 +776,282 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual((aspireDebugSession as any)._disposed, true);
     });
 
+    // Copilot review finding: a resource stop registered in _disposables is invoked again by
+    // dispose(). Because stopDebugging() disposes before rethrowing, a synchronous throw from that
+    // second invocation used to escape dispose(), abort every later disposable, and discard the
+    // failures that had just been aggregated.
+    test('stopDebugging still reports aggregated failures when a registered disposable throws synchronously', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: { type: 'coreclr', request: 'launch', name: 'AppHost' },
+        };
+        const resourceDebugSession = {
+            id: 'resource-session',
+            type: 'pwa-node',
+            name: 'Node.js: server.js',
+            configuration: { type: 'pwa-node', request: 'launch', name: 'Node.js: server.js' },
+        };
+        const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+        const resourceStopFailure = new Error('Resource stop failed');
+        const appHostStopFailure = new Error('AppHost stop failed');
+        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging')
+            .callsFake(async session => {
+                if (session === resourceDebugSession) {
+                    throw resourceStopFailure;
+                }
+
+                if (session === appHostDebugSession) {
+                    throw appHostStopFailure;
+                }
+            });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
+        };
+        (aspireDebugSession as any)._resourceDebugSessions = [
+            {
+                id: resourceDebugSession.id,
+                session: resourceDebugSession as unknown as vscode.DebugSession,
+                stopSession: () => vscode.debug.stopDebugging(resourceDebugSession as unknown as vscode.DebugSession),
+            },
+        ];
+        // Mirrors the production registration in trackAlreadyStartedResourceSession, which pushes
+        // the raw stopSession callback into _disposables without memoizing a synchronous failure.
+        const laterDisposable = sinon.stub();
+        (aspireDebugSession as any)._disposables.push({
+            dispose: () => {
+                throw new Error('Disposable stop threw synchronously');
+            },
+        });
+        (aspireDebugSession as any)._disposables.push({ dispose: laterDisposable });
+
+        await assert.rejects(
+            () => aspireDebugSession.stopDebugging(),
+            (error: unknown) => {
+                assert.ok(error instanceof AggregateError, `Expected an AggregateError but got ${error}`);
+                assert.deepStrictEqual((error as AggregateError).errors, [resourceStopFailure, appHostStopFailure]);
+                return true;
+            });
+
+        // The throwing disposable must not have stopped the ones registered after it.
+        assert.strictEqual(laterDisposable.callCount, 1);
+        assert.strictEqual((aspireDebugSession as any)._disposed, true);
+        assert.deepStrictEqual(
+            stopDebuggingStub.getCalls().map(call => call.args[0]),
+            [
+                resourceDebugSession as unknown as vscode.DebugSession,
+                appHostDebugSession as unknown as vscode.DebugSession,
+                parentDebugSession as unknown as vscode.DebugSession,
+            ]);
+    });
+
+    // Copilot review finding: the Aspire-parent stop failure is collected by stopAllSessions() but
+    // had no coverage, alone or combined with another failure.
+    test('stopDebugging rethrows an Aspire parent stop failure on its own', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: { type: 'coreclr', request: 'launch', name: 'AppHost' },
+        };
+        const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+        const parentStopFailure = new Error('Aspire parent stop failed');
+        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging')
+            .callsFake(async session => {
+                if (session === parentDebugSession) {
+                    throw parentStopFailure;
+                }
+            });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
+        };
+
+        await assert.rejects(
+            () => aspireDebugSession.stopDebugging(),
+            (error: unknown) => {
+                assert.strictEqual(error, parentStopFailure);
+                return true;
+            });
+
+        assert.deepStrictEqual(
+            stopDebuggingStub.getCalls().map(call => call.args[0]),
+            [
+                appHostDebugSession as unknown as vscode.DebugSession,
+                parentDebugSession as unknown as vscode.DebugSession,
+            ]);
+        assert.strictEqual((aspireDebugSession as any)._disposed, true);
+    });
+
+    test('stopDebugging aggregates an Aspire parent stop failure with a resource stop failure', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: { type: 'coreclr', request: 'launch', name: 'AppHost' },
+        };
+        const resourceDebugSession = {
+            id: 'resource-session',
+            type: 'pwa-node',
+            name: 'Node.js: server.js',
+            configuration: { type: 'pwa-node', request: 'launch', name: 'Node.js: server.js' },
+        };
+        const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+        const resourceStopFailure = new Error('Resource stop failed');
+        const parentStopFailure = new Error('Aspire parent stop failed');
+        sinon.stub(vscode.debug, 'stopDebugging')
+            .callsFake(async session => {
+                if (session === resourceDebugSession) {
+                    throw resourceStopFailure;
+                }
+
+                if (session === parentDebugSession) {
+                    throw parentStopFailure;
+                }
+            });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
+        };
+        (aspireDebugSession as any)._resourceDebugSessions = [
+            {
+                id: resourceDebugSession.id,
+                session: resourceDebugSession as unknown as vscode.DebugSession,
+                stopSession: () => vscode.debug.stopDebugging(resourceDebugSession as unknown as vscode.DebugSession),
+            },
+        ];
+
+        await assert.rejects(
+            () => aspireDebugSession.stopDebugging(),
+            (error: unknown) => {
+                assert.ok(error instanceof AggregateError, `Expected an AggregateError but got ${error}`);
+                assert.deepStrictEqual((error as AggregateError).errors, [resourceStopFailure, parentStopFailure]);
+                return true;
+            });
+
+        assert.strictEqual((aspireDebugSession as any)._disposed, true);
+    });
+
+    // Copilot review finding: stopAllSessions() snapshots the resource list before its awaits, so a
+    // resource that starts mid-shutdown would be registered behind the snapshot and only stopped by
+    // dispose() - after the AppHost and Aspire parent had already been stopped.
+    test('stopDebugging immediately stops a resource session that starts mid-shutdown', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: { type: 'coreclr', request: 'launch', name: 'AppHost' },
+        };
+        const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+        let releaseAppHostStop: (() => void) | undefined;
+        const appHostStopGate = new Promise<void>(resolve => { releaseAppHostStop = resolve; });
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async session => {
+            if (session === appHostDebugSession) {
+                await appHostStopGate;
+            }
+        });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
+        };
+
+        const stopPromise = aspireDebugSession.stopDebugging();
+        await Promise.resolve();
+
+        // The AppHost stop is still in flight, so the resource snapshot has already been taken.
+        const lateStopSession = sinon.stub().resolves();
+        const lateSession = {
+            id: 'late-resource-session',
+            processId: 4321,
+            session: { id: 'late-resource-session' } as unknown as vscode.DebugSession,
+            stopSession: lateStopSession,
+            termination: new Promise<number>(() => { }),
+        };
+        const tracked = aspireDebugSession.trackAlreadyStartedResourceSession(
+            { type: 'node', request: 'launch', name: 'late', runId: 'late-run', debugSessionId: null } as any,
+            lateSession as any);
+
+        assert.strictEqual(tracked, undefined, 'A session started during shutdown must not be tracked');
+        assert.strictEqual(lateStopSession.callCount, 1, 'A session started during shutdown must be stopped immediately');
+        assert.strictEqual(
+            (aspireDebugSession as any)._resourceDebugSessions.includes(lateSession),
+            false,
+            'A session started during shutdown must not be registered behind the snapshot');
+
+        releaseAppHostStop!();
+        await stopPromise;
+    });
+
     test('stopDebugging does not stop the Aspire parent session twice when AppHost stop disposes the Aspire session', async () => {
         const parentDebugSession = {
             id: 'aspire-session',

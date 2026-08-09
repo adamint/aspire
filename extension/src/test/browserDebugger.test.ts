@@ -73,6 +73,35 @@ suite('Browser Debugger Tests', () => {
             new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('firefox', 'msedge, chrome'))));
     });
 
+    // WithBrowserDebugger(string browser = "msedge") takes an arbitrary string, so an explicit
+    // empty value is a caller choice and not an absent field. Falling back to the default for it
+    // would silently launch Edge for a value the allowlist does not accept.
+    test('rejects an explicitly empty browser instead of silently defaulting to Edge', async () => {
+        await assert.rejects(
+            () => createConfiguration({ type: 'browser', url: 'http://localhost:5173', browser: '' }),
+            new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('', 'msedge, chrome'))));
+    });
+
+    test('rejects a whitespace-only browser', async () => {
+        await assert.rejects(
+            () => createConfiguration({ type: 'browser', url: 'http://localhost:5173', browser: '   ' }),
+            new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('   ', 'msedge, chrome'))));
+    });
+
+    // An AppHost predating the `browser` field omits it entirely, and a null survives untyped
+    // JSON. Both mean "not specified" and must keep the Edge default.
+    for (const [label, absentBrowser] of [['undefined', undefined], ['null', null]] as const) {
+        test(`defaults to Edge when the browser is ${label}`, async () => {
+            const debugConfig = await createConfiguration({
+                type: 'browser',
+                url: 'http://localhost:5173',
+                browser: absentBrowser as unknown as string | undefined,
+            });
+
+            assert.strictEqual(debugConfig.type, 'pwa-msedge');
+        });
+    }
+
     // The hosting side's WithBrowserDebugger accepts an arbitrary string, so the allowlist lookup must
     // not resolve inherited Object.prototype members. A plain object literal would hand back a
     // function for these names and assign it to debugConfiguration.type.

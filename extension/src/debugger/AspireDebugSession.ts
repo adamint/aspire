@@ -73,6 +73,12 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private readonly _onDidChangeState = new EventEmitter<void>();
   private readonly _disposables: vscode.Disposable[] = [];
   private _disposed = false;
+  // Set as soon as stopDebugging() begins, before it snapshots the resource sessions. Resource
+  // starts that land during the shutdown's awaits must not be registered as ordinary sessions:
+  // they would miss the snapshot and only be stopped later by dispose(), after the AppHost and
+  // the Aspire parent had already been stopped, which is the orphaned-resource ordering the
+  // shutdown exists to prevent.
+  private _stopping = false;
   private _parentStopPromise: Thenable<void> | undefined;
   // Timestamp for the `debug/apphost/end` duration measurement. Captured the first
   // time we observe a `launch` request so it covers the actual user-visible session
@@ -131,6 +137,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
    * disposables, which is unordered, fire-and-forget, and silently drops stop failures.
    */
   async stopDebugging(): Promise<void> {
+    // Latch before the first await so any resource that starts while the shutdown is in flight is
+    // stopped immediately by the start paths instead of being registered behind the snapshot.
+    this._stopping = true;
     const stopFailures = await this.stopAllSessions();
 
     // Dispose even when a stop failed, otherwise a failing adapter would leak the debug adapter
@@ -189,6 +198,14 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
 
     return stopFailures;
+  }
+
+  /**
+   * True once the session has begun stopping, whether through {@link stopDebugging} or
+   * {@link dispose}. Resource start paths use this to refuse late registrations.
+   */
+  private get isShuttingDown(): boolean {
+    return this._disposed || this._stopping;
   }
 
   private stopParentDebugSessionOnce(): Thenable<void> {
@@ -636,8 +653,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   }
 
   trackAlreadyStartedResourceSession(debugConfig: AspireResourceExtendedDebugConfiguration, resourceDebugSession: AlreadyStartedResourceDebugSession): AspireResourceDebugSession | undefined {
-    if (this._disposed) {
-      resourceDebugSession.stopSession();
+    if (this.isShuttingDown) {
+      startStopSession(resourceDebugSession).catch(err => {
+        extensionLogOutputChannel.warn(`Failed to stop resource session for run ${debugConfig.runId} that started during shutdown: ${err instanceof Error ? err.message : String(err)}`);
+      });
       return undefined;
     }
 
@@ -691,7 +710,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
           extensionLogOutputChannel.info(`Debug session started: ${session.name} (run id: ${session.configuration.runId})`);
           disposable.dispose();
 
-          if (this._disposed) {
+          if (this.isShuttingDown) {
             extensionLogOutputChannel.info(`Stopping debug session that started after Aspire session disposal: ${session.name} (run id: ${session.configuration.runId})`);
             vscode.debug.stopDebugging(session);
             cleanupRun(debugConfig.runId);
@@ -901,7 +920,21 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // `debug/apphost/end`. Without this ordering, late nonzero exits (notably
     // Windows' SIGTERM → 143 exit code which is not normalized to 0) would
     // be missed and the summary would under-report failures.
-    this._disposables.forEach(disposable => disposable.dispose());
+    //
+    // Each disposable is invoked defensively. Resource stop callbacks are registered here
+    // directly (see trackAlreadyStartedResourceSession) and `stopSession()` is only typed as
+    // returning a Thenable, so a contributed implementation may throw synchronously. An
+    // unguarded forEach would let that throw abort every later disposable and escape dispose()
+    // entirely - and because stopDebugging() disposes before rethrowing, it would also discard
+    // the stop failures it had just aggregated.
+    for (const disposable of this._disposables) {
+      try {
+        disposable.dispose();
+      }
+      catch (err) {
+        extensionLogOutputChannel.warn(`A disposable threw while disposing the Aspire debug session: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     this._trackedDebugAdapters = [];
     // dispose() cannot wait for the stop, but the promise still needs a rejection handler.
     // stopDebugging() disposes after aggregating its failures, and VS Code's own disposal path

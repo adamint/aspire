@@ -41,7 +41,11 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
         }
 
         // Map browser name to VS Code js-debug adapter type (pwa- prefix required)
-        const browser = launchConfig.browser || 'msedge';
+        // `??` rather than `||`: only an absent browser (an older AppHost that does not send the
+        // field) should fall back to the default. An explicit empty string is a value the caller
+        // chose, and it is no more supported than 'safari' would be, so it has to reach the
+        // allowlist check and be rejected instead of silently launching Edge.
+        const browser = launchConfig.browser ?? 'msedge';
         const debugType = browserDebugTypesByName.get(browser);
         if (!debugType) {
             extensionLogOutputChannel.warn(`No built-in js-debug adapter is registered for browser '${browser}'.`);
