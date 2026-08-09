@@ -266,7 +266,21 @@ export async function waitForSettledDebugConsoleOutput(
 }
 
 export function countDebugConsoleOccurrences(outputs: readonly DebugConsoleOutput[], marker: string): number {
-    return outputs.reduce((total, event) => total + (event.output.split(marker).length - 1), 0);
+    return outputs.reduce((total, event) => total + countMarkerOccurrences(event.output, marker), 0);
+}
+
+function countMarkerOccurrences(output: string, marker: string): number {
+    // Probe messages are emitted as:
+    //   E2ELOGPROBEWARN first line.
+    //   E2ELOGPROBEWARNSECOND second line.
+    // The continuation marker intentionally starts with the warning marker, so count the marker
+    // as a standalone token instead of accepting substring matches inside another sentinel.
+    const pattern = new RegExp(`(?<![A-Za-z0-9_])${escapeRegExp(marker)}(?![A-Za-z0-9_])`, 'g');
+    return output.match(pattern)?.length ?? 0;
+}
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function getHighestDebugConsoleSequence(outputs: readonly DebugConsoleOutput[]): number {
