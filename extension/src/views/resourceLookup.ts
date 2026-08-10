@@ -61,6 +61,19 @@ export function findLatestResourcesForElement(repository: AppHostDataRepository,
 }
 
 export function findAppHostForResource(repository: AppHostDataRepository, element: ResourceElementRef): AppHostDisplayInfo | undefined {
+    // A pid is not a durable identity for an app host. Tree items outlive the app host they were built
+    // from, and the OS reuses pids, so a stale action can name a pid that now belongs to a different app
+    // host - and every caller of this uses the result to pass --apphost to the CLI. When the element
+    // remembers which app host file it came from, that file is the identity: a pid that resolves outside
+    // it counts as not found, and an ambiguous file resolves to nothing rather than to a guess. This is
+    // the same resolution order findLatestResourcesForElement above uses.
+    if (element.appHostPath) {
+        const matchingAppHosts = repository.appHosts.filter(appHost => isMatchingAppHostPath(appHost.appHostPath, element.appHostPath!));
+        const appHostByPid = matchingAppHosts.find(appHost => appHost.appHostPid === element.appHostPid);
+
+        return appHostByPid ?? (matchingAppHosts.length === 1 ? matchingAppHosts[0] : undefined);
+    }
+
     return element.appHostPid !== null
         ? repository.appHosts.find(appHost => appHost.appHostPid === element.appHostPid)
         : undefined;

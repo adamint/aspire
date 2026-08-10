@@ -449,9 +449,8 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         using var workspace = TemporaryWorkspace.Create(outputHelper);
 
         // Hooking the probed target from the referenced project fails exactly the evaluation the probe performs and
-        // nothing else. Neither GetTargetFrameworks nor GetTargetPath runs on an Aspire project reference during a
-        // normal build, which is the whole point of the finding this pins: a reference that builds perfectly well
-        // can still be unable to answer the probe.
+        // nothing else. This runs the codegen target on its own, so nothing has resolved the project references and
+        // the probe is the only thing asking - which is the case the probe still exists for.
         var result = await RunProjectMetadataSourceGenerationAsync(
             workspace,
             referencedProjectXml: $"""
@@ -502,10 +501,11 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
             extraArguments: ["-p:BuildingProject=true"]);
 
         // ContinueOnError keeps the codegen target running, but it does not demote the error the referenced
-        // project logged: that error belongs to the reference's own build, so the AppHost build still fails.
-        // The probe cannot isolate itself from that, which is why it has to explain itself instead - a build
-        // that fails inside a target the user never asked for has to say where the failure came from and how
-        // to turn the probe off, because the target name it collects is only a debugger hint.
+        // project logged: that error belongs to the reference's own build, so the build still fails. The probe
+        // cannot isolate itself from that, which is why an ordinary build no longer runs it at all - see
+        // ProjectMetadataTargetNameComesFromTheReferenceBuildWithoutProbingIt. Where it does still run, it has to
+        // explain itself: a build that fails inside a target the user never asked for has to say where the failure
+        // came from and how to turn the probe off, because the target name it collects is only a debugger hint.
         Assert.NotEqual(0, result.DotNetResult.ExitCode);
         Assert.Contains("aspire target name probe hook failed", result.DotNetResult.Output);
         Assert.Contains("set SkipAspireProjectResourceTargetName=true to skip this evaluation", result.DotNetResult.Output);
@@ -521,6 +521,117 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
             extraArguments: ["-p:BuildingProject=true", "-p:SkipAspireProjectResourceTargetName=true"]);
 
         Assert.True(controlResult.DotNetResult.ExitCode == 0, controlResult.DotNetResult.Output);
+    }
+
+    [Fact]
+    public async Task ProjectMetadataTargetNameComesFromTheReferenceBuildWithoutProbingIt()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        // The same hook that fails the probe above, on the one probed target an ordinary build does not otherwise
+        // reach. Reaching it is now the failure being pinned: a build that resolves its references has already
+        // produced the target path, so there is no probe left to run. AssemblyName differs from the project file
+        // name so a name sourced from anywhere but the reference's real build output shows up as a wrong value.
+        var result = await RunProjectMetadataSourceGenerationAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                    <AssemblyName>RenamedWorker</AssemblyName>
+                  </PropertyGroup>
+                  <Target Name="FailAspireTargetNameProbe" BeforeTargets="GetTargetFrameworks">
+                    <Error Text="aspire target name probe hook failed" />
+                  </Target>
+                """,
+            // ResolveReferences rather than Build: it runs ResolveProjectReferences, which is the step a real build
+            // performs before CoreCompile and the step that captures the reference's output. Compiling the AppHost
+            // itself would need the Aspire.Hosting reference the generated source derives from, which this
+            // workspace deliberately does not have.
+            msbuildTarget: "ResolveReferences;WriteAspireProjectMetadataSources");
+
+        Assert.True(result.DotNetResult.ExitCode == 0, result.DotNetResult.Output);
+
+        var generatedSource = await File.ReadAllTextAsync(result.GeneratedPath);
+        Assert.Equal("""    public string? TargetName => @"RenamedWorker";""", GetGeneratedTargetNameMember(generatedSource));
+    }
+
+    [Fact]
+    public async Task AspireProjectResourcesCaptureTheirBuildOutputForTheTargetNameHint()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        var sdkTargetsPath = SecurityElement.Escape(Path.Combine(GetRepoRoot(), "src", "Aspire.AppHost.Sdk", "SDK", "Sdk.in.targets"));
+        var projectFile = Path.Combine(workspace.Path, "Host.csproj");
+
+        // The AppHost targets read @(_AspireProjectResourceBuildOutput), which only exists because the SDK defaults
+        // OutputItemType on every Aspire project resource. Nothing else in these tests evaluates the SDK targets -
+        // the AppHost harness spells the metadata out - so this is what keeps the two from drifting apart.
+        await File.WriteAllTextAsync(projectFile,
+            $$"""
+            <Project>
+
+              <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+
+              <PropertyGroup>
+                <TargetFramework>net8.0</TargetFramework>
+                <IsAspireHost>true</IsAspireHost>
+              </PropertyGroup>
+
+              <ItemGroup>
+                <ProjectReference Include="Resource.csproj" />
+                <ProjectReference Include="Library.csproj" IsAspireProjectResource="false" />
+                <ProjectReference Include="Claimed.csproj" OutputItemType="SomeoneElsesItem" />
+              </ItemGroup>
+
+              <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+
+              <Import Project="{{sdkTargetsPath}}" />
+
+              <Target Name="ReportOutputItemType">
+                <Message Importance="High" Text="OUTPUTITEMTYPE %(ProjectReference.Filename): [%(ProjectReference.OutputItemType)]" />
+              </Target>
+
+            </Project>
+            """);
+
+        var result = await RunDotNetWithArgumentsAsync(workspace.Path, ["msbuild", "-nologo", "-t:ReportOutputItemType", projectFile]);
+
+        Assert.True(result.ExitCode == 0, result.Output);
+        Assert.Contains("OUTPUTITEMTYPE Resource: [_AspireProjectResourceBuildOutput]", result.Output);
+
+        // A reference opted out of being a resource is an ordinary reference, and one that already routes its
+        // outputs somewhere keeps doing so: capturing the target name must not take an item type from its owner.
+        Assert.Contains("OUTPUTITEMTYPE Library: []", result.Output);
+        Assert.Contains("OUTPUTITEMTYPE Claimed: [SomeoneElsesItem]", result.Output);
+    }
+
+    [Fact]
+    public async Task GetTargetPathIsReachedOnProjectResourcesWithoutAspireAskingForIt()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        // The target name probe is switched off entirely, so nothing Aspire contributes asks the reference for
+        // GetTargetPath. Resolving project references still reaches it, which is what separates the two probed
+        // targets: a reference that cannot answer GetTargetPath cannot be referenced by any project, Aspire or
+        // not, so that half of the probe adds no failure mode of its own. GetTargetFrameworks is the half that
+        // did, and the test above covers it.
+        var result = await RunProjectMetadataSourceGenerationAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                  </PropertyGroup>
+                  <Target Name="FailAspireTargetNameProbe" BeforeTargets="GetTargetPath">
+                    <Error Text="aspire target name probe hook failed" />
+                  </Target>
+                """,
+            extraArguments: ["-p:SkipAspireProjectResourceTargetName=true"],
+            msbuildTarget: "ResolveReferences");
+
+        Assert.NotEqual(0, result.DotNetResult.ExitCode);
+        Assert.Contains("aspire target name probe hook failed", result.DotNetResult.Output);
     }
 
     [Fact]
@@ -1221,7 +1332,8 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
         string? solutionProjectConfiguration = null,
         string referencedProjectDirectoryName = "Worker",
         string? ancestorDirectoryBuildPropsXml = null,
-        bool buildProjectInSolution = true)
+        bool buildProjectInSolution = true,
+        string msbuildTarget = "WriteAspireProjectMetadataSources")
     {
         var repoRoot = GetRepoRoot();
 
@@ -1304,6 +1416,9 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
                 <OutputType>Exe</OutputType>
                 <TargetFramework>{{targetFramework}}</TargetFramework>
                 <IsAspireHost>true</IsAspireHost>
+                <!-- Without this the SDK's Aspire workload deprecation check errors out of PrepareForBuild, which
+                     any target reached through the real build graph (rather than invoked on its own) runs first. -->
+                <AspireHostingSDKVersion>9.0.0</AspireHostingSDKVersion>
                 <_AspireTasksAssembly>{{SecurityElement.Escape(GetAspireHostingTasksAssemblyPath())}}</_AspireTasksAssembly>
                 <SkipAspireWorkloadManifest>true</SkipAspireWorkloadManifest>
                 <SkipValidateAspireHostProjectResources>true</SkipValidateAspireHostProjectResources>
@@ -1315,6 +1430,7 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
                                   ReferenceOutputAssembly="false"
                                   SkipGetTargetFrameworkProperties="true"
                                   ExcludeAssets="all"
+                                  OutputItemType="_AspireProjectResourceBuildOutput"
                                   Private="false">
                   <Project>{C42D47BF-C684-40EB-B438-FC98C4DC6F5D}</Project>
             {{projectReferenceMetadataXml}}
@@ -1338,7 +1454,7 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
             "msbuild",
             "-nologo",
             "-restore",
-            "-t:WriteAspireProjectMetadataSources",
+            $"-t:{msbuildTarget}",
             appHostProjectFile
         };
 

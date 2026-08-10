@@ -38,6 +38,16 @@
       <SkipGetTargetFrameworkProperties Condition="'%(SkipGetTargetFrameworkProperties)' == '' and '%(IsAspireProjectResource)' == 'true'">true</SkipGetTargetFrameworkProperties>
       <ExcludeAssets Condition="'%(ExcludeAssets)' == '' and '%(IsAspireProjectResource)' == 'true'">all</ExcludeAssets>
       <Private Condition="'%(Private)' == '' and '%(IsAspireProjectResource)' == 'true'">false</Private>
+
+      <!--
+        ResolveProjectReferences discards a reference's build outputs when ReferenceOutputAssembly is false, which is
+        the default above, but it still routes them to the item type named here (see the OutputItemType outputs on the
+        MSBuild tasks in ResolveProjectReferences in Microsoft.Common.CurrentVersion.targets). Capturing them gives the
+        AppHost the target path of every resource it already built, so the debugger target name costs no evaluation of
+        its own. That matters more than the saving: a name read from a build that had to happen anyway cannot introduce
+        a build failure, whereas asking a reference for GetTargetPath out of band can.
+      -->
+      <OutputItemType Condition="'%(OutputItemType)' == '' and '%(IsAspireProjectResource)' == 'true'">_AspireProjectResourceBuildOutput</OutputItemType>
     </ProjectReference>
 
   </ItemGroup>

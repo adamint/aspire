@@ -95,17 +95,27 @@
     omitting the metadata, because attach consumers trust every nonblank TargetName and only fall back to TargetPath
     when the metadata is absent.
 
-    Measured cost on a single-reference AppHost build: this adds one GetTargetFrameworks evaluation per reference and
-    no extra GetTargetPath evaluation, because ResolveProjectReferences already asks for GetTargetPath with the same
-    effective global properties and MSBuild serves the second request from its result cache. A reference whose TFM
-    differs from the AppHost's is a genuine second evaluation, which is the price of reading the name it actually
-    builds under.
+    Measured cost on a single-reference AppHost build: nothing, for any reference this build built. Those names come
+    from @(_AspireProjectResourceBuildOutput), which ResolveProjectReferences already populated. The probes below only
+    run for references this build did not build, where they add one GetTargetFrameworks evaluation per reference and
+    no extra GetTargetPath evaluation, because ResolveProjectReferences asks for GetTargetPath with the same effective
+    global properties and MSBuild serves the second request from its result cache. A reference whose TFM differs from
+    the AppHost's is a genuine second evaluation, which is the price of reading the name it actually builds under.
   -->
   <Target Name="_GetAspireProjectResourceTargetNames"
           DependsOnTargets="_CreateAspireProjectResources;PrepareProjectReferences"
           Condition="'$(SkipAspireProjectResourceTargetName)' != 'true'">
 
     <ItemGroup>
+      <!--
+        The AppHost's own build already produced the answer for every reference it built: OutputItemType (defaulted in
+        Aspire.AppHost.Sdk) routes each reference's build output here, and its %(Filename) is $(TargetName) for the
+        exact configuration, platform and target framework the reference really built under. Seeding the result from
+        that costs nothing and, more to the point, evaluates nothing - so an ordinary AppHost build cannot fail inside
+        a probe, because for those references there is no probe left to run.
+      -->
+      <_AspireProjectResourceTargetPath Include="@(_AspireProjectResourceBuildOutput)" />
+
       <!--
         BuildReference is false when the active solution configuration excludes the project from the build, and
         ResolveProjectReferences skips those references entirely (see the BuildReference conditions on its MSBuild
@@ -114,8 +124,17 @@
         fresh evaluation of a project the solution disabled and a chance to fail the AppHost build on a project that
         was never meant to participate in it. AssignProjectConfiguration, which PrepareProjectReferences runs,
         defaults the metadata to true, so it is always populated by the time this target executes.
+
+        The probe is then only for a build that resolved no references at all - the codegen target invoked on its
+        own, or a host whose references were resolved some other way. The condition is on the set rather than on
+        each reference because the two sides cannot be correlated by path here: MSBuild canonicalizes
+        %(MSBuildSourceProjectFile) through symlinks while %(FullPath) does not, so on a machine where the sources
+        live under a symlinked directory the same project appears under two spellings. The sets agree anyway,
+        because ResolveProjectReferences and the Include below both skip exactly the BuildReference=false
+        references.
       -->
-      <_AspirePreparedProjectResource Include="@(_MSBuildProjectReferenceExistent->WithMetadataValue('IsAspireProjectResource', 'true')->WithMetadataValue('BuildReference', 'true'))" />
+      <_AspirePreparedProjectResource Include="@(_MSBuildProjectReferenceExistent->WithMetadataValue('IsAspireProjectResource', 'true')->WithMetadataValue('BuildReference', 'true'))"
+                                      Condition="'@(_AspireProjectResourceBuildOutput)' == ''" />
     </ItemGroup>
 
     <!--
@@ -127,12 +146,12 @@
       target running so the reference metadata is still written, just without the debugger hint.
 
       ContinueOnError only governs this target. MSBuild still reports whatever error the referenced project itself
-      logged, so the overall build result is not fully insulated from a reference that cannot answer the probe;
-      SkipAspireProjectResourceTargetName=true opts out of probing entirely for those. That is a limitation of the
-      MSBuild task rather than a choice: an error logged by the referenced project belongs to that project's build,
-      so ContinueOnError lets this target keep running but cannot demote it, and the build still fails. The warnings
-      after each probe exist for that case, so a failure inside a target the user never asked for says where it came
-      from and how to turn it off.
+      logged, so a reference that cannot answer the probe fails the AppHost build: an error logged by the referenced
+      project belongs to that project's build, so ContinueOnError lets this target keep running but cannot demote it.
+      That is why an ordinary build no longer reaches this code - the seeding above answers it from outputs the build
+      already produced. What is left here runs when nothing built the reference, and it still carries that risk, so
+      the warnings after each probe say where a failure came from and that
+      SkipAspireProjectResourceTargetName=true turns probing off entirely.
     -->
     <MSBuild Projects="@(_AspirePreparedProjectResource)"
              Targets="GetTargetFrameworks"
