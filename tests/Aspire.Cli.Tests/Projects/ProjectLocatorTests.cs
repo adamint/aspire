@@ -695,15 +695,51 @@ public class ProjectLocatorTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task RecordedAppHostPathIsReplacedWhenItsRecordedCasingNoLongerExists()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+
+        // Only the lowercase directory is created, so the recorded "Foo" spelling is a stale path
+        // rather than another way of naming the same project. On a case-insensitive volume every
+        // casing of an existing path still resolves, which is why this scenario cannot be built
+        // there at all.
+        var directory = workspace.WorkspaceRoot.CreateSubdirectory("foo");
+        Assert.SkipWhen(
+            Directory.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "FOO")),
+            "The volume backing this test is case-insensitive, so a stale casing cannot exist.");
+
+        await File.WriteAllTextAsync(Path.Combine(directory.FullName, "AppHost.csproj"), "Not a real apphost");
+
+        var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);
+        await File.WriteAllTextAsync(configPath, """{"appHost":{"path":"Foo/AppHost.csproj"}}""");
+
+        var executionContext = CreateExecutionContext(workspace.WorkspaceRoot);
+        var projectLocator = CreateProjectLocator(executionContext, environment: TestEnvironment.CreateMacOS());
+
+        var result = await projectLocator.UseOrFindAppHostProjectFileAsync(
+            new FileInfo(Path.Combine(workspace.WorkspaceRoot.FullName, "foo", "AppHost.csproj")),
+            MultipleAppHostProjectsFoundBehavior.Prompt,
+            createSettingsFile: true,
+            CancellationToken.None).DefaultTimeout();
+
+        Assert.NotNull(result.SelectedProjectFile);
+        Assert.Equal("foo/AppHost.csproj", ReadConfiguredAppHostPath(configPath));
+    }
+
+    [Fact]
     public async Task RecordedAppHostPathIsKeptWhenOnlyItsCasingDiffersOnACaseInsensitiveVolume()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
 
-        // Only one directory is created, so the two spellings name one project however the volume
-        // running this test is formatted. A macOS or Windows volume that turns out to be
-        // case-sensitive is the reason the decision reads the real directory entries instead of
-        // trusting the platform, and reading them has to reach this same answer when it is not.
+        // Only one directory is created, and the recorded "Foo" spelling has to keep naming it
+        // through the "foo" spelling passed below. That is only true where the volume folds the
+        // two together; on a case-sensitive volume "foo/AppHost.csproj" simply does not exist,
+        // which is the case the sibling test covers.
         var directory = workspace.WorkspaceRoot.CreateSubdirectory("Foo");
+        Assert.SkipUnless(
+            Directory.Exists(Path.Combine(workspace.WorkspaceRoot.FullName, "foo")),
+            "The volume backing this test is case-sensitive, so the two spellings name two projects.");
+
         await File.WriteAllTextAsync(Path.Combine(directory.FullName, "AppHost.csproj"), "Not a real apphost");
 
         var configPath = Path.Combine(workspace.WorkspaceRoot.FullName, AspireConfigFile.FileName);

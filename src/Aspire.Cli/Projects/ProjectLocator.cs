@@ -1333,11 +1333,24 @@ internal sealed class ProjectLocator(
             return false;
         }
 
+        // Both spellings have to open something before they can open the same thing. A recorded
+        // path whose casing no longer resolves is a stale path rather than an alias, and calling it
+        // the selected file would leave the broken configuration in place instead of rewriting it.
+        if (!PathExists(left) || !PathExists(right))
+        {
+            return false;
+        }
+
         // Windows and macOS volumes are usually case-insensitive, but APFS and NTFS can both be
         // formatted the other way, and Windows directories can opt in individually. Only a
         // case-sensitive directory can hold both spellings at once, so the real directory entries
         // settle it rather than the platform default.
         return !BothCaseVariantsExist(left, right);
+    }
+
+    private static bool PathExists(string path)
+    {
+        return File.Exists(path) || Directory.Exists(path);
     }
 
     private static bool BothCaseVariantsExist(string left, string right)
