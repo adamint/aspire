@@ -35,16 +35,46 @@ type DebugSessionAggregateStats = {
     anyNonZeroExit: boolean;
 };
 
+const stopRunSessionTimeoutMs = 10_000;
+
 export async function stopRunSession(runId: string, runsBySession: Map<string, AspireResourceDebugSession[]>): Promise<boolean> {
     const debugSessions = runsBySession.get(runId);
     if (!debugSessions) {
         return false;
     }
 
-    await Promise.all(debugSessions.map(debugSession => Promise.resolve(debugSession.stopSession())));
-    runsBySession.delete(runId);
+    const stopAttempt = Promise.all(debugSessions.map(debugSession => Promise.resolve(debugSession.stopSession())));
+
+    // DELETE has a bounded response time, but VS Code owns the underlying Thenables. Continue
+    // observing a timed-out attempt so a late success can remove the retained run and a late
+    // rejection cannot become unhandled.
+    void stopAttempt.then(
+        () => {
+            if (runsBySession.get(runId) === debugSessions) {
+                runsBySession.delete(runId);
+            }
+        },
+        () => { });
+
+    await withTimeout(stopAttempt, stopRunSessionTimeoutMs, `Timed out stopping debug session for run ${runId}.`);
 
     return true;
+}
+
+async function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    });
+
+    try {
+        return await Promise.race([operation, timeoutPromise]);
+    }
+    finally {
+        if (timeout) {
+            clearTimeout(timeout);
+        }
+    }
 }
 
 export default class AspireDcpServer {

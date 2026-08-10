@@ -1,7 +1,8 @@
 import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, isBrowserLaunchConfiguration } from "../../dcp/types";
-import { browserDisplayName, browserLabel, invalidLaunchConfiguration } from "../../loc/strings";
+import { browserDisplayName, browserLabel, firefoxDebuggerNotInstalled, invalidLaunchConfiguration } from "../../loc/strings";
 import { extensionLogOutputChannel } from "../../utils/logging";
 import { ResourceDebuggerExtension } from "../debuggerExtensions";
+import { firefoxDebugAdapterType, isFirefoxDebuggerInstalled, promptToInstallFirefoxDebugger } from "../firefoxDebugger";
 
 const browserRuntimeArgs = [
     '--no-first-run',
@@ -28,13 +29,17 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
         }
 
         debugConfiguration.type = getBrowserDebugAdapter(launchConfig.browser);
+        if (debugConfiguration.type === firefoxDebugAdapterType && !isFirefoxDebuggerInstalled()) {
+            promptToInstallFirefoxDebugger();
+            throw new Error(firefoxDebuggerNotInstalled);
+        }
         debugConfiguration.request = 'launch';
         debugConfiguration.url = launchConfig.url;
         debugConfiguration.webRoot = launchConfig.web_root;
         debugConfiguration.sourceMaps = true;
         debugConfiguration.resolveSourceMapLocations = ['**', '!**/node_modules/**'];
 
-        if (debugConfiguration.type === 'firefox') {
+        if (debugConfiguration.type === firefoxDebugAdapterType) {
             // vscode-firefox-debug uses reAttach to decide whether stopping a debug session should
             // leave Firefox running. Aspire owns this launch, so a workspace setting must not turn
             // resource termination into an adapter-only disconnect.
@@ -67,7 +72,7 @@ function getBrowserDebugAdapter(browser: string | undefined): string {
     switch (normalizedBrowser) {
         case 'firefox':
         case 'mozilla-firefox':
-            return 'firefox';
+            return firefoxDebugAdapterType;
         case 'chrome':
         case 'google-chrome':
         case 'chromium':

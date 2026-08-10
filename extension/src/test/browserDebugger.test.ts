@@ -6,7 +6,7 @@ import { BrowserDebugSessionTermination } from '../debugger/browserDebugSessionT
 import { browserDebuggerExtension } from '../debugger/languages/browser';
 import { prepareDebugSession } from '../debugger/debuggerExtensions';
 import { cleanupRun, registerRunCleanup } from '../debugger/runCleanupRegistry';
-import { AspireResourceExtendedDebugConfiguration, BrowserLaunchConfiguration, SessionTerminatedNotification } from '../dcp/types';
+import { AspireResourceDebugSession, AspireResourceExtendedDebugConfiguration, BrowserLaunchConfiguration, SessionTerminatedNotification } from '../dcp/types';
 
 suite('Browser Debugger Tests', () => {
     teardown(() => {
@@ -40,6 +40,8 @@ suite('Browser Debugger Tests', () => {
     });
 
     test('forces Firefox to terminate instead of reattaching to the launched browser', async () => {
+        sinon.stub(vscode.extensions, 'getExtension').callsFake((id: string) =>
+            id === 'firefox-devtools.vscode-firefox-debug' ? ({ id } as vscode.Extension<unknown>) : undefined);
         const configuration = await createBrowserConfiguration(
             { type: 'browser', url: 'https://localhost:5001', browser: 'firefox' },
             {
@@ -53,6 +55,39 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(configuration.runtimeArgs, undefined);
         assert.strictEqual(configuration.userDataDir, undefined);
         assert.deepStrictEqual(configuration.pathMappings, []);
+    });
+
+    test('prompts to install the Firefox debugger when its adapter is missing', async () => {
+        const getExtension = sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+        const showErrorMessage = sinon.stub(vscode.window, 'showErrorMessage').resolves(undefined);
+
+        await assert.rejects(
+            createBrowserConfiguration(
+                { type: 'browser', url: 'https://localhost:5001', browser: 'firefox' },
+                {}),
+            /Firefox Debugger extension/);
+
+        assert.strictEqual(getExtension.calledWith('firefox-devtools.vscode-firefox-debug'), true);
+        assert.strictEqual(showErrorMessage.calledOnce, true);
+        assert.match(showErrorMessage.firstCall.args[0], /Firefox Debugger extension/);
+    });
+
+    test('installs the Firefox debugger when selected from the missing-adapter prompt', async () => {
+        sinon.stub(vscode.extensions, 'getExtension').returns(undefined);
+        sinon.stub(vscode.window, 'showErrorMessage').resolves('Install' as any);
+        const executeCommand = sinon.stub(vscode.commands, 'executeCommand').resolves();
+
+        await assert.rejects(
+            createBrowserConfiguration(
+                { type: 'browser', url: 'https://localhost:5001', browser: 'firefox' },
+                {}),
+            /Firefox Debugger extension/);
+        await Promise.resolve();
+        await Promise.resolve();
+
+        assert.strictEqual(executeCommand.calledOnceWithExactly(
+            'workbench.extensions.installExtension',
+            'firefox-devtools.vscode-firefox-debug'), true);
     });
 
     test('reports a natural root browser termination exactly once', () => {
@@ -179,6 +214,57 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(stopDebugging.callCount, 2);
         assert.strictEqual(send.calledOnce, true);
     });
+
+    test('keeps natural termination armed after a disposal stop fails', async () => {
+        let terminateListener: ((session: vscode.DebugSession) => void) | undefined;
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(listener => {
+            terminateListener = listener;
+            return { dispose: () => { terminateListener = undefined; } };
+        });
+        sinon.stub(vscode.debug, 'stopDebugging').rejects(new Error('stop failed'));
+        const send = sinon.stub();
+        const cleanup = sinon.stub();
+        registerRunCleanup('run-1', cleanup);
+        const session = createDebugSession('browser-root');
+        const termination = new BrowserDebugSessionTermination(session, 'run-1', 'dcp-1', send);
+
+        termination.stopAndDisposeOnFailure();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        assert.ok(terminateListener);
+        terminateListener(session);
+
+        assert.strictEqual(send.calledOnceWithExactly('run-1', 'dcp-1'), true);
+        assert.strictEqual(cleanup.calledOnce, true);
+        assert.strictEqual(terminateListener, undefined);
+    });
+
+    test('returns undefined when a late browser stop succeeds after Aspire disposal', async () => {
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const { result } = await startBrowserAfterAspireDisposal();
+
+        assert.strictEqual(await result, undefined);
+    });
+
+    test('returns the late browser session for retry when its stop fails', async () => {
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(debugSession =>
+            debugSession?.id === 'browser-root' ? Promise.reject(new Error('stop failed')) : Promise.resolve());
+        const { result, browserSession } = await startBrowserAfterAspireDisposal();
+
+        assert.strictEqual((await result)?.session, browserSession);
+    });
+
+    test('times out when a late browser stop never settles after Aspire disposal', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(debugSession =>
+            debugSession?.id === 'browser-root' ? new Promise<void>(() => { }) : Promise.resolve());
+        const { result } = await startBrowserAfterAspireDisposal();
+
+        await clock.tickAsync(10_000);
+
+        assert.strictEqual(await result, undefined);
+    });
 });
 
 async function createBrowserConfiguration(
@@ -225,6 +311,49 @@ function createDebugSession(id: string, parentSession?: vscode.DebugSession, con
         customRequest: sinon.stub(),
         getDebugProtocolBreakpoint: sinon.stub()
     };
+}
+
+async function startBrowserAfterAspireDisposal(): Promise<{
+    result: Promise<AspireResourceDebugSession | undefined>;
+    browserSession: vscode.DebugSession;
+}> {
+    let startListener: ((session: vscode.DebugSession) => void) | undefined;
+    sinon.stub(vscode.debug, 'onDidStartDebugSession').callsFake(listener => {
+        startListener = listener;
+        return { dispose: () => { startListener = undefined; } };
+    });
+    sinon.stub(vscode.debug, 'onDidTerminateDebugSession').returns({ dispose: () => { } });
+    sinon.stub(vscode.workspace, 'getWorkspaceFolder').returns(undefined);
+    const start = deferred<boolean>();
+    sinon.stub(vscode.debug, 'startDebugging').returns(start.promise);
+    const parent = createDebugSession('aspire-parent', undefined, {
+        type: 'aspire',
+        name: 'Aspire',
+        request: 'launch',
+        program: '/workspace/apphost.cs'
+    });
+    const aspireSession = new AspireDebugSession(
+        parent,
+        {} as never,
+        {
+            sendNotification: sinon.stub(),
+            takeDebugSessionAggregateStats: sinon.stub().returns(undefined)
+        } as never,
+        { isDebugConfigEnvironmentLoggingEnabled: () => false } as never,
+        () => { });
+    const configuration = await createBrowserConfiguration(
+        { type: 'browser', url: 'https://localhost:5001' },
+        {});
+    const browserSession = createDebugSession('browser-root', undefined, configuration);
+
+    const result = aspireSession.startAndGetDebugSession(configuration);
+    await Promise.resolve();
+    aspireSession.dispose();
+    startListener!(browserSession);
+    start.resolve(true);
+    await Promise.resolve();
+
+    return { result, browserSession };
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve(value: T): void } {

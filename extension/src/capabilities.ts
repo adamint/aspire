@@ -63,6 +63,13 @@ export function isBunInstalled() {
     return isExtensionInstalled("oven.bun-vscode");
 }
 
+// The Firefox adapter is contributed by this extension rather than VS Code's built-in js-debug.
+export const firefoxDebuggerExtensionId = "firefox-devtools.vscode-firefox-debug";
+
+export function isFirefoxDebuggerInstalled() {
+    return isExtensionInstalled(firefoxDebuggerExtensionId);
+}
+
 export function getSupportedCapabilities(): Capabilities {
     const capabilities: Capabilities = ['prompting', 'baseline.v1', 'secret-prompts.v1', 'file-pickers.v1', 'build-dotnet-using-cli'];
 

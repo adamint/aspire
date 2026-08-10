@@ -624,6 +624,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       this.createDebugAdapterTrackerCore(debugConfig.type);
 
       let resolved = false;
+      let pendingLateBrowserStop = false;
       const disposable = vscode.debug.onDidStartDebugSession(session => {
         if (session.configuration.runId === debugConfig.runId) {
           extensionLogOutputChannel.info(`Debug session started: ${session.name} (run id: ${session.configuration.runId})`);
@@ -651,10 +652,16 @@ export class AspireDebugSession implements vscode.DebugAdapter {
             }
 
             extensionLogOutputChannel.info(`Stopping debug session: ${session.name} (run id: ${session.configuration.runId})`);
-            stopSessionPromise = vscode.debug.stopDebugging(session);
-
-            // Run any cleanup registered by resource-type extensions (e.g. func host for Azure Functions)
-            cleanupRun(debugConfig.runId);
+            stopSessionPromise = Promise.resolve(vscode.debug.stopDebugging(session)).then(
+              () => {
+                // Run cleanup only after VS Code confirms the session stopped. A failed stop keeps
+                // both the DCP run and its resource-specific cleanup available for a retry.
+                cleanupRun(debugConfig.runId);
+              },
+              error => {
+                stopSessionPromise = undefined;
+                throw error;
+              });
 
             return stopSessionPromise;
           };
@@ -667,14 +674,25 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
           if (this._disposed) {
             extensionLogOutputChannel.info(`Stopping debug session that started after Aspire session disposal: ${session.name} (run id: ${session.configuration.runId})`);
-            resolved = true;
 
             if (browserTermination) {
+              pendingLateBrowserStop = true;
               void browserTermination.stop().then(
-                () => resolve(undefined),
-                () => resolve(vsCodeDebugSession));
+                () => {
+                  if (!resolved) {
+                    resolved = true;
+                    resolve(undefined);
+                  }
+                },
+                () => {
+                  if (!resolved) {
+                    resolved = true;
+                    resolve(vsCodeDebugSession);
+                  }
+                });
             }
             else {
+              resolved = true;
               stopSession();
               resolve(undefined);
             }
@@ -731,7 +749,11 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       setTimeout(() => {
         if (!resolved) {
           disposable.dispose();
-          cleanupRun(debugConfig.runId);
+          // A hung late browser stop still has its root-session listener armed, so leave cleanup
+          // registered for a later natural termination rather than treating the stop as confirmed.
+          if (!pendingLateBrowserStop) {
+            cleanupRun(debugConfig.runId);
+          }
           resolved = true;
           resolve(undefined);
         }

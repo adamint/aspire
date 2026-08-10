@@ -45,7 +45,10 @@ export class BrowserDebugSessionTermination {
     }
 
     stopAndDisposeOnFailure(): void {
-        void this.stop().catch(() => this._terminationListener.dispose());
+        // A failed explicit stop can still be followed by a natural root-session termination.
+        // Keep observing that event while handling the rejection so disposal cannot create an
+        // unhandled promise or suppress the eventual DCP notification and cleanup.
+        void this.stop().catch(() => { });
     }
 
     private async stopCore(): Promise<void> {

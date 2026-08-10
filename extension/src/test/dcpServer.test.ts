@@ -39,6 +39,49 @@ suite('Aspire DCP Server Tests', () => {
         assert.strictEqual(firstDebugSession.stopSession.calledOnce, true);
         assert.strictEqual(secondDebugSession.stopSession.calledOnce, true);
     });
+
+    test('times out a hung stop attempt while retaining and observing the run', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const runId = 'run-1';
+        const stop = deferred<void>();
+        const debugSession = createResourceDebugSession('resource-session-1', sinon.stub().returns(stop.promise));
+        const runsBySession = new Map<string, AspireResourceDebugSession[]>([
+            [runId, [debugSession]]
+        ]);
+
+        const result = stopRunSession(runId, runsBySession);
+        const rejection = assert.rejects(result, /Timed out stopping debug session/);
+        await clock.tickAsync(10_000);
+
+        await rejection;
+        assert.strictEqual(runsBySession.has(runId), true);
+        assert.strictEqual(debugSession.stopSession.calledOnce, true);
+
+        stop.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        assert.strictEqual(runsBySession.has(runId), false);
+    });
+
+    test('observes a stop attempt that rejects after timing out', async () => {
+        const clock = sinon.useFakeTimers({ shouldClearNativeTimers: true });
+        const runId = 'run-1';
+        const stop = deferred<void>();
+        const runsBySession = new Map<string, AspireResourceDebugSession[]>([
+            [runId, [createResourceDebugSession('resource-session-1', sinon.stub().returns(stop.promise))]]
+        ]);
+
+        const rejection = assert.rejects(stopRunSession(runId, runsBySession), /Timed out stopping debug session/);
+        await clock.tickAsync(10_000);
+        await rejection;
+
+        stop.reject(new Error('late stop failure'));
+        await Promise.resolve();
+        await Promise.resolve();
+
+        assert.strictEqual(runsBySession.has(runId), true);
+    });
 });
 
 type StopSessionStub = sinon.SinonStub;
@@ -57,4 +100,15 @@ function createResourceDebugSession(id: string, stopSession: StopSessionStub): A
         } as vscode.DebugSession,
         stopSession,
     };
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void; reject(error: Error): void } {
+    let resolve!: (value: T) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<T>((promiseResolve, promiseReject) => {
+        resolve = promiseResolve;
+        reject = promiseReject;
+    });
+
+    return { promise, resolve, reject };
 }
