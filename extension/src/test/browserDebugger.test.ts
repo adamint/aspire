@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import { AspireDebugSession } from '../debugger/AspireDebugSession';
 import { browserDebuggerExtension } from '../debugger/languages/browser';
 import { AspireResourceExtendedDebugConfiguration, BrowserLaunchConfiguration } from '../dcp/types';
-import { unsupportedBrowserDebugTarget } from '../loc/strings';
+import { unsupportedBrowserDebugTarget, unsupportedBrowserDebugTargetWithoutUrl } from '../loc/strings';
 
 suite('Browser Debugger Tests', () => {
     const fakeAspireDebugSession = {} as AspireDebugSession;
@@ -38,13 +38,19 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(debugConfig.webRoot, '/workspace/frontend/src');
     });
 
-    // js-debug resolves source maps against any non-empty webRoot, so a whitespace-only value is
-    // just as invalid a source-map root as an empty one - it is only truthy.
+    // js-debug has no way to express "no web root": it defaults webRoot to '${workspaceFolder}'
+    // whenever a launch configuration omits the property. Omitting it therefore opts into that
+    // documented default rather than disabling source-map resolution, and that is the intended
+    // behaviour - forwarding the blank string instead makes js-debug resolve source maps against
+    // '', which roots them at the filesystem root rather than at the workspace.
     for (const blankWebRoot of ['', '   ']) {
-        test(`omits a blank web root ${JSON.stringify(blankWebRoot)} instead of forwarding it to js-debug`, async () => {
+        test(`omits a blank web root ${JSON.stringify(blankWebRoot)} so js-debug applies its workspace-folder default`, async () => {
             const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173', web_root: blankWebRoot });
 
             assert.strictEqual('webRoot' in debugConfig, false);
+            // The property is absent, not present-and-blank. js-debug only applies its default for
+            // an absent property, so a `webRoot: undefined` would still defeat it.
+            assert.strictEqual(debugConfig.webRoot, undefined);
         });
     }
 
@@ -84,13 +90,18 @@ suite('Browser Debugger Tests', () => {
             });
     });
 
-    // Nothing guarantees the AppHost sends a URL. The run ID is a poor identifier, but it is the
-    // only one left, and it is what the surrounding logs are keyed by.
-    test('falls back to the run ID when the browser resource has no URL', async () => {
+    // The DCP run_session handler that turns this rejection into an HTTP 500 already prefixes the
+    // message with "Failed to start debug session for run ID <runId>", so repeating the run ID here
+    // would print it twice. Without a URL the message drops the identifier clause entirely rather
+    // than rendering an empty one.
+    test('omits the resource clause when the browser resource has no URL', async () => {
         await assert.rejects(
             () => createConfiguration({ type: 'browser', browser: 'firefox' }),
             (err: Error) => {
-                assert.strictEqual(err.message, unsupportedBrowserDebugTarget('firefox', '1', 'msedge, chrome'));
+                assert.strictEqual(err.message, unsupportedBrowserDebugTargetWithoutUrl('firefox', 'msedge, chrome'));
+                assert.ok(
+                    !err.message.includes('1'),
+                    `Message must not repeat the run ID the DCP error response already carries: ${err.message}`);
                 return true;
             });
     });

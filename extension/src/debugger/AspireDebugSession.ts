@@ -6,7 +6,7 @@ import { AspireResourceExtendedDebugConfiguration, AspireResourceDebugSession, E
 import { extensionLogOutputChannel } from "../utils/logging";
 import AspireDcpServer, { generateDcpIdPrefix } from "../dcp/AspireDcpServer";
 import { spawnCliProcess } from "./languages/cli";
-import { disconnectingFromSession, launchingWithAppHost, launchingWithDirectory, processExceptionOccurred, processExitedWithCode, aspireDashboard, appHostSessionTerminated, debugSessionsFailedToStop } from "../loc/strings";
+import { disconnectingFromSession, launchingWithAppHost, launchingWithDirectory, processExceptionOccurred, processExitedWithCode, aspireDashboard, appHostSessionTerminated, debugSessionsFailedToStop, debugSessionStopTimedOut } from "../loc/strings";
 import { projectDebuggerExtension } from "./languages/dotnet";
 import { AnsiColors } from "../utils/AspireTerminalProvider";
 import { applyTextStyle } from "../utils/strings";
@@ -53,6 +53,18 @@ export function getLoggableDebugConfiguration(debugConfig: AspireResourceExtende
 export class AspireDebugSession implements vscode.DebugAdapter {
   private static readonly _mauiDebugStartMaxAttempts = 3;
   private static readonly _mauiDebugStartRetryDelayMs = 5000;
+  /**
+   * Wall-clock budget for the whole ordered shutdown, covering the resource stops, the AppHost stop
+   * and the Aspire parent stop together.
+   *
+   * The shutdown is reachable from `AppDomain.CurrentDomain.ProcessExit` in the CLI
+   * (`ExtensionBackchannel.StopDebuggingAsync`), which blocks the exiting process on the RPC call
+   * with `CancellationToken.None`. `vscode.debug.stopDebugging()` resolves only once the adapter
+   * acknowledges, so a single wedged debug adapter would otherwise hang the CLI's exit forever.
+   * A budget shared by all three phases keeps that exit bounded no matter how many resources are
+   * involved, where per-session timeouts would scale the worst case with the resource count.
+   */
+  private static readonly _stopSessionsTimeoutMs = 10000;
   private readonly _onDidSendMessage = new EventEmitter<any>();
   private readonly _onDidSendDebugConsoleOutput = new EventEmitter<AspireDebugConsoleOutputEvent>();
   private _messageSeq = 1;
@@ -76,7 +88,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   // lifecycle cleanup that always has to run; these stop a session this Aspire session owns, and
   // while an ordered shutdown is in flight that shutdown owns them. Without the split, the
   // dispose() that ends the ordered shutdown would stop every one of these sessions a second time.
-  private readonly _ownedSessionStops: vscode.Disposable[] = [];
+  private readonly _ownedSessionStops: OwnedSessionStop[] = [];
   private _disposed = false;
   // Set as soon as stopDebugging() begins, before it snapshots the resource sessions. Resource
   // starts that land during the shutdown's awaits must not be registered as ordinary sessions:
@@ -84,8 +96,13 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   // the Aspire parent had already been stopped, which is the orphaned-resource ordering the
   // shutdown exists to prevent.
   private _stopping = false;
-  // The in-flight (or completed) ordered shutdown, so overlapping stop requests share one.
+  // The in-flight (or successfully completed) ordered shutdown, so overlapping stop requests share
+  // one. Cleared again if that attempt rejects - see stopDebugging().
   private _stopPromise: Promise<void> | undefined;
+  // Set once the AppHost stop has been confirmed, so a retry after a failed shutdown does not stop
+  // it a second time. Kept separate from _appHostDebugSession, which the terminate handler still
+  // needs to identify the session.
+  private _appHostStopped = false;
   private _parentStopPromise: Thenable<void> | undefined;
   // Timestamp for the `debug/apphost/end` duration measurement. Captured the first
   // time we observe a `launch` request so it covers the actual user-visible session
@@ -148,9 +165,45 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // stopping every session twice and handing the two callers different failure lists for the
     // same shutdown. Memoizing the whole operation gives every caller the one result, the same way
     // the parent stop is memoized.
-    this._stopPromise ??= this.stopDebuggingCore();
+    if (this._stopPromise) {
+      return this._stopPromise;
+    }
 
-    return this._stopPromise;
+    // Nothing left to stop. Reached when the session was disposed without an ordered shutdown (the
+    // pure dispose() path already asked every session it owned to stop) or when a previous attempt
+    // stopped everything. Re-running the shutdown here would call stopSession() on sessions that
+    // have already terminated, and VS Code has since reused none of them, so it is a no-op at best
+    // and a spurious failure at worst.
+    if (!this.hasSessionsToStop) {
+      return Promise.resolve();
+    }
+
+    const attempt = this.stopDebuggingCore();
+    this._stopPromise = attempt;
+
+    // A rejected shutdown left something running. Caching that rejection forever would make every
+    // later attempt rethrow the original failure without retrying, so drop it and let the next
+    // caller try again against whatever is still up. Successful attempts stay cached, which is what
+    // makes repeat calls idempotent. The handler also marks `attempt` as handled, so the rejection
+    // this method returns to its caller cannot surface as an unhandled rejection when a caller
+    // (such as the fire-and-forget DAP disconnect path) logs it through a different reference.
+    attempt.catch(() => {
+      if (this._stopPromise === attempt) {
+        this._stopPromise = undefined;
+      }
+    });
+
+    return attempt;
+  }
+
+  /**
+   * Whether any session this Aspire session owns has yet to be asked to stop. Drives both the
+   * post-disposal no-op and the retry-after-failure path in {@link stopDebugging}.
+   */
+  private get hasSessionsToStop(): boolean {
+    return this._resourceDebugSessions.length > 0
+      || (this._appHostDebugSession !== undefined && !this._appHostStopped)
+      || this._parentStopPromise === undefined;
   }
 
   private async stopDebuggingCore(): Promise<void> {
@@ -176,10 +229,12 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       // The reasons go in the message as well as in `errors`. Nothing between here and the user
       // reads `errors`: the RPC boundary in interactionService.ts logs and shows `err.message`
       // alone, so a message of just "N debug sessions failed to stop." would report that something
-      // failed while discarding what - the loss this shutdown exists to stop.
+      // failed while discarding what - the loss this shutdown exists to stop. The reason list is a
+      // placeholder in the localized string rather than something appended to it, so a translation
+      // controls where the list lands in the sentence.
       throw new AggregateError(
         stopFailures,
-        `${debugSessionsFailedToStop(stopFailures.length)} ${stopFailures.map(describeStopFailure).join('; ')}`);
+        debugSessionsFailedToStop(stopFailures.length, stopFailures.map(describeStopFailure).join('; ')));
     }
   }
 
@@ -188,6 +243,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
    * instead of throwing, so the caller can finish the shutdown before surfacing them.
    */
   private async stopAllSessions(): Promise<unknown[]> {
+    // One deadline for the whole shutdown rather than one per stop, so the worst case does not grow
+    // with the number of resources. See _stopSessionsTimeoutMs for why this has to be bounded.
+    const deadline = Date.now() + AspireDebugSession._stopSessionsTimeoutMs;
+
     // A resource launched under a debugger can keep the AppHost shutdown in flight until its debug
     // session exits. Stop those sessions before the AppHost to avoid waiting on a process whose
     // debugger would otherwise only be stopped later by dispose().
@@ -197,29 +256,77 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // and reintroduce the orphaned-resource behavior this ordering exists to prevent - on exactly
     // the path where a resource is most likely to be left behind. The rejection is kept and
     // rethrown after the AppHost and the synthetic Aspire parent have been stopped.
-    const results = await Promise.allSettled(resourceDebugSessions.map(session => startStop(() => session.stopSession())));
+    const results = await Promise.allSettled(resourceDebugSessions.map(
+      session => this.stopWithinBudget(() => session.stopSession(), session.session.name, deadline)));
     const stopFailures: unknown[] = results
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
       .map(result => result.reason);
 
+    // Forget the sessions that confirmed a stop. A retry after a failed shutdown then targets only
+    // what is still running, instead of calling stopSession() again on sessions VS Code has already
+    // torn down.
+    const unstoppedResourceSessions = new Set(resourceDebugSessions.filter((_, index) => results[index].status === 'rejected'));
+    this._resourceDebugSessions = this._resourceDebugSessions.filter(
+      session => unstoppedResourceSessions.has(session) || session.id === this._appHostDebugSession?.id);
+
     // Global/E2E stop requests target the synthetic Aspire session. Stop the real AppHost session
     // explicitly before the parent so we do not rely on VS Code cascading termination before the
     // AppHost registry refresh runs.
-    try {
-      await this._appHostDebugSession?.stopSession();
-    }
-    catch (err) {
-      stopFailures.push(err);
+    if (this._appHostDebugSession && !this._appHostStopped) {
+      const appHostDebugSession = this._appHostDebugSession;
+      try {
+        await this.stopWithinBudget(() => appHostDebugSession.stopSession(), appHostDebugSession.session.name, deadline);
+        this._appHostStopped = true;
+        this._resourceDebugSessions = this._resourceDebugSessions.filter(session => session.id !== appHostDebugSession.id);
+      }
+      catch (err) {
+        stopFailures.push(err);
+      }
     }
 
     try {
-      await this.stopParentDebugSessionOnce();
+      await this.stopWithinBudget(() => this.stopParentDebugSessionOnce(), this._session.name, deadline);
     }
     catch (err) {
       stopFailures.push(err);
     }
 
     return stopFailures;
+  }
+
+  /**
+   * Starts a stop and gives up waiting for it once `deadline` passes, rejecting with a message that
+   * names the session.
+   *
+   * The stop request is always issued before the race, so a session whose adapter is slow to
+   * acknowledge is still being torn down by VS Code after we stop waiting for it. Giving up does
+   * mean the AppHost stop can begin while a wedged resource stop is outstanding, which is the one
+   * case where the resource-before-AppHost ordering is not honoured. That is the deliberate
+   * trade-off for the shutdown being reachable from the CLI's process-exit handler: an unbounded
+   * wait there hangs the exiting process indefinitely. The timeout is reported through the same
+   * `stopFailures` list as an ordinary rejection, so it is surfaced rather than swallowed.
+   */
+  private stopWithinBudget(operation: () => Thenable<void>, sessionName: string, deadline: number): Promise<void> {
+    const stop = startStop(operation);
+    const remainingMs = Math.max(0, deadline - Date.now());
+
+    return new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(debugSessionStopTimedOut(sessionName, Math.round(AspireDebugSession._stopSessionsTimeoutMs / 1000)))),
+        remainingMs);
+
+      // Whichever way this settles the timer has to be cleared: an outstanding timer keeps the
+      // event loop alive, and the shutdown runs while the extension host may be exiting.
+      stop.then(
+        value => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        err => {
+          clearTimeout(timer);
+          reject(err);
+        });
+    });
   }
 
   /**
@@ -232,6 +339,19 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     return this._disposed || this._stopping;
   }
 
+  /**
+   * Runs the ordered shutdown for callers that cannot await it - DAP request handlers that owe VS
+   * Code a prompt response, and process/session termination callbacks that return void. The
+   * failures are logged rather than rethrown because there is no caller left to receive them, and
+   * an unobserved rejection here would surface as an unhandled promise rejection in the extension
+   * host.
+   */
+  private stopDebuggingInBackground(reason: string): void {
+    startStop(() => this.stopDebugging()).catch(err => {
+      extensionLogOutputChannel.error(`Ordered shutdown triggered by ${reason} failed: ${describeStopFailure(err)}`);
+    });
+  }
+
   private stopParentDebugSessionOnce(): Thenable<void> {
     if (this._parentStopPromise) {
       return this._parentStopPromise;
@@ -241,9 +361,19 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // the AppHost termination event. Record the request before calling VS Code
     // so the Aspire parent has a single stop owner in either ordering, and
     // return the original Thenable so callers still wait for the in-flight stop.
-    this._parentStopPromise = vscode.debug.stopDebugging(this._session);
+    const parentStop = Promise.resolve(vscode.debug.stopDebugging(this._session));
+    this._parentStopPromise = parentStop;
 
-    return this._parentStopPromise;
+    // A rejected parent stop left the synthetic session up, so forget it and let a retry ask again
+    // rather than replaying the original failure forever. This also keeps hasSessionsToStop honest:
+    // an undefined _parentStopPromise means the parent has not been stopped.
+    parentStop.catch(() => {
+      if (this._parentStopPromise === parentStop) {
+        this._parentStopPromise = undefined;
+      }
+    });
+
+    return parentStop;
   }
 
   handleMessage(message: any): void {
@@ -273,7 +403,17 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
     else if (message.command === 'disconnect' || message.command === 'terminate') {
       this.sendMessageWithEmoji("🔌", disconnectingFromSession);
-      this.dispose();
+      // This is the dominant user Stop path - the red square on the debug toolbar, "Stop All
+      // Sessions", and the window closing all arrive here - so it has to run the same ordered
+      // shutdown as the CLI's stopDebugging RPC. dispose() alone fires _ownedSessionStops in
+      // registration order, and the AppHost registers first because it is the first session this
+      // Aspire session starts, so it would be stopped ahead of the resources it owns.
+      //
+      // Deliberately not awaited. The shutdown stops the synthetic Aspire parent, which makes VS
+      // Code send this very `disconnect` request; awaiting it before responding would deadlock the
+      // two against each other. The re-entrant call is safe because stopDebugging() is single-
+      // flight: the second caller joins the in-flight shutdown instead of starting another.
+      this.stopDebuggingInBackground('DAP disconnect/terminate');
 
       this.sendEvent({
         type: 'response',
@@ -520,8 +660,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
             stderrBuffer = '';
           }
           this.sendMessageWithEmoji("🔚", processExitedWithCode(code ?? '?'));
-          // if the process failed, we want to stop the debug session
-          this.dispose();
+          // The CLI process is gone but the resource debug sessions it asked us to start are not,
+          // so run the ordered shutdown rather than dispose(), which would stop the AppHost entry
+          // ahead of them.
+          this.stopDebuggingInBackground('Aspire CLI process exit');
         },
         workingDirectory: workingDirectory,
         debugSessionId: this.debugSessionId,
@@ -646,11 +788,22 @@ export class AspireDebugSession implements vscode.DebugAdapter {
           // All other cases (user stop, process crash/exit) just dispose.
           const shouldRestart = this._appHostRestartRequested;
           const config = this.configuration;
-          this.dispose();
-
+          // The AppHost is already gone, but its resources are not: run the ordered shutdown so
+          // they are stopped before the AppHost entry and the Aspire parent, and so a resource that
+          // refuses to stop is reported rather than silently dropped by dispose().
           if (shouldRestart) {
+            // Awaited only on the restart path, so the replacement session is not started while the
+            // outgoing one is still tearing its resources down. The wait is bounded by
+            // _stopSessionsTimeoutMs.
+            await this.stopDebugging().catch(err => {
+              extensionLogOutputChannel.error(`Ordered shutdown before AppHost restart failed: ${describeStopFailure(err)}`);
+            });
+
             extensionLogOutputChannel.info('AppHost restart requested, restarting Aspire debug session');
             await vscode.debug.startDebugging(undefined, config);
+          }
+          else {
+            this.stopDebuggingInBackground('AppHost session termination');
           }
         }
       });
@@ -675,7 +828,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // dispose() that ends the shutdown - after the AppHost and the Aspire parent had already been
     // stopped, which is the orphaned-resource ordering the shutdown exists to prevent.
     if (this.isShuttingDown) {
-      resourceDebugSession.stopSession();
+      stopSessionInBackground(() => resourceDebugSession.stopSession(), `late-registered resource session for run ${debugConfig.runId}`);
       return undefined;
     }
 
@@ -711,7 +864,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
     this._resourceDebugSessions.push(resourceDebugSession);
     this._ownedSessionStops.push({
-      dispose: resourceDebugSession.stopSession
+      name: resourceDebugSession.session.name,
+      // Wrapped rather than passed as a bare method reference so `stopSession` keeps its receiver.
+      stop: () => resourceDebugSession.stopSession()
     });
 
     return resourceDebugSession;
@@ -731,7 +886,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
           if (this.isShuttingDown) {
             extensionLogOutputChannel.info(`Stopping debug session that started after Aspire session disposal: ${session.name} (run id: ${session.configuration.runId})`);
-            vscode.debug.stopDebugging(session);
+            stopSessionInBackground(() => vscode.debug.stopDebugging(session), `late-started debug session ${session.name}`);
             cleanupRun(debugConfig.runId);
             resolved = true;
             resolve(undefined);
@@ -761,7 +916,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
           this._resourceDebugSessions.push(vsCodeDebugSession);
           this._ownedSessionStops.push({
-            dispose: disposalFunction
+            name: session.name,
+            stop: disposalFunction
           });
 
           resolved = true;
@@ -948,8 +1104,14 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // shutdown while one is in flight: stopDebugging() stops those same sessions resources-first
     // and disposes afterwards, so repeating the stops here would stop every session a second time.
     if (this._stopPromise === undefined) {
-      this._ownedSessionStops.forEach(ownedSessionStop => ownedSessionStop.dispose());
-      void this.stopParentDebugSessionOnce();
+      this._ownedSessionStops.forEach(ownedSessionStop => stopSessionInBackground(ownedSessionStop.stop, ownedSessionStop.name));
+      stopSessionInBackground(() => this.stopParentDebugSessionOnce(), this._session.name);
+
+      // Every owned session has now been asked to stop, so a stopDebugging() that arrives after
+      // this disposal has nothing left to order. Forgetting them keeps that call a no-op instead
+      // of re-stopping sessions VS Code has already torn down.
+      this._resourceDebugSessions = [];
+      this._appHostStopped = true;
     }
 
     this._trackedDebugAdapters = [];
@@ -1101,6 +1263,30 @@ function startStop<T>(operation: () => Thenable<T>): Promise<T> {
   catch (err) {
     return Promise.reject(err);
   }
+}
+
+/**
+ * Asks a session to stop without waiting for it, for the paths that cannot await: the late-start
+ * handlers, which stop a session that arrived after the shutdown snapshot, and dispose(), whose
+ * `Disposable.dispose()` contract returns void.
+ *
+ * The stop is still a `Thenable` and can reject - `vscode.debug.stopDebugging()` rejects for a
+ * session VS Code no longer knows about - and dropping it produced an unhandled promise rejection
+ * in the extension host with no indication of which session failed.
+ */
+function stopSessionInBackground(operation: () => Thenable<unknown>, description: string): void {
+  startStop(operation).catch(err => {
+    extensionLogOutputChannel.warn(`Failed to stop ${description}: ${describeStopFailure(err)}`);
+  });
+}
+
+/**
+ * A stop for a debug session this Aspire session started, kept alongside the session name so the
+ * disposal path can say which session failed to stop.
+ */
+interface OwnedSessionStop {
+  name: string;
+  stop: () => Thenable<void>;
 }
 
 export function buildAspireCommandArgs(command: string, commandArgs: string[], extensionArgs: string[]): string[] {

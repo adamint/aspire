@@ -1,5 +1,5 @@
 import { AspireResourceExtendedDebugConfiguration, ExecutableLaunchConfiguration, isBrowserLaunchConfiguration } from "../../dcp/types";
-import { browserDisplayName, browserLabel, invalidLaunchConfiguration, unsupportedBrowserDebugTarget } from "../../loc/strings";
+import { browserDisplayName, browserLabel, invalidLaunchConfiguration, unsupportedBrowserDebugTarget, unsupportedBrowserDebugTargetWithoutUrl } from "../../loc/strings";
 import { extensionLogOutputChannel } from "../../utils/logging";
 import { ResourceDebuggerExtension } from "../debuggerExtensions";
 
@@ -49,24 +49,40 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
         const debugType = browserDebugTypesByName.get(browser);
         if (!debugType) {
             extensionLogOutputChannel.warn(`No built-in js-debug adapter is registered for browser '${browser}'.`);
-            // The toast this becomes only carries the message, and a run ID means nothing to a
-            // user staring at several browser resources. The URL is the one field of a browser
-            // launch configuration a user recognises; fall back to the run ID when the AppHost
-            // sent no URL, which is the only identifier left.
-            const resource = launchConfig.url?.trim() || debugConfiguration.runId;
-            throw new Error(unsupportedBrowserDebugTarget(browser, resource, [...browserDebugTypesByName.keys()].join(', ')));
+            // The toast this becomes only carries the message, and the URL is the one field of a
+            // browser launch configuration a user recognises. There is deliberately no run-ID
+            // fallback: the DCP `run_session` handler that turns this into an HTTP 500 already
+            // prefixes the message with "Failed to start debug session for run ID <runId>", so
+            // repeating the run ID here would print it twice and add nothing.
+            const url = launchConfig.url?.trim();
+            const supportedBrowsers = [...browserDebugTypesByName.keys()].join(', ');
+            throw new Error(url
+                ? unsupportedBrowserDebugTarget(browser, url, supportedBrowsers)
+                : unsupportedBrowserDebugTargetWithoutUrl(browser, supportedBrowsers));
         }
 
         debugConfiguration.type = debugType;
         debugConfiguration.request = 'launch';
         debugConfiguration.url = launchConfig.url;
-        // The hosting side defaults web_root to an empty string when the resource has no web root.
-        // js-debug treats any non-empty webRoot as a real path and resolves source maps against it,
-        // so a whitespace-only value is as broken as an empty one - it just happens to be truthy.
-        // Trim only to decide whether the value is blank; forward the original. Leading and trailing
-        // spaces are valid characters in a POSIX path, so trimming the forwarded value would silently
-        // redirect a web root such as '/workspace/frontend ' to a different directory. This matches
-        // how `browser` above is handled: validate what was sent, relay it unchanged.
+        // The hosting side defaults web_root to an empty string when the resource has no web root,
+        // and a whitespace-only value is as broken as an empty one - it just happens to be truthy.
+        //
+        // There is no value that makes js-debug ignore webRoot: it defaults the property to
+        // '${workspaceFolder}' whenever the launch configuration omits it, so "no web root" is not
+        // expressible.
+        // https://github.com/microsoft/vscode-js-debug/blob/main/src/configuration.ts
+        //
+        // Omitting it therefore does not disable source-map resolution; it opts into that
+        // documented '${workspaceFolder}' default, which is the intended behaviour here. The
+        // alternative - forwarding the blank string - is strictly worse: js-debug takes webRoot as
+        // a real path, and resolving source maps against '' produces paths rooted at the filesystem
+        // root rather than at the workspace.
+        //
+        // Trim only to decide whether the value is blank; forward the original. Leading and
+        // trailing spaces are valid characters in a POSIX path, so trimming the forwarded value
+        // would silently redirect a web root such as '/workspace/frontend ' to a different
+        // directory. This matches how `browser` above is handled: validate what was sent, relay it
+        // unchanged.
         if (launchConfig.web_root?.trim()) {
             debugConfiguration.webRoot = launchConfig.web_root;
         }
