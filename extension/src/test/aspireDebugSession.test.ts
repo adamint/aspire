@@ -90,6 +90,34 @@ suite('AspireDebugSession tests', () => {
         await firstRequest;
     });
 
+    test('extension shutdown waits for a CLI RPC client that connects after the stop request', async () => {
+        let onNewConnection!: (client: { debugSessionId: string; stopCli: () => Promise<void> }) => void;
+        const stopCli = sinon.stub().resolves();
+        const cliProcess = createFakeCliProcess(4320);
+        sinon.stub(cliModule, 'spawnCliProcess').returns(cliProcess);
+        const aspireDebugSession = createSessionForSpawn(
+            async () => '/usr/local/bin/aspire',
+            () => { },
+            callback => {
+                onNewConnection = callback;
+                return { dispose: sinon.stub() };
+            });
+
+        await aspireDebugSession.spawnAspireCommand(['run'], '/workspace', false, 'aspire run');
+
+        const stopRequest = aspireDebugSession.requestCliStopForExtensionShutdown();
+        let stopSettled = false;
+        void stopRequest.then(() => { stopSettled = true; });
+        await Promise.resolve();
+
+        assert.strictEqual(stopSettled, false);
+
+        onNewConnection({ debugSessionId: aspireDebugSession.debugSessionId, stopCli });
+        await stopRequest;
+
+        sinon.assert.calledOnce(stopCli);
+    });
+
     test('spawns the Aspire CLI as a process-group leader and retains the child process', async () => {
         const cliProcess = createFakeCliProcess(4321);
         const spawnStub = sinon.stub(cliModule, 'spawnCliProcess').returns(cliProcess);
@@ -333,9 +361,10 @@ suite('AspireDebugSession tests', () => {
 
         const spawning = aspireDebugSession.spawnAspireCommand(['run'], '/workspace', false, 'aspire run');
         await cliPathRequestObserved;
-        await aspireDebugSession.requestCliStopForExtensionShutdown();
+        const stopRequest = aspireDebugSession.requestCliStopForExtensionShutdown();
         releaseCliPath('/usr/local/bin/aspire');
         await spawning;
+        await stopRequest;
 
         // The extension context can request shutdown before it has disposed this session. The
         // session must still remember that no later async continuation is allowed to create a
@@ -1768,7 +1797,8 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
     function createSessionForSpawn(
         getAspireCliExecutablePath: () => Promise<string> = async () => '/usr/local/bin/aspire',
-        removeAspireDebugSession: (session: AspireDebugSession) => void = () => { }): AspireDebugSession {
+        removeAspireDebugSession: (session: AspireDebugSession) => void = () => { },
+        onNewConnection: (callback: (client: any) => void) => vscode.Disposable = () => ({ dispose: () => { } })): AspireDebugSession {
         const parentDebugSession = {
             id: 'aspire-session',
             configuration: {},
@@ -1776,7 +1806,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
 
         return new AspireDebugSession(
             parentDebugSession,
-            { onNewConnection: () => ({ dispose: () => { } }) } as any,
+            { onNewConnection } as any,
             { recordAppHostProcessExit: () => { } } as any,
             {
                 getAspireCliExecutablePath,

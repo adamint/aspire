@@ -84,6 +84,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private _removedFromExtensionContext = false;
   private _parentStopPromise: Thenable<void> | undefined;
   private _cliStopPromise: Promise<void> | undefined;
+  private _pendingCliStopWithoutRpcClient: { resolve: () => void; reject: (reason: unknown) => void } | undefined;
+  private _stopCliWhenRpcClientConnects: ((client: ICliRpcClient) => void) | undefined;
   private _cliProcess: ChildProcessWithoutNullStreams | undefined;
   private _cliTerminationTimer: ReturnType<typeof setTimeout> | undefined;
   private _cliProcessTreeTerminationAttempted = false;
@@ -156,11 +158,24 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
   requestCliStopForExtensionShutdown(): Promise<void> {
     this._extensionShutdownRequested = true;
-    if (!this._rpcClient) {
-      return Promise.resolve();
+    if (this._cliStopPromise) {
+      return this._cliStopPromise;
     }
 
-    this._cliStopPromise ??= this._rpcClient.stopCli();
+    if (!this._rpcClient) {
+      this._cliStopPromise = new Promise<void>((resolve, reject) => {
+        this._pendingCliStopWithoutRpcClient = { resolve, reject };
+        this._stopCliWhenRpcClientConnects = client => {
+          client.stopCli().then(resolve, reject).finally(() => {
+            this._pendingCliStopWithoutRpcClient = undefined;
+          });
+        };
+      });
+
+      return this._cliStopPromise;
+    }
+
+    this._cliStopPromise = this._rpcClient.stopCli();
     return this._cliStopPromise;
   }
 
@@ -248,6 +263,13 @@ export class AspireDebugSession implements vscode.DebugAdapter {
 
     this._removedFromExtensionContext = true;
     this._removeAspireDebugSession(this);
+  }
+
+  private completePendingCliStopWithoutRpcClient(): void {
+    this._stopCliWhenRpcClientConnects = undefined;
+    const pendingStop = this._pendingCliStopWithoutRpcClient;
+    this._pendingCliStopWithoutRpcClient = undefined;
+    pendingStop?.resolve();
   }
 
   private stopParentDebugSessionOnce(): Thenable<void> {
@@ -475,6 +497,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       if (client.debugSessionId === this.debugSessionId) {
         this._rpcClient = client;
         disposable.dispose();
+        this._stopCliWhenRpcClientConnects?.(client);
+        this._stopCliWhenRpcClientConnects = undefined;
       }
     });
 
@@ -519,6 +543,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
       // would not even die with the extension host.
       extensionLogOutputChannel.info(`Skipping Aspire CLI launch for disposed or shutting-down debug session ${this.debugSessionId}.`);
       disposable.dispose();
+      this.completePendingCliStopWithoutRpcClient();
       return;
     }
 
@@ -551,6 +576,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
           else {
             this.abandonCliProcessTree();
           }
+          this.completePendingCliStopWithoutRpcClient();
           this._dcpServer.recordAppHostProcessExit(this.debugSessionId, code);
           // Flush any partial line left in either buffer so trailing output isn't lost.
           if (stdoutBuffer.length > 0) {
