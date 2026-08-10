@@ -4,6 +4,7 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using Aspire.Cli.Telemetry;
+using Aspire.Cli.Utils;
 using Microsoft.Extensions.Logging;
 using Semver;
 
@@ -20,11 +21,113 @@ internal sealed class NpmRunner(IEnvironment environment, ILogger<NpmRunner> log
     /// npm configuration.
     /// </summary>
     private const string InternalRegistry = "https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/";
+    private const string LatestDistTag = "latest";
+    private static readonly TimeSpan s_metadataLookupTimeout = TimeSpan.FromSeconds(10);
 
     private readonly Lazy<string?> _npmPath = new(() => PathLookupHelper.FindFullPathFromPath("npm"));
 
     /// <inheritdoc />
     public bool IsAvailable => _npmPath.Value is not null;
+
+    /// <inheritdoc />
+    public async Task<SemVersion> GetLatestVersionAsync(string packageName, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(packageName);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var npmPath = FindNpmPath();
+        if (npmPath is null)
+        {
+            throw new InvalidOperationException("npm is not installed or not found in PATH.");
+        }
+
+        var packageSpecifier = NpmPackageInfo.FormatPackageSpecifier(packageName, LatestDistTag);
+        logger.LogDebug("Resolving npm package {PackageSpecifier} using global npm configuration.", packageSpecifier);
+
+        // `--global` applies the same registry, proxy, certificate, and authentication configuration
+        // as the update command while excluding a project .npmrc. Running from an isolated directory
+        // also prevents unrelated project discovery from affecting any other npm behavior.
+        var tempDir = CreateIsolatedTempDirectory();
+
+        try
+        {
+            var args = new[]
+            {
+                "view",
+                packageSpecifier,
+                "version",
+                "--global",
+                "--json=false",
+                "--color=false",
+                "--loglevel=error"
+            };
+            var startInfo = CreateNpmProcessStartInfo(npmPath, args, tempDir, environment);
+            using var activity = profilingTelemetry.StartNpmCommand(npmPath, args, tempDir);
+
+            var result = await ProcessCaptureRunner.RunAsync(
+                startInfo,
+                s_metadataLookupTimeout,
+                async (process, captureCancellationToken) =>
+                {
+                    activity.SetProcessId(process.Id);
+
+                    // Drain both streams concurrently so npm cannot block on a full pipe. Stderr can
+                    // include configured registry details, so discard it rather than retaining it.
+                    var outputTask = process.StandardOutput.ReadToEndAsync(captureCancellationToken);
+                    var errorTask = process.StandardError.BaseStream.CopyToAsync(
+                        Stream.Null,
+                        captureCancellationToken);
+                    await Task.WhenAll(outputTask, errorTask).ConfigureAwait(false);
+
+                    return await outputTask.ConfigureAwait(false);
+                },
+                static () => string.Empty,
+                logger,
+                cancellationToken);
+
+            if (result.Cancelled)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new OperationCanceledException(cancellationToken);
+            }
+
+            if (result.FailureKind is ProcessCaptureFailureKind.TimedOut)
+            {
+                activity.SetError($"npm timed out after {s_metadataLookupTimeout.TotalSeconds:g} seconds.");
+                throw new TimeoutException(
+                    $"Timed out after {s_metadataLookupTimeout.TotalSeconds:g} seconds while resolving {packageSpecifier} through npm.");
+            }
+
+            if (result.FailureKind is not null)
+            {
+                activity.SetError(result.FailureMessage ?? "npm could not be started.");
+                throw new InvalidOperationException(
+                    $"Could not run npm while resolving {packageSpecifier}: {result.FailureMessage}");
+            }
+
+            activity.SetProcessExitCode(result.ExitCode);
+
+            if (result.ExitCode != 0)
+            {
+                activity.SetError($"npm exited with code {result.ExitCode}.");
+                throw new InvalidOperationException(
+                    $"npm exited with code {result.ExitCode} while resolving {packageSpecifier}.");
+            }
+
+            if (!TryExtractLastVersion(result.Capture, out var versionString) ||
+                !SemVersion.TryParse(versionString, SemVersionStyles.Strict, out var version))
+            {
+                throw new InvalidDataException(
+                    $"npm returned an invalid version while resolving {packageSpecifier}.");
+            }
+
+            return version;
+        }
+        finally
+        {
+            CleanupTempDirectory(tempDir);
+        }
+    }
 
     /// <inheritdoc />
     public async Task<NpmPackageInfo?> ResolvePackageAsync(string packageName, string versionRange, CancellationToken cancellationToken)
@@ -286,6 +389,7 @@ internal sealed class NpmRunner(IEnvironment environment, ILogger<NpmRunner> log
             process.Start();
             activity.SetProcessId(process.Id);
 
+            // Read both streams concurrently to avoid deadlock when a pipe buffer fills.
             var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
             var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
 

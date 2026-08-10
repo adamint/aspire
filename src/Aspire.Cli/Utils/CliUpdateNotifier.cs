@@ -48,7 +48,7 @@ internal static class PackageUpdateRecommendationChannels
 internal class CliUpdateNotifier(
     ILogger<CliUpdateNotifier> logger,
     INuGetPackageCache nuGetPackageCache,
-    INpmRegistryClient npmRegistryClient,
+    INpmRunner npmRunner,
     IInteractionService interactionService,
     IProcessPathProvider processPathProvider,
     CliExecutionContext executionContext) : ICliUpdateNotifier
@@ -64,7 +64,8 @@ internal class CliUpdateNotifier(
         if (NpmInstallDetection.IsRunningFromNpm())
         {
             _availablePackages = null;
-            _availableNpmVersion = await npmRegistryClient.GetLatestVersionAsync(
+            _availableNpmVersion = null;
+            _availableNpmVersion = await npmRunner.GetLatestVersionAsync(
                 NpmInstallDetection.ExpectedPackageName,
                 cancellationToken);
             return;

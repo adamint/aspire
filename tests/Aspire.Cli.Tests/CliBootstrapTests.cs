@@ -4,7 +4,6 @@
 using System.Reflection;
 using Aspire.Cli.Acquisition;
 using Aspire.Cli.Interaction;
-using Aspire.Cli.Npm;
 using Aspire.Cli.Tests.TestServices;
 using Aspire.Cli.Tests.Utils;
 using Microsoft.Extensions.DependencyInjection;
@@ -79,17 +78,6 @@ public class CliBootstrapTests(ITestOutputHelper outputHelper)
 
         Assert.NotNull(reader);
         Assert.IsType<IdentityChannelReader>(reader);
-    }
-
-    [Fact]
-    public async Task BuildApplication_DisablesCookiesForNpmRegistryHttpClient()
-    {
-        using var host = await BuildHostAsync();
-        var handlerFactory = host.Services.GetRequiredService<IHttpMessageHandlerFactory>();
-
-        using var handler = handlerFactory.CreateHandler(nameof(INpmRegistryClient));
-
-        Assert.False(GetUseCookies(handler));
     }
 
     [Fact]
@@ -266,34 +254,6 @@ public class CliBootstrapTests(ITestOutputHelper outputHelper)
         Assert.Empty(testInteractionService.ShownStatuses);
     }
 #endif
-
-    private static bool GetUseCookies(HttpMessageHandler handler)
-    {
-        return handler switch
-        {
-            HttpClientHandler httpClientHandler => httpClientHandler.UseCookies,
-            SocketsHttpHandler socketsHttpHandler => socketsHttpHandler.UseCookies,
-            DelegatingHandler { InnerHandler: { } innerHandler } => GetUseCookies(innerHandler),
-            _ => GetUseCookiesFromInnerHandler(handler)
-        };
-    }
-
-    private static bool GetUseCookiesFromInnerHandler(HttpMessageHandler handler)
-    {
-        // IHttpClientFactory wraps the primary handler in internal lifetime-tracking handlers.
-        // Those wrappers deliberately expose only HttpMessageHandler, so tests have to unwrap by
-        // reflection before they can verify the cookie policy on the real transport handler.
-        var innerHandlerProperty = handler.GetType().GetProperty(
-            "InnerHandler",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-
-        if (innerHandlerProperty?.GetValue(handler) is HttpMessageHandler innerHandler)
-        {
-            return GetUseCookies(innerHandler);
-        }
-
-        throw new InvalidOperationException($"Could not locate the primary HTTP handler inside {handler.GetType()}.");
-    }
 
     private static string WriteBinaryWithSidecar(string binaryDir, string source, string? channel = null)
     {

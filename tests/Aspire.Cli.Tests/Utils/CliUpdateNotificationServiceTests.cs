@@ -288,7 +288,7 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task NotifyIfUpdateAvailable_UsesNpmRegistryVersionForNpmInstall()
+    public async Task NotifyIfUpdateAvailable_UsesNpmVersionForNpmInstall()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
@@ -311,7 +311,7 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
                 }
             };
 
-            configure.NpmRegistryClientFactory = _ => new FakeNpmRegistryClient
+            configure.NpmRunnerFactory = _ => new FakeNpmRunner
             {
                 GetLatestVersionAsyncCallback = (packageName, _) =>
                 {
@@ -355,7 +355,7 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
 
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
         {
-            configure.NpmRegistryClientFactory = _ => new FakeNpmRegistryClient
+            configure.NpmRunnerFactory = _ => new FakeNpmRunner
             {
                 LatestVersion = SemVersion.Parse(latestVersion, SemVersionStyles.Strict)
             };
@@ -377,7 +377,7 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task GetVersionStatusAsync_NpmRegistryFailureReturnsErrorAndCanRetry()
+    public async Task GetVersionStatusAsync_NpmFailureReturnsErrorAndCanRetry()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
@@ -385,7 +385,7 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
 
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
         {
-            configure.NpmRegistryClientFactory = _ => new FakeNpmRegistryClient
+            configure.NpmRunnerFactory = _ => new FakeNpmRunner
             {
                 GetLatestVersionAsyncCallback = (_, _) =>
                 {
@@ -416,16 +416,16 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
-    public async Task GetVersionStatusAsync_NpmRegistryTimeoutReportsTimeoutMessage()
+    public async Task GetVersionStatusAsync_NpmTimeoutReportsTimeoutMessage()
     {
         using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
         using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
 
         var services = CliTestHelper.CreateServiceCollection(workspace, outputHelper, configure =>
         {
-            configure.NpmRegistryClientFactory = _ => new FakeNpmRegistryClient
+            configure.NpmRunnerFactory = _ => new FakeNpmRunner
             {
-                Failure = new TimeoutException("Timed out after 10 seconds while resolving @microsoft/aspire-cli@latest from the npm registry.")
+                LatestVersionFailure = new TimeoutException("Timed out after 10 seconds while resolving @microsoft/aspire-cli@latest through npm.")
             };
             configure.CliUpdateNotifierFactory = sp => CreateCliUpdateNotifier(sp, "9.4.0");
         });
@@ -436,7 +436,7 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
         var status = await notifier.GetVersionStatusAsync(workspace.WorkspaceRoot, CancellationToken.None).DefaultTimeout();
 
         Assert.Equal(
-            "Timed out after 10 seconds while resolving @microsoft/aspire-cli@latest from the npm registry.",
+            "Timed out after 10 seconds while resolving @microsoft/aspire-cli@latest through npm.",
             status.UpdateCheckError);
         Assert.Null(status.LatestVersion);
     }
@@ -594,7 +594,7 @@ public class CliUpdateNotificationServiceTests(ITestOutputHelper outputHelper)
             currentVersion,
             serviceProvider.GetRequiredService<ILogger<CliUpdateNotifier>>(),
             serviceProvider.GetRequiredService<INuGetPackageCache>(),
-            serviceProvider.GetRequiredService<INpmRegistryClient>(),
+            serviceProvider.GetRequiredService<INpmRunner>(),
             serviceProvider.GetRequiredService<IInteractionService>(),
             serviceProvider.GetRequiredService<IProcessPathProvider>(),
             serviceProvider.GetRequiredService<CliExecutionContext>());
@@ -605,14 +605,14 @@ internal sealed class CliUpdateNotifierWithPackageVersionOverride(
     string currentVersion,
     ILogger<CliUpdateNotifier> logger,
     INuGetPackageCache nuGetPackageCache,
-    INpmRegistryClient npmRegistryClient,
+    INpmRunner npmRunner,
     IInteractionService interactionService,
     IProcessPathProvider processPathProvider,
     CliExecutionContext executionContext)
     : CliUpdateNotifier(
         logger,
         nuGetPackageCache,
-        npmRegistryClient,
+        npmRunner,
         interactionService,
         processPathProvider,
         executionContext)

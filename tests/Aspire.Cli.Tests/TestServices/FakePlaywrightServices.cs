@@ -18,29 +18,9 @@ internal sealed class FakeNpmRunner : INpmRunner
 {
     public bool IsAvailable { get; set; } = true;
 
-    public Task<NpmPackageInfo?> ResolvePackageAsync(string packageName, string versionRange, CancellationToken cancellationToken)
-        => Task.FromResult<NpmPackageInfo?>(null);
+    public SemVersion LatestVersion { get; set; } = new(0, 0, 0);
 
-    public Task<string?> PackAsync(string packageName, string version, string outputDirectory, CancellationToken cancellationToken)
-        => Task.FromResult<string?>(null);
-
-    public Task<bool> InstallGlobalAsync(string tarballPath, CancellationToken cancellationToken)
-        => Task.FromResult(true);
-}
-
-/// <summary>
-/// A fake implementation of <see cref="INpmRegistryClient"/> for testing.
-/// </summary>
-/// <remarks>
-/// Defaults to reporting the sentinel version <c>0.0.0</c>.
-/// Set <see cref="LatestVersion"/> to advertise a newer version, or <see cref="Failure"/> to make
-/// the lookup fail the way an unreachable or malformed registry would.
-/// </remarks>
-internal sealed class FakeNpmRegistryClient : INpmRegistryClient
-{
-    public SemVersion LatestVersion { get; set; } = new SemVersion(0, 0, 0);
-
-    public Exception? Failure { get; set; }
+    public Exception? LatestVersionFailure { get; set; }
 
     public Func<string, CancellationToken, Task<SemVersion>>? GetLatestVersionAsyncCallback { get; set; }
 
@@ -53,10 +33,19 @@ internal sealed class FakeNpmRegistryClient : INpmRegistryClient
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        return Failure is null
+        return LatestVersionFailure is null
             ? Task.FromResult(LatestVersion)
-            : Task.FromException<SemVersion>(Failure);
+            : Task.FromException<SemVersion>(LatestVersionFailure);
     }
+
+    public Task<NpmPackageInfo?> ResolvePackageAsync(string packageName, string versionRange, CancellationToken cancellationToken)
+        => Task.FromResult<NpmPackageInfo?>(null);
+
+    public Task<string?> PackAsync(string packageName, string version, string outputDirectory, CancellationToken cancellationToken)
+        => Task.FromResult<string?>(null);
+
+    public Task<bool> InstallGlobalAsync(string tarballPath, CancellationToken cancellationToken)
+        => Task.FromResult(true);
 }
 
 /// <summary>

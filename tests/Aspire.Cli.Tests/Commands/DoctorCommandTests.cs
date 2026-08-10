@@ -12,7 +12,6 @@ using Aspire.Cli.Utils.EnvironmentChecker;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.AspNetCore.InternalTesting;
-using Semver;
 using Spectre.Console;
 
 namespace Aspire.Cli.Tests.Commands;
@@ -631,39 +630,17 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
 
         using var doc = await RunDoctorJsonAsync(workspace, options =>
         {
-            options.NpmRegistryClientFactory = _ => new FakeNpmRegistryClient
+            options.NpmRunnerFactory = _ => new FakeNpmRunner
             {
-                Failure = new TimeoutException("Timed out after 10 seconds while resolving @microsoft/aspire-cli@latest from the npm registry.")
+                LatestVersionFailure = new TimeoutException("Timed out after 10 seconds while resolving @microsoft/aspire-cli@latest through npm.")
             };
         });
 
         var cliVersionCheck = GetCheckByName(doc, AspireVersionCheck.CliVersionCheckName);
         Assert.Equal("warning", cliVersionCheck.GetProperty("status").GetString());
         Assert.Contains(
-            "Timed out after 10 seconds while resolving @microsoft/aspire-cli@latest from the npm registry.",
+            "Timed out after 10 seconds while resolving @microsoft/aspire-cli@latest through npm.",
             cliVersionCheck.GetProperty("details").GetString());
-    }
-
-    [Fact]
-    public async Task DoctorCommand_Json_NpmUpdateCheckDoesNotRequireNpmOnPath()
-    {
-        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
-        using var npmScope = NpmInstallDetection.UseEnvironmentForTesting(CreateNpmInstallEnvironment());
-
-        using var doc = await RunDoctorJsonAsync(workspace, options =>
-        {
-            // The update check reads registry metadata over HTTP, so a machine without the Node
-            // toolchain must still get a real answer instead of an npm-not-found warning.
-            options.NpmRunnerFactory = _ => new FakeNpmRunner { IsAvailable = false };
-            options.NpmRegistryClientFactory = _ => new FakeNpmRegistryClient
-            {
-                LatestVersion = SemVersion.Parse("99.0.0", SemVersionStyles.Strict)
-            };
-        });
-
-        var cliVersionCheck = GetCheckByName(doc, AspireVersionCheck.CliVersionCheckName);
-        Assert.Contains("99.0.0", cliVersionCheck.GetProperty("message").GetString());
-        Assert.Equal("stable", cliVersionCheck.GetProperty("metadata").GetProperty("latestVersionChannel").GetString());
     }
 
     private static IReadOnlyDictionary<string, string?> CreateNpmInstallEnvironment()
