@@ -1,6 +1,7 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System.Globalization;
 using Aspire.Cli.Configuration;
 using Aspire.Cli.Interaction;
 using Aspire.Cli.Projects;
@@ -78,7 +79,26 @@ internal static class SdkCommandPreparation
             return false;
         }
 
-        if (!SemVersion.TryParse(packageVersion, SemVersionStyles.Any, out var parsedVersion))
+        if (SemVersion.TryParse(packageVersion, SemVersionStyles.Any, out var parsedVersion))
+        {
+            if (requireExactVersion)
+            {
+                // SemVersionStyles.Any accepts abbreviated and decorated forms -- "2.0", "v2.0.0",
+                // "2.01.0" -- that NuGet normalizes on restore. A caller who asks for Package@2.0 gets
+                // the 2.0.0 package, so recording the raw text would label the export with a version no
+                // feed serves. Callers that require an exact version get the normalized string, which is
+                // the one NuGet resolved.
+                packageVersion = parsedVersion.ToString();
+            }
+        }
+        else if (TryNormalizeFourSegmentVersion(packageVersion, out var normalizedFourSegmentVersion))
+        {
+            if (requireExactVersion)
+            {
+                packageVersion = normalizedFourSegmentVersion;
+            }
+        }
+        else
         {
             errorMessage = requireExactVersion
                 ? $"Invalid version '{packageVersion}' in '{argument}'. Expected an exact NuGet version (e.g. 9.2.0); floating and range versions are not supported."
@@ -86,17 +106,54 @@ internal static class SdkCommandPreparation
             return false;
         }
 
-        if (requireExactVersion)
+        reference = IntegrationReference.FromPackage(packageName, packageVersion);
+        return true;
+    }
+
+    /// <summary>
+    /// Normalizes a four-segment NuGet version, which semantic versioning cannot represent.
+    /// </summary>
+    /// <remarks>
+    /// NuGet accepts a fourth <c>Revision</c> segment that semver has no room for, so
+    /// <c>SemVersion.TryParse</c> rejects real
+    /// package versions such as <c>5.2.9.0</c> and <c>1.2.3.4-beta</c>. Only that shape is handled
+    /// here, and it follows NuGet's own normalization: a zero revision is dropped
+    /// (<c>1.2.3.0</c> becomes <c>1.2.3</c>) while a non-zero one is kept, leading zeros are
+    /// stripped, and the pre-release and build-metadata suffixes are carried through untouched.
+    /// Floating and range syntax still fails, because <c>*</c>, <c>[</c>, and <c>,</c> are not
+    /// digits. See https://learn.microsoft.com/nuget/concepts/package-versioning.
+    /// </remarks>
+    private static bool TryNormalizeFourSegmentVersion(string version, out string normalized)
+    {
+        normalized = string.Empty;
+
+        // The suffix starts at whichever of '-' or '+' comes first, so "1.2.3.4-beta+sha" keeps
+        // "-beta+sha" and "1.2.3.4+sha" keeps "+sha".
+        var suffixIndex = version.AsSpan().IndexOfAny('-', '+');
+        var numericPart = suffixIndex < 0 ? version : version[..suffixIndex];
+        var suffix = suffixIndex < 0 ? string.Empty : version[suffixIndex..];
+
+        var segments = numericPart.Split('.');
+        if (segments.Length != 4)
         {
-            // SemVersionStyles.Any accepts abbreviated and decorated forms -- "2.0", "v2.0.0",
-            // "2.01.0" -- that NuGet normalizes on restore. A caller who asks for Package@2.0 gets
-            // the 2.0.0 package, so recording the raw text would label the export with a version no
-            // feed serves. Callers that require an exact version get the normalized string, which is
-            // the one NuGet resolved.
-            packageVersion = parsedVersion.ToString();
+            return false;
         }
 
-        reference = IntegrationReference.FromPackage(packageName, packageVersion);
+        var parsedSegments = new int[4];
+        for (var i = 0; i < segments.Length; i++)
+        {
+            // NumberStyles.None rejects signs, whitespace, and thousands separators, so only a bare
+            // run of digits gets through.
+            if (!int.TryParse(segments[i], NumberStyles.None, CultureInfo.InvariantCulture, out parsedSegments[i]))
+            {
+                return false;
+            }
+        }
+
+        normalized = parsedSegments[3] == 0
+            ? $"{parsedSegments[0]}.{parsedSegments[1]}.{parsedSegments[2]}{suffix}"
+            : $"{parsedSegments[0]}.{parsedSegments[1]}.{parsedSegments[2]}.{parsedSegments[3]}{suffix}";
+
         return true;
     }
 

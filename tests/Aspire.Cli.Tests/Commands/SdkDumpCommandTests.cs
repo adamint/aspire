@@ -444,6 +444,49 @@ public class SdkDumpCommandTests(ITestOutputHelper outputHelper)
     }
 
     /// <summary>
+    /// NuGet package versions may carry a fourth <c>Revision</c> segment that semantic versioning
+    /// cannot express, so a semver-only parse would reject shipping packages such as
+    /// <c>5.2.9.0</c>. Argument parsing has to accept them and normalize the way NuGet does.
+    /// </summary>
+    [Theory]
+    [InlineData("5.2.9.0", "5.2.9")]
+    [InlineData("1.2.3.4", "1.2.3.4")]
+    [InlineData("1.2.3.4-beta.1", "1.2.3.4-beta.1")]
+    [InlineData("01.02.03.00", "1.2.3")]
+    public void FourSegmentPackageVersionsAreAcceptedAndNormalizedLikeNuGet(string requested, string expected)
+    {
+        Assert.True(SdkCommandPreparation.TryParseIntegrationArgument(
+            $"Aspire.Hosting.Redis@{requested}",
+            requireExactVersion: true,
+            out var reference,
+            out _,
+            out var errorMessage), errorMessage);
+
+        Assert.Equal(expected, reference!.Version);
+    }
+
+    /// <summary>
+    /// Accepting a fourth segment must not open the door to the floating and range syntax that
+    /// <c>sdk export</c> deliberately refuses, since neither pins a single document version.
+    /// </summary>
+    [Theory]
+    [InlineData("1.2.3.*")]
+    [InlineData("[1.0.0.0,2.0.0.0)")]
+    [InlineData("1.2.3.4.5")]
+    [InlineData("1.2.3.-1")]
+    public void FloatingAndRangeVersionsAreStillRejected(string requested)
+    {
+        Assert.False(SdkCommandPreparation.TryParseIntegrationArgument(
+            $"Aspire.Hosting.Redis@{requested}",
+            requireExactVersion: true,
+            out _,
+            out _,
+            out var errorMessage));
+
+        Assert.Contains($"Invalid version '{requested}'", errorMessage);
+    }
+
+    /// <summary>
     /// The checked-in <c>*.ats.txt</c> baselines are produced with <c>--format ci</c>, which carries
     /// no package versions at all. That is what keeps the requested-version semantics above from
     /// reaching a version-keyed artifact.
