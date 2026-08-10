@@ -10,7 +10,7 @@ import * as io from '../utils/io';
 import { ResourceDebuggerExtension } from '../debugger/debuggerExtensions';
 import { AppHostParentOutputFilter, AspireDebugSession } from '../debugger/AspireDebugSession';
 import { extensionLogOutputChannel } from '../utils/logging';
-import { attachDebuggerTargetNameProbeAssumesDefaultConfiguration, attachDebuggerExecutableLaunchProfile } from '../loc/strings';
+import { attachDebuggerTargetNameProbeAssumesDefaultConfiguration, attachDebuggerExecutableLaunchProfile, attachDebuggerUnresolvedLaunchProfile } from '../loc/strings';
 
 class TestDotNetService {
     private _hasDevKit: boolean;
@@ -268,6 +268,53 @@ suite('Dotnet Debugger Extension Tests', () => {
                     && error.name === 'AttachDebuggerConfigurationError'
                     && (error as Error & { errorKind?: string }).errorKind === 'ResourceNotAttachable'
                     && error.message === attachDebuggerExecutableLaunchProfile('My Function', 'run-as-executable'));
+
+            assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
+        }
+        finally {
+            fs.rmSync(fixtureRoot, { recursive: true, force: true });
+        }
+    });
+
+    test('attach configuration refuses when the launch profile the AppHost reported can no longer be read', async () => {
+        const fs = require('fs');
+        const path = require('path');
+
+        // The AppHost resolved 'run-as-executable' when it started the resource, so the file has changed
+        // since. Its commandName is what decides whether the project's own output is running, and it is no
+        // longer knowable, so the guard must not quietly fall through to a Project-style attach.
+        const fixtureRoot = path.join(__dirname, '..', '..', '.test-fixtures', 'attach-unresolved-launch-profile');
+        const projectDirectory = path.join(fixtureRoot, 'MyClassLibFunction');
+        fs.mkdirSync(path.join(projectDirectory, 'Properties'), { recursive: true });
+        fs.writeFileSync(path.join(projectDirectory, 'Properties', 'launchSettings.json'), JSON.stringify({
+            profiles: {
+                'http': {
+                    commandName: 'Project',
+                },
+            },
+        }));
+
+        try {
+            const { extension, dotNetService } = createDebuggerExtension('/repo/bin/Debug/net10.0/MyClassLibFunction.dll', null, true, true);
+
+            await assert.rejects(
+                extension.createAttachDebugSessionConfigurationCallback!({
+                    name: 'my-function',
+                    displayName: 'My Function',
+                    resourceType: 'Project',
+                    state: 'Running',
+                    properties: {
+                        'executable.pid': '1234',
+                        'executable.path': 'dotnet',
+                        'project.path': path.join(projectDirectory, 'MyClassLibFunction.csproj'),
+                        'project.targetName': 'MyClassLibFunction',
+                        'project.launchProfile': 'run-as-executable',
+                    },
+                }),
+                (error: unknown) => error instanceof Error
+                    && error.name === 'AttachDebuggerConfigurationError'
+                    && (error as Error & { errorKind?: string }).errorKind === 'ResourceNotAttachable'
+                    && error.message === attachDebuggerUnresolvedLaunchProfile('My Function', 'run-as-executable'));
 
             assert.strictEqual(dotNetService.getDotNetTargetPathStub.called, false);
         }

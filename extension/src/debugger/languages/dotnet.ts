@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { extensionLogOutputChannel } from '../../utils/logging';
-import { noCsharpBuildTask, buildFailedWithExitCode, noOutputFromMsbuild, failedToGetTargetPath, invalidLaunchConfiguration, buildFailedForProjectWithError, processExitedWithCode, lookingForDevkitBuildTask, csharpDevKitNotInstalled, failedToInspectRuntimeConfig, dotNetRunFallbackDisablesDebugger, dotNetRunFileBasedExecutableProfileFallback, executableLaunchProfileMissingExecutablePath, attachDebuggerConfigurationName, attachDebuggerProcessNameUnresolved, attachDebuggerTargetNameProbeAssumesDefaultConfiguration, attachDebuggerExecutableLaunchProfile } from '../../loc/strings';
+import { noCsharpBuildTask, buildFailedWithExitCode, noOutputFromMsbuild, failedToGetTargetPath, invalidLaunchConfiguration, buildFailedForProjectWithError, processExitedWithCode, lookingForDevkitBuildTask, csharpDevKitNotInstalled, failedToInspectRuntimeConfig, dotNetRunFallbackDisablesDebugger, dotNetRunFileBasedExecutableProfileFallback, executableLaunchProfileMissingExecutablePath, attachDebuggerConfigurationName, attachDebuggerProcessNameUnresolved, attachDebuggerTargetNameProbeAssumesDefaultConfiguration, attachDebuggerExecutableLaunchProfile, attachDebuggerUnresolvedLaunchProfile } from '../../loc/strings';
 import { ChildProcessWithoutNullStreams, execFile, spawn } from 'child_process';
 import * as util from 'util';
 import * as path from 'path';
@@ -480,7 +480,18 @@ async function resolveEffectiveLaunchProfile(attachInfo: DotNetAttachDebuggerRes
         // Match the SDK's ordinal, case-sensitive profile lookup so a profile that differs only in casing
         // is treated as absent here exactly as it would be by `dotnet run`.
         const profile = launchSettings?.profiles?.[profileName] ?? null;
-        return profile ? { profile, profileName } : { profile: null, profileName: null };
+        if (!profile) {
+            // The AppHost only reports a profile name it resolved at startup, so failing to find it now
+            // means launchSettings.json changed or stopped parsing since then. Its commandName is what
+            // decides whether the project's own output is running, and that answer is now unavailable -
+            // so this fails closed rather than assuming a Project launch and offering an attach that may
+            // target a process the profile never started.
+            throw new AttachDebuggerConfigurationError(
+                'ResourceNotAttachable',
+                attachDebuggerUnresolvedLaunchProfile(attachInfo.resourceLabel, profileName));
+        }
+
+        return { profile, profileName };
     }
 
     return determineDefaultLaunchProfile(launchSettings);
