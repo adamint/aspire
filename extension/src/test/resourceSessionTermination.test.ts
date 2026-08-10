@@ -5,14 +5,14 @@ import { ResourceSessionTermination } from '../debugger/resourceSessionTerminati
 import { registerRunCleanup } from '../debugger/runCleanupRegistry';
 import { AspireResourceExtendedDebugConfiguration } from '../dcp/types';
 
-function createTerminationConfiguration(runId: string): AspireResourceExtendedDebugConfiguration {
+function createTerminationConfiguration(runId: string, terminationSignal: 'debugSessionEnd' | 'adapterExit' = 'debugSessionEnd'): AspireResourceExtendedDebugConfiguration {
     return {
         type: 'chrome',
         name: `resource-${runId}`,
         request: 'launch',
         runId,
         debugSessionId: `dcp-${runId}`,
-        terminationSignal: 'debugSessionEnd',
+        terminationSignal,
     } as unknown as AspireResourceExtendedDebugConfiguration;
 }
 
@@ -101,5 +101,52 @@ suite('ResourceSessionTermination', () => {
 
         assert.strictEqual(activeListeners.length, 0);
         assert.deepStrictEqual(terminated, [], 'A stop that never confirmed the session ended must not claim the run terminated');
+    });
+
+    test('an adapterExit run that ends naturally runs its cleanup handlers without reporting termination twice', async () => {
+        // `adapterExit` runs have their sessionTerminated notification sent by the adapter tracker's
+        // onExit, which does no other bookkeeping. If this class ignored the session ending for those
+        // runs, a session that ended on its own - the ordinary way an Azure Functions run finishes -
+        // would never release its registered cleanup handler, leaving the `func` host process alive
+        // and the run's entry in the cleanup registry leaked.
+        const runId = 'run-adapter-exit';
+        const session = { id: 'session-adapter-exit', name: 'resource' } as unknown as vscode.DebugSession;
+        stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+
+        const terminated: string[] = [];
+        let cleanedUp = false;
+        registerRunCleanup(runId, () => { cleanedUp = true; });
+
+        const termination = new ResourceSessionTermination(
+            session,
+            createTerminationConfiguration(runId, 'adapterExit'),
+            id => terminated.push(id));
+        termination.watchForDebugSessionEnd();
+
+        fireTermination(session);
+
+        assert.strictEqual(cleanedUp, true, 'A run whose session ended must have its cleanup handlers run regardless of termination signal');
+        assert.deepStrictEqual(terminated, [], 'The adapter tracker owns the sessionTerminated notification for adapterExit runs');
+        assert.strictEqual(activeListeners.length, 0, 'The terminal transition must release the termination listener');
+    });
+
+    test('stopping an adapterExit run whose session already ended resolves without asking VS Code to stop it', async () => {
+        // A DCP DELETE /run_session arriving after the session ended must not reach stopDebugging for
+        // a session VS Code has already dropped: that call rejects, and the DELETE would answer 500
+        // for a run that genuinely finished.
+        const runId = 'run-adapter-exit-late-delete';
+        const session = { id: 'session-late-delete', name: 'resource' } as unknown as vscode.DebugSession;
+        stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+
+        const termination = new ResourceSessionTermination(
+            session,
+            createTerminationConfiguration(runId, 'adapterExit'),
+            () => { });
+        termination.watchForDebugSessionEnd();
+
+        fireTermination(session);
+        await termination.stop();
+
+        assert.strictEqual(stopDebuggingStub.callCount, 0, 'A finished run must not be stopped through VS Code again');
     });
 });

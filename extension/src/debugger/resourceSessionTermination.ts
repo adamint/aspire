@@ -59,14 +59,20 @@ export class ResourceSessionTermination {
     }
 
     /**
-     * Starts listening for the end of this VS Code debug session, when this run's termination is
-     * driven by the session ending rather than by a debug adapter exit. No-op otherwise.
+     * Starts listening for the end of this VS Code debug session.
+     *
+     * Armed for both termination signals on purpose. The session ending is the only signal every
+     * run has: an `adapterExit` run reports its own termination from the adapter tracker's `onExit`,
+     * but that path emits the DCP notification and nothing else. Without this listener the terminal
+     * bookkeeping would never run for such a run, so its registered cleanup handlers (the Azure
+     * Functions host process, for example) would never fire and its entry in the run cleanup
+     * registry would leak for the lifetime of the window.
+     *
+     * Emitting `sessionTerminated` stays gated on `debugSessionEnd` inside {@link finish}, so
+     * arming this for `adapterExit` runs adds the missing bookkeeping without duplicating the
+     * notification the adapter tracker already sent.
      */
     watchForDebugSessionEnd(): void {
-        if (this._signal !== 'debugSessionEnd') {
-            return;
-        }
-
         this._terminationListener = vscode.debug.onDidTerminateDebugSession(terminatedSession => {
             // js-debug terminates target/page child sessions (and sessions belonging to other
             // parents) while this browser session is still alive, so only the root session this
