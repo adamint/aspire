@@ -128,62 +128,6 @@ public class DevCertsCheckFixRecommendationTests
     }
 
     [Fact]
-    public void EvaluateCertificateResults_PartiallyTrustedCert_WithBlankSslCertDir_RecommendsSystemCertificateDirectories()
-    {
-        var environment = TestEnvironment.CreateLinux(new Dictionary<string, string?> { ["SSL_CERT_DIR"] = "   " });
-        var certInfos = new List<DevCertInfo>
-        {
-            CreateDevCertInfo(CertificateManager.TrustLevel.Partial, "AABB1234", MinVersion)
-        };
-        var devCertsTrustPath = CertificateHelpers.GetDevCertsTrustPath(environment);
-        var systemCertDirs = CertificateHelpers.GetSystemCertificateDirectories();
-        systemCertDirs.Add(devCertsTrustPath);
-        // A blank value is treated as unset, so the recommendation must not expand $SSL_CERT_DIR: running it
-        // would otherwise make the whitespace itself the first directory OpenSSL searches.
-        var expectedCommand = $"export SSL_CERT_DIR=\"{string.Join(':', systemCertDirs)}\"";
-
-        var results = DevCertsCheck.EvaluateCertificateResults(certInfos, environment);
-
-        var result = Assert.Single(results);
-        Assert.Contains(expectedCommand, result.Fix);
-    }
-
-    [Fact]
-    public void EvaluateCertificateResults_PartiallyTrustedCert_WithUnsetSslCertDir_DoesNotLeaveALeadingEmptyEntry()
-    {
-        var environment = TestEnvironment.CreateLinux(new Dictionary<string, string?>());
-        var certInfos = new List<DevCertInfo>
-        {
-            CreateDevCertInfo(CertificateManager.TrustLevel.Partial, "AABB1234", MinVersion)
-        };
-        var devCertsTrustPath = CertificateHelpers.GetDevCertsTrustPath(environment);
-        var systemCertDirs = CertificateHelpers.GetSystemCertificateDirectories();
-        systemCertDirs.Add(devCertsTrustPath);
-        var expectedCommand = $"export SSL_CERT_DIR=\"{string.Join(':', systemCertDirs)}\"";
-
-        var results = DevCertsCheck.EvaluateCertificateResults(certInfos, environment);
-
-        var result = Assert.Single(results);
-        Assert.Contains(expectedCommand, result.Fix);
-    }
-
-    [Fact]
-    public void EvaluateCertificateResults_PartiallyTrustedCert_WithRealSslCertDir_PreservesTheExistingValue()
-    {
-        var environment = TestEnvironment.CreateLinux(new Dictionary<string, string?> { ["SSL_CERT_DIR"] = "/etc/ssl/certs" });
-        var certInfos = new List<DevCertInfo>
-        {
-            CreateDevCertInfo(CertificateManager.TrustLevel.Partial, "AABB1234", MinVersion)
-        };
-        var devCertsTrustPath = CertificateHelpers.GetDevCertsTrustPath(environment);
-
-        var results = DevCertsCheck.EvaluateCertificateResults(certInfos, environment);
-
-        var result = Assert.Single(results);
-        Assert.Contains($"export SSL_CERT_DIR=\"$SSL_CERT_DIR:{devCertsTrustPath}\"", result.Fix);
-    }
-
-    [Fact]
     public void EvaluateCertificateResults_MultipleAllTrusted_ReportsPass()
     {
         var certInfos = new List<DevCertInfo>

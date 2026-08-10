@@ -1,77 +1,12 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
-using Aspire.Cli.Utils.EnvironmentChecker;
 using Aspire.Shared;
 
 namespace Aspire.Cli.Tests.Utils;
 
 public class ContainerRuntimeCheckTests
 {
-    public static TheoryData<IReadOnlyDictionary<string, string?>, string?> ConfiguredRuntimeCases => new()
-    {
-        { new Dictionary<string, string?>(), null },
-        // An empty primary value is present as far as IConfiguration is concerned, so DcpOptions keeps it and
-        // DcpHost omits --container-runtime entirely. Doctor must report "no configured runtime", not the
-        // legacy value that the AppHost has already discarded.
-        { new Dictionary<string, string?> { ["ASPIRE_CONTAINER_RUNTIME"] = "" }, null },
-        { new Dictionary<string, string?> { ["ASPIRE_CONTAINER_RUNTIME"] = "", ["DOTNET_ASPIRE_CONTAINER_RUNTIME"] = "podman" }, null },
-        // Whitespace is non-empty, so DcpHost forwards it to DCP verbatim. Reporting it keeps doctor honest
-        // about the runtime the AppHost will fail to start with.
-        { new Dictionary<string, string?> { ["ASPIRE_CONTAINER_RUNTIME"] = "   " }, "   " },
-        { new Dictionary<string, string?> { ["ASPIRE_CONTAINER_RUNTIME"] = "   ", ["DOTNET_ASPIRE_CONTAINER_RUNTIME"] = "podman" }, "   " },
-        { new Dictionary<string, string?> { ["ASPIRE_CONTAINER_RUNTIME"] = "docker", ["DOTNET_ASPIRE_CONTAINER_RUNTIME"] = "podman" }, "docker" },
-        { new Dictionary<string, string?> { ["DOTNET_ASPIRE_CONTAINER_RUNTIME"] = "podman" }, "podman" },
-        { new Dictionary<string, string?> { ["DOTNET_ASPIRE_CONTAINER_RUNTIME"] = "" }, null },
-    };
-
-    [Theory]
-    [MemberData(nameof(ConfiguredRuntimeCases))]
-    public void GetConfiguredRuntime_MatchesTheRuntimeTheAppHostWouldLaunch(IReadOnlyDictionary<string, string?> variables, string? expectedRuntime)
-    {
-        Assert.Equal(expectedRuntime, ContainerRuntimeCheck.GetConfiguredRuntime(new TestEnvironment(variables)));
-    }
-
-    [Theory]
-    // Whitespace is the value GetConfiguredRuntime deliberately keeps, because DCP receives it verbatim.
-    [InlineData("   ")]
-    [InlineData("nerdctl")]
-    public void BuildResults_ReportsFailure_WhenConfiguredRuntimeIsNotSupported(string configuredRuntime)
-    {
-        // A healthy Docker is present, so without an explicit failure the report reads as a pass while
-        // the AppHost is about to hand DCP a runtime name it cannot use.
-        var results = ContainerRuntimeCheck.BuildResults([HealthyRuntime("docker", "Docker", isDefault: true)], configuredRuntime);
-
-        Assert.Equal(
-            ["Docker v28.0.0: running (available)", $"Configured container runtime '{configuredRuntime}' is not supported"],
-            results.Select(r => r.Message));
-        Assert.Equal([EnvironmentCheckStatus.Pass, EnvironmentCheckStatus.Fail], results.Select(r => r.Status));
-        Assert.Contains("ASPIRE_CONTAINER_RUNTIME", results[1].Details);
-        Assert.NotNull(results[1].Fix);
-    }
-
-    [Fact]
-    public void BuildResults_ReportsNoFailure_WhenConfiguredRuntimeIsSupported()
-    {
-        var results = ContainerRuntimeCheck.BuildResults([HealthyRuntime("docker", "Docker", isDefault: true)], "docker");
-
-        var result = Assert.Single(results);
-        Assert.Equal(EnvironmentCheckStatus.Pass, result.Status);
-        Assert.Equal("Docker v28.0.0: running (configured via ASPIRE_CONTAINER_RUNTIME=docker) ← active", result.Message);
-    }
-
-    [Fact]
-    public void BuildResults_ReportsBothProblems_WhenNothingIsInstalledAndTheConfiguredRuntimeIsUnsupported()
-    {
-        var results = ContainerRuntimeCheck.BuildResults(
-            [new ContainerRuntimeInfo { Executable = "docker", Name = "Docker", IsDefault = true }],
-            "nerdctl");
-
-        Assert.Equal(
-            ["No container runtime detected", "Configured container runtime 'nerdctl' is not supported"],
-            results.Select(r => r.Message));
-    }
-
     [Fact]
     public void ParseVersionFromJsonOutput_WithDockerJsonOutput_ReturnsBothVersions()
     {
@@ -366,14 +301,4 @@ public class ContainerRuntimeCheckTests
             Assert.NotNull(result);
         }
     }
-
-    private static ContainerRuntimeInfo HealthyRuntime(string executable, string name, bool isDefault) => new()
-    {
-        Executable = executable,
-        Name = name,
-        IsInstalled = true,
-        IsRunning = true,
-        IsDefault = isDefault,
-        ClientVersion = new Version(28, 0, 0)
-    };
 }
