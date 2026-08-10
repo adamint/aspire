@@ -310,7 +310,7 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         ArgumentNullException.ThrowIfNull(homeDirectory);
         ArgumentNullException.ThrowIfNull(commandResolver);
 
-        if (!IsVsCodeInstalled(environment, commandResolver))
+        if (!IsVsCodeInstalled(environment, homeDirectory, commandResolver))
         {
             return new VsCodeExtensionDetection(VsCodeInstalled: false, ExtensionInstalled: false);
         }
@@ -704,13 +704,19 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
             var obsoleteExtensionDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             // VS Code records extensions pending deletion as:
-            //   { "microsoft-aspire.aspire-vscode-1.2.3": true }
+            //   { "microsoft-aspire.aspire-vscode-1.2.3": true, "publisher.other-1.0.0": false }
             // The object is maintained by the extension scanner and keyed by the extracted folder
             // name; malformed entries are ignored because a corrupt marker must not make doctor fail.
+            // Only a JSON true marks the folder obsolete: VS Code tests the value for truthiness and
+            // writes false to clear a marker rather than removing the key, so treating the key alone
+            // as obsolete would hide an active install and report the extension as missing.
             // See https://github.com/microsoft/vscode/blob/main/src/vs/platform/extensionManagement/node/extensionsScannerService.ts.
             foreach (var property in document.RootElement.EnumerateObject())
             {
-                obsoleteExtensionDirectories.Add(property.Name);
+                if (property.Value.ValueKind == JsonValueKind.True)
+                {
+                    obsoleteExtensionDirectories.Add(property.Name);
+                }
             }
 
             return obsoleteExtensionDirectories;
@@ -1016,6 +1022,7 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
 
     private static bool IsVsCodeInstalled(
         IEnvironment environment,
+        DirectoryInfo homeDirectory,
         Func<string, string?> commandResolver)
     {
         // VS Code sets TERM_PROGRAM for integrated terminals. Outside an integrated terminal, probe the
@@ -1034,6 +1041,21 @@ internal sealed class VsCodeExtensionCheck : IEnvironmentCheck
         foreach (var launcher in s_vsCodeLaunchers)
         {
             if (commandResolver(launcher) is not null)
+            {
+                return true;
+            }
+        }
+
+        // PATH is not a reliable installation signal. On macOS the "code" command only exists after
+        // the user explicitly runs "Shell Command: Install 'code' command in PATH", so a doctor run
+        // from a plain terminal on an ordinary VS Code machine reaches here with nothing found, and
+        // returning false would drop the check entirely -- including the outdated-extension warning
+        // it exists to produce. A populated extension root is installation evidence PATH cannot give:
+        // VS Code creates it on first extension install and does not remove it on uninstall, so a
+        // leftover root can outlive the product, which only ever costs an advisory recommendation.
+        foreach (var root in VsCodeInstallLayout.GetExtensionRootPaths(environment, homeDirectory))
+        {
+            if (Directory.Exists(root.Path))
             {
                 return true;
             }

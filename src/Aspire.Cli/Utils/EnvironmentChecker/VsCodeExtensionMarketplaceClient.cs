@@ -203,13 +203,18 @@ internal sealed class VsCodeExtensionMarketplaceClient : IVsCodeExtensionMarketp
                     continue;
                 }
 
-                if (IsPreReleaseVersion(versionEntry))
+                // A flag that is present but unreadable cannot be filed into either channel. Filing it
+                // as stable, which is what an absent flag means, would let a pre-release version set
+                // StableVersion and hand a stable user an update warning naming a build their channel
+                // will never receive.
+                switch (GetPreReleaseFlag(versionEntry))
                 {
-                    latestPreReleaseVersion = SelectLaterVersion(latestPreReleaseVersion, version);
-                }
-                else
-                {
-                    latestStableVersion = SelectLaterVersion(latestStableVersion, version);
+                    case true:
+                        latestPreReleaseVersion = SelectLaterVersion(latestPreReleaseVersion, version);
+                        break;
+                    case false:
+                        latestStableVersion = SelectLaterVersion(latestStableVersion, version);
+                        break;
                 }
             }
         }
@@ -271,7 +276,11 @@ internal sealed class VsCodeExtensionMarketplaceClient : IVsCodeExtensionMarketp
         return false;
     }
 
-    private static bool IsPreReleaseVersion(JsonElement versionEntry)
+    /// <summary>
+    /// Returns whether a gallery version entry is a pre-release, or <see langword="null"/> when the
+    /// entry carries the flag but its value cannot be read.
+    /// </summary>
+    private static bool? GetPreReleaseFlag(JsonElement versionEntry)
     {
         if (versionEntry.ValueKind != JsonValueKind.Object ||
             !versionEntry.TryGetProperty("properties", out var properties) ||
@@ -284,24 +293,34 @@ internal sealed class VsCodeExtensionMarketplaceClient : IVsCodeExtensionMarketp
         {
             // The gallery emits the flag as a stringly-typed key/value pair:
             //   { "key": "Microsoft.VisualStudio.Code.PreRelease", "value": "true" }
-            // Both members are value-kind guarded before GetString for the same reason as
-            // TryFindExtension: a non-string "key" or "value" would raise InvalidOperationException,
-            // which CheckAsync does not translate into the "Marketplace unavailable" warning.
-            if (property.ValueKind == JsonValueKind.Object &&
-                property.TryGetProperty("key", out var key) &&
-                key.ValueKind == JsonValueKind.String &&
-                property.TryGetProperty("value", out var value) &&
-                value.ValueKind == JsonValueKind.String &&
-                string.Equals(
+            // The key is value-kind guarded before GetString for the same reason as TryFindExtension:
+            // a non-string "key" would raise InvalidOperationException, which CheckAsync does not
+            // translate into the "Marketplace unavailable" warning.
+            if (property.ValueKind != JsonValueKind.Object ||
+                !property.TryGetProperty("key", out var key) ||
+                key.ValueKind != JsonValueKind.String ||
+                !string.Equals(
                     key.GetString(),
                     "Microsoft.VisualStudio.Code.PreRelease",
-                    StringComparison.OrdinalIgnoreCase) &&
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // The key matched, so this entry does carry the flag. Anything unreadable from here is
+            // reported as unknown rather than skipped past, because falling through to the "no flag"
+            // result below would silently classify a pre-release version as stable.
+            if (property.TryGetProperty("value", out var value) &&
+                value.ValueKind == JsonValueKind.String &&
                 bool.TryParse(value.GetString(), out var isPreRelease))
             {
                 return isPreRelease;
             }
+
+            return null;
         }
 
+        // A stable version carries no pre-release property at all.
         return false;
     }
 

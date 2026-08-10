@@ -1255,6 +1255,44 @@ public class VsCodeExtensionCheckTests(ITestOutputHelper outputHelper)
         Assert.False(detection.ExtensionInstalled);
     }
 
+    [Fact]
+    public void Detect_KeepsExtensionDirectory_WhenItsObsoleteMarkerIsNotTrue()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = CreateDefaultExtensionsRoot(home);
+        CreateInstalledExtension(extensions, "1.2.3");
+        // VS Code clears a marker by writing false rather than removing the key, so treating the key
+        // alone as obsolete would hide an active install and report the extension as missing.
+        File.WriteAllText(
+            Path.Combine(extensions.FullName, ".obsolete"),
+            """{"microsoft-aspire.aspire-vscode-1.2.3":false}""");
+        var environment = CreateVsCodeEnvironmentWithoutReportedVersion();
+
+        var detection = VsCodeExtensionCheck.Detect(environment, home, _ => null);
+
+        Assert.True(detection.ExtensionInstalled);
+        Assert.Equal("1.2.3", detection.ExtensionVersion);
+    }
+
+    [Fact]
+    public void Detect_FindsVsCode_WhenNoLauncherIsOnPathButAnExtensionRootExists()
+    {
+        using var workspace = TemporaryWorkspace.CreateForCli(outputHelper);
+        var home = workspace.CreateDirectory("home");
+        var extensions = CreateDefaultExtensionsRoot(home);
+        CreateInstalledExtension(extensions, "1.2.3");
+        // The normal macOS setup: "code" is only on PATH after the user runs the explicit shell
+        // command, so a doctor run from a plain terminal has no launcher and no TERM_PROGRAM.
+        var environment = new TestEnvironment();
+
+        var detection = VsCodeExtensionCheck.Detect(environment, home, _ => null);
+
+        Assert.True(detection.VsCodeInstalled);
+        Assert.True(detection.ExtensionInstalled);
+        Assert.Equal("1.2.3", detection.ExtensionVersion);
+    }
+
     [Theory]
     [InlineData(".vscode")]
     [InlineData(".vscode-insiders")]

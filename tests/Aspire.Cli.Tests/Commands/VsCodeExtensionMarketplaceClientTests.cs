@@ -276,10 +276,13 @@ public class VsCodeExtensionMarketplaceClientTests
     }
 
     [Fact]
-    public async Task GetLatestVersionsAsync_IgnoresNonStringPreReleaseProperties()
+    public async Task GetLatestVersionsAsync_SkipsVersionsWhosePreReleaseFlagCannotBeRead()
     {
         // The gallery emits the pre-release flag as a stringly-typed key/value pair. A non-string
-        // member on either side must not escape as InvalidOperationException.
+        // member on either side must not escape as InvalidOperationException. The entry whose key
+        // matches carries the flag, so an unreadable value leaves the channel unknown: filing the
+        // version as stable, which is what an absent flag means, would hand a stable user an update
+        // warning naming a pre-release build their channel will never receive.
         const string responseJson = """
             {
               "results": [
@@ -301,6 +304,52 @@ public class VsCodeExtensionMarketplaceClientTests
                             {
                               "key": "Microsoft.VisualStudio.Code.PreRelease",
                               "value": true
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+            """;
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
+        };
+        using var handler = new MockHttpMessageHandler((_, _) => Task.FromResult(response));
+        using var httpClient = new HttpClient(handler);
+        var client = new VsCodeExtensionMarketplaceClient(httpClient, TimeProvider.System);
+
+        var versions = await client.GetLatestVersionsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(versions.StableVersion);
+        Assert.Null(versions.PreReleaseVersion);
+    }
+
+    [Fact]
+    public async Task GetLatestVersionsAsync_TreatsAVersionWithNoPreReleaseFlagAsStable()
+    {
+        // A property whose key is not the pre-release key -- here not even a string -- leaves the
+        // version without the flag at all, which is exactly how the gallery marks a stable release.
+        const string responseJson = """
+            {
+              "results": [
+                {
+                  "extensions": [
+                    {
+                      "extensionName": "aspire-vscode",
+                      "publisher": {
+                        "publisherName": "microsoft-aspire"
+                      },
+                      "versions": [
+                        {
+                          "version": "1.16.0",
+                          "properties": [
+                            {
+                              "key": 7,
+                              "value": "true"
                             }
                           ]
                         }
