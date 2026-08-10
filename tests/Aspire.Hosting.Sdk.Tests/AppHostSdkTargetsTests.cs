@@ -681,6 +681,42 @@ public class AppHostSdkTargetsTests(ITestOutputHelper outputHelper)
     }
 
     [Fact]
+    public async Task ProjectResourcesRoutingTheirOutputElsewhereDoNotFailTheBuildThatResolvedThem()
+    {
+        using var workspace = TemporaryWorkspace.Create(outputHelper);
+
+        // GetTargetFrameworks is the half of the probe that can fail a reference which builds perfectly well:
+        // Aspire project references default SkipGetTargetFrameworkProperties=true, so nothing in a normal build
+        // asks for it. A reference whose output the build routed to a caller-supplied OutputItemType is not in the
+        // capture the seeding reads, and it is also a reference an ordinary AppHost build resolves - so collecting
+        // its name must stay inside what that build already asked for. It already asked for GetTargetPath, which is
+        // what GetTargetPathIsReachedOnProjectResourcesWithoutAspireAskingForIt pins, so that is all this asks too.
+        var result = await RunProjectMetadataSourceGenerationAsync(
+            workspace,
+            referencedProjectXml: """
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net8.0</TargetFramework>
+                    <AssemblyName>RoutedWorker</AssemblyName>
+                  </PropertyGroup>
+                  <Target Name="FailAspireTargetNameProbe" BeforeTargets="GetTargetFrameworks">
+                    <Error Text="aspire target name probe hook failed" />
+                  </Target>
+                """,
+            projectReferenceMetadataXml: """
+                      <OutputItemType>SomeoneElsesItem</OutputItemType>
+                """,
+            msbuildTarget: "ResolveReferences;WriteAspireProjectMetadataSources");
+
+        Assert.True(result.DotNetResult.ExitCode == 0, result.DotNetResult.Output);
+
+        // Asserting the name resolved anyway is what keeps this from passing on a build that simply stopped
+        // collecting target names for the reference whose output was not captured.
+        var generatedSource = await File.ReadAllTextAsync(result.GeneratedPath);
+        Assert.Equal("""    public string? TargetName => @"RoutedWorker";""", GetGeneratedTargetNameMember(generatedSource));
+    }
+
+    [Fact]
     public async Task GetTargetPathIsReachedOnProjectResourcesWithoutAspireAskingForIt()
     {
         using var workspace = TemporaryWorkspace.Create(outputHelper);
