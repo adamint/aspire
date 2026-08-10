@@ -159,8 +159,15 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         if (!TryCreateRegistryUri(value.Value, out var registryUri))
         {
             // A registry that cannot be turned into an absolute http(s) address is unusable, but it
-            // is the user's configuration rather than a CLI fault. Fall through to the next layer
-            // instead of failing the update check outright.
+            // is the user's configuration rather than a CLI fault, so the update check falls back
+            // rather than failing outright. The fallback is the next key and then the built-in
+            // default, not the same key in a lower layer: the layers were already collapsed by
+            // precedence, and npm would not consult a lower layer either - it would hand the
+            // unusable value to its own request and fail.
+            //
+            // Falling back to the public registry can only under-report an update, never point an
+            // install somewhere unexpected, because the recommended command re-resolves the
+            // registry itself.
             _logger.LogDebug(
                 "Ignoring unusable npm '{Key}' value from {Source}; it is not an absolute http or https address.",
                 key,
@@ -218,6 +225,13 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         // the prefix, so both npm_config_registry and NPM_CONFIG_REGISTRY are honored. npm also
         // injects these into the environment of scripts it runs, which makes them the right
         // highest-precedence layer when the CLI is launched through npm exec or npx.
+        // npm's loadEnv assigns every npm_config_* variable into one object, so when two variable
+        // names normalize to the same config key the later one wins. Both npm_config_registry and
+        // NPM_CONFIG_REGISTRY can be set at once wherever environment names are case-sensitive, so
+        // the environment layer is collapsed last-wins here before it is merged first-wins against
+        // the files below it.
+        var layer = new Dictionary<string, ConfigurationValue>(StringComparer.Ordinal);
+
         foreach (var (name, value) in _npmConfigVariables)
         {
             if (!TryGetNpmConfigKey(name, out var key))
@@ -236,7 +250,15 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
                 continue;
             }
 
-            AddIfAbsent(configuration, key, expandedValue, $"the {name} environment variable");
+            if (TryCreateConfigurationValue(expandedValue, $"the {name} environment variable", out var configurationValue))
+            {
+                layer[key] = configurationValue;
+            }
+        }
+
+        foreach (var (key, value) in layer)
+        {
+            configuration.TryAdd(key, value);
         }
     }
 
@@ -330,9 +352,10 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             // "//registry.example.com/:_authToken=..." entry never becomes a token-bearing string.
             // npm substitutes ${VAR} in keys as well as values, so "@${NPM_SCOPE}:registry" has to
             // be expanded before the allow-list decides whether the entry is interesting at all.
-            if (!TryParseNpmrcKey(line, out var key, out var rawValue) ||
-                !TryExpandEnvironmentReferences(key, out key) ||
-                !IsInterestingKey(key))
+            if (!TryParseNpmrcKey(line, out var rawKey, out var rawValue) ||
+                !TryExpandEnvironmentReferences(rawKey, out var key) ||
+                !IsInterestingKey(key) ||
+                !CanRetainExpandedKey(rawKey, key))
             {
                 continue;
             }
@@ -704,19 +727,6 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         }
     }
 
-    private static void AddIfAbsent(
-        Dictionary<string, ConfigurationValue> configuration,
-        string key,
-        string? value,
-        string source)
-    {
-        if (TryCreateConfigurationValue(value, source, out var configurationValue))
-        {
-            // Layers are merged highest precedence first, so an existing entry always outranks this one.
-            configuration.TryAdd(key, configurationValue);
-        }
-    }
-
     private static void SetIfPresent(
         Dictionary<string, ConfigurationValue> configuration,
         string key,
@@ -751,6 +761,22 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     private static bool IsInterestingKey(string key)
     {
         return key is RegistryKey or UserConfigKey or GlobalConfigKey || key.EndsWith(ScopedRegistryKeySuffix, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Rejects a key that only cleared the allow list because an environment value was substituted
+    /// into it.
+    /// </summary>
+    /// <remarks>
+    /// Keys are retained for the resolver's lifetime, so <c>@${NPM_TOKEN}:registry</c> would leave
+    /// an ambient secret in memory long after the parse - the outcome the allow list exists to
+    /// prevent. The fixed keys carry no free-form text and cannot smuggle one out, so they are
+    /// still expanded the way npm's own <c>#loadObject</c> expands them.
+    /// </remarks>
+    private static bool CanRetainExpandedKey(string rawKey, string expandedKey)
+    {
+        return string.Equals(rawKey, expandedKey, StringComparison.Ordinal) ||
+            expandedKey is RegistryKey or UserConfigKey or GlobalConfigKey;
     }
 
     private static string NormalizeEnvironmentKey(string key)

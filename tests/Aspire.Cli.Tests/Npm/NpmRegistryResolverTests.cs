@@ -205,17 +205,18 @@ public class NpmRegistryResolverTests : IDisposable
     [Fact]
     public void Resolve_ExpandsEnvironmentReferencesInNpmrcKeys()
     {
-        // npm substitutes ${VAR} in config keys as well as values, so the scope this entry applies
-        // to is only known after expansion.
-        WriteHomeNpmrc("@${NPM_SCOPE}:registry=https://npm.contoso.example/scoped/");
+        // npm substitutes ${VAR} in config keys as well as values, so which key an entry sets is
+        // only known after expansion. The fixed keys carry no free-form text, so unlike a scope
+        // name they can be expanded without parking an environment value in a retained key.
+        WriteHomeNpmrc("regis${NPM_KEY_TAIL}=https://npm.contoso.example/expanded/");
 
         var resolution = CreateResolver(
-            environment: new Dictionary<string, string>
+            environment: new Dictionary<string, string>(NpmRegistryResolver.EnvironmentVariableNameComparer)
             {
-                ["NPM_SCOPE"] = "microsoft"
+                ["NPM_KEY_TAIL"] = "try"
             }).Resolve(PackageName);
 
-        Assert.Equal("https://npm.contoso.example/scoped/", resolution.RegistryUri.AbsoluteUri);
+        Assert.Equal("https://npm.contoso.example/expanded/", resolution.RegistryUri.AbsoluteUri);
     }
 
     [Fact]
@@ -283,6 +284,42 @@ public class NpmRegistryResolverTests : IDisposable
         Assert.Equal(
             "https://npm.contoso.example//u0066eed/",
             CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_UsesTheLastEnvironmentVariableThatNormalizesToTheSameKey()
+    {
+        // npm's loadEnv assigns every npm_config_* variable into one object, so two names that
+        // normalize to the same config key resolve to the later one rather than the earlier.
+        // Both spellings coexist wherever environment names are case-sensitive.
+        var environment = new Dictionary<string, string>(NpmRegistryResolver.EnvironmentVariableNameComparer)
+        {
+            ["npm_config_registry"] = "https://npm.contoso.example/first/",
+            ["NPM_CONFIG_REGISTRY"] = "https://npm.contoso.example/second/"
+        };
+
+        var expected = environment.Count == 1
+            ? "https://npm.contoso.example/second/"
+            : $"{environment.Values.Last()}";
+
+        Assert.Equal(expected, CreateResolver(environment: environment).Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Fact]
+    public void Resolve_IgnoresAScopedKeyThatOnlyBecomesARegistryKeyAfterExpansion()
+    {
+        // The expanded key is retained for the resolver's lifetime, so honoring this would park the
+        // token in memory long after the parse. npm would accept it; keeping an ambient secret out
+        // of a retained key name is a deliberate departure.
+        WriteHomeNpmrc("@${NPM_TOKEN}:registry=https://npm.contoso.example/scoped/");
+
+        var resolution = CreateResolver(
+            environment: new Dictionary<string, string>(NpmRegistryResolver.EnvironmentVariableNameComparer)
+            {
+                ["NPM_TOKEN"] = "microsoft"
+            }).Resolve(PackageName);
+
+        Assert.Equal(PublicRegistry, resolution.RegistryUri.AbsoluteUri);
     }
 
     [Fact]
@@ -620,7 +657,7 @@ public class NpmRegistryResolverTests : IDisposable
             new DirectoryInfo(Path.Combine(_root.FullName, "home")),
             new Dictionary<string, string>(
                 environment ?? new Dictionary<string, string>(),
-                StringComparer.OrdinalIgnoreCase),
+                NpmRegistryResolver.EnvironmentVariableNameComparer),
             NullLogger<NpmRegistryResolver>.Instance);
     }
 
