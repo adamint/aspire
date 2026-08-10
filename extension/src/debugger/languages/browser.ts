@@ -64,6 +64,14 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
             // comes from firefox-devtools.vscode-firefox-debug, which owns its own profile
             // lifecycle when no `profile`/`profileDir` is supplied.
             //
+            // They are deleted rather than merely left unset because the workspace `debuggers`
+            // block is merged into this configuration before this callback runs, and unknown keys
+            // are forwarded on purpose. Without this a workspace that configures Chromium options
+            // would hand js-debug-only fields — including a `userDataDir` Aspire neither created
+            // nor cleans up — to a foreign adapter on Firefox launches.
+            delete debugConfiguration.runtimeArgs;
+            delete debugConfiguration.userDataDir;
+
             // That adapter also refuses a launch configuration that has a `url` but neither
             // `webRoot` nor `pathMappings`:
             //   if (config.url) { if (!config.webRoot) {

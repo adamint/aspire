@@ -322,6 +322,45 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(rmStub.called, false);
     });
 
+    test('strips js-debug-only workspace settings from a Firefox launch', async () => {
+        // `prepareDebugSession` merges the workspace `debuggers.browser` block before the browser
+        // callback runs, and unknown adapter keys are forwarded on purpose. A workspace that
+        // configures Chromium options would otherwise hand `runtimeArgs` and a `userDataDir` that
+        // Aspire neither created nor cleans up to the Firefox adapter, which is a different
+        // extension with its own profile handling.
+        sinon.stub(vscode.extensions, 'getExtension').callsFake((id: string) =>
+            id === 'firefox-devtools.vscode-firefox-debug' ? ({ id } as vscode.Extension<unknown>) : undefined);
+        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
+        const profileFs = stubBrowserProfileFs();
+        const prepared = await prepareDebugSession(
+            {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                debuggers: {
+                    browser: {
+                        runtimeArgs: ['--headless'],
+                        userDataDir: '/workspace/chrome-profile'
+                    } as never
+                }
+            },
+            { type: 'browser', url: 'https://localhost:5001', browser: 'firefox' } as BrowserLaunchConfiguration,
+            [],
+            [],
+            { debug: true, runId: 'run-1', debugSessionId: 'dcp-1', isApphost: false, debugSession: {} as AspireDebugSession },
+            browserDebuggerExtension);
+
+        const configuration = prepared.debugConfiguration;
+        assert.strictEqual(configuration.type, 'firefox');
+        assert.strictEqual(configuration.runtimeArgs, undefined, 'Expected the js-debug runtimeArgs to be dropped for the Firefox adapter');
+        assert.strictEqual(configuration.userDataDir, undefined, 'Expected the js-debug userDataDir to be dropped for the Firefox adapter');
+        assert.strictEqual(profileFs.mkdtemp.called, false);
+
+        cleanupRun('run-1');
+        assert.strictEqual(rmStub.called, false);
+    });
+
     test('gives the Firefox adapter an empty pathMappings list when the resource has no web root', async () => {
         // firefox-devtools.vscode-firefox-debug rejects a launch configuration that has a `url` but
         // neither `webRoot` nor `pathMappings`, and `web_root` is optional in the launch
