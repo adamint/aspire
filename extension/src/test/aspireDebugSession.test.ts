@@ -154,6 +154,10 @@ suite('AspireDebugSession tests', () => {
     });
 
     test('a POSIX CLI process that exits on its own still has its process group collected', async () => {
+        // The behaviour under test is selected by `process.platform`, so it has to be pinned rather
+        // than inherited from whichever agent runs the suite. Without this the test asserts POSIX
+        // behaviour on the Windows agents, where the branch it covers deliberately does not run.
+        const platformStub = sinon.stub(process, 'platform').value('linux');
         // Already exited: the leader is gone by the time the exit callback runs, which is exactly
         // the state the old early return skipped on.
         const cliProcess = createFakeCliProcess(4325, 0);
@@ -162,18 +166,23 @@ suite('AspireDebugSession tests', () => {
         sinon.stub(vscode.debug, 'stopDebugging').resolves();
         const aspireDebugSession = createSessionForSpawn();
 
-        await aspireDebugSession.spawnAspireCommand(['run'], '/workspace', false, 'aspire run');
+        try {
+            await aspireDebugSession.spawnAspireCommand(['run'], '/workspace', false, 'aspire run');
 
-        spawnStub.firstCall.args[3]?.exitCallback?.(0);
+            spawnStub.firstCall.args[3]?.exitCallback?.(0);
 
-        // The CLI is gone but the AppHost and resource processes in its detached group need not be,
-        // and once the leader's PID is released the group id can be recycled — so the collection has
-        // to happen here rather than on a later timer.
-        sinon.assert.calledOnceWithExactly(
-            terminateStub,
-            cliProcess,
-            `Aspire CLI for debug session ${aspireDebugSession.debugSessionId}`,
-            { force: true });
+            // The CLI is gone but the AppHost and resource processes in its detached group need not
+            // be, and once the leader's PID is released the group id can be recycled — so the
+            // collection has to happen here rather than on a later timer.
+            sinon.assert.calledOnceWithExactly(
+                terminateStub,
+                cliProcess,
+                `Aspire CLI for debug session ${aspireDebugSession.debugSessionId}`,
+                { force: true });
+        }
+        finally {
+            platformStub.restore();
+        }
     });
 
     test('a Windows CLI process that exits on its own is not swept by stale PID', async () => {
