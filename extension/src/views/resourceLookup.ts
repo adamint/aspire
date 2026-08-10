@@ -79,6 +79,13 @@ export function findAppHostForResource(repository: AppHostDataRepository, elemen
         : undefined;
 }
 
+// Deliberately returns the remembered path without re-resolving it, which is the opposite of what
+// findAppHostForResource does. The split is by what the caller then does: commands that change resource
+// state (_runResourceCommand) and attach both require findLatestResourceForElement to resolve and return
+// early when it does not, so a stale path never reaches them. The diagnostic callers - View logs and Open
+// terminal - fall back to the remembered resource on purpose, because a resource missing from the current
+// snapshot is usually a refresh window rather than a gone app host, and dropping the action there would
+// break a routine command far more often than it would prevent reading the wrong app host's output.
 export function getAppHostPathForResource(repository: AppHostDataRepository, element: ResourceElementRef): string | undefined {
     return element.appHostPath ?? findAppHostForResource(repository, element)?.appHostPath ?? repository.workspaceAppHostPath;
 }
