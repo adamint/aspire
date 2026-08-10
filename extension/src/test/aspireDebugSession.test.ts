@@ -1236,6 +1236,68 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             });
     });
 
+    // Pressing Stop in VS Code arrives as a DAP `disconnect`, which used to call dispose() directly:
+    // owned sessions were stopped only as unordered fire-and-forget disposables and their failures
+    // were dropped. It must run the same ordered shutdown the CLI's stopDebugging RPC runs.
+    test('a DAP disconnect runs the ordered shutdown and reports stop failures', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+        const stopOrder: string[] = [];
+        const resourceStopFailure = new Error('Resource stop failed');
+        const resourceStop = sinon.stub().callsFake(async () => {
+            stopOrder.push('resource');
+            throw resourceStopFailure;
+        });
+        const appHostStop = sinon.stub().callsFake(async () => { stopOrder.push('apphost'); });
+        // VS Code is already terminating the Aspire parent when it sends the disconnect, so asking
+        // it to stop the same session again would re-enter this handler.
+        const stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').callsFake(async () => { stopOrder.push('parent'); });
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        (aspireDebugSession as any)._resourceDebugSessions = [
+            {
+                id: 'resource-session',
+                session: { id: 'resource-session' } as unknown as vscode.DebugSession,
+                stopSession: resourceStop,
+            },
+        ];
+        (aspireDebugSession as any)._appHostDebugSession = {
+            id: 'apphost-session',
+            session: { id: 'apphost-session' } as unknown as vscode.DebugSession,
+            stopSession: appHostStop,
+        };
+
+        aspireDebugSession.handleMessage({ seq: 7, type: 'request', command: 'disconnect', arguments: {} });
+
+        const shutdown = (aspireDebugSession as any)._stopPromise;
+
+        assert.ok(shutdown, 'A DAP disconnect must run the ordered shutdown, not dispose() alone');
+
+        await assert.rejects(
+            () => shutdown,
+            (error: unknown) => {
+                assert.strictEqual(error, resourceStopFailure, 'A stop failure on the disconnect path must be surfaced, not swallowed');
+                return true;
+            });
+
+        assert.deepStrictEqual(stopOrder, ['resource', 'apphost'], 'Resources must be stopped before the AppHost, and the parent must not be stopped again');
+        assert.strictEqual(stopDebugging.called, false, 'The disconnect path must not ask VS Code to stop the session it is already disconnecting');
+        assert.strictEqual((aspireDebugSession as any)._disposed, true, 'The session must still be disposed after a failed stop');
+    });
+
     // Two overlapping stop requests must not both run the ordered shutdown: they would race over the
     // late-stop queue, and one caller could be told the shutdown succeeded while the other was told
     // it failed.

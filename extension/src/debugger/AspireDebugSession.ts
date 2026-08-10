@@ -156,6 +156,21 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     return this._stopPromise;
   }
 
+  /**
+   * The same ordered shutdown as {@link stopDebugging}, for the DAP `disconnect`/`terminate`
+   * request. VS Code is already terminating the synthetic Aspire parent when it sends that request,
+   * so the parent stop is recorded as satisfied instead of calling
+   * `vscode.debug.stopDebugging(this._session)`, which would ask VS Code to stop the session whose
+   * disconnect is being handled. Everything else - resource sessions before the AppHost, the
+   * late-start drain, and failure aggregation - is deliberately identical, because a stop from the
+   * VS Code UI must not take a different path from a stop from the CLI.
+   */
+  stopDebuggingFromDisconnect(): Promise<void> {
+    this._parentStopPromise ??= Promise.resolve();
+
+    return this.stopDebugging();
+  }
+
   private async stopDebuggingCore(): Promise<void> {
     // Latch before the first await so any resource that starts while the shutdown is in flight is
     // stopped immediately by the start paths instead of being registered behind the snapshot.
@@ -360,7 +375,15 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
     else if (message.command === 'disconnect' || message.command === 'terminate') {
       this.sendMessageWithEmoji("🔌", disconnectingFromSession);
-      this.dispose();
+
+      // Pressing Stop in VS Code arrives here. Run the same ordered shutdown the CLI's stopDebugging
+      // RPC runs rather than dispose() alone, which would stop the owned sessions through unordered
+      // fire-and-forget disposables and drop their failures. The response is sent without waiting:
+      // VS Code cancels the disconnect and force-kills the adapter if the response is slow, so the
+      // shutdown is reported to the log instead of to the request.
+      void this.stopDebuggingFromDisconnect().catch(err => {
+        extensionLogOutputChannel.error(`Failed to stop the Aspire session on ${message.command}: ${err instanceof Error ? err.message : String(err)}`);
+      });
 
       this.sendEvent({
         type: 'response',
