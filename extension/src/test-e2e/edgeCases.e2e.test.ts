@@ -146,7 +146,7 @@ suite('Aspire extension edge case E2E', function () {
         assert.ok(backgrounded.state.appHosts.some(appHost => isSamePath(appHost.appHostPath, appHostPath)));
     });
 
-    test('deactivation process cleanup stops the owned CLI and AppHost process tree', async () => {
+    test('process-owner cleanup stops the owned CLI and AppHost process tree', async () => {
         await openAspireView();
         await waitForRepositoryIdle();
         const discovered = await waitForWorkspaceAppHost();
@@ -165,13 +165,13 @@ suite('Aspire extension edge case E2E', function () {
         assert.ok(isProcessAlive(processInfo.cliPid), `Expected the Aspire CLI process ${processInfo.cliPid} to be running before deactivation.`);
         assert.ok(isProcessAlive(processInfo.appHostPid), `Expected the AppHost process ${processInfo.appHostPid} to be running before deactivation.`);
 
-        // This uses the same process-owner cleanup methods that extension deactivation reaches,
-        // but keeps the extension host alive. Full workbench reloads did stop these processes
-        // locally, but left ExTester unable to complete its own after-all browser shutdown.
+        // This exercises the process-owner cleanup methods with real CLI and AppHost processes while
+        // keeping the extension host alive. Workbench deactivation is covered separately by unit
+        // tests because a reload leaves ExTester unable to complete its own browser shutdown.
         await executeE2eControlCommand({ name: 'stopOwnedDebugSessionProcesses', appHostPath }, { timeoutMs: 30000 });
 
-        await waitForKnownProcessExit(processInfo.cliPid, 'the Aspire CLI process owned by the deactivated extension', 120000);
-        await waitForKnownProcessExit(processInfo.appHostPid, 'the AppHost process owned by the deactivated extension', 120000);
+        await waitForKnownProcessExit(processInfo.cliPid, 'the Aspire CLI process owned by the debug session', 120000);
+        await waitForKnownProcessExit(processInfo.appHostPid, 'the AppHost process owned by the debug session', 120000);
         await waitForNoDebugSessions(120000);
         await waitForNoRunningAppHost(120000, appHostPath);
     });
