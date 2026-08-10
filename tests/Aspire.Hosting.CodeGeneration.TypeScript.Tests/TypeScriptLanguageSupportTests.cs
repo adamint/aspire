@@ -403,10 +403,16 @@ public sealed class TypeScriptLanguageSupportTests(ITestOutputHelper outputHelpe
     /// </para>
     /// </remarks>
     [Theory]
-    [InlineData("src/Aspire.Cli/Templating/Templates/ts-starter/package-lock.json")]
-    [InlineData("src/Aspire.Cli/Templating/Templates/py-starter/package-lock.json")]
-    public void Scaffold_PinsEveryDependencyToAnExactVersionTheShippedStarterLockfilesResolve(string relativeLockfilePath)
+    [InlineData("ts-starter")]
+    [InlineData("py-starter")]
+    public void Scaffold_PinsEveryDependencyToAnExactVersionTheShippedStarterLockfilesResolve(string starterTemplateName)
     {
+        // Read from the copy the project puts next to the test assembly rather than from the
+        // checkout: this project is archived for Helix, whose payload has no repository at all, so
+        // walking up for Aspire.slnx would throw there instead of asserting.
+        var relativeLockfilePath = Path.Combine("ShippedTemplates", starterTemplateName, "package-lock.json");
+        var lockfilePath = Path.Combine(AppContext.BaseDirectory, relativeLockfilePath);
+
         using var workspace = TemporaryWorkspace.Create(outputHelper);
 
         var files = _languageSupport.Scaffold(new ScaffoldRequest
@@ -416,7 +422,7 @@ public sealed class TypeScriptLanguageSupportTests(ITestOutputHelper outputHelpe
         });
 
         var packageJson = ParseJson(files["package.json"]);
-        var lockfile = ParseJson(File.ReadAllText(Path.Combine(FindRepoRoot(), relativeLockfilePath)));
+        var lockfile = ParseJson(File.ReadAllText(lockfilePath));
         var lockedPackages = lockfile["packages"]!.AsObject();
 
         var findings = new List<string>();
@@ -467,27 +473,6 @@ public sealed class TypeScriptLanguageSupportTests(ITestOutputHelper outputHelpe
     private static readonly Regex s_exactNpmVersion = new(
         @"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$",
         RegexOptions.CultureInvariant);
-
-    /// <summary>
-    /// Walks up from the test assembly to the directory holding <c>Aspire.slnx</c>, so the shipped
-    /// lockfiles can be read from the checkout the tests were built in.
-    /// </summary>
-    private static string FindRepoRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "Aspire.slnx")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException(
-            $"Could not find repository root containing Aspire.slnx (searched from '{AppContext.BaseDirectory}').");
-    }
 
     private static int GetPort(string url) => new Uri(url).Port;
 

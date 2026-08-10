@@ -121,12 +121,23 @@ internal static class PackageJsonMerger
         }
 
         // Handle dependency sections with semver-aware merging. A project that already declares
-        // typescript-eslint keeps its own spec verbatim: narrowing a range such as `^8.57.1` to the
-        // scaffold's exact 8.58.0 removes the project's ability to resolve a future 8.x that
-        // supports its compiler, and 8.58.0 peers `typescript: >=4.8.4 <6.1.0`, so on TypeScript 7
-        // that rewrite turns an install that worked into ERESOLVE - the failure this merger exists
-        // to avoid.
-        var projectOwnedPackage = projectAlreadyLinted ? TypeScriptEslintPackage : null;
+        // typescript-eslint keeps its own spec verbatim, but only while this merge also leaves its
+        // compiler alone. The two constraints move together:
+        //
+        //   - Compiler untouched (the project is already past the scaffold's TypeScript, e.g. on
+        //     TypeScript 7): narrowing a range such as `^8.57.1` to the scaffold's exact 8.58.0
+        //     removes the project's ability to resolve a future 8.x that supports that compiler, and
+        //     8.58.0 peers `typescript: >=4.8.4 <6.1.0`, so the rewrite turns an install that
+        //     resolved into the ERESOLVE this merger exists to avoid.
+        //   - Compiler upgraded (e.g. 5.9.3 to the scaffold's 6.0.3): the project's linter spec was
+        //     chosen against the old compiler and may not admit the new one - 8.57.1 peers
+        //     `typescript: <6.0.0` - so leaving it alone would be the thing that breaks the install.
+        //     Whoever moves the compiler owns the linter that has to match it.
+        var scaffoldTypeScript = FindDependencyVersion(scaffold, TypeScriptPackage);
+        var projectTypeScript = FindDependencyVersion(existing, TypeScriptPackage);
+        var compilerIsUnchanged = projectTypeScript is not null
+            && (scaffoldTypeScript is null || !NpmVersionHelper.ShouldUpgrade(projectTypeScript, scaffoldTypeScript));
+        var projectOwnedPackage = projectAlreadyLinted && compilerIsUnchanged ? TypeScriptEslintPackage : null;
         MergeDependencySection(existing, scaffold, DependenciesKey, logger, projectOwnedPackage);
         MergeDependencySection(existing, scaffold, DevDependenciesKey, logger, projectOwnedPackage);
 

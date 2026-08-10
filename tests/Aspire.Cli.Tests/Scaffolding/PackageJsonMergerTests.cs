@@ -1621,6 +1621,31 @@ public class PackageJsonMergerTests
         Assert.Null(GetDep(result, "devDependencies", "typescript-eslint"));
     }
 
+    /// <summary>
+    /// Ownership of the linter spec only survives while the merge leaves the compiler alone. Here it
+    /// does not: TypeScript 5.9.3 is behind the scaffold, so it is upgraded to 6.0.3, and the
+    /// project's exact typescript-eslint 8.57.1 peers <c>typescript: &lt;6.0.0</c>. Leaving that spec
+    /// in place would be the thing that produces ERESOLVE, so the linter moves with the compiler.
+    /// </summary>
+    [Fact]
+    public void Merge_BrownfieldTypeScriptEslintPinnedBehindAnUpgradedCompiler_IsUpgradedWithIt()
+    {
+        const string Existing = """
+            {
+              "name": "brownfield",
+              "devDependencies": {
+                "typescript": "5.9.3",
+                "typescript-eslint": "8.57.1"
+              }
+            }
+            """;
+
+        var result = MergeJson(Existing, ScaffoldWithLintToolchain);
+
+        Assert.Equal("6.0.3", GetDep(result, "devDependencies", "typescript"));
+        Assert.Equal("8.58.0", GetDep(result, "devDependencies", "typescript-eslint"));
+    }
+
     [Fact]
     public void Merge_BrownfieldUnsupportedTypeScript_PreservesExistingLintScriptsItDidNotAdd()
     {
