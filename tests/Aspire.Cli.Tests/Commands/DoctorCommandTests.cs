@@ -1163,10 +1163,11 @@ public class DoctorCommandTests(ITestOutputHelper outputHelper)
         IVsCodeExtensionMarketplaceClient marketplaceClient)
     {
         services.RemoveAll<IEnvironment>();
-        // Mirrors what the VS Code extension contributes to the terminals, tasks, and debug processes
-        // it creates (see extension/src/utils/cliPathEnvironment.ts). All three variables are required:
-        // without the channel and source signals the check reports the extension as installed and
-        // returns before it ever reaches the Marketplace client.
+        // Mirrors what the VS Code extension contributes through EnvironmentVariableCollection, which
+        // reaches the terminals VS Code creates and therefore tasks and debug sessions configured with
+        // "console": "integratedTerminal" (see extension/src/utils/cliPathEnvironment.ts). All three
+        // variables are required: without the channel and source signals the check reports the
+        // extension as installed and returns before it ever reaches the Marketplace client.
         services.AddSingleton<IEnvironment>(new TestEnvironment(new Dictionary<string, string?>
         {
             ["TERM_PROGRAM"] = "vscode",

@@ -47,10 +47,11 @@ internal sealed record VsCodeExtensionRoot(string Path, bool UsesMicrosoftGaller
 /// <item><description><c>serverDataFolderName</c> names the home-relative remote/server folder.</description></item>
 /// </list>
 /// Values are taken from the shipping manifests: the stable and Insiders builds use <c>Code</c> /
-/// <c>Code - Insiders</c>, and VSCodium inherits the OSS defaults because its overlay manifest does
-/// not redefine them.
-/// See https://github.com/microsoft/vscode/blob/main/product.json and
-/// https://github.com/VSCodium/vscodium/blob/master/product.json.
+/// <c>Code - Insiders</c>, while the VSCodium builds keep only some of the code-oss defaults --
+/// stable redefines the server folder and Insiders redefines both folders -- so each variant is
+/// listed with the names it actually uses rather than inherited wholesale.
+/// See https://github.com/microsoft/vscode/blob/main/product.json and the setpath calls in
+/// https://github.com/VSCodium/vscodium/blob/master/prepare_vscode.sh.
 /// </remarks>
 internal static class VsCodeInstallLayout
 {
