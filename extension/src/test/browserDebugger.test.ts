@@ -357,6 +357,44 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(rmStub.called, false);
     });
 
+    test('strips a workspace --user-data-dir from browser runtimeArgs', async () => {
+        // js-debug seeds its argument map with `--user-data-dir=<userDataDir>` and then merges
+        // `runtimeArgs` over it keyed on the switch name, so a workspace-supplied duplicate wins
+        // and the browser would launch into that profile while Aspire believes the isolated
+        // profile it created (and later deletes) is in use.
+        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
+        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
+        stubBrowserProfileFs();
+        const prepared = await prepareDebugSession(
+            {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                debuggers: {
+                    browser: {
+                        runtimeArgs: ['--start-maximized', '--user-data-dir=/home/user/.config/google-chrome']
+                    } as never
+                }
+            },
+            { type: 'browser', url: 'https://localhost:5001' } as BrowserLaunchConfiguration,
+            [],
+            [],
+            { debug: true, runId: 'run-1', debugSessionId: 'dcp-1', isApphost: false, debugSession: {} as AspireDebugSession },
+            browserDebuggerExtension);
+
+        const configuration = prepared.debugConfiguration;
+        assert.deepStrictEqual(
+            configuration.runtimeArgs,
+            ['--start-maximized', '--no-first-run', '--no-default-browser-check', '--disable-background-mode'],
+            'Expected the workspace --user-data-dir switch to be dropped while its other runtimeArgs survive');
+        assert.strictEqual(configuration.userDataDir, profileDirFor('run-1'));
+        assert.ok(warnStub.getCalls().some(call => /redirect the debug profile directory/.test(call.args[0])));
+
+        cleanupRun('run-1');
+        assert.strictEqual(rmStub.called, true);
+    });
+
     test('strips js-debug-only workspace settings from a Firefox launch', async () => {
         // `prepareDebugSession` merges the workspace `debuggers.browser` block before the browser
         // callback runs, and unknown adapter keys are forwarded on purpose. A workspace that

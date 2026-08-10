@@ -86,6 +86,11 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
             }
         }
         else {
+            const droppedProfileArgs = normalizeRuntimeArgs(debugConfiguration.runtimeArgs).filter(isProfileDirectorySwitch);
+            if (droppedProfileArgs.length > 0) {
+                extensionLogOutputChannel.warn(`Ignoring workspace browser runtimeArgs that would redirect the debug profile directory away from the one Aspire manages: ${droppedProfileArgs.join(' ')}`);
+            }
+
             debugConfiguration.runtimeArgs = mergeRuntimeArgs(debugConfiguration.runtimeArgs, defaultBrowserRuntimeArgs);
             const userDataDir = await createBrowserUserDataDir(debugConfiguration.runId);
             if (userDataDir) {
@@ -142,9 +147,7 @@ function getBrowserDebugAdapter(browser: string | undefined): string {
 }
 
 function mergeRuntimeArgs(existingRuntimeArgs: unknown, argsToAdd: string[]): string[] {
-    const runtimeArgs = Array.isArray(existingRuntimeArgs)
-        ? existingRuntimeArgs.filter((arg): arg is string => typeof arg === 'string')
-        : typeof existingRuntimeArgs === 'string' ? [existingRuntimeArgs] : [];
+    const runtimeArgs = normalizeRuntimeArgs(existingRuntimeArgs).filter(arg => !isProfileDirectorySwitch(arg));
 
     for (const arg of argsToAdd) {
         if (!runtimeArgs.includes(arg)) {
@@ -153,6 +156,38 @@ function mergeRuntimeArgs(existingRuntimeArgs: unknown, argsToAdd: string[]): st
     }
 
     return runtimeArgs;
+}
+
+function normalizeRuntimeArgs(runtimeArgs: unknown): string[] {
+    if (Array.isArray(runtimeArgs)) {
+        return runtimeArgs.filter((arg): arg is string => typeof arg === 'string');
+    }
+
+    return typeof runtimeArgs === 'string' ? [runtimeArgs] : [];
+}
+
+/**
+ * Whether a Chromium command line argument selects the browser profile directory.
+ *
+ * The workspace `debuggers` block is merged into the configuration before the browser callback
+ * runs, so `runtimeArgs` can carry a `--user-data-dir` of the workspace's choosing. js-debug does
+ * not treat that as a conflict with the `userDataDir` configuration field: it seeds the argument
+ * map with `--user-data-dir=<userDataDir>` and then merges `runtimeArgs` over it, and because the
+ * merge is a plain object spread keyed on the switch name, the workspace value silently replaces
+ * the Aspire-created profile path.
+ *   browserArguments = browserArguments.add('--user-data-dir', userDataDir);
+ *   browserArguments = browserArguments.merge(defined);   // `defined` is runtimeArgs
+ * https://github.com/microsoft/vscode-js-debug/blob/main/src/targets/browser/launcher.ts
+ * https://github.com/microsoft/vscode-js-debug/blob/main/src/common/processArgs.ts
+ *
+ * Dropping the switch keeps the isolated profile Aspire created (and later deletes) authoritative.
+ * Both the bare `--user-data-dir` and the `--user-data-dir=<path>` forms are matched because
+ * js-debug keys its map on the text before the first `=`.
+ */
+function isProfileDirectorySwitch(arg: string): boolean {
+    const switchName = arg.split('=', 1)[0].trim();
+
+    return switchName === '--user-data-dir' || switchName === '-user-data-dir';
 }
 
 /**
