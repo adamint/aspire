@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { defaultConfigurationName } from '../loc/strings';
 import type { AspireExtendedDebugConfiguration } from '../dcp/types';
-import { AppHostDiscoveryService, getDebugTargetForCandidate, isSamePath } from '../utils/appHostDiscovery';
+import { AppHostDiscoveryService, getDebugTargetForCandidate, isSameFileSystemEntry } from '../utils/appHostDiscovery';
 import type { CandidateAppHostDisplayInfo } from '../utils/appHostDiscovery';
 import { checkCliAvailableOrRedirect } from '../utils/workspace';
 import { extensionLogOutputChannel } from '../utils/logging';
@@ -155,7 +155,12 @@ export class AspireDebugConfigurationProvider implements vscode.DebugConfigurati
 
     private isWorkspaceFolderRoot(program: string, folder: vscode.WorkspaceFolder | undefined): boolean {
         const owningFolder = folder ?? vscode.workspace.getWorkspaceFolder(vscode.Uri.file(program));
-        return owningFolder !== undefined && isSamePath(program, owningFolder.uri.fsPath);
+
+        // An explicit program that only differs from the workspace root by casing is a distinct
+        // directory wherever the volume is case-sensitive, and misreading it as the generated
+        // default would let a launch configuration take over the workspace default - the outcome
+        // this classification exists to prevent.
+        return owningFolder !== undefined && isSameFileSystemEntry(program, owningFolder.uri.fsPath);
     }
 
     private ensureAppHostSelectionOrigin(config: AspireExtendedDebugConfiguration): void {

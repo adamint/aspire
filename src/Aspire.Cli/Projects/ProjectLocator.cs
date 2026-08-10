@@ -1309,10 +1309,8 @@ internal sealed class ProjectLocator(
 
         // Windows and macOS volumes are usually case-insensitive, but APFS and NTFS can both be
         // formatted the other way, and Windows directories can opt in individually. Only a
-        // case-sensitive volume can hold both spellings at once, so the real directory entries
-        // settle it rather than the platform default. The two paths are the same string apart from
-        // casing and therefore on the same volume, which makes the first differing component enough
-        // to answer for the whole path.
+        // case-sensitive directory can hold both spellings at once, so the real directory entries
+        // settle it rather than the platform default.
         return !BothCaseVariantsExist(left, right);
     }
 
@@ -1327,6 +1325,10 @@ internal sealed class ProjectLocator(
             return false;
         }
 
+        // Windows enables case sensitivity per directory rather than per volume, so an ancestor that
+        // folds the two spellings together says nothing about a descendant that does not. Every
+        // differing component is checked, and one directory holding both spellings is enough to
+        // prove the paths reach different files.
         for (var index = 0; index < leftSegments.Length; index++)
         {
             if (string.Equals(leftSegments[index], rightSegments[index], StringComparison.Ordinal))
@@ -1334,8 +1336,8 @@ internal sealed class ProjectLocator(
                 continue;
             }
 
-            // Rebuild the parent from the segments already agreed on, so the lookup is anchored at
-            // a directory both paths share.
+            // Rebuild the parent from the left spelling of the preceding segments. Any of those
+            // that differed resolved to one directory, so either spelling opens it.
             var parent = string.Join(Path.DirectorySeparatorChar, leftSegments[..index]);
 
             try
@@ -1344,15 +1346,17 @@ internal sealed class ProjectLocator(
                     .Select(Path.GetFileName)
                     .ToArray();
 
-                return siblings.Contains(leftSegments[index], StringComparer.Ordinal) &&
-                    siblings.Contains(rightSegments[index], StringComparer.Ordinal);
+                if (siblings.Contains(leftSegments[index], StringComparer.Ordinal) &&
+                    siblings.Contains(rightSegments[index], StringComparer.Ordinal))
+                {
+                    return true;
+                }
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
             {
                 // The probe refines the platform default rather than replacing it, so a directory
-                // that cannot be read leaves the caller with that default: on Windows and macOS the
-                // two spellings are taken to name one file.
-                return false;
+                // that cannot be read contributes no evidence and the components below it are
+                // still worth checking.
             }
         }
 
