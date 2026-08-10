@@ -132,7 +132,10 @@ config.ps1
 *.lscache
 
 # Node.js modules
-node_modules/
+# Intentionally unanchored: a trailing slash matches directories only, so a
+# `node_modules` symlink (common when sharing an install between worktrees)
+# would otherwise be trackable and could be committed by accident.
+node_modules
 **/.yarn/install-state.gz
 
 # Maven build outputs
