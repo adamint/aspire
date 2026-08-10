@@ -1078,12 +1078,19 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // is the common case, not the rare one. Their failures also belong to the shutdown, which
     // aggregates and rethrows them; here they could only be logged.
     if (this._stopPromise === undefined) {
+      const logStopFailure = (err: unknown) => {
+        extensionLogOutputChannel.warn(`A session stop failed while disposing the Aspire debug session: ${err instanceof Error ? err.message : String(err)}`);
+      };
+
       for (const ownedSessionStop of this._ownedSessionStops) {
         try {
-          ownedSessionStop.dispose();
+          // These callbacks are async, so most failures arrive as a rejection the surrounding catch
+          // can never see. dispose() cannot wait for them, but the returned thenable still has to be
+          // observed or the extension host reports an unhandled rejection instead.
+          void Promise.resolve(ownedSessionStop.dispose() as unknown).catch(logStopFailure);
         }
         catch (err) {
-          extensionLogOutputChannel.warn(`A session stop threw while disposing the Aspire debug session: ${err instanceof Error ? err.message : String(err)}`);
+          logStopFailure(err);
         }
       }
     }

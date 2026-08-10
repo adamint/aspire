@@ -8,6 +8,7 @@ import { AspireDebugSession, buildAspireCommandArgs, getLoggableDebugConfigurati
 import { appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { AspireResourceExtendedDebugConfiguration } from '../dcp/types';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
+import { extensionLogOutputChannel } from '../utils/logging';
 
 interface RecordedEvent {
     name: string;
@@ -1361,6 +1362,54 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             ['resource-stop-started', 'resource-stop-finished', 'apphost-stop'],
             'The shutdown must keep the resources-before-AppHost ordering across a concurrent disposal');
         assert.strictEqual(resourceStop.callCount, 1, 'The resource must be stopped once, by the shutdown, not again by disposal');
+    });
+
+    // The owned-session stops are async, so a failure arrives as a rejection rather than a throw.
+    // dispose() cannot wait for it, but it still has to observe it: an unobserved rejection is an
+    // unhandled-rejection warning in the extension host instead of a logged stop failure.
+    test('disposal observes an async failure from an owned session stop', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = { isCliDebugLoggingEnabled: () => false };
+        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
+        sinon.stub(vscode.debug, 'stopDebugging').callsFake(async () => { });
+        const unhandled: unknown[] = [];
+        const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+        process.on('unhandledRejection', onUnhandled);
+
+        try {
+            const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+            (aspireDebugSession as any)._ownedSessionStops.push({
+                dispose: () => Promise.reject(new Error('resource stop rejected'))
+            });
+
+            aspireDebugSession.dispose();
+
+            // Two turns: one for the rejection to settle, one for the unhandled-rejection check.
+            await new Promise(resolve => setTimeout(resolve, 10));
+
+            assert.deepStrictEqual(unhandled, [], 'An async stop failure must be observed, not left as an unhandled rejection');
+            const warnings = warnStub.getCalls().map(call => String(call.args[0]));
+            assert.ok(
+                warnings.some(message => message.includes('resource stop rejected')),
+                `The async stop failure must be logged, but the warnings were ${JSON.stringify(warnings)}`);
+        }
+        finally {
+            process.off('unhandledRejection', onUnhandled);
+        }
     });
 
     // Two overlapping stop requests must not both run the ordered shutdown: they would race over the
