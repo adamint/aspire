@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { AspireExtendedDebugConfiguration } from '../dcp/types';
-import { appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
+import { appHostLaunchReservationTokenConfigKey, appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { isAspireDebugConfigurationExtensionOwned } from '../debugger/AspireDebugConfigurationProviderInternal';
 import { appHostLifecycleBusy } from '../loc/strings';
 import { AppHostLaunchService, AppHostLifecycleLockTimeoutError, appHostLifecycleLockMaxHoldMs, appHostLifecycleLockWaitTimeoutMs, externalLaunchReservationTimeoutMs } from '../services/AppHostLaunchService';
@@ -1041,6 +1041,40 @@ suite('AppHostLaunchService', () => {
 
         assert.strictEqual(service.isLaunching(reservedPath), false, 'Expected the reservation taken under the source path to be cleared');
         assert.strictEqual(service.getLaunchReservationToken(reservedPath), undefined);
+    });
+
+    test('a lifecycle launch of a source file releases its claim when the session terminates as the sibling project', async () => {
+        // The end-to-end shape of the same rewrite, driven through `launch` rather than
+        // `reserveLaunch`: only that path takes a lifecycle claim, and the claim is what
+        // `tryReserveLaunch` consults. A reservation released without its claim would still
+        // report the AppHost as spoken for and refuse every later lifecycle start for it.
+        const directory = createAppHostDirectory('AppHost.csproj', 'Program.cs');
+        const sourcePath = path.join(directory, 'Program.cs');
+        const rewrittenPath = path.join(directory, 'AppHost.csproj');
+
+        await service.launch(sourcePath, 'run', true);
+        assert.strictEqual(service.isLaunching(sourcePath), true);
+        assert.strictEqual(service.hasLifecycleLaunchClaim(sourcePath), true);
+        // The token the launch actually stamped, rather than one fabricated here, so the test
+        // fails if the launch ever stops stamping the configuration it hands to VS Code.
+        const launchedConfiguration = startDebuggingStub.firstCall.args[1] as Record<string, unknown>;
+        const reservationToken = launchedConfiguration[appHostLaunchReservationTokenConfigKey];
+        assert.strictEqual(typeof reservationToken, 'string');
+
+        assert.ok(onDidTerminateDebugSessionCallback);
+        onDidTerminateDebugSessionCallback({
+            configuration: {
+                type: 'aspire',
+                program: rewrittenPath,
+                command: 'run',
+                [appHostLaunchReservationTokenConfigKey]: reservationToken,
+            },
+        } as unknown as vscode.DebugSession);
+
+        assert.strictEqual(service.hasLifecycleLaunchClaim(sourcePath), false, 'Expected the lifecycle claim taken for the source path to be released');
+        assert.strictEqual(service.isLaunching(sourcePath), false);
+        assert.deepStrictEqual(service.launchingPaths, []);
+        assert.strictEqual(service.tryReserveLaunch(sourcePath), true, 'Expected a later lifecycle launch of the same AppHost to be accepted');
     });
 
     test('a repeated external reservation issues a fresh token so the superseded session cannot clear it', () => {
