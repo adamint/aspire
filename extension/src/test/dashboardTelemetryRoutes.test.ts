@@ -220,6 +220,7 @@ suite('DashboardTelemetryPassthrough route-level normalization', () => {
                         String.raw`\\?\UNC\private-server\customer-share\workspace\apphost.csproj`,
                         String.raw`\\private-server`,
                         '//private-server/customer-share/workspace/apphost.csproj',
+                        '//private-server',
                         'UNC-looking label private-server customer-share without leading slashes',
                     ],
                     propertyType: 1,
@@ -233,6 +234,7 @@ suite('DashboardTelemetryPassthrough route-level normalization', () => {
         assert.deepStrictEqual(
             parsed.v['Aspire.Dashboard.Resource.Types'],
             [
+                '<redacted>',
                 '<redacted>',
                 '<redacted>',
                 '<redacted>',
