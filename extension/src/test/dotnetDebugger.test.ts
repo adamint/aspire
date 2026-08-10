@@ -503,6 +503,34 @@ suite('Dotnet Debugger Extension Tests', () => {
         assert.strictEqual(notification.callCount, 1, 'sibling resources must not stack identical Hot Reload notifications');
     });
 
+    test('identifies each launch in the Hot Reload diagnostics, not just the project file', async () => {
+        initializeHotReloadNotificationState({ globalState: createTestMemento() });
+        stubCsDevKitExtension({});
+        const notification = vscode.window.showInformationMessage as sinon.SinonStub;
+        notification.resolves(undefined);
+        stubHotReloadSettingContribution({
+            get: (name: string) => name === 'hotReload' ? false : true
+        });
+        const info = sinon.stub(extensionLogOutputChannel, 'info');
+
+        // Two launches of the same project, which is what an app that runs one project as several
+        // resources produces. A file name alone would make these two lines identical.
+        await createProjectDebugConfiguration({ runId: 'resource-1' });
+        await createProjectDebugConfiguration({ runId: 'resource-2' });
+
+        const stateLines = info.getCalls()
+            .map(call => String(call.args[0]))
+            .filter(line => line.startsWith('Hot Reload state for '));
+
+        assert.strictEqual(stateLines.length, 2, stateLines.join('\n'));
+        assert.notStrictEqual(stateLines[0], stateLines[1], stateLines.join('\n'));
+        for (const line of stateLines) {
+            assert.ok(line.includes('C:\\temp\\TestProject.csproj'), line);
+        }
+        assert.ok(stateLines[0].includes('resource-1'), stateLines[0]);
+        assert.ok(stateLines[1].includes('resource-2'), stateLines[1]);
+    });
+
     test('reports a run-only resource through the real launch path when Hot Reload is off', async () => {
         initializeHotReloadNotificationState({ globalState: createTestMemento() });
         stubCsDevKitExtension({});

@@ -632,12 +632,16 @@ export function createProjectDebuggerExtension(dotNetServiceProducer: (debugSess
                 // force `noDebug = true` while `launchOptions.debug` stays true.
                 const isDebugSession = debugConfiguration.noDebug !== true;
                 const hotReloadDiagnostics = getHotReloadDiagnostics();
-                logHotReloadDiagnostics(path.basename(projectPath), hotReloadDiagnostics, isDebugSession);
+                // The project file name alone does not identify the launch: two resources can run the same
+                // project, and two projects in one app can share a file name, so per-resource diagnostics
+                // would be indistinguishable exactly when several resources start at once. The run id is
+                // the only per-launch identifier this callback is given.
+                logHotReloadDiagnostics(`${projectPath} (run ${debugConfiguration.runId})`, hotReloadDiagnostics, isDebugSession);
 
                 // Deliberately NOT awaited. A VS Code notification stays up until the user interacts
                 // with it, and this callback runs before the debug session is created, so awaiting it
                 // would stall the resource behind an advisory message.
-                showHotReloadNotificationIfNeeded(hotReloadDiagnostics, isDebugSession);
+                void showHotReloadNotificationIfNeeded(hotReloadDiagnostics, isDebugSession);
             }
             catch (err) {
                 extensionLogOutputChannel.warn(`Could not determine C# Dev Kit Hot Reload availability; continuing without it: ${err instanceof Error ? err.message : String(err)}`);

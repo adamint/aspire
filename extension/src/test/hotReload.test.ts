@@ -150,14 +150,13 @@ suite('Hot Reload Tests', () => {
         initializeHotReloadNotificationState({ globalState: createTestMemento() });
         const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
-        showHotReloadNotificationIfNeeded({
+        await showHotReloadNotificationIfNeeded({
             devKitInstalled: true,
             workspaceTrusted: true,
             settingContributed: false,
             settingEnabled: false,
             reloadOnSaveEnabled: true,
         }, true);
-        await settleNotifications();
 
         assert.strictEqual(notification.called, false);
     });
@@ -170,14 +169,13 @@ suite('Hot Reload Tests', () => {
         getConfiguration.returns({ get: () => undefined } as unknown as vscode.WorkspaceConfiguration);
         const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(enableHotReloadLabel as unknown as vscode.MessageItem);
 
-        showHotReloadNotificationIfNeeded({
+        await showHotReloadNotificationIfNeeded({
             devKitInstalled: true,
             workspaceTrusted: true,
             settingContributed: true,
             settingEnabled: false,
             reloadOnSaveEnabled: true,
         }, true);
-        await settleNotifications();
 
         assert.deepStrictEqual(notification.firstCall.args, [hotReloadDisabledNotice, enableHotReloadLabel]);
         assert.strictEqual(update.calledOnceWithExactly('hotReload', true, vscode.ConfigurationTarget.Global), true);
@@ -188,14 +186,13 @@ suite('Hot Reload Tests', () => {
         sinon.stub(vscode.window, 'showInformationMessage').resolves(showHotReloadOutputLabel as unknown as vscode.MessageItem);
         const executeCommand = sinon.stub(vscode.commands, 'executeCommand').resolves(undefined);
 
-        showHotReloadNotificationIfNeeded({
+        await showHotReloadNotificationIfNeeded({
             devKitInstalled: true,
             workspaceTrusted: true,
             settingContributed: true,
             settingEnabled: true,
             reloadOnSaveEnabled: true,
         }, true);
-        await settleNotifications();
 
         assert.strictEqual(executeCommand.calledOnceWithExactly('csdevkit.debug.showHotReloadPanel'), true);
     });
@@ -204,14 +201,13 @@ suite('Hot Reload Tests', () => {
         initializeHotReloadNotificationState({ globalState: createTestMemento() });
         const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
-        showHotReloadNotificationIfNeeded({
+        await showHotReloadNotificationIfNeeded({
             devKitInstalled: true,
             workspaceTrusted: true,
             settingContributed: true,
             settingEnabled: true,
             reloadOnSaveEnabled: false,
         }, true);
-        await settleNotifications();
 
         assert.strictEqual(notification.firstCall.args[0], hotReloadActiveNoticeSaveDisabled);
     });
@@ -220,23 +216,21 @@ suite('Hot Reload Tests', () => {
         initializeHotReloadNotificationState({ globalState: createTestMemento() });
         const notification = sinon.stub(vscode.window, 'showInformationMessage').resolves(undefined);
 
-        showHotReloadNotificationIfNeeded({
+        await showHotReloadNotificationIfNeeded({
             devKitInstalled: true,
             workspaceTrusted: true,
             settingContributed: true,
             settingEnabled: false,
             reloadOnSaveEnabled: true,
         }, true);
-        await settleNotifications();
 
-        showHotReloadNotificationIfNeeded({
+        await showHotReloadNotificationIfNeeded({
             devKitInstalled: true,
             workspaceTrusted: true,
             settingContributed: true,
             settingEnabled: true,
             reloadOnSaveEnabled: true,
         }, true);
-        await settleNotifications();
 
         assert.deepStrictEqual(notification.getCalls().map(call => call.args[0]), [
             hotReloadDisabledNotice,
@@ -256,13 +250,11 @@ suite('Hot Reload Tests', () => {
             reloadOnSaveEnabled: true,
         };
 
-        showHotReloadNotificationIfNeeded(diagnostics, true);
-        await settleNotifications();
+        await showHotReloadNotificationIfNeeded(diagnostics, true);
 
         // Same stored state, fresh window: only the persisted flag can suppress the second presentation.
         initializeHotReloadNotificationState({ globalState });
-        showHotReloadNotificationIfNeeded(diagnostics, true);
-        await settleNotifications();
+        await showHotReloadNotificationIfNeeded(diagnostics, true);
 
         assert.deepStrictEqual(notification.getCalls().map(call => call.args[0]), [hotReloadActiveNotice]);
     });
@@ -277,14 +269,13 @@ suite('Hot Reload Tests', () => {
         notification.onFirstCall().resolves(enableHotReloadLabel as unknown as vscode.MessageItem);
         notification.resolves(undefined);
 
-        showHotReloadNotificationIfNeeded({
+        await showHotReloadNotificationIfNeeded({
             devKitInstalled: true,
             workspaceTrusted: true,
             settingContributed: true,
             settingEnabled: false,
             reloadOnSaveEnabled: true,
         }, true);
-        await settleNotifications();
 
         assert.strictEqual(update.calledOnceWithExactly('hotReload', true, vscode.ConfigurationTarget.Global), true);
         assert.deepStrictEqual(notification.getCalls().map(call => call.args[0]), [
@@ -312,21 +303,18 @@ suite('Hot Reload Tests', () => {
             reloadOnSaveEnabled: true,
         };
 
-        showHotReloadNotificationIfNeeded(diagnostics, true);
-        await settleNotifications();
+        await showHotReloadNotificationIfNeeded(diagnostics, true);
 
         assert.deepStrictEqual(errorNotification.getCalls().map(call => call.args[0]), [hotReloadEnableFailed]);
 
         // The user asked for Hot Reload and did not get it, so the single offer this notice gets must
         // not have been consumed. Presenting again in this window proves both the in-window guard and
         // the persisted record were released, since either one alone would still suppress it.
-        showHotReloadNotificationIfNeeded(diagnostics, true);
-        await settleNotifications();
+        await showHotReloadNotificationIfNeeded(diagnostics, true);
 
         // That second presentation did consume the offer, so a later window gets nothing.
         initializeHotReloadNotificationState({ globalState });
-        showHotReloadNotificationIfNeeded(diagnostics, true);
-        await settleNotifications();
+        await showHotReloadNotificationIfNeeded(diagnostics, true);
 
         assert.deepStrictEqual(notification.getCalls().map(call => call.args[0]), [
             hotReloadDisabledNotice,
@@ -348,8 +336,7 @@ suite('Hot Reload Tests', () => {
             reloadOnSaveEnabled: true,
         };
 
-        showHotReloadNotificationIfNeeded(diagnostics, true);
-        await settleNotifications();
+        await showHotReloadNotificationIfNeeded(diagnostics, true);
 
         assert.deepStrictEqual(notification.firstCall.args, [hotReloadDisabledNotice, enableHotReloadLabel]);
         assert.strictEqual(notification.firstCall.args.includes(dontShowAgainLabel), false);
@@ -358,8 +345,7 @@ suite('Hot Reload Tests', () => {
         // A fresh window: dismissal alone already retired the notice, which is what makes the
         // suppression action redundant rather than merely unused.
         initializeHotReloadNotificationState({ globalState });
-        showHotReloadNotificationIfNeeded(diagnostics, true);
-        await settleNotifications();
+        await showHotReloadNotificationIfNeeded(diagnostics, true);
 
         assert.deepStrictEqual(notification.getCalls().map(call => call.args[0]), [hotReloadDisabledNotice]);
         assert.strictEqual(getNotificationSuppressionKey('resourceCommandArguments.secretWarning'), 'resourceCommandArguments.secretWarningSuppressed');
@@ -372,6 +358,21 @@ suite('Hot Reload Tests', () => {
     // (extension/scripts/run-e2e.js installs only the Aspire VSIX and runs extester --offline) has the
     // ms-dotnettools extensions that supply them, so no harness here can make the toast appear for a
     // UI driver to click. What is reachable is what happens after a click, so that is what these cover.
+
+    test('the active notices claim a setting rather than coverage of every resource', () => {
+        // This notice is presented before vscode.debug.startDebugging, from a probe that can only read the
+        // global setting: it does not know whether the debug engine will support applying changes, and
+        // sibling resources launched with noDebug are excluded from Hot Reload outright. Claiming the app's
+        // .NET project resources are covered would therefore be a promise the extension cannot keep.
+        for (const notice of [hotReloadActiveNotice, hotReloadActiveNoticeSaveDisabled]) {
+            assert.ok(
+                notice.includes('is turned on in C# Dev Kit') && notice.includes('the .NET resources you debug'),
+                `Notice must scope its claim to the setting and to debugged resources: ${notice}`);
+            assert.ok(
+                !notice.includes('is enabled for .NET project resources in this Aspire app'),
+                `Notice must not claim coverage of every project resource: ${notice}`);
+        }
+    });
 
     test('recovers when VS Code itself refuses to write the Hot Reload setting', async () => {
         const globalState = createTestMemento();
@@ -401,8 +402,7 @@ suite('Hot Reload Tests', () => {
             reloadOnSaveEnabled: true,
         };
 
-        showHotReloadNotificationIfNeeded(diagnostics, true);
-        await settleNotifications();
+        await showHotReloadNotificationIfNeeded(diagnostics, true);
 
         // Pins that the rejection came from VS Code rather than from a stub that happened to throw.
         assert.strictEqual(
@@ -412,8 +412,7 @@ suite('Hot Reload Tests', () => {
         assert.deepStrictEqual(errorMessage.getCalls().map(call => call.args[0]), [hotReloadEnableFailed]);
 
         initializeHotReloadNotificationState({ globalState });
-        showHotReloadNotificationIfNeeded(diagnostics, true);
-        await settleNotifications();
+        await showHotReloadNotificationIfNeeded(diagnostics, true);
 
         assert.deepStrictEqual(notification.getCalls().map(call => call.args[0]), [hotReloadDisabledNotice, hotReloadDisabledNotice]);
     });
@@ -436,8 +435,7 @@ suite('Hot Reload Tests', () => {
             reloadOnSaveEnabled: true,
         };
 
-        showHotReloadNotificationIfNeeded(diagnostics, true);
-        await settleNotifications();
+        await showHotReloadNotificationIfNeeded(diagnostics, true);
 
         assert.strictEqual(
             warn.getCalls().some(call => String(call.args[0]).includes("command 'csdevkit.debug.showHotReloadPanel' not found")),
@@ -445,13 +443,9 @@ suite('Hot Reload Tests', () => {
             `Expected the real command registry to reject, got: ${JSON.stringify(warn.getCalls().map(call => call.args[0]))}`);
 
         initializeHotReloadNotificationState({ globalState });
-        showHotReloadNotificationIfNeeded(diagnostics, true);
-        await settleNotifications();
+        await showHotReloadNotificationIfNeeded(diagnostics, true);
 
         assert.deepStrictEqual(notification.getCalls().map(call => call.args[0]), [hotReloadActiveNotice, hotReloadActiveNotice]);
     });
 
-    async function settleNotifications(): Promise<void> {
-        await new Promise(resolve => setTimeout(resolve, 5));
-    }
 });

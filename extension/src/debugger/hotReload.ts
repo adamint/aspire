@@ -52,13 +52,19 @@ function isHotReloadExpected(diagnostics: HotReloadDiagnostics): boolean {
         && diagnostics.settingEnabled;
 }
 
-export function logHotReloadDiagnostics(resourceName: string, diagnostics: HotReloadDiagnostics, isDebugSession: boolean): void {
+/**
+ * Writes the per-launch Hot Reload state to the output channel.
+ *
+ * `resourceIdentifier` has to distinguish one launch from another, not just name a project: several
+ * resources launch at once and their diagnostics interleave in a single channel.
+ */
+export function logHotReloadDiagnostics(resourceIdentifier: string, diagnostics: HotReloadDiagnostics, isDebugSession: boolean): void {
     if (!diagnostics.devKitInstalled) {
         return;
     }
 
     extensionLogOutputChannel.info(
-        `Hot Reload state for ${resourceName}: workspaceTrusted=${diagnostics.workspaceTrusted}, ` +
+        `Hot Reload state for ${resourceIdentifier}: workspaceTrusted=${diagnostics.workspaceTrusted}, ` +
         `settingContributed=${diagnostics.settingContributed}, ` +
         `csharp.experimental.debug.hotReload=${diagnostics.settingEnabled}, ` +
         `csharp.debug.hotReloadOnSave=${diagnostics.reloadOnSaveEnabled}`);
@@ -83,7 +89,7 @@ export function logHotReloadDiagnostics(resourceName: string, diagnostics: HotRe
     // setting is enough to cover a resource that is not being debugged at all.
     if (!isDebugSession) {
         extensionLogOutputChannel.info(
-            `${resourceName} is running without a debugger, so Hot Reload does not apply to it.`);
+            `${resourceIdentifier} is running without a debugger, so Hot Reload does not apply to it.`);
         return;
     }
 
@@ -100,7 +106,7 @@ export function logHotReloadDiagnostics(resourceName: string, diagnostics: HotRe
     // launch succeeding and on the target debugger engine supporting applying changes, and only Dev Kit
     // can answer that.
     extensionLogOutputChannel.info(
-        `Hot Reload is configured for ${resourceName} and applies once C# Dev Kit starts the session. ${gesture} across .NET resources at once. ` +
+        `Hot Reload is configured for ${resourceIdentifier} and applies once C# Dev Kit starts the session. ${gesture} across .NET resources at once. ` +
         "Dev Kit reports what it actually applied in the '.NET Hot Reload' output channel.");
 }
 
@@ -114,16 +120,24 @@ export function initializeHotReloadNotificationState(context: { globalState: vsc
     hotReloadNotificationsShownThisWindow.clear();
 }
 
-export function showHotReloadNotificationIfNeeded(diagnostics: HotReloadDiagnostics, isDebugSession: boolean): void {
+/**
+ * Presents the Hot Reload notice for a resource that is about to be debugged, if one is due.
+ *
+ * The returned promise settles when the notice has been answered and acted on. Production launches
+ * discard it - a notification stays up until the user interacts with it, and this runs before the
+ * debug session is created - but returning it is what lets tests wait for the work instead of
+ * guessing at a delay, and a guessed delay is a race as soon as the work touches a real VS Code API.
+ */
+export function showHotReloadNotificationIfNeeded(diagnostics: HotReloadDiagnostics, isDebugSession: boolean): Promise<void> {
     if (!isDebugSession) {
-        return;
+        return Promise.resolve();
     }
 
     const notice = getHotReloadNotice(diagnostics);
     if (!notice
         || hotReloadNotificationsShownThisWindow.has(notice.name)
         || hasNotificationBeenShown(hotReloadNotificationState, notice.name)) {
-        return;
+        return Promise.resolve();
     }
 
     // The in-window set is the synchronous guard: several resources launch at once, and the persisted
@@ -135,7 +149,7 @@ export function showHotReloadNotificationIfNeeded(diagnostics: HotReloadDiagnost
         extensionLogOutputChannel.warn('Hot Reload notification state was never initialized; a dismissal will not persist across windows.');
     }
 
-    void (async () => {
+    return (async () => {
         try {
             // Recorded before the notification is presented rather than after it is answered. Each notice
             // is offered at most once per user, and a window that closes while the notification is still
