@@ -29,7 +29,12 @@ suite('E2E deadline helper', () => {
 
     test('bounds the resource-debugger cleanup stop request by the proof deadline', () => {
         const extensionRoot = path.resolve(__dirname, '..', '..');
-        const bridge = fs.readFileSync(path.join(extensionRoot, 'src', 'testing', 'e2eStateFileBridge.ts'), 'utf8');
+        // `.gitattributes` marks the tree `* text=auto`, so this file is stored with LF and checked
+        // out with native endings - CRLF on Windows. The multi-line assertion below is written with
+        // `\n`, so it has to compare against normalized text or it can only ever pass on macOS and
+        // Linux.
+        const bridge = fs.readFileSync(path.join(extensionRoot, 'src', 'testing', 'e2eStateFileBridge.ts'), 'utf8')
+            .replace(/\r\n/g, '\n');
 
         assert.ok(bridge.includes('let proofFailure: unknown;'), 'Cleanup failures must not mask the startup or breakpoint failure that triggered cleanup.');
         assert.ok(bridge.includes("'resource breakpoint pause'"), 'Breakpoint pauses must share the resource-debugger proof deadline.');
