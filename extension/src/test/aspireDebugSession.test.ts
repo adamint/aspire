@@ -1337,6 +1337,69 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.strictEqual(stopDebuggingStub.callCount, parentStopsAfterDisposal, 'The Aspire parent must not be stopped a second time');
     });
 
+    // dispose() is what stops the owned sessions whenever no ordered shutdown ran: VS Code reaping
+    // the adapter, a startup failure, extension deactivation. Those stops sit in _ownedSessionStops
+    // instead of _disposables purely so the dispose() that *ends* an ordered shutdown does not
+    // repeat them, which leaves the plain path resting on a split nothing asserts - moving them
+    // back into _disposables would stop every session twice here and keep the suite green.
+    test('a plain disposal stops every owned session exactly once', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/AppHost/AppHost.csproj',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const terminalProvider = { isDebugConfigEnvironmentLoggingEnabled: () => false };
+        const dcpServer = { sendNotification: sinon.stub() };
+        const stopDebuggingStub = sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, dcpServer as any, terminalProvider as any, () => { });
+
+        // Registered through the real entry point so this covers how stops actually reach
+        // _ownedSessionStops, rather than a hand-built stand-in for that list.
+        const ownedSessions = ['AppHost', 'Frontend', 'Cache'].map(name => {
+            const stopSession = sinon.stub().resolves();
+            aspireDebugSession.trackAlreadyStartedResourceSession(
+                { runId: `run-${name}`, debugSessionId: `debug-${name}`, type: 'coreclr', name, request: 'launch' } as AspireResourceExtendedDebugConfiguration,
+                {
+                    id: `run-${name}`,
+                    processId: 100,
+                    session: { id: `run-${name}`, name } as vscode.DebugSession,
+                    stopSession,
+                    termination: new Promise<number>(() => { }),
+                });
+            return { name, stopSession };
+        });
+
+        aspireDebugSession.dispose();
+        await new Promise(resolve => setImmediate(resolve));
+
+        for (const { name, stopSession } of ownedSessions) {
+            assert.strictEqual(stopSession.callCount, 1, `${name} must be stopped exactly once by a plain disposal`);
+        }
+
+        assert.deepStrictEqual(stopDebuggingStub.args, [[parentDebugSession]], 'The Aspire parent is stopped exactly once');
+
+        // dispose() is reachable more than once - VS Code disposes the adapter and the extension
+        // disposes it again on deactivate - and the repeat must not re-stop anything.
+        aspireDebugSession.dispose();
+        await new Promise(resolve => setImmediate(resolve));
+
+        assert.deepStrictEqual(
+            ownedSessions.map(ownedSession => ownedSession.stopSession.callCount),
+            [1, 1, 1],
+            'A repeated disposal must not stop the sessions again');
+        assert.strictEqual(stopDebuggingStub.callCount, 1, 'A repeated disposal must not stop the Aspire parent again');
+    });
+
     // A stop for a session VS Code no longer knows about rejects, and these call sites cannot await
     // it: the late-start handlers return void and dispose() satisfies the Disposable contract. The
     // rejection has to be observed, or it surfaces as an unhandled rejection in the extension host
