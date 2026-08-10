@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
 import { AspireDebugSession, buildAspireCommandArgs, getLoggableDebugConfiguration } from '../debugger/AspireDebugSession';
+import * as cliModule from '../debugger/languages/cli';
 import { appHostTelemetryTargetPathConfigKey } from '../debugger/AspireDebugConfigurationMetadata';
 import { AspireResourceExtendedDebugConfiguration } from '../dcp/types';
 import { __resetCommonPropertiesForTests, __setReporterForTests } from '../utils/telemetry';
@@ -2429,6 +2430,80 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             const args = buildAspireCommandArgs('run', ['--isolated', '--', '--custom-arg', 'value'], ['--apphost', '/workspace/AppHost.csproj']);
 
             assert.deepStrictEqual(args, ['run', '--isolated', '--apphost', '/workspace/AppHost.csproj', '--', '--custom-arg', 'value']);
+        });
+    });
+
+    suite('CLI stop requests', () => {
+        function createSpawningSession(onNewConnection: (listener: (client: any) => void) => vscode.Disposable) {
+            const parentDebugSession = {
+                id: 'aspire-session',
+                type: 'aspire',
+                name: 'Aspire',
+                workspaceFolder: undefined,
+                configuration: {
+                    type: 'aspire',
+                    request: 'launch',
+                    name: 'Aspire',
+                    program: '/workspace/apphost.cs',
+                    command: 'run',
+                },
+                customRequest: sinon.stub(),
+                getDebugProtocolBreakpoint: sinon.stub(),
+            };
+            const terminalProvider = {
+                isCliDebugLoggingEnabled: () => false,
+                getAspireCliExecutablePath: async () => 'aspire',
+            };
+            const rpcServer = { onNewConnection };
+            const dcpServer = { recordAppHostProcessExit: sinon.stub() };
+
+            return new AspireDebugSession(
+                parentDebugSession as unknown as vscode.DebugSession,
+                rpcServer as any,
+                dcpServer as any,
+                terminalProvider as any,
+                () => { });
+        }
+
+        test('sends the pending CLI stop when the CLI connects after the stop was requested', async () => {
+            let connectListener: ((client: any) => void) | undefined;
+            const stopCli = sinon.stub().resolves();
+            sinon.stub(cliModule, 'spawnCliProcess').returns({ kill: () => { } } as any);
+            const aspireDebugSession = createSpawningSession(listener => {
+                connectListener = listener;
+                return { dispose: () => { } };
+            });
+
+            await aspireDebugSession.spawnAspireCommand(['run'], undefined, false);
+            assert.ok(connectListener, 'Expected the session to subscribe to new RPC connections.');
+
+            // The stop is requested while the CLI is still completing its RPC handshake, so there is
+            // no client to send it to yet.
+            aspireDebugSession.dispose();
+            assert.strictEqual(stopCli.callCount, 0);
+
+            connectListener({ debugSessionId: aspireDebugSession.debugSessionId, stopCli });
+            await waitFor(() => stopCli.callCount === 1);
+            assert.strictEqual(stopCli.callCount, 1);
+        });
+
+        test('ignores a late connection that belongs to a different debug session', async () => {
+            let connectListener: ((client: any) => void) | undefined;
+            const stopCli = sinon.stub().resolves();
+            sinon.stub(cliModule, 'spawnCliProcess').returns({ kill: () => { } } as any);
+            const aspireDebugSession = createSpawningSession(listener => {
+                connectListener = listener;
+                return { dispose: () => { } };
+            });
+
+            await aspireDebugSession.spawnAspireCommand(['run'], undefined, false);
+            assert.ok(connectListener);
+
+            aspireDebugSession.dispose();
+            connectListener({ debugSessionId: 'some-other-session', stopCli });
+            await new Promise(resolve => setTimeout(resolve, 20));
+
+            assert.strictEqual(stopCli.callCount, 0);
         });
     });
 

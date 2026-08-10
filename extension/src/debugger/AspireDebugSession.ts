@@ -85,6 +85,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private _disposeCompletion: Promise<void> | undefined;
   private _resolveDisposeCompletion: (() => void) | undefined;
   private _cliStopDisposable?: vscode.Disposable;
+  private _cliStopRequested = false;
   // Timestamp for the `debug/apphost/end` duration measurement. Captured the first
   // time we observe a `launch` request so it covers the actual user-visible session
   // lifetime, not the moment the AspireDebugSession object was constructed.
@@ -581,11 +582,36 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     return this._appHostTargetVersionAtLaunch;
   }
 
+  /**
+   * Sends the CLI shutdown request over RPC. Called both when the stop is first requested and,
+   * when that request arrived before the CLI connected, again from the connection callback.
+   */
+  private sendCliStopRequest(args: string[]): void {
+    if (!this._rpcClient) {
+      extensionLogOutputChannel.info(`Aspire CLI exit requested before the CLI connected; the request will be sent when it does: ${args.join(' ')}`);
+      return;
+    }
+
+    this._rpcClient.stopCli().catch((err) => {
+      extensionLogOutputChannel.info(`stopCli failed (connection may already be closed): ${err}`);
+    });
+    extensionLogOutputChannel.info(`Requested Aspire CLI exit with args: ${args.join(' ')}`);
+  }
+
   async spawnAspireCommand(args: string[], workingDirectory: string | undefined, noDebug: boolean, commandLabel: string = 'aspire run') {
-    const disposable = this._rpcServer.onNewConnection((client: ICliRpcClient) => {
+    // Deliberately not pushed onto `_disposables`: a stop requested before the CLI finishes its RPC
+    // handshake has to be replayed by this callback, so the subscription must outlive disposal. It
+    // is released either when the matching client connects or when the CLI process exits.
+    const connectionSubscription = this._rpcServer.onNewConnection((client: ICliRpcClient) => {
       if (client.debugSessionId === this.debugSessionId) {
         this._rpcClient = client;
-        disposable.dispose();
+        connectionSubscription.dispose();
+        // Disposal can race the handshake: `_cliStopDisposable` latches the request and finds no
+        // client to send it to, so replay it here. Without this the CLI (and the AppHost it owns)
+        // keeps running after the context closes the RPC server.
+        if (this._cliStopRequested) {
+          this.sendCliStopRequest(args);
+        }
       }
     });
 
@@ -639,6 +665,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
         },
         exitCallback: (code) => {
           this._dcpServer.recordAppHostProcessExit(this.debugSessionId, code);
+          // The CLI is gone, so no client will ever arrive to replay a pending stop against.
+          connectionSubscription.dispose();
           // Flush any partial line left in either buffer so trailing output isn't lost.
           if (stdoutBuffer.length > 0) {
             flushBuffer(stdoutBuffer, 'stdout');
@@ -667,10 +695,10 @@ export class AspireDebugSession implements vscode.DebugAdapter {
         }
 
         cliStopRequested = true;
-        this._rpcClient?.stopCli().catch((err) => {
-          extensionLogOutputChannel.info(`stopCli failed (connection may already be closed): ${err}`);
-        });
-        extensionLogOutputChannel.info(`Requested Aspire CLI exit with args: ${args.join(' ')}`);
+        // Latched on the instance as well as locally so the connection callback above can replay
+        // the request if the CLI had not completed its RPC handshake by the time we asked it to stop.
+        this._cliStopRequested = true;
+        this.sendCliStopRequest(args);
       }
     };
     this._disposables.push(this._cliStopDisposable);
