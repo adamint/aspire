@@ -255,6 +255,12 @@ internal static class PackageJsonMerger
     /// <see href="https://github.com/npm/node-semver#ranges"/>. Comparators, unions, hyphen ranges,
     /// x-ranges, dist-tags and aliases have no bound this can prove, and prereleases resolve by
     /// their own rules, so all of them fail closed.
+    ///
+    /// A literal that omits components is an x-range in disguise and widens the bound: `6` is
+    /// `6.x.x` and `~6` is <c>&gt;=6.0.0 &lt;7.0.0</c>, both of which reach 6.1.0, where `6.0` and
+    /// `~6.0` stop below it. <see cref="SemVersionStyles.Any"/> fills the missing components with
+    /// zero and so cannot tell those apart, which is why the bound is computed from how many
+    /// components the literal actually spells out.
     /// </remarks>
     private static bool IsTypeScriptVersionKnownSupported(string typeScriptVersion)
     {
@@ -275,17 +281,51 @@ internal static class PackageJsonMerger
             return false;
         }
 
-        // The first version the range can no longer resolve to. A caret allows everything below the
-        // next major, except below 1.0.0 where it allows only the next minor; a tilde allows
-        // everything below the next minor; an exact spec resolves only to itself.
-        var firstExcluded = rangeOperator switch
+        // The first version the range can no longer resolve to, following npm's x-range, tilde and
+        // caret rules. An omitted component is a wildcard, so the bound is set by the last component
+        // the literal names rather than by the zero the parser substituted for it.
+        // https://github.com/npm/node-semver#x-ranges-12x-1x-12-
+        var firstExcluded = (rangeOperator, ComponentCount(literal)) switch
         {
-            '^' when lowest.Major > 0 => new SemVersion(lowest.Major + 1, 0, 0),
-            '^' or '~' => new SemVersion(lowest.Major, lowest.Minor + 1, 0),
+            // A caret with no minor to pin - `^6`, and `^0` alike - is just `6.x`.
+            ('^', 1) => new SemVersion(lowest.Major + 1, 0, 0),
+            ('^', _) when lowest.Major > 0 => new SemVersion(lowest.Major + 1, 0, 0),
+            // Below 1.0.0 a caret pins the leftmost non-zero component instead: `^0.2.3` stops below
+            // 0.3.0, and `^0.0.3` below 0.0.4.
+            ('^', 3) when lowest.Minor == 0 => new SemVersion(0, 0, lowest.Patch + 1),
+            ('^', _) => new SemVersion(0, lowest.Minor + 1, 0),
+            // `~6` has no minor to pin either, so it stops below the next major; `~6.0` and `~6.0.3`
+            // both stop below the next minor.
+            ('~', 1) => new SemVersion(lowest.Major + 1, 0, 0),
+            ('~', _) => new SemVersion(lowest.Major, lowest.Minor + 1, 0),
+            // A bare or `=` literal is an x-range over whatever it omits, and resolves only to
+            // itself once all three components are present.
+            (_, 1) => new SemVersion(lowest.Major + 1, 0, 0),
+            (_, 2) => new SemVersion(lowest.Major, lowest.Minor + 1, 0),
             _ => new SemVersion(lowest.Major, lowest.Minor, lowest.Patch + 1),
         };
 
         return SemVersion.ComparePrecedence(firstExcluded, s_firstUnsupportedTypeScript) <= 0;
+    }
+
+    /// <summary>
+    /// How many numeric components a version literal spells out, so a partial literal can be given
+    /// the npm range bound it really has instead of the zero-filled one the parser produced.
+    /// </summary>
+    /// <remarks>
+    /// Only the core is counted. Prerelease and build metadata are separated by <c>-</c> and
+    /// <c>+</c> and can contain dots of their own, and neither widens the range.
+    /// </remarks>
+    private static int ComponentCount(string literal)
+    {
+        var core = literal.AsSpan();
+        var metadata = core.IndexOfAny('-', '+');
+        if (metadata >= 0)
+        {
+            core = core[..metadata];
+        }
+
+        return core.Count('.') + 1;
     }
 
     private static string? FindDependencyVersion(JsonObject packageJson, string packageName)

@@ -1750,6 +1750,56 @@ public class PackageJsonMergerTests
         Assert.Null(GetDep(result, "devDependencies", "typescript-eslint"));
     }
 
+    /// <summary>
+    /// npm completes a partial literal into a range over the components it leaves out, so `6` is
+    /// `6.x.x` and `~6` is <c>&gt;=6.0.0 &lt;7.0.0</c> - both resolve to 6.1.0 once it is published,
+    /// which is outside typescript-eslint 8.58.0's <c>&lt;6.1.0</c> peer range. Only `6.0` still
+    /// pins the minor, so only `6.0` is provably inside it.
+    /// </summary>
+    /// <remarks>
+    /// The scaffold here is deliberately behind the project. Dependency merging rewrites a project
+    /// spec whose lower bound is below the scaffold's version, which would replace the partial
+    /// literal with the scaffold's exact version and hide what this is testing. A project that is
+    /// already ahead of the scaffold keeps its own spec, which is the case the support check exists
+    /// to judge.
+    ///
+    /// See <see href="https://github.com/npm/node-semver#x-ranges-12x-1x-12-"/> and
+    /// <see href="https://github.com/npm/node-semver#tilde-ranges-123-12-1"/>.
+    /// </remarks>
+    [Theory]
+    [InlineData("6", false)]
+    [InlineData("~6", false)]
+    [InlineData("^6", false)]
+    [InlineData("6.0", true)]
+    [InlineData("~6.0", true)]
+    public void Merge_BrownfieldAheadOfScaffoldOnPartialTypeScriptLiteral_KeepsLintToolchainOnlyWhenTheRangeCannotReachTheUnsupportedVersion(
+        string existingTypeScript,
+        bool expectsLintToolchain)
+    {
+        var existing = $$"""
+            {
+              "name": "brownfield",
+              "devDependencies": { "typescript": "{{existingTypeScript}}" }
+            }
+            """;
+
+        var result = MergeJson(existing, ScaffoldBehindOnTypeScript);
+
+        // The spec has to survive the merge for the support check to be what decided the outcome.
+        Assert.Equal(existingTypeScript, GetDep(result, "devDependencies", "typescript"));
+
+        if (expectsLintToolchain)
+        {
+            Assert.Equal("8.58.0", GetDep(result, "devDependencies", "typescript-eslint"));
+            Assert.Equal("eslint apphost.mts", GetScript(result, "aspire:lint"));
+        }
+        else
+        {
+            Assert.Null(ParseJson(result)["devDependencies"]?["typescript-eslint"]);
+            Assert.DoesNotContain("aspire:lint", GetScripts(result).Select(script => script.Key));
+        }
+    }
+
     private const string ScaffoldWithLintToolchain = """
         {
           "scripts": {
@@ -1759,6 +1809,21 @@ public class PackageJsonMergerTests
           "dependencies": { "vscode-jsonrpc": "^8.2.0" },
           "devDependencies": {
             "typescript": "6.0.3",
+            "typescript-eslint": "8.58.0",
+            "eslint": "^10.0.3"
+          }
+        }
+        """;
+
+    private const string ScaffoldBehindOnTypeScript = """
+        {
+          "scripts": {
+            "aspire:lint": "eslint apphost.mts",
+            "aspire:build": "tsc -p tsconfig.apphost.json"
+          },
+          "dependencies": { "vscode-jsonrpc": "^8.2.0" },
+          "devDependencies": {
+            "typescript": "5.9.3",
             "typescript-eslint": "8.58.0",
             "eslint": "^10.0.3"
           }
