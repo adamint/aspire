@@ -4,10 +4,15 @@
 using System.Collections;
 using System.Text;
 using Aspire.Cli.Npm;
+using Aspire.Cli.Tests.Acquisition;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Aspire.Cli.Tests.Npm;
 
+// ReadNpmConfigVariables_RetainsOnlyRegistryConfigurationFromTheProcessEnvironment sets a
+// process-wide npm_config_* variable, and the assembly runs suites in parallel by default, so join
+// EnvVarMutatingTestCollection to keep another suite from observing it mid-run.
+[Collection(EnvVarMutatingTestCollection.Name)]
 public class NpmRegistryResolverTests : IDisposable
 {
     private const string PackageName = "@microsoft/aspire-cli";
@@ -265,11 +270,12 @@ public class NpmRegistryResolverTests : IDisposable
     [Fact]
     public void Resolve_KeepsADoubleQuotedNpmrcValueThatIsNotValidJson()
     {
-        // JSON.parse rejects "\z", and ini swallows the error while still holding the quoted text,
-        // so the quotes survive and the value never names a usable registry.
+        // JSON.parse rejects "\z", and ini swallows the error while still holding the quoted text.
+        // The surviving quotes are what make the value unusable, so the throw is the observation
+        // that proves they survived: unquoting it would have produced a perfectly good address.
         WriteHomeNpmrc("registry=\"https://npm.contoso.example/a\\zb/\"");
 
-        Assert.Equal(PublicRegistry, CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+        Assert.Throws<InvalidOperationException>(() => CreateResolver().Resolve(PackageName));
     }
 
     [Fact]
@@ -445,13 +451,26 @@ public class NpmRegistryResolverTests : IDisposable
     [InlineData("registry")]
     [InlineData("registry=")]
     [InlineData("=https://npm.contoso.example/")]
-    [InlineData("registry=file:///tmp/local")]
-    [InlineData("registry=not-a-url")]
-    public void Resolve_IgnoresUnusableNpmrcLines(string line)
+    public void Resolve_IgnoresNpmrcLinesThatDoNotDefineAKey(string line)
     {
         WriteHomeNpmrc(line);
 
         Assert.Equal(PublicRegistry, CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+    }
+
+    [Theory]
+    [InlineData("registry=not-a-url")]
+    [InlineData("registry=file:///tmp/local")]
+    public void Resolve_FailsWhenTheConfiguredRegistryIsNotAnHttpAddress(string line)
+    {
+        // These lines do define the key, and npm keeps a defined value selected however unusable
+        // it is. Falling back to public npm would advertise an update whose recommended
+        // "npm install -g" runs against the same unusable registry and fails.
+        WriteHomeNpmrc(line);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => CreateResolver().Resolve(PackageName));
+
+        Assert.Contains("'registry'", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -474,15 +493,21 @@ public class NpmRegistryResolverTests : IDisposable
         // npm expands ${VAR} through Node's process.env, which is case-insensitive only on Windows.
         WriteHomeNpmrc("registry=https://${npm_host}/feed/");
 
-        var resolution = CreateResolver(
+        var resolver = CreateResolver(
             environment: new Dictionary<string, string>
             {
                 ["NPM_HOST"] = "npm.contoso.example"
-            }).Resolve(PackageName);
+            });
 
-        Assert.Equal(
-            OperatingSystem.IsWindows() ? "https://npm.contoso.example/feed/" : PublicRegistry,
-            resolution.RegistryUri.AbsoluteUri);
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Equal("https://npm.contoso.example/feed/", resolver.Resolve(PackageName).RegistryUri.AbsoluteUri);
+            return;
+        }
+
+        // Elsewhere the reference stays undefined, so npm keeps the literal "${npm_host}" in the
+        // selected value and its own request fails.
+        Assert.Throws<InvalidOperationException>(() => resolver.Resolve(PackageName));
     }
 
     [Fact]
@@ -512,11 +537,49 @@ public class NpmRegistryResolverTests : IDisposable
     }
 
     [Fact]
-    public void Resolve_IgnoresEntryWithUndefinedEnvironmentReference()
+    public void Resolve_FailsWhenAnNpmrcEntryHasAnUndefinedEnvironmentReference()
     {
+        // npm leaves the undefined reference literal, keeps the entry selected, and fails its own
+        // request. Falling back to public npm here would advertise an update that the recommended
+        // "npm install -g" cannot install.
         WriteHomeNpmrc("registry=https://${NPM_HOST_NOT_SET}/feed/");
 
-        Assert.Equal(PublicRegistry, CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
+        var exception = Assert.Throws<InvalidOperationException>(() => CreateResolver().Resolve(PackageName));
+
+        Assert.Contains("'registry'", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("NPM_HOST_NOT_SET", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Resolve_FailsRatherThanFallingBackToALowerPrecedenceRegistry()
+    {
+        // The user layer defines an unusable registry, so npm never reaches the global one.
+        var globalNpmrc = Path.Combine(_root.FullName, "global-npmrc");
+        File.WriteAllText(globalNpmrc, "registry=https://npm.contoso.example/global/\n");
+        WriteHomeNpmrc($"globalconfig={globalNpmrc}", "registry=not-a-url");
+
+        Assert.Throws<InvalidOperationException>(() => CreateResolver().Resolve(PackageName));
+    }
+
+    [Fact]
+    public void Resolve_FailsWhenAnEnvironmentRegistryHasAnUndefinedEnvironmentReference()
+    {
+        var resolver = CreateResolver(environment: new Dictionary<string, string>
+        {
+            ["npm_config_registry"] = "https://${NPM_HOST_NOT_SET}/feed/"
+        });
+
+        Assert.Throws<InvalidOperationException>(() => resolver.Resolve(PackageName));
+    }
+
+    [Fact]
+    public void Resolve_ReadsAQuotedNpmrcKey()
+    {
+        // ini decodes the key half with the same unsafe() pass it applies to values, so npm sees
+        // the plain "registry" key here.
+        WriteHomeNpmrc("\"registry\"=https://npm.contoso.example/quoted/");
+
+        Assert.Equal("https://npm.contoso.example/quoted/", CreateResolver().Resolve(PackageName).RegistryUri.AbsoluteUri);
     }
 
     [Fact]
@@ -554,7 +617,7 @@ public class NpmRegistryResolverTests : IDisposable
 
         var key = name[NpmRegistryResolver.EnvironmentVariablePrefix.Length..].ToLowerInvariant();
 
-        return key is "registry" or "userconfig" || key.EndsWith(":registry", StringComparison.Ordinal);
+        return key is "registry" or "userconfig" or "globalconfig" || key.EndsWith(":registry", StringComparison.Ordinal);
     }
 
     [Fact]

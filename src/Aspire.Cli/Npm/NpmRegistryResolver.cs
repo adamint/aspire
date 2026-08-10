@@ -27,14 +27,28 @@ namespace Aspire.Cli.Npm;
 /// Node-on-PATH requirement that the HTTP-based lookup deliberately removed.
 /// </para>
 /// <para>
-/// Nothing outside <c>registry</c>, <c>&lt;scope&gt;:registry</c>, and <c>userconfig</c> is ever
-/// retained. Credential keys such as <c>//registry.example.com/:_authToken</c> are rejected by the
+/// Nothing outside <c>registry</c>, <c>&lt;scope&gt;:registry</c>, <c>userconfig</c>, and
+/// <c>globalconfig</c> is ever retained. Credential keys such as <c>//registry.example.com/:_authToken</c> are rejected by the
 /// allow list before their value is parsed out of the line, and the environment layer keeps only
 /// the <c>npm_config_*</c> variables that clear the same allow list, so no process environment
 /// value and no credential entry outlives the parse. A <c>.npmrc</c> line and the value behind a
 /// <c>${VAR}</c> reference still pass through managed strings while they are being read, which no
-/// in-process parser can avoid; the guarantee is that they are not held afterwards. The lookup
-/// itself is anonymous.
+/// in-process parser can avoid; the guarantee is that they are not held afterwards.
+/// </para>
+/// <para>
+/// The one credential that can outlive the parse is one the user wrote into the registry address
+/// itself, as <c>https://user:token@host/</c> or as a signed query string. That address is the
+/// request target, so removing the credential would turn a working private-feed lookup into a
+/// 401 rather than make anything safer.
+/// <see cref="NpmRegistryResolution.DisplayUri"/> exists to keep it out of the debug log and the
+/// timeout message.
+/// </para>
+/// <para>
+/// The request itself carries no <c>Authorization</c> header and no package metadata beyond the
+/// package name, and it follows the scheme of the configured registry. A registry configured as
+/// <c>http://</c> is therefore read over plaintext HTTP; npm supports http registries, and
+/// refusing them here would silently disable the update check for an internal mirror rather than
+/// protect it.
 /// </para>
 /// See https://docs.npmjs.com/cli/using-npm/config for the precedence rules implemented here.
 /// </remarks>
@@ -156,26 +170,21 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             return false;
         }
 
-        if (!TryCreateRegistryUri(value.Value, out var registryUri))
+        if (value.Value is null)
         {
-            // A registry that cannot be turned into an absolute http(s) address is unusable, but it
-            // is the user's configuration rather than a CLI fault, so the update check falls back
-            // rather than failing outright. The fallback is the next key and then the built-in
-            // default, not the same key in a lower layer: the layers were already collapsed by
-            // precedence, and npm would not consult a lower layer either - it would hand the
-            // unusable value to its own request and fail.
-            //
-            // Falling back to the public registry can only under-report an update, never point an
-            // install somewhere unexpected, because the recommended command re-resolves the
-            // registry itself.
-            _logger.LogDebug(
-                "Ignoring unusable npm '{Key}' value from {Source}; it is not an absolute http or https address.",
-                key,
-                value.Source);
-            return false;
+            // npm does not fall back when the selected registry is unusable: the value stays
+            // selected at its layer and the request npm builds from it fails. Falling back to the
+            // next key or to public npm would report an update that the recommended
+            // "npm install -g" cannot install, so the whole check fails instead and the caller
+            // reports no update. The message names the key and its source but never the value,
+            // which may embed a credential.
+            throw new InvalidOperationException(
+                $"The npm registry configured by '{key}' in {value.Source} is not an absolute http or https address.");
         }
 
-        resolution = new NpmRegistryResolution(registryUri, value.Source);
+        // The value was normalized into an absolute http(s) address when it was retained, so it
+        // cannot fail to parse here.
+        resolution = new NpmRegistryResolution(new Uri(value.Value, UriKind.Absolute), value.Source);
         _logger.LogDebug("Resolved npm '{Key}' to {Registry} from {Source}.", key, resolution.DisplayUri, value.Source);
 
         return true;
@@ -242,15 +251,19 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             // npm hands every layer's values to parseField, which trims them and substitutes
             // ${VAR}, so an environment layer is no more literal than a file layer. Path-typed
             // options such as userconfig are expanded where they are consumed.
-            string? expandedValue = null;
+            var rawValue = value?.Trim();
 
-            if (value is not null && !TryExpandEnvironmentReferences(value.Trim(), out expandedValue))
-            {
-                _logger.LogDebug("Ignoring the {Name} environment variable because it references an undefined environment variable.", name);
-                continue;
-            }
+            // npm's envReplace leaves each undefined "${VAR}" in place instead of dropping the
+            // entry, so the value stays selected at this precedence and npm's own request fails.
+            // Keeping the literal reproduces that rather than silently consulting a
+            // lower-precedence layer, and it keeps a defined ${NPM_TOKEN} that sits beside an
+            // undefined reference out of the retained string.
+            // See https://github.com/npm/config/blob/main/lib/env-replace.js.
+            var configuredValue = rawValue is not null && TryExpandEnvironmentReferences(rawValue, out var expandedValue)
+                ? expandedValue
+                : rawValue;
 
-            if (TryCreateConfigurationValue(expandedValue, $"the {name} environment variable", out var configurationValue))
+            if (TryCreateConfigurationValue(key, configuredValue, $"the {name} environment variable", out var configurationValue))
             {
                 layer[key] = configurationValue;
             }
@@ -360,13 +373,13 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
                 continue;
             }
 
-            if (!TryExpandEnvironmentReferences(ParseNpmrcValue(rawValue), out var value))
+            var parsedValue = ParseNpmrcValue(rawValue);
+
+            // See the matching comment in MergeEnvironment: npm leaves an undefined "${VAR}"
+            // literal rather than dropping the entry, so the layer stays selected and unusable.
+            if (!TryExpandEnvironmentReferences(parsedValue, out var value))
             {
-                // Current npm leaves an unresolved ${VAR} in place, which cannot parse as a
-                // registry address; dropping just this entry reaches the same outcome and keeps
-                // the remaining layers usable.
-                _logger.LogDebug("Ignoring npm '{Key}' in {Path} because it references an undefined environment variable.", key, path);
-                continue;
+                value = parsedValue;
             }
 
             SetIfPresent(fileConfiguration, key, value, path);
@@ -454,7 +467,19 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
             return false;
         }
 
-        key = parsedKey.ToString();
+        // ini runs its unsafe() decoder over the key half as well as the value half, so
+        //   "registry"=https://mirror.example/
+        // names the plain "registry" key in npm. Only a fully quoted key is unquoted, which is why
+        //   "scope":registry=https://s.example/
+        // keeps its quotes in npm too and is rejected by the allow list here.
+        // See https://github.com/npm/ini/blob/main/lib/ini.js (decode calls unsafe on match[2]).
+        key = ParseNpmrcValue(parsedKey);
+
+        if (key.Length == 0)
+        {
+            return false;
+        }
+
         rawValue = trimmed[(separatorIndex + 1)..].Trim();
 
         return true;
@@ -733,24 +758,42 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         string? value,
         string source)
     {
-        if (TryCreateConfigurationValue(value, source, out var configurationValue))
+        if (TryCreateConfigurationValue(key, value, source, out var configurationValue))
         {
             configuration[key] = configurationValue;
         }
     }
 
     private static bool TryCreateConfigurationValue(
+        string key,
         string? value,
         string source,
         [NotNullWhen(true)] out ConfigurationValue? configurationValue)
     {
+        configurationValue = null;
+
         if (string.IsNullOrWhiteSpace(value))
         {
-            configurationValue = null;
             return false;
         }
 
-        configurationValue = new ConfigurationValue(value.Trim(), source);
+        var trimmed = value.Trim();
+
+        if (!IsRegistryKey(key))
+        {
+            configurationValue = new ConfigurationValue(trimmed, source);
+            return true;
+        }
+
+        // A registry value only ever becomes a request address, so it is normalized once here
+        // instead of at every lookup. A value that cannot become one is retained as null rather
+        // than as text: the null still marks the key as configured, which is what keeps resolution
+        // from falling through to a lower-precedence registry, without holding a string such as
+        // "https://user:${NPM_TOKEN}@host/" whose reference was already substituted above.
+        configurationValue = TryCreateRegistryUri(trimmed, out var registryUri)
+            ? new ConfigurationValue(registryUri.AbsoluteUri, source)
+            : new ConfigurationValue(null, source);
+
         return true;
     }
 
@@ -760,7 +803,12 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
     /// </summary>
     private static bool IsInterestingKey(string key)
     {
-        return key is RegistryKey or UserConfigKey or GlobalConfigKey || key.EndsWith(ScopedRegistryKeySuffix, StringComparison.Ordinal);
+        return IsRegistryKey(key) || key is UserConfigKey or GlobalConfigKey;
+    }
+
+    private static bool IsRegistryKey(string key)
+    {
+        return key is RegistryKey || key.EndsWith(ScopedRegistryKeySuffix, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -925,5 +973,9 @@ internal sealed class NpmRegistryResolver : INpmRegistryResolver
         return true;
     }
 
-    private sealed record ConfigurationValue(string Value, string Source);
+    /// <summary>
+    /// A configuration entry that survived the allow list, where <paramref name="Value"/> is null
+    /// for a registry key whose configured value cannot be used as a request address.
+    /// </summary>
+    private sealed record ConfigurationValue(string? Value, string Source);
 }
