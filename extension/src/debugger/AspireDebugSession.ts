@@ -927,9 +927,9 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     }
   }
 
-  dispose(): void {
+  dispose(): Promise<void> {
     if (this._disposeCompletion || this._disposed) {
-      return;
+      return this._disposeCompletion ?? Promise.resolve();
     }
     this._disposed = true;
     this._disposeCompletion = new Promise<void>(resolve => {
@@ -982,12 +982,12 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     else {
       finishDispose();
     }
+
+    return this._disposeCompletion;
   }
 
   private disposeAndWait(): Promise<void> {
-    this.dispose();
-
-    return this._disposeCompletion ?? Promise.resolve();
+    return this.dispose();
   }
 
   private finishDisposeAfterResourceStops(

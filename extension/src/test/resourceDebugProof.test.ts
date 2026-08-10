@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { createDebugAdapterOutputCapture, getResourceDebugProofRequest, resourceDebugProofPhaseBudgetMs } from '../testing/e2eStateFileBridge';
+import { createDebugAdapterOutputCapture, findAppHostDebugSession, getResourceDebugProofRequest, resourceDebugProofPhaseBudgetMs } from '../testing/e2eStateFileBridge';
 import type { AspireExtensionE2EControlCommand } from '../types/extensionApi';
 
 suite('Resource debug proof request', () => {
@@ -58,6 +58,31 @@ suite('Resource debug proof request', () => {
 
         assert.strictEqual(request.expectedResourceDebugSessionType, 'pwa-node');
         assert.strictEqual(request.stopDebuggingOnCompletion, false);
+    });
+
+    test('selects the real AppHost debugger session instead of the synthetic Aspire parent', () => {
+        const appHostSession = findAppHostDebugSession([
+            {
+                id: 'aspire-parent',
+                type: 'aspire',
+                name: 'Aspire',
+                configuration: { program: appHostPath },
+            },
+            {
+                id: 'apphost-child',
+                type: 'coreclr',
+                name: 'C#: AppHost',
+                configuration: { program: appHostPath, isApphost: true },
+            },
+            {
+                id: 'node-resource',
+                type: 'pwa-node',
+                name: 'Node.js: app.js',
+                configuration: { program: sourcePath },
+            },
+        ]);
+
+        assert.strictEqual(appHostSession?.id, 'apphost-child');
     });
 
     test('clamps the per-phase timeout budgets to the requested timeout', () => {

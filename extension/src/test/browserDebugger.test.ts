@@ -55,10 +55,10 @@ suite('Browser Debugger Tests', () => {
         });
     }
 
-    test('forwards the trimmed web root so the validated value is the one js-debug receives', async () => {
+    test('preserves whitespace in a nonblank web root', async () => {
         const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173', web_root: '  /workspace/frontend/src\t' });
 
-        assert.strictEqual(debugConfig.webRoot, '/workspace/frontend/src');
+        assert.strictEqual(debugConfig.webRoot, '  /workspace/frontend/src\t');
     });
 
     test('omits the web root when the AppHost does not send one', async () => {

@@ -76,7 +76,8 @@ suite('Aspire resource debugger E2E', function () {
         assert.ok(appHostSession, `Expected an Aspire AppHost debug session: ${JSON.stringify(proof.debugSessions.map(toSessionSummary))}`);
         assert.ok(resourceSession, `Expected the stopped resource debug session: ${JSON.stringify(proof.debugSessions.map(toSessionSummary))}`);
 
-        assert.strictEqual(appHostSession.type, 'aspire');
+        assert.strictEqual(appHostSession.type, 'coreclr');
+        assert.strictEqual(appHostSession.configuration.isApphost, true);
         assert.strictEqual(resourceSession.type, 'pwa-node');
         assert.notStrictEqual(resourceSession.id, appHostSession.id);
         assert.ok(isSamePath(String(appHostSession.configuration.program ?? ''), getPrimaryAppHostProjectPath()));

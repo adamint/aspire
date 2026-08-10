@@ -21,6 +21,7 @@ export class AspireExtensionContext implements vscode.Disposable {
     private readonly _debugSessionOutputSubscriptions = new Map<string, vscode.Disposable>();
     private readonly _onDidChangeDebugSessions = new vscode.EventEmitter<void>();
     private readonly _onDidReceiveDebugConsoleOutput = new vscode.EventEmitter<AspireDebugConsoleOutputEvent>();
+    private _disposePromise?: Promise<void>;
     readonly onDidChangeDebugSessions = this._onDidChangeDebugSessions.event;
     readonly onDidReceiveDebugConsoleOutput = this._onDidReceiveDebugConsoleOutput.event;
 
@@ -94,14 +95,25 @@ export class AspireExtensionContext implements vscode.Disposable {
         return this._debugConfigProvider;
     }
 
-    dispose() {
+    dispose(): Promise<void> {
+        this._disposePromise ??= this.disposeCore();
+
+        return this._disposePromise;
+    }
+
+    private async disposeCore(): Promise<void> {
+        // AspireDebugSession.dispose() stops resource debug sessions before it runs the AppHost/CLI
+        // shutdown disposables. VS Code only awaits extension deactivation when a Promise is
+        // returned, so wait for those per-session disposals before tearing down the shared transport.
+        const debugSessionDisposals = this._aspireDebugSessions.map(session => session.dispose());
+        await Promise.allSettled(debugSessionDisposals);
+
         this._rpcServer?.dispose();
         this._dcpServer?.dispose();
         this._debugSessionStateSubscriptions.forEach(disposable => disposable.dispose());
         this._debugSessionStateSubscriptions.clear();
         this._debugSessionOutputSubscriptions.forEach(disposable => disposable.dispose());
         this._debugSessionOutputSubscriptions.clear();
-        this._aspireDebugSessions.forEach(session => session.dispose());
         this._terminalProvider?.dispose();
         this._editorCommandProvider?.dispose();
         this._onDidChangeDebugSessions.dispose();

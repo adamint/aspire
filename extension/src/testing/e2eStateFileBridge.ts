@@ -810,13 +810,17 @@ export function getResourceDebugProofRequest(command: ResourceDebugProofCommand)
   };
 }
 
-interface DebugSessionSnapshot {
+export interface DebugSessionSnapshot {
   id: string;
   type: string;
   name: string;
   parentSessionId?: string;
   parentSessionType?: string;
   configuration: Record<string, unknown>;
+}
+
+export function findAppHostDebugSession(debugSessions: readonly DebugSessionSnapshot[]): DebugSessionSnapshot | undefined {
+  return debugSessions.find(session => session.configuration.isApphost === true);
 }
 
 interface DebugAdapterLaunchRequest {
@@ -1178,13 +1182,9 @@ ${JSON.stringify({
       },
       resourceCommandResult,
       debugSessions,
-      // The AppHost session is the 'aspire' debug session the extension starts for this AppHost. The
-      // resource session is whichever session actually stopped on the breakpoint. Both are reported
-      // so a caller can assert the resource debugger is a separate session rather than the AppHost's.
-      appHostDebugSession: debugSessions.find(session =>
-        session.type === 'aspire' &&
-        typeof session.configuration.program === 'string' &&
-        isSamePath(session.configuration.program, appHostPath)),
+      // The AppHost session is the real child debugger session for the AppHost, not the synthetic
+      // Aspire parent. It is marked by createDebugSessionConfiguration with isApphost=true.
+      appHostDebugSession: findAppHostDebugSession(debugSessions),
       resourceDebugSession,
       launchRequests,
       debugAdapterResponses,
