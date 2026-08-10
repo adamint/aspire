@@ -132,6 +132,22 @@ suite('E2E shard matrix', () => {
                 continue;
             }
 
+            // A sequence entry the row pattern did not match is a row shape this parser does not
+            // model. Both of these are valid GitHub Actions matrix YAML:
+            //   -
+            //     name: Windows
+            //     shardName: edge-cases
+            //   - { name: Windows, shardName: edge-cases }
+            // Skipping them would make the row invisible to the guard, and an invisible row cannot
+            // fail the `spec` assertion, so a row missing its spec would pass by being unparseable.
+            // The bare-dash form is worse than a plain drop: its keys land on the previous row and
+            // overwrite it, so the previous row's spec makes the assertion pass for a row that has
+            // none. Fail closed on anything at the row indent this parser cannot read.
+            const sequenceEntry = /^(\s*)-(?:\s|$)/.exec(line);
+            if (sequenceEntry !== null && (includeRowIndent === undefined || sequenceEntry[1].length === includeRowIndent)) {
+                assert.fail(`Unsupported E2E matrix row shape: '${line.trim()}'. Write every row as '- <key>: <value>' with the remaining keys on the following lines so the guard can read its spec.`);
+            }
+
             if (currentRow === undefined) {
                 continue;
             }
@@ -392,6 +408,95 @@ suite('E2E shard matrix', () => {
             () => assertMatrixMatchesSpecs(workflow, ['edgeCases.e2e.test.ts']),
             /E2E matrix rows must include spec/,
             'A row without matrix.spec would run the default all-spec glob and must fail the guard.');
+    });
+
+    test('rejects a matrix row whose keys start on the line after the dash', () => {
+        const workflow = [
+            'jobs:',
+            '  extension_e2e:',
+            '    strategy:',
+            '      matrix:',
+            '        include:',
+            '          - name: Linux',
+            '            shardName: edge-cases',
+            '            spec: out/test-e2e/test-e2e/edgeCases.e2e.test.js',
+            '          -',
+            '            name: Windows',
+            '            shardName: edge-cases',
+            '            runner: windows-latest',
+            '',
+        ].join('\n');
+
+        // Without the fail-closed branch the Windows keys are folded into the Linux row, so the
+        // Linux spec satisfies the assertion for a Windows row that has no spec at all.
+        assert.throws(
+            () => assertMatrixMatchesSpecs(workflow, ['edgeCases.e2e.test.ts']),
+            /Unsupported E2E matrix row shape/,
+            'A row the parser cannot read must fail the guard rather than disappear from it.');
+    });
+
+    test('rejects a flow-style matrix row', () => {
+        const workflow = [
+            'jobs:',
+            '  extension_e2e:',
+            '    strategy:',
+            '      matrix:',
+            '        include:',
+            '          - name: Linux',
+            '            shardName: edge-cases',
+            '            spec: out/test-e2e/test-e2e/edgeCases.e2e.test.js',
+            '          - { name: Windows, shardName: edge-cases, runner: windows-latest }',
+            '',
+        ].join('\n');
+
+        assert.throws(
+            () => assertMatrixMatchesSpecs(workflow, ['edgeCases.e2e.test.ts']),
+            /Unsupported E2E matrix row shape/,
+            'A flow-style row is dropped by the parser, so it must fail the guard instead of passing unseen.');
+    });
+
+    test('rejects a matrix row whose spec key is present but empty', () => {
+        const workflow = [
+            'jobs:',
+            '  extension_e2e:',
+            '    strategy:',
+            '      matrix:',
+            '        include:',
+            '          - name: Linux',
+            '            shardName: edge-cases',
+            '            spec:',
+            '',
+        ].join('\n');
+
+        // An absent or empty spec expands to an empty ASPIRE_EXTENSION_E2E_SPEC. The workflow's
+        // compile step catches that with its own Test-Path throw, but this guard is the cheaper
+        // signal, and run-e2e.js falls back to the all-spec glob when the variable is empty.
+        assert.throws(
+            () => assertMatrixMatchesSpecs(workflow, ['edgeCases.e2e.test.ts']),
+            /E2E matrix rows must include spec/,
+            'An empty spec runs the default all-spec glob and must fail the guard.');
+    });
+
+    test('accepts a nested list inside a matrix row', () => {
+        const spec = 'out/test-e2e/test-e2e/edgeCases.e2e.test.js';
+        const workflow = [
+            'jobs:',
+            '  extension_e2e:',
+            '    strategy:',
+            '      matrix:',
+            '        include:',
+            '          - name: Linux',
+            '            shardName: edge-cases',
+            `            spec: ${spec}`,
+            '            tags:',
+            '              - fast',
+            '              - linux-only',
+            '',
+        ].join('\n');
+
+        // Sequence entries nested under a row property sit deeper than the row indent and must not
+        // trip the fail-closed branch.
+        assertMatrixMatchesSpecs(workflow, ['edgeCases.e2e.test.ts']);
     });
 
     test('rejects a disabled matrix row that is not explicitly tracked', () => {
