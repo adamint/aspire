@@ -25,6 +25,7 @@ internal static class PackageJsonMerger
     private const string AspirePrefix = "aspire:";
     private const string TypeScriptPackage = "typescript";
     private const string TypeScriptEslintPackage = "typescript-eslint";
+    private const string OverridesKey = "overrides";
     private const string AspireLintScriptName = "aspire:lint";
 
     /// <summary>
@@ -138,8 +139,10 @@ internal static class PackageJsonMerger
         var compilerIsUnchanged = projectTypeScript is not null
             && (scaffoldTypeScript is null || !NpmVersionHelper.ShouldUpgrade(projectTypeScript, scaffoldTypeScript));
         var projectOwnedPackage = projectAlreadyLinted && compilerIsUnchanged ? TypeScriptEslintPackage : null;
-        MergeDependencySection(existing, scaffold, DependenciesKey, logger, projectOwnedPackage);
-        MergeDependencySection(existing, scaffold, DevDependenciesKey, logger, projectOwnedPackage);
+        var rewrittenSpecs = new Dictionary<string, string>(StringComparer.Ordinal);
+        MergeDependencySection(existing, scaffold, DependenciesKey, logger, projectOwnedPackage, rewrittenSpecs);
+        MergeDependencySection(existing, scaffold, DevDependenciesKey, logger, projectOwnedPackage, rewrittenSpecs);
+        ReconcileNpmOverrides(existing, rewrittenSpecs, logger);
 
         // Handle engines with overwrite semantics for "node" — since the user is running
         // "aspire init", we enforce our Node version constraint (required for ESLint 10
@@ -237,18 +240,51 @@ internal static class PackageJsonMerger
         }
     }
 
+    /// <summary>
+    /// True only when every version the spec can resolve to is one typescript-eslint supports.
+    /// </summary>
+    /// <remarks>
+    /// The spec's lower bound is not enough: `^6.0.3` reads as satisfied by 6.0.3, but npm resolves
+    /// a caret range to the newest match, so it installs 6.1.0 or later the moment one is published
+    /// and typescript-eslint's `&lt;6.1.0` peer turns into ERESOLVE. What matters is the first
+    /// version the range excludes.
+    ///
+    /// Only the forms whose upper bound follows from the spec alone are considered - an exact
+    /// version, a caret range and a tilde range, per
+    /// <see href="https://github.com/npm/node-semver#ranges"/>. Comparators, unions, hyphen ranges,
+    /// x-ranges, dist-tags and aliases have no bound this can prove, and prereleases resolve by
+    /// their own rules, so all of them fail closed.
+    /// </remarks>
     private static bool IsTypeScriptVersionKnownSupported(string typeScriptVersion)
     {
         var trimmed = typeScriptVersion.Trim();
-        if (trimmed.StartsWith(">=", StringComparison.Ordinal) ||
-            trimmed.StartsWith(">", StringComparison.Ordinal))
+
+        var (rangeOperator, literal) = trimmed switch
+        {
+            ['^', .. var rest] => ('^', rest.TrimStart()),
+            ['~', .. var rest] => ('~', rest.TrimStart()),
+            ['=', .. var rest] => ('\0', rest.TrimStart()),
+            _ => ('\0', trimmed),
+        };
+
+        if (!SemVersion.TryParse(literal, SemVersionStyles.Any, out var lowest) ||
+            lowest is null ||
+            lowest.IsPrerelease)
         {
             return false;
         }
 
-        return NpmVersionHelper.TryParseNpmVersion(trimmed, out var resolvedTypeScript) &&
-            !resolvedTypeScript.IsPrerelease &&
-            SemVersion.ComparePrecedence(resolvedTypeScript, s_firstUnsupportedTypeScript) < 0;
+        // The first version the range can no longer resolve to. A caret allows everything below the
+        // next major, except below 1.0.0 where it allows only the next minor; a tilde allows
+        // everything below the next minor; an exact spec resolves only to itself.
+        var firstExcluded = rangeOperator switch
+        {
+            '^' when lowest.Major > 0 => new SemVersion(lowest.Major + 1, 0, 0),
+            '^' or '~' => new SemVersion(lowest.Major, lowest.Minor + 1, 0),
+            _ => new SemVersion(lowest.Major, lowest.Minor, lowest.Patch + 1),
+        };
+
+        return SemVersion.ComparePrecedence(firstExcluded, s_firstUnsupportedTypeScript) <= 0;
     }
 
     private static string? FindDependencyVersion(JsonObject packageJson, string packageName)
@@ -359,7 +395,47 @@ internal static class PackageJsonMerger
     /// the scaffold specifies a newer version. Unparseable version ranges (union ranges, workspace
     /// references, etc.) are preserved as-is.
     /// </summary>
-    private static void MergeDependencySection(JsonObject existing, JsonObject scaffold, string sectionName, ILogger logger, string? projectOwnedPackage = null)
+    /// <summary>
+    /// Re-points npm <c>overrides</c> entries at the specs this merge just rewrote.
+    /// </summary>
+    /// <remarks>
+    /// npm rejects an override for a package the manifest depends on directly unless the two specs
+    /// are identical, and it does so before any peer resolution: a manifest with
+    /// <c>devDependencies.typescript: "^5.9.3"</c> and <c>overrides.typescript: "^5.9.3"</c> is
+    /// valid until the merge moves the direct spec to the scaffold's 6.0.3, at which point
+    /// <c>npm install</c> fails with EOVERRIDE. Only npm enforces this - Yarn <c>resolutions</c> and
+    /// pnpm overrides deliberately allow a divergent spec - so only npm's section is reconciled.
+    /// See <see href="https://docs.npmjs.com/cli/v11/configuring-npm/package-json#overrides"/>.
+    /// </remarks>
+    private static void ReconcileNpmOverrides(JsonObject existing, Dictionary<string, string> rewrittenSpecs, ILogger logger)
+    {
+        if (rewrittenSpecs.Count == 0 || existing[OverridesKey] is not JsonObject overrides)
+        {
+            return;
+        }
+
+        foreach (var (packageName, rewrittenSpec) in rewrittenSpecs)
+        {
+            // Only a string entry is a spec for the package itself. An object entry is a nested
+            // override tree scoped to that package's own dependencies, which npm never compares
+            // against the direct spec.
+            if (GetStringValue(overrides[packageName]) is not { } overriddenSpec ||
+                string.Equals(overriddenSpec, rewrittenSpec, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            overrides[packageName] = rewrittenSpec;
+
+            logger.LogWarning(
+                "Updated the '{Package}' entry in overrides from '{OverriddenVersion}' to '{RewrittenVersion}' to match the upgraded direct dependency, because npm rejects an override that does not match a direct dependency.",
+                packageName,
+                overriddenSpec,
+                rewrittenSpec);
+        }
+    }
+
+    private static void MergeDependencySection(JsonObject existing, JsonObject scaffold, string sectionName, ILogger logger, string? projectOwnedPackage = null, Dictionary<string, string>? rewrittenSpecs = null)
     {
         var scaffoldDeps = scaffold[sectionName]?.AsObject();
         if (scaffoldDeps is null)
@@ -404,6 +480,7 @@ internal static class PackageJsonMerger
                     && NpmVersionHelper.ShouldUpgrade(existingVersion, desiredVersion))
                 {
                     existingDeps[packageName] = desiredVersion;
+                    rewrittenSpecs?.TryAdd(packageName, desiredVersion);
                 }
             }
         }

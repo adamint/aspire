@@ -1509,6 +1509,11 @@ public class PackageJsonMergerTests
     [InlineData("workspace:*")]
     [InlineData("^6.0.0 || ^7.0.0")]
     [InlineData(">=6.0.3")]
+    // A caret range is decided by the version it can reach, not the one it names: `^6.0.3` resolves
+    // to the newest 6.x, so it installs 6.1.0 or later the moment one is published and the peer
+    // range stops being satisfied.
+    [InlineData("^6.0.3")]
+    [InlineData("6.x")]
     public void Merge_BrownfieldOnUnsupportedTypeScript_DropsLintToolchain(string existingTypeScript)
     {
         var existing = $$"""
@@ -1530,9 +1535,17 @@ public class PackageJsonMergerTests
         Assert.Equal("tsc -p tsconfig.apphost.json", GetScript(result, "aspire:build"));
     }
 
+    /// <summary>
+    /// The counterpart: every version these specs can resolve to is inside typescript-eslint's
+    /// <c>&lt;6.1.0</c> peer range, so the lint toolchain stays. `^5.9.3` stops below 6.0.0 and
+    /// `~6.0.3` stops below 6.1.0, which is why a tilde on the same base version is accepted where
+    /// the caret is not.
+    /// </summary>
     [Theory]
-    [InlineData("^6.0.3")]
     [InlineData("^5.9.3")]
+    [InlineData("~6.0.3")]
+    [InlineData("6.0.3")]
+    [InlineData("=6.0.3")]
     public void Merge_BrownfieldOnSupportedTypeScript_KeepsLintToolchain(string existingTypeScript)
     {
         var existing = $$"""
@@ -1644,6 +1657,41 @@ public class PackageJsonMergerTests
 
         Assert.Equal("6.0.3", GetDep(result, "devDependencies", "typescript"));
         Assert.Equal("8.58.0", GetDep(result, "devDependencies", "typescript-eslint"));
+    }
+
+    /// <summary>
+    /// npm rejects an override for a package the manifest depends on directly unless the two specs
+    /// are identical, and it does so before any peer resolution. This manifest installs today; the
+    /// merge moves the direct spec to the scaffold's 6.0.3, so the override has to move with it or
+    /// <c>npm install</c> fails with EOVERRIDE.
+    /// </summary>
+    [Fact]
+    public void Merge_BrownfieldWithAnNpmOverride_MovesTheOverrideWithTheUpgradedDependency()
+    {
+        const string Existing = """
+            {
+              "name": "brownfield",
+              "devDependencies": {
+                "typescript": "^5.9.3"
+              },
+              "overrides": {
+                "typescript": "^5.9.3",
+                "left-pad": "1.3.0",
+                "some-package": { "typescript": "^5.9.3" }
+              }
+            }
+            """;
+
+        var result = MergeJson(Existing, ScaffoldWithLintToolchain);
+        var overrides = ParseJson(result)["overrides"]!.AsObject();
+
+        Assert.Equal("6.0.3", GetDep(result, "devDependencies", "typescript"));
+        Assert.Equal("6.0.3", overrides["typescript"]?.GetValue<string>());
+
+        // Untouched: an override for a package this merge did not rewrite, and a nested override
+        // tree, which npm scopes to that package's own dependencies rather than the direct spec.
+        Assert.Equal("1.3.0", overrides["left-pad"]?.GetValue<string>());
+        Assert.Equal("^5.9.3", overrides["some-package"]?["typescript"]?.GetValue<string>());
     }
 
     [Fact]
