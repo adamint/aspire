@@ -158,7 +158,7 @@ suite('Browser Debugger Tests', () => {
             const userDataDir = debugConfig.userDataDir as string | undefined;
             if (userDataDir === undefined) {
                 assert.ok(
-                    warnStub.getCalls().some(call => /without an isolated profile/.test(call.args[0])),
+                    warnStub.getCalls().some(call => /without an Aspire-owned profile/.test(call.args[0])),
                     'Expected the rejected profile directory to be logged');
             }
             else {
@@ -393,6 +393,45 @@ suite('Browser Debugger Tests', () => {
 
         cleanupRun('run-1');
         assert.strictEqual(rmStub.called, true);
+    });
+
+    test('drops a workspace userDataDir when the created profile directory fails containment', async () => {
+        // The other half of the same failure mode: `createBrowserUserDataDir` also returns
+        // `undefined` when the directory it created resolves outside the temp root, and that path
+        // never reaches the `catch`. A workspace `userDataDir` has to be dropped there too, or the
+        // containment refusal would hand js-debug the workspace's own profile path instead.
+        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
+        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
+        const profileFs = stubBrowserProfileFs();
+        const createdPath = profileDirFor('run-1');
+        profileFs.mkdtemp.resolves(createdPath);
+        profileFs.realpath.callsFake(async (candidate: fs.PathLike) =>
+            String(candidate) === createdPath ? path.join(browserProfileTempRootDir(), '..', 'escaped-profile') : String(candidate));
+        const prepared = await prepareDebugSession(
+            {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                debuggers: {
+                    browser: {
+                        userDataDir: '/home/user/.config/google-chrome'
+                    } as never
+                }
+            },
+            { type: 'browser', url: 'https://localhost:5001' } as BrowserLaunchConfiguration,
+            [],
+            [],
+            { debug: true, runId: 'run-1', debugSessionId: 'dcp-1', isApphost: false, debugSession: {} as AspireDebugSession },
+            browserDebuggerExtension);
+
+        const configuration = prepared.debugConfiguration;
+        assert.strictEqual(configuration.userDataDir, undefined, 'Expected the workspace userDataDir to be dropped when the created profile directory failed containment');
+        assert.ok(warnStub.getCalls().some(call => /outside/.test(call.args[0])));
+        assert.ok(warnStub.getCalls().some(call => /without an Aspire-owned profile/.test(call.args[0])));
+
+        cleanupRun('run-1');
+        assert.strictEqual(rmStub.called, false);
     });
 
     test('strips js-debug-only workspace settings from a Firefox launch', async () => {
