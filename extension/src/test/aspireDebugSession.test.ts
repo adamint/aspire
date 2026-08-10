@@ -605,6 +605,80 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         clock.restore();
     });
 
+    test('AppHost restart waits for resource-first disposal to finish', async () => {
+        const parentDebugSession = {
+            id: 'aspire-session',
+            type: 'aspire',
+            name: 'Aspire',
+            workspaceFolder: undefined,
+            configuration: {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.js',
+                command: 'run',
+            },
+            customRequest: sinon.stub(),
+            getDebugProtocolBreakpoint: sinon.stub(),
+        };
+        const appHostDebugSession = {
+            id: 'apphost-session',
+            type: 'coreclr',
+            name: 'AppHost',
+            configuration: { type: 'coreclr', request: 'launch', name: 'AppHost' },
+        };
+        const resourceDebugSession = {
+            id: 'resource-session',
+            type: 'pwa-node',
+            name: 'Node.js: app.js',
+            configuration: { type: 'pwa-node', request: 'launch', name: 'Node.js: app.js' },
+        };
+        const terminalProvider = {
+            isCliDebugLoggingEnabled: () => false,
+            isDebugConfigEnvironmentLoggingEnabled: () => false,
+        };
+        let onAppHostTerminated: ((session: vscode.DebugSession) => unknown) | undefined;
+        sinon.stub(vscode.debug, 'registerDebugAdapterTrackerFactory').returns({ dispose: sinon.stub() });
+        sinon.stub(vscode.debug, 'onDidTerminateDebugSession').callsFake(listener => {
+            onAppHostTerminated = listener;
+            return { dispose: sinon.stub() };
+        });
+        const restartStub = sinon.stub(vscode.debug, 'startDebugging').resolves(true);
+        sinon.stub(vscode.debug, 'stopDebugging').resolves();
+        const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { });
+        let releaseResourceStop!: () => void;
+        const resourceStopGate = new Promise<void>(resolve => { releaseResourceStop = resolve; });
+        sinon.stub(aspireDebugSession, 'startAndGetDebugSession').resolves({
+            id: appHostDebugSession.id,
+            session: appHostDebugSession as unknown as vscode.DebugSession,
+            stopSession: () => vscode.debug.stopDebugging(appHostDebugSession as unknown as vscode.DebugSession),
+        });
+
+        await aspireDebugSession.startAppHost('/workspace/apphost.js', ['node', 'apphost.js'], [], true, { forceBuild: false });
+        (aspireDebugSession as any)._resourceDebugSessions = [
+            (aspireDebugSession as any)._appHostDebugSession,
+            {
+                id: resourceDebugSession.id,
+                session: resourceDebugSession as unknown as vscode.DebugSession,
+                stopSession: () => resourceStopGate,
+            },
+        ];
+        (aspireDebugSession as any)._appHostRestartRequested = true;
+
+        const restart = Promise.resolve(onAppHostTerminated!(appHostDebugSession as unknown as vscode.DebugSession));
+        await Promise.resolve();
+
+        // The AppHost termination callback used to call dispose() and immediately restart. That
+        // lets the replacement Aspire session launch while the old one still owns resource debug
+        // sessions and has not run its CLI/AppHost shutdown disposables yet.
+        sinon.assert.notCalled(restartStub);
+
+        releaseResourceStop();
+        await restart;
+
+        sinon.assert.calledOnceWithExactly(restartStub, undefined, parentDebugSession.configuration);
+    });
+
     test('stopDebugging waits for every resource stop to settle before stopping the AppHost', async () => {
         const parentDebugSession = {
             id: 'aspire-session',

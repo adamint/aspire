@@ -81,6 +81,8 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   private readonly _disposables: vscode.Disposable[] = [];
   private _disposed = false;
   private _parentStopPromise: Thenable<void> | undefined;
+  private _disposeCompletion: Promise<void> | undefined;
+  private _resolveDisposeCompletion: (() => void) | undefined;
   // Timestamp for the `debug/apphost/end` duration measurement. Captured the first
   // time we observe a `launch` request so it covers the actual user-visible session
   // lifetime, not the moment the AspireDebugSession object was constructed.
@@ -672,7 +674,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
           // All other cases (user stop, process crash/exit) just dispose.
           const shouldRestart = this._appHostRestartRequested;
           const config = this.configuration;
-          this.dispose();
+          await this.disposeAndWait();
 
           if (shouldRestart) {
             extensionLogOutputChannel.info('AppHost restart requested, restarting Aspire debug session');
@@ -926,10 +928,13 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   }
 
   dispose(): void {
-    if (this._disposed) {
+    if (this._disposeCompletion || this._disposed) {
       return;
     }
     this._disposed = true;
+    this._disposeCompletion = new Promise<void>(resolve => {
+      this._resolveDisposeCompletion = resolve;
+    });
     extensionLogOutputChannel.info('Stopping the Aspire debug session');
     this._onDidChangeState.fire();
 
@@ -948,16 +953,22 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     const dcpServer = this._dcpServer;
 
     const finishDispose = () => {
-      this.finishDisposeAfterResourceStops(
-        startMs,
-        mode,
-        language,
-        languagePromise,
-        targetVersion,
-        targetVersionPromise,
-        appHostIsDirectory,
-        debugSessionId,
-        dcpServer);
+      try {
+        this.finishDisposeAfterResourceStops(
+          startMs,
+          mode,
+          language,
+          languagePromise,
+          targetVersion,
+          targetVersionPromise,
+          appHostIsDirectory,
+          debugSessionId,
+          dcpServer);
+      }
+      finally {
+        this._resolveDisposeCompletion?.();
+        this._resolveDisposeCompletion = undefined;
+      }
     };
 
     // Stop child debug sessions before any CLI/AppHost shutdown disposable can fire. The normal
@@ -971,6 +982,12 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     else {
       finishDispose();
     }
+  }
+
+  private disposeAndWait(): Promise<void> {
+    this.dispose();
+
+    return this._disposeCompletion ?? Promise.resolve();
   }
 
   private finishDisposeAfterResourceStops(
