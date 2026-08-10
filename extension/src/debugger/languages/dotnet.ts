@@ -20,6 +20,7 @@ import {
     determineServerReadyAction,
     LaunchProfileCommandName,
     LaunchProfile,
+    LaunchProfileResult,
     expandEnvironmentVariables
 } from '../launchProfiles';
 import { AspireDebugSession } from '../AspireDebugSession';
@@ -36,7 +37,17 @@ interface DotNetAttachDebuggerResourceInfo {
     projectPath: string;
     resourceLabel: string;
     reportedTargetName: string | undefined;
+    selectedLaunchProfile: SelectedLaunchProfile;
 }
+
+// What the resource snapshot says about the launch profile the AppHost applied.
+// 'named'   - the AppHost reported the profile it selected, which is not necessarily the file's default.
+// 'none'    - the AppHost reported that no profile applies (ExcludeLaunchProfile, or no profile matched).
+// 'unknown' - the AppHost never reported the property, so the file's default has to be inferred instead.
+type SelectedLaunchProfile =
+    | { kind: 'named'; name: string }
+    | { kind: 'none' }
+    | { kind: 'unknown' };
 
 const executablePidPropertyName = 'executable.pid';
 const executablePathPropertyName = 'executable.path';
@@ -44,6 +55,11 @@ const projectPathPropertyName = 'project.path';
 // Well-known snapshot property added by the AppHost SDK target-name contract.
 // It carries the MSBuild-evaluated `TargetName`, which is the process name the C# debugger attaches to.
 const projectTargetNamePropertyName = 'project.targetName';
+// Carries the name of the launch profile the AppHost actually applied to this resource, which the
+// AppHost resolves itself (ResourceSnapshotBuilder -> GetEffectiveLaunchProfile). It is published with a
+// null value when no profile applies, so key presence - not just the value - distinguishes "no profile"
+// from an AppHost too old to report the property at all.
+const projectLaunchProfilePropertyName = 'project.launchProfile';
 const resourceParentNamePropertyName = 'resource.parentName';
 const dotNetProjectFileExtensions = new Set(['.csproj', '.fsproj', '.vbproj']);
 
@@ -432,7 +448,42 @@ function getDotNetAttachDebuggerResourceInfo(resource: DebuggableResourceSnapsho
         projectPath,
         resourceLabel: resource.displayName ?? resource.name,
         reportedTargetName: getReportedTargetName(resource),
+        selectedLaunchProfile: getSelectedLaunchProfile(resource),
     };
+}
+
+function getSelectedLaunchProfile(resource: DebuggableResourceSnapshot): SelectedLaunchProfile {
+    const properties = resource.properties;
+    if (!properties || !(projectLaunchProfilePropertyName in properties)) {
+        return { kind: 'unknown' };
+    }
+
+    const value: unknown = properties[projectLaunchProfilePropertyName];
+    if (typeof value !== 'string' || value.trim().length === 0) {
+        return { kind: 'none' };
+    }
+
+    return { kind: 'named', name: value };
+}
+
+// Resolves the launch profile that governs how this resource was started. The AppHost-reported profile
+// wins because it is the one that was actually applied; only an AppHost that never reported it falls back
+// to inferring the file's default, which is what `dotnet run` would have picked.
+async function resolveEffectiveLaunchProfile(attachInfo: DotNetAttachDebuggerResourceInfo): Promise<LaunchProfileResult> {
+    if (attachInfo.selectedLaunchProfile.kind === 'none') {
+        return { profile: null, profileName: null };
+    }
+
+    const launchSettings = await readLaunchSettings(attachInfo.projectPath);
+    if (attachInfo.selectedLaunchProfile.kind === 'named') {
+        const profileName = attachInfo.selectedLaunchProfile.name;
+        // Match the SDK's ordinal, case-sensitive profile lookup so a profile that differs only in casing
+        // is treated as absent here exactly as it would be by `dotnet run`.
+        const profile = launchSettings?.profiles?.[profileName] ?? null;
+        return profile ? { profile, profileName } : { profile: null, profileName: null };
+    }
+
+    return determineDefaultLaunchProfile(launchSettings);
 }
 
 function getResourceParentName(resource: DebuggableResourceSnapshot): string | null {
@@ -487,14 +538,11 @@ async function createDotNetAttachDebugSessionConfiguration(resource: DebuggableR
     // An Executable profile does not run the project's own output: the extension launches the profile's
     // executablePath with its commandLineArgs (see configureExecutableLaunchProfile), so a process named
     // after the project's TargetName was never started and attaching by that name would find nothing.
-    // Only the default profile can be checked - the resource contract does not carry which profile the
-    // AppHost actually selected - so this refuses the case where nothing else was chosen and explains why,
-    // rather than offering an attach that cannot succeed.
-    const defaultLaunchProfile = determineDefaultLaunchProfile(await readLaunchSettings(attachInfo.projectPath));
-    if (defaultLaunchProfile.profile?.commandName === LaunchProfileCommandName.executable) {
+    const effectiveLaunchProfile = await resolveEffectiveLaunchProfile(attachInfo);
+    if (effectiveLaunchProfile.profile?.commandName === LaunchProfileCommandName.executable) {
         throw new AttachDebuggerConfigurationError(
             'ResourceNotAttachable',
-            attachDebuggerExecutableLaunchProfile(attachInfo.resourceLabel, defaultLaunchProfile.profileName ?? ''));
+            attachDebuggerExecutableLaunchProfile(attachInfo.resourceLabel, effectiveLaunchProfile.profileName ?? ''));
     }
 
     let processName = attachInfo.reportedTargetName;
