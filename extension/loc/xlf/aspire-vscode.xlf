@@ -67,9 +67,6 @@
     <trans-unit id="aspire-vscode.strings.aspireRestoreFailedStatusBar">
       <source xml:lang="en">Aspire restore failed (click to retry)</source>
     </trans-unit>
-    <trans-unit id="aspire-vscode.strings.resourceStartsDidNotFinishBeforeStopDeadline">
-      <source xml:lang="en">Aspire stopped waiting for {0} resource(s) that were still starting. Any that had already launched were asked to stop; see the Aspire output channel for the result.</source>
-    </trans-unit>
     <trans-unit id="aspire-vscode.strings.aspireTerminalName">
       <source xml:lang="en">Aspire terminal</source>
     </trans-unit>
@@ -97,17 +94,11 @@
     <trans-unit id="configuration.aspire.enableAutoRestore">
       <source xml:lang="en">Automatically run &apos;aspire restore&apos; when the workspace opens and whenever aspire.config.json changes (e.g. after switching git branches). Keeps integration packages in sync and prevents editor errors.</source>
     </trans-unit>
-    <trans-unit id="aspire-vscode.strings.azureFunctionsLabel">
-      <source xml:lang="en">Azure Functions</source>
-    </trans-unit>
     <trans-unit id="aspire-vscode.strings.azureFunctionsCmdDelayedExpansion">
       <source xml:lang="en">Azure Functions launch arguments containing &quot;!&quot; are not supported by cmd.exe because delayed environment variable expansion may change them. Configure terminal.integrated.automationProfile.windows to use PowerShell and try again.</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.azureFunctionsCmdPercentArgument">
       <source xml:lang="en">Azure Functions launch arguments containing &quot;%&quot; are not supported by cmd.exe. Configure terminal.integrated.automationProfile.windows to use PowerShell and try again.</source>
-    </trans-unit>
-    <trans-unit id="aspire-vscode.strings.azureFunctionsDisplayName">
-      <source xml:lang="en">Azure Functions: {0}</source>
     </trans-unit>
     <trans-unit id="aspire-vscode.strings.unsupportedBrowserDebugTarget">
       <source xml:lang="en">Browser &apos;{0}&apos; cannot be debugged for resource &apos;{1}&apos;. Supported browsers are: {2}.</source>

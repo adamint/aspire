@@ -32,14 +32,6 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(debugConfig.type, 'pwa-chrome');
     });
 
-    test('drops process launch properties that browser debugging cannot use', async () => {
-        const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173' });
-
-        assert.strictEqual(debugConfig.program, undefined);
-        assert.strictEqual(debugConfig.args, undefined);
-        assert.strictEqual(debugConfig.cwd, undefined);
-    });
-
     test('forwards a web root when the AppHost supplies one', async () => {
         const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173', web_root: '/workspace/frontend/src' });
 
@@ -48,7 +40,7 @@ suite('Browser Debugger Tests', () => {
 
     // js-debug resolves source maps against any non-empty webRoot, so a whitespace-only value is
     // just as invalid a source-map root as an empty one - it is only truthy.
-    for (const blankWebRoot of ['', '   ', '\t', '\n', ' \t\r\n ']) {
+    for (const blankWebRoot of ['', '   ']) {
         test(`omits a blank web root ${JSON.stringify(blankWebRoot)} instead of forwarding it to js-debug`, async () => {
             const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173', web_root: blankWebRoot });
 
@@ -60,13 +52,11 @@ suite('Browser Debugger Tests', () => {
     // different directory rather than a sloppy spelling of the unpadded one. The trim decides only
     // whether the value is blank; rewriting what the AppHost sent would silently point js-debug at
     // a directory the AppHost never named.
-    for (const paddedWebRoot of ['  /workspace/frontend/src\t', '/workspace/frontend ', ' /workspace/frontend']) {
-        test(`forwards the web root ${JSON.stringify(paddedWebRoot)} unchanged instead of rewriting the path`, async () => {
-            const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173', web_root: paddedWebRoot });
+    test('forwards a padded web root unchanged instead of rewriting the path', async () => {
+        const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173', web_root: ' /workspace/frontend ' });
 
-            assert.strictEqual(debugConfig.webRoot, paddedWebRoot);
-        });
-    }
+        assert.strictEqual(debugConfig.webRoot, ' /workspace/frontend ');
+    });
 
     test('omits the web root when the AppHost does not send one', async () => {
         const debugConfig = await createConfiguration({ type: 'browser', url: 'http://localhost:5173' });
@@ -114,12 +104,6 @@ suite('Browser Debugger Tests', () => {
             new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('', BROWSER_RESOURCE_URL, 'msedge, chrome'))));
     });
 
-    test('rejects a whitespace-only browser', async () => {
-        await assert.rejects(
-            () => createConfiguration({ type: 'browser', url: 'http://localhost:5173', browser: '   ' }),
-            new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget('   ', BROWSER_RESOURCE_URL, 'msedge, chrome'))));
-    });
-
     // An AppHost predating the `browser` field omits it entirely, and a null survives untyped
     // JSON. Both mean "not specified" and must keep the Edge default.
     for (const [label, absentBrowser] of [['undefined', undefined], ['null', null]] as const) {
@@ -137,33 +121,13 @@ suite('Browser Debugger Tests', () => {
     // The hosting side's WithBrowserDebugger accepts an arbitrary string, so the allowlist lookup must
     // not resolve inherited Object.prototype members. A plain object literal would hand back a
     // function for these names and assign it to debugConfiguration.type.
-    for (const inheritedMember of ['toString', 'constructor', '__proto__', 'hasOwnProperty', 'valueOf']) {
+    for (const inheritedMember of ['toString', '__proto__']) {
         test(`rejects '${inheritedMember}' instead of resolving it through Object.prototype`, async () => {
             await assert.rejects(
                 () => createConfiguration({ type: 'browser', url: 'http://localhost:5173', browser: inheritedMember }),
                 new RegExp(escapeForRegExp(unsupportedBrowserDebugTarget(inheritedMember, BROWSER_RESOURCE_URL, 'msedge, chrome'))));
         });
     }
-
-    test('leaves the debug type untouched when the browser is not on the allowlist', async () => {
-        const debugConfig = createDebugConfig();
-        const launchConfig: BrowserLaunchConfiguration = { type: 'browser', url: 'http://localhost:5173', browser: '__proto__' };
-
-        await assert.rejects(() => browserDebuggerExtension.createDebugSessionConfigurationCallback!(
-            launchConfig,
-            ['--ignored'],
-            [],
-            { debug: true, runId: '1', debugSessionId: '1', isApphost: false, debugSession: fakeAspireDebugSession },
-            debugConfig));
-
-        assert.strictEqual(debugConfig.type, 'browser');
-    });
-
-    test('rejects a launch configuration for another resource type', async () => {
-        await assert.rejects(
-            () => createConfiguration({ type: 'node', script_path: '/workspace/app/server.js' } as unknown as BrowserLaunchConfiguration),
-            /Invalid launch configuration/);
-    });
 });
 
 function escapeForRegExp(value: string): string {

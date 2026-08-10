@@ -60,7 +60,6 @@ export const failedToStartProject = (errorMessage: string) => vscode.l10n.t('Fai
 export const dcpServerNotInitialized = vscode.l10n.t('DCP server not initialized - cannot forward debug output.');
 export const appHostSessionTerminated = vscode.l10n.t('The AppHost process has terminated. To view console output, select the AppHost session from the debug console dropdown.');
 export const debugSessionsFailedToStop = (count: number) => vscode.l10n.t('{0} debug sessions failed to stop.', count);
-export const resourceStartsDidNotFinishBeforeStopDeadline = (count: number) => vscode.l10n.t('Aspire stopped waiting for {0} resource(s) that were still starting. Any that had already launched were asked to stop; see the Aspire output channel for the result.', count);
 export const invalidTokenProvided = vscode.l10n.t('Invalid token provided.');
 export const noWorkspaceFolder = vscode.l10n.t('No workspace folder found.');
 export const aspireConfigExists = vscode.l10n.t('Aspire launch configuration already exists in launch.json.');
@@ -166,8 +165,6 @@ export const bunDisplayName = (script: string) => `Bun: ${script}`;
 export const bunLabel = 'Bun';
 export const nodeDisplayName = (script: string) => `Node.js: ${script}`;
 export const nodeLabel = 'Node.js';
-export const azureFunctionsDisplayName = (project: string) => vscode.l10n.t('Azure Functions: {0}', project);
-export const azureFunctionsLabel = vscode.l10n.t('Azure Functions');
 export const dontShowAgainLabel = vscode.l10n.t("Don't Show Again");
 export const doYouWantToSetDefaultApphost = (appHost: string) => vscode.l10n.t('Do you want to set {0} as the default AppHost for this workspace?', appHost);
 export const doYouWantToSelectDefaultApphost = vscode.l10n.t('Do you want to select the default AppHost for this workspace?');
