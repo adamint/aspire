@@ -7,8 +7,8 @@
     <IsTestProject>true</IsTestProject>
 
     <RunOnGithubActionsLinux>true</RunOnGithubActionsLinux>
-    <RunOnGithubActionsWindows>true</RunOnGithubActionsWindows>
-    <RunOnGithubActionsMacOS>true</RunOnGithubActionsMacOS>
+    <RunOnGithubActionsWindows>false</RunOnGithubActionsWindows>
+    <RunOnGithubActionsMacOS>false</RunOnGithubActionsMacOS>
 
     <!-- Run only on Linux in Azdo Helix -->
     <RunOnAzdoHelixWindows>false</RunOnAzdoHelixWindows>
