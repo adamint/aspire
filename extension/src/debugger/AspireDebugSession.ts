@@ -710,13 +710,13 @@ export class AspireDebugSession implements vscode.DebugAdapter {
             // rejected promise. It shares the memoized stop with stopSession(), so an in-flight
             // DCP-requested stop is joined rather than duplicated.
             //
-            // termination.dispose() bounds the listener a failed stop leaves registered: once this
-            // Aspire session is gone nothing is tracking the run, so waiting for an end that may
-            // never come would just hold the subscription for the life of the extension host. A
-            // successful stop has already finished and disposed it, making this a no-op.
+            // stopAndDisposeOnFailure() bounds the listener a failed stop leaves registered: once
+            // this Aspire session is gone nothing is tracking the run, so waiting for an end that
+            // may never come would just hold the subscription for the life of the extension host.
+            // It keeps the listener armed until the stop settles, because disposal is exactly when
+            // the parent session is being stopped and its cascade can end this session first.
             dispose: () => {
-              termination.stopAndLogFailure();
-              termination.dispose();
+              termination.stopAndDisposeOnFailure();
             }
           });
 

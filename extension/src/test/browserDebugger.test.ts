@@ -831,9 +831,18 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(harness.rm.called, false);
 
         harness.aspireDebugSession.dispose();
+
+        // Disposal retries the stop, and the listener has to stay armed while that retry is in
+        // flight: VS Code stops the Aspire parent during disposal and cascades that to this
+        // session, so an end can arrive before the retry settles.
+        assert.strictEqual(harness.terminateListenerRegistered, true, 'Expected the termination listener to survive an in-flight disposal stop');
+
+        harness.failStopDebuggingFor(resourceDebugSession.session, new Error('VS Code failed to stop the session again'));
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+
         const hadListener = harness.terminateSession(resourceDebugSession.session);
 
-        assert.strictEqual(hadListener, false, 'Expected the termination listener to have been released on disposal');
+        assert.strictEqual(hadListener, false, 'Expected the termination listener to have been released once the disposal stop genuinely failed');
         // Nothing observed the debuggee ending before the session went away, so the run is not
         // reported as terminated and the profile is left for the OS rather than deleted blindly.
         assert.deepStrictEqual(harness.sessionTerminatedNotifications(), []);

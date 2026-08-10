@@ -132,10 +132,18 @@ export class ResourceSessionTermination {
     /**
      * Fire-and-forget variant of {@link stop} for disposal paths that have no caller to report a
      * failure to. Shares the memoized stop, so it never issues a second `stopDebugging`.
+     *
+     * The termination listener stays armed until the stop settles. Disposing it up front would
+     * race the parent session's termination cascade: VS Code can end this session while
+     * `stopDebugging` is still in flight, and with the listener already gone {@link stopCore}
+     * reads the resulting rejection as a genuine failure and skips both `sessionTerminated` and
+     * the profile cleanup for a run that really did end. Only a rejection that survives that
+     * check means the session is still alive, and that is the one case where the listener has to
+     * be released - see {@link dispose} for why disposal is the bound.
      */
-    stopAndLogFailure(): void {
+    stopAndDisposeOnFailure(): void {
         // stopCore() already logged the failure; swallow here only to keep the rejection handled.
-        void this.stop().catch(() => { });
+        void this.stop().then(undefined, () => this.dispose());
     }
 
     /**

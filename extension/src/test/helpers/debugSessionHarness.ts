@@ -127,6 +127,7 @@ export class DebugSessionHarness {
     private _startListener: ((session: vscode.DebugSession) => void) | undefined;
     private _terminateListener: ((session: vscode.DebugSession) => void) | undefined;
     private _pendingStop: Deferred<void> | undefined;
+    private readonly _pendingStops: Array<{ session: vscode.DebugSession; deferred: Deferred<void> }> = [];
 
     constructor(options: DebugSessionHarnessOptions = {}) {
         const { stopDebugging = 'immediate', startedSessionId = 'browser-session-id', autoStartSession = true } = options;
@@ -160,8 +161,12 @@ export class DebugSessionHarness {
         });
 
         if (stopDebugging === 'deferred') {
-            this.stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').callsFake(() => {
+            this.stopDebugging = sinon.stub(vscode.debug, 'stopDebugging').callsFake(target => {
                 this._pendingStop = createDeferred<void>();
+                // Disposal stops resource sessions and the Aspire parent, so several stops can be
+                // outstanding at once. Keeping them all lets a test settle one specific session's
+                // stop instead of whichever happened to be issued last.
+                this._pendingStops.push({ session: target as vscode.DebugSession, deferred: this._pendingStop });
                 return this._pendingStop.promise;
             });
         }
@@ -196,6 +201,11 @@ export class DebugSessionHarness {
         this._startListener(session);
     }
 
+    /** Whether a `vscode.debug.onDidTerminateDebugSession` listener is currently registered. */
+    get terminateListenerRegistered(): boolean {
+        return this._terminateListener !== undefined;
+    }
+
     /**
      * Fires the captured `vscode.debug.onDidTerminateDebugSession` listener, if one is still
      * registered. Returns whether a listener was there to receive it, so tests can distinguish
@@ -217,6 +227,7 @@ export class DebugSessionHarness {
             throw new Error('No stopDebugging call is pending.');
         }
 
+        this.forgetPendingStop(this._pendingStop);
         this._pendingStop.resolve();
     }
 
@@ -226,7 +237,29 @@ export class DebugSessionHarness {
             throw new Error('No stopDebugging call is pending.');
         }
 
+        this.forgetPendingStop(this._pendingStop);
         this._pendingStop.reject(error);
+    }
+
+    /**
+     * Fails the in-flight `'deferred'` stop issued for one specific session, leaving any other
+     * outstanding stop untouched.
+     */
+    failStopDebuggingFor(session: vscode.DebugSession, error: Error): void {
+        const index = this._pendingStops.findIndex(pending => pending.session === session);
+        if (index < 0) {
+            throw new Error(`No stopDebugging call is pending for session '${session.id}'.`);
+        }
+
+        const [pending] = this._pendingStops.splice(index, 1);
+        pending.deferred.reject(error);
+    }
+
+    private forgetPendingStop(deferred: Deferred<void>): void {
+        const index = this._pendingStops.findIndex(pending => pending.deferred === deferred);
+        if (index >= 0) {
+            this._pendingStops.splice(index, 1);
+        }
     }
 
     /** Every `sessionTerminated` notification the extension pushed to DCP, in order. */
