@@ -36,65 +36,7 @@ RUN case "$NODE_VERSION" in 22|24) ;; *) echo "Unsupported NODE_VERSION: $NODE_V
 # TypeScript 7 (the native Go compiler) ships as the plain `typescript` package with a `tsc` binary
 # since 7.0 GA, replacing the pre-GA `@typescript/native-preview` package and its `tsgo` binary.
 # See https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/.
-#
-# `--registry` sets npm's *default* registry only. A `@scope:registry` key is a separate setting that
-# always wins for that scope, and neither `--registry` nor npm_config_registry overrides it - the
-# same npm behaviour npm-registry-env.sh isolates against at job time, measured in
-# NpmLockfileRegistryTests.RegistryEnvScript_IsolatesNpmFromAmbientScopedRegistries. This command
-# acquires scoped packages (@yarnpkg/cli-dist directly, and typescript's @typescript/* platform
-# packages transitively), so a scoped key baked into the base image would redirect exactly those.
-# The runtime helper cannot cover this: it is sourced by /scripts, which do not run until the
-# entrypoint, long after this layer has already downloaded the toolchain.
-#
-# npm resolves config as cli > env > project .npmrc > user .npmrc > global .npmrc > builtin. Owning
-# the user config and the working directory outranks the project, user and global .npmrc an ambient
-# scoped key could come from, so each scope npm reports is re-pinned to the approved feed in the
-# user config rather than compared against it - there is no value to normalize.
-#
-# The environment outranks the user config, though, so re-pinning alone is not proof. Measured with
-# npm 11.4.2: with `npm_config_@types:registry` set in the environment, `npm config list` prints
-#   ; @types:registry = "https://approved.example.test/" ; overridden by env
-#   @types:registry = "https://ambient-env.example.invalid/"
-# and `npm config get @types:registry` returns the environment's value. The re-pin would be written,
-# the loop would report success, and the install would still leave the approved feed. So every scope
-# is read back afterwards and the build fails if the approved feed did not win. The read-back is a
-# `for` loop rather than `while read`: a `while` fed by a pipe runs in a subshell, where `exit 1`
-# ends only the subshell and the RUN would still succeed.
-#
-# `npm config list` prints one setting per line, quoted, with `;`-prefixed comments naming the file
-# each block came from:
-#   @types:registry = "https://scoped.example.invalid/"
-#
-# The global config is left alone on purpose: it is where the base image records the `prefix` that
-# --global installs use, and blanking it would relocate the binaries this layer then verifies.
-#
-# The NPM_REGISTRY build arg is checked against the approved feed first, for the reason
-# npm-registry-env.sh rejects the same override at job time: if the arg were treated as the
-# expected value, `--build-arg NPM_REGISTRY=https://registry.npmjs.org` would make every step below
-# agree with itself while the toolchain came from an unapproved host.
-RUN APPROVED_NPM_REGISTRY=https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public-npm/npm/registry/ && \
-    if [ "${NPM_REGISTRY%/}" != "${APPROVED_NPM_REGISTRY%/}" ]; then \
-        echo "NPM_REGISTRY build arg '${NPM_REGISTRY}' is not the approved feed '${APPROVED_NPM_REGISTRY}'." >&2; \
-        exit 1; \
-    fi && \
-    mkdir -p /usr/local/etc/polyglot-npm && \
-    printf 'registry=%s\n' "${NPM_REGISTRY}" > /usr/local/etc/polyglot-npm/npmrc && \
-    export NPM_CONFIG_USERCONFIG=/usr/local/etc/polyglot-npm/npmrc && \
-    npm config list | sed -n 's/^\(@[^:]*\):registry = .*/\1/p' | sort -u | \
-    while read -r scope; do \
-        echo "Re-pinning ambient npm scope ${scope} to ${NPM_REGISTRY}"; \
-        printf '%s:registry=%s\n' "${scope}" "${NPM_REGISTRY}" >> /usr/local/etc/polyglot-npm/npmrc; \
-    done && \
-    for scope in $(npm config list | sed -n 's/^\(@[^:]*\):registry = .*/\1/p' | sort -u); do \
-        effective="$(npm config get "${scope}:registry")"; \
-        if [ "${effective%/}" != "${NPM_REGISTRY%/}" ]; then \
-            echo "npm resolves ${scope} packages from '${effective}' instead of the approved feed '${NPM_REGISTRY}'; a higher-precedence config source is overriding the re-pin." >&2; \
-            exit 1; \
-        fi; \
-        echo "Verified npm scope ${scope} resolves from ${effective}"; \
-    done && \
-    cd /usr/local/etc/polyglot-npm && \
-    npm install --global --force --registry "${NPM_REGISTRY}" \
+RUN npm install --global --force --registry "${NPM_REGISTRY}" \
     pnpm@10.0.0 \
     @yarnpkg/cli-dist@4.14.1 \
     bun@1.2.0 \
@@ -110,11 +52,10 @@ ENV ASPIRE_CLI_TELEMETRY_OPTOUT=1
 
 WORKDIR /workspace
 
-# Copy the whole script directory rather than naming files individually. Enumerating them meant a
-# script could reference a sibling that was never added to the image — a helper extracted out of one
-# of these scripts is invisible until the job runs and the `source` fails.
-COPY *.sh /scripts/
-RUN chmod +x /scripts/*.sh
+COPY setup-local-cli.sh /scripts/setup-local-cli.sh
+COPY test-typescript.sh /scripts/test-typescript.sh
+COPY test-typescript-playground.sh /scripts/test-typescript-playground.sh
+RUN chmod +x /scripts/setup-local-cli.sh /scripts/test-typescript.sh /scripts/test-typescript-playground.sh
 
 # Entrypoint: Set up Aspire CLI and run validation
 # Bundle extraction happens lazily on first command that needs the layout

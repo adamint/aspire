@@ -1915,6 +1915,58 @@ public class PackageJsonMergerTests
     }
 
     /// <summary>
+    /// Package specifications that are not ordinary npm semver ranges are project-owned references,
+    /// not evidence that the project selected an old linter. The compiler upgrade must not replace
+    /// workspace links, local packages, aliases, forks, or direct artifact references.
+    /// </summary>
+    [Theory]
+    [InlineData("workspace:*")]
+    [InlineData("file:../typescript-eslint")]
+    [InlineData("npm:@contoso/typescript-eslint-fork@^8.57.1")]
+    [InlineData("github:contoso/typescript-eslint-fork#semver:^8.57.1")]
+    [InlineData("git+https://github.com/contoso/typescript-eslint-fork.git#v8.57.1")]
+    [InlineData("https://packages.contoso.test/typescript-eslint-fork-8.57.1.tgz")]
+    public void Merge_BrownfieldLinterOpaqueSpec_IsPreservedWhenTheMergeUpgradesTheCompiler(string existingLinter)
+    {
+        var existing = $$"""
+            {
+              "name": "brownfield",
+              "devDependencies": {
+                "typescript": "5.9.3",
+                "typescript-eslint": "{{existingLinter}}"
+              }
+            }
+            """;
+
+        var result = MergeJson(existing, ScaffoldWithLintToolchain);
+
+        Assert.Equal("6.0.3", GetDep(result, "devDependencies", "typescript"));
+        Assert.Equal(existingLinter, GetDep(result, "devDependencies", "typescript-eslint"));
+    }
+
+    [Fact]
+    public void Merge_BrownfieldRuntimeLinterOpaqueSpec_RemainsInTheProjectOwnedSection()
+    {
+        const string Existing = """
+            {
+              "name": "brownfield",
+              "dependencies": {
+                "typescript-eslint": "workspace:*"
+              },
+              "devDependencies": {
+                "typescript": "5.9.3"
+              }
+            }
+            """;
+
+        var result = MergeJson(Existing, ScaffoldWithLintToolchain);
+
+        Assert.Equal("6.0.3", GetDep(result, "devDependencies", "typescript"));
+        Assert.Equal("workspace:*", GetDep(result, "dependencies", "typescript-eslint"));
+        Assert.Null(GetDep(result, "devDependencies", "typescript-eslint"));
+    }
+
+    /// <summary>
     /// The reconciliation is scoped to the compiler moving. A project whose compiler this merge
     /// leaves alone still owns its linter, however unusual the spec, because nothing about the
     /// install changed underneath it.

@@ -493,8 +493,8 @@ internal static class PackageJsonMerger
     }
 
     /// <summary>
-    /// A project spec that this merge cannot prove admits the compiler it just upgraded is replaced
-    /// by the scaffold's, because the version-floor merge cannot make that call on its own.
+    /// An ordinary npm semver range that this merge cannot reduce to a single version is replaced by
+    /// the scaffold's when the compiler moves. Opaque package references remain project-owned.
     /// </summary>
     /// <remarks>
     /// <see cref="NpmVersionHelper.ShouldUpgrade"/> compares lower bounds and fails closed on any
@@ -503,9 +503,11 @@ internal static class PackageJsonMerger
     /// A project on TypeScript 5.9.3 with <c>typescript-eslint: "&gt;=8.57.1 &lt;8.58.0"</c> loses
     /// the upgrade - the range is a comparator pair, so no lower bound comes out of it - and keeps a
     /// linter that resolves to 8.57.x, whose <c>typescript: &lt;6.0.0</c> peer the freshly upgraded
-    /// 6.0.3 compiler no longer satisfies. That is the ERESOLVE this merger exists to prevent, and
-    /// the project is not shielded from it by <c>projectOwnedPackage</c>, which is already cleared
-    /// precisely because the compiler moved.
+    /// 6.0.3 compiler no longer satisfies. That is the ERESOLVE this merger exists to prevent.
+    ///
+    /// A spec that is not a valid npm semver range can instead be a workspace link, local package,
+    /// npm alias, fork, git URL, or tarball URL. Replacing one of those would discard the project's
+    /// package ownership rather than safely upgrading an ordinary version range.
     ///
     /// The removal pass is no help either: it only runs for a project that had no linter, so a
     /// brownfield project that did have one has nothing left to catch this.
@@ -526,6 +528,11 @@ internal static class PackageJsonMerger
             return;
         }
 
+        if (!SemVersionRange.TryParseNpm(projectLinter, out _))
+        {
+            return;
+        }
+
         var section = (existing[DependenciesKey] as JsonObject)?[TypeScriptEslintPackage] is not null
             ? DependenciesKey
             : DevDependenciesKey;
@@ -536,7 +543,7 @@ internal static class PackageJsonMerger
         rewrittenSpecs[TypeScriptEslintPackage] = scaffoldLinter;
 
         logger.LogWarning(
-            "Replaced the '{Package}' spec '{ExistingVersion}' with '{DesiredVersion}' because this merge upgraded TypeScript and the existing spec is not a form this tool can check against the new compiler.",
+            "Replaced the '{Package}' semver range '{ExistingVersion}' with '{DesiredVersion}' because this merge upgraded TypeScript and the existing range is not a form this tool can check against the new compiler.",
             TypeScriptEslintPackage,
             projectLinter,
             scaffoldLinter);
