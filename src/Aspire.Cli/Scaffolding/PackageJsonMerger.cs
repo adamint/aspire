@@ -143,6 +143,11 @@ internal static class PackageJsonMerger
         var rewrittenSpecs = new Dictionary<string, string>(StringComparer.Ordinal);
         MergeDependencySection(existing, scaffold, DependenciesKey, logger, projectOwnedPackage, rewrittenSpecs);
         MergeDependencySection(existing, scaffold, DevDependenciesKey, logger, projectOwnedPackage, rewrittenSpecs);
+        if (projectAlreadyLinted && !compilerIsUnchanged)
+        {
+            ReconcileProjectLinterWithUpgradedCompiler(existing, scaffold, logger);
+        }
+
         ReconcileNpmOverrides(existing, rewrittenSpecs, logger);
 
         // Handle engines with overwrite semantics for "node" — since the user is running
@@ -491,6 +496,53 @@ internal static class PackageJsonMerger
                 overriddenSpec,
                 rewrittenSpec);
         }
+    }
+
+    /// <summary>
+    /// A project spec that this merge cannot prove admits the compiler it just upgraded is replaced
+    /// by the scaffold's, because the version-floor merge cannot make that call on its own.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="NpmVersionHelper.ShouldUpgrade"/> compares lower bounds and fails closed on any
+    /// spec it cannot reduce to a single version, which is the right default everywhere else: an
+    /// unparseable spec is usually a deliberate choice worth preserving. Here it is the wrong one.
+    /// A project on TypeScript 5.9.3 with <c>typescript-eslint: "&gt;=8.57.1 &lt;8.58.0"</c> loses
+    /// the upgrade - the range is a comparator pair, so no lower bound comes out of it - and keeps a
+    /// linter that resolves to 8.57.x, whose <c>typescript: &lt;6.0.0</c> peer the freshly upgraded
+    /// 6.0.3 compiler no longer satisfies. That is the ERESOLVE this merger exists to prevent, and
+    /// the project is not shielded from it by <c>projectOwnedPackage</c>, which is already cleared
+    /// precisely because the compiler moved.
+    ///
+    /// The removal pass is no help either: it only runs for a project that had no linter, so a
+    /// brownfield project that did have one has nothing left to catch this.
+    /// </remarks>
+    private static void ReconcileProjectLinterWithUpgradedCompiler(JsonObject existing, JsonObject scaffold, ILogger logger)
+    {
+        var scaffoldLinter = FindDependencyVersion(scaffold, TypeScriptEslintPackage);
+        var projectLinter = FindDependencyVersion(existing, TypeScriptEslintPackage);
+        if (scaffoldLinter is null || projectLinter is null || projectLinter == scaffoldLinter)
+        {
+            return;
+        }
+
+        // A spec the floor merge could read was already upgraded, or was deliberately left alone
+        // because it is ahead of the scaffold. Only the ones it could not read are still stale.
+        if (NpmVersionHelper.TryParseNpmVersion(projectLinter, out _))
+        {
+            return;
+        }
+
+        var section = (existing[DependenciesKey] as JsonObject)?[TypeScriptEslintPackage] is not null
+            ? DependenciesKey
+            : DevDependenciesKey;
+
+        ((JsonObject)existing[section]!)[TypeScriptEslintPackage] = scaffoldLinter;
+
+        logger.LogWarning(
+            "Replaced the '{Package}' spec '{ExistingVersion}' with '{DesiredVersion}' because this merge upgraded TypeScript and the existing spec is not a form this tool can check against the new compiler.",
+            TypeScriptEslintPackage,
+            projectLinter,
+            scaffoldLinter);
     }
 
     private static void MergeDependencySection(JsonObject existing, JsonObject scaffold, string sectionName, ILogger logger, string? projectOwnedPackage = null, Dictionary<string, string>? rewrittenSpecs = null)

@@ -1800,6 +1800,65 @@ public class PackageJsonMergerTests
         }
     }
 
+    /// <summary>
+    /// Clearing <c>projectOwnedPackage</c> is not enough on its own to move a project's linter onto
+    /// the compiler this merge just upgraded. The version-floor merge fails closed on a spec it
+    /// cannot reduce to a single version, so a comparator pair survives untouched and keeps
+    /// resolving to a linter whose peer range excludes the new compiler.
+    /// </summary>
+    /// <remarks>
+    /// `>=8.57.1 &lt;8.58.0` resolves to 8.57.x, which peers `typescript: &lt;6.0.0`, while the
+    /// merge moves the compiler from 5.9.3 to 6.0.3 - the ERESOLVE this merger exists to prevent.
+    /// The removal pass cannot catch it either: it only runs for a project that had no linter.
+    /// </remarks>
+    [Theory]
+    // Both forms defeat NpmVersionHelper: a comparator pair leaves trailing text after the operator
+    // is stripped, and an x-range leaves a non-numeric component. `>=8.57.1` is deliberately absent
+    // because it reduces to 8.57.1 and the version-floor merge already upgrades it.
+    [InlineData(">=8.57.1 <8.58.0")]
+    [InlineData("8.57.x")]
+    public void Merge_BrownfieldLinterSpecIsUncheckable_ReplacesItWhenTheMergeUpgradesTheCompiler(string existingLinter)
+    {
+        var existing = $$"""
+            {
+              "name": "brownfield",
+              "devDependencies": {
+                "typescript": "5.9.3",
+                "typescript-eslint": "{{existingLinter}}"
+              }
+            }
+            """;
+
+        var result = MergeJson(existing, ScaffoldWithLintToolchain);
+
+        Assert.Equal("6.0.3", GetDep(result, "devDependencies", "typescript"));
+        Assert.Equal("8.58.0", GetDep(result, "devDependencies", "typescript-eslint"));
+    }
+
+    /// <summary>
+    /// The reconciliation is scoped to the compiler moving. A project whose compiler this merge
+    /// leaves alone still owns its linter, however unusual the spec, because nothing about the
+    /// install changed underneath it.
+    /// </summary>
+    [Fact]
+    public void Merge_BrownfieldLinterSpecIsUncheckable_IsLeftAloneWhenTheCompilerDoesNotMove()
+    {
+        const string Existing = """
+            {
+              "name": "brownfield",
+              "devDependencies": {
+                "typescript": "^7.0.2",
+                "typescript-eslint": ">=8.57.1 <8.58.0"
+              }
+            }
+            """;
+
+        var result = MergeJson(Existing, ScaffoldWithLintToolchain);
+
+        Assert.Equal("^7.0.2", GetDep(result, "devDependencies", "typescript"));
+        Assert.Equal(">=8.57.1 <8.58.0", GetDep(result, "devDependencies", "typescript-eslint"));
+    }
+
     private const string ScaffoldWithLintToolchain = """
         {
           "scripts": {
