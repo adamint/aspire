@@ -52,6 +52,49 @@ suite('AspireExtensionContext', () => {
             'editor command provider',
         ]);
     });
+
+    test('dispose continues shared transport teardown when debug session disposal does not settle', async () => {
+        const timeoutMs = (AspireExtensionContext as any)._debugSessionDisposalTimeoutMs;
+        (AspireExtensionContext as any)._debugSessionDisposalTimeoutMs = 0;
+        const order: string[] = [];
+        const context = new AspireExtensionContext();
+        context.initialize(
+            { dispose: () => order.push('rpc server') } as any,
+            { subscriptions: [] } as unknown as vscode.ExtensionContext,
+            { dispose: () => { } } as any,
+            { dispose: () => order.push('dcp server') } as any,
+            { dispose: () => order.push('terminal provider') } as any,
+            { dispose: () => order.push('editor command provider') } as any);
+        context.addAspireDebugSession({
+            debugSessionId: 'aspire-session',
+            onDidChangeState: () => ({ dispose: () => order.push('state subscription') }),
+            onDidSendDebugConsoleOutput: () => ({ dispose: () => order.push('output subscription') }),
+            dispose: () => {
+                order.push('debug session dispose started');
+                return new Promise<void>(() => { });
+            },
+        } as unknown as AspireDebugSession);
+
+        try {
+            await context.dispose();
+
+            // Deactivation should prefer bounded cleanup over waiting forever on VS Code's
+            // external stopDebugging Thenable. Shared services are torn down after the bounded
+            // session-disposal grace period so VS Code can finish unloading the extension.
+            assert.deepStrictEqual(order, [
+                'debug session dispose started',
+                'rpc server',
+                'dcp server',
+                'state subscription',
+                'output subscription',
+                'terminal provider',
+                'editor command provider',
+            ]);
+        }
+        finally {
+            (AspireExtensionContext as any)._debugSessionDisposalTimeoutMs = timeoutMs;
+        }
+    });
 });
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void } {
