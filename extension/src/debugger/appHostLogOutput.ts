@@ -38,6 +38,7 @@ interface PendingConsoleRecord {
     raw: string;
     category: string;
     allowsContinuation: boolean;
+    hasBodyLine: boolean;
 }
 
 export class AppHostLogOutputCoordinator {
@@ -151,6 +152,7 @@ export class AppHostLogOutputCoordinator {
                 if (pending.body || !bodyLine.startsWith('=> ')) {
                     pending.body += bodyLine;
                 }
+                pending.hasBodyLine = true;
 
                 const record = createPendingRecord(pending);
                 if (record && this.consumeCorrelatedRecord(record, 'console')) {
@@ -169,7 +171,8 @@ export class AppHostLogOutputCoordinator {
                 body: '',
                 raw: line,
                 category,
-                allowsContinuation: true
+                allowsContinuation: true,
+                hasBodyLine: false
             });
             return;
         }
@@ -186,7 +189,8 @@ export class AppHostLogOutputCoordinator {
                 body: singleLineRecord.body,
                 raw: line,
                 category,
-                allowsContinuation: false
+                allowsContinuation: false,
+                hasBodyLine: true
             });
 
             if (this.consumeCorrelatedRecord(singleLineRecord, 'console')) {
@@ -261,7 +265,7 @@ export class AppHostLogOutputCoordinator {
 
     private scheduleIdleFlush(category: string): void {
         const pending = this._pendingRecords.get(category);
-        if (!this._onIdleFlush || (!pending?.body && !this._partialLines.has(category))) {
+        if (!this._onIdleFlush || (!pending?.hasBodyLine && !this._partialLines.has(category))) {
             return;
         }
 
@@ -387,7 +391,7 @@ function createBackchannelRecord(entry: AppHostLogEntry): LogRecord {
 }
 
 function createPendingRecord(pending: PendingConsoleRecord): LogRecord | undefined {
-    if (!pending.body) {
+    if (!pending.hasBodyLine) {
         return undefined;
     }
 
@@ -516,15 +520,26 @@ function getShortLoggerLevel(logLevel: AppHostLogLevel): string {
 
 function getConsoleLogSeverity(line: string): 'low' | 'normal' | 'severe' | undefined {
     const level = /^(trce|dbug|info|warn|fail|crit):\s/.exec(line)?.[1];
-    if (!level) {
-        return undefined;
+    if (level) {
+        return level === 'trce' || level === 'dbug'
+            ? 'low'
+            : level === 'fail' || level === 'crit'
+                ? 'severe'
+                : 'normal';
     }
 
-    return level === 'trce' || level === 'dbug'
+    // Preserve the pre-correlation filter for adapters that render records as:
+    //   Example.Category[7]: Warning: Request took too long.
+    // These records cannot be correlated with the default console grammar, but their
+    // low-level suppression and severe-stream classification must remain unchanged.
+    const fullLevel = /^[A-Za-z_]\w*(?:\.\w+)+(?:\[[^\]]+\])?:\s*(Trace|Debug|Information|Warning|Error|Critical):\s/.exec(line)?.[1];
+    return fullLevel === 'Trace' || fullLevel === 'Debug'
         ? 'low'
-        : level === 'fail' || level === 'crit'
+        : fullLevel === 'Error' || fullLevel === 'Critical'
             ? 'severe'
-            : 'normal';
+            : fullLevel
+                ? 'normal'
+                : undefined;
 }
 
 function isIndentedContinuation(line: string): boolean {

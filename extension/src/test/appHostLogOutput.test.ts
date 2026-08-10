@@ -94,6 +94,29 @@ suite('AppHost log output coordinator', () => {
         assert.deepStrictEqual(coordinator.flush(), []);
     });
 
+    test('deduplicates an empty log message', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+        const raw = 'info: Example.Category[7]\n      \n';
+
+        assert.deepStrictEqual(coordinator.handleDebugAdapterOutput(raw, 'stdout'), []);
+        assert.deepStrictEqual(coordinator.handleBackchannelEntry(createEntry({ message: '' })), {
+            output: raw,
+            category: 'stdout'
+        });
+        assert.deepStrictEqual(coordinator.flush(), []);
+    });
+
+    test('preserves fallback filtering for non-default logger output', () => {
+        const coordinator = new AppHostLogOutputCoordinator();
+
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('Example.Category[7]: Debug: Hidden detail.\n', 'stdout'),
+            []);
+        assert.deepStrictEqual(
+            coordinator.handleDebugAdapterOutput('Example.Category[7]: Error: Failed.\n', 'console'),
+            [{ output: 'Example.Category[7]: Error: Failed.\n', category: 'stderr' }]);
+    });
+
     test('suppresses replayed sequences and accepts the same sequence after reset', () => {
         const coordinator = new AppHostLogOutputCoordinator();
         const laterEntry = createEntry({ sequenceNumber: 42, message: 'Later entry.' });

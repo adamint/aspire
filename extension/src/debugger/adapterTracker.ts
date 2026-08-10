@@ -48,6 +48,7 @@ export function createDebugAdapterTracker(dcpServer: AspireDcpServer, debugAdapt
                     // suppress VS Code's automatic child restart so the Aspire debug
                     // session can restart entirely instead.
                     if (configuration.isApphost
+                        && isOwnedAppHostSession
                         && (message.command === 'disconnect' || message.command === 'terminate')
                         && message.arguments?.restart
                         && appHostTracker?.onRestartRequested) {

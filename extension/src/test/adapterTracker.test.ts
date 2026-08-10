@@ -507,6 +507,44 @@ suite('Debug Adapter Tracker Tests', () => {
         unrelatedDisposable.dispose();
     });
 
+    test('apphost restart only feeds the tracker that owns its debug session', async () => {
+        const owningCallback = sinon.stub().returns(true);
+        const unrelatedCallback = sinon.stub().returns(true);
+        const owningDisposable = createDebugAdapterTracker(dcpServer as any, 'coreclr', {
+            debugSessionId: 'debug-456',
+            onRestartRequested: owningCallback
+        });
+        const owningFactory = registerFactoryStub.lastCall.args[1];
+        const unrelatedDisposable = createDebugAdapterTracker(dcpServer as any, 'coreclr', {
+            debugSessionId: 'other-session',
+            onRestartRequested: unrelatedCallback
+        });
+        const unrelatedFactory = registerFactoryStub.lastCall.args[1];
+        const appHostSession = {
+            ...debugSession,
+            configuration: { ...debugSession.configuration, isApphost: true }
+        };
+        const unrelatedDisconnectRequest = {
+            command: 'disconnect',
+            arguments: { restart: true }
+        };
+        const owningDisconnectRequest = {
+            command: 'disconnect',
+            arguments: { restart: true }
+        };
+
+        unrelatedFactory.createDebugAdapterTracker(appHostSession).onWillReceiveMessage(unrelatedDisconnectRequest);
+        owningFactory.createDebugAdapterTracker(appHostSession).onWillReceiveMessage(owningDisconnectRequest);
+
+        assert.strictEqual(owningCallback.calledOnceWith('debug-456'), true);
+        assert.strictEqual(unrelatedCallback.called, false);
+        assert.strictEqual(unrelatedDisconnectRequest.arguments.restart, true);
+        assert.strictEqual(owningDisconnectRequest.arguments.restart, false);
+
+        owningDisposable.dispose();
+        unrelatedDisposable.dispose();
+    });
+
     test('resource output events are not mirrored to output callback', async () => {
         const outputCallback = sinon.stub();
         const disposable = createDebugAdapterTracker(dcpServer as any, 'pwa-node', {
