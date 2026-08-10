@@ -411,7 +411,11 @@ export default class AspireDcpServer {
                         return preparedSession.alreadyStartedSession
                             ? aspireDebugSession.trackAlreadyStartedResourceSession(preparedSession.debugConfiguration, preparedSession.alreadyStartedSession)
                             : await aspireDebugSession.startAndGetDebugSession(preparedSession.debugConfiguration);
-                    });
+                    },
+                    // If the shutdown gives up waiting for this start, whatever the resource-type
+                    // extension already spawned for the run has to go with it - the same cleanup the
+                    // refusal and failure paths below run.
+                    () => cleanupRun(runId));
 
                     // A shutdown that begins while this start is still preparing is an expected
                     // cancellation, not a launch failure: the start paths deliberately stop the late

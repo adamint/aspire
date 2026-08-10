@@ -685,6 +685,11 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
             (error: unknown) => {
                 assert.ok(error instanceof AggregateError);
                 assert.deepStrictEqual((error as AggregateError).errors, [resourceStopFailure, appHostStopFailure]);
+                // The RPC boundary logs and shows err.message alone, so the reasons have to be in
+                // the message too or the caller learns only that something failed.
+                assert.ok(
+                    error.message.includes(resourceStopFailure.message) && error.message.includes(appHostStopFailure.message),
+                    `The aggregate message must name every reason, but was: ${error.message}`);
                 return true;
             });
 
@@ -1215,7 +1220,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
                     stopSession: () => { throw lateStopFailure; },
                     termination: new Promise<number>(() => { }),
                 } as any);
-        });
+        }, () => { });
 
         assert.ok(startOperation, 'A start requested before the shutdown began must be accepted');
 
@@ -1379,7 +1384,10 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         sinon.stub(vscode.debug, 'stopDebugging').callsFake(async () => { });
         const aspireDebugSession = new AspireDebugSession(parentDebugSession as unknown as vscode.DebugSession, {} as any, {} as any, terminalProvider as any, () => { }, undefined, 50);
 
-        const stalledStart = aspireDebugSession.startResourceIfNotShuttingDown(() => new Promise<void>(() => { }));
+        let releasedAbandonedStart = false;
+        const stalledStart = aspireDebugSession.startResourceIfNotShuttingDown(
+            () => new Promise<void>(() => { }),
+            () => { releasedAbandonedStart = true; });
         assert.notStrictEqual(stalledStart, undefined);
 
         let stopFailure: unknown;
@@ -1394,6 +1402,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         assert.ok(
             (stopFailure as Error).message.includes('still starting'),
             `Unexpected shutdown failure: ${(stopFailure as Error).message}`);
+        assert.strictEqual(releasedAbandonedStart, true, 'Abandoning a start must release whatever its preparation already spawned');
         assert.strictEqual((aspireDebugSession as any)._disposed, true, 'The session must still be disposed after abandoning a start');
     });
 
@@ -1588,7 +1597,7 @@ var builder = Aspire.Hosting.DistributedApplication.CreateBuilder(args);
         await aspireDebugSession.stopDebugging();
 
         const start = sinon.stub().resolves(undefined);
-        const refused = aspireDebugSession.startResourceIfNotShuttingDown(start);
+        const refused = aspireDebugSession.startResourceIfNotShuttingDown(start, () => { });
 
         assert.strictEqual(refused, undefined, 'A start requested during shutdown must be refused');
         assert.strictEqual(start.callCount, 0, 'A refused start must not run: nothing would await it');

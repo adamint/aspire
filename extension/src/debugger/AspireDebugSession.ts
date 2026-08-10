@@ -106,9 +106,11 @@ export class AspireDebugSession implements vscode.DebugAdapter {
   // drains this before stopping the AppHost so late starts keep the resources-before-AppHost
   // ordering and their failures reach the caller instead of only the log.
   private readonly _lateResourceStops: Promise<void>[] = [];
-  // Resource starts that are in flight. A start only queues its stop once it finishes, so a start
-  // that has not finished yet is represented nowhere else and the drain would not see it.
-  private readonly _pendingResourceStarts = new Set<Promise<unknown>>();
+  // Resource starts that are in flight, each with the callback that releases whatever it has
+  // already spawned if the shutdown gives up waiting for it. A start only queues its stop once it
+  // finishes, so a start that has not finished yet is represented nowhere else and the drain would
+  // not see it.
+  private readonly _pendingResourceStarts = new Map<Promise<unknown>, () => void>();
   // When the shutdown stops waiting for those starts. Set once, when the shutdown latches, so the
   // two drain passes share one budget instead of each getting a fresh one.
   private _lateStartDeadlineMs = Number.POSITIVE_INFINITY;
@@ -218,7 +220,14 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     if (stopFailures.length > 1) {
       // More than one adapter failed, so no single reason describes the shutdown. AggregateError
       // keeps every reason instead of picking one and discarding the rest.
-      throw new AggregateError(stopFailures, debugSessionsFailedToStop(stopFailures.length));
+      //
+      // The reasons go in the message as well as in `errors`. Nothing between here and the user
+      // reads `errors`: the RPC boundary in interactionService.ts logs and shows `err.message`
+      // alone, so a message of just "N debug sessions failed to stop." would report that something
+      // failed while discarding what - the loss this shutdown exists to stop.
+      throw new AggregateError(
+        stopFailures,
+        `${debugSessionsFailedToStop(stopFailures.length)} ${stopFailures.map(describeStopFailure).join('; ')}`);
     }
   }
 
@@ -286,15 +295,30 @@ export class AspireDebugSession implements vscode.DebugAdapter {
         // resolve while that resource's debugger was still being launched and then stopped.
         // A start FAILURE is reported to whoever requested the start, not here - this only needs the
         // start to be finished so its stop, if any, is queued.
-        const pending = [...this._pendingResourceStarts];
+        const pending = [...this._pendingResourceStarts.keys()];
         const finished = await settlesBefore(Promise.allSettled(pending), this._lateStartDeadlineMs);
 
         if (!finished) {
-          // Forget them rather than looping on them again. Each start deregisters itself through a
-          // finally() handler, and deleting from an emptied Set is a no-op, so the bookkeeping still
-          // holds once they do finish.
-          abandonedStarts += this._pendingResourceStarts.size;
-          this._pendingResourceStarts.clear();
+          // A preparation that is stuck may never finish, so it may never reach the start paths that
+          // route a late resource through stopLateResourceSession(). Whatever it already spawned -
+          // for Azure Functions, a `func host start` process - would then outlive the AppHost and
+          // the parent. Release it through the same per-run cleanup every other abandonment path in
+          // AspireDcpServer uses.
+          for (const [operation, releaseAbandonedStart] of this._pendingResourceStarts) {
+            abandonedStarts++;
+
+            try {
+              releaseAbandonedStart();
+            }
+            catch (err) {
+              extensionLogOutputChannel.warn(`Failed to release a resource start abandoned at shutdown: ${describeStopFailure(err)}`);
+            }
+
+            // Forget it rather than looping on it again. The start still deregisters itself through
+            // its finally() handler, and deleting an absent key is a no-op, so the bookkeeping holds
+            // if it does eventually finish.
+            this._pendingResourceStarts.delete(operation);
+          }
         }
       }
 
@@ -315,7 +339,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
    * caller that checked {@link isShuttingDown} itself and then started could be interleaved with the
    * shutdown between the two steps.
    */
-  startResourceIfNotShuttingDown<T>(start: () => Promise<T>): Promise<T> | undefined {
+  startResourceIfNotShuttingDown<T>(start: () => Promise<T>, releaseAbandonedStart: () => void): Promise<T> | undefined {
     if (this.isShuttingDown) {
       return undefined;
     }
@@ -324,7 +348,7 @@ export class AspireDebugSession implements vscode.DebugAdapter {
     // pending marker is still registered and still removed.
     const operation = startStop(start);
 
-    this._pendingResourceStarts.add(operation);
+    this._pendingResourceStarts.set(operation, releaseAbandonedStart);
     // The derived promise is only used to deregister; its rejection is the caller's to handle, so
     // sink it here to avoid a second, unhandled one.
     operation.finally(() => this._pendingResourceStarts.delete(operation)).catch(() => { });
@@ -722,7 +746,12 @@ export class AspireDebugSession implements vscode.DebugAdapter {
    * the AppHost was still starting behind it.
    */
   async startAppHost(projectFile: string, args: string[], environment: EnvVar[], debug: boolean, options: StartAppHostOptions): Promise<void> {
-    const launch = this.startResourceIfNotShuttingDown(() => this.startAppHostCore(projectFile, args, environment, debug, options));
+    const launch = this.startResourceIfNotShuttingDown(
+      () => this.startAppHostCore(projectFile, args, environment, debug, options),
+      // Nothing to release. Per-run cleanup is registered by resource-type extensions against a DCP
+      // runId, and the AppHost launch has none - createDebugSessionConfiguration() is given an empty
+      // one. Its own debugger is released by dispose() through _disposables.
+      () => { });
 
     if (launch === undefined) {
       extensionLogOutputChannel.info(`Not starting AppHost for project ${projectFile} because the Aspire session is already stopping.`);
@@ -1294,6 +1323,14 @@ function delay(ms: number): Promise<void> {
  */
 function startStopSession(session: AspireResourceDebugSession): Promise<void> {
   return startStop(() => session.stopSession());
+}
+
+/**
+ * Renders a stop failure for a log line or an aggregate message. A rejection reason is `unknown`:
+ * adapters reject with plain strings and DAP error objects as readily as with Errors.
+ */
+function describeStopFailure(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason);
 }
 
 /**
