@@ -30,6 +30,12 @@ namespace Aspire.Hosting.CodeGeneration.TypeScript;
 /// <see cref="System.Reflection.ReflectionTypeLoadException"/>, so the generator survives and only
 /// this type disappears.
 /// </para>
+/// <para>
+/// The split covers type loading only. A method body on the generation path that names a newer
+/// shared-contract <em>member</em> is a separate hard bind that no type split can absorb, because
+/// the JIT resolves a method's tokens when that method first runs; see
+/// <see cref="AtsContextCompatibility"/> for how those reads are kept out of the generator path.
+/// </para>
 /// </remarks>
 internal sealed class AtsTypeScriptApiReferenceExporter : IApiReferenceExporter
 {

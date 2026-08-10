@@ -1153,7 +1153,9 @@ internal sealed partial class TypeScriptApiProjector
     /// </summary>
     /// <remarks>
     /// This mirrors <c>AtsContextFilter.IsCapabilityOwnedBySelectedAssembly</c>. The two must agree,
-    /// or the exporter would document symbols the filter excluded, or drop symbols it kept.
+    /// or the exporter would document symbols the filter excluded, or drop symbols it kept. A CLI
+    /// that predates <see cref="AtsContext.CapabilityExportingAssemblyNames"/> runs the pre-map
+    /// filter as well, so both sides fall back to reflection together and still agree.
     /// </remarks>
     private string GetCapabilityOwningAssemblyName(AtsCapabilityInfo capability)
         => GetCapabilityOwningAssemblyName(_resolved.Context, capability);
@@ -1165,7 +1167,10 @@ internal sealed partial class TypeScriptApiProjector
     /// </remarks>
     private static string GetCapabilityOwningAssemblyName(AtsContext context, AtsCapabilityInfo capability)
     {
-        if (context.CapabilityExportingAssemblyNames.TryGetValue(capability.CapabilityId, out var exportingAssemblyName))
+        // Read through the compatibility shim rather than off the context directly: this method runs
+        // on the ordinary generation path, and a direct read hard-binds it to a contract member an
+        // already-shipped CLI does not have. See AtsContextCompatibility for the failure it avoids.
+        if (AtsContextCompatibility.TryGetCapabilityExportingAssemblyName(context, capability.CapabilityId, out var exportingAssemblyName))
         {
             return exportingAssemblyName;
         }
