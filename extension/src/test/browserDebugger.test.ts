@@ -322,6 +322,41 @@ suite('Browser Debugger Tests', () => {
         assert.strictEqual(rmStub.called, false);
     });
 
+    test('drops a workspace userDataDir when no Aspire-owned profile could be created', async () => {
+        // `prepareDebugSession` merges the workspace `debuggers.browser` block before this
+        // callback runs. When the contained profile cannot be created, leaving that value in place
+        // would send js-debug at the user's own profile directory - js-debug treats a string as
+        // the exact profile path - instead of falling back to an isolated one.
+        const rmStub = sinon.stub(fs.promises, 'rm').resolves();
+        const warnStub = sinon.stub(extensionLogOutputChannel, 'warn');
+        const profileFs = stubBrowserProfileFs();
+        profileFs.mkdtemp.rejects(new Error('no space left on device'));
+        const prepared = await prepareDebugSession(
+            {
+                type: 'aspire',
+                request: 'launch',
+                name: 'Aspire',
+                program: '/workspace/apphost.cs',
+                debuggers: {
+                    browser: {
+                        userDataDir: '/home/user/.config/google-chrome'
+                    } as never
+                }
+            },
+            { type: 'browser', url: 'https://localhost:5001' } as BrowserLaunchConfiguration,
+            [],
+            [],
+            { debug: true, runId: 'run-1', debugSessionId: 'dcp-1', isApphost: false, debugSession: {} as AspireDebugSession },
+            browserDebuggerExtension);
+
+        const configuration = prepared.debugConfiguration;
+        assert.strictEqual(configuration.userDataDir, undefined, 'Expected the workspace userDataDir to be dropped when Aspire could not create its own profile');
+        assert.ok(warnStub.getCalls().some(call => /without an Aspire-owned profile/.test(call.args[0])));
+
+        cleanupRun('run-1');
+        assert.strictEqual(rmStub.called, false);
+    });
+
     test('strips js-debug-only workspace settings from a Firefox launch', async () => {
         // `prepareDebugSession` merges the workspace `debuggers.browser` block before the browser
         // callback runs, and unknown adapter keys are forwarded on purpose. A workspace that

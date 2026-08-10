@@ -101,11 +101,15 @@ export const browserDebuggerExtension: ResourceDebuggerExtension = {
                 });
             }
             else {
-                // Fail closed: run without an isolated profile rather than pointing the browser at,
-                // or aiming a recursive delete at, a directory Aspire does not own. js-debug falls
-                // back to its own default profile, so debugging still works and only profile
-                // isolation is lost.
-                extensionLogOutputChannel.warn(`Could not create a contained browser debug profile directory for run '${debugConfiguration.runId}'; launching without an isolated profile.`);
+                // Fail closed: drop any userDataDir rather than pointing the browser at, or aiming
+                // a recursive delete at, a directory Aspire does not own. The delete matters
+                // because the workspace `debuggers` block is merged into this configuration before
+                // this callback runs: a workspace-supplied string would otherwise survive here and
+                // js-debug would launch into that exact profile. With the field absent js-debug
+                // creates its own isolated profile, so debugging still works and only Aspire's
+                // ownership of the directory is lost.
+                delete debugConfiguration.userDataDir;
+                extensionLogOutputChannel.warn(`Could not create a contained browser debug profile directory for run '${debugConfiguration.runId}'; launching without an Aspire-owned profile.`);
             }
         }
         // Remove program/args/cwd since browser debugging doesn't use them
